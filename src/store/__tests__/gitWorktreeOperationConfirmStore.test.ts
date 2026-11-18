@@ -21,7 +21,7 @@ describe("gitWorktreeOperationConfirmStore", () => {
     });
 
     useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(true);
-    await expect(pending).resolves.toEqual({ confirmed: true, pinned: null });
+    await expect(pending).resolves.toEqual({ confirmed: true, pinned: null, operation: null });
     expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
@@ -40,13 +40,13 @@ describe("gitWorktreeOperationConfirmStore", () => {
       baseBranch: "main",
     });
 
-    await expect(first).resolves.toEqual({ confirmed: false, pinned: null });
+    await expect(first).resolves.toEqual({ confirmed: false, pinned: null, operation: null });
     expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm?.request).toMatchObject({
       cwd: "/repo/two",
     });
 
     useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(true);
-    await expect(second).resolves.toEqual({ confirmed: true, pinned: null });
+    await expect(second).resolves.toEqual({ confirmed: true, pinned: null, operation: null });
   });
 
   it("bumps requestSeq on every request, including a back-to-back supersede", () => {
@@ -72,7 +72,22 @@ describe("gitWorktreeOperationConfirmStore", () => {
     await expect(pending).resolves.toEqual({
       confirmed: true,
       pinned: { headOid: "aaa", baseOid: "bbb" },
+      operation: null,
     });
+  });
+
+  it("carries the approved operation back for an abort, and drops it on a decline", async () => {
+    // The abort's counterpart to the commit pins (#17559): Main refuses unless
+    // this same operation is still in progress when the abort runs.
+    const chosen = { operation: "MERGING", operationId: "merge-a" } as const;
+    const request = { kind: "abort-operation", cwd: "/repo/wt", operation: "MERGING" } as const;
+    const approved = useGitWorktreeOperationConfirmStore.getState().requestConfirmation(request);
+    useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(true, null, chosen);
+    await expect(approved).resolves.toEqual({ confirmed: true, pinned: null, operation: chosen });
+
+    const declined = useGitWorktreeOperationConfirmStore.getState().requestConfirmation(request);
+    useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(false, null, chosen);
+    await expect(declined).resolves.toEqual({ confirmed: false, pinned: null, operation: null });
   });
 
   it("drops any pins on a decline", async () => {
@@ -86,7 +101,7 @@ describe("gitWorktreeOperationConfirmStore", () => {
     useGitWorktreeOperationConfirmStore
       .getState()
       .resolveConfirmation(false, { headOid: "aaa", baseOid: "bbb" });
-    await expect(pending).resolves.toEqual({ confirmed: false, pinned: null });
+    await expect(pending).resolves.toEqual({ confirmed: false, pinned: null, operation: null });
   });
 
   it("ignores a resolve with nothing pending", () => {

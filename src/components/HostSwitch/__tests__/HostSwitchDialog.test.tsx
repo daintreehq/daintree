@@ -528,6 +528,59 @@ describe("HostSwitchDialog", () => {
     });
   });
 
+  it.each([
+    ["with the worktree open", "/home/greg/code/daintree-worktrees/feature-host-chip", true],
+    ["without the worktree", null, false],
+  ] as const)(
+    "tells the asker where the window landed, %s",
+    async (_label, worktreePath, worktreeOpened) => {
+      prepare.mockResolvedValue(
+        preparation({
+          hasUncommittedChanges: false,
+          candidates: [
+            {
+              projectId: "host-p1",
+              path: "/home/greg/code/daintree",
+              name: "daintree",
+              remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree" }],
+              source: "registered",
+              matchedBy: "remote-url",
+              lastOpenedAt: null,
+            },
+          ],
+        })
+      );
+      execute.mockResolvedValue({
+        kind: "opened",
+        hostId: "studio-01",
+        projectId: "host-p1",
+        projectPath: "/home/greg/code/daintree",
+        projectName: "daintree",
+        worktreePath,
+        canCheckOutBranch: false,
+        branchNote: null,
+        setupRecipeId: null,
+      });
+      const onLanding = vi.fn();
+      render(<HostSwitchDialog request={{ ...request, onLanding }} onClose={vi.fn()} />);
+      await waitFor(() => expect(switchToHost).toHaveBeenCalledTimes(1));
+      const options = switchToHost.mock.calls[0]![3] as {
+        onLanded: () => void;
+        onStayed: () => void;
+        focusIntent?: unknown;
+      };
+      // It lands on that worktree, even in a window that already shows the project.
+      expect(options.focusIntent).toEqual(
+        worktreePath === null ? undefined : { intent: "focus-worktree", worktreeId: worktreePath }
+      );
+      expect(onLanding).not.toHaveBeenCalled();
+      options.onLanded();
+      expect(onLanding).toHaveBeenLastCalledWith({ landed: true, worktreeOpened });
+      options.onStayed();
+      expect(onLanding).toHaveBeenLastCalledWith({ landed: false });
+    }
+  );
+
   it("opens straight away, without a question, when there is nothing to decide", async () => {
     prepare.mockResolvedValue(
       preparation({

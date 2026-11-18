@@ -316,23 +316,22 @@ describe("restoreRemoteWindows", () => {
       warn.mockRestore();
     });
 
-    it("never dials again for a host whose build can't talk to this one", async () => {
-      vi.useFakeTimers();
-      const client = fakeClient(async () => {
-        throw new AppError({
-          code: "HOST_VERSION_MISMATCH",
-          message: "protocol",
-          userMessage: "x",
+    it.each(["HOST_VERSION_MISMATCH", "HOST_CONNECTION_UNUSABLE"] as const)(
+      "never dials again after %s, which only the person can change",
+      async (code) => {
+        vi.useFakeTimers();
+        const client = fakeClient(async () => {
+          throw new AppError({ code, message: "stopped", userMessage: "x" });
         });
-      });
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      noteRemoteWindowRestore(3, KEY);
-      remoteWindowReady(3);
-      await restoreRemoteWindows(deps(new Set([3])).d);
-      await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MAX_MS * 2);
-      expect(client.connect).not.toHaveBeenCalled();
-      warn.mockRestore();
-    });
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        noteRemoteWindowRestore(3, KEY);
+        remoteWindowReady(3);
+        await restoreRemoteWindows(deps(new Set([3])).d);
+        await vi.advanceTimersByTimeAsync(REMOTE_RESTORE_REDIAL_MAX_MS * 2);
+        expect(client.connect).not.toHaveBeenCalled();
+        warn.mockRestore();
+      }
+    );
 
     it("lets go of the host's place when the project is gone from it", async () => {
       vi.useFakeTimers();

@@ -9,10 +9,6 @@ vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
 }));
 
-vi.mock("@/store/portalStore", () => ({
-  usePortalStore: () => ({ isOpen: false, width: 0 }),
-}));
-
 vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));

@@ -86,10 +86,14 @@ import { useIssuePromptContext } from "./hooks/useIssuePromptContext";
 import { composeIssueFirstPrompt, issuePromptRef } from "./issuePromptContext";
 import { Textarea } from "@/components/ui/textarea";
 import { LazyWorktreePlacementRow } from "@/components/Hosts/Overview/LazyHostOverviewParts";
+import { canOfferResourceBoxHandoff } from "@/components/Hosts/resourceHostHandoff";
+import { openCreatedWorktreeOnMachine } from "./openCreatedWorktreeOnMachine";
 import type {
+  CloudMachineCommit,
   PlacementCommit,
   PlacementDraft,
 } from "@/components/Hosts/Overview/WorktreePlacementRow";
+import { startCloudWorktreePlacement } from "@/components/Hosts/cloudWorktreePlacement";
 
 import {
   PrHeader,
@@ -105,6 +109,7 @@ import {
   PathResolvedHint,
   EnvironmentRadioGroup,
   EnvironmentHint,
+  OpenOnMachineToggle,
   RecipePickerPopover,
   AgentPickerPopover,
   IssuePromptToggle,
@@ -195,6 +200,9 @@ export function NewWorktreeDialog({
   const [selectedExistingBranch, setSelectedExistingBranch] = useState<string | null>(null);
   const [recentBranchNames, setRecentBranchNames] = useState<string[]>([]);
   const [worktreeMode, setWorktreeMode] = useState<string>("local");
+  // The environment whose machine the worktree is to open on, so the choice
+  // never carries over to another environment however the pick changes.
+  const [openOnMachineFor, setOpenOnMachineFor] = useState<string | null>(null);
   const isCreatingRef = useRef(false);
   const baseBranchTouchedRef = useRef(false);
   // Set once the bootstrap has run for this open, so a Retry refetches the
@@ -301,9 +309,9 @@ export function NewWorktreeDialog({
   const [currentUser, setCurrentUser] = useState<string | undefined>(undefined);
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | undefined>(undefined);
 
-  const { projectSettings, configuredBranchPrefix } = useNewWorktreeProjectSettings({ isOpen });
+  const { projectSettings, configuredBranchPrefix, resourceEnvironments, environmentsLoaded } =
+    useNewWorktreeProjectSettings({ isOpen });
 
-  const resourceEnvironments = projectSettings?.resourceEnvironments;
   const hasAnyEnvironments = usableEnvironmentKeys(resourceEnvironments).length > 0;
 
   const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
@@ -559,6 +567,7 @@ export function NewWorktreeDialog({
       setBranchMode(restoredExisting ? "existing" : "new");
       setSelectedExistingBranch(restoredExisting ? restoreDraft.branch : null);
       setWorktreeMode(restoreDraft?.worktreeMode ?? "local");
+      setOpenOnMachineFor(restoreDraft?.openOnMachine ? (restoreDraft.worktreeMode ?? null) : null);
     }
     // resetErrors() is NOT called here — touched refs are managed by individual hooks
 
@@ -827,6 +836,29 @@ export function NewWorktreeDialog({
   const [placement, setPlacement] = useState<PlacementCommit | null>(null);
   const placementHost = placement?.hostName ?? null;
   const placementElsewhere = placement !== null;
+  // A new cloud machine chosen: the worktree is created here, then opens on
+  // the machine made for it, so nothing that runs here (an environment, a
+  // layout, an agent) is started for it.
+  const [cloudMachine, setCloudMachine] = useState<CloudMachineCommit | null>(null);
+  const newMachine = cloudMachine !== null;
+  const setupOff = placementElsewhere || newMachine;
+
+  // A worktree made here in an environment can follow its box there: only
+  // from a window on this machine that reaches hosts over ssh. Whether the
+  // box gets a name is known only from its status once it's provisioned,
+  // whichever file or setting the environment came from. Another host or a
+  // new cloud machine leaves the environment unused, so there's no box to follow.
+  const machineHandoffOffered =
+    worktreeMode !== "local" &&
+    !setupOff &&
+    !!projectId &&
+    // A Retry's environment that's no longer listed has no row to show the choice in.
+    usableEnvironmentKeys(resourceEnvironments).includes(worktreeMode) &&
+    canOfferResourceBoxHandoff();
+  const openOnMachine = openOnMachineFor !== null && openOnMachineFor === worktreeMode;
+  // Leaving for the box, nothing starts here: an agent or a layout started
+  // now would run on this machine, not on the one the worktree opens on.
+  const openOnMachineChosen = machineHandoffOffered && openOnMachine;
 
   const selectedRecipeStartsAgent = selectedRecipe
     ? recipeTerminalsStartAgent(selectedRecipe.terminals)
@@ -840,7 +872,7 @@ export function NewWorktreeDialog({
   // while closed, so the subscription exists only while `active`: a store
   // selector would run on every status flush of a streaming agent (#17053).
   const cloneStartsAgent = useCloneStartsAgent(
-    isOpen && selectedRecipeId === CLONE_LAYOUT_ID && !!activeWorktreeId,
+    isOpen && selectedRecipeId === CLONE_LAYOUT_ID && !!activeWorktreeId && !openOnMachineChosen,
     activeWorktreeId
   );
   // The layout's own agent wins, so the dialog's agent and its prompt never
@@ -851,7 +883,11 @@ export function NewWorktreeDialog({
   // The issue goes only where the dialog says it goes: with an agent this
   // window starts, which no layout agent displaces. Create reads the same gate.
   const issuePromptApplies =
-    selectedIssue !== null && firstAgent !== undefined && !promptBlocked && !placementElsewhere;
+    selectedIssue !== null &&
+    firstAgent !== undefined &&
+    !promptBlocked &&
+    !setupOff &&
+    !openOnMachineChosen;
   const issuePrompt = useIssuePromptContext({
     enabled: isOpen && includeIssue && issuePromptApplies,
     cwd: rootPath,
@@ -895,28 +931,36 @@ export function NewWorktreeDialog({
       ? selectedExistingBranch!
       : (resolvedBranchName ?? result.fullBranchName!);
 
+    // The machine as the form stands now; the create below takes seconds.
+    const snapCloudMachine = cloudMachine?.machine() ?? null;
+    if (cloudMachine && !snapCloudMachine) {
+      isCreatingRef.current = false;
+      return;
+    }
     const snapBranchMode = branchMode;
     const snapUseExisting = snapBranchMode === "existing";
     const snapFromRemote = fromRemote;
     const snapWorktreePath = worktreePath.trim();
-    const snapWorktreeMode = worktreeMode;
+    const snapWorktreeMode = snapCloudMachine ? "local" : worktreeMode;
+    const snapOpenOnMachine = openOnMachineChosen;
+    const snapProjectId = projectId;
     const snapIssue = selectedIssue;
-    const snapRecipeId = selectedRecipeId;
-    const snapSelectedRecipe = selectedRecipe;
+    const snapRecipeId = snapCloudMachine ? null : selectedRecipeId;
+    const snapSelectedRecipe = snapCloudMachine ? undefined : selectedRecipe;
     const snapInitialPR = initialPR;
     const snapBranches = branches;
     const snapAssignToSelf = assignWorktreeToSelf;
     const snapCurrentUser = currentUser;
     const snapCurrentUserAvatar = currentUserAvatar;
     const snapBaseBranch = baseBranch;
-    const snapFirstAgent = firstAgent;
+    const snapFirstAgent = snapCloudMachine ? undefined : firstAgent;
     // Captured now, not after the async create: the layout the agent warning
     // judged is the layout that gets cloned.
     const snapSourceWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
     let snapCloneTerminals: ReturnType<
       ReturnType<typeof useRecipeStore.getState>["generateRecipeFromActiveTerminals"]
     > | null = null;
-    if (snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
+    if (!snapOpenOnMachine && snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
       try {
         snapCloneTerminals = useRecipeStore
           .getState()
@@ -943,8 +987,9 @@ export function NewWorktreeDialog({
 
     // Picks become the project's remembered setup only when they create
     // something: a discarded dialog leaves the next one as this one opened.
-    // An untouched field keeps following whatever seeded it.
-    if (projectId) {
+    // An untouched field keeps following whatever seeded it, and one that
+    // was off because the worktree leaves for its machine wasn't used.
+    if (projectId && !snapCloudMachine && !snapOpenOnMachine) {
       if (errors.touchedFields.recipe) {
         setLastSelectedWorktreeRecipeIdByProject(projectId, snapRecipeId);
       }
@@ -954,7 +999,12 @@ export function NewWorktreeDialog({
     }
     // Only a choice the user could see and make: the option shows with an
     // issue and an agent.
-    if (snapFirstAgent && snapIssue && snapIncludeIssue !== includeIssueInFirstPrompt) {
+    if (
+      !snapOpenOnMachine &&
+      snapFirstAgent &&
+      snapIssue &&
+      snapIncludeIssue !== includeIssueInFirstPrompt
+    ) {
       setIncludeIssueInFirstPrompt(snapIncludeIssue);
     }
 
@@ -973,6 +1023,7 @@ export function NewWorktreeDialog({
         // The user's own words; a Retry reads the issue afresh.
         prompt: snapFirstPrompt,
         includeIssue: snapIncludeIssue,
+        ...(snapOpenOnMachine ? { openOnMachine: true } : {}),
       });
     }
 
@@ -1011,10 +1062,23 @@ export function NewWorktreeDialog({
           throw new Error(actionResult.error.message);
         }
 
-        const { worktreeId } = actionResult.result as { worktreeId: string; branch: string };
+        const { worktreeId, branch: createdBranch } = actionResult.result as {
+          worktreeId: string;
+          branch: string;
+        };
         useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
         useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
         linkProviderIssue(worktreeId, snapIssue);
+        // The worktree exists here now: the machine made for it is asked for next,
+        // and its card follows the machine from here on.
+        if (snapCloudMachine && projectId) {
+          void startCloudWorktreePlacement({
+            projectId,
+            worktreeId,
+            branch: createdBranch || fullBranchName,
+            machine: snapCloudMachine,
+          });
+        }
 
         // Skip when the selected issue already lists the current user as an
         // assignee: the assign call would be a no-op and the resulting Undo
@@ -1124,7 +1188,17 @@ export function NewWorktreeDialog({
         // handed back to the user rather than becoming a silent second one.
         let layoutAgentConflict: "recipe-has-agent" | "layout-has-agent" | null = null;
 
-        if (snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
+        if (snapOpenOnMachine) {
+          // Its own wait on setup and the box's status; it reports what
+          // becomes of the handoff itself, and never fails the create.
+          void openCreatedWorktreeOnMachine({
+            worktreeId,
+            projectId: snapProjectId,
+            environment: snapWorktreeMode,
+            // What the host made, which a name taken meanwhile can differ from.
+            label: createdBranch || fullBranchName,
+          });
+        } else if (snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
           const notifyCloneFailed = (cloneErr: unknown) => {
             const message = formatErrorMessage(cloneErr, "Couldn't clone layout");
             notify({
@@ -1226,7 +1300,7 @@ export function NewWorktreeDialog({
           }
         }
 
-        if (snapFirstAgent) {
+        if (snapFirstAgent && !snapOpenOnMachine) {
           const launch: FirstAgentLaunch = {
             agentId: snapFirstAgent.id,
             agentName: snapFirstAgent.name,
@@ -1425,9 +1499,14 @@ export function NewWorktreeDialog({
     };
   };
   const placementPending = placement?.status === "pending";
+  // A Retry that was to open on its machine waits for the list that says
+  // whether it still can: submitted before, it would start its agent here.
+  const handoffAwaitingEnvironments = openOnMachineFor !== null && !environmentsLoaded;
   const submitDisabled =
     placementPending ||
+    handoffAwaitingEnvironments ||
     (placement?.unavailable ?? null) !== null ||
+    (cloudMachine?.blocked ?? null) !== null ||
     formNotReady ||
     isCheckingBranch ||
     isGeneratingPath ||
@@ -1519,6 +1598,10 @@ export function NewWorktreeDialog({
         <span className="truncate">
           {placement.hostName}: {placement.unavailable}
         </span>
+      ) : cloudMachine?.blocked != null ? (
+        <span className="truncate">{cloudMachine.blocked}</span>
+      ) : handoffAwaitingEnvironments ? (
+        <span className="truncate">Loading environments…</span>
       ) : footerBusy && (isCheckingBranch || isGeneratingPath) ? (
         <span className="truncate">
           {isCheckingBranch ? "Checking the branch name…" : "Generating the path…"}
@@ -1596,6 +1679,24 @@ export function NewWorktreeDialog({
   // Said once, above the first of the rows it turns off: the agent's when no
   // issue or environment row comes before the Recipe row.
   const placementSetupNoteFirst = showIssueRow || hasAnyEnvironments;
+  // A new machine keeps the issue (it's linked here), but nothing here runs for the worktree.
+  const machineSkips = [
+    hasAnyEnvironments ? "environment" : null,
+    showRecipeRow ? "recipe" : null,
+    "agent",
+    showPromptRow ? "prompt" : null,
+  ].filter((skip): skip is string => skip !== null);
+  const newMachineNote = cloudMachine !== null && (
+    <div className="col-span-2" data-testid="new-machine-setup-note">
+      <Callout severity="info">
+        <p>
+          The {setupList.format(machineSkips)} {machineSkips.length === 1 ? "is" : "are"} off for a
+          new machine. Your {machineSkips.length === 1 ? "choice is" : "choices are"} kept for{" "}
+          {cloudMachine.homeName}.
+        </p>
+      </Callout>
+    </div>
+  );
   const placementSetupNote = placementHost !== null && homeName !== null && (
     <div className="col-span-2" data-testid="placement-setup-note">
       <Callout severity="info">
@@ -1846,6 +1947,7 @@ export function NewWorktreeDialog({
                     getDraft={getPlacementDraft}
                     onLeave={onClose}
                     onCommitChange={setPlacement}
+                    onCloudChange={setCloudMachine}
                   />
                   {placement ? (
                     // This machine's folder picker can't reach another host's
@@ -1897,6 +1999,7 @@ export function NewWorktreeDialog({
 
                 <FormSection title="Setup" note="Optional">
                   {placementSetupNoteFirst && placementSetupNote}
+                  {newMachineNote}
 
                   {showIssueRow && (
                     <FormRow
@@ -1929,7 +2032,20 @@ export function NewWorktreeDialog({
                       selfLabelled
                       hint={
                         worktreeMode !== "local" &&
-                        !placementElsewhere && <EnvironmentHint worktreeMode={worktreeMode} />
+                        !setupOff && (
+                          <div className="flex min-w-0 flex-col gap-1.5">
+                            <EnvironmentHint worktreeMode={worktreeMode} />
+                            {machineHandoffOffered && (
+                              <OpenOnMachineToggle
+                                worktreeMode={worktreeMode}
+                                checked={openOnMachine}
+                                onCheckedChange={(checked) =>
+                                  setOpenOnMachineFor(checked ? worktreeMode : null)
+                                }
+                              />
+                            )}
+                          </div>
+                        )
                       }
                     >
                       <EnvironmentRadioGroup
@@ -1938,11 +2054,9 @@ export function NewWorktreeDialog({
                         resourceEnvironments={resourceEnvironments}
                         hasAnyEnvironments={hasAnyEnvironments}
                         describedBy={
-                          worktreeMode !== "local" && !placementElsewhere
-                            ? "environment-hint"
-                            : undefined
+                          worktreeMode !== "local" && !setupOff ? "environment-hint" : undefined
                         }
-                        disabled={placementElsewhere}
+                        disabled={setupOff}
                       />
                     </FormRow>
                   )}
@@ -1974,6 +2088,7 @@ export function NewWorktreeDialog({
                         onMarkTouched={() => {
                           if (!placementElsewhere) markTouched("recipe");
                         }}
+                        disabled={newMachine || openOnMachineChosen}
                         listId="recipe-selector"
                         describedBy={placedRecipeNote ? placedRecipeNoteId : undefined}
                         unavailableReason={recipeUnavailableReason}
@@ -1988,7 +2103,8 @@ export function NewWorktreeDialog({
                     htmlFor="first-agent-selector-trigger"
                     hint={
                       promptBlocked &&
-                      !placementElsewhere && (
+                      !setupOff &&
+                      !openOnMachineChosen && (
                         <p
                           id="first-agent-conflict"
                           className="text-xs text-balance text-text-secondary"
@@ -2010,9 +2126,11 @@ export function NewWorktreeDialog({
                       onSelectAgent={handleFirstAgentSelect}
                       listId="first-agent-selector"
                       describedBy={
-                        promptBlocked && !placementElsewhere ? "first-agent-conflict" : undefined
+                        promptBlocked && !setupOff && !openOnMachineChosen
+                          ? "first-agent-conflict"
+                          : undefined
                       }
-                      disabled={placementElsewhere}
+                      disabled={setupOff || openOnMachineChosen}
                     />
                   </FormRow>
 
@@ -2028,7 +2146,7 @@ export function NewWorktreeDialog({
                             issueRef={issuePromptRef(selectedIssue)}
                             checked={includeIssue}
                             onCheckedChange={handleIncludeIssueChange}
-                            disabled={promptBlocked || placementElsewhere}
+                            disabled={promptBlocked || setupOff || openOnMachineChosen}
                             state={issuePrompt.state}
                             onRetry={issuePrompt.retry}
                           />
@@ -2042,9 +2160,11 @@ export function NewWorktreeDialog({
                         value={firstPrompt}
                         onChange={(e) => setFirstPrompt(e.target.value)}
                         placeholder="First task for the agent (optional)"
-                        disabled={promptBlocked || placementElsewhere}
+                        disabled={promptBlocked || setupOff || openOnMachineChosen}
                         aria-describedby={
-                          promptBlocked && !placementElsewhere ? "first-agent-conflict" : undefined
+                          promptBlocked && !setupOff && !openOnMachineChosen
+                            ? "first-agent-conflict"
+                            : undefined
                         }
                       />
                     </FormRow>
@@ -2105,6 +2225,12 @@ export function NewWorktreeDialog({
                 <span className={cn("truncate", longPlacementHost ? "max-w-96" : "max-w-60")}>
                   {initialPR ? "Check out on" : "Create on"} {placement.hostName}
                 </span>
+              ) : newMachine ? (
+                initialPR ? (
+                  "Check out on new machine"
+                ) : (
+                  "Create on new machine"
+                )
               ) : initialPR ? (
                 "Check out"
               ) : (

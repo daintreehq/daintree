@@ -20,7 +20,6 @@ const focusPanelInput = vi.hoisted(() => vi.fn(() => true));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/diagnosticsStore", () => ({ useDiagnosticsStore: { getState: vi.fn() } }));
 vi.mock("@/store/errorStore", () => ({ useErrorStore: { getState: vi.fn() } }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: { getState: vi.fn() } }));
 vi.mock("@shared/config/panelKindRegistry", () => ({
   getPanelKindConfig: registryMock.getPanelKindConfig,
   // The real predicates, read off the mocked registry entry.

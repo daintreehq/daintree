@@ -64,8 +64,20 @@ function seed(): void {
     binding("nav.toggleSidebar", "Toggle sidebar", "Navigation", "Cmd+B"),
     binding("help.shortcuts", "Open keyboard shortcuts reference", "Help", "Cmd+K Cmd+S"),
     binding("help.shortcutsAlt", "Open keyboard shortcuts reference", "Help", "Cmd+/"),
-    binding("portal.closeTab", "Close active portal tab", "Portal", "Cmd+W", "portal"),
-    binding("portal.newTab", "New portal tab", "Portal", "Cmd+T", "portal"),
+    binding(
+      "devPreview.reloadPreview",
+      "Reload dev preview",
+      "Dev preview",
+      "Cmd+R",
+      "dev-preview"
+    ),
+    binding(
+      "devPreview.toggleElementPicker",
+      "Pick an element",
+      "Dev preview",
+      "Cmd+E",
+      "dev-preview"
+    ),
     binding("app.settings", "Open settings", "System", "Cmd+,"),
     binding("plugin.thing", "Do the plugin thing", "Acme plugin", "Cmd+Alt+Y"),
   ];
@@ -146,7 +158,7 @@ describe("ShortcutReferenceDialog", () => {
     it("orders categories by the shared browse order, with unknown ones last", () => {
       render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
       const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
-      const names = headings.map((h) => h?.replace(/In the portal$/, "") ?? "");
+      const names = headings.map((h) => h?.replace(/In dev preview$/, "") ?? "");
       expect(names.indexOf("Navigation")).toBeLessThan(names.indexOf("Terminal"));
       expect(names.indexOf("Terminal")).toBeLessThan(names.indexOf("Help"));
       expect(names[names.length - 1]).toBe("Acme plugin");
@@ -164,9 +176,9 @@ describe("ShortcutReferenceDialog", () => {
       render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
       const heading = screen
         .getAllByRole("heading", { level: 3 })
-        .find((h) => h.textContent?.startsWith("Portal"))!;
-      expect(heading.textContent).toMatch(/In the portal/);
-      expect(rowFor("New portal tab").textContent).not.toMatch(/In the portal/);
+        .find((h) => h.textContent?.startsWith("Dev preview"))!;
+      expect(heading.textContent).toMatch(/In dev preview/);
+      expect(rowFor("Pick an element").textContent).not.toMatch(/In dev preview/);
     });
 
     it("marks customised rows, and only those, as custom", () => {

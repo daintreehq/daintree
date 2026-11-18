@@ -255,7 +255,7 @@
   mask-composite: add, exclude;
 }
 
-/* 24px, the width the mask-faded rails use (PortalToolbar, FigureRail). */
+/* 24px, the width the mask-faded rails use (FigureRail). */
 .markdown-document :where(.markdown-table[data-scroll-start]) {
   --markdown-table-fade-start: 1.5rem;
 }

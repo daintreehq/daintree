@@ -31,6 +31,7 @@ import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { useRowFocus } from "@/components/Settings/useRowFocus";
 import { useReorderFocus } from "@/components/Settings/useReorderFocus";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { MergedWorktreeCleanupSection } from "./MergedWorktreeCleanupSection";
 
 const LOCATION_OPTIONS = [
   { value: "grid", label: "Grid" },
@@ -482,6 +483,8 @@ export function AutomationTab({
           />
         </SettingsGroup>
       </SettingsSection>
+
+      {currentProject?.id && <MergedWorktreeCleanupSection projectId={currentProject.id} />}
 
       <SettingsSection
         id="project-terminal-settings"

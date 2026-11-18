@@ -1,6 +1,6 @@
 import type { ScheduledRun } from "../scheduledRuns.js";
 
-/** `window.electron.scheduledRuns.listByProject` (#15976). */
+/** `window.electron.scheduledRuns.listByProject` (#15976): each schedule's latest run (#17465). */
 export interface ScheduledRunsListByProjectPayload {
   projectId: string;
 }

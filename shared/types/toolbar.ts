@@ -71,9 +71,9 @@ export type ToolbarButtonId =
   | "problems"
   | "notification-center"
   | "canopy"
+  | "decisions-inbox"
   | "links-launcher"
-  | "assistant-toggle"
-  | "portal-toggle";
+  | "assistant-toggle";
 
 /**
  * Sparse pin-state map for toolbar buttons. Mirrors the tri-state semantics of
@@ -313,7 +313,7 @@ export function isPanelButtonOnToolbar(
 export interface ToolbarLayout {
   /** Ordered list of button IDs to show on the left side (excluding sidebar-toggle which is always first) */
   leftButtons: AnyToolbarButtonId[];
-  /** Ordered list of button IDs to show on the right side (excluding assistant-toggle and portal-toggle which are always last) */
+  /** Ordered list of button IDs to show on the right side (excluding assistant-toggle which is always last) */
   rightButtons: AnyToolbarButtonId[];
   /**
    * Per-button visibility overrides. `false` hides the button; missing
@@ -342,7 +342,6 @@ export type ToolbarButtonPriority = 1 | 2 | 3 | 4 | 5;
 export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPriority> = {
   "sidebar-toggle": 1,
   "assistant-toggle": 1,
-  "portal-toggle": 1,
   "voice-recording": 1,
   // Deliberately ahead of the individual panel buttons at 3: on a fresh profile
   // the launcher is the only toolbar route to the agents and to `browser` /
@@ -360,6 +359,7 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   // and hold the agents' tier while they are lit (`withLitSignalPriorities`).
   "notification-center": 3,
   canopy: 3,
+  "decisions-inbox": 3,
   problems: 3,
   // Wide and informational: the stats capsule costs as much room as six icon
   // buttons, and its counts stay one click away in the `…` menu.

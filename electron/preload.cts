@@ -18,6 +18,7 @@ import type { PanelTitleMode } from "../shared/types/panel.js";
 import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
 import type { TerminalExitContext, TerminalKillOptions } from "../shared/types/terminal.js";
 import type { RendererInputBlockingSnapshot } from "../shared/types/ipc/system.js";
+import type { DeploymentTarget } from "../shared/types/forge.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
@@ -37,7 +38,13 @@ import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import type { ForgeNewPRLinkRequest } from "../shared/types/ipc/forge.js";
 import type { ProjectCloneJobSnapshot } from "../shared/types/ipc/projectClone.js";
 import type { KeybindingOverridesSnapshot } from "../shared/types/ipc/api.js";
-import type { GitPullRebaseReview, GitPushReview } from "../shared/types/git.js";
+import type {
+  ConflictSideChoice,
+  GitCommitReview,
+  GitPullRebaseReview,
+  GitPushReview,
+  RepoOperationPin,
+} from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
 import type { PluginRendererMetricsEnvelope } from "../shared/types/ipc/pluginMetrics.js";
 import { CHANNELS } from "./ipc/channels.js";
@@ -62,7 +69,6 @@ import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.
 import { buildConfigBundlePreloadBindings } from "./ipc/handlers/configBundle.preload.js";
 import { buildHelpPreloadBindings } from "./ipc/handlers/help.preload.js";
 import { buildEventInspectorPreloadBindings } from "./ipc/handlers/eventInspector.preload.js";
-import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
 import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.js";
@@ -85,6 +91,7 @@ import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
 import { buildTerminalSessionFilePreloadBindings } from "./ipc/handlers/terminalSessionFile.preload.js";
 import { buildVoiceDictionaryPreloadBindings } from "./ipc/handlers/voiceDictionary.preload.js";
 import { buildProjectLinksPreloadBindings } from "./ipc/handlers/projectLinks.preload.js";
+import { buildMergedWorktreeCleanupPreloadBindings } from "./ipc/handlers/mergedWorktreeCleanup.preload.js";
 import { buildRecentDictationsPreloadBindings } from "./ipc/handlers/recentDictations.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
@@ -120,6 +127,7 @@ import { buildReviewMarksPreloadBindings } from "./ipc/handlers/reviewMarks.prel
 import { buildSchedulesPreloadBindings } from "./ipc/handlers/schedules.preload.js";
 import { buildDecisionsPreloadBindings } from "./ipc/handlers/decisions.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
+import { buildNotificationSoundsPreloadBindings } from "./ipc/handlers/notificationSounds.preload.js";
 import { buildFileDocumentPreloadBindings } from "./ipc/handlers/fileDocument.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
@@ -1068,8 +1076,8 @@ function buildElectronApi(): ElectronAPI {
 
       getAllTerminals: () => _unwrappingInvoke(CHANNELS.TERMINAL_GET_ALL),
 
-      searchSemanticBuffers: (query: string, isRegex: boolean) =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS, query, isRegex),
+      searchSemanticBuffers: (query: string, isRegex: boolean, terminalIds?: string[]) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS, query, isRegex, terminalIds),
 
       reconnect: (terminalId: string) => _unwrappingInvoke(CHANNELS.TERMINAL_RECONNECT, terminalId),
 
@@ -1098,6 +1106,9 @@ function buildElectronApi(): ElectronAPI {
 
       forceResume: (id: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
+
+      resetModes: (id: string): Promise<boolean> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_RESET_MODES, id),
 
       getHostMemoryPause: (): Promise<HostMemoryPauseSnapshot> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_GET_HOST_MEMORY_PAUSE),
@@ -1505,9 +1516,8 @@ function buildElectronApi(): ElectronAPI {
 
       notifyWarmViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_WARM_PAINTED),
 
-      onMenuAction: (
-        callback: (payload: { actionId: string; args?: unknown; portalActionId?: string }) => void
-      ) => _typedOn(CHANNELS.MENU_ACTION, callback),
+      onMenuAction: (callback: (payload: { actionId: string; args?: unknown }) => void) =>
+        _typedOn(CHANNELS.MENU_ACTION, callback),
 
       reloadConfig: () => _unwrappingInvoke(CHANNELS.APP_RELOAD_CONFIG),
 
@@ -2200,8 +2210,18 @@ function buildElectronApi(): ElectronAPI {
 
       unstageAll: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_UNSTAGE_ALL, cwd),
 
-      commit: (cwd: string, message: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_COMMIT, { cwd, message }),
+      commit: (cwd: string, message: string, review?: GitCommitReview) =>
+        _unwrappingInvoke(CHANNELS.GIT_COMMIT, {
+          cwd,
+          message,
+          ...(review
+            ? {
+                expectedBranch: review.branch,
+                expectedHeadOid: review.headOid,
+                expectedStagedIdentity: review.stagedIdentity,
+              }
+            : {}),
+        }),
 
       push: (cwd: string, setUpstream?: boolean, opId?: string, review?: GitPushReview) =>
         _unwrappingInvoke(CHANNELS.GIT_PUSH, {
@@ -2233,8 +2253,18 @@ function buildElectronApi(): ElectronAPI {
 
       listRemoteCommits: (cwd: string, branchName: string, limit?: number) =>
         _unwrappingInvoke(CHANNELS.GIT_LIST_REMOTE_COMMITS, { cwd, branchName, limit }),
-      listPushCommits: (cwd: string, branchName: string, limit?: number) =>
-        _unwrappingInvoke(CHANNELS.GIT_LIST_PUSH_COMMITS, { cwd, branchName, limit }),
+      listPushCommits: (
+        cwd: string,
+        branchName: string,
+        limit?: number,
+        options?: { includeStaged?: boolean }
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_LIST_PUSH_COMMITS, {
+          cwd,
+          branchName,
+          limit,
+          ...(options?.includeStaged ? { includeStaged: true } : {}),
+        }),
       listRebaseCommits: (cwd: string, branchName: string, limit?: number) =>
         _unwrappingInvoke(CHANNELS.GIT_LIST_REBASE_COMMITS, { cwd, branchName, limit }),
       listBaseIntegrationCommits: (
@@ -2279,17 +2309,17 @@ function buildElectronApi(): ElectronAPI {
 
       getStagingStatus: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_STAGING_STATUS, cwd),
 
-      abortRepositoryOperation: (cwd: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, cwd),
+      abortRepositoryOperation: (cwd: string, expected?: RepoOperationPin) =>
+        _unwrappingInvoke(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, cwd, expected),
 
-      continueRepositoryOperation: (cwd: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, cwd),
+      continueRepositoryOperation: (cwd: string, expected?: RepoOperationPin) =>
+        _unwrappingInvoke(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, cwd, expected),
 
       scanConflictMarkers: (cwd: string, filePaths: string[]) =>
         _unwrappingInvoke(CHANNELS.GIT_SCAN_CONFLICT_MARKERS, { cwd, filePaths }),
 
-      checkoutOursTheirs: (cwd: string, filePath: string, side: "ours" | "theirs") =>
-        _unwrappingInvoke(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, { cwd, filePath, side }),
+      checkoutOursTheirs: (cwd: string, filePath: string, choice: ConflictSideChoice) =>
+        _unwrappingInvoke(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, { ...choice, cwd, filePath }),
 
       compareWorktrees: (
         cwd: string,
@@ -2298,7 +2328,8 @@ function buildElectronApi(): ElectronAPI {
         filePath?: string,
         useMergeBase?: boolean,
         ignoreWhitespace?: boolean,
-        contextLines?: number
+        contextLines?: number,
+        oldPath?: string
       ) =>
         _unwrappingInvoke(CHANNELS.GIT_COMPARE_WORKTREES, {
           cwd,
@@ -2308,6 +2339,7 @@ function buildElectronApi(): ElectronAPI {
           useMergeBase,
           ignoreWhitespace,
           contextLines,
+          oldPath,
         }),
 
       getUsername: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_USERNAME, cwd),
@@ -2352,30 +2384,6 @@ function buildElectronApi(): ElectronAPI {
 
       onSupportChanged: (callback: (data: { enabled: boolean }) => void) =>
         _typedOn(CHANNELS.ACCESSIBILITY_SUPPORT_CHANGED, callback),
-    },
-
-    // Portal API
-    portal: {
-      ...buildPortalPreloadBindings(_unwrappingInvoke),
-
-      onNavEvent: (
-        callback: (data: {
-          tabId: string;
-          title: string;
-          url: string;
-          canGoBack: boolean;
-          canGoForward: boolean;
-        }) => void
-      ) => _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
-
-      onFocus: (callback: () => void) => _typedOn(CHANNELS.PORTAL_FOCUS, callback),
-
-      onBlur: (callback: () => void) => _typedOn(CHANNELS.PORTAL_BLUR, callback),
-
-      onTabEvicted: (callback: (data: { tabId: string }) => void) =>
-        _typedOn(CHANNELS.PORTAL_TAB_EVICTED, callback),
-      onTabsEvicted: (callback: (payload: { tabIds: string[] }) => void) =>
-        _typedOn(CHANNELS.PORTAL_TABS_EVICTED, callback),
     },
 
     // Webview API
@@ -2604,9 +2612,12 @@ function buildElectronApi(): ElectronAPI {
     // Recovery API (used by recovery.html)
     recovery: recoveryApi,
 
+    // Sounds imported on this device for the notification pickers
+    notificationSounds: buildNotificationSoundsPreloadBindings(_unwrappingInvoke),
+
     // Notification API
     notification: {
-      updateBadge: (state: { waitingCount: number }) =>
+      updateBadge: (state: { waitingPanelIds: string[]; membershipOnly?: boolean }) =>
         ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
       getSettings: (): Promise<{
         enabled: boolean;
@@ -2699,8 +2710,9 @@ function buildElectronApi(): ElectronAPI {
 
     // Sound API (Web Audio playback via main → renderer push)
     sound: {
-      onTrigger: (callback: (payload: { soundFile: string; detune?: number }) => void) =>
-        _typedOn(CHANNELS.SOUND_TRIGGER, callback),
+      onTrigger: (
+        callback: (payload: { soundFile: string; detune?: number; volume?: number }) => void
+      ) => _typedOn(CHANNELS.SOUND_TRIGGER, callback),
       onCancel: (callback: () => void) => _eventBusOn("sound:cancel", () => callback()),
       getSoundDir: (): Promise<string> => _unwrappingInvoke(CHANNELS.SOUND_GET_DIR),
     },
@@ -2945,6 +2957,9 @@ function buildElectronApi(): ElectronAPI {
       ...buildRemoteHostsPreloadBindings(_unwrappingInvoke),
       onEvent: (callback: (event: IpcEventMap["remote-hosts:event"]) => void) =>
         _typedOn("remote-hosts:event", callback),
+      onSshSignInEvent: (
+        callback: (event: IpcEventMap["remote-hosts:ssh-sign-in-event"]) => void
+      ) => _typedOn("remote-hosts:ssh-sign-in-event", callback),
     },
     cloudHosts: buildCloudHostsPreloadBindings(_unwrappingInvoke),
     hostMode: {
@@ -3146,6 +3161,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, payload),
       getChecks: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_CHECKS, payload),
+      getDeployments: (payload: { cwd: string; target: DeploymentTarget }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_DEPLOYMENTS, payload),
       resolveAuthorAvatar: (payload: { cwd: string; email: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, payload),
       getTokenHealth: (payload: { providerId: string }) =>
@@ -3337,6 +3354,14 @@ function buildElectronApi(): ElectronAPI {
     voiceDictionary: buildVoiceDictionaryPreloadBindings(_unwrappingInvoke),
 
     projectLinks: buildProjectLinksPreloadBindings(_unwrappingInvoke),
+
+    // The merged-worktree rule (#17321)
+    mergedWorktreeCleanup: {
+      ...buildMergedWorktreeCleanupPreloadBindings(_unwrappingInvoke),
+
+      onReceiptsReady: (callback: () => void) =>
+        _typedOn(CHANNELS.MERGED_WORKTREE_CLEANUP_RECEIPTS_READY, callback),
+    },
 
     recentDictations: {
       ...buildRecentDictationsPreloadBindings(_unwrappingInvoke),

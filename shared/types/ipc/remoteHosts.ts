@@ -23,6 +23,8 @@ export interface AddHostPayload {
   connection: HostConnection;
   /** Added for this worktree's resource environment, and removed along with it. */
   ownerWorktreeId?: string;
+  /** A worktree waiting on the new host, written with the host so no restart can split them. */
+  pendingPlacement?: PendingHostPlacement;
 }
 
 export interface UpdateHostPayload {
@@ -400,6 +402,50 @@ export interface HostInstallPlan {
 export interface HostSetupTarget {
   connection: HostConnection;
 }
+
+/**
+ * A person's Sign in to an ssh host that refused a batch login: the one ssh
+ * that may prompt, with each of its prompts relayed to the view that asked.
+ */
+export interface StartSshSignInPayload {
+  /** Chosen by the view, so the prompts that arrive before the answer can be matched to it. */
+  attemptId: string;
+  connection: HostConnection;
+}
+
+/**
+ * How a sign-in ended. `signed-in` means ssh is logged in to the host (a
+ * master is up for every later call to ride), not that Daintree answers
+ * there. `failed` carries ssh's own words, one line, when it said any.
+ */
+export type SshSignInResult =
+  { status: "signed-in" } | { status: "cancelled" } | { status: "failed"; detail: string | null };
+
+export interface AnswerSshSignInPayload {
+  attemptId: string;
+  promptId: string;
+  /** What the person typed, handed to ssh once and kept nowhere. */
+  answer: string;
+}
+
+export interface CancelSshSignInPayload {
+  attemptId: string;
+}
+
+/** `secret`: ssh wants text back (a passphrase, a password, a code). `notice`: nothing to type (touch a security key). */
+export type SshSignInPromptKind = "secret" | "notice";
+
+/** Sent only to the view that started the sign-in; never carries an answer. */
+export type SshSignInEvent =
+  | {
+      type: "prompt";
+      attemptId: string;
+      promptId: string;
+      kind: SshSignInPromptKind;
+      /** ssh's prompt as it wrote it, made safe to show. */
+      text: string;
+    }
+  | { type: "prompt-closed"; attemptId: string; promptId: string };
 
 export interface PlanInstallPayload {
   connection: HostConnection;

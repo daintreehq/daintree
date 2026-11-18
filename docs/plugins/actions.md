@@ -284,9 +284,12 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `action.palette.open` | Open command palette | safe | — |
+| `decisions.openInbox` | Open Decisions inbox | safe | — |
+| `decisions.openNextQuestion` | Open next Decisions question | safe | — |
 | `find.inFocusedPanel` | Find in focused panel | safe | — |
 | `nav.focusRegion.next` | Focus next region | safe | — |
 | `nav.focusRegion.prev` | Focus previous region | safe | — |
+| `nav.quickOpenFile` | Open file by name | safe | — |
 | `nav.quickSwitcher` | Quick switcher | safe | — |
 | `nav.showGrid` | Show grid | safe | — |
 | `nav.showProjectHome` | Show project home | safe | — |
@@ -311,7 +314,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `panel.openPluginPanel` | Open plugin panel | safe | `kind`, `initialArgs?`, `presentation?`, `reuseExisting?`, `size?`, `toggle?`, `worktreeId?` |
 | `panel.palette` | Panel palette | safe | — |
 | `panel.toggleDiagnostics` | Toggle diagnostics | safe | — |
-| `panel.togglePortal` | Toggle portal | safe | — |
 
 ## plugins
 
@@ -320,41 +322,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `plugin.diagnostics` | Read plugin diagnostics | safe | `pluginId`, `logLimit?` |
 | `plugin.openSettings` | Open plugin settings | safe | `pluginId`, `key?`, `page?`, `scope?`, `section?` |
 | `plugin.validate` | Validate plugin manifest | safe | `path` |
-
-## portal
-
-| Action | Title | Danger | Arguments |
-| --- | --- | --- | --- |
-| `portal.activateTab` | Activate portal tab | safe | `tabId` |
-| `portal.closeAllTabs` | Close all portal tabs | safe | `confirmed?` |
-| `portal.closeOthers` | Close other portal tabs | safe | `confirmed?`, `tabId?` |
-| `portal.closeTab` | Close portal tab | safe | `tabId?` |
-| `portal.closeToRight` | Close tabs to the right | safe | `confirmed?`, `tabId?` |
-| `portal.copyTabUrl` | Copy portal tab URL | safe | `tabId?` |
-| `portal.copyUrl` | Copy portal URL | safe | `tabId?` |
-| `portal.duplicateTab` | Duplicate portal tab | safe | `tabId?` |
-| `portal.goBack` | Portal back | safe | `tabId?` |
-| `portal.goForward` | Portal forward | safe | `tabId?` |
-| `portal.links.add` | Add portal link | safe | `title`, `url`, `alwaysEnabled?`, `icon?` |
-| `portal.links.remove` | Remove portal link | confirm | `id` |
-| `portal.links.reorder` | Reorder portal links | safe | `fromIndex`, `toIndex` |
-| `portal.links.toggle` | Toggle portal link | safe | `id` |
-| `portal.links.update` | Update portal link | safe | `id`, `updates` |
-| `portal.listTabs` | List portal tabs | safe | — |
-| `portal.newTab` | New portal tab | safe | — |
-| `portal.nextTab` | Next portal tab | safe | — |
-| `portal.openExternal` | Open portal URL externally | safe | `tabId?` |
-| `portal.openLaunchpad` | Open portal launchpad | safe | — |
-| `portal.openTabExternal` | Open portal tab externally | safe | `tabId?` |
-| `portal.openUrl` | Open URL in portal | safe | `url`, `background?`, `title?` |
-| `portal.prevTab` | Previous portal tab | safe | — |
-| `portal.reload` | Reload portal | safe | `tabId?` |
-| `portal.reloadTab` | Reload portal tab | safe | `tabId?` |
-| `portal.resetWidth` | Reset portal width | safe | — |
-| `portal.setDefaultNewTab` | Set default new tab | safe | `url` |
-| `portal.tabs.reorder` | Reorder portal tabs | safe | `fromIndex`, `toIndex` |
-| `portal.toggle` | Toggle portal | safe | — |
-| `portal.width.set` | Set portal width | safe | `width` |
 
 ## preferences
 
@@ -375,7 +342,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `canopy.openWindow` | Open Canopy window | safe | — |
 | `canopy.toggle` | Open Canopy | safe | — |
 | `pilot.openProject` | View this project's agents | safe | — |
-| `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
+| `pilot.openRun` | Open run | safe | `runId`, `workspaceId?`, `worktreeId?` |
 | `pilot.toggle` | View all agents | safe | — |
 | `project.add` | Open project | safe | `destination?`, `path?` |
 | `project.archive` | Archive project | safe | `projectId?` |
@@ -552,6 +519,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
 | `terminal.rename` | Rename panel | safe | `name?`, `terminalId?` |
 | `terminal.reopenLast` | Reopen last closed panel | safe | — |
+| `terminal.resetModes` | Reset terminal modes | confirm | `confirmed?`, `terminalId?` |
 | `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
 | `terminal.restartAll` | Restart all terminals | confirm | `confirmed?` |
 | `terminal.restartOnAccount` | Restart agent on account | confirm | `accountId`, `confirmed?`, `keepConversation?`, `terminalId?` |

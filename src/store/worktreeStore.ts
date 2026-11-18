@@ -74,6 +74,8 @@ export interface PendingCreationDraft {
   prompt?: string;
   /** Whether the issue was to be quoted ahead of `prompt`. */
   includeIssue?: boolean;
+  /** Whether the worktree was to open on its environment's machine once provisioned. */
+  openOnMachine?: boolean;
 }
 
 export interface PendingCreation extends PendingCreationDraft {

@@ -141,6 +141,7 @@ describe("terminalConfig handlers", () => {
 
     expect(typeof result.scrollbackLines).toBe("number");
     expect(result.performanceMode).toBe(false);
+    expect(result.osc52ClipboardEnabled).toBe(false);
     expect(result.fontSize).toBe(14);
   });
 
@@ -420,6 +421,21 @@ describe("terminalConfig handlers", () => {
       hybridInputEnabled: false,
       hybridInputAutoFocus: true,
     });
+  });
+
+  it("setOsc52ClipboardEnabled saves a boolean and throws on anything else", async () => {
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_OSC52_CLIPBOARD_ENABLED);
+
+    await handler({}, true);
+    expect(storeState.data.terminalConfig).toMatchObject({ osc52ClipboardEnabled: true });
+
+    // A save the Settings switch waits on, so a bad value must fail it.
+    await expect(handler({}, "false")).rejects.toThrow("osc52ClipboardEnabled");
+    expect(storeState.data.terminalConfig).toMatchObject({ osc52ClipboardEnabled: true });
+
+    await handler({}, false);
+    expect(storeState.data.terminalConfig).toMatchObject({ osc52ClipboardEnabled: false });
   });
 
   it("setScreenReaderMode accepts valid values and rejects invalid", async () => {

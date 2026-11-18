@@ -1,6 +1,8 @@
 import { lazy, Suspense, type ComponentProps, type ComponentType } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
+import { useCloudHosts } from "../cloud/cloudHostsState";
+import { canOfferCloudMachine, cloudMachineAccounts } from "../cloudWorktreePlacement";
 import { hasRemoteHosts, useHostList } from "../hostList";
 import type { HostSparkline as HostSparklineComponent } from "./HostSparkline";
 import type { OtherHostsWorktrees as OtherHostsWorktreesComponent } from "./OtherHostsWorktrees";
@@ -43,9 +45,15 @@ function useRemoteHostsInUse(): boolean {
   return isRemoteShellSupported() && hasRemoteHosts(hostList);
 }
 
-/** The new-worktree dialog's host choice; absent until a host other than this machine exists. */
+/**
+ * The new-worktree dialog's host choice; absent until a host other than this
+ * machine exists, or a connected cloud account can make one.
+ */
 export function LazyWorktreePlacementRow(props: PlacementProps) {
-  if (!useRemoteHostsInUse()) return null;
+  const hostsInUse = useRemoteHostsInUse();
+  const { snapshot } = useCloudHosts();
+  const cloudOffered = canOfferCloudMachine() && cloudMachineAccounts(snapshot).length > 0;
+  if (!hostsInUse && !cloudOffered) return null;
   return (
     <ErrorBoundary variant="component" componentName="WorktreePlacementRow">
       <Suspense fallback={null}>

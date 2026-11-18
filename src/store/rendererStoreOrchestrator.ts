@@ -34,8 +34,6 @@ import { usePluginPanelOpenRequestStore } from "./pluginPanelOpenRequestStore";
 import { sameLayoutPanelIds, selectLayoutPanelIds, useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
-import { useHelpPanelStore } from "./helpPanelStore";
-import { usePortalStore } from "./portalStore";
 import {
   applicationDefaultRoute,
   selectProjectMainAreaRoute,
@@ -742,30 +740,7 @@ export function initStoreOrchestrator(): () => void {
   // Which copy of each agent's CLI launches (#16399), kept current across views.
   disposables.add(toDisposable(initAgentCliChoiceSync()));
 
-  // 7. The Daintree Assistant and the web chat Portal share the right edge, so
-  //    only one is open at a time: opening either closes the other. Keyed on the
-  //    closed→open transition so every entry point (toolbar, keybinding, action,
-  //    MCP) is covered without either store importing its partner.
-  disposables.add(
-    toDisposable(
-      useHelpPanelStore.subscribe((state, prev) => {
-        if (state.isOpen && !prev.isOpen && usePortalStore.getState().isOpen) {
-          usePortalStore.getState().setOpen(false);
-        }
-      })
-    )
-  );
-  disposables.add(
-    toDisposable(
-      usePortalStore.subscribe((state, prev) => {
-        if (state.isOpen && !prev.isOpen && useHelpPanelStore.getState().isOpen) {
-          useHelpPanelStore.getState().setOpen(false);
-        }
-      })
-    )
-  );
-
-  // 8. Flush the MRU debounce once nobody can see this view, or its latest
+  // 7. Flush the MRU debounce once nobody can see this view, or its latest
   //    write is stranded when the user switches projects, closes the window,
   //    or quits within the debounce window (#9914). A project switch caches
   //    the view, which fires no `visibilitychange` (a cached view reports
@@ -791,7 +766,7 @@ export function initStoreOrchestrator(): () => void {
   if (isViewUnobservable()) void flushMru();
 
   // Focused panel kind for `host.onDidChangeFocusedPanel` (#13221). Main
-  // combines it with window and Portal focus, which it observes itself.
+  // combines it with window focus, which it observes itself.
   disposables.add(toDisposable(subscribeFocusedPanelReporter()));
 
   // The host's assistant agent and default terminal agent (#13345).

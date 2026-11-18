@@ -35,6 +35,7 @@ import {
   unsupportedConnection,
 } from "./connection.js";
 import { discoverHosts, discoverWslDistros } from "./discovery.js";
+import { listSshConfigAliases } from "./sshConfig.js";
 import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
 import { runHostInstall } from "./hostInstaller.js";
 import { RestartImpactSchema } from "../metrics/linkMethods.js";
@@ -42,7 +43,13 @@ import { bootstrapHostMode, LINUX_START_SCRIPT, macStartScript } from "./hostMod
 import { probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
-import { closeSshMaster, controlPathFor } from "./sshTransport.js";
+import { sshExecutable } from "./sshExecutable.js";
+import {
+  closeSshMaster,
+  controlPathFor,
+  hiddenHopRefusal,
+  isProxyClosedEarly,
+} from "./sshTransport.js";
 import type { WslKeepalive } from "./wslKeepalive.js";
 import { createWslCommandChannel } from "./wslShell.js";
 
@@ -68,6 +75,8 @@ export interface HostSetupDeps {
   /** The release feed's checksum for an artifact; defaults to reading the feed's update manifest. */
   checksum?(url: string, signal: AbortSignal): Promise<ArtifactChecksum | null>;
   emit(event: RemoteHostsEvent): void;
+  /** The aliases the user's ssh config names; read from `~/.ssh/config` unless given. */
+  sshConfigAliases?: (signal?: AbortSignal) => Promise<readonly string[]>;
   sleep?(ms: number, signal: AbortSignal): Promise<void>;
   now?: () => number;
   idlePollMs?: number;
@@ -175,12 +184,34 @@ export class HostSetupService {
       run: this.deps.run,
       platform: this.deps.platform,
       knownConnections: this.deps.knownConnections(),
+      // Read only here, when Add Host asks: never at startup, never written.
+      sshConfigAliases:
+        this.deps.sshConfigAliases ??
+        ((aliasSignal) => listSshConfigAliases({ signal: aliasSignal })),
       signal,
     });
   }
 
   async probe(payload: HostSetupTarget): Promise<HostProbeResult> {
-    return (await this.probeOutcome(this.requireTarget(payload))).result;
+    const connection = this.requireTarget(payload);
+    const result = (await this.probeOutcome(connection)).result;
+    // The probe may start a master, so ssh hid a jump host's own words: heard
+    // once more without one, a refused login is named and can be signed in to.
+    if (
+      !result.reachable &&
+      connection.kind === "ssh" &&
+      !this.deps.channelFor &&
+      isProxyClosedEarly(result.sshError)
+    ) {
+      const refusal = await hiddenHopRefusal(
+        this.deps.run,
+        sshExecutable(),
+        connection.target
+      ).catch(() => null);
+      if (refusal !== null)
+        return { ...result, sshError: refusal.split("\n").slice(-3).join("\n") };
+    }
+    return result;
   }
 
   async planInstall(payload: PlanInstallPayload): Promise<HostInstallPlan> {

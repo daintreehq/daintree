@@ -98,7 +98,7 @@ export function assertLifecycleInvariants(manager: ManagerLike, win: WindowLike)
       const wc = child?.webContents;
       if (!wc || wc.isDestroyed()) continue;
       const projectId = manager.getProjectIdForWebContents(wc.id);
-      // Non-project children (welcome view, parked portals) own their own
+      // Non-project children (welcome view, paint surfaces) own their own
       // attach lifecycle — only project views are orphan candidates here.
       if (projectId === null) continue;
       expect(

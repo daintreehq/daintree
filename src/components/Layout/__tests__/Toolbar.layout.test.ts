@@ -251,15 +251,15 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(source).toMatch(/isFullscreen\s*&&\s*"w-0(\s[^"]*)?"/);
     });
 
-    it("places the spacer inside the right toolbar group, after the portal toggle", () => {
+    it("places the spacer inside the right toolbar group, after the assistant toggle", () => {
       const rightGroupIndex = source.indexOf('aria-label="Tools and settings"');
       const spacerIndex = source.indexOf("width: `${WINDOWS_CAPTION_WIDTH_PX}px`");
-      const portalToggleIndex = source.indexOf('buttonRegistry["portal-toggle"]');
+      const assistantToggleIndex = source.indexOf('buttonRegistry["assistant-toggle"]');
       expect(rightGroupIndex).toBeGreaterThan(-1);
       expect(spacerIndex).toBeGreaterThan(-1);
-      expect(portalToggleIndex).toBeGreaterThan(-1);
+      expect(assistantToggleIndex).toBeGreaterThan(-1);
       expect(spacerIndex).toBeGreaterThan(rightGroupIndex);
-      expect(spacerIndex).toBeGreaterThan(portalToggleIndex);
+      expect(spacerIndex).toBeGreaterThan(assistantToggleIndex);
     });
 
     it("uses scoped transition-[width] motion, not transition-all", () => {
@@ -308,7 +308,7 @@ describe("Toolbar keyboard navigation — issue #2814", () => {
 
     it("keeps the tab stop on the focused item when an item appears ahead of it", () => {
       // The host memory pause indicator (#12375) comes and goes ahead of the
-      // assistant and portal toggles. A stored index alone would then point at
+      // assistant toggle. A stored index alone would then point at
       // the newcomer and strand the tab stop away from where focus really is.
       expect(source).toMatch(/items\.findIndex\(\(el\) => el === document\.activeElement\)/);
     });

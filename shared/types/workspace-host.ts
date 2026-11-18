@@ -384,7 +384,7 @@ export interface WorktreeSnapshot {
   /** POSIX path inside the WSL distro (mirrors `Worktree.wslPosixPath`). */
   wslPosixPath?: string;
 
-  /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING). Absent when no blocking operation is in progress. */
+  /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING, APPLYING_MAILBOX). Absent when no blocking operation is in progress. */
   repoState?: RepoState;
 
   /** Whether this worktree is in detached HEAD state. Mirrors the Worktree field. */
@@ -618,6 +618,17 @@ export type WorkspaceHostRequest =
       worktreeId: string;
       force?: boolean;
       deleteBranch?: boolean;
+    }
+  /**
+   * Main's merged-worktree rule (#17321) removing a worktree no one is there
+   * to confirm. Answered with `delete-worktree-result`. Never forces or
+   * deletes the branch; the host re-checks the guard right before git runs.
+   */
+  | {
+      type: "remove-merged-worktree";
+      requestId: string;
+      worktreeId: string;
+      guard: UnattendedRemovalGuard;
     }
   /**
    * What deleting the worktree would discard and run, read fresh, for a
@@ -1022,7 +1033,17 @@ export type WorkspaceHostEvent =
       startCommit?: string;
       error?: string;
     }
-  | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }
+  | {
+      type: "delete-worktree-result";
+      requestId: string;
+      success: boolean;
+      error?: string;
+      /**
+       * An unattended removal (#17321) failed after git was asked to remove
+       * the checkout, so it may be gone anyway.
+       */
+      gitStarted?: true;
+    }
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
   /**
@@ -1345,3 +1366,31 @@ export interface WorkspaceClientConfig {
    */
   maxWarmEntries?: number;
 }
+
+/**
+ * What an unattended removal (#17321) was judged against: the branch the
+ * merged PR came from and the commit it merged. The host refuses unless the
+ * checkout still matches both and holds nothing uncommitted.
+ */
+export interface UnattendedRemovalGuard {
+  expectedBranch: string;
+  expectedHead: string;
+  /**
+   * Epoch ms after which the host refuses to start git: main stops waiting
+   * for an answer and later settles the removal from the disk, so a request
+   * that stalled past this can't remove a checkout main has given up on.
+   */
+  notAfter: number;
+}
+
+/**
+ * How an unattended removal (#17321) ended, as main can tell it: `declined`
+ * when the last check before the request said no, `not-sent` when it failed
+ * before the request went, `refused` when the host said no before git ran,
+ * and `lost` when the removal may or may not have happened (no answer came
+ * back, or git failed partway).
+ */
+export type UnattendedRemovalOutcome =
+  | { outcome: "removed" }
+  | { outcome: "declined" }
+  | { outcome: "not-sent" | "refused" | "lost"; error: string };

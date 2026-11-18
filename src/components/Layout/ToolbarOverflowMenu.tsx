@@ -55,6 +55,7 @@ import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { useUIStore } from "@/store/uiStore";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
@@ -74,6 +75,7 @@ export const OVERFLOW_KEYBINDING_BY_ID: Partial<Record<string, string>> = {
   "copy-tree": "worktree.copyTree",
   "notification-center": "notifications.toggle",
   canopy: "canopy.toggle",
+  "decisions-inbox": "decisions.openInbox",
   "command-palette": "action.palette.open",
   "resume-sessions": "terminal.resumeSessions",
   "dev-server": "devServer.start",
@@ -95,6 +97,8 @@ export interface OverflowMenuProps {
   notificationUnreadCount: number;
   /** Asks Canopy reads as urgent, said when its button is folded in here. */
   canopyUrgentCount: number;
+  /** Questions waiting on the person, said when the Decisions inbox button is folded in here. */
+  decisionsWaitingCount?: number;
   /** Extra classes for the trigger button: the left one's clearance in its row. */
   triggerClassName?: string;
   /** Problems' watcher observation ("File watching degraded"), or null. */
@@ -161,6 +165,7 @@ export function OverflowMenu({
   errorCount,
   notificationUnreadCount,
   canopyUrgentCount,
+  decisionsWaitingCount = 0,
   watcherStatus = null,
   triggerClassName,
   agentObservations,
@@ -252,6 +257,7 @@ export function OverflowMenu({
   const diagnosticsOpen = useDiagnosticsStore((s) => s.isOpen);
   const notificationCenterOpen = useUIStore((s) => s.notificationCenterOpen);
   const canopyOpen = useCanopyStore((s) => s.isOpen);
+  const decisionsInboxOpen = useDecisionsInboxStore((s) => s.isOpen);
   const signalMark = (
     id: AnyToolbarButtonId
   ): { pip: "error" | "warning" | "waiting" | "unread"; spoken: string } | null => {
@@ -268,6 +274,12 @@ export function OverflowMenu({
     if (id === "canopy" && canopyUrgentCount > 0 && !canopyOpen) {
       return { pip: "waiting", spoken: `${canopyUrgentCount} urgent` };
     }
+    if (id === "decisions-inbox" && decisionsWaitingCount > 0 && !decisionsInboxOpen) {
+      return {
+        pip: "waiting",
+        spoken: `${pluralize(decisionsWaitingCount, "question")} waiting`,
+      };
+    }
     if (id === "notification-center" && notificationUnreadCount > 0 && !notificationCenterOpen) {
       return { pip: "unread", spoken: `${notificationUnreadCount} unread` };
     }
@@ -279,7 +291,7 @@ export function OverflowMenu({
   if (overflowIds.includes("problems") && errorCount > 0 && !diagnosticsOpen) {
     observations.push(pluralize(errorCount, "error"));
   }
-  for (const id of ["notification-center", "canopy"] as const) {
+  for (const id of ["notification-center", "canopy", "decisions-inbox"] as const) {
     if (!overflowIds.includes(id)) continue;
     const mark = signalMark(id);
     if (mark) observations.push(mark.spoken);
@@ -304,6 +316,9 @@ export function OverflowMenu({
     if (id === "notification-center" && notificationUnreadCount > 0 && !notificationCenterOpen)
       return notificationUnreadCount;
     if (id === "canopy" && canopyUrgentCount > 0 && !canopyOpen) return canopyUrgentCount;
+    if (id === "decisions-inbox" && decisionsWaitingCount > 0 && !decisionsInboxOpen) {
+      return decisionsWaitingCount;
+    }
     return null;
   };
 
@@ -622,6 +637,8 @@ export function OverflowMenu({
         disabled={disabled}
         onClick={() => overflowActions[id]?.()}
         keybinding={keybindingById[id]}
+        // The inbox takes focus; the closing menu mustn't take it back to `…`.
+        focusHandoff={id === "decisions-inbox"}
       >
         {rowContent}
       </DropdownMenuItem>,

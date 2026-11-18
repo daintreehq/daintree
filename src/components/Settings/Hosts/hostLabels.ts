@@ -3,6 +3,7 @@ import type {
   HandshakeMismatch,
   HostArch,
   HostConnection,
+  HostConnectionBlocker,
   HostConnectionState,
   HostDescriptor,
   HostPlatform,
@@ -15,6 +16,11 @@ import type {
   StagedHostUpdate,
 } from "@shared/types/ipc/remoteHosts";
 import { pluralize } from "@/lib/pluralize";
+
+import { sshRefusalAdvice } from "@shared/utils/sshRefusal";
+
+export { sshRefusalAdvice };
+export type { SshRefusalAdvice } from "@shared/utils/sshRefusal";
 
 export function platformLabel(platform: HostPlatform | null, arch: HostArch | null): string {
   if (!platform) return "Platform not seen yet";
@@ -71,6 +77,17 @@ export function stagedUpdateLabel(staged: StagedHostUpdate): string {
     : `Daintree ${staged.version}`;
 }
 
+/** What stopped the retries, as the label's lead; null for an ssh refusal, said by its detail. */
+function parkedLead(blocker: HostConnectionBlocker | undefined): string | null {
+  if (blocker?.kind === "wsl-distro-missing") return `WSL couldn't find ${blocker.distro}`;
+  if (blocker?.kind === "unusable") return withoutStop(blocker.message) || null;
+  return null;
+}
+
+function withoutStop(text: string): string {
+  return text.trim().replace(/\.$/, "");
+}
+
 function formatSeen(at: number | null, now: number): string {
   if (at === null) return "never seen";
   return `last seen ${formatRelativeTime(at, now)}`;
@@ -93,17 +110,20 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       // A build that differs but connected is the Build row's to say, not the link's.
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
-    case "unreachable":
+    case "unreachable": {
       if (state.restarting) return "Restarting…";
       // The host menus' word for the same state.
       if (state.hostModeOff) return `Not listening · ${formatSeen(state.lastSeenAt, now)}`;
-      // What was seen, when there is something: ssh's own words for why it couldn't reach it.
+      // What was seen, when there is something: the transport's words for why it couldn't reach it.
+      const lead = parkedLead(state.blocker);
       return [
-        "Unreachable",
+        lead ?? "Unreachable",
         formatSeen(state.lastSeenAt, now),
         ...(state.stoppedRetrying ? ["not retrying until you connect"] : []),
-        ...(state.detail ? [state.detail] : []),
+        // A transport that said the same thing twice (cloud hosts do) is said once.
+        ...(state.detail && withoutStop(state.detail) !== lead ? [state.detail] : []),
       ].join(" · ");
+    }
     case "version-mismatch":
       // Exact builds are the Build row's; here, what it means for connecting.
       return "Can't connect · needs a compatible build";
@@ -291,28 +311,17 @@ export function shellWord(target: string): string {
   return /^[\w@.%+-]+$/.test(target) ? target : `'${target.replace(/'/g, "'\\''")}'`;
 }
 
-export type SshRefusalAdvice = "untrusted-host-key" | "changed-host-key" | "login-refused";
-
 /**
- * What ssh's own words say stopped a probe that BatchMode refused, so the
- * dialog can name the next step. The probe keeps only the last lines of
- * stderr, so a changed key is told apart by its "has changed" or "Offending"
- * line rather than the banner above them.
+ * A link that stopped because ssh reached the login and was refused: it waits
+ * for a person, and a Sign in can pass ssh's own prompts (a passphrase, a
+ * code) to them.
  */
-export function sshRefusalAdvice(sshError: string | null): SshRefusalAdvice | null {
-  if (!sshError) return null;
-  if (
-    /^Host key for \S+ has changed\b|REMOTE HOST IDENTIFICATION HAS CHANGED|^Offending \S+ key in /im.test(
-      sshError
-    )
-  ) {
-    return "changed-host-key";
-  }
-  if (/Host key verification failed|No \S+ host key is known/i.test(sshError)) {
-    return "untrusted-host-key";
-  }
-  if (/Permission denied \(/i.test(sshError)) return "login-refused";
-  return null;
+export function isLoginRefused(connection: HostConnectionState): boolean {
+  return (
+    connection.status === "unreachable" &&
+    connection.stoppedRetrying === true &&
+    sshRefusalAdvice(connection.detail) === "login-refused"
+  );
 }
 
 /**

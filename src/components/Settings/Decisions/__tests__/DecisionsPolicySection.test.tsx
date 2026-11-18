@@ -7,6 +7,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { DecisionsPolicySection } from "../DecisionsPolicySection";
 import { DecisionsQuestionsSection } from "../DecisionsQuestionsSection";
 import { useDecisionsPolicy } from "../useDecisionsPolicy";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import {
   gateDescription,
   proxyAllowlistText,
@@ -70,7 +72,7 @@ async function statusPushed() {
 }
 
 /** What the Decisions tab renders behind its switch: one read feeding both sections. */
-function Sections({ active = true }: { active?: boolean }) {
+function Sections({ active = true, onClose }: { active?: boolean; onClose?: SettingsTabClose }) {
   const read = useDecisionsPolicy(active);
   return (
     <TooltipProvider>
@@ -79,6 +81,7 @@ function Sections({ active = true }: { active?: boolean }) {
         status={{ state: "connected" }}
         locked={false}
         onChanged={() => {}}
+        onClose={onClose}
       />
       <DecisionsPolicySection policy={read} />
     </TooltipProvider>
@@ -388,6 +391,51 @@ describe("Decisions policy and questions sections", () => {
     expect(screen.queryByText("Couldn't read how long questions wait")).toBeNull();
     expect(screen.getByRole("group", { name: "Workflow gates" })).toBeTruthy();
     expect(expiryRow()).toContain("waits 2 days");
+  });
+});
+
+describe("Questions → Inbox (#17231)", () => {
+  beforeEach(() => {
+    getPolicy.mockResolvedValue(policy());
+  });
+
+  afterEach(() => {
+    useDecisionsInboxStore.setState({ isOpen: false });
+  });
+
+  it("opens the inbox, from Settings shown outside its dialog", async () => {
+    render(<Sections />);
+    await act(async () => {});
+    const button = screen.getByRole("button", { name: "Open inbox" });
+    // The row's description reaches the button, so it isn't read out alone.
+    const described = document.getElementById(button.getAttribute("aria-describedby") ?? "");
+    expect(described?.closest("#decisions-questions-inbox")).not.toBeNull();
+    // The explanation, not the row's own label.
+    expect(described?.textContent).not.toBe("Inbox");
+    expect(described?.textContent).toMatch(/question/i);
+    fireEvent.click(button);
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+    expect(useDecisionsInboxStore.getState().request.terminalId).toBeNull();
+  });
+
+  it("closes Settings first, and opens nothing when Settings stays", async () => {
+    const afterCloses: Array<(closed: boolean) => void> = [];
+    const onClose = vi.fn<SettingsTabClose>(async (afterClose) => {
+      if (afterClose) afterCloses.push(afterClose);
+      return true;
+    });
+    render(<Sections onClose={onClose} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByTestId("decisions-inbox-open"));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+
+    act(() => afterCloses[0]!(false));
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+
+    fireEvent.click(screen.getByTestId("decisions-inbox-open"));
+    act(() => afterCloses[1]!(true));
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
   });
 });
 

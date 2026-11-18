@@ -1,8 +1,8 @@
-import type { HostId } from "../../../shared/types/remoteHosts.js";
+import type { HostConnectionState, HostId } from "../../../shared/types/remoteHosts.js";
 import { getProjectAcrossHostsService } from "../../services/projectAcrossHosts/index.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { hostModeOff } from "../client/hostModeOffError.js";
-import { sshAccessDenied } from "../client/sshAccessError.js";
+import { parkedLinkError } from "../client/parkedLinkError.js";
 import type { RemoteHostsClient } from "../client/RemoteHostsClient.js";
 import type { LinkSession } from "../link/session.js";
 import { registerRemoteService } from "../runtime.js";
@@ -28,10 +28,14 @@ function unreachable(
   hostId: HostId,
   readiness: string,
   hostName: string,
-  linkDetail: string | null,
+  link: HostConnectionState | undefined,
   everSeen: boolean
 ): AppError {
-  if (readiness === "stopped-retrying") return sshAccessDenied(hostName, linkDetail);
+  if (readiness === "stopped-retrying") {
+    return link?.status === "unreachable"
+      ? parkedLinkError(hostName, link.blocker, link.detail)
+      : parkedLinkError(hostName, undefined, null);
+  }
   if (readiness === "host-mode-off") return hostModeOff(hostName, everSeen);
   if (readiness === "version-mismatch") {
     return new AppError({
@@ -66,12 +70,11 @@ export function createHostSwitchService(deps: HostSwitchClientDeps): HostSwitchS
     if (!session?.isOpen) {
       const entry = deps.client.list().find((candidate) => candidate.descriptor.id === hostId);
       const link = readiness === "stopped-retrying" ? entry?.connection : undefined;
-      const detail = link?.status === "unreachable" ? link.detail : null;
       throw unreachable(
         hostId,
         readiness,
         entry?.descriptor.name ?? hostId,
-        detail,
+        link,
         (entry?.descriptor.lastSeenAt ?? null) !== null
       );
     }

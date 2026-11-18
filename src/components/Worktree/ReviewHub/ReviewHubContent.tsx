@@ -9,8 +9,9 @@ import {
   useRef,
   useState,
 } from "react";
-import type { StagingFileEntry, GitStatus } from "@shared/types";
-import type { GitDiffSide } from "@shared/types/git";
+import type { ConflictSideChoice, StagingFileEntry, GitStatus } from "@shared/types";
+import type { GitDiffSide, RepoOperationPin } from "@shared/types/git";
+import { isClientGitError } from "@/utils/clientGitError";
 import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
@@ -106,6 +107,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
 import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
+import { joinWorktreeFilePath } from "@/utils/worktreePaths";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -127,6 +129,7 @@ import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { BranchBadge } from "@/components/ui/BranchBadge";
 import { Badge } from "@/components/ui/badge";
 import { pluralize } from "@/lib/pluralize";
+import { toRepoOperationState } from "@/components/Git/repoOperationCopy";
 
 /**
  * Floor for the dialog-hosted body, so the pane stops resizing itself around
@@ -265,6 +268,7 @@ export function ReviewHubContent({
     readWithCapture,
     refreshWithCapture,
     debouncedBgRefreshRef,
+    isOpenPath,
     beginOpen: beginStatusOpen,
     reset: resetStatus,
   } = useReviewHubStatus({ isOpen, worktreePath, worktreeId });
@@ -404,6 +408,7 @@ export function ReviewHubContent({
     pullRebasing,
     handleCommit,
     handleCommitAndPush,
+    handleCommitThenReviewPush,
     handleRetryPush,
     handlePushClean,
     confirmPullRebase,
@@ -1167,9 +1172,11 @@ export function ReviewHubContent({
     handleToggleUnstaged,
   } = useReviewHubStagingActions({
     worktreePath,
+    isOpenPath,
     refresh,
     derivedStaged,
     derivedUnstaged,
+    unstaged: status?.unstaged ?? null,
     selectedPaths,
     selectionSection,
     setActionError,
@@ -1246,16 +1253,23 @@ export function ReviewHubContent({
   ]);
 
   const repoState = status?.repoState ?? "CLEAN";
-  const isOperationState =
-    repoState === "MERGING" ||
-    repoState === "REBASING" ||
-    repoState === "CHERRY_PICKING" ||
-    repoState === "REVERTING";
+  const isOperationState = toRepoOperationState(repoState) !== null;
 
   useEffect(() => {
     if (!isOpen || !autoStageOnOpen) return;
     if (!status || !statusIsFresh) return;
     if (hasAutoStagedRef.current) return;
+    // Never over a conflict or a halted operation: staging everything would
+    // stage conflicted files markers and all, which marks them resolved, and
+    // the conflict panel owns what gets staged there. Opening the hub to
+    // resolve or continue one is ordinary (#17559), not an edge case. The
+    // one-shot is spent here too, as it is over staged files below: the
+    // tree the operation leaves when it finishes is not what was opened.
+    const halted = status.repoState !== "CLEAN" && status.repoState !== "DIRTY";
+    if (status.conflicted.length > 0 || halted) {
+      hasAutoStagedRef.current = true;
+      return;
+    }
     if (status.staged.length > 0) {
       // Already staged from a prior session — skip and mark as handled.
       hasAutoStagedRef.current = true;
@@ -1285,6 +1299,8 @@ export function ReviewHubContent({
         await window.electron.git.stageAll(worktreePath);
         await refresh();
       } catch (err) {
+        // Its Retry would stage the worktree the hub has since moved off.
+        if (!isOpenPath(worktreePath)) return;
         hasAutoStagedRef.current = false;
         setActionError({
           title: "Couldn't stage all files",
@@ -1301,6 +1317,7 @@ export function ReviewHubContent({
     isOperationState,
     refresh,
     worktreePath,
+    isOpenPath,
     handleStageAll,
     debouncedBgRefreshRef,
   ]);
@@ -1337,43 +1354,67 @@ export function ReviewHubContent({
       setSelectedBaseBranchFile(null);
     }
   }, [statusBranch, mainBranch, diffMode, invalidateBaseBranch]);
-  const handleAbortOperation = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.abortRepositoryOperation(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError({
-        title: "Couldn't abort repository operation",
-        detail: formatErrorMessage(err, "Failed to abort repository operation"),
-      });
-      throw err;
-    }
-  }, [worktreePath, refresh, debouncedBgRefreshRef]);
+  // Both carry the operation the panel showed when the user chose (#17559),
+  // and Main refuses if another has replaced it. That refusal ran no git, so
+  // the banner offers no Retry, which would only send the same stale choice
+  // again; the refresh puts the operation that is there now on screen to
+  // choose from instead.
+  const handleAbortOperation = useCallback(
+    async (chosen: RepoOperationPin) => {
+      setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
+      try {
+        await window.electron.git.abortRepositoryOperation(worktreePath, chosen);
+        await refresh();
+      } catch (err) {
+        // The conflict writes below all still throw for ConflictPanel, which
+        // guards a move itself; only the banner is this hub's, and it belongs
+        // to the worktree the write was for (#17584).
+        if (isOpenPath(worktreePath)) {
+          const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+          setActionError({
+            title: "Couldn't abort repository operation",
+            detail: formatErrorMessage(err, "Failed to abort repository operation"),
+          });
+          if (changed) void refresh().catch(() => {});
+        }
+        throw err;
+      }
+    },
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
+  );
 
   // Each handler retries itself from its own error banner. A named function
   // expression referenced from inside its own body is a declaration the React
   // Compiler cannot hoist, and it abandons the whole component over it, so the
-  // recursion goes through a local const instead.
-  const handleContinueOperation = useCallback((): Promise<void> => {
-    const continueOperation = async (): Promise<void> => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      try {
-        await window.electron.git.continueRepositoryOperation(worktreePath);
-        await refresh();
-      } catch (err) {
-        setActionError({
-          title: "Couldn't continue repository operation",
-          detail: formatErrorMessage(err, "Failed to continue repository operation"),
-          retry: () => void continueOperation().catch(() => {}),
-        });
-        throw err;
-      }
-    };
-    return continueOperation();
-  }, [worktreePath, refresh, debouncedBgRefreshRef]);
+  // recursion goes through a local const instead. The retry keeps the choice it
+  // was made for, so it continues that operation or is refused, never whichever
+  // one has replaced it since.
+  const handleContinueOperation = useCallback(
+    (chosen: RepoOperationPin): Promise<void> => {
+      const continueOperation = async (): Promise<void> => {
+        setActionError(null);
+        debouncedBgRefreshRef.current?.cancel();
+        try {
+          await window.electron.git.continueRepositoryOperation(worktreePath, chosen);
+          await refresh();
+        } catch (err) {
+          if (isOpenPath(worktreePath)) {
+            const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+            setActionError({
+              title: "Couldn't continue repository operation",
+              detail: formatErrorMessage(err, "Failed to continue repository operation"),
+              ...(changed ? {} : { retry: () => void continueOperation().catch(() => {}) }),
+            });
+            if (changed) void refresh().catch(() => {});
+          }
+          throw err;
+        }
+      };
+      return continueOperation();
+    },
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
+  );
 
   const handleOpenInEditor = useCallback(
     (args: string | { path: string; line?: number }): Promise<void> => {
@@ -1385,10 +1426,8 @@ export function ReviewHubContent({
         // chaining inside one. Read at click time rather than subscribing —
         // without it the main process never loads the project's preferred-editor
         // setting.
-        const base = worktreePath.replace(/\\/g, "/").replace(/\/+$/, "");
-        const tail = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
         const payload: { path: string; line?: number; projectId?: string } = {
-          path: `${base}/${tail}`,
+          path: joinWorktreeFilePath(worktreePath, filePath),
           projectId: useProjectStore.getState().currentProject?.id,
         };
         if (typeof line === "number" && Number.isFinite(line) && line > 0) {
@@ -1410,24 +1449,33 @@ export function ReviewHubContent({
   );
 
   const handleCheckoutOursTheirs = useCallback(
-    async (filePath: string, side: "ours" | "theirs") => {
+    async (filePath: string, choice: ConflictSideChoice) => {
       setActionError(null);
       debouncedBgRefreshRef.current?.cancel();
       try {
-        await window.electron.git.checkoutOursTheirs(worktreePath, filePath, side);
+        await window.electron.git.checkoutOursTheirs(worktreePath, filePath, choice);
         await refresh();
       } catch (err) {
-        setActionError({
-          title: side === "ours" ? "Couldn't take ours" : "Couldn't take theirs",
-          detail: formatErrorMessage(
-            err,
-            side === "ours" ? "Failed to take ours" : "Failed to take theirs"
-          ),
-        });
+        if (isOpenPath(worktreePath)) {
+          // Main refuses a choice the index no longer agrees with, and the read
+          // that would have shown the change was cancelled above: read again so
+          // the row offers what is there now.
+          debouncedBgRefreshRef.current?.();
+          const action =
+            choice.resolution === "delete"
+              ? "delete file"
+              : choice.side === "ours"
+                ? "take ours"
+                : "take theirs";
+          setActionError({
+            title: `Couldn't ${action}`,
+            detail: formatErrorMessage(err, `Failed to ${action}`),
+          });
+        }
         throw err;
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   // Same body as handleStageFile but rethrows so ConflictPanel can roll back
@@ -1442,14 +1490,16 @@ export function ReviewHubContent({
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError({
-          title: "Couldn't mark file resolved",
-          detail: formatErrorMessage(err, "Failed to mark file resolved"),
-        });
+        if (isOpenPath(worktreePath)) {
+          setActionError({
+            title: "Couldn't mark file resolved",
+            detail: formatErrorMessage(err, "Failed to mark file resolved"),
+          });
+        }
         throw err;
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   const handleFocusBlocker = useCallback(
@@ -1735,10 +1785,12 @@ export function ReviewHubContent({
 
   if (!isOpen) return null;
 
-  const totalChanges =
-    (status?.staged.length ?? 0) +
-    (status?.unstaged.length ?? 0) +
-    (status?.conflicted.length ?? 0);
+  // A partially staged path appears in both sections but is one changed file.
+  const totalChanges = new Set([
+    ...(status?.staged ?? []).map((f) => f.path),
+    ...(status?.unstaged ?? []).map((f) => f.path),
+    ...(status?.conflicted ?? []),
+  ]).size;
   const hasConflicts = (status?.conflicted.length ?? 0) > 0;
   const hasStagedSelection = selectionSection === "staged" && selectedPaths.size > 0;
   const hasUnstagedSelection = selectionSection === "unstaged" && selectedPaths.size > 0;
@@ -2587,6 +2639,8 @@ export function ReviewHubContent({
               onRestoreCommitSeed={restoreCommitSeed}
               onCommit={handleCommit}
               onCommitAndPush={handleCommitAndPush}
+              isUnbornBranch={status.isUnbornBranch === true}
+              onCommitThenReviewPush={handleCommitThenReviewPush}
               onFocusBlocker={handleFocusBlocker}
               isPushing={isPushing}
               pushProgress={pushProgress}

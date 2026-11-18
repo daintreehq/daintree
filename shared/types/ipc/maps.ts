@@ -1,4 +1,9 @@
-import type { GitCommitResult, GitRemoteCommitPreview, StagingStatus } from "../git.js";
+import type {
+  GitCommitResult,
+  GitRemoteCommitPreview,
+  RepoOperationPin,
+  StagingStatus,
+} from "../git.js";
 import type { AgentId } from "../agent.js";
 import type {
   VoiceInputError,
@@ -970,7 +975,21 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "git:commit": {
-    args: [payload: { cwd: string; message: string }];
+    args: [
+      payload: {
+        cwd: string;
+        message: string;
+        /**
+         * What a Commit & push confirm reviewed (#17563): all three or none.
+         * With them the commit refuses (`commit-review-stale`) unless the
+         * worktree is still on that branch, at that commit, with exactly those
+         * changes staged, and the result reports `stagedIdentity`.
+         */
+        expectedBranch?: string;
+        expectedHeadOid?: string;
+        expectedStagedIdentity?: string;
+      },
+    ];
     result: GitCommitResult;
   };
   "git:push": {
@@ -1025,11 +1044,11 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: StagingStatus;
   };
   "git:abort-repository-operation": {
-    args: [cwd: string];
+    args: [cwd: string, expected?: RepoOperationPin];
     result: void;
   };
   "git:continue-repository-operation": {
-    args: [cwd: string];
+    args: [cwd: string, expected?: RepoOperationPin];
     result: void;
   };
   "git:scan-conflict-markers": {
@@ -1057,7 +1076,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Portal channels
   // Keybinding channels
   "keybinding:get-overrides": {
     args: [];
@@ -1566,6 +1584,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
 export interface IpcEventMap {
   // Remote Hosts namespaces: one push channel each, carrying a discriminated union.
   "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
+  "remote-hosts:ssh-sign-in-event": import("./remoteHosts.js").SshSignInEvent;
   "host-mode:event": import("./hostMode.js").HostModeEvent;
   "device-answer:event": import("./deviceAnswer.js").DeviceAnswerEvent;
   /** Every assistant persona as stored, after any write (#16213). */
@@ -1630,6 +1649,8 @@ export interface IpcEventMap {
   "decisions:questions-changed": import("../decisionsQuestion.js").DecisionQuestionList;
   // Open one question in the question view (#17232): a click on its desktop notification. One window only.
   "decisions:open-question": import("../decisionsQuestion.js").DecisionsOpenQuestionRequest;
+  // Open the list of answers needing attention (#17235): a click on a stalled answer's notification. One window only.
+  "decisions:open-attention": import("../decisionsQuestion.js").DecisionsOpenAttentionRequest;
   // The relay's paired devices or its key changed; Settings reads the list again. Its own windows only.
   "decisions:devices-changed": null;
   // The setup check's progress (#16024). Its own windows only.
@@ -2039,12 +2060,6 @@ export interface IpcEventMap {
   // Power policy changed — battery, focus, visibility, or screen lock (#12515)
   "system:power-policy-changed": import("../powerPolicy.js").PowerPolicySnapshot;
 
-  // Portal events
-  "portal:nav-event": import("../portal.js").PortalNavEvent;
-  "portal:focus": void;
-  "portal:blur": void;
-  "portal:tab-evicted": { tabId: string };
-
   // System Sleep events
   "system-sleep:on-suspend": void;
   "system-sleep:on-wake": number;
@@ -2054,7 +2069,7 @@ export interface IpcEventMap {
   "os-dnd:state-changed": import("./osDnd.js").OsDndState;
 
   // Menu events
-  "menu:action": { actionId: string; args?: unknown; portalActionId?: string };
+  "menu:action": { actionId: string; args?: unknown };
 
   // Window events
   "window:fullscreen-change": boolean;
@@ -2076,14 +2091,13 @@ export interface IpcEventMap {
     availableMb: number;
     writesSuppressed: boolean;
   };
-  "portal:tabs-evicted": { tabIds: string[] };
 
   // Sound events (main → renderer)
-  "sound:trigger": { soundFile: string; detune?: number };
+  "sound:trigger": { soundFile: string; detune?: number; volume?: number };
   "sound:cancel": void;
 
   // Notification events
-  "notification:update": { waitingCount: number };
+  "notification:update": { waitingPanelIds: string[]; membershipOnly?: boolean };
   "notification:watch-navigate": { panelId: string; panelTitle: string; worktreeId?: string };
   "notification:show-toast": MainProcessToastPayload;
 
@@ -2306,6 +2320,9 @@ export interface IpcEventMap {
 
   // Host-owned agent defaults changed (#13345)
   "agent-defaults:changed": AgentDefaultsSnapshot;
+
+  // The merged-worktree rule removed a worktree; its receipt waits to be taken (#17321)
+  "merged-worktree-cleanup:receipts-ready": void;
 
   // A saved agent settings change on the host, the whole slice (#14700)
   "agent-settings:changed": import("../agentSettings.js").AgentSettings;
@@ -2825,6 +2842,7 @@ export type IpcEventBusMap = Pick<
   | "decisions:status-changed"
   | "decisions:questions-changed"
   | "decisions:open-question"
+  | "decisions:open-attention"
   | "decisions:devices-changed"
   | "decisions:setup-check-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)

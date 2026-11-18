@@ -1493,6 +1493,7 @@ describe("RemoteHostsClient", () => {
       link.linkState = {
         status: "unreachable",
         detail: "greg@studio-01: Permission denied (publickey).",
+        blocker: { kind: "ssh-access" },
       } as typeof link.linkState;
       await expect(
         client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
@@ -1506,6 +1507,26 @@ describe("RemoteHostsClient", () => {
       await expect(
         client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true })
       ).rejects.toMatchObject({ code: "HOST_SSH_ACCESS_DENIED" });
+    });
+
+    it("names a missing WSL distribution, never ssh, when that stopped the retries", async () => {
+      manager.readiness = "stopped-retrying";
+      const link = manager.connect("studio-01");
+      link.linkState = {
+        status: "unreachable",
+        detail: "There is no distribution with the supplied name.",
+        blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+      } as typeof link.linkState;
+      const error = await client
+        .switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        .catch((e: unknown) => e);
+      expect(error).toMatchObject({
+        code: "HOST_CONNECTION_UNUSABLE",
+        userMessage:
+          "WSL couldn't find Ubuntu-24.04 for studio-01. Restore it under that name, then try again.",
+      });
+      expect((error as { userMessage: string }).userMessage).not.toMatch(/ssh/i);
+      expect(bindings.get(1)).toBe("local");
     });
 
     it("refuses when the host never answers, rather than moving the window blind", async () => {

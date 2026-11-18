@@ -37,14 +37,24 @@ export function canDeleteMachines(provider: CloudProviderTerms | null): boolean 
 /**
  * For a provider that bills a stopped machine, that it does and the way to
  * stop paying: Delete when Daintree can, the provider's console otherwise.
- * Null for one where stopping ends compute billing, which needs no warning.
+ * For one that bills a stopped machine's disk alone, that it does, asleep
+ * too where its machines sleep. Null for one where stopping ends billing.
  */
 export function stoppedBillingSentence(provider: CloudProviderTerms | null): string | null {
-  if (!provider || !billsWhileStopped(provider)) return null;
-  const stopPaying = provider.capabilities.deletion
-    ? "remove the host and delete its machine"
-    : `delete the machine in ${provider.name}'s console`;
-  return `${provider.name} keeps billing a stopped machine for compute until it's deleted. To stop paying for it, ${stopPaying}.`;
+  if (!provider) return null;
+  if (billsWhileStopped(provider)) {
+    const stopPaying = provider.capabilities.deletion
+      ? "remove the host and delete its machine"
+      : `delete the machine in ${provider.name}'s console`;
+    const bills =
+      provider.capabilities.persistence.stoppedBilling ??
+      `${provider.name} keeps billing a stopped machine for compute until it's deleted.`;
+    return `${bills} To stop paying for it, ${stopPaying}.`;
+  }
+  if (!provider.capabilities.persistence.stoppedStorageBilled) return null;
+  const parked =
+    provider.capabilities.lifetime.kind === "idle-sleep" ? "stopped or asleep" : "stopped";
+  return `${provider.name} bills only for its disk while it's ${parked}.`;
 }
 
 /** That a stopped machine on this provider is still billing, for a line of short facts. */
@@ -109,6 +119,16 @@ export function diskSentence(persistence: CloudProviderPersistence): string {
 }
 
 /** A provider's reason as a sentence start: providers write theirs lowercase. */
+/**
+ * What a provider's credentials are called in buttons and copy: a key when it
+ * asks for one value, credentials when it asks for several or isn't registered.
+ */
+export function credentialsNoun(
+  provider: CloudProviderInfo | null | undefined
+): "key" | "credentials" {
+  return provider?.credentialFields.length === 1 ? "key" : "credentials";
+}
+
 export function sentenceCase(text: string): string {
   return text.length > 0 ? `${text[0]!.toUpperCase()}${text.slice(1)}` : text;
 }
@@ -137,10 +157,20 @@ export function idleClockSentence(
   sampledAt: number | null
 ): string {
   if (!idle) return IDLE_TIME_COUNTED;
-  if (idle.busy || idle.idleEndsAt === null) return `In use now. ${IDLE_TIME_COUNTED}.`;
+  if (idle.busy || idle.idleEndsAt === null) {
+    return idle.stopsWhenIdle
+      ? `In use now. ${IDLE_TIME_COUNTED}, and it stops by itself once idle that long.`
+      : `In use now. ${IDLE_TIME_COUNTED}.`;
+  }
   const since = clockTime(new Date(idle.lastWorkAt).toISOString());
   const ends = clockTime(new Date(idle.idleEndsAt).toISOString());
   const ended = sampledAt !== null && idle.idleEndsAt <= sampledAt;
+  // Only the host's own word that it holds a key says it will stop (#17361).
+  if (idle.stopsWhenIdle) {
+    return ended
+      ? `Idle since ${since}. Its idle time ended ${ends}, so it stops by itself.`
+      : `Idle since ${since}. It stops by itself ${ends} if it stays idle.`;
+  }
   return `Idle since ${since}. Its idle time ${ended ? "ended" : "ends"} ${ends}.`;
 }
 
@@ -163,6 +193,7 @@ export function cloudStateWord(status: CloudHostStatus): string {
     }
   }
   if (status.dataExpired) return "Saved disk expired";
+  if (status.machine === "stopped" && status.asleep) return "Asleep";
   // Not proof of anything: a refused key or a lost scope reads the same as a deleted machine.
   if (status.machine === "unknown") return "Couldn't check its state";
   if (status.machine === "not-created")
@@ -330,5 +361,61 @@ export function providerStopSentence(
         : `${providerName} puts it to sleep by itself after ${durationLabel(lifetime.idleSeconds)} without activity.`;
     default:
       return null;
+  }
+}
+
+/**
+ * What keeping a machine means, from what was last seen of it, and when that
+ * was if it's old. `billedStopped`: its provider keeps billing a stopped
+ * machine for compute until it's deleted. `storageBilled`: it bills a stopped
+ * machine's disk alone until then. `addBack` for a host that leaves the list,
+ * which can be added back.
+ */
+export function keepMachineDescription(
+  status: CloudHostStatus,
+  providerName: string,
+  billedStopped: boolean,
+  storageBilled: boolean,
+  now: number,
+  addBack: boolean
+): string {
+  const said = keepMachineState(status, providerName, billedStopped, storageBilled, addBack);
+  if (status.machine === "unknown" || !isObservationStale(status, now)) return said;
+  const at =
+    status.observedAt !== null ? clockTime(new Date(status.observedAt).toISOString()) : null;
+  return `${said} That's as of ${at ?? "the last check"}; it may have changed since.`;
+}
+
+function keepMachineState(
+  status: CloudHostStatus,
+  providerName: string,
+  billedStopped: boolean,
+  storageBilled: boolean,
+  addBack: boolean
+): string {
+  const disk = storageBilled
+    ? `, where its disk keeps billing ${status.accountName} until it's deleted`
+    : "";
+  const back = addBack && !status.dataExpired ? " You can add it back from Add host." : "";
+  switch (status.machine) {
+    case "running":
+    case "starting":
+      return billedStopped
+        ? `It's running and keeps billing ${status.accountName} until it's deleted, even once it stops.${back}`
+        : `It's running and keeps billing ${status.accountName} until it stops${status.autoStopAt ? " by itself" : ` on ${providerName}`}${storageBilled ? `, and for its disk after that until it's deleted` : ""}.${back}`;
+    case "stopping":
+      return billedStopped
+        ? `It's stopping. Once stopped it stays in your account and keeps billing ${status.accountName} until it's deleted.${back}`
+        : `It's stopping. Once stopped it stays in your account${disk}.${back}`;
+    case "stopped":
+      return status.dataExpired
+        ? `It stays in your account, but ${providerName} has deleted its saved disk.${billedStopped ? ` It keeps billing ${status.accountName} until it's deleted.` : ""}`
+        : billedStopped
+          ? `It stays stopped in your account and keeps billing ${status.accountName} until it's deleted.${back}`
+          : `It stays ${status.asleep ? "asleep" : "stopped"} in your account${disk}.${back}`;
+    default:
+      return billedStopped
+        ? `Daintree can't tell whether it's running; check on ${providerName}, where it keeps billing until it's deleted.`
+        : `Daintree can't tell whether it's running; check on ${providerName}, where it keeps billing while it runs${storageBilled && status.machine !== "deleted" ? `, and for its disk until it's deleted` : ""}.`;
   }
 }

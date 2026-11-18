@@ -31,12 +31,14 @@ vi.mock("../../../services/getSoundService.js", () => ({
 
 const createHardenedGitMock = vi.hoisted(() => vi.fn());
 const createAuthenticatedGitMock = vi.hoisted(() => vi.fn());
+const createStrictExitGitMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../utils/hardenedGit.js", () => ({
   validateCwd: vi.fn(),
   createHardenedGit: createHardenedGitMock,
   createAuthenticatedGit: createAuthenticatedGitMock,
   createContinueGit: vi.fn(),
+  createStrictExitGit: createStrictExitGitMock,
 }));
 
 // Staged blob content by object id, as `cat-file` would answer for it.
@@ -1058,22 +1060,93 @@ describe("git:get-staging-status — push and pull destinations", () => {
     expect(forEachRefCalls(git)).toHaveLength(0);
   });
 
-  it("keeps staging without churn on an unborn branch", async () => {
+  it("reads staged churn on an unborn branch and keeps untracked entries without counts", async () => {
     const git = makeGit({
+      status: vi.fn(async () => ({
+        files: [
+          { path: "a.ts", index: "A", working_dir: "M" },
+          { path: "b.ts", index: "?", working_dir: "?" },
+        ],
+        conflicted: [],
+        current: "topic",
+        detached: false,
+      })),
       revparse: vi.fn(async (args: string[]) => {
         if (args[0] === "--git-dir") return ".git\n";
         throw new Error("fatal: ambiguous argument 'HEAD'");
       }),
+      diff: vi.fn(async (args: string[]) =>
+        args.includes("--cached") ? "1\t0\ta.ts\0" : "0\t2\ta.ts\0"
+      ),
     });
     createHardenedGitMock.mockResolvedValue(git);
 
     const status = await getStagingStatus();
 
-    expect(status.staged).toEqual([
-      { path: "a.ts", status: "modified", insertions: null, deletions: null },
+    expect(status.staged).toEqual([{ path: "a.ts", status: "added", insertions: 1, deletions: 0 }]);
+    expect(status.unstaged).toEqual([
+      { path: "a.ts", status: "modified", insertions: 0, deletions: 2 },
+      { path: "b.ts", status: "untracked", insertions: null, deletions: null },
     ]);
-    expect(git.diff).not.toHaveBeenCalled();
     expect(status.repoState).toBe("CLEAN");
+  });
+
+  // #17588: only git's own porcelain v2 statement makes a branch unborn.
+  describe("unborn branch", () => {
+    const UNREADABLE_HEAD = vi.fn(async (args: string[]) => {
+      if (args[0] === "--git-dir") return ".git\n";
+      throw new Error("fatal: ambiguous argument 'HEAD'");
+    });
+
+    function withPorcelain(answer: () => Promise<string>): FakeGit {
+      return makeGit({
+        revparse: UNREADABLE_HEAD,
+        raw: vi.fn(async (args: string[]) => {
+          if (args[0] === "status") return answer();
+          if (args[0] === "for-each-ref") return "";
+          return "";
+        }),
+      });
+    }
+
+    it("says so when git reports this branch with no commit", async () => {
+      createHardenedGitMock.mockResolvedValue(
+        withPorcelain(async () => "# branch.oid (initial)\n# branch.head topic\n1 A. N...\n")
+      );
+
+      const status = await getStagingStatus();
+
+      expect(status.isUnbornBranch).toBe(true);
+      expect(status.pushDestination).toBeNull();
+    });
+
+    it.each([
+      [
+        "git reports a commit",
+        async () => "# branch.oid 0123456789abcdef0123456789abcdef01234567\n# branch.head topic\n",
+      ],
+      ["git reports another branch", async () => "# branch.oid (initial)\n# branch.head other\n"],
+      ["git reports only the commit", async () => "# branch.oid (initial)\n"],
+      ["the probe fails", () => Promise.reject(new Error("fatal: index file corrupt"))],
+    ])("stays silent when %s", async (_, answer) => {
+      createHardenedGitMock.mockResolvedValue(withPorcelain(answer));
+
+      const status = await getStagingStatus();
+
+      expect(status.currentBranch).toBe("topic");
+      expect(status.isUnbornBranch).toBeUndefined();
+    });
+
+    it("never asks on a branch whose HEAD reads as a commit", async () => {
+      const git = makeGit();
+      createHardenedGitMock.mockResolvedValue(git);
+
+      const status = await getStagingStatus();
+
+      expect(status.isUnbornBranch).toBeUndefined();
+      const asked = git.raw!.mock.calls.map((c) => c[0] as string[]);
+      expect(asked.filter((args) => args[0] === "status")).toEqual([]);
+    });
   });
 });
 
@@ -1366,21 +1439,69 @@ describe("git-write commit and working diff", () => {
     it.each([
       ["<<<<<<< HEAD", "start"],
       ["||||||| merged common ancestors", "ancestor"],
-      ["=======", "middle"],
       [">>>>>>> branch", "end"],
-    ])("throws for the %s marker line", async (markerLine) => {
+      ["<<<<<<<", "bare start"],
+      [">>>>>>>\r", "bare end before a CRLF"],
+      ["<<<<<<<\tHEAD", "start labelled after a tab"],
+      ["<<<<<<<< HEAD:b.txt", "eight-wide start from a rename/rename conflict"],
+      [">>>>>>>> theirs:c.txt", "eight-wide end from a rename/rename conflict"],
+      [">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> branch", "end widened by conflict-marker-size"],
+    ])("throws for the %s marker line (%s)", async (markerLine) => {
       const git = makeFakeGit({
         diff: stagedDiff([{ path: "f.txt", content: `head\n${markerLine}\ntail\n` }]),
       });
-      await expect(scan(git)).rejects.toThrow(/Unresolved conflict markers/);
+      await expect(scan(git)).rejects.toThrow(/Unresolved conflict markers found in f\.txt/);
     });
 
-    it("does not block when markers are mid-line (line-anchored regex)", async () => {
-      // An indented `=======` should not trip the scan; ensures the `^` anchor
-      // in CONFLICT_MARKER_RE is doing its job.
+    it.each([
+      ["a labelled marker", "head\n>>>>>>> branch"],
+      ["a bare marker", "head\n>>>>>>>"],
+    ])("blocks %s on the last line with no trailing newline", async (_name, content) => {
+      const git = makeFakeGit({ diff: stagedDiff([{ path: "f.txt", content }]) });
+      await expect(scan(git)).rejects.toThrow(/found in f\.txt \(line 2\)/);
+    });
+
+    it("reports the line of the first marker in a full region", async () => {
       const git = makeFakeGit({
-        diff: stagedDiff([{ path: "doc.md", content: "  =======\ninline <<<<<<< text\n" }]),
+        diff: stagedDiff([
+          {
+            path: "f.md",
+            content: "Title\n=======\nbody\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> b\n",
+          },
+        ]),
       });
+      await expect(scan(git)).rejects.toThrow(
+        "Unresolved conflict markers found in f.md (line 4). Resolve all conflicts before committing."
+      );
+    });
+
+    it("counts lines through CRLF endings", async () => {
+      const git = makeFakeGit({
+        diff: stagedDiff([{ path: "f.txt", content: "one\r\ntwo\r\n<<<<<<< HEAD\r\n" }]),
+      });
+      await expect(scan(git)).rejects.toThrow(/found in f\.txt \(line 3\)/);
+    });
+
+    it("counts only LF as a line break, as git does", async () => {
+      const git = makeFakeGit({
+        diff: stagedDiff([{ path: "f.txt", content: "one\rtwo\n<<<<<<< HEAD\n" }]),
+      });
+      await expect(scan(git)).rejects.toThrow(/found in f\.txt \(line 2\)/);
+    });
+
+    it.each([
+      ["a lone divider", "=======\n"],
+      ["a Setext underline", "Release notes\n=============\n"],
+      ["a CRLF Setext underline", "Release notes\r\n=======\r\n"],
+      ["a divider with no trailing newline", "above\n======="],
+      ["an indented marker", "  <<<<<<< HEAD\n"],
+      ["a mid-line marker", "inline >>>>>>> text\n"],
+      ["a marker with text glued to it", "<<<<<<<HEAD\n"],
+      ["a wide run with text glued to it", ">>>>>>>>nested quote\n"],
+      ["a run followed by a vertical tab", "<<<<<<<\vHEAD\n"],
+      ["a run of six", "<<<<<< HEAD\n"],
+    ])("does not block %s", async (_name, content) => {
+      const git = makeFakeGit({ diff: stagedDiff([{ path: "doc.md", content }]) });
       await expect(scan(git)).resolves.toBeUndefined();
     });
 
@@ -1478,7 +1599,9 @@ describe("git-write commit and working diff", () => {
           { path: "bom.txt", content: "\uFEFF<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> b\n" },
         ]),
       });
-      await expect(scan(git)).rejects.toThrow(/Unresolved conflict markers found in bom\.txt/);
+      await expect(scan(git)).rejects.toThrow(
+        /Unresolved conflict markers found in bom\.txt \(line 1\)/
+      );
     });
 
     it("blocks when content is exactly at the 1 MB byte cap", async () => {
@@ -1605,7 +1728,82 @@ describe("git-write commit and working diff", () => {
 
       await handler(null, { cwd: "/tmp/repo", type: "head" });
 
-      expect(git.diff).toHaveBeenCalledWith(["--no-ext-diff", "--no-textconv", "HEAD"]);
+      expect(git.diff).toHaveBeenCalledWith(["--no-ext-diff", "--no-textconv", "HEAD", "--"]);
+      expect(createStrictExitGitMock).not.toHaveBeenCalled();
+    });
+
+    describe("when the HEAD diff fails", () => {
+      const headFailure = new Error("fatal: bad revision 'HEAD'");
+
+      /** A strict git answering each probe by subcommand; anything unlisted fails. */
+      function strictGit(answers: Record<string, string | Error>) {
+        const strict = makeFakeGit({
+          raw: vi.fn(async (args: string[]) => {
+            const answer = answers[args[0]];
+            if (answer === undefined || answer instanceof Error) {
+              throw answer ?? new Error(`unexpected git ${args[0]}`);
+            }
+            return answer;
+          }),
+          diff: vi.fn().mockResolvedValue("diff --git a/a.txt b/a.txt\nnew file mode 100644\n"),
+        });
+        createStrictExitGitMock.mockResolvedValue(strict);
+        return strict;
+      }
+
+      async function headDiff() {
+        const git = makeFakeGit({ diff: vi.fn().mockRejectedValue(headFailure) });
+        createHardenedGitMock.mockReturnValue(git);
+        registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+        return getHandler("git:get-working-diff")(null, { cwd: "/tmp/repo", type: "head" });
+      }
+
+      beforeEach(() => {
+        createStrictExitGitMock.mockReset();
+      });
+
+      it("diffs an unborn branch against its object format's empty tree", async () => {
+        const strict = strictGit({
+          "symbolic-ref": "refs/heads/main\n",
+          "for-each-ref": "refs/heads/main/old\n",
+          "rev-parse": "sha256\n",
+        });
+
+        await expect(headDiff()).resolves.toContain("new file mode");
+        expect(strict.diff).toHaveBeenCalledWith([
+          "--no-ext-diff",
+          "--no-textconv",
+          "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+          "--",
+        ]);
+      });
+
+      // Every probe but the one under test answers as an unborn branch would, so
+      // a guard that let the case through would reach the empty-tree diff.
+      const unborn = {
+        "symbolic-ref": "refs/heads/main\n",
+        "for-each-ref": "",
+        "rev-parse": "sha1\n",
+      };
+      it.each([
+        ["HEAD is detached", { ...unborn, "symbolic-ref": new Error("exited with 1") }],
+        ["HEAD's branch has a commit", { ...unborn, "for-each-ref": "refs/heads/main\n" }],
+        ["HEAD names a ref outside the branches", { ...unborn, "symbolic-ref": "refs/tags/v1\n" }],
+        ["the ref listing fails", { ...unborn, "for-each-ref": new Error("probe failed") }],
+        ["the object format can't be read", { ...unborn, "rev-parse": new Error("probe failed") }],
+        ["the object format is unknown", { ...unborn, "rev-parse": "sha512\n" }],
+      ] as const)("rethrows git's own error when %s", async (_case, answers) => {
+        const strict = strictGit(answers);
+
+        await expect(headDiff()).rejects.toBe(headFailure);
+        expect(strict.diff).not.toHaveBeenCalled();
+      });
+
+      it("rethrows git's own error when no strict git can be made", async () => {
+        createStrictExitGitMock.mockRejectedValue(new Error("no git"));
+
+        await expect(headDiff()).rejects.toBe(headFailure);
+      });
     });
 
     it("rejects an invalid diff type without invoking git", async () => {

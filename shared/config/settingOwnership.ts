@@ -80,6 +80,8 @@ export const SETTING_CATALOG = {
           memoryLeakAutoRestartThresholdMb: host,
           screenReaderMode: device,
           cachedProjectViews: device,
+          // This machine's clipboard: a host can never turn it on for it.
+          osc52ClipboardEnabled: device,
           fontSize: device,
           fontFamily: device,
           colorSchemeId: device,
@@ -135,6 +137,8 @@ export const SETTING_CATALOG = {
       // host still detects the events; a Shell's own choices decide which of them
       // alert it (#14701), and a host's windows use the host's.
       notificationSettings: device,
+      // Imported sound files stay in this device's app data, so their list does too.
+      customNotificationSounds: device,
       userAgentRegistry: host,
       agentUpdateSettings: host,
       // A path on the machine the agents run on, so it is that machine's.
@@ -157,6 +161,8 @@ export const SETTING_CATALOG = {
       mcpServer: host,
       helpAssistant: host,
       pendingErrors: device,
+      // The removals happened on the machine whose worktrees they were.
+      mergedWorktreeRemovalReceipts: host,
       errorFingerprints: device,
       gpu: device,
       crashRecovery: device,
@@ -237,6 +243,7 @@ export const SETTING_CATALOG = {
           askHumanAgents: device,
           terminalSnapshots: device,
           terminalSnapshotsConsentedAt: device,
+          holdPhonePushes: device,
         },
       },
       // An enrolled Host's own record of its enrollment, kept on the Host itself.

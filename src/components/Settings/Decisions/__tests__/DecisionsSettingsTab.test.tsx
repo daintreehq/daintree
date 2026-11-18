@@ -10,6 +10,8 @@ import type {
   VerifyDecisionsRecoveryKitPayload,
 } from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { DecisionsSettingsTab } from "../DecisionsSettingsTab";
 
 const ORIGIN = "https://decisions.example.workers.dev";
@@ -35,10 +37,10 @@ function kitPassphraseField(): HTMLInputElement | null {
   );
 }
 
-async function renderTab() {
+async function renderTab(onClose?: SettingsTabClose) {
   render(
     <TooltipProvider>
-      <DecisionsSettingsTab />
+      <DecisionsSettingsTab onClose={onClose} />
     </TooltipProvider>
   );
   await act(async () => {});
@@ -355,5 +357,23 @@ describe("DecisionsSettingsTab", () => {
       })
     );
     expect(notice()?.textContent).toMatch(/The relay isn't connected/);
+  });
+
+  it("closes Settings before it opens the inbox (#17231)", async () => {
+    getStatus.mockResolvedValue({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN });
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    const afterCloses: Array<(closed: boolean) => void> = [];
+    const onClose = vi.fn<SettingsTabClose>(async (afterClose) => {
+      if (afterClose) afterCloses.push(afterClose);
+      return true;
+    });
+    useDecisionsInboxStore.setState({ isOpen: false });
+    await renderTab(onClose);
+    fireEvent.click(await screen.findByTestId("decisions-inbox-open"));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+    act(() => afterCloses[0]!(true));
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+    useDecisionsInboxStore.setState({ isOpen: false });
   });
 });

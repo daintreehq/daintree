@@ -11,6 +11,16 @@
  */
 export const SEARCH_PROVIDER_KEYWORD_PATTERN = /^[a-z][a-z0-9-]{0,23}$/;
 
+/**
+ * The keyword of the switcher's built-in file search (#17329). Daintree holds
+ * it ahead of every plugin, the way the first plugin to register a keyword
+ * holds it ahead of later ones: a provider that claims it is refused.
+ */
+export const FILE_SEARCH_KEYWORD = "files";
+
+/** Who holds {@link FILE_SEARCH_KEYWORD}, as a refused provider's Settings row names it. */
+export const FILE_SEARCH_KEYWORD_HOLDER = "Daintree";
+
 /** The icon a provider and its results get when the manifest names none. */
 export const SEARCH_PROVIDER_DEFAULT_ICON_ID = "search";
 

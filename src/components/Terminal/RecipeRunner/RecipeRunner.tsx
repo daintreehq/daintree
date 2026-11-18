@@ -1,6 +1,10 @@
 import { useRef } from "react";
-import { Plus, RefreshCw, XCircle } from "lucide-react";
-import { useRecipeRunner, type SpawnFailureSummary } from "./useRecipeRunner";
+import { Pencil, Plus, RefreshCw, XCircle } from "lucide-react";
+import {
+  useRecipeRunner,
+  type ChangedRecipeRefusal,
+  type SpawnFailureSummary,
+} from "./useRecipeRunner";
 import { RecipeRunnerGrid } from "./RecipeRunnerGrid";
 import { RecipeRunnerList } from "./RecipeRunnerList";
 import { RecipeRunnerEmpty } from "./RecipeRunnerEmpty";
@@ -38,6 +42,14 @@ function formatUnresolvedVarsTitle(vars: string[]): string {
   const items = vars.map((v) => `{{${v}}}`).join(", ");
   return `Missing context for ${items}`;
 }
+
+const CHANGED_RECIPE_DESCRIPTION: Record<ChangedRecipeRefusal["current"], string> = {
+  editable:
+    "The recipe changed while the confirmation was open. Review it before running it again.",
+  plugin:
+    "Its plugin changed the recipe while the confirmation was open. Run it again to start the current version.",
+  missing: "The recipe changed while the confirmation was open and is no longer available.",
+};
 
 function recipeOptionId(recipeId: string): string {
   return `recipe-option-${recipeId}`;
@@ -117,6 +129,28 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
   // of its parent when dismissed, and a wrapper would leave with it.
   const banners = (
     <>
+      {runner.changedRecipe && (
+        <InlineStatusBanner
+          className="mb-3"
+          data-testid="recipe-changed-banner"
+          title={`Couldn't start '${runner.changedRecipe.recipeName}'`}
+          description={CHANGED_RECIPE_DESCRIPTION[runner.changedRecipe.current]}
+          severity="error"
+          action={
+            runner.changedRecipe.current === "editable"
+              ? {
+                  id: "review-recipe",
+                  label: "Review recipe",
+                  icon: Pencil,
+                  variant: "primary",
+                  onClick: runner.reviewChangedRecipe,
+                  title: "Open the recipe as it is now",
+                }
+              : undefined
+          }
+          onClose={runner.dismissChangedRecipe}
+        />
+      )}
       {runner.spawnFailureSummary && (
         <InlineStatusBanner
           className="mb-3"

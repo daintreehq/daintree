@@ -11,6 +11,20 @@ export interface ProjectLink {
   addedByAssistant?: true;
 }
 
+/** A manifest at the project's root that can name the project's addresses (#17252, #17254). */
+export type DeclaredProjectLinkSource =
+  "package.json" | "pyproject.toml" | "Cargo.toml" | "catalog-info.yaml";
+
+/**
+ * A link one of the project's own manifests declares. Read from the file each
+ * time and never saved, so it can't be edited or removed from Daintree.
+ */
+export interface DeclaredProjectLink {
+  source: DeclaredProjectLinkSource;
+  title: string;
+  url: string;
+}
+
 /** Who is changing a project's links: the Assistant is held to its own links and a narrower URL rule. */
 export type ProjectLinkActor = "user" | "assistant";
 

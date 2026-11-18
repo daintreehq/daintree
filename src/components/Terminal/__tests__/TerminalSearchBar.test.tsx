@@ -303,6 +303,167 @@ describe("TerminalSearchBar", () => {
     expect(liveRegion.textContent).toBe("No matches");
   });
 
+  describe("when the search addon cannot load", () => {
+    async function typeQuery(value: string, regex = false) {
+      renderSearchBar();
+      const input = screen.getByPlaceholderText("Find in terminal…");
+      if (regex) {
+        await act(() => {
+          fireEvent.click(screen.getByLabelText("Use regular expression"));
+        });
+      }
+      await act(() => {
+        fireEvent.change(input, { target: { value } });
+      });
+      await act(() => {
+        vi.advanceTimersByTime(150);
+      });
+    }
+
+    it("reports a rejected load as unavailable, not as no matches or an invalid regex", async () => {
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockRejectedValue(
+        new Error("chunk failed to load")
+      );
+
+      await typeQuery("hello", true);
+
+      const liveRegion = screen.getByRole("status");
+      expect(liveRegion.textContent).toContain("Search failed");
+      expect(liveRegion.textContent).not.toContain("No matches");
+      expect(liveRegion.textContent).not.toContain("Invalid regex");
+      expect(
+        screen.getByPlaceholderText("Find in terminal…").getAttribute("aria-invalid")
+      ).not.toBe("true");
+    });
+
+    it("reports a missing addon as unavailable", async () => {
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockResolvedValue(null);
+
+      await typeQuery("hello");
+
+      expect(screen.getByRole("status").textContent).toContain("Search failed");
+    });
+
+    it("keeps stepping available, explains the failure, and retries into a working search with counts", async () => {
+      const mock = createMockManaged(true);
+      // xterm reports the result from inside the search, so a retry that
+      // subscribes after searching would lose this first count.
+      mock.searchAddon.findNext.mockImplementation(() => {
+        mock._fireResults({ resultIndex: 0, resultCount: 3 });
+        return true;
+      });
+      let loadWorks = false;
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(async () => {
+        if (!loadWorks) throw new Error("chunk failed to load");
+        return mock.searchAddon as never;
+      });
+
+      await typeQuery("hello");
+      const failed = screen.getByRole("status").textContent ?? "";
+      expect(failed).toContain("Search failed");
+      expect(failed).toContain("Press Enter to try again");
+      const input = screen.getByPlaceholderText("Find in terminal…");
+      const noteId = input.getAttribute("aria-describedby");
+      expect(noteId).toBeTruthy();
+      expect(document.getElementById(noteId!)?.textContent).toContain("Press Enter to try again");
+
+      loadWorks = true;
+      const next = screen.getByLabelText("Next match");
+      expect(next.hasAttribute("disabled")).toBe(false);
+      await act(async () => {
+        fireEvent.click(next);
+      });
+
+      expect(mock.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+      expect(screen.getByRole("status").textContent).toBe("1 of 3");
+      expect(input.getAttribute("aria-describedby")).toBeNull();
+    });
+
+    it("does not let a late load failure overwrite a newer invalid pattern", async () => {
+      let rejectLoad!: (error: Error) => void;
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectLoad = reject;
+          })
+      );
+
+      await typeQuery("hello", true);
+      await act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Find in terminal…"), {
+          target: { value: "[" },
+        });
+      });
+      await act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+
+      await act(async () => rejectLoad(new Error("chunk failed to load")));
+
+      expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+    });
+
+    it("does not let a late load failure announce itself over a query still being typed", async () => {
+      let rejectLoad!: (error: Error) => void;
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectLoad = reject;
+          })
+      );
+
+      await typeQuery("hello");
+      await act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Find in terminal…"), {
+          target: { value: "world" },
+        });
+      });
+      await act(async () => rejectLoad(new Error("chunk failed to load")));
+
+      expect(screen.getByRole("status").textContent).toBe("");
+    });
+
+    it("does not let a late load failure resurface after the field is cleared", async () => {
+      let rejectLoad!: (error: Error) => void;
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectLoad = reject;
+          })
+      );
+
+      await typeQuery("hello");
+      await act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Find in terminal…"), {
+          target: { value: "" },
+        });
+      });
+      await act(async () => rejectLoad(new Error("chunk failed to load")));
+      await act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Find in terminal…"), {
+          target: { value: "h" },
+        });
+      });
+
+      expect(screen.getByRole("status").textContent).toBe("");
+    });
+
+    it("still reports a pattern the engine rejects as an invalid regex", async () => {
+      const mock = createMockManaged(true);
+      mock.searchAddon.findNext.mockImplementation(() => {
+        throw new Error("Invalid regular expression: /a(/: Unterminated group");
+      });
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        mock as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+
+      await typeQuery("a", true);
+
+      expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+    });
+  });
+
   it('announces "Invalid regex" for invalid regex patterns', async () => {
     const mock = createMockManaged(true);
     vi.mocked(terminalInstanceService.get).mockReturnValue(
@@ -1080,7 +1241,263 @@ describe("TerminalSearchBar", () => {
       await act(async () => loadOnA.reject(new Error("addon failed to load")));
 
       expect(screen.queryByText("No matches")).toBeNull();
+      expect(screen.getByRole("status").textContent).not.toContain("Search failed");
       expect(managed.a.searchAddon.clearDecorations).not.toHaveBeenCalled();
     });
+  });
+
+  describe("a search still loading its addon (#17485)", () => {
+    type LoadedAddon = Awaited<ReturnType<typeof terminalInstanceService.ensureSearchAddon>>;
+
+    // One shared load, as the service shares it, opened on a remembered term
+    // so the mount search is already waiting on it. As in the service, the
+    // terminal holds no addon until the load succeeds.
+    function openOnRememberedTerm(
+      term: string,
+      { strict = false, ...toggles }: { regexEnabled?: boolean; strict?: boolean } = {}
+    ) {
+      useTerminalSearchHistoryStore.setState({ searches: [term], ...toggles });
+      const mock = createMockManaged(true);
+      const managed: { searchAddon: typeof mock.searchAddon | null } = { searchAddon: null };
+      vi.mocked(terminalInstanceService.get).mockReturnValue(
+        managed as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+      let settle!: { resolve: () => void; reject: (error: Error) => void };
+      const load = new Promise<LoadedAddon>((resolve, reject) => {
+        settle = {
+          resolve: () => {
+            managed.searchAddon = mock.searchAddon;
+            resolve(mock.searchAddon as unknown as LoadedAddon);
+          },
+          reject,
+        };
+      });
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(() => load);
+      const bar = <TerminalSearchBar terminalId="test-terminal" onClose={vi.fn()} />;
+      const view = render(strict ? <StrictMode>{bar}</StrictMode> : bar);
+      return { mock, settle, view, input: screen.getByPlaceholderText("Find in terminal…") };
+    }
+
+    it("draws nothing for a remembered term cleared before the addon loads", async () => {
+      const { mock, settle, input } = openOnRememberedTerm("hello");
+
+      await act(() => {
+        fireEvent.change(input, { target: { value: "" } });
+      });
+      await act(async () => settle.resolve());
+
+      expect(mock.searchAddon.findNext).not.toHaveBeenCalled();
+    });
+
+    it("keeps a late load failure of a cleared search out of the next query's status", async () => {
+      const { settle, input } = openOnRememberedTerm("hello");
+
+      await act(() => {
+        fireEvent.change(input, { target: { value: "" } });
+      });
+      await act(async () => settle.reject(new Error("addon failed to load")));
+      // An empty field shows no status at all; the next query, still in its
+      // debounce, is where a stale failure would surface.
+      await act(() => {
+        fireEvent.change(input, { target: { value: "world" } });
+      });
+
+      expect(screen.getByRole("status").textContent).toBe("");
+    });
+
+    it("draws nothing for a term that became an invalid regex before the addon loads", async () => {
+      const { mock, settle, input } = openOnRememberedTerm("abc", { regexEnabled: true });
+
+      await act(() => {
+        fireEvent.change(input, { target: { value: "abc[" } });
+      });
+      await act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      await act(async () => settle.resolve());
+
+      expect(mock.searchAddon.findNext).not.toHaveBeenCalled();
+      expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+    });
+
+    it("draws nothing for a remembered literal the regex toggle rejects before the addon loads", async () => {
+      const { mock, settle } = openOnRememberedTerm("abc[");
+
+      await act(() => {
+        fireEvent.click(screen.getByLabelText("Use regular expression"));
+      });
+      expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+      await act(async () => settle.resolve());
+
+      expect(mock.searchAddon.findNext).not.toHaveBeenCalled();
+      expect(screen.getByRole("status").textContent).toBe("Invalid regex");
+    });
+
+    it("reports a failed load for the query still in the field", async () => {
+      const { settle } = openOnRememberedTerm("hello");
+
+      await act(async () => settle.reject(new Error("addon failed to load")));
+
+      expect(screen.getByRole("status").textContent).toContain("Search failed");
+    });
+
+    it("drops the old query once the field changes, even before the new search runs", async () => {
+      const { mock, settle, input } = openOnRememberedTerm("hello");
+
+      await act(() => {
+        fireEvent.change(input, { target: { value: "help" } });
+      });
+      await act(async () => settle.resolve());
+      expect(mock.searchAddon.findNext).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(1);
+      expect(mock.searchAddon.findNext).toHaveBeenCalledWith("help", expect.anything());
+    });
+
+    it("draws only the newest of two searches waiting on the same load", async () => {
+      const { mock, settle, input } = openOnRememberedTerm("hello");
+
+      await act(() => {
+        fireEvent.change(input, { target: { value: "help" } });
+      });
+      await act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      await act(async () => settle.resolve());
+
+      expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(1);
+      expect(mock.searchAddon.findNext).toHaveBeenCalledWith("help", expect.anything());
+    });
+
+    it("runs only the latest step pressed while the addon loads", async () => {
+      const { mock, settle, input } = openOnRememberedTerm("hello");
+
+      await act(() => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      await act(() => {
+        fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+      });
+      await act(async () => settle.resolve());
+
+      expect(mock.searchAddon.findNext).not.toHaveBeenCalled();
+      expect(mock.searchAddon.findPrevious).toHaveBeenCalledTimes(1);
+      expect(mock.searchAddon.findPrevious).toHaveBeenCalledWith("hello", expect.anything());
+    });
+
+    it("searches the remembered term once under StrictMode", async () => {
+      const { mock, settle } = openOnRememberedTerm("hello", { strict: true });
+
+      await act(async () => settle.resolve());
+
+      expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(1);
+      expect(mock.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+    });
+
+    it("drops a search still loading when the bar unmounts without a close", async () => {
+      const { mock, settle, view } = openOnRememberedTerm("hello");
+
+      view.unmount();
+      await act(async () => settle.resolve());
+
+      expect(mock.searchAddon.findNext).not.toHaveBeenCalled();
+    });
+
+    it("shows nothing from the last terminal while a replacement's addon loads", async () => {
+      const a = createMockManaged(false);
+      const b = createMockManaged(true);
+      const managedB: { searchAddon: typeof b.searchAddon | null } = { searchAddon: null };
+      let resolveB!: () => void;
+      const loadOnB = new Promise<LoadedAddon>((resolve) => {
+        resolveB = () => {
+          managedB.searchAddon = b.searchAddon;
+          resolve(b.searchAddon as unknown as LoadedAddon);
+        };
+      });
+      vi.mocked(terminalInstanceService.get).mockImplementation(
+        (id) =>
+          (id === "a" ? a : managedB) as unknown as ReturnType<typeof terminalInstanceService.get>
+      );
+      vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation((id) =>
+        id === "a" ? Promise.resolve(a.searchAddon as unknown as LoadedAddon) : loadOnB
+      );
+      const view = render(<TerminalSearchBar terminalId="a" onClose={vi.fn()} />);
+      await act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Find in terminal…"), {
+          target: { value: "hello" },
+        });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(screen.getByRole("status").textContent).toBe("No matches");
+
+      view.rerender(<TerminalSearchBar terminalId="b" onClose={vi.fn()} />);
+      await act(async () => {});
+      expect(screen.getByRole("status").textContent).toBe("");
+
+      await act(async () => resolveB());
+      expect(b.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+      expect(screen.getByRole("status").textContent).toBe("Found");
+    });
+  });
+
+  it("keeps the last count and highlights up while the next query debounces", async () => {
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+    renderSearchBar();
+    const input = screen.getByPlaceholderText("Find in terminal…");
+    await act(() => {
+      fireEvent.change(input, { target: { value: "hello" } });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(150);
+    });
+    await act(() => {
+      mock._fireResults({ resultIndex: 0, resultCount: 3 });
+    });
+    mock.searchAddon.clearDecorations.mockClear();
+
+    await act(() => {
+      fireEvent.change(input, { target: { value: "help" } });
+    });
+
+    expect(screen.getByRole("status").textContent).toBe("1 of 3");
+    expect(mock.searchAddon.clearDecorations).not.toHaveBeenCalled();
+    expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      vi.advanceTimersByTime(150);
+    });
+    expect(mock.searchAddon.findNext).toHaveBeenCalledTimes(2);
+    expect(mock.searchAddon.findNext).toHaveBeenLastCalledWith("help", expect.anything());
+  });
+
+  it("keeps a typed query queued when ArrowDown has no newer history to recall", async () => {
+    useTerminalSearchHistoryStore.setState({ searches: ["alpha"] });
+    const mock = createMockManaged(true);
+    vi.mocked(terminalInstanceService.get).mockReturnValue(
+      mock as unknown as ReturnType<typeof terminalInstanceService.get>
+    );
+    renderSearchBar();
+    await act(async () => {});
+    const input = screen.getByPlaceholderText("Find in terminal…");
+
+    await act(() => {
+      fireEvent.change(input, { target: { value: "beta" } });
+    });
+    await act(() => {
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+    });
+    expect(mock.searchAddon.findNext).not.toHaveBeenCalledWith("beta", expect.anything());
+    await act(async () => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(mock.searchAddon.findNext).toHaveBeenLastCalledWith("beta", expect.anything());
   });
 });

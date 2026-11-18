@@ -180,3 +180,16 @@ export function canopySearchNotes(
   if (plan.overRuns) notes.push("Some terminals aren't searched: narrow the search to reach them");
   return notes;
 }
+
+/**
+ * What the search says of the hosts whose terminals it couldn't search: each
+ * by name, or nothing more when the panel shows only its own host.
+ */
+export function canopyScreenGapWords(hostNames: readonly string[]): string {
+  if (hostNames.length === 0) return "Couldn't search terminals";
+  const named =
+    hostNames.length === 1
+      ? hostNames[0]
+      : `${hostNames.slice(0, -1).join(", ")} and ${hostNames[hostNames.length - 1]}`;
+  return `Couldn't search terminals on ${named}`;
+}

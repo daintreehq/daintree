@@ -147,7 +147,6 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Open diagnostics dock to Problems tab | `⌃+⇧+M` | `Ctrl+Shift+M` |
 | Toggle diagnostics dock | `⌃+⇧+J` | `Ctrl+Shift+J` |
 | Toggle notification inbox | `⌘+⇧+N` | `Ctrl+Shift+N` |
-| Toggle portal panel | `⌘+\` | `Ctrl+\` |
 | Open focused panel context menu | `⇧+F10` | `Shift+F10` |
 | Open focused panel context menu | `ContextMenu` | `ContextMenu` |
 
@@ -181,16 +180,6 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Stage all changes | `⌘+K ⌘+G` | `Ctrl+K Ctrl+G` |
 | Commit staged changes | `⌘+K ⌘+C` | `Ctrl+K Ctrl+C` |
 | Push to remote | `⌘+K ⌘+P` | `Ctrl+K Ctrl+P` |
-
-## Portal
-
-| Action | macOS | Windows/Linux |
-| --- | --- | --- |
-| Close active portal tab | `⌘+W` | `Ctrl+W` |
-| Next portal tab | `⌃+Tab` | `Ctrl+Tab` |
-| Previous portal tab | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
-| New portal tab | `⌘+T` | `Ctrl+T` |
-| Close active portal tab | — | `Ctrl+F4` (Windows only) |
 
 ## Dev preview
 

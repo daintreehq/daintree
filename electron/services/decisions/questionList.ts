@@ -3,19 +3,24 @@ import {
   parseAnswers,
   parseMessages,
   type QuestionRow,
+  type StoredMessage,
 } from "@daintreehq/decisions-client";
 import { threadAwaitsHuman } from "@daintreehq/decisions-protocol";
 import type {
   DecisionQuestionListItem,
+  DecisionQuestionStall,
   DecisionQuestionStanding,
 } from "../../../shared/types/decisionsQuestion.js";
 import {
   answerNeedsAttention,
+  answerRevision,
   heldFollowUps,
   isHandled,
   pendingEntries,
   type HandledAnswers,
 } from "./attentionList.js";
+import { reasonOf } from "./paneDecisionState.js";
+import { closedReasonOf, declineOf } from "./questionClosed.js";
 
 type AnsweredStatus = Extract<QuestionRow["local_status"], "human-answered" | "proxy-answered">;
 
@@ -69,6 +74,8 @@ export function projectDecisionQuestions(
         expiresAt: row.expires_at ?? null,
         settledAt: standing.kind === "settled" ? settledAt(row, standing.outcome) : null,
         standing,
+        replyRequest: replyRequestOf(row),
+        stall: stallOf(row, handled),
       };
     });
 }
@@ -96,7 +103,10 @@ export function standingOf(row: QuestionRow, handled: HandledAnswers): DecisionQ
   }
   switch (row.local_status) {
     case "cancelled":
-      return { kind: "settled", outcome: "withdrawn" };
+      return {
+        kind: "settled",
+        outcome: closedReasonOf(row) === "declined" ? "declined" : "withdrawn",
+      };
     case "expired":
       return { kind: "settled", outcome: "expired" };
     case "queued":
@@ -117,13 +127,50 @@ function answeredStanding(
   handled: HandledAnswers
 ): DecisionQuestionStanding {
   const messages = parseMessages(row.messages_json);
-  if (threadAwaitsHuman({ status, messages, lastHumanActionSeq: lastHumanActionSeq(row) })) {
-    return { kind: "waiting", reason: "reply" };
-  }
+  if (awaitsReply(row, status, messages)) return { kind: "waiting", reason: "reply" };
   // An answer delivery stopped on and a person handled is never typed in.
   const answerPending = !attentionStatus(row.delivery_status) && pendingEntries(row).length > 0;
   if (answerPending || messages.some(isPendingMessage)) return { kind: "to-type" };
   return { kind: "settled", outcome: "answered", handled: isHandled(row, handled) };
+}
+
+function awaitsReply(
+  row: QuestionRow,
+  status: AnsweredStatus,
+  messages: readonly StoredMessage[]
+): boolean {
+  return threadAwaitsHuman({ status, messages, lastHumanActionSeq: lastHumanActionSeq(row) });
+}
+
+/**
+ * The agent's follow-up asking for a reply, while it still does: its latest,
+ * which `threadAwaitsHuman` reads the request from. Whatever the question's
+ * standing shows first, an answered one can ask for a reply.
+ */
+function replyRequestOf(row: QuestionRow): string | null {
+  const status = row.local_status;
+  if (status !== "human-answered" && status !== "proxy-answered") return null;
+  const messages = parseMessages(row.messages_json);
+  if (!awaitsReply(row, status, messages)) return null;
+  let latest: StoredMessage | null = null;
+  for (const message of messages) {
+    if (message.side === "agent" && (latest === null || message.event_seq > latest.event_seq)) {
+      latest = message;
+    }
+  }
+  return latest?.message_id ?? null;
+}
+
+/** What delivery stopped on, as `standingOf` reads it; null while nothing needs a person. */
+function stallOf(row: QuestionRow, handled: HandledAnswers): DecisionQuestionStall | null {
+  const answerHeld = answerNeedsAttention(row, handled);
+  const held = heldFollowUps(row);
+  if (!answerHeld && held.length === 0) return null;
+  return {
+    answerRevision: answerHeld ? answerRevision(row) : null,
+    followUpIds: held.map((message) => message.message_id),
+    reason: reasonOf(answerHeld ? row.error_code : (held[0]!.delivery?.error_code ?? null)),
+  };
 }
 
 /**
@@ -150,13 +197,15 @@ function lastHumanActionSeq(row: QuestionRow): number | null {
 /**
  * When a settled question settled: its newest answer, or the person's reply
  * to the agent's latest request for one when that came later; its expiry
- * notice, else the time it was set to expire. A withdrawal records no time.
+ * notice, else the time it was set to expire; the person's decline. A
+ * withdrawal records no time.
  */
 function settledAt(
   row: QuestionRow,
   outcome: "answered" | "withdrawn" | "expired" | "declined"
 ): string | null {
-  if (outcome === "withdrawn" || outcome === "declined") return null;
+  if (outcome === "withdrawn") return null;
+  if (outcome === "declined") return declineOf(row)?.created_at ?? null;
   const kind = outcome === "answered" ? "answer" : "expired";
   let newest: { revision: number; at: string } | null = null;
   for (const entry of parseAnswers(row.answers_json)) {

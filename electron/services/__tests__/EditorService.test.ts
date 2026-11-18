@@ -111,7 +111,7 @@ describe("EditorService.discover", () => {
 
     const discover = await loadDiscover();
     const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
+    const webstorm = results.find((e) => e.id === "jetbrains-webstorm");
 
     expect(webstorm).toBeDefined();
     expect(webstorm!.available).toBe(true);
@@ -124,21 +124,19 @@ describe("EditorService.discover", () => {
 
     const discover = await loadDiscover();
     const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
+    const idea = results.find((e) => e.id === "jetbrains-idea");
 
-    expect(webstorm).toBeDefined();
-    expect(webstorm!.available).toBe(true);
-    expect(webstorm!.executablePath).toBe(
+    expect(idea).toBeDefined();
+    expect(idea!.available).toBe(true);
+    expect(idea!.executablePath).toBe(
       "/Users/testuser/Applications/IntelliJ IDEA.app/Contents/MacOS/idea"
     );
   });
 
-  // Probes run concurrently, so completion order is arbitrary; the pick must
-  // still be the one a sequential walk makes.
-  it("keeps binary-then-directory precedence when a lower-priority probe settles first", async () => {
+  it("takes the first PATH directory holding a launcher even when a later one answers sooner", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     process.env.PATH = "/slow/bin:/fast/bin";
-    const present = new Set(["/slow/bin/idea", "/fast/bin/idea", "/fast/bin/webstorm"]);
+    const present = new Set(["/slow/bin/idea", "/fast/bin/idea"]);
     fsMock.promises.stat.mockImplementation(async (filePath: string) => {
       if (filePath.startsWith("/slow/")) await new Promise((r) => setTimeout(r, 20));
       if (present.has(filePath)) return { isFile: () => true };
@@ -149,11 +147,11 @@ describe("EditorService.discover", () => {
     const discover = await loadDiscover();
     const results = await discover();
 
-    expect(results.find((e) => e.id === "webstorm")!.executablePath).toBe("/fast/bin/webstorm");
+    expect(results.find((e) => e.id === "jetbrains-idea")!.executablePath).toBe("/slow/bin/idea");
 
-    present.delete("/fast/bin/webstorm");
+    present.delete("/slow/bin/idea");
     const second = await discover();
-    expect(second.find((e) => e.id === "webstorm")!.executablePath).toBe("/slow/bin/idea");
+    expect(second.find((e) => e.id === "jetbrains-idea")!.executablePath).toBe("/fast/bin/idea");
   });
 
   it("skips a directory match and a non-executable file for the next candidate", async () => {
@@ -235,7 +233,7 @@ describe("EditorService.discover", () => {
 
     const discover = await loadDiscover();
     const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
+    const webstorm = results.find((e) => e.id === "jetbrains-webstorm");
 
     expect(webstorm).toBeDefined();
     expect(webstorm!.available).toBe(true);
@@ -263,7 +261,7 @@ describe("EditorService.discover", () => {
 
     const discover = await loadDiscover();
     const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
+    const webstorm = results.find((e) => e.id === "jetbrains-webstorm");
 
     expect(webstorm).toBeDefined();
     expect(webstorm!.available).toBe(false);
@@ -1006,7 +1004,7 @@ describe("EditorService directory targets", () => {
       ["zed", "zed"],
       ["sublime", "subl"],
       ["webstorm", "webstorm"],
-      ["neovim", "nvim"],
+      ["jetbrains-idea", "idea"],
     ] as const) {
       vi.clearAllMocks();
       mockExecaChildren(execaMock.execa, ["spawned"]);
@@ -1177,5 +1175,356 @@ describe("EditorService directory targets", () => {
       expect.objectContaining({ detached: true }),
     ]);
     expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+});
+
+// Neovim needs a TTY, and every launch here is detached with its streams
+// ignored, so a spawned nvim is a live process nobody can see (#17441).
+describe("EditorService terminal-only editors", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalPATH = process.env.PATH;
+    originalVISUAL = process.env.VISUAL;
+    originalEDITOR = process.env.EDITOR;
+    process.env.PATH = "/usr/local/bin";
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    setPlatform("linux");
+    mockExistingFiles([]);
+    shellMock.openPath.mockResolvedValue("");
+    mockExecaChildren(execaMock.execa, ["spawned"]);
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+    process.env.PATH = originalPATH;
+    if (originalVISUAL === undefined) delete process.env.VISUAL;
+    else process.env.VISUAL = originalVISUAL;
+    if (originalEDITOR === undefined) delete process.env.EDITOR;
+    else process.env.EDITOR = originalEDITOR;
+  });
+
+  function launchedBinaries(): string[] {
+    return execaMock.execa.mock.calls.map((call) => call[0] as string);
+  }
+
+  it("automatic selection passes over nvim to the next GUI editor", async () => {
+    // nvim ranks ahead of Sublime in the automatic order.
+    mockExistingFiles(["/usr/local/bin/nvim", "/usr/local/bin/subl"]);
+    const { openFile } = await loadModule();
+
+    await expect(openFile("/abs/file.ts", 12, 5, null)).resolves.toBeUndefined();
+
+    expect(launchedBinaries()).toEqual(["/usr/local/bin/subl"]);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("automatic selection with only nvim installed reaches the default app", async () => {
+    mockExistingFiles(["/usr/local/bin/nvim"]);
+    const { openFile } = await loadModule();
+
+    await expect(openFile("/abs/file.ts", 12, 5, null)).resolves.toBeUndefined();
+
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).toHaveBeenCalledWith("/abs/file.ts");
+  });
+
+  it("automatic selection on macOS with only nvim installed reaches `open -t`", async () => {
+    setPlatform("darwin");
+    mockExistingFiles(["/usr/local/bin/nvim"]);
+    const { openFile } = await loadModule();
+
+    await expect(openFile("/abs/file.ts", 12, 5, null)).resolves.toBeUndefined();
+
+    expect(launchedBinaries()).toEqual(["open"]);
+    expect(execaMock.execa.mock.calls[0]![1]).toEqual(["-t", "/abs/file.ts"]);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  // Substituting another editor for an explicit choice would hide why the
+  // choice never opens; the result lets the window say how to set it up.
+  it("an explicit Neovim choice launches nothing and answers that it needs a terminal", async () => {
+    mockExistingFiles(["/usr/local/bin/nvim", "/usr/local/bin/code"]);
+    process.env.EDITOR = "code";
+    const { openFile } = await loadModule();
+
+    const result = await openFile("/abs/file.ts", 12, 5, { id: "neovim" });
+
+    expect(result).toEqual({ outcome: "needs-terminal", editorName: "Neovim", command: "nvim" });
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("an explicit Neovim choice answers the same for a folder target", async () => {
+    mockExistingFiles(["/usr/local/bin/nvim"]);
+    const { openFile } = await loadModule();
+
+    const result = await openFile(
+      "/abs/worktrees/feature-x",
+      undefined,
+      undefined,
+      { id: "neovim" },
+      true
+    );
+
+    expect(result).toEqual({ outcome: "needs-terminal", editorName: "Neovim", command: "nvim" });
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("an explicit Neovim choice answers the same when nvim isn't installed", async () => {
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    const result = await openFile("/abs/file.ts", 12, 5, { id: "neovim" });
+
+    expect(result).toEqual({ outcome: "needs-terminal", editorName: "Neovim", command: "nvim" });
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  // `nvim --server <addr> --remote {file}` hands the file to a running Neovim
+  // and needs no terminal of its own, so a custom command is never second-guessed.
+  it("a custom nvim command still launches as configured", async () => {
+    const { openFile } = await loadModule();
+
+    const result = await openFile("/abs/my file.ts", 12, 5, {
+      id: "custom",
+      customCommand: "nvim",
+      customTemplate: "--server /tmp/nvim.sock --remote {file}",
+    });
+
+    expect(result).toBeUndefined();
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "nvim",
+      ["--server", "/tmp/nvim.sock", "--remote", "/abs/my file.ts"],
+      expect.objectContaining({ detached: true })
+    );
+  });
+
+  it("a GUI editor's launch answers nothing", async () => {
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    await expect(openFile("/abs/file.ts", 12, 5, { id: "vscode" })).resolves.toBeUndefined();
+    expect(launchedBinaries()).toEqual(["/usr/local/bin/code"]);
+  });
+});
+
+describe("EditorService JetBrains products", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalPATH = process.env.PATH;
+    originalVISUAL = process.env.VISUAL;
+    originalEDITOR = process.env.EDITOR;
+    process.env.PATH = "";
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    setPlatform("darwin");
+    mockExistingFiles([]);
+    shellMock.openPath.mockResolvedValue("");
+    mockExecaChildren(execaMock.execa, ["spawned"]);
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+    process.env.PATH = originalPATH;
+    if (originalVISUAL === undefined) delete process.env.VISUAL;
+    else process.env.VISUAL = originalVISUAL;
+    if (originalEDITOR === undefined) delete process.env.EDITOR;
+    else process.env.EDITOR = originalEDITOR;
+  });
+
+  const WEBSTORM = "/Applications/WebStorm.app/Contents/MacOS/webstorm";
+  const IDEA = "/Applications/IntelliJ IDEA.app/Contents/MacOS/idea";
+  const VSCODE = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code";
+  const WORKTREE = "/abs/worktrees/feature-x";
+
+  function launchedPrograms(): string[] {
+    return execaMock.execa.mock.calls.map(([program]) => program as string);
+  }
+
+  it("discovers WebStorm and IntelliJ IDEA as separate editors when both are installed", async () => {
+    mockExistingFiles([WEBSTORM, IDEA]);
+    const { discover } = await loadModule();
+
+    const results = await discover();
+
+    expect(results.find((e) => e.id === "jetbrains-webstorm")?.executablePath).toBe(WEBSTORM);
+    expect(results.find((e) => e.id === "jetbrains-idea")?.executablePath).toBe(IDEA);
+  });
+
+  it("reports WebStorm as not found when only IntelliJ IDEA is installed", async () => {
+    mockExistingFiles([IDEA]);
+    const { discover } = await loadModule();
+
+    const results = await discover();
+
+    expect(results.find((e) => e.id === "jetbrains-webstorm")?.available).toBe(false);
+    expect(results.find((e) => e.id === "jetbrains-idea")?.executablePath).toBe(IDEA);
+  });
+
+  it("finds each product's own Toolbox script and community-edition bundle", async () => {
+    const toolbox = "/Users/testuser/Library/Application Support/JetBrains/Toolbox/scripts";
+    mockExistingFiles([
+      `${toolbox}/goland`,
+      "/Users/testuser/Applications/PyCharm CE.app/Contents/MacOS/pycharm",
+      "/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea",
+    ]);
+    const { discover } = await loadModule();
+
+    const found = Object.fromEntries(
+      (await discover()).filter((e) => e.available).map((e) => [e.id, e.executablePath])
+    );
+
+    expect(found).toEqual({
+      "jetbrains-goland": `${toolbox}/goland`,
+      "jetbrains-pycharm": "/Users/testuser/Applications/PyCharm CE.app/Contents/MacOS/pycharm",
+      "jetbrains-idea": "/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea",
+    });
+  });
+
+  // VS Code outranks every JetBrains IDE in the automatic pick, so only the
+  // configured step can produce these launches.
+  it.each([
+    { id: "jetbrains-webstorm", expected: WEBSTORM },
+    { id: "jetbrains-idea", expected: IDEA },
+  ] as const)("opens a file at its line in the chosen $id", async ({ id, expected }) => {
+    mockExistingFiles([VSCODE, WEBSTORM, IDEA]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", 12, 4, { id });
+
+    expect(execaMock.execa.mock.calls).toEqual([
+      [
+        expected,
+        ["--line", "12", "/abs/src/Main.java"],
+        expect.objectContaining({ detached: true }),
+      ],
+    ]);
+  });
+
+  it.each([
+    { id: "jetbrains-webstorm", expected: WEBSTORM },
+    { id: "jetbrains-idea", expected: IDEA },
+  ] as const)("opens a worktree folder in the chosen $id", async ({ id, expected }) => {
+    mockExistingFiles([VSCODE, WEBSTORM, IDEA]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, undefined, undefined, { id }, true);
+
+    expect(execaMock.execa.mock.calls).toEqual([
+      [expected, [WORKTREE], expect.objectContaining({ detached: true })],
+    ]);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  // A saved `webstorm` predates the split, when it meant whichever JetBrains IDE
+  // came first; it keeps opening that IDE rather than leaving for VS Code.
+  it("keeps a saved webstorm choice opening another JetBrains IDE when WebStorm is absent", async () => {
+    mockExistingFiles([IDEA, VSCODE]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", 3, undefined, { id: "webstorm" });
+
+    expect(execaMock.execa.mock.calls).toEqual([
+      [IDEA, ["--line", "3", "/abs/src/Main.java"], expect.objectContaining({ detached: true })],
+    ]);
+  });
+
+  it("searches a saved webstorm choice binary first, then directory, as it always did", async () => {
+    setPlatform("linux");
+    process.env.PATH = "/early/bin:/late/bin";
+    mockExistingFiles(["/early/bin/idea", "/late/bin/webstorm"]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", undefined, undefined, { id: "webstorm" });
+
+    expect(launchedPrograms()).toEqual(["/late/bin/webstorm"]);
+  });
+
+  it("reports no separate row for a saved webstorm choice", async () => {
+    mockExistingFiles([WEBSTORM, IDEA]);
+    const { discover } = await loadModule();
+
+    const ids = (await discover()).map((e) => e.id);
+
+    expect(ids).not.toContain("webstorm");
+  });
+
+  // The two ids differ only once WebStorm is gone: the old one meant any
+  // JetBrains IDE, a WebStorm chosen since then means WebStorm.
+  it.each([
+    { id: "webstorm", expected: IDEA },
+    { id: "jetbrains-webstorm", expected: "code" },
+  ] as const)("with only IDEA installed, $id opens $expected", async ({ id, expected }) => {
+    process.env.VISUAL = "code";
+    mockExistingFiles([IDEA]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", 3, undefined, { id });
+
+    expect(launchedPrograms()).toEqual([expected]);
+  });
+
+  it("finds a Linux Toolbox script with nothing on PATH", async () => {
+    setPlatform("linux");
+    const script = "/Users/testuser/.local/share/JetBrains/Toolbox/scripts/clion";
+    mockExistingFiles([script]);
+    const { discover } = await loadModule();
+
+    const found = (await discover()).filter((e) => e.available);
+
+    expect(found.map((e) => [e.id, e.executablePath])).toEqual([["jetbrains-clion", script]]);
+  });
+
+  it("finds a Windows Toolbox script under a profile path with spaces", async () => {
+    setPlatform("win32");
+    const originalLocalAppData = process.env.LOCALAPPDATA;
+    const originalPathExt = process.env.PATHEXT;
+    process.env.LOCALAPPDATA = "C:\\Users\\Test User\\AppData\\Local";
+    process.env.PATHEXT = ".EXE;.CMD";
+    const script = "C:\\Users\\Test User\\AppData\\Local\\JetBrains\\Toolbox\\scripts\\idea.cmd";
+    windowsDisk([script]);
+
+    try {
+      const { discover, openFile } = await loadModule();
+      const results = await discover();
+      expect(results.find((e) => e.id === "jetbrains-idea")?.executablePath).toBe(script);
+      expect(results.find((e) => e.id === "jetbrains-webstorm")?.available).toBe(false);
+
+      await openFile("/repo/Main.java", 7, undefined, { id: "jetbrains-idea" });
+      expect(execaMock.execa.mock.calls[0]?.slice(0, 2)).toEqual([
+        script,
+        ["--line", "7", "/repo/Main.java"],
+      ]);
+    } finally {
+      if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = originalLocalAppData;
+      if (originalPathExt === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = originalPathExt;
+    }
+  });
+
+  it("sends a missing chosen IDE through the ordinary fallback order", async () => {
+    mockExistingFiles([WEBSTORM, VSCODE]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", 3, undefined, { id: "jetbrains-idea" });
+
+    expect(launchedPrograms()).toEqual([VSCODE]);
+  });
+
+  it("keeps the automatic pick in the old JetBrains order", async () => {
+    const SUBLIME = "/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl";
+    mockExistingFiles(["/Applications/Rider.app/Contents/MacOS/rider", IDEA, SUBLIME]);
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/src/Main.java", undefined, undefined, null);
+
+    expect(launchedPrograms()).toEqual([IDEA]);
   });
 });

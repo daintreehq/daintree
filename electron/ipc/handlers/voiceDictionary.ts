@@ -20,9 +20,12 @@ import type {
 import {
   DICTIONARY_CONTROL_CHARACTERS,
   MAX_DICTIONARY_HEARD_AS,
+  MAX_DICTIONARY_IMPORT_TERMS,
+  MAX_DICTIONARY_TERM_LENGTH,
   acceptSuggestion,
   addDictionaryEntry,
   dismissSuggestion,
+  importDictionaryEntries,
   mergeSuggestions,
   removeDictionaryEntry,
   updateDictionaryEntry,
@@ -48,6 +51,20 @@ const addSchema = z.object({
   source: z.enum(["manual", "learned", "imported"]).optional(),
   addedAt: z.number().finite().nonnegative().optional(),
   heardAsConflict,
+});
+// A paste arrives parsed and trimmed, so each phrase is held to the real length cap
+// here and the whole batch stays bounded.
+const importPhrase = z.string().max(MAX_DICTIONARY_TERM_LENGTH);
+const importSchema = z.object({
+  entries: z
+    .array(
+      z.object({
+        term: importPhrase,
+        heardAs: z.array(importPhrase).max(MAX_DICTIONARY_HEARD_AS).optional(),
+      })
+    )
+    .min(1)
+    .max(MAX_DICTIONARY_IMPORT_TERMS),
 });
 const removeSchema = z.object({ term: existing });
 const updateSchema = z.object({
@@ -160,6 +177,17 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
         changeReporting((state, conflicts) => ({
           ...state,
           dictionary: addDictionaryEntry(state.dictionary, input, Date.now(), conflicts),
+        }))
+    ),
+    // A paste in one write; a term main refuses (an empty phrase) leaves the
+    // whole paste unwritten.
+    importTerms: opValidated(
+      VOICE_DICTIONARY_METHOD_CHANNELS.importTerms,
+      importSchema,
+      async ({ entries }): Promise<VoiceDictionaryChange> =>
+        changeReporting((state, conflicts) => ({
+          ...state,
+          dictionary: importDictionaryEntries(state.dictionary, entries, Date.now(), conflicts),
         }))
     ),
     remove: opValidated(

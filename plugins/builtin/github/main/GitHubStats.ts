@@ -3,11 +3,13 @@ import path from "path";
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS, rateLimitAwareFetch } from "./GitHubAuth.js";
 import { REPO_OPEN_COUNTS_QUERY, REPO_STATS_AND_PAGE_QUERY } from "./GitHubQueries.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import { gitHubRateLimitService, rateLimitServiceForHost } from "./GitHubRateLimitService.js";
+import { githubApiBase } from "./GitHubHost.js";
 import { rateLimitMessage } from "./GitHubErrors.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { getRepoContext, isRepoNotFoundError } from "./GitHubRepoContext.js";
 import {
+  cacheOwner,
   repoContextCache,
   repoStatsCache,
   issueListCache,
@@ -145,17 +147,17 @@ export interface ActivityProbeResult {
  */
 export async function fetchActivityProbe(
   token: string,
-  owner: string,
-  repo: string
+  context: RepoContext
 ): Promise<ActivityProbeResult> {
-  const cacheKey = `${owner}/${repo}`;
+  const { owner, repo } = context;
+  const cacheKey = `${cacheOwner(context)}/${repo}`;
 
-  const block = gitHubRateLimitService.shouldBlockRequest("core");
+  const block = rateLimitServiceForHost(context.host).shouldBlockRequest("core");
   if (block.blocked) return { status: "unknown" };
 
   const cachedETag = repoEventsETagCache.get(cacheKey);
   const versionAtStart = getETagCacheVersion();
-  const url = `https://api.github.com/repos/${owner}/${repo}/events?per_page=1`;
+  const url = `${githubApiBase(context.host)}/repos/${owner}/${repo}/events?per_page=1`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
@@ -249,8 +251,7 @@ export function parseLinkLastPage(linkHeader: string | null): number | null {
  */
 export async function fetchRestCounts(
   token: string,
-  owner: string,
-  repo: string
+  context: RepoContext
 ): Promise<RestCountsReading | null> {
   // Per-repo singleflight: concurrent polls (multi-window — each
   // `WebContentsView` runs its own poll loop) must not interleave. Two
@@ -258,10 +259,10 @@ export async function fetchRestCounts(
   // commit a stale `304` replay over the faster one's fresh counts and
   // double-fire the count-buster (the second epoch bump would discard a list
   // fetch that started after the first, forcing a redundant GraphQL refetch).
-  const cacheKey = `${owner}/${repo}`;
+  const cacheKey = `${cacheOwner(context)}/${context.repo}`;
   const pending = restCountsInflight.get(cacheKey);
   if (pending) return pending;
-  const promise = fetchRestCountsImpl(token, owner, repo, cacheKey);
+  const promise = fetchRestCountsImpl(token, context, cacheKey);
   restCountsInflight.set(cacheKey, promise);
   const cleanup = () => {
     if (restCountsInflight.get(cacheKey) === promise) restCountsInflight.delete(cacheKey);
@@ -274,11 +275,12 @@ const restCountsInflight = new Map<string, Promise<RestCountsReading | null>>();
 
 async function fetchRestCountsImpl(
   token: string,
-  owner: string,
-  repo: string,
+  context: RepoContext,
   cacheKey: string
 ): Promise<RestCountsReading | null> {
-  const block = gitHubRateLimitService.shouldBlockRequest("core");
+  const { owner, repo } = context;
+  const apiBase = githubApiBase(context.host);
+  const block = rateLimitServiceForHost(context.host).shouldBlockRequest("core");
   if (block.blocked) return null;
   const readAt = issueReadStamp();
 
@@ -296,19 +298,16 @@ async function fetchRestCountsImpl(
 
   try {
     const [repoRes, prRes] = await Promise.all([
-      rateLimitAwareFetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      rateLimitAwareFetch(`${apiBase}/repos/${owner}/${repo}`, {
         headers: repoHeaders,
         signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
         daintreeSkipRateLimitPreflight: true,
       }),
-      rateLimitAwareFetch(
-        `https://api.github.com/repos/${owner}/${repo}/pulls?state=open&per_page=1`,
-        {
-          headers: prHeaders,
-          signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
-          daintreeSkipRateLimitPreflight: true,
-        }
-      ),
+      rateLimitAwareFetch(`${apiBase}/repos/${owner}/${repo}/pulls?state=open&per_page=1`, {
+        headers: prHeaders,
+        signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+        daintreeSkipRateLimitPreflight: true,
+      }),
     ]);
 
     // A concurrent cache clear invalidated the ETag baseline these requests
@@ -377,7 +376,7 @@ async function fetchRestCountsImpl(
     // stays the correctness backstop.
     if (prior) {
       const priorIssueCount = prior.combinedCount - prior.prCount;
-      invalidateRepoListCachesForCountChange(owner, repo, {
+      invalidateRepoListCachesForCountChange(cacheOwner(context), repo, {
         issues: priorIssueCount !== issueCount,
         prs: prior.prCount !== prCount,
       });
@@ -406,8 +405,9 @@ async function fetchRestCountsImpl(
 async function fetchOpenCounts(
   context: RepoContext
 ): Promise<{ issueCount: number; prCount: number; readAt: number } | null> {
-  const client = GitHubAuth.createClient();
-  if (!client || gitHubRateLimitService.shouldBlockRequest("graphql").blocked) return null;
+  const client = GitHubAuth.createClient(context.host);
+  const rateLimits = rateLimitServiceForHost(context.host);
+  if (!client || rateLimits.shouldBlockRequest("graphql").blocked) return null;
   const readAt = issueReadStamp();
   try {
     const result = (await client(REPO_OPEN_COUNTS_QUERY, {
@@ -415,7 +415,7 @@ async function fetchOpenCounts(
       repo: context.repo,
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
-    gitHubRateLimitService.updateFromGraphQL(result, "REPO_OPEN_COUNTS_QUERY");
+    rateLimits.updateFromGraphQL(result, "REPO_OPEN_COUNTS_QUERY");
     const issueCount: unknown = result?.repository?.issues?.totalCount;
     const prCount: unknown = result?.repository?.pullRequests?.totalCount;
     if (!isOpenCount(issueCount) || !isOpenCount(prCount)) return null;
@@ -484,16 +484,17 @@ export async function getRepoStatsAndPageForContext(
 ): Promise<RepoStatsAndPageResult> {
   const bypassCache = options.bypassCache === true;
   const projectPath = options.projectPath ?? "";
-  const cacheKey = `${context.owner}/${context.repo}`;
+  const cacheKey = `${cacheOwner(context)}/${context.repo}`;
   const persistentCache = GitHubStatsCache.getInstance();
-  const client = GitHubAuth.createClient();
+  const client = GitHubAuth.createClient(context.host);
+  const rateLimits = rateLimitServiceForHost(context.host);
 
   // Seeds the legacy first page, so these must match exactly what
   // `GitHubIssues.listIssues`/`GitHubPRs.listPullRequests` build for an
   // unfiltered, uncursored, default-ordered first page — otherwise the seed
   // lands under a key nothing ever reads.
   const firstPageKeyDefaults = {
-    owner: context.owner,
+    owner: cacheOwner(context),
     repo: context.repo,
     state: "open",
     search: "",
@@ -580,7 +581,7 @@ export async function getRepoStatsAndPageForContext(
     repoEventsNoChangeCount.delete(cacheKey);
     repoEventsLastProbeAt.delete(cacheKey);
   } else {
-    const token = GitHubAuth.getToken();
+    const token = GitHubAuth.getToken(context.host);
     if (token) {
       const hadCountBaseline =
         repoStatsAndPageSnapshotCache.get(cacheKey) !== undefined ||
@@ -595,7 +596,7 @@ export async function getRepoStatsAndPageForContext(
         Date.now() - (repoEventsLastProbeAt.get(cacheKey) ?? 0) < eventsProbeDelayMs(cacheKey);
       const probe: ActivityProbeResult = withinBackoff
         ? { status: "unchanged" }
-        : await fetchActivityProbe(token, context.owner, context.repo);
+        : await fetchActivityProbe(token, context);
 
       // Read the count baselines only AFTER the probe await — two independent
       // concurrent mutations can land during it: (1) a list query's write-back
@@ -722,9 +723,9 @@ export async function getRepoStatsAndPageForContext(
   // a silent fallback would quietly reinstate the heavy query on every
   // transient REST error.
   if (!bypassCache) {
-    const token = GitHubAuth.getToken();
+    const token = GitHubAuth.getToken(context.host);
     const versionAtStart = getETagCacheVersion();
-    const restReading = token ? await fetchRestCounts(token, context.owner, context.repo) : null;
+    const restReading = token ? await fetchRestCounts(token, context) : null;
     const settleOutcome = restReading
       ? await settleRestCounts(context, cacheKey, restReading, versionAtStart)
       : "superseded";
@@ -754,7 +755,7 @@ export async function getRepoStatsAndPageForContext(
       };
     }
 
-    const coreBlock = gitHubRateLimitService.shouldBlockRequest("core");
+    const coreBlock = rateLimits.shouldBlockRequest("core");
     const message =
       coreBlock.blocked && coreBlock.reason && coreBlock.resumeAt
         ? rateLimitMessage(coreBlock.reason, coreBlock.resumeAt)
@@ -776,7 +777,7 @@ export async function getRepoStatsAndPageForContext(
     return { stats: null, issues: null, prs: null, error: message };
   }
 
-  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest("graphql");
+  const rateLimitBlock = rateLimits.shouldBlockRequest("graphql");
   if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
     const diskCached = persistentCache.get(cacheKey);
     const message = rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt);
@@ -802,8 +803,8 @@ export async function getRepoStatsAndPageForContext(
   // flight, and server-side ordering between the two reads is unknowable.
   // On an epoch move the page/snapshot writes are skipped (the next read
   // refetches); the response is still returned and broadcast for display.
-  const issueEpochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
-  const prEpochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
+  const issueEpochAtStart = getRepoListEpoch("issue", cacheOwner(context), context.repo);
+  const prEpochAtStart = getRepoListEpoch("pr", cacheOwner(context), context.repo);
   const readAt = issueReadStamp();
 
   try {
@@ -813,7 +814,7 @@ export async function getRepoStatsAndPageForContext(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(result, "REPO_STATS_AND_PAGE_QUERY");
+    rateLimits.updateFromGraphQL(result, "REPO_STATS_AND_PAGE_QUERY");
 
     const repository = result?.repository;
     if (!repository) {
@@ -902,8 +903,9 @@ export async function getRepoStatsAndPageForContext(
       totalCount: prCount,
     };
     const issueEpochUnchanged =
-      getRepoListEpoch("issue", context.owner, context.repo) === issueEpochAtStart;
-    const prEpochUnchanged = getRepoListEpoch("pr", context.owner, context.repo) === prEpochAtStart;
+      getRepoListEpoch("issue", cacheOwner(context), context.repo) === issueEpochAtStart;
+    const prEpochUnchanged =
+      getRepoListEpoch("pr", cacheOwner(context), context.repo) === prEpochAtStart;
     if (issueEpochUnchanged) {
       issueListCache.set(issuesListCacheKey, {
         items: issuesPage.items,
@@ -943,7 +945,9 @@ export async function getRepoStatsAndPageForContext(
       const freshContext = await options.refreshContext();
       if (
         freshContext &&
-        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
+        (freshContext.host !== context.host ||
+          freshContext.owner !== context.owner ||
+          freshContext.repo !== context.repo)
       ) {
         return getRepoStatsAndPageForContext(freshContext, options, true);
       }
@@ -959,10 +963,10 @@ export async function getRepoStatsAndPageForContext(
         },
         issues: null,
         prs: null,
-        error: parseGitHubError(error),
+        error: parseGitHubError(error, context.host),
       };
     }
-    return { stats: null, issues: null, prs: null, error: parseGitHubError(error) };
+    return { stats: null, issues: null, prs: null, error: parseGitHubError(error, context.host) };
   }
 }
 
@@ -994,7 +998,7 @@ export async function getFirstPageCacheForContext(
   context: RepoContext,
   projectPath = ""
 ): Promise<GitHubFirstPageCachePayload | null> {
-  const repoKey = `${context.owner}/${context.repo}`;
+  const repoKey = `${cacheOwner(context)}/${context.repo}`;
   const entry = GitHubFirstPageCache.getInstance().get(repoKey);
   const cachedStats = GitHubStatsCache.getInstance().getForBootstrap(repoKey);
 

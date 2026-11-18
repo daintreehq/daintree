@@ -40,6 +40,8 @@ const GOLDEN_QUERIES = [
   { query: "github", expectedTopResults: ["forge-access-token", "tab-nav-code-forge"] },
   { query: "remote resources", expectedTopResults: ["tab-nav-project:environments"] },
   { query: "docker akash", expectedTopResults: ["tab-nav-project:environments"] },
+  { query: "droplet", expectedTopResults: ["hosts-cloud-providers"] },
+  { query: "digital ocean", expectedTopResults: ["hosts-cloud-providers"] },
 ] as const;
 
 describe("filterSettings", () => {
@@ -126,10 +128,6 @@ describe("filterSettings", () => {
     }
   );
 
-  it("no longer offers the person's own links on the Portal page", () => {
-    expect(SETTINGS_SEARCH_INDEX.some((entry) => entry.id === "portal-custom-links")).toBe(false);
-  });
-
   it.each(["group", "folder", "project group"])(
     "finds the project's group row by %s while a project is open",
     (query) => {
@@ -210,6 +208,27 @@ describe("filterSettings", () => {
     for (const query of ["antigravity", "Antigravity IDE"]) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
       expect(results.some((r) => r.id === "editor-external")).toBe(true);
+    }
+  });
+
+  it("matches the external editor entry for each JetBrains IDE", () => {
+    for (const query of [
+      "JetBrains",
+      "WebStorm",
+      "IntelliJ IDEA",
+      "PhpStorm",
+      "PyCharm",
+      "GoLand",
+      "Rider",
+      "CLion",
+      "DataGrip",
+      "RubyMine",
+    ]) {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
+      expect(
+        results.some((r) => r.id === "editor-external"),
+        query
+      ).toBe(true);
     }
   });
 
@@ -400,7 +419,6 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       worktree: "Worktree paths",
       agents: "CLI agents",
       "code-forge": "Code forge",
-      portal: "Portal links",
       toolbar: "Toolbar customization",
       notifications: "Notifications",
       links: "Links",

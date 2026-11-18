@@ -19,6 +19,7 @@ import {
 import {
   DECISION_BLOCK_END,
   DECISION_BLOCK_START,
+  DECISION_COMPUTER_THREAD_PREFACE,
   DECISION_FOLLOWUP_END,
   DECISION_FOLLOWUP_START,
   DECISION_PREFACE,
@@ -98,6 +99,7 @@ describe("parseAnswerNotice", () => {
       source: "human",
       onComputer: false,
       expired: false,
+      declined: false,
       correction: false,
       modelId: null,
       confidence: null,
@@ -647,6 +649,87 @@ function rawFollowUp(fields: string[]): string {
   ].join("\n");
 }
 
+describe("a person's decline (#17234)", () => {
+  const declined = () => answer({ kind: "declined" });
+  const LIBRARY_DECLINED_NOTE =
+    "note: The person declined to answer this question. Nothing was decided or approved; stop waiting for it and do not continue the gated step.";
+
+  it("reads the library's decline as the person's, answering nothing", () => {
+    const [block] = parsed(notice(declined()));
+    expect(block).toMatchObject({
+      questionId: Q1,
+      alias: 4,
+      revision: 1,
+      injectionId: I1,
+      source: "human",
+      declined: true,
+      expired: false,
+      onComputer: false,
+      correction: false,
+      choice: null,
+      choiceLabel: null,
+      comment: null,
+      images: [],
+    });
+  });
+
+  it("types it as declined and authorising nothing, in Daintree's words, never as an answer", () => {
+    const section = renderDecisionSection(parsed(notice(declined())));
+    const lines = section.split("\n");
+    const source = lines.indexOf("source: human");
+    expect(lines.slice(source, source + 3)).toEqual([
+      "source: human",
+      "status: declined",
+      "authorised: no",
+    ]);
+    // Told plainly what it means for the agent, not just that a note is there.
+    expect(lines[source + 3]).toMatch(/^note: /);
+    expect(lines[source + 3]).toMatch(/nothing was decided or approved/i);
+    expect(lines[source + 3]).toMatch(/stop waiting/i);
+    expect(lines[source + 3]).toMatch(/don't continue the gated step/i);
+    expect(lines[source + 3]).not.toBe(LIBRARY_DECLINED_NOTE);
+    expect(lines[source + 4]).toBe(DECISION_BLOCK_END);
+    expect(section).toContain(markerFor(I1));
+    expect(section).not.toMatch(/^(choice|comment|image_1):/m);
+  });
+
+  it("reads a decline batched with another question's answer, each in order", () => {
+    const blocks = parsed(notice(declined(), answer({ questionId: Q2, injectionId: I2 })));
+    expect(blocks.map((b) => [b.questionId, b.declined])).toEqual([
+      [Q1, true],
+      [Q2, false],
+    ]);
+  });
+
+  it("copies a decline without its marker, for a person to paste", () => {
+    const copied = renderCopiedAnswer(parsed(notice(declined())));
+    expect(copied).toContain("status: declined\nauthorised: no\nnote:");
+    expect(copied).not.toContain("[decision-injection");
+  });
+
+  const lines = declined().split("\n");
+  const at = lines.indexOf("status: declined");
+  const withLines = (...extra: string[]) =>
+    notice([...lines.slice(0, at + 3), ...extra, ...lines.slice(at + 3)].join("\n"));
+  it.each([
+    ["a choice", withLines("choice: approve")],
+    ["a comment", withLines("comment: go ahead")],
+    ["an image", withLines("image_1: /tmp/a.png")],
+    ["a note of its own", notice(declined().replace(LIBRARY_DECLINED_NOTE, "note: Go ahead."))],
+    ["no note", notice(declined().replace(`\n${LIBRARY_DECLINED_NOTE}`, ""))],
+    ["no authorisation line", notice(declined().replace("\nauthorised: no", ""))],
+    ["an authorisation", notice(declined().replace("authorised: no", "authorised: yes"))],
+    ["a proxy's decline", notice(declined().replace("source: human", "source: proxy"))],
+    ["a system decline", notice(declined().replace("source: human", "source: system"))],
+    [
+      "a decline made on the computer",
+      notice(declined().replace("source: human", "source: human\nanswered_on: computer")),
+    ],
+  ])("refuses a decline with %s", (_label, text) => {
+    expect(parseAnswerNotice(text)).toBeNull();
+  });
+});
+
 describe("parseDecisionNotice, follow-ups (#16231)", () => {
   it("reads a follow-up typed after the answer, in the order the library wrote them", () => {
     const blocks = thread(
@@ -662,6 +745,7 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
       injectionId: I2,
       question: "Which sidebar should ship? Compact or classic.",
       answered: true,
+      onComputer: false,
       text: "Keep the old icons.\nBut make them smaller.",
       images: [],
     });
@@ -679,6 +763,7 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
       injectionId: I2,
       question: null,
       answered: false,
+      onComputer: false,
       text: null,
       images: [],
     });
@@ -743,6 +828,40 @@ describe("parseDecisionNotice, follow-ups (#16231)", () => {
     expect(parse(text)).toBeNull();
   });
 
+  it("reads a follow-up the person sent from their computer, and one from their phone (#17238)", () => {
+    const fromComputer = noticeChunk([answer(), followUp({ onComputer: true })]);
+    expect(fromComputer).toContain("source: human\nsent_from: computer\n");
+    const expected = {
+      kind: "followup",
+      questionId: Q1,
+      alias: 4,
+      messageId: M1,
+      injectionId: I2,
+      question: "Which sidebar should ship? Compact or classic.",
+      answered: true,
+      text: "Keep the old icons, though.",
+      images: [],
+    };
+    expect(thread(fromComputer)[1]).toEqual({ ...expected, onComputer: true });
+    const [, fromPhone] = thread(noticeChunk([answer(), followUp({ onComputer: false })]));
+    expect(fromPhone).toEqual({ ...expected, onComputer: false });
+  });
+
+  it.each([
+    ["the line after the note", ["source: human", FOLLOWUP_NOTE_ANSWERED, "sent_from: computer"]],
+    ["a phone named on the line", ["source: human", "sent_from: phone", FOLLOWUP_NOTE_ANSWERED]],
+    [
+      "the line twice",
+      ["source: human", "sent_from: computer", "sent_from: computer", FOLLOWUP_NOTE_ANSWERED],
+    ],
+    [
+      "the line before the source",
+      ["sent_from: computer", "source: human", FOLLOWUP_NOTE_ANSWERED],
+    ],
+  ])("refuses a follow-up with %s", (_label, fields) => {
+    expect(parseDecisionNotice(rawFollowUp(fields))).toBeNull();
+  });
+
   it("takes two messages of one question, and follow-ups to different questions", () => {
     const blocks = thread(
       noticeChunk([
@@ -805,6 +924,47 @@ describe("renderDecisionSection, follow-ups (#16231)", () => {
     ]);
     expect(section).not.toContain(FOLLOWUP_NOTE_UNANSWERED);
     expect(section).not.toContain("question:");
+  });
+
+  it("types a follow-up from the computer as the person's, sent from their computer (#17238)", () => {
+    for (const answered of [true, false]) {
+      const section = renderDecisionSection(
+        thread(noticeChunk([followUp({ answered, onComputer: true, question: undefined })]))
+      );
+      const lines = section.split("\n");
+      expect(lines[0]).toBe(DECISION_COMPUTER_THREAD_PREFACE);
+      expect(lines.slice(6)).toEqual([
+        "source: human",
+        "sent_from: computer",
+        answered
+          ? "note: The person sent this from their computer about a decision already made. It is not a new answer, a correction or an approval: the answer stands."
+          : "note: The person sent this from their computer before answering. It is not an answer or an approval: you are not authorised to continue a gated step on it.",
+        "text: Keep the old icons, though.",
+        DECISION_FOLLOWUP_END,
+      ]);
+      expect(section).not.toContain("phone\n");
+    }
+  });
+
+  it("names both senders in the preface once any follow-up came from the computer", () => {
+    const phoneOnly = renderDecisionSection(thread(noticeChunk([answer(), followUp()])));
+    expect(phoneOnly.split("\n")[0]).toBe(DECISION_THREAD_PREFACE);
+    const mixed = renderDecisionSection(
+      thread(
+        noticeChunk([followUp(), followUp({ messageId: M2, injectionId: I1, onComputer: true })])
+      )
+    );
+    const preface = mixed.split("\n")[0]!;
+    expect(preface).toBe(DECISION_COMPUTER_THREAD_PREFACE);
+    // It names both senders, and the line that says which one each block came from.
+    expect(preface).toMatch(/phone/);
+    expect(preface).toMatch(/computer/);
+    expect(preface).toContain("sent_from");
+    expect(mixed).toContain("sent_from: phone\n");
+    expect(mixed).toContain("sent_from: computer\n");
+    expect(renderCopiedAnswer(thread(noticeChunk([followUp({ onComputer: true })])))).toContain(
+      "sent_from: computer\n"
+    );
   });
 
   it("keeps the answers' preface for a section of answers alone", () => {

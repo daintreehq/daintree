@@ -9,7 +9,6 @@ import {
   Link,
   Mic,
   Package,
-  PanelRight,
   PanelTop,
   Keyboard,
   ScrollText,
@@ -152,7 +151,6 @@ const importTerminalAppearanceTab = () => import("./TerminalAppearanceTab");
 const importTroubleshootingTab = () => import("./TroubleshootingTab");
 const importCodeForgeSettingsTab = () => import("./CodeForgeSettingsTab");
 const importNotificationSettingsTab = () => import("./NotificationSettingsTab");
-const importPortalSettingsTab = () => import("./PortalSettingsTab");
 const importLinksSettingsTab = () => import("./LinksSettingsTab");
 const importKeyboardShortcutsTab = () => import("./KeyboardShortcutsTab");
 const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
@@ -199,7 +197,6 @@ const LazyNotificationSettingsTab = lazyWithPreload(
   importNotificationSettingsTab,
   (m) => m.NotificationSettingsTab
 );
-const LazyPortalSettingsTab = lazyWithPreload(importPortalSettingsTab, (m) => m.PortalSettingsTab);
 const LazyLinksSettingsTab = lazyWithPreload(importLinksSettingsTab, (m) => m.LinksSettingsTab);
 const LazyKeyboardShortcutsTab = lazyWithPreload(
   importKeyboardShortcutsTab,
@@ -329,6 +326,14 @@ const HOSTS_TAB = {
     "update",
     "cloud",
     "boat",
+    "agent 37",
+    "agent37",
+    "digitalocean",
+    "droplet",
+    "google cloud",
+    "compute engine",
+    "aws",
+    "ec2",
   ],
   sections: [
     {
@@ -344,7 +349,31 @@ const HOSTS_TAB = {
       title: "Cloud providers",
       description:
         "Connect a cloud provider account to create machines as hosts, start and stop them, and delete them when you're done",
-      keywords: ["boat", "cloud", "api key", "provider", "machine", "vm", "sandbox", "account"],
+      keywords: [
+        "boat",
+        "agent 37",
+        "agent37",
+        "digitalocean",
+        "digital ocean",
+        "droplet",
+        "google cloud",
+        "gcp",
+        "compute engine",
+        "service account",
+        "aws",
+        "amazon",
+        "ec2",
+        "cloud",
+        "api key",
+        "access token",
+        "access key",
+        "provider",
+        "machine",
+        "vm",
+        "sandbox",
+        "instance",
+        "account",
+      ],
     },
     {
       id: "host-mode",
@@ -796,8 +825,16 @@ export const SETTINGS_REGISTRY = [
         section: "Sound",
         title: "Notification sound",
         description:
-          "Play a sound when notifications fire. Choose from chime, ping, complete, waiting, error, or pulse sounds.",
-        keywords: ["sound", "audio", "chime", "ping", "notification", "alert", "volume"],
+          "Play a sound when notifications fire. Choose chime, ping, complete, waiting, error, pulse, or your own audio file.",
+        keywords: ["sound", "audio", "chime", "ping", "notification", "alert", "custom", "file"],
+      },
+      {
+        id: "notifications-sound-volume",
+        section: "Sound",
+        title: "Notification volume",
+        description:
+          "How loud notification, working pulse and UI feedback sounds play, on top of the system volume.",
+        keywords: ["volume", "loud", "quiet", "level", "sound", "audio"],
       },
     ],
   } satisfies LazySettingsTabEntry,
@@ -966,6 +1003,7 @@ export const SETTINGS_REGISTRY = [
       "Scrollback history": SECTION_SETTINGS.scrollback,
       "Grid layout": SECTION_SETTINGS.gridLayout,
       "Screen reader mode": SECTION_SETTINGS.assistiveTechnology,
+      "Copying from programs": SECTION_SETTINGS.osc52Clipboard,
     },
     label: "Panel grid",
     icon: <LayoutGrid className="w-4 h-4" />,
@@ -1062,6 +1100,30 @@ export const SETTINGS_REGISTRY = [
           "nvda",
           "screenReaderMode",
           "assistive",
+        ],
+      },
+      {
+        id: "terminal-osc52-clipboard",
+        subtab: "clipboard",
+        subtabLabel: "Clipboard",
+        section: "Copying from programs",
+        title: "Let programs copy to the clipboard (OSC 52)",
+        description:
+          "Let tmux, Neovim, Zellij and fzf copy text from a shell, including over SSH, right after you type or click in it",
+        keywords: [
+          "clipboard",
+          "copy",
+          "osc 52",
+          "osc52",
+          "yank",
+          "tmux",
+          "neovim",
+          "vim",
+          "zellij",
+          "fzf",
+          "ssh",
+          "remote",
+          "pastejacking",
         ],
       },
       {
@@ -1452,7 +1514,7 @@ export const SETTINGS_REGISTRY = [
         section: "All agents",
         title: "Default agent",
         description:
-          'Agent used for the Daintree Assistant and automated workflows ("What\'s next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
+          'Agent used for the Daintree Assistant and automated workflows ("What\'s next?", onboarding, project explanations).',
         keywords: [
           "default",
           "agent",
@@ -1694,7 +1756,7 @@ export const SETTINGS_REGISTRY = [
         section: "External editor",
         title: "External editor",
         description:
-          "Configure external editor: VS Code, Cursor, Windsurf, Antigravity IDE, Zed, Neovim, WebStorm, Sublime Text, or custom",
+          "Configure external editor: VS Code, Cursor, Windsurf, Antigravity IDE, Zed, Neovim, a JetBrains IDE, Sublime Text, or custom",
         keywords: [
           "editor",
           "vscode",
@@ -1702,6 +1764,15 @@ export const SETTINGS_REGISTRY = [
           "zed",
           "neovim",
           "webstorm",
+          "jetbrains",
+          "intellij",
+          "pycharm",
+          "phpstorm",
+          "goland",
+          "rider",
+          "clion",
+          "datagrip",
+          "rubymine",
           "sublime",
           "external",
           "open",
@@ -1903,37 +1974,6 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   ...(isRemoteShellSupported() ? [HOSTS_TAB] : []),
-
-  {
-    id: "portal",
-    scope: "global",
-    group: "Integrations",
-    settings: ["storage:portal-storage"],
-    label: "Portal",
-    headerTitle: "Portal links",
-    icon: <PanelRight className="w-4 h-4" />,
-    importKind: "lazy",
-    importer: LazyPortalSettingsTab.preload,
-    LazyComponent: LazyPortalSettingsTab,
-    searchNavDescription: "New tab page and built-in chat links for the portal browser panel",
-    searchNavKeywords: ["integrations", "portal", "browser", "chat"],
-    sections: [
-      {
-        id: "portal-default-agent",
-        section: "Default new tab agent",
-        title: "Default new tab agent",
-        description: "Choose which agent opens when you click the + button in the portal",
-        keywords: ["portal", "agent", "default", "new tab", "browser"],
-      },
-      {
-        id: "portal-default-links",
-        section: "Default links",
-        title: "Default links",
-        description: "System-provided links shown in the portal panel",
-        keywords: ["portal", "links", "default", "browser", "chat"],
-      },
-    ],
-  } satisfies LazySettingsTabEntry,
 
   {
     id: "mcp",
@@ -2247,6 +2287,24 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-questions-inbox",
+        section: "Questions",
+        title: "Inbox",
+        description:
+          "Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided",
+        keywords: [
+          "inbox",
+          "questions",
+          "all questions",
+          "history",
+          "answered",
+          "waiting",
+          "delivered",
+          "asked",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-terminal-snapshots",
         section: "Questions",
         title: "Show agent status and recent terminal lines on my phone",
@@ -2266,6 +2324,26 @@ export const SETTINGS_REGISTRY = [
           "privacy",
           "consent",
           "redact",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-hold-phone-pushes",
+        section: "Questions",
+        title: "Hold phone notifications while I'm at this computer",
+        description:
+          "While desktop notifications are on, tells your relay whether you're here, so it waits up to two minutes before notifying your phone of a new question",
+        keywords: [
+          "presence",
+          "present",
+          "away",
+          "idle",
+          "phone",
+          "push",
+          "hold",
+          "delay",
+          "desktop",
+          "privacy",
         ],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
@@ -2698,8 +2776,8 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         id: "project-links",
         section: "Project links",
         title: "Project links",
-        description: "Addresses offered in this project's Portal launchpad, such as staging",
-        keywords: ["portal", "links", "launchpad", "staging", "production", "dashboard", "url"],
+        description: "Addresses offered in this project's links launcher, such as staging",
+        keywords: ["links", "launcher", "staging", "production", "dashboard", "url"],
       },
       {
         id: "project-agent-integrations",
@@ -2794,6 +2872,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         title: "Path pattern",
         description: "Where this project's new worktrees are created, built from path variables",
         keywords: ["worktree", "path", "pattern", "location", "directory", "folder", "variables"],
+      },
+      {
+        id: "project-merged-worktrees",
+        section: "Merged worktrees",
+        title: "Remove worktrees once their PR has merged",
+        description: "Removes clean worktrees Daintree created a day after their PR merged",
+        keywords: ["merged", "cleanup", "remove", "delete", "prune", "worktree", "pr", "automatic"],
       },
       {
         // Id kept for deep links; the names follow the heading the page renders, which
@@ -2946,7 +3031,6 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
   "code-forge": <GitPullRequest className="w-5 h-5 text-text-secondary" />,
   links: <Link className="w-5 h-5 text-text-secondary" />,
-  portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
   toolbar: <PanelTop className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
   "import-export": <ArrowDownUp className="w-5 h-5 text-text-secondary" />,

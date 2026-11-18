@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from "react";
+import { lazy, Suspense, useState, type MouseEvent } from "react";
 import { Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -13,6 +13,9 @@ import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/projectStore";
 import { clientErrorText } from "@/utils/clientAppError";
 import { useCardFocusHandoff } from "./hooks/useCardFocusHandoff";
+
+// Only a worktree waiting on a machine made for it needs the cloud picture.
+const CloudPlacementNotice = lazy(() => import("./CloudPlacementNotice"));
 
 interface PendingPlacementNoticeProps {
   worktreeId: string;
@@ -32,6 +35,19 @@ export function PendingPlacementNotice({ worktreeId, inGutter }: PendingPlacemen
   const found =
     getViewHostId() === null ? placementForWorktree(hosts, projectId, worktreeId) : null;
   if (!found) return null;
+  if (found.placement.createdMachine) {
+    return (
+      <Suspense fallback={null}>
+        <CloudPlacementNotice
+          hostId={found.host.descriptor.id}
+          hostName={found.host.descriptor.name}
+          connection={found.host.connection}
+          placement={found.placement}
+          inGutter={inGutter}
+        />
+      </Suspense>
+    );
+  }
   return (
     <WaitingNotice
       hostId={found.host.descriptor.id}

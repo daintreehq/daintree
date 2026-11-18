@@ -14,6 +14,7 @@ import {
   HostModeOffError,
   TransportError,
   UnusableConnectionError,
+  WslDistroMissingError,
   type LinkOpenOptions,
   type LinkTransport,
   type LinkTransportConnection,
@@ -173,7 +174,7 @@ export class WslTransport implements LinkTransport {
       const detail = failureDetail(result, `wsl.exe exited with ${result.code}`);
       // wsl.exe's own code for a name it doesn't know: only installing or renaming one changes it.
       if (isWslServiceFailure(result.code) && WSL_DISTRO_NOT_FOUND.test(detail)) {
-        throw new UnusableConnectionError(`${distro} isn't installed in WSL`, detail);
+        throw new WslDistroMissingError(distro, detail);
       }
       throw new TransportError(`Couldn't reach ${distro} through WSL`, detail);
     }

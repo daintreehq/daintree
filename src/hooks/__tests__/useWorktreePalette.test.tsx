@@ -12,6 +12,7 @@ vi.mock("@/store", () => ({
 
 import { useWorktreePalette } from "../useWorktreePalette";
 import { usePaletteStore } from "@/store/paletteStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { consumeDeferredPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 
 function worktree(id: string, name: string, isMainWorktree = false): WorktreeState {
@@ -75,5 +76,52 @@ describe("useWorktreePalette focus restore", () => {
     act(() => result.current.close());
     expect(result.current.isOpen).toBe(false);
     expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+  });
+});
+
+describe("useWorktreePalette custom titles (#17503)", () => {
+  const setTitles = (titles: Record<string, string>) =>
+    act(() => useWorktreeFilterStore.setState({ worktreeCustomTitles: titles }));
+
+  const red: WorktreeState = {
+    ...worktree("wt-red", "auth-refresh"),
+    branch: "feature/oauth",
+    path: "/repo/red-dir",
+  };
+  const blue = worktree("wt-blue", "billing");
+  const list = [red, blue];
+
+  beforeEach(() => {
+    usePaletteStore.setState({ activePaletteId: "worktree" });
+  });
+
+  afterEach(() => {
+    setTitles({});
+    usePaletteStore.setState({ activePaletteId: null });
+  });
+
+  const idsFor = (result: { current: ReturnType<typeof useWorktreePalette> }, query: string) => {
+    act(() => result.current.setQuery(query));
+    return result.current.results.map((w) => w.id);
+  };
+
+  it("finds a worktree by its custom title, and still by its name and branch", () => {
+    setTitles({ "wt-red": "Release planning" });
+    const { result } = renderHook(() => useWorktreePalette({ worktrees: list }));
+
+    expect(idsFor(result, "release planning")).toEqual(["wt-red"]);
+    expect(idsFor(result, "auth-refresh")).toEqual(["wt-red"]);
+    expect(idsFor(result, "oauth")).toEqual(["wt-red"]);
+    expect(idsFor(result, "zzz-unrelated")).toEqual([]);
+  });
+
+  it("follows a retitle without the query changing", () => {
+    setTitles({ "wt-red": "Release planning" });
+    const { result } = renderHook(() => useWorktreePalette({ worktrees: list }));
+    expect(idsFor(result, "hotfix")).toEqual([]);
+
+    setTitles({ "wt-red": "Hotfix rollout" });
+
+    expect(result.current.results.map((w) => w.id)).toEqual(["wt-red"]);
   });
 });

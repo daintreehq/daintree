@@ -16,6 +16,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
 // An enrolled Host's record (#16022), the store's `decisionsHost`.
 const savedHost = vi.hoisted(() => ({ value: undefined as unknown }));
+// The store's `notificationSettings`: desktop notifications on, as they are by default.
+const savedNotifications = vi.hoisted(() => ({ value: { enabled: true } as unknown }));
 const loads = vi.hoisted(() => ({
   constructed: 0,
   failNextConstruct: false,
@@ -34,7 +36,21 @@ const toastAudience = vi.hoisted(() => ({ present: true }));
 // The relay check's network: Chromium's, which tests answer by hand.
 const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
 
-vi.mock("electron", () => ({ net: { fetch: netFetch }, app: {}, safeStorage: {} }));
+// Whether the system can show a native notification (#17240).
+const nativeNotifications = vi.hoisted(() => ({ supported: true }));
+// Whether the fake store holds a question notification record the notifier can read (#17240).
+const notificationRecord = vi.hoisted(() => ({
+  readable: false,
+  /** Resolves the record's read; already resolved unless a test holds it. */
+  read: Promise.resolve() as Promise<void>,
+}));
+
+vi.mock("electron", () => ({
+  net: { fetch: netFetch },
+  app: {},
+  safeStorage: {},
+  Notification: { isSupported: () => nativeNotifications.supported },
+}));
 
 // The key file each service uses, in a directory of the test's own.
 const keyFile = vi.hoisted(() => ({ path: "" }));
@@ -293,6 +309,7 @@ const connections = vi.hoisted(
       started: number;
       stopped: number;
       snapshotsChanged: number;
+      presenceChanged: number;
       keyFileAtStop?: boolean;
     }>
 );
@@ -317,7 +334,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) =>
-      key === "decisions" ? saved.value : key === "decisionsHost" ? savedHost.value : undefined
+      key === "decisions"
+        ? saved.value
+        : key === "decisionsHost"
+          ? savedHost.value
+          : key === "notificationSettings"
+            ? savedNotifications.value
+            : undefined
     ),
     set: vi.fn((key: string, value: unknown) => {
       if (key === "decisions") saved.value = value;
@@ -390,6 +413,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             started: 0,
             stopped: 0,
             snapshotsChanged: 0,
+            presenceChanged: 0,
           };
           connections.push(made);
           return {
@@ -398,6 +422,9 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             },
             snapshotsChanged: () => {
               made.snapshotsChanged += 1;
+            },
+            presenceChanged: () => {
+              made.presenceChanged += 1;
             },
             stop: () => {
               made.stopped += 1;
@@ -418,6 +445,16 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             onFault: () => () => {},
             faultReason: () => loads.faultReason,
             listQuestions: async () => [],
+            ...(notificationRecord.readable
+              ? {
+                  getMeta: async (key: string) => {
+                    if (key !== "daintree:notified-questions") return null;
+                    await notificationRecord.read;
+                    return "[]";
+                  },
+                  setMeta: async () => {},
+                }
+              : {}),
           } as never;
         },
       });
@@ -434,7 +471,14 @@ import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { RelayCheckCancelledError } from "../relayCheck.js";
 import { setDecisionsHostsPort } from "../../../window/serviceRefs.js";
 import { noteRelayRemovalLaunch } from "../../pty/relayRemovalLaunches.js";
-import type { DecisionsHostLink, DecisionsHostsPort } from "../../../types/decisionsHosts.js";
+import type {
+  DecisionsHostLink,
+  DecisionsHostQuestionRead,
+  DecisionsHostQuestions,
+  DecisionsHostsPort,
+  HostCallOutcome,
+} from "../../../types/decisionsHosts.js";
+import { notificationSettingsWritten } from "../../../utils/notificationSettingsPatch.js";
 
 /** An entry status: what it observed, and the revision it was read at. */
 function withRevision<T extends object>(status: T): T & { revision: number } {
@@ -474,6 +518,9 @@ import {
   getDecisionQuestionImageByReference,
   getDecisionQuestionSummaries,
   getDecisionQuestionSummariesByReference,
+  cancelDecisionQuestionByReference,
+  cancelHostServedQuestion,
+  readHostServedQuestion,
   getDecisionsPaneState,
   getDecisionsPolicy,
   cancelSetupCheck,
@@ -498,6 +545,7 @@ import {
   setDecisionsDefaultQuestionExpiry,
   setDecisionsAgentAskHuman,
   setDecisionsTerminalSnapshots,
+  setDecisionsHoldPhonePushes,
   startDecisionsModelEvaluation,
   startRelayRemoval,
   startDecisionsIfEnabled,
@@ -508,7 +556,9 @@ import {
 } from "../index.js";
 import type { AnswerDelivery } from "../answerDelivery.js";
 import type {
+  DecisionQuestionCancelResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionReference,
   DecisionQuestionList,
   DecisionQuestionListItem,
 } from "../../../../shared/types/decisionsQuestion.js";
@@ -552,6 +602,10 @@ describe("Decisions entry", () => {
     statGate.started = 0;
     saved.value = undefined;
     savedHost.value = undefined;
+    savedNotifications.value = { enabled: true };
+    nativeNotifications.supported = true;
+    notificationRecord.readable = false;
+    notificationRecord.read = Promise.resolve();
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
     loads.closing = null;
@@ -654,6 +708,8 @@ describe("Decisions entry", () => {
       expiresAt: null,
       settledAt: null,
       standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
     });
     const listPushes = () =>
       statusView.send.mock.calls.filter(
@@ -676,6 +732,124 @@ describe("Decisions entry", () => {
     } finally {
       off();
       // The list outlives the entry's reset: leave none for the tests after.
+      setDecisionQuestions([]);
+    }
+  });
+
+  it("lists each enrolled Host's questions with this computer's, named by its Host, oldest first (#17230)", async () => {
+    saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    const publish = Reflect.get(service, "publishQuestions") as (
+      questions: DecisionQuestionListItem[],
+      listing?: boolean
+    ) => void;
+    const item = (
+      hostId: string,
+      questionId: string,
+      askedAt: string
+    ): DecisionQuestionListItem => ({
+      reference: { hostId, projectId: "project-1", terminalId: "pane-a", questionId },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt,
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+    });
+    const own = item(RELAY.hostId, "q_own_000001", "2026-11-02T10:05:00.000Z");
+    const theirs = item("qhost_studio_0001", "q_host_00001", "2026-11-02T10:01:00.000Z");
+    const theirsLater = item("qhost_studio_0001", "q_host_00002", "2026-11-02T10:09:00.000Z");
+    const lab = item("qhost_lab_00001", "q_lab_000001", "2026-11-02T10:03:00.000Z");
+    const labHost: DecisionsHostQuestions = {
+      hostId: "lab",
+      name: "Lab",
+      connected: true,
+      questionHostId: "qhost_lab_00001",
+      questions: [lab],
+    };
+    let hosts: DecisionsHostQuestions[] = [
+      {
+        hostId: "studio",
+        name: "Studio",
+        connected: true,
+        questionHostId: "qhost_studio_0001",
+        questions: [theirs, theirsLater],
+      },
+      labHost,
+    ];
+    const changed = new Set<() => void>();
+    const withdraw = setDecisionsHostsPort({
+      hosts: () => [],
+      linkFor: () => null,
+      onLinkOpened: () => () => {},
+      onHostsChanged: () => () => {},
+      runtimeOf: () => null,
+      announceOwnerState: () => {},
+      hostQuestions: () => hosts,
+      onHostQuestionsChanged: (listener) => {
+        changed.add(listener);
+        return () => changed.delete(listener);
+      },
+      readHostQuestion: () => null,
+      cancelHostQuestion: () => null,
+    });
+    const listPushes = () =>
+      statusView.send.mock.calls.filter(
+        ([, message]) => (message as { name?: string }).name === "decisions:questions-changed"
+      );
+    const studio = { hostId: "studio", name: "Studio", connected: true };
+    try {
+      publish([own]);
+      // Oldest first across every machine, each Host's named.
+      expect(getDecisionQuestionList().questions).toEqual([
+        { ...theirs, remoteHost: studio },
+        { ...lab, remoteHost: { hostId: "lab", name: "Lab", connected: true } },
+        own,
+        { ...theirsLater, remoteHost: studio },
+      ]);
+
+      // The Host's link goes: its questions stay, as not connected, and every window hears it.
+      statusView.send.mockClear();
+      hosts = [{ ...hosts[0], questions: [theirs], connected: false }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions[0]?.remoteHost).toEqual({
+        hostId: "studio",
+        name: "Studio",
+        connected: false,
+      });
+      expect(listPushes()).toHaveLength(1);
+
+      // With none asked here, the Host's are still listed.
+      publish([]);
+      expect(getDecisionQuestionList().questions.map((question) => question.reference)).toEqual([
+        theirs.reference,
+      ]);
+
+      // A Host whose questions name this computer's own id lists none of them.
+      hosts = [{ ...hosts[0], questionHostId: RELAY.hostId, questions: [own] }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions).toEqual([]);
+
+      // Nothing listed here means nothing at all, and the Hosts' changes are no longer followed.
+      hosts = [{ ...hosts[0], questionHostId: "qhost_studio_0001", questions: [theirs] }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions).toHaveLength(1);
+      const followed = [...changed];
+      publish([], false);
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(changed.size).toBe(0);
+      // A Host's change already on its way when it stopped lists nothing.
+      for (const listener of followed) listener();
+      expect(getDecisionQuestionList().questions).toEqual([]);
+    } finally {
+      withdraw();
       setDecisionQuestions([]);
     }
   });
@@ -1245,6 +1419,218 @@ describe("Decisions entry", () => {
       });
     });
 
+    describe("on an enrolled Remote Host (#17230)", () => {
+      /** A question the Host asked, named by the id its own questions carry. */
+      const ON_HOST = {
+        hostId: "qhost_studio_0001",
+        projectId: "project-server",
+        terminalId: "pane-host",
+        questionId: "0190f0aa11112222333344445555bb01",
+      };
+      const OWN = {
+        ...ON_HOST,
+        hostId: RELAY.hostId,
+        questionId: "0190f0aa11112222333344445555aa09",
+      };
+
+      function publishHostPort(over: Partial<DecisionsHostsPort>): () => void {
+        return setDecisionsHostsPort({
+          hosts: () => [],
+          linkFor: () => null,
+          onLinkOpened: () => () => {},
+          onHostsChanged: () => () => {},
+          runtimeOf: () => null,
+          announceOwnerState: () => {},
+          hostQuestions: () => [],
+          onHostQuestionsChanged: () => () => {},
+          readHostQuestion: () => null,
+          cancelHostQuestion: () => null,
+          ...over,
+        });
+      }
+
+      it("reads a Host's question on that Host, with or without a delivery here", async () => {
+        const questionContent = vi.fn(async () => ({ result: "not-found" as const }));
+        const current = await running({ questionContent });
+        const answered = { result: "unreadable" } as const;
+        const readHostQuestion = vi.fn((questionHostId: string) =>
+          questionHostId === ON_HOST.hostId
+            ? Promise.resolve({ ok: true as const, value: answered })
+            : null
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: readHostQuestion as DecisionsHostsPort["readHostQuestion"],
+        });
+        try {
+          await expect(getDecisionQuestionContentByReference({ reference: ON_HOST })).resolves.toBe(
+            answered
+          );
+          current.delivery = null;
+          await expect(
+            getDecisionQuestionImageByReference({
+              reference: ON_HOST,
+              attachmentId: "attach_0001",
+              offset: 8,
+            })
+          ).resolves.toBe(answered);
+
+          expect(readHostQuestion.mock.calls).toEqual([
+            [ON_HOST.hostId, { read: "content", reference: ON_HOST }],
+            [
+              ON_HOST.hostId,
+              { read: "image", reference: ON_HOST, attachmentId: "attach_0001", offset: 8 },
+            ],
+          ]);
+          expect(questionContent).not.toHaveBeenCalled();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("never reads a reference naming this computer on a Host", async () => {
+        const questionContent = vi.fn(async () => ({ result: "not-found" as const }));
+        await running({ questionContent });
+        const readHostQuestion = vi.fn(() => null);
+        const withdraw = publishHostPort({ readHostQuestion });
+        try {
+          await expect(getDecisionQuestionContentByReference({ reference: OWN })).resolves.toEqual({
+            result: "not-found",
+          });
+          expect(readHostQuestion).not.toHaveBeenCalled();
+          expect(questionContent).toHaveBeenCalledOnce();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("says the Host isn't connected when its link is down or went under the read, and fails on any other answer", async () => {
+        await running(null);
+        let outcome: HostCallOutcome<unknown> = { ok: false, failure: "disconnected" };
+        const cancelHostQuestion = vi.fn((_reference: DecisionQuestionReference) =>
+          Promise.resolve(outcome as HostCallOutcome<DecisionQuestionCancelResult>)
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: (() =>
+            Promise.resolve(outcome)) as DecisionsHostsPort["readHostQuestion"],
+          cancelHostQuestion,
+        });
+        try {
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({
+            result: "host-not-connected",
+          });
+          await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "host-not-connected",
+          });
+          outcome = { ok: false, failure: "outcome-unknown" };
+          // A cancel that went out may have been taken: it says so, and isn't sent again.
+          await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "host-not-connected",
+          });
+          // A read that went out and got no answer is a failed read, to retry.
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).rejects.toThrow(/outcome-unknown/);
+          outcome = { ok: false, failure: "unexpected-answer" };
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).rejects.toThrow(/unexpected-answer/);
+          outcome = { ok: true, value: { result: "cancelling" } };
+          await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "cancelling",
+          });
+          expect(cancelHostQuestion.mock.calls).toEqual([[ON_HOST], [ON_HOST], [ON_HOST]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("serves a Host's owner nothing over the link once this machine runs as an owner itself", async () => {
+        const questionContent = vi.fn(async () => ({ result: "not-found" as const }));
+        const questionSummaries = vi.fn(async () => []);
+        await running({ questionContent, questionSummaries });
+        const cancelQuestionByReference = vi.spyOn(
+          peekDecisionsService()!,
+          "cancelQuestionByReference"
+        );
+
+        await expect(readHostServedQuestion({ read: "content", reference: OWN })).resolves.toEqual({
+          result: "off",
+        });
+        await expect(
+          readHostServedQuestion({ read: "summaries", references: [OWN] })
+        ).resolves.toEqual({ result: "off" });
+        await expect(cancelHostServedQuestion(OWN)).resolves.toEqual({ result: "off" });
+        expect(questionContent).not.toHaveBeenCalled();
+        expect(questionSummaries).not.toHaveBeenCalled();
+        expect(cancelQuestionByReference).not.toHaveBeenCalled();
+      });
+
+      it("reads opening lines here and on each Host in one batch, in the order asked for", async () => {
+        const questionSummaries = vi.fn(async (_scope: unknown, ids: readonly string[]) =>
+          ids.map((questionId) => ({ questionId, result: "read" as const, line: "Here?" }))
+        );
+        await running({ questionSummaries });
+        const second = { ...ON_HOST, questionId: "0190f0aa11112222333344445555bb02" };
+        let connected = true;
+        let failure: "disconnected" | "outcome-unknown" = "disconnected";
+        const readHostQuestion = vi.fn((_questionHostId: string, read: DecisionsHostQuestionRead) =>
+          Promise.resolve(
+            connected && read.read === "summaries"
+              ? {
+                  ok: true as const,
+                  value: {
+                    result: "read" as const,
+                    summaries: [
+                      { questionId: ON_HOST.questionId, result: "read" as const, line: "There?" },
+                    ],
+                  },
+                }
+              : { ok: false as const, failure }
+          )
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: readHostQuestion as unknown as DecisionsHostsPort["readHostQuestion"],
+        });
+        try {
+          await expect(
+            getDecisionQuestionSummariesByReference({ references: [ON_HOST, OWN, second, ON_HOST] })
+          ).resolves.toEqual({
+            result: "read",
+            summaries: [
+              { questionId: ON_HOST.questionId, result: "read", line: "There?" },
+              { questionId: OWN.questionId, result: "read", line: "Here?" },
+              { questionId: second.questionId, result: "not-found" },
+            ],
+          });
+          // One read for the Host's two questions.
+          expect(readHostQuestion).toHaveBeenCalledExactlyOnceWith(ON_HOST.hostId, {
+            read: "summaries",
+            references: [ON_HOST, second],
+          });
+
+          connected = false;
+          await expect(
+            getDecisionQuestionSummariesByReference({ references: [ON_HOST] })
+          ).resolves.toEqual({
+            result: "read",
+            summaries: [{ questionId: ON_HOST.questionId, result: "host-not-connected" }],
+          });
+          // One that went out and got no answer isn't the Host being away: it couldn't be read.
+          failure = "outcome-unknown";
+          await expect(
+            getDecisionQuestionSummariesByReference({ references: [ON_HOST] })
+          ).resolves.toEqual({
+            result: "read",
+            summaries: [{ questionId: ON_HOST.questionId, result: "unreadable" }],
+          });
+        } finally {
+          withdraw();
+        }
+      });
+    });
+
     it("is not running when the delivery stopped under the read, whatever the read returned", async () => {
       const current = await running(null);
       current.delivery = {
@@ -1282,6 +1668,10 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState,
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
       });
       try {
         saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
@@ -1450,6 +1840,155 @@ describe("Decisions entry", () => {
       expect(terminalSnapshotsAllowed()).toBe(true);
       await stopDecisions();
       expect(terminalSnapshotsAllowed()).toBe(false);
+    });
+  });
+
+  describe("holding phone pushes (#17240)", () => {
+    afterEach(async () => {
+      await peekDecisionsService()?.stop();
+    });
+
+    it("reports presence only while Decisions, the switch and desktop notifications are on, telling the connection of each turn", async () => {
+      notificationRecord.readable = true;
+      let readRecord!: () => void;
+      notificationRecord.read = new Promise<void>((resolve) => (readRecord = resolve));
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const connection = connections[0]!;
+      const presence = connection.options.presence!;
+      // Nothing until question notifications follow the lifetime; then the connection hears so.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(presence.allowed()).toBe(false);
+      const before = connection.presenceChanged;
+      readRecord();
+      await vi.waitFor(() => expect(connection.presenceChanged).toBe(before + 1));
+      // On by default, with nothing new to agree to.
+      expect(presence.allowed()).toBe(true);
+      const told = connection.presenceChanged;
+      expect((await getDecisionsStatus()).holdPhonePushes).toBeUndefined();
+
+      savedNotifications.value = { enabled: false };
+      notificationSettingsWritten();
+      expect(connection.presenceChanged).toBe(told + 1);
+      expect(presence.allowed()).toBe(false);
+
+      savedNotifications.value = { enabled: true };
+      notificationSettingsWritten();
+      expect(connection.presenceChanged).toBe(told + 2);
+      expect(presence.allowed()).toBe(true);
+
+      // A system that can't show a notification can't tell the person first.
+      nativeNotifications.supported = false;
+      expect(presence.allowed()).toBe(false);
+      nativeNotifications.supported = true;
+
+      // Off reaches the connection before the queue gets to it.
+      const off = setDecisionsHoldPhonePushes(false);
+      expect(presence.allowed()).toBe(false);
+      expect(connection.presenceChanged).toBe(told + 3);
+      expect((await off).holdPhonePushes).toBe(false);
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        holdPhonePushes: false,
+      });
+      expect(peekDecisionsService()!.getSettings()!.holdPhonePushes).toBe(false);
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ holdPhonePushes: false })
+      );
+      // Notifications turning on doesn't override the switch.
+      notificationSettingsWritten();
+      expect(presence.allowed()).toBe(false);
+
+      const beforeOn = connection.presenceChanged;
+      const on = await setDecisionsHoldPhonePushes(true);
+      expect(on.holdPhonePushes).toBeUndefined();
+      expect(presence.allowed()).toBe(true);
+      expect(connection.presenceChanged).toBeGreaterThan(beforeOn);
+      expect(peekDecisionsService()!.getSettings()!.holdPhonePushes).toBe(true);
+      await vi.waitFor(() => expect(pushedStatuses().at(-1)).not.toHaveProperty("holdPhonePushes"));
+
+      // Decisions turned off, with the app still running.
+      await setDecisionsEnabled(false);
+      expect(presence.allowed()).toBe(false);
+    });
+
+    it("holds nothing for a lifetime whose question notifications can't follow its questions", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const presence = connections.at(-1)!.options.presence!;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(presence.allowed()).toBe(false);
+      warn.mockRestore();
+    });
+
+    it("shows every window the switch off before the queue reaches it", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the queue.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      let answered = false;
+      let off: ReturnType<typeof setDecisionsHoldPhonePushes> | null = null;
+      try {
+        await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+        off = setDecisionsHoldPhonePushes(false).then((status) => {
+          answered = true;
+          return status;
+        });
+        await vi.waitFor(() =>
+          expect(pushedStatuses().at(-1)).toMatchObject({ holdPhonePushes: false })
+        );
+        expect(answered).toBe(false);
+      } finally {
+        closed();
+      }
+      const [, , status] = await Promise.all([stopping, enabling, off]);
+      expect(status?.holdPhonePushes).toBe(false);
+    });
+
+    it("lets a turn off stand over a turn on queued before it", async () => {
+      saved.value = { enabled: true, consentedAt: 5, holdPhonePushes: false };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the queue behind a switch-on.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      const turningOn = setDecisionsHoldPhonePushes(true);
+      const turningOff = setDecisionsHoldPhonePushes(false);
+      closed();
+      const [, , on, off] = await Promise.all([stopping, enabling, turningOn, turningOff]);
+
+      const wroteOn = vi
+        .mocked(store.set)
+        .mock.calls.some(
+          (call) =>
+            ((call as unknown[])[1] as { holdPhonePushes?: boolean } | undefined)
+              ?.holdPhonePushes === true
+        );
+      expect(wroteOn).toBe(false);
+      expect(on.holdPhonePushes).toBe(false);
+      expect(off.holdPhonePushes).toBe(false);
+      expect(saved.value).toMatchObject({ holdPhonePushes: false });
+    });
+
+    it("refuses to turn on while Decisions is off, without loading it", async () => {
+      saved.value = { enabled: false, holdPhonePushes: false };
+      const constructed = loads.constructed;
+      await expect(setDecisionsHoldPhonePushes(true)).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+      expect(loads.constructed).toBe(constructed);
     });
   });
 
@@ -1879,6 +2418,10 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState,
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
       });
       try {
         saved.value = { enabled: true, consentedAt: 5 };
@@ -3850,6 +4393,10 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState,
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
       });
       try {
         saved.value = { consentedAt: 5, ...RELAY };
@@ -3892,6 +4439,10 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState: vi.fn(),
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
       };
       const withdraw = setDecisionsHostsPort(port);
       return {

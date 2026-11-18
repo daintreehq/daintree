@@ -4,7 +4,6 @@ import { render, cleanup, act, fireEvent, screen } from "@testing-library/react"
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/hooks/useOverlayState", () => ({ useOverlayState: () => {} }));
 // Held open after `isOpen` goes false when `presence.lingering` is set, as the real
 // exit animation keeps the dialog's buttons mounted for a moment.

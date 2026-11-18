@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { ProjectPulse, PulseRangeDays } from "@shared/types";
 import { usePulseStore, PULSE_MAX_RETRIES } from "@/store";
 import { cn } from "@/lib/utils";
-import { XCircle, RefreshCw, GitBranch, WifiOff } from "lucide-react";
+import { XCircle, RefreshCw, GitBranch, WifiOff, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -230,6 +230,13 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   const lastFocusProbeRef = useRef(0);
   const minuteTick = useGlobalMinuteTicker();
   const heatmapScrollerRef = useRef<HTMLDivElement>(null);
+  // Read by the settle effect without being one of its triggers: a count
+  // change alone must not rerun it and drop the manual-refresh press feedback.
+  // Declared before it, so it holds the count of the render being settled.
+  const retryCountRef = useRef(retryCount);
+  useEffect(() => {
+    retryCountRef.current = retryCount;
+  }, [retryCount]);
 
   // Declared before the settle effect so a worktree switch drops the baseline
   // (and any "Refreshing" said about the last worktree) before that effect
@@ -257,7 +264,14 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     if (settled) settledPulseRef.current = settled;
     if (!wasLoading) return;
     const changed = settled !== null && previous !== null && !isSamePulseData(previous, settled);
-    setRefreshAnnouncement(changed ? "Pulse data updated" : "");
+    // A failure with a snapshot still up is said here: the error row that
+    // announces a failure with nothing to show never renders in that case.
+    // While the store still has a retry scheduled the footer carries it alone,
+    // so one failed probe and its backoff retries are announced once, at the end.
+    const refreshFailed = !!error && !!pulse && retryCountRef.current === 0;
+    setRefreshAnnouncement(
+      changed ? "Pulse data updated" : refreshFailed ? "Couldn't refresh pulse data" : ""
+    );
   }, [worktreeId, isLoading, pulse, error, rangeDays]);
 
   // `isLoading` too, not the gate alone: the gate only closes in an effect, so
@@ -331,6 +345,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     // useGlobalMinuteTicker pauses while hidden and emits on visibility restore.
     void minuteTick;
     const updatedLabel = formatTimeSince(pulse.generatedAt, Date.now());
+    // The store keeps a same-range snapshot when a refresh fails, so the
+    // counts on screen are the last good read; the footer says the refresh
+    // failed instead of passing that snapshot off as current. It stays the
+    // same button either way, so a retry from it keeps keyboard focus.
+    const refreshFailed = !!error;
 
     // pulse.rangeDays, not the selector's — the chip describes the same snapshot
     // the coach line above it does. A provider with no `projectHealth`
@@ -397,10 +416,20 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             // Not `disabled`: pressing it would drop keyboard focus to the page.
             aria-disabled={isLoading}
             className="pulse-control mt-2 -ml-2.5 text-2xs aria-disabled:cursor-not-allowed"
-            aria-label={`Refresh — last updated ${updatedLabel}`}
+            // Each name contains its visible label, for speech input.
+            aria-label={
+              refreshFailed
+                ? `Retry — couldn't refresh · updated ${updatedLabel}`
+                : `Refresh — last updated ${updatedLabel}`
+            }
             data-testid="pulse-last-updated"
           >
-            <span>Updated {updatedLabel}</span>
+            {refreshFailed && <AlertTriangle className="text-status-warning" aria-hidden="true" />}
+            <span>
+              {refreshFailed
+                ? `Couldn't refresh · updated ${updatedLabel}`
+                : `Updated ${updatedLabel}`}
+            </span>
           </Button>
         </div>
       </div>

@@ -257,7 +257,6 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
       });
     },
   },
-  portal: { title: "Portal links" },
   mcp: {
     content: async (window) => {
       const mcpToggle = window.locator(SEL.settings.mcpServerToggle);

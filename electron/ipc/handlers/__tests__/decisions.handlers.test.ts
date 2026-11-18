@@ -31,9 +31,17 @@ import type {
 import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
+  DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   GetDecisionAnswerResultPayload,
+  GetDecisionDeclineResultPayload,
+  GetDecisionFollowUpResultPayload,
+  SendDecisionFollowUpPayload,
   CancelDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
@@ -118,6 +126,30 @@ const decisionsEntry = vi.hoisted(() => ({
   ),
   getDecisionAnswerResult: vi.fn(
     async (_payload: GetDecisionAnswerResultPayload): Promise<DecisionAnswerResultRead> => ({
+      result: "not-found",
+    })
+  ),
+  declineDecisionQuestion: vi.fn(
+    async (_payload: DeclineDecisionQuestionPayload): Promise<DecisionQuestionDeclineResult> => ({
+      result: "submitted",
+      declineId: "0190f0aa-1111-4222-8333-44445555dddd",
+      outcome: { status: "declined" },
+    })
+  ),
+  getDecisionDeclineResult: vi.fn(
+    async (_payload: GetDecisionDeclineResultPayload): Promise<DecisionDeclineResultRead> => ({
+      result: "not-found",
+    })
+  ),
+  sendDecisionFollowUp: vi.fn(
+    async (_payload: SendDecisionFollowUpPayload): Promise<DecisionQuestionFollowUpResult> => ({
+      result: "submitted",
+      messageId: "0190f0aa-2222-4222-8333-444455550001",
+      outcome: { status: "sent" },
+    })
+  ),
+  getDecisionFollowUpResult: vi.fn(
+    async (_payload: GetDecisionFollowUpResultPayload): Promise<DecisionFollowUpResultRead> => ({
       result: "not-found",
     })
   ),
@@ -210,6 +242,11 @@ const decisionsEntry = vi.hoisted(() => ({
         ? { state: "connected", terminalSnapshots: true, revision: 1 }
         : { state: "connected", revision: 1 }
   ),
+  setDecisionsHoldPhonePushes: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> =>
+    enabled
+      ? { state: "connected", revision: 1 }
+      : { state: "connected", holdPhonePushes: false, revision: 1 }
+  ),
   // Asks for a path as the real entry does, and answers with what it was given.
   exportRecoveryKit: vi.fn(
     async (
@@ -290,6 +327,10 @@ vi.mock("../../../services/decisions/index.js", () => {
     cancelDecisionQuestionByReference: decisionsEntry.cancelDecisionQuestionByReference,
     answerDecisionQuestion: decisionsEntry.answerDecisionQuestion,
     getDecisionAnswerResult: decisionsEntry.getDecisionAnswerResult,
+    declineDecisionQuestion: decisionsEntry.declineDecisionQuestion,
+    getDecisionDeclineResult: decisionsEntry.getDecisionDeclineResult,
+    sendDecisionFollowUp: decisionsEntry.sendDecisionFollowUp,
+    getDecisionFollowUpResult: decisionsEntry.getDecisionFollowUpResult,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
     claimRelay: decisionsEntry.claimRelay,
@@ -306,6 +347,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     setDecisionsDefaultQuestionExpiry: decisionsEntry.setDecisionsDefaultQuestionExpiry,
     setDecisionsAgentAskHuman: decisionsEntry.setDecisionsAgentAskHuman,
     setDecisionsTerminalSnapshots: decisionsEntry.setDecisionsTerminalSnapshots,
+    setDecisionsHoldPhonePushes: decisionsEntry.setDecisionsHoldPhonePushes,
     exportRecoveryKit: decisionsEntry.exportRecoveryKit,
     verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
     revokeDevice: decisionsEntry.revokeDevice,
@@ -394,6 +436,18 @@ const answerQuestion = decisionsNamespace.ops.answerQuestion.handler as unknown 
 const getAnswerResult = decisionsNamespace.ops.getAnswerResult.handler as unknown as (
   payload: GetDecisionAnswerResultPayload
 ) => Promise<DecisionAnswerResultRead>;
+const declineQuestion = decisionsNamespace.ops.declineQuestion.handler as unknown as (
+  payload: DeclineDecisionQuestionPayload
+) => Promise<DecisionQuestionDeclineResult>;
+const getDeclineResult = decisionsNamespace.ops.getDeclineResult.handler as unknown as (
+  payload: GetDecisionDeclineResultPayload
+) => Promise<DecisionDeclineResultRead>;
+const sendFollowUp = decisionsNamespace.ops.sendFollowUp.handler as unknown as (
+  payload: SendDecisionFollowUpPayload
+) => Promise<DecisionQuestionFollowUpResult>;
+const getFollowUpResult = decisionsNamespace.ops.getFollowUpResult.handler as unknown as (
+  payload: GetDecisionFollowUpResultPayload
+) => Promise<DecisionFollowUpResultRead>;
 const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
@@ -431,6 +485,9 @@ const setAgentAskHuman = decisionsNamespace.ops.setAgentAskHuman.handler as unkn
 ) => Promise<DecisionsPolicy>;
 const setTerminalSnapshots = decisionsNamespace.ops.setTerminalSnapshots.handler as unknown as (
   payload: SetDecisionsTerminalSnapshotsPayload
+) => Promise<DecisionsStatus>;
+const setHoldPhonePushes = decisionsNamespace.ops.setHoldPhonePushes.handler as unknown as (
+  enabled: boolean
 ) => Promise<DecisionsStatus>;
 
 const listHosts = decisionsNamespace.ops.listHosts
@@ -515,6 +572,20 @@ const ANSWER: AnswerDecisionQuestionPayload = {
   reviewedAttachmentDigests: ["a".repeat(64)],
 };
 
+/** A person's dismissal of the same question (#17239). */
+const DECLINE: DeclineDecisionQuestionPayload = {
+  reference: ANSWER.reference,
+  declineId: "0190f0aa-1111-4222-8333-44445555dddd",
+  expectedRevision: 0,
+};
+
+/** A person's follow-up on a Remote Host's question, as the view submits it (#17238). */
+const FOLLOW_UP: SendDecisionFollowUpPayload = {
+  reference: ANSWER.reference,
+  messageId: "0190f0aa-2222-4222-8333-444455550001",
+  text: "Prefer the one already deployed.",
+};
+
 const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_STATUS,
   CHANNELS.DECISIONS_GET_PANE_STATE,
@@ -528,6 +599,10 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
   CHANNELS.DECISIONS_ANSWER_QUESTION,
   CHANNELS.DECISIONS_GET_ANSWER_RESULT,
+  CHANNELS.DECISIONS_DECLINE_QUESTION,
+  CHANNELS.DECISIONS_GET_DECLINE_RESULT,
+  CHANNELS.DECISIONS_SEND_FOLLOW_UP,
+  CHANNELS.DECISIONS_GET_FOLLOW_UP_RESULT,
   CHANNELS.DECISIONS_SET_ENABLED,
   CHANNELS.DECISIONS_CHECK_RELAY,
   CHANNELS.DECISIONS_CLAIM_RELAY,
@@ -543,6 +618,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
   CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
   CHANNELS.DECISIONS_SET_TERMINAL_SNAPSHOTS,
+  CHANNELS.DECISIONS_SET_HOLD_PHONE_PUSHES,
   CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT,
   CHANNELS.DECISIONS_VERIFY_RECOVERY_KIT,
   CHANNELS.DECISIONS_LIST_HOSTS,
@@ -576,6 +652,10 @@ describe("decisions IPC", () => {
     decisionsEntry.cancelDecisionQuestionByReference.mockClear();
     decisionsEntry.answerDecisionQuestion.mockClear();
     decisionsEntry.getDecisionAnswerResult.mockClear();
+    decisionsEntry.declineDecisionQuestion.mockClear();
+    decisionsEntry.getDecisionDeclineResult.mockClear();
+    decisionsEntry.sendDecisionFollowUp.mockClear();
+    decisionsEntry.getDecisionFollowUpResult.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
     decisionsEntry.claimRelay.mockClear();
@@ -596,6 +676,7 @@ describe("decisions IPC", () => {
     decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
     decisionsEntry.setDecisionsDefaultQuestionExpiry.mockClear();
     decisionsEntry.setDecisionsTerminalSnapshots.mockClear();
+    decisionsEntry.setDecisionsHoldPhonePushes.mockClear();
     decisionsEntry.revokeDevice.mockClear();
     decisionsEntry.rotateKeys.mockClear();
     decisionsEntry.startSetupCheck.mockClear();
@@ -736,6 +817,8 @@ describe("decisions IPC", () => {
           expiresAt: null,
           settledAt: null,
           standing: { kind: "waiting", reason: "open" },
+          replyRequest: null,
+          stall: null,
         },
       ]);
       // Whatever the switch reads now: the list is what Decisions last installed.
@@ -806,11 +889,66 @@ describe("decisions IPC", () => {
       await expect(getAnswerResult({ answerId: ANSWER.answerId })).resolves.toEqual({
         result: "off",
       });
+      await expect(sendFollowUp(FOLLOW_UP)).resolves.toEqual({ result: "off" });
+      await expect(getFollowUpResult({ messageId: FOLLOW_UP.messageId })).resolves.toEqual({
+        result: "off",
+      });
 
       expect(decisionsEntry.evaluated).toBe(0);
       expect(decisionsEntry.libraries).toBe(0);
     }
   );
+
+  it.each([
+    ["absent", undefined],
+    ["off", { enabled: false }],
+  ])(
+    "signs and reads no person's dismissal with the setting %s, saying it's off, loading none of Decisions (#17239)",
+    async (_label, value) => {
+      saved.value = value;
+
+      await expect(declineQuestion(DECLINE)).resolves.toEqual({ result: "off" });
+      await expect(getDeclineResult({ declineId: DECLINE.declineId })).resolves.toEqual({
+        result: "off",
+      });
+
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it.each([
+    [
+      "serving its panes",
+      { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: null },
+      "not-owner",
+    ],
+    ["turned off by its owner", { deviceId: "dev_host_1", ownerOffAt: 1, revokedAt: null }, "off"],
+    ["revoked", { deviceId: "dev_host_1", ownerOffAt: null, revokedAt: 1 }, "off"],
+  ] as const)(
+    "on an enrolled Remote Host %s, says its key never signs a dismissal, loading none of Decisions (#17239)",
+    async (_label, host, said) => {
+      saved.value = { enabled: false };
+      saved.host = host;
+
+      await expect(declineQuestion(DECLINE)).resolves.toEqual(
+        said === "not-owner" ? { result: "refused", reason: "not-owner" } : { result: "off" }
+      );
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it("signs no person's dismissal once quit has sealed the loader, without loading it (#17239)", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(declineQuestion(DECLINE)).resolves.toEqual({ result: "not-running" });
+    await expect(getDeclineResult({ declineId: DECLINE.declineId })).resolves.toEqual({
+      result: "not-running",
+    });
+    expect(decisionsEntry.evaluated).toBe(0);
+  });
 
   it("signs no person's answer once quit has sealed the loader, without loading it (#17101)", async () => {
     saved.value = { enabled: true };
@@ -818,6 +956,10 @@ describe("decisions IPC", () => {
 
     await expect(answerQuestion(ANSWER)).resolves.toEqual({ result: "not-running" });
     await expect(getAnswerResult({ answerId: ANSWER.answerId })).resolves.toEqual({
+      result: "not-running",
+    });
+    await expect(sendFollowUp(FOLLOW_UP)).resolves.toEqual({ result: "not-running" });
+    await expect(getFollowUpResult({ messageId: FOLLOW_UP.messageId })).resolves.toEqual({
       result: "not-running",
     });
     expect(decisionsEntry.evaluated).toBe(0);
@@ -968,6 +1110,7 @@ describe("decisions IPC", () => {
       await expect(setTerminalSnapshots({ enabled: true, consent: true })).rejects.toMatchObject({
         code: "PERMISSION",
       });
+      await expect(setHoldPhonePushes(false)).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1462,6 +1605,120 @@ describe("decisions IPC", () => {
     });
   });
 
+  describe("the person's dismissal (#17239)", () => {
+    it("passes the dismissal to Decisions once on, and hands back what it says", async () => {
+      saved.value = { enabled: true };
+      const refused: DecisionQuestionDeclineResult = { result: "refused", reason: "not-owner" };
+      const read: DecisionDeclineResultRead = {
+        result: "read",
+        questionId: QUESTION_ID,
+        expectedRevision: 0,
+        outcome: { status: "unsupported", by: "asking-desktop" },
+      };
+      decisionsEntry.declineDecisionQuestion.mockResolvedValueOnce(refused);
+      decisionsEntry.getDecisionDeclineResult.mockResolvedValueOnce(read);
+
+      await expect(declineQuestion(DECLINE)).resolves.toBe(refused);
+      await expect(getDeclineResult({ declineId: DECLINE.declineId })).resolves.toBe(read);
+
+      expect(decisionsEntry.declineDecisionQuestion).toHaveBeenCalledExactlyOnceWith(DECLINE);
+      expect(decisionsEntry.getDecisionDeclineResult).toHaveBeenCalledExactlyOnceWith({
+        declineId: DECLINE.declineId,
+      });
+    });
+
+    it("takes a whole reference, a decline id and a revision, and nothing else", () => {
+      const decline = decisionsNamespace.ops.declineQuestion.schema as SafeParse;
+      const result = decisionsNamespace.ops.getDeclineResult.schema as SafeParse;
+      expect(decline.safeParse(DECLINE).success).toBe(true);
+      expect(
+        decline.safeParse({
+          ...DECLINE,
+          declineId: "a".repeat(64),
+          expectedRevision: Number.MAX_SAFE_INTEGER,
+        }).success
+      ).toBe(true);
+      for (const bad of [
+        {},
+        { ...DECLINE, reference: undefined },
+        { ...DECLINE, reference: { ...DECLINE.reference, questionId: "../q" } },
+        { ...DECLINE, reference: { ...DECLINE.reference, hostId: "" } },
+        { ...DECLINE, declineId: undefined },
+        { ...DECLINE, declineId: "short" },
+        { ...DECLINE, declineId: "a".repeat(65) },
+        { ...DECLINE, declineId: "has spaces in it" },
+        { ...DECLINE, expectedRevision: undefined },
+        { ...DECLINE, expectedRevision: -1 },
+        { ...DECLINE, expectedRevision: 1.5 },
+        { ...DECLINE, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+        // A decline carries no words and says nothing of who signs it.
+        { ...DECLINE, text: "not now" },
+        { ...DECLINE, decline: true },
+        { ...DECLINE, signerDeviceId: "dev_owner" },
+      ]) {
+        expect(decline.safeParse(bad).success, JSON.stringify(bad).slice(0, 120)).toBe(false);
+      }
+      expect(result.safeParse({ declineId: DECLINE.declineId }).success).toBe(true);
+      for (const bad of [{}, { declineId: "../x" }, { declineId: DECLINE.declineId, extra: 1 }]) {
+        expect(result.safeParse(bad).success).toBe(false);
+      }
+    });
+  });
+
+  describe("the person's follow-up (#17238)", () => {
+    it("passes the follow-up to Decisions once on, and hands back what it says", async () => {
+      saved.value = { enabled: true };
+      const refused: DecisionQuestionFollowUpResult = { result: "refused", reason: "not-owner" };
+      const read: DecisionFollowUpResultRead = {
+        result: "read",
+        questionId: QUESTION_ID,
+        outcome: { status: "unsupported", by: "asking-desktop" },
+      };
+      decisionsEntry.sendDecisionFollowUp.mockResolvedValueOnce(refused);
+      decisionsEntry.getDecisionFollowUpResult.mockResolvedValueOnce(read);
+
+      await expect(sendFollowUp(FOLLOW_UP)).resolves.toBe(refused);
+      await expect(getFollowUpResult({ messageId: FOLLOW_UP.messageId })).resolves.toBe(read);
+
+      expect(decisionsEntry.sendDecisionFollowUp).toHaveBeenCalledExactlyOnceWith(FOLLOW_UP);
+      expect(decisionsEntry.getDecisionFollowUpResult).toHaveBeenCalledExactlyOnceWith({
+        messageId: FOLLOW_UP.messageId,
+      });
+    });
+
+    it("takes a whole reference, a message id and words within the protocol's bound, and nothing else", () => {
+      const send = decisionsNamespace.ops.sendFollowUp.schema as SafeParse;
+      const result = decisionsNamespace.ops.getFollowUpResult.schema as SafeParse;
+      expect(send.safeParse(FOLLOW_UP).success).toBe(true);
+      expect(
+        send.safeParse({ ...FOLLOW_UP, messageId: "a".repeat(64), text: "x".repeat(16 * 1024) })
+          .success
+      ).toBe(true);
+      for (const bad of [
+        {},
+        { ...FOLLOW_UP, reference: undefined },
+        { ...FOLLOW_UP, reference: { ...FOLLOW_UP.reference, questionId: "../q" } },
+        { ...FOLLOW_UP, messageId: undefined },
+        { ...FOLLOW_UP, messageId: "short" },
+        { ...FOLLOW_UP, messageId: "has spaces in it" },
+        { ...FOLLOW_UP, text: undefined },
+        { ...FOLLOW_UP, text: "" },
+        { ...FOLLOW_UP, text: " \n\t" },
+        { ...FOLLOW_UP, text: "x".repeat(16 * 1024 + 1) },
+        // Only words: never a reply request, images or a signer of its own.
+        { ...FOLLOW_UP, expectsReply: true },
+        { ...FOLLOW_UP, images: [] },
+        { ...FOLLOW_UP, signerDeviceId: "dev_phone_1" },
+      ]) {
+        expect(send.safeParse(bad).success, JSON.stringify(bad).slice(0, 120)).toBe(false);
+      }
+      expect(result.safeParse({ messageId: FOLLOW_UP.messageId }).success).toBe(true);
+      for (const bad of [{}, { messageId: "../x" }, { messageId: FOLLOW_UP.messageId, extra: 1 }]) {
+        expect(result.safeParse(bad).success).toBe(false);
+      }
+    });
+  });
+
   it("takes only a pane and a question id to cancel, never a project", () => {
     const cancel = decisionsNamespace.ops.cancelQuestion.schema as SafeParse;
     expect(cancel.safeParse({ terminalId: "pane-a", questionId: QUESTION_ID }).success).toBe(true);
@@ -1773,6 +2030,22 @@ describe("decisions IPC", () => {
       [{ enabled: false }],
     ]);
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("changes holding phone pushes through Decisions itself once on, and takes only a boolean (#17240)", async () => {
+    saved.value = { enabled: true };
+
+    await expect(setHoldPhonePushes(false)).resolves.toMatchObject({ holdPhonePushes: false });
+    await expect(setHoldPhonePushes(true)).resolves.not.toHaveProperty("holdPhonePushes");
+    expect(decisionsEntry.setDecisionsHoldPhonePushes.mock.calls).toEqual([[false], [true]]);
+    expect(store.set).not.toHaveBeenCalled();
+
+    const schema = decisionsNamespace.ops.setHoldPhonePushes.schema as SafeParse;
+    expect(schema.safeParse(true).success).toBe(true);
+    expect(schema.safeParse(false).success).toBe(true);
+    for (const value of [undefined, "false", 0, { enabled: false }]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
   });
 
   it("takes the switch and an agreement for terminal snapshots, never a time of its own", () => {

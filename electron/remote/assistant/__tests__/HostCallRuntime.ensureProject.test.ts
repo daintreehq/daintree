@@ -127,6 +127,7 @@ describe("HostCallRuntime.ensureProject (#14140)", () => {
     ["UNSUPPORTED", "unsupported"],
     ["PERMISSION", "policy_rejected"],
     ["HOST_DISCONNECTED", "disconnected"],
+    ["HOST_CONNECTION_UNUSABLE", "disconnected"],
     ["VALIDATION", "conflict"],
     ["OUTCOME_UNKNOWN", "ambiguous"],
   ] as const)("reports a %s failure as %s, in fixed words", async (code, outcome) => {

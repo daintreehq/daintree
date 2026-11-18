@@ -39,10 +39,13 @@ vi.mock("../../../utils/hardenedGit.js", () => ({
 
 const detectRepoOperationStateMock = vi.hoisted(() => vi.fn());
 const resolveGitDirMock = vi.hoisted(() => vi.fn(async () => "/repo/.git"));
+const readRepoOperationIdMock = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
 vi.mock("../../../services/git/repoOperationState.js", () => ({
   detectRepoOperationState: detectRepoOperationStateMock,
   resolveGitDir: resolveGitDirMock,
   getRepoOperationStateSync: vi.fn(() => undefined),
+  readRepoOperationId: readRepoOperationIdMock,
+  readCurrentRepoOperationId: vi.fn(async () => null),
 }));
 
 import { registerGitWriteHandlers } from "../git-write.js";
@@ -1208,6 +1211,16 @@ describe("git:continue-repository-operation handler", () => {
     expect(git.raw).toHaveBeenCalledWith(["revert", "--continue", "--no-edit"]);
   });
 
+  it("continues a git am session with git am, never git rebase", async () => {
+    const { git, handler } = setup("APPLYING_MAILBOX");
+
+    await handler(null, "/tmp/repo");
+
+    // `git rebase --continue` refuses an am session outright (exit 128).
+    expect(git.raw).toHaveBeenCalledWith(["am", "--continue"]);
+    expect(git.rebase).not.toHaveBeenCalled();
+  });
+
   it("propagates a rebase failure instead of swallowing it", async () => {
     const { git, handler } = setup("REBASING");
     git.rebase.mockRejectedValueOnce(new Error("could not apply abc123"));
@@ -1226,9 +1239,99 @@ describe("git:continue-repository-operation handler", () => {
     const { git, handler } = setup("CLEAN");
 
     await expect(handler(null, "/tmp/repo")).rejects.toThrow(
-      /No merge, rebase, cherry-pick, or revert operation is in progress/
+      /No repository operation is in progress/
     );
     expect(git.rebase).not.toHaveBeenCalled();
     expect(git.merge).not.toHaveBeenCalled();
+  });
+});
+
+describe("abort and continue check the operation they were chosen for (#17559)", () => {
+  const CHOSEN = { operation: "MERGING", operationId: "merge-a" } as const;
+
+  function setup(channel: string, state: RepoState, currentId: string | null) {
+    const git = {
+      env: vi.fn(),
+      merge: vi.fn().mockResolvedValue(undefined),
+      rebase: vi.fn().mockResolvedValue(undefined),
+      raw: vi.fn().mockResolvedValue(""),
+    };
+    createContinueGitMock.mockResolvedValue(git);
+    createHardenedGitMock.mockResolvedValue(git);
+    detectRepoOperationStateMock.mockResolvedValue({
+      state,
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      rebaseSequence: null,
+    });
+    readRepoOperationIdMock.mockResolvedValue(currentId);
+    registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+    const handler = registeredHandlers().get(channel)!;
+    const gitRan = () =>
+      git.merge.mock.calls.length + git.rebase.mock.calls.length + git.raw.mock.calls.length;
+    return { git, handler, gitRan };
+  }
+
+  const CHANNELS_UNDER_TEST = [
+    ["abort", CHANNELS.GIT_ABORT_REPOSITORY_OPERATION],
+    ["continue", CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION],
+  ] as const;
+
+  describe.each(CHANNELS_UNDER_TEST)("%s", (verb, channel) => {
+    it.each([
+      ["the same kind replaced it", "MERGING", "merge-b", /restarted or replaced/],
+      // The same id, so only the kind comparison can refuse it.
+      ["another kind replaced it", "REBASING", "merge-a", /rebase is in progress now/],
+      ["it ended", "CLEAN", null, /no longer in progress/],
+      ["its identity can't be read now", "MERGING", null, /couldn't confirm/],
+    ] as const)("refuses, running no git, when %s", async (_case, state, currentId, message) => {
+      const { handler, gitRan } = setup(channel, state, currentId);
+
+      const refusal = handler(null, CWD, CHOSEN) as Promise<void>;
+      // Plain prose: the preload adds the transport prefix from the reason.
+      await expect(refusal).rejects.toMatchObject({
+        reason: "repo-operation-changed",
+        message: expect.not.stringContaining("[GitError"),
+      });
+      await expect(refusal).rejects.toThrow(message);
+      expect(gitRan()).toBe(0);
+    });
+
+    it("refuses a choice made without an identity, even over the same kind", async () => {
+      const { handler, gitRan } = setup(channel, "MERGING", null);
+      await expect(
+        handler(null, CWD, { operation: "MERGING", operationId: null })
+      ).rejects.toMatchObject({ reason: "repo-operation-changed" });
+      expect(gitRan()).toBe(0);
+    });
+
+    it("refuses a malformed pin before reading the worktree, never treating it as none", async () => {
+      const { handler, gitRan } = setup(channel, "MERGING", "merge-a");
+      for (const pin of [
+        null,
+        {},
+        { operation: "CLEAN", operationId: "x" },
+        { operation: "MERGING", operationId: "" },
+      ]) {
+        await expect(handler(null, CWD, pin)).rejects.toThrow(/Invalid repository operation pin/);
+      }
+      expect(createContinueGitMock).not.toHaveBeenCalled();
+      expect(createHardenedGitMock).not.toHaveBeenCalled();
+      expect(resolveGitDirMock).not.toHaveBeenCalled();
+      expect(gitRan()).toBe(0);
+    });
+
+    it("runs on the operation it was chosen for", async () => {
+      const { git, handler } = setup(channel, "MERGING", "merge-a");
+      await handler(null, CWD, CHOSEN);
+      expect(git.merge).toHaveBeenCalledWith([verb === "abort" ? "--abort" : "--continue"]);
+    });
+
+    it("acts on what it finds when no pin was sent, as an agent dispatch does", async () => {
+      const { git, handler } = setup(channel, "MERGING", "merge-b");
+      await handler(null, CWD);
+      expect(git.merge).toHaveBeenCalledTimes(1);
+      expect(readRepoOperationIdMock).not.toHaveBeenCalled();
+    });
   });
 });

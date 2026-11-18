@@ -78,6 +78,7 @@ const createMockProjectClient = () => ({
   updateInRepoRecipe: vi.fn().mockResolvedValue(undefined),
   deleteInRepoRecipe: vi.fn().mockResolvedValue(undefined),
   getInRepoPresets: vi.fn().mockResolvedValue({}),
+  getDeclaredLinks: vi.fn().mockResolvedValue([]),
 });
 
 describe("PanelPersistence", () => {

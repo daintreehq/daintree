@@ -1146,6 +1146,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.resetModes",
   "terminal.restartOnPreset",
   "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
@@ -1168,7 +1169,6 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "fleet.deleteNamedFleet",
   "worktree.resource.teardown",
   "worktree.resource.openOnHost",
-  "portal.links.remove",
   "keybinding.resetAll",
   "logs.clear",
   "eventInspector.clear",
@@ -1224,6 +1224,7 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.resetModes",
   "terminal.restartOnPreset",
   "terminal.restartOnAccount",
   "terminal.restartAll",
@@ -1273,7 +1274,6 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Deleted at once with an Undo toast from the UI (exactly restorable, D0 there);
   // danger:"confirm" still gates agent and palette dispatch, which get no Undo.
   "fleet.deleteNamedFleet",
-  "portal.links.remove",
   // Deferred-promise via gitPushConfirmStore; action run() awaits confirmation
   // before calling IPC; GitPushConfirmDialog resolves the Promise.
   "git.push",

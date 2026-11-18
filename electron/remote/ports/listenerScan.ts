@@ -151,34 +151,40 @@ const nodeProcFs: ProcFs = {
   readlink: (path) => fs.readlink(path),
 };
 
-/** Linux: the user's own listeners, with the owning process where its fds are readable. */
-export async function scanLinuxListeners(
-  uid: number,
-  procFs: ProcFs = nodeProcFs
-): Promise<RawListener[]> {
-  const tables = await Promise.all([
+/**
+ * Both TCP tables, reachable listeners only. With `strict`, a table that
+ * exists but can't be read makes the answer null rather than half a list; a
+ * missing table is an address family the kernel doesn't have.
+ */
+async function readProcNetTables(
+  procFs: ProcFs,
+  strict = false
+): Promise<ProcNetListener[] | null> {
+  let failed = false;
+  const read = (file: string, family: 4 | 6) =>
     procFs
-      .readFile("/proc/net/tcp")
-      .then((text) => parseProcNetTcp(text, 4))
-      .catch(() => []),
-    procFs
-      .readFile("/proc/net/tcp6")
-      .then((text) => parseProcNetTcp(text, 6))
-      .catch(() => []),
-  ]);
-  const listeners = tables.flat().filter((entry) => entry.uid === uid);
-  const wanted = new Map<number, ProcNetListener[]>();
-  for (const listener of listeners) {
-    const list = wanted.get(listener.inode) ?? [];
-    list.push(listener);
-    wanted.set(listener.inode, list);
-  }
+      .readFile(file)
+      .then((text) => parseProcNetTcp(text, family))
+      .catch((error: unknown) => {
+        if ((error as { code?: unknown }).code !== "ENOENT") failed = true;
+        return [];
+      });
+  const tables = await Promise.all([read("/proc/net/tcp", 4), read("/proc/net/tcp6", 6)]);
+  return strict && failed ? null : tables.flat();
+}
+
+/** The process holding each socket inode, from the user's own readable `/proc/<pid>/fd` links. */
+async function socketOwners(
+  inodes: ReadonlySet<number>,
+  procFs: ProcFs
+): Promise<Map<number, { pid: number; processName: string | null }>> {
   const owners = new Map<number, { pid: number; processName: string | null }>();
+  if (inodes.size === 0) return owners;
   const pids = (await procFs.readdir("/proc").catch(() => [] as string[]))
     .filter((name) => /^\d+$/.test(name))
     .slice(0, MAX_PIDS_SCANNED);
   for (const pidText of pids) {
-    if (owners.size === wanted.size) break;
+    if (owners.size === inodes.size) break;
     const fds = await procFs.readdir(`/proc/${pidText}/fd`).catch(() => null);
     if (!fds) continue;
     let processName: string | null | undefined;
@@ -187,7 +193,7 @@ export async function scanLinuxListeners(
       const match = target ? /^socket:\[(\d+)\]$/.exec(target) : null;
       if (!match) continue;
       const inode = Number.parseInt(match[1]!, 10);
-      if (!wanted.has(inode) || owners.has(inode)) continue;
+      if (!inodes.has(inode) || owners.has(inode)) continue;
       if (processName === undefined) {
         processName = await procFs
           .readFile(`/proc/${pidText}/comm`)
@@ -197,6 +203,16 @@ export async function scanLinuxListeners(
       owners.set(inode, { pid: Number.parseInt(pidText, 10), processName });
     }
   }
+  return owners;
+}
+
+/** Linux: the user's own listeners, with the owning process where its fds are readable. */
+export async function scanLinuxListeners(
+  uid: number,
+  procFs: ProcFs = nodeProcFs
+): Promise<RawListener[]> {
+  const listeners = ((await readProcNetTables(procFs)) ?? []).filter((entry) => entry.uid === uid);
+  const owners = await socketOwners(new Set(listeners.map((listener) => listener.inode)), procFs);
   return listeners.map((listener) => {
     const owner = owners.get(listener.inode);
     return {
@@ -248,4 +264,119 @@ export async function scanHostListeners(
     return finalizeListeners(await scanLinuxListeners(uid, options.procFs), exclude);
   }
   return [];
+}
+
+/** `lsof` asked about one listening TCP port; exits 1 when nothing matched. */
+export function portLsofArgs(port: number): string[] {
+  return ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-F", "pcn"];
+}
+
+/** `lsof` asked for the working directory of each pid. */
+export function cwdLsofArgs(pids: readonly number[]): string[] {
+  return ["-a", "-d", "cwd", "-p", pids.join(","), "-F", "pn"];
+}
+
+export type LsofArgsRunner = (args: string[]) => Promise<string>;
+
+const runLsof: LsofArgsRunner = (args) =>
+  new Promise((resolve, reject) => {
+    execFile(
+      "/usr/sbin/lsof",
+      args,
+      { timeout: LSOF_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+      (error, stdout) => {
+        if (error && (error as { code?: unknown }).code !== 1) {
+          reject(error);
+          return;
+        }
+        resolve(String(stdout));
+      }
+    );
+  });
+
+/** Parse `lsof -d cwd -F pn`: `p<pid>` then `n<path>` for each process. */
+export function parseLsofCwds(output: string): Map<number, string> {
+  const cwds = new Map<number, string>();
+  let pid: number | null = null;
+  for (const raw of output.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (line.startsWith("p")) {
+      const parsed = Number.parseInt(line.slice(1), 10);
+      pid = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+    } else if (line.startsWith("n") && pid !== null && line.length > 1) {
+      cwds.set(pid, line.slice(1));
+      pid = null;
+    }
+  }
+  return cwds;
+}
+
+export interface PortListener {
+  pid: number;
+  /** Where the process runs from; null when it can't be read. */
+  cwd: string | null;
+}
+
+export interface PortListenerOptions {
+  platform?: NodeJS.Platform;
+  uid?: number;
+  lsof?: LsofArgsRunner;
+  procFs?: ProcFs;
+  excludePids?: ReadonlySet<number>;
+}
+
+/**
+ * Every process listening on `port` where a `localhost` connection reaches,
+ * and the directory each runs from: a server and something else can hold the
+ * IPv4 and IPv6 sides of one port, and either may be what answered. Null when
+ * this machine can't account for every such socket: an unsupported platform,
+ * a failed scan, a socket whose owner isn't readable or belongs to another
+ * user, or one held by this app itself. An empty list means nothing listens.
+ */
+export async function findPortListeners(
+  port: number,
+  options: PortListenerOptions = {}
+): Promise<PortListener[] | null> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  const platform = options.platform ?? process.platform;
+  const exclude = options.excludePids ?? new Set([process.pid]);
+  try {
+    let pids: number[];
+    if (platform === "darwin") {
+      const lsof = options.lsof ?? runLsof;
+      const listeners = parseLsofListeners(await lsof(portLsofArgs(port))).filter(
+        (listener) => listener.port === port
+      );
+      if (listeners.some((listener) => listener.pid === null)) return null;
+      pids = [...new Set(listeners.map((listener) => listener.pid as number))];
+      if (pids.some((pid) => exclude.has(pid))) return null;
+      if (pids.length === 0) return [];
+      const cwds = parseLsofCwds(await lsof(cwdLsofArgs(pids)));
+      return pids.sort((a, b) => a - b).map((pid) => ({ pid, cwd: cwds.get(pid) ?? null }));
+    }
+    if (platform === "linux") {
+      const procFs = options.procFs ?? nodeProcFs;
+      const uid = options.uid ?? process.getuid?.() ?? -1;
+      // Filtered to the one port before any fd is read: a miss costs two
+      // table reads, never a walk of every process.
+      const tables = await readProcNetTables(procFs, true);
+      if (tables === null) return null;
+      const sockets = tables.filter((entry) => entry.port === port);
+      if (sockets.length === 0) return [];
+      if (sockets.some((socket) => socket.uid !== uid)) return null;
+      const owners = await socketOwners(new Set(sockets.map((socket) => socket.inode)), procFs);
+      if (sockets.some((socket) => !owners.has(socket.inode))) return null;
+      pids = [...new Set(sockets.map((socket) => owners.get(socket.inode)!.pid))];
+      if (pids.some((pid) => exclude.has(pid))) return null;
+      const listeners: PortListener[] = [];
+      for (const pid of pids.sort((a, b) => a - b)) {
+        const cwd = await procFs.readlink(`/proc/${pid}/cwd`).catch(() => null);
+        listeners.push({ pid, cwd });
+      }
+      return listeners;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }

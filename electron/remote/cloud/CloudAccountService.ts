@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
 import {
   CLOUD_PROVISIONING_DIMENSIONS,
+  canConnectCloudAccount,
   cloudProviderNamespace,
   isCloudProviderId,
   type CloudAccountAddRequest,
   type CloudAccountCheckResult,
   type CloudAccountSummary,
   type CloudCatalog,
+  type CloudCredentialValues,
   type CloudProviderId,
   type CloudProviderInfo,
   type CloudProvisioningChoice,
@@ -18,10 +20,10 @@ import {
 import { AppError } from "../../utils/errorTypes.js";
 import type { CloudCredentialVault } from "./CloudCredentialVault.js";
 import type { CloudHostStore, StoredCloudAccount } from "./CloudHostStore.js";
+import { cloudCredentialHint, normalizeCloudCredentials } from "./cloudCredentials.js";
 import type { CloudProvider, ProviderCatalog, ProviderCredentials } from "./provider.js";
 
 const MAX_ACCOUNTS = 16;
-const MAX_KEY_LENGTH = 4096;
 const MAX_NAME_LENGTH = 64;
 const CATALOG_TTL_MS = 5 * 60_000;
 
@@ -107,20 +109,6 @@ export function normalizeProvisioning(
   return result;
 }
 
-/** A pasted key, trimmed: printable ASCII with no whitespace inside. */
-export function normalizeApiKey(value: unknown): string {
-  if (typeof value !== "string") throw invalid("Paste the API key as text.");
-  const key = value.trim();
-  if (key.length === 0) throw invalid("Paste an API key.");
-  if (/PRIVATE KEY/.test(key)) throw invalid("That's a private key, not an API key.");
-  if (key.length > MAX_KEY_LENGTH || !/^[\x21-\x7e]+$/.test(key)) {
-    throw invalid(
-      "That doesn't look like an API key: it should be one line of letters, digits and symbols."
-    );
-  }
-  return key;
-}
-
 function normalizeName(value: unknown, fallback: string): string {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value !== "string") throw invalid("Account name must be text.");
@@ -156,16 +144,46 @@ export interface CloudAccountServiceDeps {
   now?: () => number;
   /** An account was removed from this device: drop what was kept for it (its ssh key). */
   onAccountRemoved?(accountId: string): Promise<void>;
+  /** Before the account's key leaves this device: the last chance to use it. A rejection keeps the account. */
+  beforeAccountRemoved?(accountId: string): Promise<void>;
+  /** Why an unregistered provider can't be used, when its owner knows better than "missing"; null to fall back. */
+  unavailableReason?(providerId: CloudProviderId): string | null;
+}
+
+/** The provider's check result, carried on as exactly the declared shape and nothing else. */
+function projectCheck(result: CloudAccountCheckResult): CloudAccountCheckResult {
+  return {
+    // A blank sign-in is no sign-in: it must never stand in for a known one.
+    identity:
+      typeof result.identity === "string" && result.identity.trim().length > 0
+        ? result.identity
+        : null,
+    scopes: result.scopes.map((choice) => ({
+      scope: { kind: choice.scope.kind, id: choice.scope.id, name: choice.scope.name },
+      active: choice.active === true,
+    })),
+  };
+}
+
+/** Whether two reads of an account hold the same credentials: a replace changes the revision. */
+function sameCredentials(a: StoredCloudAccount, b: StoredCloudAccount): boolean {
+  return a.credentialRevision === b.credentialRevision && a.keyHint === b.keyHint;
+}
+
+function newCredentialRevision(): string {
+  return crypto.randomBytes(8).toString("hex");
 }
 
 /**
- * Connected provider accounts: checking a pasted key, keeping it in the
- * keychain, resolving it for provider calls, and reading the account's
- * catalog and machines. A key only ever goes to the API origin it was
- * connected against, so a development override can't receive a production key.
+ * Connected provider accounts: checking entered credentials, keeping them in
+ * the keychain, resolving them for provider calls, and reading the account's
+ * catalog and machines. Credentials only ever go to the API origin they were
+ * connected against, so a development override can't receive production ones.
  */
 export class CloudAccountService {
   private readonly catalogs = new Map<string, CloudCatalog>();
+  /** Per account, the replace or remove committing now; the next one waits for it. */
+  private readonly commits = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: CloudAccountServiceDeps) {}
 
@@ -181,7 +199,11 @@ export class CloudAccountService {
 
   /** Null while the provider is registered; otherwise why its accounts and hosts can't be used. */
   providerUnavailable(providerId: CloudProviderId): string | null {
-    return this.deps.providers.get(providerId) ? null : cloudProviderUnavailableReason(providerId);
+    return this.deps.providers.get(providerId) ? null : this.unavailableReason(providerId);
+  }
+
+  private unavailableReason(providerId: CloudProviderId): string {
+    return this.deps.unavailableReason?.(providerId) ?? cloudProviderUnavailableReason(providerId);
   }
 
   provider(providerId: CloudProviderId): CloudProvider {
@@ -190,10 +212,20 @@ export class CloudAccountService {
       throw new AppError({
         code: "UNSUPPORTED",
         message: `Unknown cloud provider ${providerId}`,
-        userMessage: cloudProviderUnavailableReason(providerId),
+        userMessage: this.unavailableReason(providerId),
       });
     }
     return provider;
+  }
+
+  /**
+   * Refused before anything entered is read or kept: a plugin's provider
+   * would be handed the credentials, which needs the person's say-so first.
+   */
+  private requireConnectable(providerId: CloudProviderId): void {
+    if (canConnectCloudAccount(providerId)) return;
+    const message = "Accounts can't be connected for a plugin's cloud provider yet.";
+    throw new AppError({ code: "UNSUPPORTED", message, userMessage: message });
   }
 
   /** Refused before anything billable happens on a platform the provider can't serve. */
@@ -235,27 +267,66 @@ export class CloudAccountService {
     return account;
   }
 
-  /** Refused before a pasted key goes anywhere: it couldn't be kept. */
+  /** Refused before entered credentials go anywhere: they couldn't be kept. */
   private requireVault(): void {
     if (this.deps.vault.available()) return;
     throw new AppError({
       code: "UNSUPPORTED",
-      message: "No OS keychain to protect the cloud API key",
+      message: "No OS keychain to protect the cloud credentials",
       userMessage:
-        "This device has no secure storage Daintree can use, so it can't keep a cloud API key. Daintree never stores one in plain text.",
+        "This device has no secure storage Daintree can use, so it can't keep cloud credentials. Daintree never stores them in plain text.",
     });
+  }
+
+  /** Entered credentials, checked against what the provider declares. */
+  private normalize(provider: CloudProvider, values: unknown): CloudCredentialValues {
+    const fields = provider.info(this.deps.platform ?? process.platform).credentialFields;
+    return normalizeCloudCredentials(fields, values);
+  }
+
+  private hint(provider: CloudProvider, values: CloudCredentialValues): string | null {
+    const fields = provider.info(this.deps.platform ?? process.platform).credentialFields;
+    return cloudCredentialHint(fields, values);
+  }
+
+  private async check(
+    provider: CloudProvider,
+    values: CloudCredentialValues,
+    apiUrl: string
+  ): Promise<CloudAccountCheckResult> {
+    try {
+      return projectCheck(await provider.checkCredentials(values, apiUrl));
+    } catch (error) {
+      throw this.asAppError(provider, error);
+    }
+  }
+
+  /** Runs `commit` once the account's previous replace or remove has finished. */
+  private serialize<T>(accountId: string, commit: () => Promise<T>): Promise<T> {
+    const previous = this.commits.get(accountId) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(commit);
+    const settled = next.catch(() => {});
+    this.commits.set(accountId, settled);
+    void settled.then(() => {
+      if (this.commits.get(accountId) === settled) this.commits.delete(accountId);
+    });
+    return next;
   }
 
   private findDuplicate(
     providerId: CloudProviderId,
     identity: string | null,
     scopeId: string,
-    apiUrl: string
+    apiUrl: string,
+    exceptId: string | null = null
   ): StoredCloudAccount | undefined {
+    // A provider that can't say who a key belongs to can't tell two of its accounts apart.
+    if (identity === null) return undefined;
     return this.deps.store
       .accounts()
       .find(
         (account) =>
+          account.id !== exceptId &&
           account.providerId === providerId &&
           account.identity === identity &&
           account.scope.id === scopeId &&
@@ -263,40 +334,33 @@ export class CloudAccountService {
       );
   }
 
-  /** Checks a pasted key without storing it, and lists the scopes it may bill. */
-  async checkKey(providerId: unknown, apiKey: unknown): Promise<CloudAccountCheckResult> {
+  /** Checks entered credentials without keeping them, and lists the scopes they may bill. */
+  async checkCredentials(providerId: unknown, values: unknown): Promise<CloudAccountCheckResult> {
     if (!isCloudProviderId(providerId)) throw invalid("Choose a cloud provider.");
+    this.requireConnectable(providerId);
     const provider = this.requireSupported(providerId);
-    const key = normalizeApiKey(apiKey);
+    const credentials = this.normalize(provider, values);
     this.requireVault();
-    try {
-      return await provider.checkKey(key, this.apiUrl(providerId));
-    } catch (error) {
-      throw this.asAppError(provider, error);
-    }
+    return this.check(provider, credentials, this.apiUrl(providerId));
   }
 
   async addAccount(request: CloudAccountAddRequest): Promise<CloudAccountSummary> {
     if (!request || typeof request !== "object") throw invalid("Missing account details.");
     if (!isCloudProviderId(request.providerId)) throw invalid("Choose a cloud provider.");
+    this.requireConnectable(request.providerId);
     const provider = this.requireSupported(request.providerId);
-    const key = normalizeApiKey(request.apiKey);
+    const credentials = this.normalize(provider, request.credentials);
     if (typeof request.scopeId !== "string" || request.scopeId.length === 0) {
-      throw invalid("Choose which account or organization pays for machines.");
+      throw invalid("Choose who pays for machines.");
     }
     this.requireVault();
     if (this.deps.store.accounts().length >= MAX_ACCOUNTS) {
       throw invalid(`At most ${MAX_ACCOUNTS} cloud accounts can be connected.`);
     }
     const apiUrl = this.apiUrl(request.providerId);
-    let checked: CloudAccountCheckResult;
-    try {
-      checked = await provider.checkKey(key, apiUrl);
-    } catch (error) {
-      throw this.asAppError(provider, error);
-    }
+    const checked = await this.check(provider, credentials, apiUrl);
     const choice = checked.scopes.find((entry) => entry.scope.id === request.scopeId);
-    if (!choice) throw invalid("This key can't bill that account or organization.");
+    if (!choice) throw invalid("These credentials can't create machines billed there.");
     const refuseDuplicate = () => {
       const duplicate = this.findDuplicate(
         request.providerId,
@@ -306,7 +370,7 @@ export class CloudAccountService {
       );
       if (duplicate) {
         throw invalid(
-          `${duplicate.displayName} is already connected for ${choice.scope.name}. Replace its key instead.`
+          `${duplicate.displayName} is already connected for ${choice.scope.name}. Replace its credentials instead.`
         );
       }
       if (this.deps.store.accounts().length >= MAX_ACCOUNTS) {
@@ -315,10 +379,13 @@ export class CloudAccountService {
     };
     refuseDuplicate();
     const id = `ca_${crypto.randomBytes(8).toString("hex")}`;
+    // An organization, a project or a provider account is named for itself; a personal or workspace key, for who holds it.
     const fallbackName =
-      choice.scope.kind === "personal"
-        ? (checked.identity ?? provider.info(process.platform).name)
-        : choice.scope.name;
+      choice.scope.kind === "organization" ||
+      choice.scope.kind === "project" ||
+      choice.scope.kind === "account"
+        ? choice.scope.name
+        : (checked.identity ?? provider.info(process.platform).name);
     const account: StoredCloudAccount = {
       id,
       providerId: request.providerId,
@@ -326,53 +393,141 @@ export class CloudAccountService {
       identity: checked.identity,
       scope: choice.scope,
       apiUrl,
-      keyHint: key.slice(-4),
+      keyHint: this.hint(provider, credentials),
+      credentialRevision: newCredentialRevision(),
       addedAt: this.now(),
       validation: { status: "valid", checkedAt: this.now() },
       lastProvisioning: null,
     };
-    await this.deps.vault.put(id, key);
-    // Another connect may have finished while the key was being sealed.
+    await this.deps.vault.put(id, credentials);
     try {
+      // Another connect may have finished while the credentials were being sealed.
       refuseDuplicate();
+      this.deps.store.putAccount(account);
     } catch (error) {
+      // No account will ever name this set: it isn't left sealed with nothing able to remove it.
       await this.deps.vault.delete(id).catch(() => {});
       throw error;
     }
-    this.deps.store.putAccount(account);
     return this.summaries().find((summary) => summary.id === id)!;
   }
 
-  /** A new key for the same account and scope; machines and hosts stay bound as they are. */
-  async replaceKey(accountId: unknown, apiKey: unknown): Promise<CloudAccountSummary> {
+  /**
+   * A whole new set for the same account and scope: whatever the old set held
+   * and the new one leaves out is gone. Machines and hosts stay bound as they are.
+   */
+  async replaceCredentials(accountId: unknown, values: unknown): Promise<CloudAccountSummary> {
     const account = this.requireAccount(accountId);
     const provider = this.requireSupported(account.providerId);
-    const key = normalizeApiKey(apiKey);
+    const credentials = this.normalize(provider, values);
     this.requireVault();
     this.requireCurrentOrigin(account);
-    let checked: CloudAccountCheckResult;
-    try {
-      checked = await provider.checkKey(key, account.apiUrl);
-    } catch (error) {
-      throw this.asAppError(provider, error);
+    const checked = await this.check(provider, credentials, account.apiUrl);
+    const refuseOtherIdentity = (current: StoredCloudAccount) => {
+      if (current.identity && checked.identity && checked.identity !== current.identity) {
+        throw invalid(
+          `Those credentials sign in as ${checked.identity}, not ${current.identity}. Connect them as another account instead.`
+        );
+      }
+    };
+    refuseOtherIdentity(account);
+    if (!checked.scopes.some((choice) => choice.scope.id === account.scope.id)) {
+      throw invalid(`Those credentials can't bill ${account.scope.name}.`);
     }
-    if (account.identity && checked.identity && checked.identity !== account.identity) {
+    return this.serialize(account.id, async () => {
+      // Removed while the check was out: nothing is sealed for an account that's gone.
+      const before = this.requireAccount(account.id);
+      this.requireCurrentOrigin(before);
+      // A check of the old set may have learned who it signs in as meanwhile.
+      refuseOtherIdentity(before);
+      // Two accounts for one sign-in and wallet are refused at connect, and so here.
+      const identity = checked.identity ?? before.identity;
+      const duplicate =
+        identity &&
+        this.findDuplicate(before.providerId, identity, before.scope.id, before.apiUrl, before.id);
+      if (duplicate) {
+        throw invalid(
+          `${duplicate.displayName} is already connected as ${identity} for ${before.scope.name}. Remove one of them instead.`
+        );
+      }
+      // Nothing says whose these are: they must see the machines this account already has.
+      if (checked.identity === null) await this.requireSameMachines(before, provider, credentials);
+      // Read before anything is overwritten: a set that can't be read now couldn't be put back.
+      const previous = await this.deps.vault.get(account.id);
+      await this.deps.vault.put(account.id, credentials);
+      try {
+        // A connect may have finished while the set was sealed.
+        const raced =
+          identity &&
+          this.findDuplicate(
+            before.providerId,
+            identity,
+            before.scope.id,
+            before.apiUrl,
+            before.id
+          );
+        if (raced) throw invalid(`${raced.displayName} is already connected as ${identity}.`);
+        const latest = this.deps.store.account(account.id) ?? before;
+        // A check of the old set may have learned whose account this is while the new one was sealed.
+        refuseOtherIdentity(latest);
+        this.deps.store.putAccount({
+          ...latest,
+          // Who the new set signs in as, never what a check of the old one wrote while it was sealed.
+          identity,
+          keyHint: this.hint(provider, credentials),
+          credentialRevision: newCredentialRevision(),
+          validation: { status: "valid", checkedAt: this.now() },
+        });
+      } catch (error) {
+        // The account still names the set it had (a remove waits its turn), so the vault goes back to it.
+        await (
+          previous ? this.deps.vault.put(account.id, previous) : this.deps.vault.delete(account.id)
+        ).catch(() => {});
+        throw error;
+      }
+      this.catalogs.delete(account.id);
+      return this.requireSummary(account.id);
+    });
+  }
+
+  /**
+   * For a provider that can't say who a key belongs to: the new key must see
+   * at least one of the machines bound to the account. A key for another
+   * workspace would otherwise take over, and the bound machines would read as
+   * gone (a delete through it, a not-found, forgets a host whose machine
+   * keeps billing). An account with no machines has nothing to strand.
+   */
+  private async requireSameMachines(
+    account: StoredCloudAccount,
+    provider: CloudProvider,
+    values: CloudCredentialValues
+  ): Promise<void> {
+    const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
+    // A create sent and not yet found is looked for, and deleted, with the account's key.
+    if (bound.some((binding) => binding.resourceId === null && binding.creation?.sentAt != null)) {
       throw invalid(
-        `That key signs in as ${checked.identity}, not ${account.identity}. Connect it as another account instead.`
+        "A machine this account asked for hasn't been confirmed yet, and a new key may not see it. Replace the key once it has, or remove that host first."
       );
     }
-    if (!checked.scopes.some((choice) => choice.scope.id === account.scope.id)) {
-      throw invalid(`That key can't bill ${account.scope.name}.`);
+    const resourceIds = bound
+      .filter((binding) => binding.resourceId !== null)
+      .map((binding) => binding.resourceId!);
+    if (resourceIds.length === 0) return;
+    const credentials = { values, scopeId: account.scope.id, apiUrl: account.apiUrl };
+    for (const resourceId of resourceIds) {
+      try {
+        await provider.inspect(credentials, resourceId);
+        return;
+      } catch (error) {
+        // One deleted elsewhere proves nothing either way; anything else is an answer to give.
+        if (provider.describeError(error).code !== "not-found") {
+          throw this.asAppError(provider, error);
+        }
+      }
     }
-    await this.deps.vault.put(account.id, key);
-    const current = this.requireAccount(account.id);
-    this.deps.store.putAccount({
-      ...current,
-      keyHint: key.slice(-4),
-      validation: { status: "valid", checkedAt: this.now() },
-    });
-    this.catalogs.delete(account.id);
-    return this.summaries().find((summary) => summary.id === account.id)!;
+    throw invalid(
+      `That key can't see this account's machines, so it may belong to another ${provider.info(process.platform).name} workspace. Connect it as another account instead.`
+    );
   }
 
   rename(accountId: unknown, displayName: unknown): CloudAccountSummary {
@@ -385,45 +540,52 @@ export class CloudAccountService {
   }
 
   /**
-   * Removes the account from this device and deletes its key here. Refused
+   * Removes the account from this device and deletes its credentials here. Refused
    * while hosts use it: their machines would keep running with nothing here
    * able to stop them. Nothing is revoked or deleted at the provider.
    */
   async removeAccount(accountId: unknown): Promise<void> {
     const account = this.requireAccount(accountId);
-    const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
-    if (bound.length > 0) {
-      throw invalid(
-        `${account.displayName} still has ${bound.length === 1 ? "a cloud host" : `${bound.length} cloud hosts`}. Remove ${bound.length === 1 ? "it" : "them"} first, so no machine is left running with nothing here able to stop it.`
-      );
-    }
-    // The key first: if its file can't be written, the account stays listed and removable again.
-    await this.deps.vault.delete(account.id);
-    this.deps.store.removeAccount(account.id);
-    this.catalogs.delete(account.id);
+    await this.serialize(account.id, async () => {
+      this.requireAccount(account.id);
+      const bound = this.deps.store
+        .bindings()
+        .filter((binding) => binding.accountId === account.id);
+      if (bound.length > 0) {
+        throw invalid(
+          `${account.displayName} still has ${bound.length === 1 ? "a cloud host" : `${bound.length} cloud hosts`}. Remove ${bound.length === 1 ? "it" : "them"} first, so no machine is left running with nothing here able to stop it.`
+        );
+      }
+      // Keys its machines were given are revoked first; one that may still work keeps the account (#17361).
+      await this.deps.beforeAccountRemoved?.(account.id);
+      // The credentials first: if their file can't be written, the account stays listed and removable again.
+      await this.deps.vault.delete(account.id);
+      this.deps.store.removeAccount(account.id);
+      this.catalogs.delete(account.id);
+    });
     await this.deps.onAccountRemoved?.(account.id).catch(() => {});
   }
 
   async validate(accountId: unknown): Promise<CloudAccountSummary> {
     const account = this.requireAccount(accountId);
     const provider = this.provider(account.providerId);
-    // A local failure (no key here, another API origin) says nothing about the key at the provider.
+    // A local failure (nothing kept here, another API origin) says nothing about the credentials at the provider.
     const credentials = await this.credentials(account);
     try {
       const { identity } = await provider.validate(credentials);
-      // Removed, or its key replaced, while the check was out: that answer is about another key.
+      // Removed, or its credentials replaced, while the check was out: that answer is about another set.
       const current = this.deps.store.account(account.id);
-      if (current && current.keyHint === account.keyHint) {
+      if (current && sameCredentials(current, account)) {
         this.deps.store.putAccount({
           ...current,
-          identity: identity ?? current.identity,
+          identity: identity?.trim() ? identity : current.identity,
           validation: { status: "valid", checkedAt: this.now() },
         });
       }
     } catch (error) {
       const described = provider.describeError(error);
       const current = this.deps.store.account(account.id);
-      if (!current || current.keyHint !== account.keyHint) throw this.asAppError(provider, error);
+      if (!current || !sameCredentials(current, account)) throw this.asAppError(provider, error);
       this.deps.store.putAccount({
         ...current,
         validation:
@@ -470,7 +632,9 @@ export class CloudAccountService {
         lastChoice: null,
         fetchedAt: this.now(),
       };
-      this.catalogs.set(account.id, catalog);
+      // Not cached when the answer came for credentials since replaced, or an account since removed.
+      const current = this.deps.store.account(account.id);
+      if (current && sameCredentials(current, account)) this.catalogs.set(account.id, catalog);
       return this.withLastChoice(catalog);
     } catch (error) {
       this.noteFailure(account, provider, error);
@@ -531,24 +695,25 @@ export class CloudAccountService {
         boundHostId:
           bindings.find((binding) => binding.resourceId === resource.resourceId)?.hostId ?? null,
         restricted: resource.restricted,
+        asleep: resource.machine === "stopped" && resource.asleep === true,
       }));
   }
 
-  /** The key and scope for a provider call; main only. */
+  /** The credentials and scope for a provider call; main only. */
   async credentials(
     account: StoredCloudAccount,
     signal?: AbortSignal
   ): Promise<ProviderCredentials> {
     this.requireCurrentOrigin(account);
-    const apiKey = await this.deps.vault.get(account.id);
-    if (!apiKey) {
+    const values = await this.deps.vault.get(account.id);
+    if (!values) {
       throw new AppError({
         code: "PERMISSION",
-        message: "Cloud account key is missing",
-        userMessage: `${account.displayName}'s API key isn't on this device any more. Replace it in Settings → Hosts.`,
+        message: "Cloud account credentials are missing",
+        userMessage: `${account.displayName}'s credentials aren't on this device any more. Replace them in Settings → Hosts.`,
       });
     }
-    return { apiKey, scopeId: account.scope.id, apiUrl: account.apiUrl, signal };
+    return { values, scopeId: account.scope.id, apiUrl: account.apiUrl, signal };
   }
 
   /** A provider failure as an AppError the renderer can show, with no secret in it. */
@@ -571,8 +736,9 @@ export class CloudAccountService {
   private noteFailure(account: StoredCloudAccount, provider: CloudProvider, error: unknown): void {
     const described = provider.describeError(error);
     if (described.code !== "credential-invalid") return;
+    // A refusal of credentials since replaced says nothing about the ones kept now.
     const current = this.deps.store.account(account.id);
-    if (!current) return;
+    if (!current || !sameCredentials(current, account)) return;
     this.deps.store.putAccount({
       ...current,
       validation: { status: "invalid", checkedAt: this.now(), detail: described.message },
@@ -598,7 +764,7 @@ export class CloudAccountService {
     throw new AppError({
       code: "PERMISSION",
       message: "Cloud account was connected against another API origin",
-      userMessage: `${account.displayName} was connected against ${account.apiUrl}, and this build talks to ${current}. Its key is never sent anywhere else.`,
+      userMessage: `${account.displayName} was connected against ${account.apiUrl}, and this build talks to ${current}. Its credentials are never sent anywhere else.`,
     });
   }
 }

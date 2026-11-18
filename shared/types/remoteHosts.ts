@@ -130,8 +130,9 @@ export function isBlockingMismatch(mismatch: HandshakeMismatch): boolean {
   return mismatch.kind === "protocol";
 }
 
-/** How a host was found. Discovery only proves reachability; `wsl` is a distro installed on this PC. */
-export type HostDiscoverySource = "tailscale" | "netbird" | "bonjour" | "manual" | "wsl";
+/** How a host was found. Discovery only proves reachability; `wsl` is a distro installed on this PC, `ssh-config` an alias the user's ssh config names. */
+export type HostDiscoverySource =
+  "tailscale" | "netbird" | "bonjour" | "ssh-config" | "manual" | "wsl";
 
 /**
  * How this client reaches a host. Each kind names the one command that gets a
@@ -335,6 +336,12 @@ export interface PendingHostPlacement {
   requestedAt: number;
   /** Asked for by an agent or a plugin: the switch dialog asks before it moves the window. */
   askFirst?: true;
+  /**
+   * The host's machine was created for this worktree (#17359): the placement
+   * holds until the window has opened there, and cancelling it offers to
+   * delete that machine.
+   */
+  createdMachine?: true;
   /** The last setup step that failed, as it said; the placement stays pending through it. */
   failure?: { message: string; at: number };
 }
@@ -369,6 +376,7 @@ export function readPendingPlacement(value: unknown): PendingHostPlacement | nul
     requestedAt,
   };
   if (raw.askFirst === true) placement.askFirst = true;
+  if (raw.createdMachine === true) placement.createdMachine = true;
   const failure = raw.failure as Record<string, unknown> | null | undefined;
   const message = failure && typeof failure === "object" ? placementText(failure.message) : null;
   if (message && typeof failure?.at === "number" && Number.isFinite(failure.at)) {
@@ -426,6 +434,17 @@ export interface HostDescriptor {
   wake?: HostWakeSetup;
 }
 
+/**
+ * What a link that stopped retrying on its own was told, when trying again
+ * can't change it: ssh refused the login, WSL has no distribution by the
+ * host's saved name, or the connection can't be used from this machine as set
+ * up (`message` is the transport's own sentence, never raw output).
+ */
+export type HostConnectionBlocker =
+  | { kind: "ssh-access" }
+  | { kind: "wsl-distro-missing"; distro: string }
+  | { kind: "unusable"; message: string };
+
 export type HostConnectionState =
   | { status: "local" }
   | { status: "disconnected" }
@@ -480,6 +499,8 @@ export type HostConnectionState =
        * still checked now and then, so the window comes back with it.
        */
       stoppedRetrying?: true;
+      /** What stopped the retries, other than Host mode being off; only with `stoppedRetrying`. */
+      blocker?: HostConnectionBlocker;
     }
   | { status: "version-mismatch"; mismatch: HandshakeMismatch; remote: HostHandshakeInfo }
   | { status: "driven-elsewhere"; driver: DriveLeaseHolder };

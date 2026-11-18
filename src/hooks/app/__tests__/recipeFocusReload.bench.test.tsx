@@ -12,7 +12,7 @@ const { notifyMock, updateBadgeMock, clearFaviconMock, updateFaviconMock, counts
     updateBadgeMock: vi.fn(),
     clearFaviconMock: vi.fn(),
     updateFaviconMock: vi.fn(),
-    counts: { waitingCount: 0 },
+    counts: { waitingPanelIds: [] as string[] },
     getInRepoMock: vi.fn(),
   }));
 
@@ -56,7 +56,7 @@ vi.mock("@/services/FaviconBadgeService", () => ({
   clearFaviconBadge: clearFaviconMock,
 }));
 vi.mock("@/hooks/useTerminalSelectors", () => ({
-  useTerminalNotificationCounts: () => ({ waitingCount: counts.waitingCount }),
+  useTerminalNotificationPanelIds: () => counts.waitingPanelIds,
 }));
 
 Object.defineProperty(window, "electron", {
@@ -84,7 +84,7 @@ describe("focus-driven work benchmark", () => {
     updateBadgeMock.mockClear();
     clearFaviconMock.mockClear();
     updateFaviconMock.mockClear();
-    counts.waitingCount = 0;
+    counts.waitingPanelIds = [];
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -179,21 +179,21 @@ describe("focus-driven work benchmark", () => {
       act(() => {
         window.dispatchEvent(new Event("blur"));
       });
-      counts.waitingCount = 2;
+      counts.waitingPanelIds = ["t-1", "t-2"];
       rerender();
       act(() => {
         vi.advanceTimersByTime(400);
       });
-      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingCount: 2 });
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-1", "t-2"] });
       expect(updateFaviconMock).toHaveBeenCalledWith(2);
 
-      counts.waitingCount = 0;
+      counts.waitingPanelIds = [];
       updateBadgeMock.mockClear();
       act(() => {
         window.dispatchEvent(new Event("focus"));
       });
       expect(updateBadgeMock).toHaveBeenCalledTimes(1);
-      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingCount: 0 });
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: [] });
       expect(clearFaviconMock).toHaveBeenCalledTimes(1);
 
       act(() => {
@@ -206,4 +206,207 @@ describe("focus-driven work benchmark", () => {
       vi.useRealTimers();
     }
   });
+
+  it("reports a swap of waiting panes at the same count", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderHook(() => useWindowNotifications());
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      counts.waitingPanelIds = ["t-1"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-1"] });
+
+      // Main counts a pane once with a question waiting in it, so which pane matters.
+      counts.waitingPanelIds = ["t-2"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({
+        waitingPanelIds: ["t-2"],
+        membershipOnly: true,
+      });
+      expect(updateBadgeMock).toHaveBeenCalledTimes(2);
+      // The count, and so the favicon, stayed where it was.
+      expect(updateFaviconMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends a swap by the pending report's own deadline, never later", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderHook(() => useWindowNotifications());
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      counts.waitingPanelIds = ["t-1"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      counts.waitingPanelIds = ["t-2"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(101);
+      });
+
+      expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-2"] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a count change after a swap restart the wait, and sends only the latest", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderHook(() => useWindowNotifications());
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      counts.waitingPanelIds = ["t-a"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      counts.waitingPanelIds = ["t-b"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      counts.waitingPanelIds = ["t-b", "t-c"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(299);
+      });
+      expect(updateBadgeMock).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["t-b", "t-c"] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { through: ["t-b"], membershipOnly: true },
+    { through: ["t-a", "t-b"], membershipOnly: false },
+  ])(
+    "marks panes back where they were by way of $through as membership-only: $membershipOnly",
+    async ({ through, membershipOnly }) => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = renderHook(() => useWindowNotifications());
+        act(() => {
+          window.dispatchEvent(new Event("blur"));
+        });
+        counts.waitingPanelIds = ["t-a"];
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+
+        counts.waitingPanelIds = through;
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+        counts.waitingPanelIds = ["t-a"];
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+
+        // A count that moved and came back is sent as it always was; panes that
+        // only traded places are marked, so main runs no pass for them alone.
+        expect(updateBadgeMock).toHaveBeenCalledTimes(2);
+        expect(updateBadgeMock).toHaveBeenLastCalledWith(
+          membershipOnly
+            ? { waitingPanelIds: ["t-a"], membershipOnly }
+            : { waitingPanelIds: ["t-a"] }
+        );
+        expect(updateFaviconMock).toHaveBeenCalledTimes(membershipOnly ? 1 : 2);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it("tells two panes from one whose id joins theirs", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderHook(() => useWindowNotifications());
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      counts.waitingPanelIds = ["a\u0000b"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      counts.waitingPanelIds = ["a", "b"];
+      rerender();
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+
+      expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: ["a", "b"] });
+      expect(updateFaviconMock).toHaveBeenLastCalledWith(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["focus", "unmount"] as const)(
+    "never lets a pending report land after %s",
+    async (end) => {
+      vi.useFakeTimers();
+      try {
+        const { rerender, unmount } = renderHook(() => useWindowNotifications());
+        act(() => {
+          window.dispatchEvent(new Event("blur"));
+        });
+        counts.waitingPanelIds = ["t-1"];
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+        // A swap that joined the pending report goes with it.
+        counts.waitingPanelIds = ["t-2"];
+        rerender();
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+
+        if (end === "focus") {
+          act(() => {
+            window.dispatchEvent(new Event("focus"));
+          });
+          counts.waitingPanelIds = [];
+          rerender();
+        } else {
+          unmount();
+        }
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+
+        expect(updateBadgeMock).toHaveBeenCalledTimes(1);
+        expect(updateBadgeMock).toHaveBeenLastCalledWith({ waitingPanelIds: [] });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 });

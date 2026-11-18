@@ -155,6 +155,45 @@ describe("useRovingRows", () => {
     expect(document.activeElement).toBe(document.body);
   });
 
+  it("keeps focus on a row that is replaced rather than windowed out", async () => {
+    // A list switching between its windowed and static forms remounts every
+    // row under a new parent. The static container has no tab stop to park on,
+    // so focus has to follow the focused row's replacement instead.
+    function Switching({ wrapped }: { wrapped: boolean }) {
+      const roving = useRovingRows({ keys: KEYS, windowed: wrapped });
+      const rows = KEYS.map((key) => (
+        <button
+          key={key}
+          type="button"
+          data-roving-row=""
+          ref={roving.rowRef(key)}
+          tabIndex={roving.tabStopKey === key ? 0 : -1}
+          onFocus={() => roving.onRowFocus(key)}
+        >
+          {key}
+        </button>
+      ));
+      return (
+        <div data-testid="list" {...roving.containerProps}>
+          {wrapped ? <div>{rows}</div> : rows}
+        </div>
+      );
+    }
+
+    const { getByText, rerender } = render(<Switching wrapped={false} />);
+    const before = getByText("b");
+    act(() => before.focus());
+
+    rerender(<Switching wrapped />);
+    await act(async () => {});
+    expect(getByText("b")).not.toBe(before);
+    expect(document.activeElement).toBe(getByText("b"));
+
+    rerender(<Switching wrapped={false} />);
+    await act(async () => {});
+    expect(document.activeElement).toBe(getByText("b"));
+  });
+
   it("drops a pending arrow-key focus once focus has left the list", async () => {
     const outside = document.createElement("button");
     document.body.append(outside);

@@ -23,7 +23,7 @@ function getPortalBoundary() {
   if (typeof document === "undefined") return null;
   if (portalBoundary) return portalBoundary;
 
-  // Collision boundary that excludes the native portal region on the right.
+  // Collision boundary that excludes the Assistant's region on the right.
   const boundary = document.createElement("div");
   boundary.dataset.portalBoundary = "true";
   Object.assign(boundary.style, {
@@ -374,7 +374,7 @@ const PopoverContent = React.forwardRef<
     const [boundary, setBoundary] = React.useState<HTMLElement | null>(null);
     // Floating UI's autoUpdate observes the reference/floating elements but not the
     // collision boundary. The portal boundary's width tracks --right-obstruction-offset,
-    // which changes when the right native panel toggles — so an open popover would keep a
+    // which changes when the Assistant opens or resizes — so an open popover would keep a
     // stale position. Observe the boundary and bump a tick to re-run Radix's positioning.
     const [repositionTick, setRepositionTick] = React.useState(0);
     const focusRestore = useOverlayFocusRestore();

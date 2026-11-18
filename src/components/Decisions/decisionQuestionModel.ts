@@ -25,8 +25,17 @@ const STATUS_TEXT: Record<DecisionQuestionStatus, string> = {
   "publish-failed": "Couldn't be sent",
 };
 
-export function questionStatusText(status: DecisionQuestionStatus): string {
-  return STATUS_TEXT[status];
+/**
+ * What the view says of the question's status: a cancelled one the person
+ * declined from their phone or tablet (#17234) says so, apart from one
+ * withdrawn from the desktop.
+ */
+export function questionStatusText(
+  question: Pick<DecisionQuestionContent, "status" | "closedReason">
+): string {
+  return question.closedReason === "declined"
+    ? "You declined to answer"
+    : STATUS_TEXT[question.status];
 }
 
 const REQUIREMENT_TEXT: Record<DecisionsRequirement, string> = {
@@ -44,8 +53,18 @@ export function threadEntryHeading(entry: DecisionThreadEntry): string {
   switch (entry.type) {
     case "expired":
       return "Expired unanswered";
+    case "declined":
+      return "Declined by you";
     case "message":
-      return entry.from === "person" ? "Follow-up from your phone" : "Follow-up from the agent";
+      if (entry.from === "agent") {
+        return entry.expectsReply
+          ? "Follow-up from the agent, asking for a reply"
+          : "Follow-up from the agent";
+      }
+      // A Remote Host from before #17238 doesn't say: its messages are all a phone's.
+      return entry.onComputer === true
+        ? "Follow-up from your computer"
+        : "Follow-up from your phone";
     case "answer":
       if (entry.from === "model") return "Decision model's answer";
       if (entry.confirmsModel) return "Confirmed the decision model's answer";
@@ -72,7 +91,7 @@ export function choiceLabels(
 
 /** What stands in for an entry with nothing to read, or null when it has words or choices. */
 export function emptyEntryText(entry: DecisionThreadEntry): string | null {
-  if (entry.type === "expired") return null;
+  if (entry.type === "expired" || entry.type === "declined") return null;
   if (entry.unreadable) return "This couldn't be opened on this computer.";
   const hasChoices = entry.type === "answer" && entry.choices.length > 0;
   if (entry.text !== null || hasChoices) return null;

@@ -36,6 +36,17 @@ export interface DevPreviewToolHostProps {
   worktreeId: string | undefined;
   url: string;
   isWebviewReady: boolean;
+  /**
+   * The tools this panel hosts. A dev preview hosts every built-in tool; a
+   * browser panel only the ones that make sense on a page someone else's
+   * server is serving.
+   */
+  tools?: readonly DevPreviewToolDefinition[];
+  /**
+   * Whether the page lets a toggle be offered at all. False hides every toggle
+   * that is off; one that is on stays, so the user can always switch it off.
+   */
+  pageQualifies?: boolean;
 }
 
 /**
@@ -77,9 +88,12 @@ function useToolContext({
   };
 }
 
-function useActiveTool(panelId: string): DevPreviewToolDefinition | undefined {
+function useActiveTool(
+  panelId: string,
+  tools: readonly DevPreviewToolDefinition[] = BUILT_IN_DEV_PREVIEW_TOOLS
+): DevPreviewToolDefinition | undefined {
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[panelId]);
-  return activeId ? BUILT_IN_DEV_PREVIEW_TOOLS.find((tool) => tool.id === activeId) : undefined;
+  return activeId ? tools.find((tool) => tool.id === activeId) : undefined;
 }
 
 /** One tool in one preview: what its toggle and its surfaces are tagged with. */
@@ -261,17 +275,20 @@ function DevPreviewToolButton({
   tool,
   context,
   active,
+  pageQualifies,
   onToggle,
 }: {
   tool: DevPreviewToolDefinition;
   context: DevPreviewToolContext;
   active: boolean;
+  pageQualifies: boolean;
   onToggle: () => void;
 }) {
   const applies = useToolApplies(tool, context, active);
-  // An active tool stays reachable whatever the predicate says or hasn't said
-  // yet: the one control that switches it off must not vanish under the user.
-  if (!active && !applies) return null;
+  // An active tool stays reachable whatever the predicate or the page says, or
+  // hasn't said yet: the one control that switches it off must not vanish
+  // under the user.
+  if (!active && (!applies || !pageQualifies)) return null;
   return (
     // `contents` so the toggle keeps sitting in the toolbar's own flex row.
     <span className="contents" data-dev-preview-tool-toggle={surfaceTag(context.panelId, tool.id)}>
@@ -285,14 +302,17 @@ export function DevPreviewToolButtons(props: DevPreviewToolHostProps) {
   const context = useToolContext(props);
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[props.panelId]);
   const toggle = useDevPreviewToolStore((s) => s.toggle);
+  const tools = props.tools ?? BUILT_IN_DEV_PREVIEW_TOOLS;
+  const pageQualifies = props.pageQualifies ?? true;
   return (
     <>
-      {BUILT_IN_DEV_PREVIEW_TOOLS.map((tool) => (
+      {tools.map((tool) => (
         <ErrorBoundary key={tool.id} variant="component" componentName={`${tool.label} button`}>
           <DevPreviewToolButton
             tool={tool}
             context={context}
             active={activeId === tool.id}
+            pageQualifies={pageQualifies}
             onToggle={() => toggle(props.panelId, tool.id)}
           />
         </ErrorBoundary>
@@ -374,7 +394,7 @@ function ready(
 
 /** The active tool's strip under the browser toolbar. */
 export function DevPreviewToolToolbar(props: DevPreviewToolHostProps) {
-  const tool = useActiveTool(props.panelId);
+  const tool = useActiveTool(props.panelId, props.tools);
   const context = useToolContext(props);
   const handle = useDevPreviewToolSessionHandle(props.panelId, tool?.id);
   const Surface = tool?.Toolbar;
@@ -392,7 +412,7 @@ export function DevPreviewToolToolbar(props: DevPreviewToolHostProps) {
 
 /** The active tool's drawer beside the page, inside the host's drawer chrome. */
 export function DevPreviewToolDrawer(props: DevPreviewToolHostProps) {
-  const tool = useActiveTool(props.panelId);
+  const tool = useActiveTool(props.panelId, props.tools);
   const context = useToolContext(props);
   const handle = useDevPreviewToolSessionHandle(props.panelId, tool?.id);
   const Surface = tool?.Drawer;

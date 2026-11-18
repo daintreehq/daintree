@@ -95,6 +95,7 @@ function renderEditor(
       schedule={schedule}
       defaultAgentId="claude"
       worktrees={[{ id: null, label: "Main checkout" }]}
+      worktreeIds={new Set()}
       now={NOW}
       osJobContext={osJobContext}
       projectSwitches={switches}
@@ -441,6 +442,7 @@ describe("ScheduleEditor: main's refusal under the project's switches (#16168)",
         schedule={existing({ runWhenClosed: true })}
         defaultAgentId="claude"
         worktrees={[{ id: null, label: "Main checkout" }]}
+        worktreeIds={new Set()}
         now={NOW}
         osJobContext={LONDON}
         projectSwitches={null}

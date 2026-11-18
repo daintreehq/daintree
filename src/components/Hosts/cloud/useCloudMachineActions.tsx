@@ -31,11 +31,12 @@ function hourlyClause(status: CloudHostStatus): string {
 
 /** Why a machine that may be started now isn't running, from the reading it was asked on. */
 function notRunningSentence(name: string, status: CloudHostStatus, askedAt: number): string {
-  const word = status.machine === "error" ? "reported an error" : "stopped";
+  const parked = status.asleep ? "asleep" : "stopped";
+  const word = status.machine === "error" ? "reported an error" : parked;
   if (!isObservationStale(status, askedAt)) {
     return status.machine === "error"
       ? `${name}'s machine reported an error.`
-      : `${name}'s machine is stopped.`;
+      : `${name}'s machine is ${parked}.`;
   }
   const at =
     status.observedAt !== null ? clockTime(new Date(status.observedAt).toISOString()) : null;
@@ -192,7 +193,7 @@ export function useCloudMachineActions(): {
         description={
           stopBusy
             ? undefined
-            : `Terminals, agents and anything else running on it end${stopBilling ? `. ${stopBilling}` : ", and billing for the machine stops."}${stopProvider ? ` ${stopKeepsSentence(stopProvider.capabilities.persistence)}` : ""}`
+            : `Terminals, agents and anything else running on it end${stopBilling ? `. ${stopBilling}` : ", and billing for its compute stops."}${stopProvider ? ` ${stopKeepsSentence(stopProvider.capabilities.persistence)}` : ""}`
         }
         confirmLabel={stopBusy ? "Stopping…" : "Stop machine"}
         confirmDisabled={stopBusy}

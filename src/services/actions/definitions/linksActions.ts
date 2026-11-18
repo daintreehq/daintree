@@ -1,13 +1,13 @@
 import type { ActionRegistry } from "../actionTypes";
 import { openLinksLauncher } from "@/store/linksLauncherStore";
 
-/** The toolbar's links launcher, reachable from the palette as well as its button (#17249, #17251). */
+/** The toolbar's links launcher, reachable from the palette as well as its button (#17249, #17251, #17253, #17255). */
 export function registerLinksActions(actions: ActionRegistry): void {
   actions.set("links.open", () => ({
     id: "links.open",
     title: "Open links",
     description:
-      "Show this project's links, your own links, and dev servers across worktrees beside the toolbar.",
+      "Show project links, your own, the active worktree's pull request and deployments, and dev servers.",
     category: "ui",
     kind: "command",
     danger: "safe",
@@ -26,6 +26,12 @@ export function registerLinksActions(actions: ActionRegistry): void {
       "server",
       "preview",
       "ports",
+      "pull request",
+      "pr",
+      "checks",
+      "ci",
+      "deployments",
+      "deploy",
     ],
     run: async () => {
       openLinksLauncher();

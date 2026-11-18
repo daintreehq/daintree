@@ -323,11 +323,47 @@ describe("hostChipStatus", () => {
       lastSeenAt: null,
       detail: "Permission denied (publickey).",
       stoppedRetrying: true,
+      blocker: { kind: "ssh-access" },
     };
     expect(hostChipStatus(false, hostModeOff, null)).toBe("host-mode-off");
     expect(hostChipStatusText(hostChipStatus(false, hostModeOff, null))).toBe("not listening");
     expect(hostChipStatus(false, refused, null)).toBe("access-denied");
     expect(hostChipStatusText(hostChipStatus(false, refused, null))).toBe("can't log in");
+  });
+
+  it("says a missing WSL distribution or an unusable connection without claiming ssh", () => {
+    const parked = {
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "There is no distribution with the supplied name.",
+      stoppedRetrying: true,
+    } as const;
+    const missing: HostConnectionState = {
+      ...parked,
+      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+    };
+    const unusable: HostConnectionState = {
+      ...parked,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    };
+    expect(hostChipStatus(false, missing, null)).toBe("wsl-distro-missing");
+    expect(hostChipStatusText("wsl-distro-missing")).toBe("distro not found");
+    expect(hostChipStatus(false, unusable, null)).toBe("connection-unavailable");
+    expect(hostChipStatus(false, parked, null)).toBe("connection-unavailable");
+    expect(hostChipStatusText("connection-unavailable")).toBe("unavailable");
+    const [, row] = rowsFor([entry("h1", "Ubuntu", missing)]);
+    expect(describeHostMenuState(row!)).toEqual({
+      state: "Distro not found",
+      note: "WSL couldn't find Ubuntu-24.04",
+    });
+    const [, other] = rowsFor([entry("h1", "Ubuntu", unusable)]);
+    expect(describeHostMenuState(other!)).toEqual({ state: "Unavailable", note: null });
+    const [, unsaid] = rowsFor([entry("h1", "Ubuntu", parked)]);
+    expect(describeHostMenuState(unsaid!)).toEqual({ state: "Unavailable", note: null });
+    const [, refused] = rowsFor([
+      entry("h1", "studio-01", { ...parked, blocker: { kind: "ssh-access" } }),
+    ]);
+    expect(describeHostMenuState(refused!)).toEqual({ state: "Can't log in", note: null });
   });
 
   it("reports a lease held elsewhere only while the link is up", () => {
@@ -386,7 +422,22 @@ describe("away hosts", () => {
     ["dialling for the first time", { status: "connecting", attempt: 1 }, false, false],
     ["restarting", { status: "connecting", attempt: 4, restarting: true }, false, false],
     ["not listening", { ...unreachable, hostModeOff: true, stoppedRetrying: true }, true, true],
-    ["refusing the login", { ...unreachable, stoppedRetrying: true }, true, false],
+    [
+      "refusing the login",
+      { ...unreachable, stoppedRetrying: true, blocker: { kind: "ssh-access" } },
+      true,
+      false,
+    ],
+    [
+      "missing its WSL distribution",
+      {
+        ...unreachable,
+        stoppedRetrying: true,
+        blocker: { kind: "wsl-distro-missing", distro: "Ubuntu" },
+      },
+      true,
+      false,
+    ],
     ["silent", { ...CONNECTED, quietSince: 40 }, false, true],
     ["not connected", { status: "disconnected" }, false, false],
     ["connected", CONNECTED, false, false],

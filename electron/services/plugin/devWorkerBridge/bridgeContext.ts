@@ -16,6 +16,7 @@ import type {
   WorktreeSetupStepWireContext,
 } from "../../../../shared/types/pluginDevWorker.js";
 import type { PluginServiceCaller } from "../../../../shared/types/pluginServices.js";
+import type { CloudProviderMethod } from "../../../../shared/types/pluginCloudProvider.js";
 
 export type InvokeTarget =
   | { kind: "action"; namespacedId: string; args: unknown; context: PluginActionContext }
@@ -29,6 +30,12 @@ export type InvokeTarget =
   | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
   | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
   | { kind: "worktree-delete-notes"; providerId: string; worktree: PluginWorktreeSnapshot }
+  | {
+      kind: "cloud-provider-method";
+      providerId: string;
+      method: CloudProviderMethod;
+      args: unknown[];
+    }
   | {
       kind: "context-provider-method";
       providerId: string;

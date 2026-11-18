@@ -680,8 +680,8 @@ export function setupLifecycleListeners(): DisposableStore {
           // `pause-end` and `suspend` are the canonical resume signals —
           // clear the held-duration gauge for the terminal so a stale
           // value doesn't outlive the actual pause. `pause-duration-gauge`
-          // is the skip-when-empty gauge that drives the held-duration
-          // tooltip body. Other metric types (queue-depth-gauge,
+          // drives the held-duration tooltip body and names the terminals
+          // that left it. Other metric types (queue-depth-gauge,
           // data-loss-count, ipc-cap-drop, pending-bytes-gauge,
           // throughput-rate) are host-side telemetry sinks — observable
           // via the host log stream and ignored here. In particular,
@@ -718,28 +718,21 @@ export function setupLifecycleListeners(): DisposableStore {
             return;
           }
           if (payload.metricType !== "pause-duration-gauge") return;
-          const entries = payload.perTerminalHeld;
 
-          // Snapshot the panel map once per tick so we can both update
-          // terminals present in the gauge AND clear terminals absent from
-          // it (a terminal that was paused on the last tick but is no
-          // longer in the gauge has resumed — clear its stale value).
+          // Each PTY shard reports only its own paused terminals, so a terminal
+          // missing from one batch may simply belong to another shard; only
+          // the host that reported it names it in `clearedTerminalIds` once it
+          // resumes (#17575). A clear always enqueues, as for `pause-end`.
           const panelsById = usePanelStore.getState().panelsById;
-          const seenIds = new Set<string>();
-          if (entries) {
-            for (const entry of entries) {
-              const terminal = panelsById[entry.terminalId];
-              if (!terminal || !isPtyPanel(terminal)) continue;
-              seenIds.add(entry.terminalId);
-              enqueueHeldDurationUpdate(entry.terminalId, entry.heldDurationMs);
-            }
-          }
-          for (const id of Object.keys(panelsById)) {
-            if (seenIds.has(id)) continue;
-            const terminal = panelsById[id];
+          for (const entry of payload.perTerminalHeld ?? []) {
+            const terminal = panelsById[entry.terminalId];
             if (!terminal || !isPtyPanel(terminal)) continue;
-            if (terminal.heldDurationMs === undefined) continue;
-            clearHeldDuration(id);
+            enqueueHeldDurationUpdate(entry.terminalId, entry.heldDurationMs);
+          }
+          for (const terminalId of payload.clearedTerminalIds ?? []) {
+            const terminal = panelsById[terminalId];
+            if (!terminal || !isPtyPanel(terminal)) continue;
+            clearHeldDuration(terminalId);
           }
         }
       )

@@ -111,9 +111,9 @@ describe("overrideScopes and scopeNote", () => {
   });
 
   it("names every scope when none is global", () => {
-    const scopes = overrideScopes(["portal", "dev-preview", "portal"]);
-    expect(scopes).toEqual(["portal", "dev-preview"]);
-    expect(scopeNote(scopes)).toBe("In the portal and in dev preview");
+    const scopes = overrideScopes(["worktreeGrid", "dev-preview", "worktreeGrid"]);
+    expect(scopes).toEqual(["worktreeGrid", "dev-preview"]);
+    expect(scopeNote(scopes)).toBe("In an expanded worktree card and in dev preview");
   });
 });
 
@@ -184,37 +184,43 @@ describe("buildShortcutRows", () => {
     ]);
 
     const scoped = [
-      source("preview.reload", "Cmd+R", "portal", "Reload", ["Y", "Z"]),
+      source("preview.reload", "Cmd+R", "worktreeGrid", "Reload", ["Y", "Z"]),
       source("preview.reload", "F5", "dev-preview", "Reload", ["Y", "Z"]),
     ];
     expect(buildShortcutRows(scoped, () => true, true).map((row) => row.scopeNote)).toEqual([
-      "In the portal and in dev preview",
-      "In the portal and in dev preview",
+      "In an expanded worktree card and in dev preview",
+      "In an expanded worktree card and in dev preview",
     ]);
   });
 
   it("before an override with no global scope, says both the edited and the kept key widen", () => {
     const rows = buildShortcutRows(
-      [source("preview.reload", "Cmd+R", "portal"), source("preview.reload", "F5", "dev-preview")],
+      [
+        source("preview.reload", "Cmd+R", "worktreeGrid"),
+        source("preview.reload", "F5", "dev-preview"),
+      ],
       () => false,
       true
     );
     expect(rows.map((row) => [row.scopeNote, row.widening])).toEqual([
-      ["In the portal", { self: true, keys: ["F5"], where: "in the portal and in dev preview" }],
+      [
+        "In an expanded worktree card",
+        { self: true, keys: ["F5"], where: "in an expanded worktree card and in dev preview" },
+      ],
       [
         "In dev preview",
-        { self: true, keys: ["Cmd+R"], where: "in the portal and in dev preview" },
+        { self: true, keys: ["Cmd+R"], where: "in an expanded worktree card and in dev preview" },
       ],
     ]);
   });
 
   it("checks conflicts in the action's own scope when it has only one", () => {
     const [row] = buildShortcutRows(
-      [source("portal.closeTab", "Cmd+W", "portal")],
+      [source("devPreview.reloadPreview", "Cmd+R", "dev-preview")],
       () => false,
       true
     );
-    expect(row!.editScope).toBe("portal");
+    expect(row!.editScope).toBe("dev-preview");
     expect(row!.widening).toBeUndefined();
   });
 

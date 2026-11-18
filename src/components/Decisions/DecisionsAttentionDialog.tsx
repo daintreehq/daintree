@@ -188,7 +188,7 @@ function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
 }
 
 /**
- * A follow-up the person sent from their phone (#16231), as it would be
+ * A follow-up the person sent from their phone or computer (#16231), as it would be
  * typed in. It never changes the answer, so it shows apart from it.
  */
 function FollowUpPreview({
@@ -212,7 +212,9 @@ function FollowUpPreview({
   return (
     <figure className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
       <figcaption className="text-2xs text-text-secondary">
-        Your follow-up from your phone
+        {followUp.onComputer
+          ? "Your follow-up from your computer"
+          : "Your follow-up from your phone"}
         {followUp.status === "delivery-uncertain" && ", may or may not have been delivered"}{" "}
         <FactSeparator /> <TimeAgo timestamp={followUp.sentAt} />
       </figcaption>
@@ -279,15 +281,23 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
     if (stillWorking) announce(`${alias}: ${STILL_WORKING}`);
   }, [stillWorking, alias, announce]);
 
+  // Every opening and closing starts a new generation, so a lookup from an opening already
+  // closed can't overwrite the agents (or the error) of the menu showing now.
+  const destinationsGenerationRef = useRef(0);
   const loadDestinations = (open: boolean) => {
+    const generation = ++destinationsGenerationRef.current;
     if (!open) return;
     setDestinations(null);
     setDestinationsError(null);
-    decisionsClient
-      .listAnswerDestinations(item.questionId)
-      .then(setDestinations, (error) =>
-        setDestinationsError(formatErrorMessage(error, "Couldn't list the running agents"))
-      );
+    decisionsClient.listAnswerDestinations(item.questionId).then(
+      (listed) => {
+        if (generation === destinationsGenerationRef.current) setDestinations(listed);
+      },
+      (error) => {
+        if (generation !== destinationsGenerationRef.current) return;
+        setDestinationsError(formatErrorMessage(error, "Couldn't list the running agents"));
+      }
+    );
   };
 
   return (
@@ -509,12 +519,20 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   /** The place in the list of an item whose action may take it off, for focus to land after. */
   const focusAfter = useRef<{ questionId: string; index: number } | null>(null);
   const reading = useRef(0);
+  /** The opening reads are launched for now. */
+  const opening = useRef(0);
+  /**
+   * The opening the shown list or error was read in. The host keeps the last
+   * opening's list mounted, so a reopening shows it until its own read lands.
+   */
+  const [readFor, setReadFor] = useState(0);
   const showSkeleton = useSkeletonGate(isOpen && list === null && loadError === null);
 
   const items = useMemo(() => (list?.result === "listed" ? list.items : []), [list]);
 
   const refresh = useCallback(async () => {
     const ticket = ++reading.current;
+    const launchedFor = opening.current;
     try {
       const next = await decisionsClient.listAttention();
       if (ticket !== reading.current) return;
@@ -524,10 +542,12 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       if (ticket !== reading.current) return;
       setLoadError(formatErrorMessage(error, "Couldn't read the answers"));
     }
+    setReadFor(launchedFor);
   }, []);
 
   useEffect(() => {
     if (!isOpen) return;
+    opening.current = request.seq;
     setOutcome(null);
     void refresh();
   }, [isOpen, request.seq, refresh]);
@@ -560,24 +580,67 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   }, [isOpen, refresh]);
 
   // Opened for a pane — from its chip, or from its run in Canopy: its first
-  // answer's first action takes the focus once listed, ringed when the
-  // keyboard brought the person here. With none listed for that pane, the
+  // answer's first action takes the focus once this opening's own read is
+  // listed, ringed when the keyboard brought the person here. A reopening
+  // still shows the last opening's list until then, which may not have the
+  // pane's answer yet. With none listed for that pane, or no list read, the
   // list itself holds it.
   const focusedFor = useRef(0);
+  /** The opening during whose read the person moved focus, which then stays theirs. */
+  const focusMovedFor = useRef(0);
   useEffect(() => {
-    if (!isOpen || request.terminalId === null || focusedFor.current === request.seq) return;
-    if (list === null && loadError === null) return;
-    focusedFor.current = request.seq;
-    const target = listRef.current?.querySelector<HTMLElement>(
-      `[data-terminal-id="${CSS.escape(request.terminalId)}"] ${ITEM_ACTIONS}`
-    );
+    if (!isOpen || request.terminalId === null || focusedFor.current === request.seq) {
+      return undefined;
+    }
+    const seq = request.seq;
+    if (readFor !== seq) {
+      // A control in a modal, this one or a confirmation over it, is the
+      // person's move. This one's surface taking focus as it opens, the list's
+      // place taking it from a click on no control, the element that held
+      // focus when the window lost it taking it again as the window comes
+      // back, and focus behind every modal (a popover handing it back to the
+      // chip that opened the list) are not.
+      // The window may already be away as the opening begins.
+      let heldAtWindowBlur = document.hasFocus() ? null : document.activeElement;
+      // Blur doesn't bubble, so outside the capture phase only the window's own arrives.
+      const onWindowBlur = () => {
+        heldAtWindowBlur = document.activeElement;
+      };
+      const onFocusIn = (event: FocusEvent) => {
+        const { target } = event;
+        const replayed = target === heldAtWindowBlur;
+        heldAtWindowBlur = null;
+        const body = bodyRef.current;
+        if (replayed || !(target instanceof Element) || body === null) return;
+        if (target.contains(body) || target.closest('[aria-modal="true"]') === null) return;
+        focusMovedFor.current = seq;
+      };
+      window.addEventListener("blur", onWindowBlur);
+      document.addEventListener("focusin", onFocusIn, true);
+      return () => {
+        window.removeEventListener("blur", onWindowBlur);
+        document.removeEventListener("focusin", onFocusIn, true);
+      };
+    }
+    focusedFor.current = seq;
+    // A control the refresh took away leaves focus on nothing, which no one chose.
+    const active = document.activeElement;
+    const kept = active !== null && active !== document.body;
+    if (focusMovedFor.current === seq && kept) return undefined;
+    const target =
+      loadError === null
+        ? listRef.current?.querySelector<HTMLElement>(
+            `[data-terminal-id="${CSS.escape(request.terminalId)}"] ${ITEM_ACTIONS}`
+          )
+        : null;
     if (target) {
       target.focus({ preventScroll: true });
       // The whole answer comes into view, padding included: scrolled only as
       // far as its action, the last answer's focus ring sat under the footer.
       target.closest<HTMLElement>("[data-question-id]")?.scrollIntoView({ block: "nearest" });
     } else bodyRef.current?.focus({ focusVisible: false } as FocusOptions);
-  }, [isOpen, list, loadError, request]);
+    return undefined;
+  }, [isOpen, loadError, readFor, request]);
 
   // An item that left took the focus with it: the next one's first action
   // gets it, else the one before, else the list's own place in the dialog.

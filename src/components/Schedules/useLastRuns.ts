@@ -41,10 +41,11 @@ export function useLastRuns(projectId: string | null) {
     const read = () => {
       const ticket = ++reads;
       schedulesClient
-        .listRuns(projectId)
+        .listLatestRuns(projectId)
         .then((runs) => {
           if (cancelled || ticket !== reads) return;
-          // Newest first, so the first run seen for a schedule is its last.
+          // Newest first, so the first run seen for a schedule is its last. A
+          // remote host on an older build still sends the whole history.
           const byScheduleId = new Map<string, ScheduledRun>();
           for (const run of runs) {
             if (!byScheduleId.has(run.scheduleId)) byScheduleId.set(run.scheduleId, run);

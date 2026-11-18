@@ -1403,13 +1403,16 @@ export function PilotView() {
       );
       return;
     }
+    const { runId, workspaceId, worktreeId } = row.item.run;
     void actionService.dispatch("pilot.openRun", {
-      runId: row.item.run.runId,
+      runId,
       // Read off the RUN, never off the group. A group id names a project on
       // one axis and a worktree on the other, so the row's own workspace is the
       // only field that answers this question in both — and it is the field
       // that was authoritative even when the two happened to coincide.
-      workspaceId: row.item.run.workspaceId,
+      workspaceId,
+      // Where to land if the run exits while its project opens (#17592).
+      ...(worktreeId !== undefined ? { worktreeId } : {}),
     });
   }, []);
 

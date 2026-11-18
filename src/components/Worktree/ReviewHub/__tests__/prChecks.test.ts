@@ -4,6 +4,7 @@ import {
   checkRowLabel,
   composePrChecksAgentText,
   getCheckOutcomeVisual,
+  isFailingOrRunningCheck,
   preparePrChecks,
   safeDetailsUrl,
   sanitizeCheckName,
@@ -647,5 +648,29 @@ describe("summarizePrChecks", () => {
     const summary = summarizePrChecks(rows);
     expect(counted(summary.settledLabel)).toBe(summary.settledCount);
     expect(summary.settledCount).toBe(rows.filter((row) => row.group === "settled").length);
+  });
+});
+
+describe("isFailingOrRunningCheck", () => {
+  it("takes running checks and the ones that failed or timed out, and nothing else", () => {
+    const cases: Array<[ForgeCheckRun, boolean]> = [
+      [check({ status: "in_progress", conclusion: undefined }), true],
+      [check({ conclusion: "failure" }), true],
+      [check({ conclusion: "timed_out" }), true],
+      [check({ status: "queued", conclusion: undefined }), false],
+      [check({ conclusion: "cancelled" }), false],
+      [check({ conclusion: "action_required" }), false],
+      [check({ conclusion: "success" }), false],
+      [check({ conclusion: "skipped" }), false],
+      [check({ conclusion: "neutral" }), false],
+      [check({ conclusion: undefined }), false],
+    ];
+    const rows = preparePrChecks(cases.map(([run]) => run));
+    // Rows come back reordered; each keeps its response index as its key.
+    const picked = rows
+      .filter((row) => isFailingOrRunningCheck(row))
+      .map((row) => Number(row.key))
+      .sort((a, b) => a - b);
+    expect(picked).toEqual(cases.flatMap(([, expected], index) => (expected ? [index] : [])));
   });
 });

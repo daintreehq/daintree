@@ -584,7 +584,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange, onClose }: Privac
                 <SettingsRow
                   id="privacy-clear-cache"
                   label="Clear cache"
-                  description="Clears the HTTP disk and code caches for the app, browser panels, portal, and dev previews. Sign-ins, site data, and settings aren't affected."
+                  description="Clears the HTTP disk and code caches for the app, browser panels, and dev previews. Sign-ins, site data, and settings aren't affected."
                   control={
                     <Button
                       variant="outline"

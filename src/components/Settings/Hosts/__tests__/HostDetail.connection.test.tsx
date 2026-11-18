@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostConnectionState, HostListEntry } from "@shared/types/remoteHosts";
+import type { SshSignInEvent, SshSignInResult } from "@shared/types/ipc/remoteHosts";
 
 const client = vi.hoisted(() => ({
   update: vi.fn(async (payload: unknown) => payload),
@@ -15,7 +16,17 @@ const client = vi.hoisted(() => ({
   listClipboardGrants: vi.fn(async () => []),
   listPluginViewConsents: vi.fn(async () => []),
   resetClipboardGrants: vi.fn(async () => undefined),
+  startSshSignIn: vi.fn(
+    (_payload: { attemptId: string }): Promise<SshSignInResult> => new Promise(() => {})
+  ),
+  answerSshSignIn: vi.fn(async () => true),
+  cancelSshSignIn: vi.fn(async () => true),
+  onSshSignInEvent: vi.fn((listener: (event: SshSignInEvent) => void) => {
+    signInListeners.add(listener);
+    return () => signInListeners.delete(listener);
+  }),
 }));
+const signInListeners = vi.hoisted(() => new Set<(event: SshSignInEvent) => void>());
 
 vi.mock("@/clients/remoteHostsClient", () => ({ remoteHostsClient: client }));
 vi.mock("../HostPluginsSection", () => ({ HostPluginsSection: () => null }));
@@ -53,6 +64,9 @@ const HANDSHAKE = {
 } as const;
 
 beforeEach(() => {
+  client.startSshSignIn.mockClear();
+  client.cancelSshSignIn.mockClear();
+  client.answerSshSignIn.mockClear();
   client.connect.mockClear();
   client.connectAndSettle.mockClear();
   client.disconnect.mockClear();
@@ -100,6 +114,106 @@ describe("HostDetail connection controls", () => {
     });
     // A person's Retry starts over, even with an attempt under way.
     expect(client.connectAndSettle).toHaveBeenCalledWith("studio-01", { restart: true });
+  });
+
+  it("signs in to a host that refused the login, relays ssh's prompt, then connects", async () => {
+    let finish: (result: SshSignInResult) => void = () => {};
+    client.startSshSignIn.mockImplementationOnce(
+      () => new Promise<SshSignInResult>((resolve) => (finish = resolve))
+    );
+    render(
+      <HostDetail
+        entry={entry({
+          status: "unreachable",
+          lastSeenAt: null,
+          detail: "greg@studio: Permission denied (publickey,keyboard-interactive).",
+          stoppedRetrying: true,
+        })}
+        onBack={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Sign in…" }));
+    await waitFor(() => expect(client.startSshSignIn).toHaveBeenCalledTimes(1));
+    const { attemptId } = client.startSshSignIn.mock.calls[0]![0] as { attemptId: string };
+    expect(client.startSshSignIn).toHaveBeenCalledWith({
+      attemptId,
+      connection: { kind: "ssh", target: "greg@studio" },
+    });
+    const send = (event: SshSignInEvent) =>
+      act(() => {
+        for (const listener of signInListeners) listener(event);
+      });
+    // Another sign-in's prompt is none of this one's business.
+    send({
+      type: "prompt",
+      attemptId: "someone-else",
+      promptId: "x1",
+      kind: "secret",
+      text: "Password:",
+    });
+    expect(screen.queryByTestId("ssh-sign-in-prompt")).toBeNull();
+    send({
+      type: "prompt",
+      attemptId,
+      promptId: "p1",
+      kind: "secret",
+      text: "(greg@studio) Verification code:",
+    });
+    send({ type: "prompt-closed", attemptId, promptId: "x1" });
+    expect(screen.getByTestId("ssh-sign-in-prompt").textContent).toBe(
+      "(greg@studio) Verification code:"
+    );
+    fireEvent.change(screen.getByTestId("ssh-sign-in-answer"), { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(client.answerSshSignIn).toHaveBeenCalledWith({
+      attemptId,
+      promptId: "p1",
+      answer: "123456",
+    });
+    // Answered, the field goes: nothing typed stays on screen.
+    expect(screen.queryByTestId("ssh-sign-in-answer")).toBeNull();
+    // Nothing dials until ssh is in.
+    expect(client.connectAndSettle).not.toHaveBeenCalled();
+    await act(async () => finish({ status: "signed-in" }));
+    expect(client.connectAndSettle).toHaveBeenCalledWith("studio-01", { restart: true });
+    expect(signInListeners.size).toBe(0);
+  });
+
+  it("offers no sign-in for a host key ssh refused", () => {
+    render(
+      <HostDetail
+        entry={entry({
+          status: "unreachable",
+          lastSeenAt: null,
+          detail: "Host key verification failed.",
+          stoppedRetrying: true,
+        })}
+        onBack={() => {}}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in…" })).toBeNull();
+  });
+
+  it("cancels a sign-in still running when the host's page goes", async () => {
+    const view = render(
+      <HostDetail
+        entry={entry({
+          status: "unreachable",
+          lastSeenAt: null,
+          detail: "Permission denied (publickey).",
+          stoppedRetrying: true,
+        })}
+        onBack={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Sign in…" }));
+    await waitFor(() => expect(client.startSshSignIn).toHaveBeenCalledTimes(1));
+    const { attemptId } = client.startSshSignIn.mock.calls.at(-1)![0] as { attemptId: string };
+    expect(signInListeners.size).toBe(1);
+    view.unmount();
+    expect(client.cancelSshSignIn).toHaveBeenCalledWith(attemptId);
+    expect(signInListeners.size).toBe(0);
   });
 
   it("says a Connect failed when the link reports it unreachable, in ssh's words", async () => {

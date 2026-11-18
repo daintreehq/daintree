@@ -16,6 +16,12 @@ import { NESTED_WORKTREE_DELETE_MARKER } from "@shared/utils/nestedWorktrees";
 import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 import { WORKTREE_BRANCH_KEPT_MARKER } from "@shared/utils/worktreeSummary";
 import {
+  CLOUD_CLEANUP_REFUSED,
+  prepareWorktreeCloudCleanup,
+  settleWorktreeCloudCleanup,
+  type WorktreeCloudCleanup,
+} from "./worktreeCloudCleanup";
+import {
   mergeIssueState,
   pickIssueProvenance,
   type ManualIssueAssociation,
@@ -30,6 +36,8 @@ export interface WorktreeDeleteOptions {
   force?: boolean;
   deleteBranch?: boolean;
   closeTerminals?: boolean;
+  /** What becomes of the cloud machines made for the worktree; absent when it has none. */
+  cloudCleanup?: WorktreeCloudCleanup;
 }
 
 /**
@@ -156,6 +164,7 @@ const PERMANENT_ERROR_PATTERNS = [
   WORKTREE_BRANCH_KEPT_MARKER,
   "(detached HEAD)",
   NESTED_WORKTREE_DELETE_MARKER,
+  CLOUD_CLEANUP_REFUSED,
 ];
 
 function isPermanentDeleteError(message: string): boolean {
@@ -197,6 +206,8 @@ export type DeleteRetryOutcome = "dispatched" | "needs-review" | "none";
  */
 export function deleteRetryNeedsReview(options: WorktreeDeleteOptions, error: string): boolean {
   if (options.force === true) return true;
+  // What its cloud machines' choices offered may have changed since (#17360).
+  if (error.includes(CLOUD_CLEANUP_REFUSED)) return true;
   return FORCE_REQUIRED_PATTERNS.some((pattern) => error.includes(pattern));
 }
 
@@ -208,6 +219,29 @@ export function deleteRetryNeedsReview(options: WorktreeDeleteOptions, error: st
  * count toward the retry cap — the failure is the port being down, and the
  * port reconnect path drives the next attempt.
  */
+/**
+ * What a failed attempt says about the worktree, for its machines' choices
+ * (#17360): removed (the branch step failed after), refused, or unknown when
+ * the host went away mid-call and may have finished it.
+ */
+function worktreeRemovedBy(message: string, reachedDelete: boolean): boolean | null {
+  if (startsWithWorktreeRemoved(message)) return true;
+  if (!reachedDelete) return false;
+  // A request that ran out of time may still finish on the host.
+  return isConnectivityError(message) || message.includes(BROKER_TIMEOUT) ? null : false;
+}
+
+/**
+ * How WorkspaceService.deleteWorktree starts a failure that came after the
+ * worktree went. Only at the start: a refusal can quote a path holding the words.
+ */
+const WORKTREE_REMOVED_PREFIX = "Worktree removed.";
+const BROKER_TIMEOUT = "[BrokerError|TIMEOUT]";
+
+function startsWithWorktreeRemoved(message: string): boolean {
+  return message.trimStart().startsWith(WORKTREE_REMOVED_PREFIX);
+}
+
 function isConnectivityError(message: string): boolean {
   return (
     message.includes("HOST_EXITED") ||
@@ -462,7 +496,14 @@ export async function runDeleteAsync(
   // as a network error, `fix/file-upload` as a filesystem one. Once the delete
   // call is in flight we know the category without having to guess at text.
   let reachedDelete = false;
+  const cloudCleanup = options.cloudCleanup;
+  let cloudPrepared = false;
   try {
+    // First, so a choice that can't be written down closes nothing (#17360).
+    if (cloudCleanup) {
+      await prepareWorktreeCloudCleanup(cloudCleanup, mutationId);
+      cloudPrepared = true;
+    }
     // A rapid retry after a prior attempt's restore must not start closing
     // terminals while that restore is still spawning panels (#11344) — wait it
     // out so this attempt sees the fully-restored set.
@@ -529,6 +570,7 @@ export async function runDeleteAsync(
     // path). Either way, no post-success bookkeeping is owned here.
     dropDeleteRestore(mutationId);
     pruneOutboxEntry(get, set, mutationId);
+    if (cloudCleanup) settleWorktreeCloudCleanup(cloudCleanup, true, mutationId);
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
     // Logged once here, before the routing split below, so the partial-success
@@ -564,6 +606,14 @@ export async function runDeleteAsync(
       // drop the snapshots rather than relaunch them against a deleted worktree.
       dropDeleteRestore(mutationId);
       pruneOutboxEntry(get, set, mutationId);
+      if (cloudCleanup && cloudPrepared) {
+        // The card went, but only a branch failure says the worktree did too.
+        settleWorktreeCloudCleanup(
+          cloudCleanup,
+          startsWithWorktreeRemoved(message) ? true : null,
+          mutationId
+        );
+      }
       if (isBranchKeptError(message)) {
         // Not a malfunction: the safe `branch -d` refused rather than discard
         // work Git does not consider merged. A warning keeps that legible as a
@@ -587,6 +637,14 @@ export async function runDeleteAsync(
         });
       }
       return;
+    }
+    // Main looks for itself whether a worktree on this device went anyway.
+    if (cloudCleanup && cloudPrepared) {
+      settleWorktreeCloudCleanup(
+        cloudCleanup,
+        worktreeRemovedBy(message, reachedDelete),
+        mutationId
+      );
     }
     handleDeleteFailure(get, set, worktreeId, options, mutationId, message);
   }

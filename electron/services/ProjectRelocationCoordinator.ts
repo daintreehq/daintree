@@ -9,6 +9,7 @@ import { collectActiveProjectIds, projectViewManagersFrom } from "../window/acti
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 import { logError, logInfo } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { folderNameLengthError } from "../../shared/utils/folderName.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
@@ -564,6 +565,13 @@ export class ProjectRelocationCoordinator {
         "invalid-destination",
         "Can't move a project into its own subfolder."
       );
+    }
+    // Length only: the rename would fail with ENAMETOOLONG after the project is
+    // already quiesced, and the coordinator accepts names the shared validator
+    // would refuse, so the rest of that policy stays out.
+    const lengthError = folderNameLengthError(path.basename(newRoot));
+    if (lengthError) {
+      throw new ProjectRelocationError("invalid-destination", `${lengthError}.`);
     }
     if (existsSync(newRoot)) {
       // On a case-insensitive volume (APFS by default, NTFS) a case-only rename

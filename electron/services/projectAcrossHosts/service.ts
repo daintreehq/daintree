@@ -287,6 +287,15 @@ export class ProjectAcrossHostsService {
     throw invalid("worktreePath is not a working tree of this project");
   }
 
+  /**
+   * Refuses unless `worktreePath` is one of this project's working trees, as
+   * git lists them: what a machine made for a worktree is marked with.
+   */
+  async requireProjectWorktree(projectId: unknown, worktreePath: unknown): Promise<void> {
+    const project = this.requireProject(projectId);
+    await this.resolveWorktree(project, worktreePath);
+  }
+
   // Source side
 
   async describeSource(payload: DescribeSourcePayload): Promise<SourceProjectDescription> {
@@ -791,7 +800,9 @@ export class ProjectAcrossHostsService {
       const parent = path.dirname(destination);
       const folderName = path.basename(destination);
       await fs.mkdir(parent, { recursive: true });
-      staging = await fs.mkdtemp(path.join(parent, `.${folderName}.daintree-clone-`));
+      // A fixed prefix: the folder's own name here would push a name that is
+      // valid on its own past the directory-entry limit.
+      staging = await fs.mkdtemp(path.join(parent, ".daintree-clone-"));
       const stagedRepo = path.join(staging, folderName);
 
       op.progress({ fraction: 0, stage: "cloning", message: "Cloning" });

@@ -914,11 +914,10 @@ export function FileBrowserPane({
     setFileBrowserView(id, { browserSidebarCollapsed: !sidebarCollapsed });
   }, [id, sidebarCollapsed, setFileBrowserView]);
 
-  // Tree-column resize, modeled on PortalDock's handle: delta math from a
-  // mousedown-captured start (no DOM measure), continuous writes through the
-  // 500ms-debounced panel store, and a ref-held teardown so an unmount mid-drag
-  // can drop the document listeners. The column is left-anchored, so dragging
-  // right widens (the mirror of PortalDock's right-anchored dock).
+  // Tree-column resize: delta math from a mousedown-captured start (no DOM
+  // measure), continuous writes through the 500ms-debounced panel store, and a
+  // ref-held teardown so an unmount mid-drag can drop the document listeners.
+  // The column is left-anchored, so dragging right widens.
   const [isResizing, setIsResizing] = useState(false);
   const dragCleanupRef = useRef<(() => void) | null>(null);
 

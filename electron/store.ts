@@ -17,10 +17,12 @@ import type { DeviceAnswerSettings } from "../shared/types/ipc/deviceAnswer.js";
 import type { DecisionsSettings } from "../shared/types/decisions.js";
 import type { DecisionsHostRecord } from "../shared/types/decisionsHosts.js";
 import type { EditorConfig } from "../shared/types/editor.js";
+import type { CustomNotificationSound } from "../shared/types/ipc/notificationSounds.js";
 import type { DisplayIdentity } from "../shared/types/displayIdentity.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
+import type { MergedWorktreeRemovalReceipt } from "../shared/types/mergedWorktreeCleanup.js";
 import type { DevPreviewUserStoppedRecord } from "../shared/types/ipc/devPreview.js";
 import type {
   AssistantTurnRecord,
@@ -113,6 +115,7 @@ export interface StoreSchema {
     memoryLeakDetectionEnabled?: boolean;
     memoryLeakAutoRestartThresholdMb?: number;
     cachedProjectViews?: number;
+    osc52ClipboardEnabled?: boolean;
     // Appearance fields written by the terminal-config handlers. Declared so
     // the device/host split in shared/config/settingOwnership.ts covers them.
     fontSize?: TerminalConfig["fontSize"];
@@ -184,7 +187,12 @@ export interface StoreSchema {
   };
   pluginBackgroundUpdateCheck: {
     enabled: boolean;
-    /** Wall-clock ms of the last completed pass; null until the first runs. */
+    /**
+     * Wall-clock ms of the last conclusive pass (one with no targets, or where at
+     * least one check answered); null until the first runs. A pass where every
+     * check failed leaves it alone so a later idle tick retries after a backoff
+     * instead of waiting a day.
+     */
     lastCheckedAt: number | null;
   };
   appState: {
@@ -298,6 +306,8 @@ export interface StoreSchema {
    * `electron/services/agentToolbarPins.ts`.
    */
   agentToolbarPins?: Record<string, boolean>;
+  /** Sounds imported on this device, by id; the WAVs live under `<userData>/sounds/custom/`. */
+  customNotificationSounds?: CustomNotificationSound[];
   notificationSettings: {
     enabled: boolean;
     completedEnabled: boolean;
@@ -311,6 +321,7 @@ export interface StoreSchema {
     workingPulseEnabled: boolean;
     workingPulseSoundFile: string;
     uiFeedbackSoundEnabled: boolean;
+    soundVolume?: number;
     flashEnabled: boolean;
     quietHoursEnabled: boolean;
     quietHoursStartMin: number;
@@ -476,6 +487,11 @@ export interface StoreSchema {
     };
   };
   pendingErrors: ErrorRecord[];
+  /**
+   * Worktrees the merged-worktree rule removed (#17321) that no window has
+   * put in its notification inbox yet. Written only by that rule's service.
+   */
+  mergedWorktreeRemovalReceipts: MergedWorktreeRemovalReceipt[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;
   gpu: {
     hardwareAccelerationDisabled: boolean;
@@ -1027,6 +1043,7 @@ const storeOptions = {
       hybridInputEnabled: true,
       hybridInputAutoFocus: true,
       screenReaderMode: "auto" as const,
+      osc52ClipboardEnabled: false,
     },
     // Defaults ON, unlike the opt-in lifecycle toggles around it: every editor
     // that restores a session at all does it without being asked, and the cost
@@ -1172,6 +1189,7 @@ const storeOptions = {
       auditRetention: 7 as const,
     },
     pendingErrors: [],
+    mergedWorktreeRemovalReceipts: [],
     errorFingerprints: {},
     gpu: {
       hardwareAccelerationDisabled: false,

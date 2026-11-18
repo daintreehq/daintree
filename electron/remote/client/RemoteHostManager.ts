@@ -488,6 +488,7 @@ export class HostConnection {
           ...(state.restarting ? { restarting: true as const } : {}),
           ...(state.answered ? { answered: true as const } : {}),
           ...(state.retryAt === null ? { stoppedRetrying: true as const } : {}),
+          ...(state.retryAt === null && state.blocker ? { blocker: state.blocker } : {}),
         };
       case "version-mismatch":
         return { status: "version-mismatch", mismatch: state.mismatch, remote: state.remote };

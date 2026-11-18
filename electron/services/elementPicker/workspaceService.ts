@@ -17,6 +17,8 @@ import { AppError } from "../../utils/errorTypes.js";
 import { logWarn } from "../../utils/logger.js";
 import { AdmissionGate } from "./admissionGate.js";
 import { hasControlCharacter, isStrictlyInside } from "./containment.js";
+import type { PortListener } from "../../remote/ports/listenerScan.js";
+import { findServerWorktree, localServerPort, type ServerWorktreeDeps } from "./serverWorktree.js";
 import type { ElementPickerHost } from "./ElementPickerHost.js";
 import { ElementPickerHostError } from "./errors.js";
 import { getElementPickerHost } from "./index.js";
@@ -30,6 +32,14 @@ import { getElementPickerHost } from "./index.js";
  */
 
 const P = "[ElementPickerWorkspaces]";
+/** How long a finished scan of a port's listeners answers the resolves that ask. */
+const LISTENER_REUSE_MS = 1_000;
+/** Scans of the machine's sockets running at once, across ports. */
+const MAX_LISTENER_SCANS = 2;
+/** Ports with a scan running or remembered at once. */
+const MAX_LISTENER_LOOKUPS = 16;
+/** How long a scan holds its slot before its callers are told it can't say. */
+const LISTENER_SCAN_DEADLINE_MS = 6_000;
 
 /**
  * Workspaces one view may hold. A panel holds one; past this the oldest goes,
@@ -83,6 +93,17 @@ export interface ElementPickerWorkspaceServiceDeps {
   ): Promise<ReadonlyArray<{ id: string; path: string }> | null>;
   getHost?: () => Promise<WorkspaceHost>;
   discoverApps?: (worktreeRoot: string, signal: AbortSignal) => Promise<AppDiscovery>;
+  /** Who listens on a browser page's port, and where each runs; absent, nothing is checked. */
+  findListeners?: ServerWorktreeDeps["findListeners"];
+}
+
+/** What main itself knows about the page a workspace is opened for. */
+export interface WorkspaceOpenServing {
+  /**
+   * A browser panel's committed URL, read by main from the sender's own guest.
+   * A dev preview's server is its own, and its `serverCwd` already places it.
+   */
+  pageUrl?: string;
 }
 
 interface LeaseRecord extends ElementPickerLease {
@@ -159,6 +180,16 @@ function toRelative(worktreeRoot: string, absolute: string): string {
   return relative === "" ? "." : relative.split(path.sep).join("/");
 }
 
+/** Whether a directory holds a `.git` of its own; an unreadable one counts, so it can't vouch. */
+async function isCheckoutRoot(dir: string): Promise<boolean> {
+  try {
+    await fs.lstat(path.join(dir, ".git"));
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code !== "ENOENT";
+  }
+}
+
 async function canonicalDirectory(target: string): Promise<string | null> {
   try {
     const real = await fs.realpath(target);
@@ -223,6 +254,11 @@ export class ElementPickerWorkspaceService {
   private readonly leases = new Map<string, LeaseRecord>();
   private readonly endpoints = new Map<string, EndpointRecord>();
   private readonly discoveries = new Map<string, Promise<AppDiscovery>>();
+  private scansRunning = 0;
+  private readonly listenerLookups = new Map<
+    number,
+    { listeners: Promise<PortListener[] | null>; settledAt: number | null }
+  >();
   /**
    * One registration at a time per view: making room in its own leases and
    * registering the replacement are one step, or two opens from one view could
@@ -246,12 +282,21 @@ export class ElementPickerWorkspaceService {
 
   async open(
     owner: ElementPickerWorkspaceOwner,
-    request: ElementPickerWorkspaceOpenRequest
+    request: ElementPickerWorkspaceOpenRequest,
+    serving: WorkspaceOpenServing = {}
   ): Promise<ElementPickerWorkspaceOpenResult> {
     this.assertLive(owner);
     const worktreePath = await this.worktreePathOf(owner.projectId, request.worktreeId);
     const worktreeRoot = worktreePath === null ? null : await canonicalDirectory(worktreePath);
     if (worktreeRoot === null) return { status: "unavailable", reason: "unknown-worktree" };
+
+    const server = await this.serverOutsideWorktree(
+      owner,
+      request.worktreeId,
+      serving.pageUrl,
+      false
+    );
+    if (server !== null) return server;
 
     let explicitApp: string | null = null;
     if (request.appPath !== undefined) {
@@ -293,6 +338,98 @@ export class ElementPickerWorkspaceService {
     };
   }
 
+  /**
+   * A browser page whose server runs from another of the project's worktrees:
+   * resolving it against this one would trace the page to a checkout that
+   * isn't serving it, and hand the agent the wrong files. Only a positive
+   * sighting refuses; a server nobody can place opens as asked.
+   */
+  private async serverOutsideWorktree(
+    owner: ElementPickerWorkspaceOwner,
+    worktreeId: string,
+    pageUrl: string | null | undefined,
+    reuseSettled: boolean
+  ): Promise<Extract<ElementPickerWorkspaceOpenResult, { reason: "other-worktree" }> | null> {
+    const findListeners = this.deps.findListeners;
+    const listenerPort = pageUrl ? localServerPort(pageUrl) : null;
+    if (listenerPort === null || !findListeners) return null;
+    const listed = await this.worktreesOf(owner.projectId);
+    if (listed === null) return null;
+    const roots = await Promise.all(
+      listed.map(async (worktree) => ({
+        id: worktree.id,
+        root: await canonicalDirectory(worktree.path),
+      }))
+    );
+    const worktrees = roots.filter(
+      (worktree): worktree is { id: string; root: string } => worktree.root !== null
+    );
+    const verdict = await findServerWorktree(listenerPort, worktrees, {
+      findListeners: (port) => this.listenersOn(port, findListeners, reuseSettled),
+      canonical: canonicalDirectory,
+      isCheckoutRoot,
+    });
+    this.assertLive(owner);
+    if (verdict.status !== "worktree" || verdict.worktreeId === worktreeId) return null;
+    return {
+      status: "unavailable",
+      reason: "other-worktree",
+      serverWorktreeId: verdict.worktreeId,
+    };
+  }
+
+  /**
+   * Who listens on a port. A scan still running answers every check that asks
+   * meanwhile. A finished one answers a resolve for a moment after, since a
+   * page can make selections far faster than the machine's sockets should be
+   * scanned, but never an open: an open is a new document, or a retry after
+   * one, and a server that changed hands is exactly what it is there to see.
+   * Past a few scans at once a check can't say, which opens as asked.
+   */
+  private listenersOn(
+    port: number,
+    find: NonNullable<ElementPickerWorkspaceServiceDeps["findListeners"]>,
+    reuseSettled: boolean
+  ): Promise<PortListener[] | null> {
+    const now = Date.now();
+    for (const [known, lookup] of this.listenerLookups) {
+      if (lookup.settledAt !== null && now - lookup.settledAt >= LISTENER_REUSE_MS) {
+        this.listenerLookups.delete(known);
+      }
+    }
+    const recent = this.listenerLookups.get(port);
+    if (recent && (recent.settledAt === null || reuseSettled)) return recent.listeners;
+    const others = this.listenerLookups.size - (recent ? 1 : 0);
+    // Counted until the scan itself ends, not its callers' deadline.
+    if (this.scansRunning >= MAX_LISTENER_SCANS || others >= MAX_LISTENER_LOOKUPS) {
+      return Promise.resolve(null);
+    }
+    this.scansRunning++;
+    const scan = find(port)
+      .catch(() => null)
+      .finally(() => {
+        this.scansRunning--;
+      });
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const lookup: { listeners: Promise<PortListener[] | null>; settledAt: number | null } = {
+      // A read that never returns answers its callers at the deadline: they
+      // can't say, and the scan's own late answer goes nowhere.
+      listeners: Promise.race([
+        scan,
+        new Promise<null>((resolve) => {
+          deadline = setTimeout(() => resolve(null), LISTENER_SCAN_DEADLINE_MS);
+          deadline.unref?.();
+        }),
+      ]).finally(() => {
+        clearTimeout(deadline);
+        lookup.settledAt = Date.now();
+      }),
+      settledAt: null,
+    };
+    this.listenerLookups.set(port, lookup);
+    return lookup.listeners;
+  }
+
   close(owner: ElementPickerWorkspaceOwner, workspaceId: string): { closed: boolean } {
     const lease = this.owned(owner, workspaceId);
     if (lease === null) return { closed: false };
@@ -307,9 +444,20 @@ export class ElementPickerWorkspaceService {
 
   async resolve(
     owner: ElementPickerWorkspaceOwner,
-    request: { workspaceId: string }
+    request: { workspaceId: string },
+    serving: { pageUrlOf?: (panelId: string) => string | null } = {}
   ): Promise<ResolveResponse> {
     const lease = this.require(owner, request.workspaceId);
+    // A browser page's server can change hands between documents without the
+    // workspace knowing: another worktree takes the port and a reload shows
+    // its page. Checked per selection, not per document, so a reload's
+    // re-proof keeps the workspace it was proven in. The view reopens a
+    // closed workspace, and the open says where the page is served from.
+    const pageUrl = serving.pageUrlOf?.(lease.panelId);
+    if ((await this.serverOutsideWorktree(owner, lease.worktreeId, pageUrl, true)) !== null) {
+      this.release(lease);
+      throw workspaceClosedError();
+    }
     return this.withHost(lease, (host) => host.resolve(request, { projectId: owner.projectId }));
   }
 
@@ -364,16 +512,21 @@ export class ElementPickerWorkspaceService {
   }
 
   private async worktreePathOf(projectId: string, worktreeId: string): Promise<string | null> {
+    const worktrees = await this.worktreesOf(projectId);
+    return worktrees?.find((worktree) => worktree.id === worktreeId)?.path ?? null;
+  }
+
+  private async worktreesOf(
+    projectId: string
+  ): Promise<ReadonlyArray<{ id: string; path: string }> | null> {
     const project = this.deps.getProject(projectId);
     if (!project || project.status === "closed") return null;
-    let worktrees: ReadonlyArray<{ id: string; path: string }> | null;
     try {
-      worktrees = await this.deps.listWorktrees(project.path, projectId);
+      return await this.deps.listWorktrees(project.path, projectId);
     } catch (error) {
       logWarn(`${P} Could not list the project's worktrees`, { projectId, error: String(error) });
       return null;
     }
-    return worktrees?.find((worktree) => worktree.id === worktreeId)?.path ?? null;
   }
 
   /** One search per worktree at a time, shared by every open that asks for it meanwhile. */

@@ -44,6 +44,8 @@ interface ScheduleListProps {
   switches?: ReactNode;
   /** Worktree labels by id, for schedules that don't run in the main checkout. */
   worktreeLabels: ReadonlyMap<string, string>;
+  /** The project's worktree ids once they are known, null until then; a label's absence only means missing from a known list. */
+  worktreeIds: ReadonlySet<string> | null;
   /** Schedules whose switch is being saved; the switch holds still until main answers. */
   pendingEnabled: ReadonlySet<string>;
   enabledError: string | null;
@@ -300,6 +302,7 @@ export function ScheduleList({
   now,
   switches,
   worktreeLabels,
+  worktreeIds,
   pendingEnabled,
   enabledError,
   pendingRunNow,
@@ -468,7 +471,7 @@ export function ScheduleList({
                 schedule={schedule}
                 now={now}
                 schedulesOn={schedulesOn}
-                worktreeLabel={scheduleWorktreeLabel(schedule.launch, worktreeLabels)}
+                worktreeLabel={scheduleWorktreeLabel(schedule.launch, worktreeLabels, worktreeIds)}
                 enabledPending={pendingEnabled.has(schedule.id)}
                 runNowPending={pendingRunNow.has(schedule.id)}
                 lastRun={lastRuns.byScheduleId.get(schedule.id)}

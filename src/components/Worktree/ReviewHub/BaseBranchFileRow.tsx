@@ -68,6 +68,7 @@ export function BaseBranchFileRow({
           ref={openButtonRef}
           type="button"
           onClick={onClick}
+          aria-label={`${config.word}: ${file.path}`}
           data-base-row-index={rowIndex}
           className={cn(
             "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded-[var(--radius-sm)] px-1 text-left",

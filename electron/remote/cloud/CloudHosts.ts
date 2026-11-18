@@ -1,4 +1,5 @@
 import type {
+  CloudHostCreatedFor,
   CloudHostCreateRequest,
   CloudHostImportRequest,
   CloudAccountAddRequest,
@@ -8,6 +9,7 @@ import type {
   CloudHostStatus,
   CloudHostsSnapshot,
   CloudResourceSummary,
+  CloudWorktreeCleanupOutcome,
 } from "../../../shared/types/cloudHosts.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
 import type { CloudHostStore } from "./CloudHostStore.js";
@@ -26,6 +28,7 @@ export interface CloudHostsDeps {
   store: CloudHostStore;
   /** Tells every view the cloud picture changed. */
   emit(snapshot: CloudHostsSnapshot): void;
+  now?: () => number;
 }
 
 /**
@@ -68,6 +71,46 @@ export class CloudHosts {
     return this.lifecycle.create(request);
   }
 
+  /**
+   * Creates a machine for a worktree on this device, marked for it in the
+   * create's first write, with the worktree waiting to open on the new host
+   * from the host's own first write. The mark names this device: a window on
+   * another host has no worktree here to make a machine for. `projectName` is
+   * main's own record of the project, never the asker's.
+   */
+  async createHostForWorktree(
+    machine: unknown,
+    worktree: unknown,
+    projectName: string
+  ): Promise<{ hostId: HostId; requestedAt: number }> {
+    const target = (worktree && typeof worktree === "object" ? worktree : {}) as Record<
+      string,
+      unknown
+    >;
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const projectId = text(target.projectId);
+    const worktreeId = text(target.worktreeId);
+    const worktreeName = text(target.worktreeName).trim();
+    const createdFor: CloudHostCreatedFor = {
+      hostId: null,
+      projectId,
+      worktreeId,
+      projectName,
+      worktreeName,
+      hostName: null,
+    };
+    const requestedAt = (this.deps.now ?? Date.now)();
+    const { hostId } = await this.lifecycle.create(machine as CloudHostCreateRequest, createdFor, {
+      projectId,
+      worktreeId,
+      worktreePath: worktreeId,
+      label: worktreeName,
+      requestedAt,
+      createdMachine: true,
+    });
+    return { hostId, requestedAt };
+  }
+
   importHost(request: CloudHostImportRequest): Promise<{ hostId: HostId }> {
     return this.lifecycle.importMachine(request);
   }
@@ -100,6 +143,26 @@ export class CloudHosts {
     return this.lifecycle.trustHostKey(hostId, fingerprint);
   }
 
+  prepareWorktreeCleanup(worktree: unknown, machines: unknown, mutationId: unknown): void {
+    this.lifecycle.prepareWorktreeCleanup(worktree, machines, mutationId);
+  }
+
+  settleWorktreeCleanup(
+    worktree: unknown,
+    deleted: unknown,
+    mutationId: unknown
+  ): Promise<CloudWorktreeCleanupOutcome[]> {
+    return this.lifecycle.settleWorktreeCleanup(worktree, deleted, mutationId);
+  }
+
+  retryWorktreeCleanup(hostId: unknown): Promise<void> {
+    return this.lifecycle.retryWorktreeCleanup(hostId);
+  }
+
+  dismissWorktreeCleanup(hostId: unknown): void {
+    this.lifecycle.dismissWorktreeCleanup(hostId);
+  }
+
   snapshot(): CloudHostsSnapshot {
     return {
       providers: this.deps.accounts.providerInfos(),
@@ -124,16 +187,16 @@ export class CloudHosts {
     this.changed();
   }
 
-  checkAccountKey(providerId: unknown, apiKey: unknown): Promise<CloudAccountCheckResult> {
-    return this.deps.accounts.checkKey(providerId, apiKey);
+  checkAccountCredentials(providerId: unknown, values: unknown): Promise<CloudAccountCheckResult> {
+    return this.deps.accounts.checkCredentials(providerId, values);
   }
 
   addAccount(request: CloudAccountAddRequest): Promise<CloudAccountSummary> {
     return this.deps.accounts.addAccount(request);
   }
 
-  replaceAccountKey(accountId: unknown, apiKey: unknown): Promise<CloudAccountSummary> {
-    return this.deps.accounts.replaceKey(accountId, apiKey);
+  replaceAccountCredentials(accountId: unknown, values: unknown): Promise<CloudAccountSummary> {
+    return this.deps.accounts.replaceCredentials(accountId, values);
   }
 
   renameAccount(accountId: unknown, displayName: unknown): CloudAccountSummary {

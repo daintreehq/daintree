@@ -135,6 +135,38 @@ function clearSnoozeIfThreadGone(
   return next;
 }
 
+/**
+ * Drops the snooze of every thread a prune took an active row from and left
+ * with none. The Snoozed tab is built from the snooze keys but lists only
+ * surviving active rows, so a key outliving its thread is an empty tab. Only
+ * threads the prune touched are swept: a removed archived row never stood
+ * behind a snooze, and a snooze with nothing pruned behind it (one set before
+ * the thread's first row) is left as it is.
+ */
+function clearSnoozesOfPrunedThreads(
+  snoozedThreads: Record<string, number>,
+  before: Iterable<NotificationHistoryEntry>,
+  after: NotificationHistoryEntry[]
+): Record<string, number> {
+  if (Object.keys(snoozedThreads).length === 0) return snoozedThreads;
+  const kept = new Set(after.map((e) => e.id));
+  let pruned: Set<string> | undefined;
+  for (const e of before) {
+    const id = e.correlationId;
+    if (!id || e.archivedAt !== null || snoozedThreads[id] === undefined || kept.has(e.id))
+      continue;
+    (pruned ??= new Set()).add(id);
+  }
+  if (pruned === undefined) return snoozedThreads;
+  let next = snoozedThreads;
+  for (const id of pruned) {
+    if (after.some((e) => e.correlationId === id && e.archivedAt === null)) continue;
+    if (next === snoozedThreads) next = { ...snoozedThreads };
+    delete next[id];
+  }
+  return next;
+}
+
 function computeUnreadCount(
   entries: NotificationHistoryEntry[],
   snoozedThreads: Record<string, number>,
@@ -376,7 +408,8 @@ function mergeEntryFields(
  *   - in the writer's baseline but not its memory → the writer removed it.
  *   - on disk and never known to the writer → a sibling's addition, kept.
  *
- * Snoozes merge per thread through `mergeRecordByWriterDelta`. The result is
+ * Snoozes merge per thread through `mergeRecordByWriterDelta`, and a snooze
+ * whose thread is left with no active row is dropped. The result is
  * sorted newest first and held to the 200-entry cap. Age retention stays with
  * hydration and the store's own prunes, and never removes a row this writer
  * still holds: an old unread row marked read is expired in memory, and its Undo
@@ -419,18 +452,35 @@ function mergeNotificationHistoryPersistedWrite({
   }
   merged.sort((a, b) => b.timestamp - a.timestamp);
 
+  const capped =
+    merged.length > MAX_ENTRIES
+      ? merged
+          .filter((e) => inc.entries.has(e.id) || !isPastRetention(e, now))
+          .slice(0, MAX_ENTRIES)
+      : merged;
+  // A writer that no longer holds an active row of a thread dropped its snooze
+  // by pruning or dismissing, not by unsnoozing: a row a sibling added there
+  // since still needs the snooze the sibling's disk copy carries.
+  const writerThreads = new Set<string>();
+  for (const e of inc.entries.values()) {
+    if (e.correlationId && e.archivedAt === null) writerThreads.add(e.correlationId);
+  }
+  let snoozedThreads = mergeRecordByWriterDelta(
+    base.snoozedThreads,
+    inc.snoozedThreads,
+    disk.snoozedThreads
+  );
+  for (const [id, until] of Object.entries(disk.snoozedThreads)) {
+    if (snoozedThreads[id] !== undefined || writerThreads.has(id)) continue;
+    if (!capped.some((e) => e.correlationId === id && e.archivedAt === null)) continue;
+    snoozedThreads = { ...snoozedThreads, [id]: until };
+  }
   const state: PersistedNotificationHistoryShape = {
-    entries:
-      merged.length > MAX_ENTRIES
-        ? merged
-            .filter((e) => inc.entries.has(e.id) || !isPastRetention(e, now))
-            .slice(0, MAX_ENTRIES)
-        : merged,
-    snoozedThreads: mergeRecordByWriterDelta(
-      base.snoozedThreads,
-      inc.snoozedThreads,
-      disk.snoozedThreads
-    ),
+    entries: capped,
+    // Swept against the rows this write takes off disk: a thread that ends up
+    // with none keeps no snooze, and a stale baseline row that disk already
+    // lost says nothing about it.
+    snoozedThreads: clearSnoozesOfPrunedThreads(snoozedThreads, disk.entries.values(), capped),
   };
   return { version: incoming.version, state };
 }
@@ -584,9 +634,9 @@ interface NotificationHistoryState {
    */
   clearSnooze: (correlationId: string) => void;
   /**
-   * Drop every snooze whose expiry has passed. Called on a `setTimeout`
-   * registered by `useSnoozeExpiryTimer`. No-op when nothing has expired so
-   * the persist write doesn't fire on every tick.
+   * Drop every snooze whose expiry has passed. Called by the view-lifetime
+   * `useNotificationSnoozeExpiry` at each expiry and on wake, and when the
+   * inbox opens. Writes nothing when nothing has expired.
    */
   clearExpiredSnoozes: (now?: number) => void;
 }
@@ -681,11 +731,11 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           const candidate = [newEntry, ...sourceEntries];
           const updated = pruneNotificationEntries(candidate, now);
           // A superseded entry is archived like any other: a thread it leaves
-          // empty mustn't keep its snooze.
-          const snoozedThreads = clearSnoozeIfThreadGone(
-            state.snoozedThreads,
-            updated,
-            archived?.correlationId
+          // empty mustn't keep its snooze, nor one the 200-entry cap emptied.
+          const snoozedThreads = clearSnoozesOfPrunedThreads(
+            clearSnoozeIfThreadGone(state.snoozedThreads, updated, archived?.correlationId),
+            candidate,
+            updated
           );
           return {
             entries: updated,
@@ -717,9 +767,15 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
         const now = Date.now();
         const candidate = [...added, ...state.entries].sort((a, b) => b.timestamp - a.timestamp);
         const updated = pruneNotificationEntries(candidate, now);
+        const snoozedThreads = clearSnoozesOfPrunedThreads(
+          state.snoozedThreads,
+          candidate,
+          updated
+        );
         set({
           entries: updated,
-          unreadCount: computeUnreadCount(updated, state.snoozedThreads, now),
+          snoozedThreads,
+          unreadCount: computeUnreadCount(updated, snoozedThreads, now),
         });
       },
       updateEntryMessage: (id, message) => {
@@ -892,9 +948,15 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
         set((state) => {
           const filtered = pruneNotificationEntries(state.entries, now);
           if (filtered.length === state.entries.length) return state;
+          const snoozedThreads = clearSnoozesOfPrunedThreads(
+            state.snoozedThreads,
+            state.entries,
+            filtered
+          );
           return {
             entries: filtered,
-            unreadCount: computeUnreadCount(filtered, state.snoozedThreads, now),
+            snoozedThreads,
+            unreadCount: computeUnreadCount(filtered, snoozedThreads, now),
           };
         }),
       snoozeThread: (correlationId, snoozedUntil) => {
@@ -920,7 +982,10 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           };
         });
       },
-      clearExpiredSnoozes: (now = Date.now()) =>
+      clearExpiredSnoozes: (now = Date.now()) => {
+        // Persist queues a storage write on every `set`, even one that returns
+        // the same state, and this runs on each window focus.
+        if (!Object.values(get().snoozedThreads).some((until) => until <= now)) return;
         set((state) => {
           let mutated = false;
           const next: Record<string, number> = {};
@@ -936,7 +1001,8 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
             snoozedThreads: next,
             unreadCount: computeUnreadCount(state.entries, next, now),
           };
-        }),
+        });
+      },
     }),
     {
       name: NOTIFICATION_HISTORY_STORAGE_KEY,
@@ -981,7 +1047,11 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           now,
           new Set(current.entries.map((e) => e.id))
         );
-        const snoozedThreads = sanitizeSnoozedThreads(p?.snoozedThreads, now);
+        const snoozedThreads = clearSnoozesOfPrunedThreads(
+          sanitizeSnoozedThreads(p?.snoozedThreads, now),
+          sanitized,
+          pruned
+        );
         const entries = keepHeldEntries(pruned, current.entries);
         return {
           ...current,

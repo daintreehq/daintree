@@ -19,7 +19,7 @@ import type { HostId } from "./remoteHosts.js";
 export type CloudProviderId = BuiltInCloudProviderId | (string & {});
 
 /** The providers compiled into this build; the open union keeps their names autocompleting. */
-export type BuiltInCloudProviderId = "boat";
+export type BuiltInCloudProviderId = "boat" | "agent37" | "digitalocean" | "gce" | "aws";
 
 /** Where a provider's id lives: Daintree's own bare names, or one plugin's namespace. */
 export type CloudProviderNamespace = { kind: "built-in" } | { kind: "plugin"; pluginId: string };
@@ -57,6 +57,15 @@ export function pluginCloudProviderId(
   return namespace?.kind === "plugin" && namespace.pluginId === pluginId ? id : null;
 }
 
+/**
+ * Whether a new account may be connected for this provider. Only Daintree's
+ * own providers for now: a plugin's provider gets an account only once the
+ * person has agreed to hand that plugin credentials (#17352).
+ */
+export function canConnectCloudAccount(providerId: CloudProviderId): boolean {
+  return cloudProviderNamespace(providerId)?.kind === "built-in";
+}
+
 export { isValidCloudBindingId } from "./remoteHosts.js";
 
 /**
@@ -74,6 +83,17 @@ export interface CloudProviderPersistence {
   saveRetryBilled: boolean;
   /** Whether a stopped machine still bills for compute, not only for its disk. */
   stoppedComputeBilled: boolean;
+  /**
+   * Whether a stopped machine's disk keeps billing on its own, so stopping
+   * cuts the bill to storage rather than ending it.
+   */
+  stoppedStorageBilled: boolean;
+  /**
+   * For one that bills a stopped machine for compute, what a stopped machine
+   * bills, as one sentence in the provider's own terms; the general wording
+   * when absent.
+   */
+  stoppedBilling?: string;
 }
 
 /**
@@ -106,10 +126,14 @@ export function cloudLifetimeIsChosen(model: CloudLifetimeModel): boolean {
  * Where the trust in a machine's SSH server key comes from.
  * - `pinned-from-api`: the provider's authenticated API returns it, so it is pinned before any dial.
  * - `confirm-on-first-connect`: nothing vouches for it; the person confirms its fingerprint once.
+ * - `api-or-confirm`: the provider's authenticated API reports the key when it can (EC2's console
+ *   output, which can lag boot); that report is trusted for a first connect when the machine
+ *   presents exactly it, and otherwise the person confirms the fingerprint once. Direct only.
  * - `provider-tunnel`: the provider's own tunnel authenticates the machine, whose key may change
  *   when it is rebuilt or moved.
  */
-export type CloudSshTrust = "pinned-from-api" | "confirm-on-first-connect" | "provider-tunnel";
+export type CloudSshTrust =
+  "pinned-from-api" | "confirm-on-first-connect" | "api-or-confirm" | "provider-tunnel";
 
 /**
  * How the desktop reaches the machine's sshd: straight to an address, or
@@ -180,6 +204,17 @@ export interface CloudCredentialField {
   help: string | null;
 }
 
+/**
+ * What a person entered for an account's credentials, keyed by the provider's
+ * declared field ids. It travels to main once, when credentials are checked,
+ * connected or replaced, and never comes back.
+ */
+export type CloudCredentialValues = Record<string, string>;
+
+/** The most one entered value may hold, in UTF-8 bytes: one line, then text over several lines or a key file. */
+export const MAX_CLOUD_CREDENTIAL_LINE_BYTES = 4096;
+export const MAX_CLOUD_CREDENTIAL_TEXT_BYTES = 64 * 1024;
+
 export interface CloudProviderInfo {
   id: CloudProviderId;
   name: string;
@@ -195,9 +230,14 @@ export interface CloudProviderInfo {
   unsupportedReason: string | null;
 }
 
-/** A wallet an account may bill: the person's own, or an organization they belong to. */
+/**
+ * What an account bills: the person's own wallet, an organization they belong
+ * to, the one workspace a provider binds each key to, a cloud project (Google
+ * Cloud's unit of billing and access), or the provider's account itself (an
+ * AWS account), with no wallet to choose.
+ */
 export interface CloudBillingScope {
-  kind: "personal" | "organization";
+  kind: "personal" | "organization" | "workspace" | "project" | "account";
   /** The provider's id for it: what every request names. */
   id: string;
   name: string;
@@ -222,7 +262,10 @@ export interface CloudAccountSummary {
   /** Cloud hosts bound to this account. */
   hostCount: number;
   addedAt: number;
-  /** The last four characters of the key, so two keys can be told apart. */
+  /**
+   * The last four characters of the first one-line secret, so two sets can be
+   * told apart; null when the set has none long enough to hint at.
+   */
   keyHint: string | null;
 }
 
@@ -347,7 +390,7 @@ export interface CloudCatalog {
   machineTypes: CloudMachineType[];
   /**
    * What a create may name, per dimension the provider takes; null for a
-   * dimension it doesn't. Boat takes none.
+   * dimension it doesn't. Boat takes none; DigitalOcean a region and an image.
    */
   provisioning: Record<CloudProvisioningDimension, CloudProvisioningOptions | null>;
   /** What this account's last create named on this device; null before its first. */
@@ -380,6 +423,8 @@ export interface CloudResourceSummary {
   boundHostId: HostId | null;
   /** The account cannot start or connect to it (a teammate's private machine). */
   restricted: boolean;
+  /** Stopped because the provider slept it on idle. */
+  asleep: boolean;
 }
 
 /** What Daintree is doing to a machine right now, in the user's terms. */
@@ -415,7 +460,33 @@ export type CloudHostErrorCode =
   | "outcome-unknown"
   | "unsupported"
   | "lifetime-renewal"
+  /** The provider turned the request down as it was made (a size its region lacks, a limit reached); nothing changed. */
+  | "refused"
   | "failed";
+
+/** Every code, so a code that arrives as data (from a plugin) can be checked. */
+const CLOUD_HOST_ERROR_CODES = {
+  "credential-invalid": true,
+  permission: true,
+  billing: true,
+  "rate-limited": true,
+  capacity: true,
+  "not-found": true,
+  "data-expired": true,
+  "stop-failing": true,
+  "ssh-authorization": true,
+  "ssh-tunnel-command-missing": true,
+  "provider-unreachable": true,
+  "outcome-unknown": true,
+  unsupported: true,
+  "lifetime-renewal": true,
+  refused: true,
+  failed: true,
+} as const satisfies Record<CloudHostErrorCode, true>;
+
+export function isCloudHostErrorCode(value: unknown): value is CloudHostErrorCode {
+  return typeof value === "string" && Object.hasOwn(CLOUD_HOST_ERROR_CODES, value);
+}
 
 /**
  * The worktree a machine was created for, written down with its create so it
@@ -437,6 +508,57 @@ export interface CloudHostCreatedFor {
   worktreeName: string;
   /** The host's name then; null for this device. */
   hostName: string | null;
+}
+
+/** A worktree as a mark names it: where it lives, its project there, and its root path. */
+export type CloudWorktreeRef = Pick<CloudHostCreatedFor, "hostId" | "projectId" | "worktreeId">;
+
+/** Whether a machine's mark names this worktree. Names never count: only where it lives. */
+export function cloudMarkNamesWorktree(
+  mark: CloudHostCreatedFor | null,
+  worktree: CloudWorktreeRef
+): boolean {
+  return (
+    mark !== null &&
+    mark.hostId === worktree.hostId &&
+    mark.projectId === worktree.projectId &&
+    mark.worktreeId === worktree.worktreeId
+  );
+}
+
+/** What becomes of a machine made for a worktree when that worktree is deleted. */
+export type CloudWorktreeCleanupChoice = "keep" | "stop" | "delete";
+
+/** One machine to stop or delete once its worktree is gone, naming the machine the person confirmed. */
+export interface CloudWorktreeCleanupRequest {
+  hostId: HostId;
+  resourceId: string;
+  choice: Exclude<CloudWorktreeCleanupChoice, "keep">;
+}
+
+/**
+ * A stop or delete the person chose with a worktree's delete, until it is
+ * done. `waiting`: the worktree isn't known to be gone yet. `running`: it is,
+ * and the stop or delete is under way or will resume (with `error` saying why
+ * it can't yet, when its provider isn't available). `failed`: it didn't
+ * finish, and waits for Retry. `unconfirmed`: Daintree never heard whether a
+ * worktree on another host went, so nothing is done until the person decides.
+ */
+export interface CloudWorktreeCleanupStatus {
+  choice: Exclude<CloudWorktreeCleanupChoice, "keep">;
+  phase: "waiting" | "running" | "failed" | "unconfirmed";
+  /** Where the worktree lives: null for this device, whose worktree Daintree can look at itself. */
+  worktreeHostId: HostId | null;
+  error: CloudHostError | null;
+}
+
+/** How one machine's stop or delete ended, for whoever is waiting on the worktree's delete. */
+export interface CloudWorktreeCleanupOutcome {
+  hostId: HostId;
+  machineName: string;
+  choice: Exclude<CloudWorktreeCleanupChoice, "keep">;
+  /** Null when it was carried out, or wasn't due because the worktree is still there. */
+  error: string | null;
 }
 
 /**
@@ -478,6 +600,8 @@ export interface CloudHostStatus {
   ownership: "created-by-daintree" | "imported";
   /** The worktree it was created for; null for every other machine. */
   createdFor: CloudHostCreatedFor | null;
+  /** A stop or delete chosen with that worktree's delete and not yet done; null for none. */
+  worktreeCleanup: CloudWorktreeCleanupStatus | null;
   /** The region, image and network it was created with; null when none was named (imported, or a provider that takes none). */
   provisioning: CloudHostProvisioning | null;
   machine: CloudMachineState;
@@ -515,6 +639,17 @@ export interface CloudHostStatus {
   hostKeyReview: CloudHostKeyReview | null;
   /** When this device last moved the machine's auto-stop forward because it was in use here. */
   keptRunningAt: number | null;
+  /**
+   * Why the machine can't renew and stop itself by its host's idle time, as
+   * this device last found (#17361); null when nothing stands in the way, or
+   * its provider has no such keys. Optional for snapshots from before it.
+   */
+  selfStopProblem?: string | null;
+  /**
+   * The provider put the stopped machine to sleep on idle rather than being
+   * asked to stop it: a request to it would wake it, and it bills as stopped.
+   */
+  asleep: boolean;
 }
 
 /** The machine as it would be created. */
@@ -535,6 +670,25 @@ export interface CloudHostCreateRequest {
   provisioning?: CloudProvisioningSelection;
 }
 
+/**
+ * A machine created for a worktree on this device, from the New Worktree
+ * dialog. Main writes the mark from `worktree` and its own record of the
+ * project, and the worktree waits on the new host to open there once it is
+ * set up; the machine is created exactly as `machine` asks, as Settings →
+ * Hosts' create would.
+ */
+export interface CloudHostCreateForWorktreeRequest {
+  machine: CloudHostCreateRequest;
+  worktree: {
+    /** The local project's id: the asking window's own. */
+    projectId: string;
+    /** The worktree's root path on this device. */
+    worktreeId: string;
+    /** Its branch, or its name when it has none. */
+    worktreeName: string;
+  };
+}
+
 export interface CloudHostImportRequest {
   accountId: string;
   resourceId: string;
@@ -543,8 +697,8 @@ export interface CloudHostImportRequest {
 
 export interface CloudAccountAddRequest {
   providerId: CloudProviderId;
-  /** Read once in main, encrypted, and never returned. */
-  apiKey: string;
+  /** Read once in main, sealed in the keychain as one set, and never returned. */
+  credentials: CloudCredentialValues;
   scopeId: string;
   displayName?: string;
 }

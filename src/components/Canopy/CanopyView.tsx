@@ -35,7 +35,7 @@ import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { itemArchived, itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
-import { searchPasteText } from "./canopySearch";
+import { canopyScreenGapWords, searchPasteText } from "./canopySearch";
 import { isWorkerEntry, type CanopyInboxEntry } from "./canopyInboxProjection";
 import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
@@ -558,6 +558,8 @@ function CanopyInbox({
     remotes,
     participants,
     api,
+    searchScreens,
+    markAllReadReport,
     terminalApi,
     readings,
     canopy,
@@ -604,7 +606,29 @@ function CanopyInbox({
     searchKey,
     screenAsk,
     onScreen,
-  } = useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
+    screenUnsearched,
+    screenRetry,
+    retryScreenSearch,
+  } = useCanopyInboxSearch({ isOpen, hostId, items, searchScreens, refreshedAt });
+  // The hosts whose terminals the search couldn't read, named in the host list's
+  // order: the panel's own host alone needs no name.
+  const screenGap = useMemo(() => {
+    if (screenUnsearched.length === 0) return null;
+    if (!everyHost) return canopyScreenGapWords(otherHost ? [hostName] : []);
+    const rows = hostRows ?? [];
+    const place = (id: HostId) => {
+      const index = rows.findIndex((row) => row.hostId === id);
+      return index === -1 ? rows.length : index;
+    };
+    return canopyScreenGapWords(
+      [...screenUnsearched]
+        .sort((a, b) => place(a) - place(b))
+        .map(
+          (id) =>
+            rows.find((row) => row.hostId === id)?.name ?? (id === ownHostId ? "This Mac" : id)
+        )
+    );
+  }, [screenUnsearched, everyHost, otherHost, hostName, hostRows, ownHostId]);
   const {
     roleFilter,
     setRoleFilter,
@@ -644,6 +668,7 @@ function CanopyInbox({
     firstAssistant,
     listRef,
     onlyReadMatch,
+    searchGap,
   } = useCanopyInboxFilters({
     isOpen,
     hostId,
@@ -666,6 +691,8 @@ function CanopyInbox({
     searchKey,
     screenAsk,
     onScreen,
+    screenGap,
+    screenRetry,
     listHidden,
   });
   // The band has rows of its own: only then do the band headings show.
@@ -755,6 +782,16 @@ function CanopyInbox({
     sortFocusedRef.current = false;
     searchRef.current?.focus({ preventScroll: true });
   }, [sortShown, searchRef]);
+  // Retry leaves once every host has searched, on its press or a refresh: the
+  // keyboard on it stays in the panel, on the search.
+  const retryRef = useRef<HTMLButtonElement>(null);
+  const retryFocusedRef = useRef(false);
+  const gapShown = searchGap !== null;
+  useLayoutEffect(() => {
+    if (gapShown || !retryFocusedRef.current) return;
+    retryFocusedRef.current = false;
+    searchRef.current?.focus({ preventScroll: true });
+  }, [gapShown, searchRef]);
   const {
     readNow,
     handlers,
@@ -775,6 +812,7 @@ function CanopyInbox({
     hostId,
     ownHostId,
     api,
+    markAllReadReport,
     terminalApi,
     listed,
     focusedItem,
@@ -1083,6 +1121,12 @@ function CanopyInbox({
     toggleRead,
     markAllRead,
     onSelectAll: bulkTrashable ? openBulkTrash : undefined,
+    retryStop: () => {
+      const retry = retryRef.current;
+      if (!retry) return false;
+      retry.focus();
+      return true;
+    },
     onPastEnd: () => focusArchivedBar() || (trashRef.current?.focusHeader() ?? false),
     sectionStop: { before: projection.sectionStart, focus: focusAssistantsBar },
   });
@@ -1392,9 +1436,9 @@ function CanopyInbox({
   const inboxEmpty: { words: string; note?: string } = searching
     ? {
         words:
-          shownInbox.inbox.length > 0
+          (shownInbox.inbox.length > 0
             ? `Nothing unread matches “${appliedQuery.trim()}”`
-            : `Nothing matches “${appliedQuery.trim()}”`,
+            : `Nothing matches “${appliedQuery.trim()}”`) + (searchGap === null ? "" : " so far"),
       }
     : workOf !== null
       ? {
@@ -1506,6 +1550,12 @@ function CanopyInbox({
     listed.length > 0 || bandAssistants.length > 0 ? "canopy-inbox-list" : null,
     sectionAssistants.length > 0 ? "canopy-assistants" : null,
     archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
+  ]
+    .filter((id) => id !== null)
+    .join(" ");
+  const searchDescription = [
+    searchNotes.length > 0 ? "canopy-search-notes" : null,
+    searchGap !== null ? "canopy-search-gap" : null,
   ]
     .filter((id) => id !== null)
     .join(" ");
@@ -1781,7 +1831,7 @@ function CanopyInbox({
                   data-canopy-search=""
                   placeholder="Search agents and their terminals"
                   aria-label="Search agents"
-                  aria-describedby={searchNotes.length > 0 ? "canopy-search-notes" : undefined}
+                  aria-describedby={searchDescription || undefined}
                   role="combobox"
                   aria-expanded={visible.length > 0}
                   aria-controls={searchControls || undefined}
@@ -1808,6 +1858,34 @@ function CanopyInbox({
                       <p key={note}>{note}</p>
                     ))}
                   </div>
+                )}
+                {/* The matches listed are only what the hosts that searched found:
+                    said, with the same search asked again on Retry. */}
+                {searchGap !== null && (
+                  <Callout
+                    severity="warning"
+                    size="compact"
+                    className="mt-1.5"
+                    data-testid="canopy-search-incomplete"
+                    action={
+                      <Button
+                        ref={retryRef}
+                        variant="outline"
+                        size="xs"
+                        onFocus={() => {
+                          retryFocusedRef.current = true;
+                        }}
+                        onBlur={() => {
+                          retryFocusedRef.current = false;
+                        }}
+                        onClick={retryScreenSearch}
+                      >
+                        Retry
+                      </Button>
+                    }
+                  >
+                    <span id="canopy-search-gap">{searchGap}</span>
+                  </Callout>
                 )}
               </div>
               <div
@@ -2329,18 +2407,33 @@ function CanopyInbox({
                         </>
                       ) : onlyReadMatch ? (
                         <>
-                          <p className="text-sm text-text-primary">No unread agent matches</p>
+                          <p className="text-sm text-text-primary">
+                            {searchGap === null
+                              ? "No unread agent matches"
+                              : "No unread agent matches so far"}
+                          </p>
                           <p className="text-xs text-text-secondary">
-                            Turn off Unread to see every agent that matches.
+                            {searchGap === null
+                              ? "Turn off Unread to see every agent that matches."
+                              : "Turn off Unread to see the matches found so far."}
                           </p>
                         </>
                       ) : searching ? (
-                        <>
-                          <p className="text-sm text-text-primary">No agent matches</p>
-                          <p className="text-xs text-text-secondary">
-                            Try other words, or press Esc to clear the search.
-                          </p>
-                        </>
+                        searchGap === null ? (
+                          <>
+                            <p className="text-sm text-text-primary">No agent matches</p>
+                            <p className="text-xs text-text-secondary">
+                              Try other words, or press Esc to clear the search.
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm text-text-primary">No agent matches so far</p>
+                            <p className="text-xs text-text-secondary">
+                              Some terminals couldn't be searched. Retry to search them again.
+                            </p>
+                          </>
+                        )
                       ) : unreadOnly && inbox.inbox.length > 0 ? (
                         <>
                           <p className="text-sm text-text-primary">Nothing unread</p>

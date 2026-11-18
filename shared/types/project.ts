@@ -1009,6 +1009,13 @@ export interface ProjectSettings {
    */
   daintreeMcpSkipConfirmations?: boolean;
   /**
+   * Remove this project's worktrees once their PR has merged (#17321): standing
+   * consent, given in Project Settings and nowhere else, to removals that lose
+   * nothing. Only `true` turns it on. Written through its own setter, so a
+   * whole-settings save keeps what is stored and no agent can change it.
+   */
+  removeMergedWorktrees?: boolean;
+  /**
    * @deprecated Use `daintreeMcpTier` instead. Kept for one-cycle migration of existing project files.
    * `true` migrates to `core` on read; `false`/undefined migrates to `off`.
    */
@@ -1062,6 +1069,7 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   links: "local",
   daintreeMcpTier: "local",
   daintreeMcpSkipConfirmations: "local",
+  removeMergedWorktrees: "local",
   exposeDaintreeMcpToAgents: "local",
 } as const satisfies Record<keyof ProjectSettings, FieldShareability>;
 
@@ -1140,6 +1148,7 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   links: "internal",
   daintreeMcpTier: "internal",
   daintreeMcpSkipConfirmations: "internal",
+  removeMergedWorktrees: "internal",
   exposeDaintreeMcpToAgents: "internal",
 } as const satisfies Record<keyof ProjectSettings, ProjectSettingsAgentExposure>;
 

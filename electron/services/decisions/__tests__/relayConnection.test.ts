@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DecisionsBridge,
+  INVOLVEMENT_META,
   MemoryKeyStore,
   MemoryLocalStore,
   loadIdentity,
@@ -20,14 +21,22 @@ import {
   generateEpochKeyBytes,
   issueDeviceCert,
   serializeDeviceKeys,
+  signObject,
+  verifyObject,
   type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import { pendingRotationOf } from "../keyRotation.js";
+import { PRESENCE_TICK_MS, type PresenceWatchers } from "../desktopPresence.js";
+import type { UserPresence } from "../../userPresence.js";
 import {
   bytesToBase64Url,
   type DeviceCert,
   type InvolvementRecord,
 } from "@daintreehq/decisions-protocol";
+import {
+  LEGACY_PHONE_INVOLVEMENT_START,
+  legacyPhoneInvolvementRead,
+} from "@daintreehq/decisions-protocol/fixtures";
 
 vi.mock("electron", () => ({
   app: {
@@ -1721,6 +1730,10 @@ describe("get_involvement over a connection (#17228)", () => {
     let preference: InvolvementRecord | null = null;
     let held: Promise<void> = Promise.resolve();
     const declared: unknown[] = [];
+    /** Every request Daintree made, as `METHOD /path`. */
+    const requests: string[] = [];
+    /** What `/info` advertises; null answers it as the stock fake does, with a 404. */
+    let advertised: string[] | null = null;
     const json = (body: unknown) =>
       new Response(JSON.stringify(body), {
         status: 200,
@@ -1730,6 +1743,19 @@ describe("get_involvement over a connection (#17228)", () => {
       (fetchImpl: RelayFetch): RelayFetch =>
       async (url, init) => {
         const { pathname } = new URL(url);
+        requests.push(`${init.method ?? "GET"} ${pathname}`);
+        if (pathname === "/api/v1/info" && advertised !== null) {
+          return json({
+            name: "daintree-decisions",
+            protocol_min: 1,
+            protocol_max: 1,
+            worker_version: "0.7.0",
+            claimed: true,
+            claim_configured: true,
+            voice: { xai: false, anthropic: false, openai: false },
+            features: advertised,
+          });
+        }
         if (pathname === "/api/v1/devices") return json(devices);
         if (pathname === "/api/v1/involvement" && (init.method ?? "GET") === "GET") {
           await held;
@@ -1746,6 +1772,14 @@ describe("get_involvement over a connection (#17228)", () => {
     return {
       wrapFetch,
       declared,
+      requests,
+      phone,
+      advertise(features: string[]): void {
+        advertised = features;
+      },
+      serve(record: InvolvementRecord | null): void {
+        preference = record;
+      },
       holdReads(): () => void {
         let release!: () => void;
         held = new Promise((resolve) => {
@@ -1769,6 +1803,47 @@ describe("get_involvement over a connection (#17228)", () => {
         });
       },
     };
+  }
+
+  /**
+   * A record as a 0.7.0 phone signs it: the fields that release builds,
+   * written out here so no 0.8.0 builder shapes it.
+   */
+  async function signedOn070Phone(
+    phone: DeviceKeys,
+    revision: number,
+    override: InvolvementRecord["override"]
+  ): Promise<InvolvementRecord> {
+    return (await signObject(phone.signing.privateKey, {
+      v: 1,
+      type: "involvement.preference",
+      installation_id: RELAY.installationId,
+      revision,
+      normal_mode: "recommend",
+      consult_count: 3,
+      override,
+      created_at: new Date().toISOString(),
+      signer_device_id: PHONE,
+    })) as InvolvementRecord;
+  }
+
+  /** A 0.7.0 phone's own reading of a record: `ready` only for one it would have set itself. */
+  function readOn070Phone(phone: DeviceKeys, record: InvolvementRecord) {
+    return legacyPhoneInvolvementRead(
+      LEGACY_PHONE_INVOLVEMENT_START,
+      { preference: record, received_at: record.created_at },
+      {
+        installationId: RELAY.installationId,
+        signer: (deviceId) =>
+          deviceId === PHONE
+            ? {
+                role: "phone",
+                revoked: false,
+                verify: (r) => verifyObject(phone.signing.publicKey, r),
+              }
+            : null,
+      }
+    );
   }
 
   /** The relay's hint that the preference changed: question-free, it only says to read again. */
@@ -1880,5 +1955,297 @@ describe("get_involvement over a connection (#17228)", () => {
     });
     await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
     expect(asked.status).toBe("queued");
+  });
+
+  it("serves a 0.7.0 phone's preference through a 0.7.0 relay as agents read it before 0.8.0, and asks that relay for nothing 0.8.0 added (#17433, #17239)", async () => {
+    const relay = await relayWithPreference();
+    // Every feature a 0.7.0 relay can advertise; none of 0.8.0's.
+    const releasedBy070 = [
+      "thread-messages-v1",
+      "phone-images-v1",
+      "pane-snapshots-v1",
+      "owner-desktop-answers-v1",
+      "involvement-v1",
+      "person-declines-v1",
+    ];
+    relay.advertise(releasedBy070);
+    // 0.8.0's host APIs, on every bridge the connection makes: none of them is Daintree's to call yet.
+    const hostApis = (
+      ["reportPresence", "setInvolvementPreference", "declineQuestion", "sendFollowUp"] as const
+    ).map((name) => vi.spyOn(DecisionsBridge.prototype, name));
+    const until = new Date(Date.now() + 60 * 60_000).toISOString();
+    const record = await signedOn070Phone(relay.phone, 4, { mode: "involve-early", until });
+    await expect(readOn070Phone(relay.phone, record)).resolves.toMatchObject({
+      status: "ready",
+      revision: 4,
+      problem: null,
+    });
+    relay.serve(record);
+    let source: QuestionSource | null = null;
+    const h = await harness({
+      wrapFetch: relay.wrapFetch,
+      overrides: { onQuestionsReady: (ready) => (source = ready) },
+    });
+    teardown.push(() => h.connection.stop());
+    h.connection.start();
+    await connectLive(h);
+    const bridge = new QuestionBridge({
+      source: source as unknown as QuestionSource,
+      isCurrent: () => true,
+    });
+
+    await vi.waitFor(async () =>
+      expect(await bridge.getInvolvement()).toMatchObject({ status: "available", stale: false })
+    );
+    const view = await bridge.getInvolvement();
+    // The fields an agent read on 0.7.0, and no more: where it was set is the person's own display.
+    expect(view).toEqual({
+      status: "available",
+      mode: "involve-early",
+      normalMode: "recommend",
+      consultCount: 3,
+      revision: 4,
+      overrideActive: true,
+      until,
+      setAt: record.created_at,
+      lastSyncedAt: expect.any(String),
+      stale: false,
+    });
+
+    await bridge.registerQuestion({
+      origin: QUESTION_ORIGIN,
+      input: { question: "Still asking?" },
+    });
+    await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
+    expect(h.statuses.at(-1)?.state).toBe("connected");
+    expect(relay.declared.length).toBeGreaterThan(0);
+    // Only the owner desktop's decline (#17239) and follow-ups (#17238) are declared beyond 0.7.0's:
+    // a relay ignores a token it doesn't know, and nothing is declined or followed up unless the
+    // person dismisses a question or writes on one here.
+    const declarable = [...releasedBy070, "owner-desktop-declines-v1", "owner-desktop-messages-v1"];
+    for (const features of relay.declared) {
+      for (const feature of (features as string[] | undefined) ?? []) {
+        expect(declarable).toContain(feature);
+      }
+    }
+    for (const api of hostApis) expect(api).not.toHaveBeenCalled();
+    expect(relay.requests).not.toContain("PUT /api/v1/presence");
+    expect(relay.requests).not.toContain("PUT /api/v1/involvement");
+  });
+
+  it("answers from the verified copy a 0.7.0 Daintree kept, and still refuses an older record against it (#17433)", async () => {
+    const relay = await relayWithPreference();
+    const kept = await signedOn070Phone(relay.phone, 2, null);
+    const syncedAt = Date.now() - 60_000;
+    const store = new MemoryLocalStore();
+    // The copy exactly as 0.7.0 stored it: no record of where the preference was set.
+    await store.setMeta(
+      INVOLVEMENT_META,
+      JSON.stringify({ record: kept, high_water: 2, synced_at: syncedAt })
+    );
+    // The relay hands back an older revision, as a rolled-back relay would.
+    relay.serve(await signedOn070Phone(relay.phone, 1, null));
+    const release = relay.holdReads();
+    let source: QuestionSource | null = null;
+    const h = await harness({
+      store,
+      wrapFetch: relay.wrapFetch,
+      overrides: { onQuestionsReady: (ready) => (source = ready) },
+    });
+    teardown.push(release, () => h.connection.stop());
+    h.connection.start();
+    await vi.waitFor(() => expect(source).not.toBeNull());
+    const bridge = new QuestionBridge({
+      source: source as unknown as QuestionSource,
+      isCurrent: () => true,
+    });
+
+    const fromCopy = {
+      status: "available",
+      mode: "recommend",
+      consultCount: 3,
+      revision: 2,
+      setAt: kept.created_at,
+      lastSyncedAt: new Date(syncedAt).toISOString(),
+      stale: true,
+    };
+    await expect(bridge.getInvolvement()).resolves.toMatchObject(fromCopy);
+
+    release();
+    await connectLive(h);
+    await vi.waitFor(async () =>
+      expect(await store.listAudit(50)).toContainEqual(
+        expect.objectContaining({ event: "involvement.refused", result: "rollback" })
+      )
+    );
+    await expect(bridge.getInvolvement()).resolves.toMatchObject(fromCopy);
+  });
+});
+
+describe("presence over a connection (#17240)", () => {
+  const teardown: Array<() => unknown> = [];
+
+  afterEach(async () => {
+    for (const step of teardown.splice(0)) await step();
+  });
+
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  /** A relay advertising `features` in `/info`, keeping each presence report Daintree sends. */
+  function presenceRelay(features: string[]) {
+    const reports: boolean[] = [];
+    const requests: string[] = [];
+    const wrapFetch =
+      (fetchImpl: RelayFetch): RelayFetch =>
+      async (url, init) => {
+        const { pathname } = new URL(url);
+        requests.push(`${init.method ?? "GET"} ${pathname}`);
+        if (pathname === "/api/v1/info") {
+          return json({
+            name: "daintree-decisions",
+            protocol_min: 1,
+            protocol_max: 1,
+            worker_version: "0.8.0",
+            claimed: true,
+            claim_configured: true,
+            voice: { xai: false, anthropic: false, openai: false },
+            features,
+          });
+        }
+        if (pathname === "/api/v1/presence" && init.method === "PUT") {
+          const { present } = JSON.parse(String(init.body)) as { present: boolean };
+          reports.push(present);
+          return json({
+            present,
+            until: present ? new Date(Date.now() + 60_000).toISOString() : null,
+          });
+        }
+        return fetchImpl(url, init);
+      };
+    return { wrapFetch, reports, requests };
+  }
+
+  /** What the owner's presence reads, and whether it may be reported; no Electron watchers. */
+  function presenceState() {
+    const state = { presence: "present" as UserPresence, allowed: true };
+    const watch: PresenceWatchers = {
+      onSuspend: () => () => {},
+      onResume: () => () => {},
+      onChange: () => () => {},
+    };
+    return {
+      state,
+      presence: { read: () => state.presence, allowed: () => state.allowed, watch },
+    };
+  }
+
+  async function connected(
+    relay: ReturnType<typeof presenceRelay>,
+    presence: ReturnType<typeof presenceState>["presence"]
+  ): Promise<Harness> {
+    const h = await harness({ wrapFetch: relay.wrapFetch, overrides: { presence } });
+    teardown.push(() => h.connection.stop());
+    h.connection.start();
+    await connectLive(h);
+    return h;
+  }
+
+  it("tells the relay while the person is here, and that they left once they're away", async () => {
+    const relay = presenceRelay(["presence-v1"]);
+    const { state, presence } = presenceState();
+    const h = await connected(relay, presence);
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+
+    state.presence = "away";
+    h.connection.presenceChanged();
+    await vi.waitFor(() => expect(relay.reports).toEqual([true, false]));
+  });
+
+  it("tells the relay nothing while presence isn't allowed, and starts and ends as that changes", async () => {
+    const report = vi.spyOn(DecisionsBridge.prototype, "reportPresence");
+    const relay = presenceRelay(["presence-v1"]);
+    const { state, presence } = presenceState();
+    state.allowed = false;
+    const h = await connected(relay, presence);
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 2);
+    expect(report).not.toHaveBeenCalled();
+    expect(relay.requests).not.toContain("PUT /api/v1/presence");
+
+    state.allowed = true;
+    h.connection.presenceChanged();
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+
+    state.allowed = false;
+    h.connection.presenceChanged();
+    await vi.waitFor(() => expect(relay.reports).toEqual([true, false]));
+    expect(report.mock.calls.map(([present]) => present)).toEqual([true, false]);
+  });
+
+  it("counts unknown presence as away: nothing is reported", async () => {
+    const report = vi.spyOn(DecisionsBridge.prototype, "reportPresence");
+    const relay = presenceRelay(["presence-v1"]);
+    const { state, presence } = presenceState();
+    state.presence = "unknown";
+    await connected(relay, presence);
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 2);
+    expect(report).not.toHaveBeenCalled();
+    expect(relay.requests).not.toContain("PUT /api/v1/presence");
+  });
+
+  it("tells each new attempt's bridge at once, not a tick later", async () => {
+    const relay = presenceRelay(["presence-v1"]);
+    const { presence } = presenceState();
+    const h = await connected(relay, presence);
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+
+    expect(h.connection.refresh()).toBe(true);
+    await connectLive(h, 1);
+    await vi.waitFor(() => expect(relay.reports).toEqual([true, true]));
+  });
+
+  it("sends a relay that doesn't serve presence nothing for it", async () => {
+    const relay = presenceRelay(["thread-messages-v1", "involvement-v1"]);
+    const { presence } = presenceState();
+    await connected(relay, presence);
+    await vi.waitFor(() => expect(relay.requests).toContain("GET /api/v1/info"));
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 2);
+    expect(relay.requests).not.toContain("PUT /api/v1/presence");
+  });
+
+  it("tells the relay the person left once the store stops writing, since no question can show", async () => {
+    const relay = presenceRelay(["presence-v1"]);
+    const { presence } = presenceState();
+    let faulted = false;
+    const store = Object.assign(new MemoryLocalStore(), { isFaulted: () => faulted });
+    const h = await harness({ store, wrapFetch: relay.wrapFetch, overrides: { presence } });
+    teardown.push(() => h.connection.stop());
+    h.connection.start();
+    await connectLive(h);
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+
+    faulted = true;
+    // The library may renew once before the next read sees the fault; that read ends the lease.
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS);
+    await vi.waitFor(() => expect(relay.reports.at(-1)).toBe(false));
+    const sent = relay.reports.length;
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 3);
+    expect(relay.reports).toHaveLength(sent);
+  });
+
+  it("stops following presence when the connection stops", async () => {
+    const relay = presenceRelay(["presence-v1"]);
+    const read = vi.fn<() => UserPresence>(() => "present");
+    const { presence } = presenceState();
+    const h = await connected(relay, { ...presence, read });
+    await vi.waitFor(() => expect(relay.reports).toEqual([true]));
+    await h.connection.stop();
+    const reads = read.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(PRESENCE_TICK_MS * 3);
+    h.connection.presenceChanged();
+    expect(read).toHaveBeenCalledTimes(reads);
   });
 });

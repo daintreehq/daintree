@@ -18,6 +18,7 @@ import {
  * directly on purpose.
  */
 const DEFERRED = [
+  "src/components/Decisions/DecisionsInboxDialog.tsx",
   "src/components/Fleet/FleetArmingRibbon.tsx",
   "src/components/Config/ImportConfigDialog.tsx",
   "src/components/Terminal/ContentGridEmptyState.tsx",

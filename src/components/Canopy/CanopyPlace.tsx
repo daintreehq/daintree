@@ -38,19 +38,27 @@ function useRunBranch(
   // or the user in another terminal, can check out another branch.
   useEffect(() => {
     let live = true;
-    const readBranch = () =>
-      runBranch(runId, { spawnedAt }).then(
+    // A slow read can still be out when the next one goes, and land after it:
+    // only a read newer than the one shown may change the branch or its cache.
+    let sent = 0;
+    let shown = 0;
+    const readBranch = () => {
+      const seq = sent + 1;
+      sent = seq;
+      return runBranch(runId, { spawnedAt }).then(
         (branch) => {
-          if (!live) return;
+          if (!live || seq < shown) return;
+          shown = seq;
           remember(key, branch);
           setRead({ key, branch });
         },
         () => {
           // Unread is not branchless: the folder is still worth saying, and
           // a branch read before stays until a read replaces it.
-          if (live && !branches.has(key)) setRead({ key, branch: null });
+          if (live && shown === 0 && !branches.has(key)) setRead({ key, branch: null });
         }
       );
+    };
     void readBranch();
     const timer = setInterval(readBranch, REREAD_MS);
     return () => {

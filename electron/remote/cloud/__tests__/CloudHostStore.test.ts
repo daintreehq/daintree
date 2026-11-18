@@ -39,6 +39,7 @@ function binding(overrides: Partial<StoredCloudBinding> = {}): StoredCloudBindin
     resourceId: null,
     ownership: "created-by-daintree",
     createdFor: LOCAL_MARK,
+    worktreeCleanup: null,
     provisioning: null,
     creation: {
       operationId: "op",
@@ -144,11 +145,136 @@ describe("CloudHostStore worktree marks", () => {
           stop: null,
           lastSnapshotAt: null,
           dataExpired: false,
+          asleep: false,
+          idleSleep: null,
           observedAt: 5,
         },
       })
     );
     expect(new CloudHostStore(backend).bindings()[0]?.observation?.name).toBe("feature-login-box");
+  });
+
+  it("keeps whether the provider slept the machine, and its own idle sleep (#17347)", () => {
+    const backend = disk();
+    const observation = {
+      machine: "stopped",
+      name: "build",
+      rawState: "sleeping",
+      machineType: "2x4",
+      vcpu: 2,
+      memoryGB: 4,
+      autoStopAt: null,
+      lifetimeSeconds: null,
+      stoppedAt: null,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      asleep: true,
+      idleSleep: { enabled: true, idleSeconds: 600 },
+      observedAt: 5,
+    };
+    new CloudHostStore(backend).putBinding(binding({ observation }));
+    expect(new CloudHostStore(backend).bindings()[0]?.observation).toMatchObject({
+      asleep: true,
+      idleSleep: { enabled: true, idleSeconds: 600 },
+    });
+    // A record from before either existed reads as awake, with nothing reported.
+    const { asleep: _asleep, idleSleep: _idleSleep, ...older } = observation;
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [binding({ observation: older as never })],
+    });
+    expect(new CloudHostStore(backend).bindings()[0]?.observation).toMatchObject({
+      asleep: false,
+      idleSleep: null,
+    });
+    // Sleep turned off reads as off; an idle time that isn't one reads as unreported.
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [
+        binding({
+          observation: { ...observation, idleSleep: { enabled: false, idleSeconds: -5 } } as never,
+        }),
+      ],
+    });
+    expect(new CloudHostStore(backend).bindings()[0]?.observation?.idleSleep).toEqual({
+      enabled: false,
+      idleSeconds: null,
+    });
+  });
+});
+
+describe("CloudHostStore worktree cleanup (#17360)", () => {
+  const CLEANUP = {
+    attemptId: "attempt-1",
+    mutationId: "mutation-1",
+    choice: "delete" as const,
+    resourceId: "bx_23456789",
+    worktree: { hostId: null, projectId: LOCAL_MARK.projectId, worktreeId: LOCAL_MARK.worktreeId },
+    phase: "waiting" as const,
+    error: null,
+    requestedAt: 5,
+  };
+  const exists = { resourceId: "bx_23456789", creation: null };
+
+  it("keeps a choice across a restart, with a failure's error", () => {
+    const backend = disk();
+    new CloudHostStore(backend).putBinding(binding({ ...exists, worktreeCleanup: CLEANUP }));
+    expect(new CloudHostStore(backend).bindings()[0]?.worktreeCleanup).toEqual(CLEANUP);
+
+    const failed = {
+      ...CLEANUP,
+      phase: "failed" as const,
+      error: { code: "failed" as const, message: "Upstream exploded", at: 9 },
+    };
+    new CloudHostStore(backend).updateBinding("cb_abcdefgh12", (current) => ({
+      ...current,
+      worktreeCleanup: failed,
+    }));
+    expect(new CloudHostStore(backend).bindings()[0]?.worktreeCleanup).toEqual(failed);
+  });
+
+  it("reads a binding saved before choices existed as having none", () => {
+    const backend = disk();
+    const { worktreeCleanup: _dropped, ...older } = binding(exists);
+    backend.write({ version: 1, accounts: [], bindings: [older] });
+    expect(new CloudHostStore(backend).bindings()[0]?.worktreeCleanup).toBeNull();
+  });
+
+  it("never reads a choice for another machine, another worktree, or a machine without the mark", () => {
+    const cases: Array<Partial<StoredCloudBinding>> = [
+      { ...exists, resourceId: "bx_99999999", worktreeCleanup: CLEANUP },
+      { ...exists, resourceId: null, worktreeCleanup: CLEANUP },
+      {
+        ...exists,
+        worktreeCleanup: {
+          ...CLEANUP,
+          worktree: { ...CLEANUP.worktree, worktreeId: "/elsewhere" },
+        },
+      },
+      {
+        ...exists,
+        worktreeCleanup: { ...CLEANUP, worktree: { ...CLEANUP.worktree, hostId: "studio" } },
+      },
+      {
+        ...exists,
+        worktreeCleanup: { ...CLEANUP, worktree: { ...CLEANUP.worktree, projectId: "aaaaaaaa" } },
+      },
+      { ...exists, worktreeCleanup: { ...CLEANUP, attemptId: "" } },
+      { ...exists, createdFor: null, worktreeCleanup: CLEANUP },
+      { ...exists, ownership: "imported", worktreeCleanup: CLEANUP },
+      { ...exists, worktreeCleanup: { ...CLEANUP, choice: "keep" as never } },
+      { ...exists, worktreeCleanup: { ...CLEANUP, phase: "done" as never } },
+    ];
+    for (const overrides of cases) {
+      const backend = disk();
+      backend.write({ version: 1, accounts: [], bindings: [binding(overrides)] });
+      const read = new CloudHostStore(backend).bindings()[0];
+      expect(read?.id).toBe("cb_abcdefgh12");
+      expect(read?.worktreeCleanup).toBeNull();
+    }
   });
 });
 
@@ -235,6 +361,75 @@ describe("CloudHostStore provisioning", () => {
   });
 });
 
+describe("CloudHostStore accounts", () => {
+  const account = {
+    id: "ca_0123456789",
+    providerId: "boat",
+    displayName: "Personal",
+    identity: "octocat",
+    scope: { kind: "personal" as const, id: "personal", name: "Personal" },
+    apiUrl: "https://boat.dev/api/v1",
+    keyHint: "abcd",
+    addedAt: 1,
+    validation: { status: "valid" as const, checkedAt: 1 },
+  };
+
+  it("keeps the credential revision across a restart and unrelated writes", () => {
+    const backend = disk();
+    const store = new CloudHostStore(backend);
+    store.putAccount({
+      ...account,
+      credentialRevision: "0011223344556677",
+      lastProvisioning: null,
+    });
+    store.putBinding(binding({ accountId: account.id }));
+    store.removeBinding("cb_abcdefgh12");
+    expect(new CloudHostStore(backend).account(account.id)?.credentialRevision).toBe(
+      "0011223344556677"
+    );
+  });
+
+  it("keeps an account that bills a cloud project across a restart", () => {
+    const backend = disk();
+    const project = {
+      ...account,
+      providerId: "gce",
+      scope: { kind: "project" as const, id: "daintree-build", name: "daintree-build" },
+      apiUrl: "https://compute.googleapis.com/compute/v1",
+      credentialRevision: "0011223344556677",
+      lastProvisioning: null,
+    };
+    new CloudHostStore(backend).putAccount(project);
+    expect(new CloudHostStore(backend).account(account.id)?.scope).toEqual(project.scope);
+  });
+
+  it("keeps an AWS account's scope across a restart", () => {
+    const backend = disk();
+    const aws = {
+      ...account,
+      id: "ca_aws0000001",
+      providerId: "aws",
+      scope: { kind: "account" as const, id: "123456789012", name: "AWS account 123456789012" },
+      apiUrl: "https://amazonaws.com",
+    };
+    new CloudHostStore(backend).putAccount({
+      ...aws,
+      credentialRevision: null,
+      lastProvisioning: null,
+    });
+    expect(new CloudHostStore(backend).account(aws.id)?.scope).toEqual(aws.scope);
+  });
+
+  it("reads an account saved before revisions existed as having none", () => {
+    const backend = disk();
+    backend.write({ version: 1, accounts: [account], bindings: [] });
+    expect(new CloudHostStore(backend).account(account.id)).toMatchObject({
+      keyHint: "abcd",
+      credentialRevision: null,
+    });
+  });
+});
+
 describe("CloudHostStore host keys", () => {
   const KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
   const OTHER = `ssh-ed25519 ${Buffer.alloc(51, 7).toString("base64")}`;
@@ -302,5 +497,68 @@ describe("CloudHostStore SSH access", () => {
       backend.write({ version: 1, accounts: [], bindings: [{ ...binding(), access }] });
       expect(new CloudHostStore(backend).binding("cb_abcdefgh12")?.access).toBeNull();
     }
+  });
+});
+
+describe("CloudHostStore machine keys (#17361)", () => {
+  const key = (overrides: Record<string, unknown> = {}) => ({
+    id: "mk_1",
+    bindingId: "cb_abcdefgh12",
+    accountId: "ca_abcdefgh",
+    providerId: "boat" as const,
+    resourceId: "bx_23456789",
+    name: "daintree-mk_1",
+    keyId: "sak_1",
+    expiresAt: 1_800_000_000_000,
+    state: "active" as const,
+    createdAt: 1_700_000_000_000,
+    ...overrides,
+  });
+
+  it("keeps what a key needs to be revoked across a restart, and a file from before them reads as none", () => {
+    const backend = disk();
+    backend.write({ version: 1, accounts: [], bindings: [binding()] });
+    expect(new CloudHostStore(backend).machineKeys()).toEqual([]);
+    new CloudHostStore(backend).putMachineKey(key());
+    expect(new CloudHostStore(backend).machineKeys()).toEqual([key()]);
+    // Unrelated writes carry it through.
+    new CloudHostStore(backend).updateBinding("cb_abcdefgh12", (current) => ({
+      ...current,
+      intent: "stop",
+    }));
+    expect(new CloudHostStore(backend).machineKey("mk_1")).toEqual(key());
+  });
+
+  it("marks every key a removed binding's machine was given for revoking, in the same write", () => {
+    const backend = disk();
+    const store = new CloudHostStore(backend);
+    store.putBinding(binding());
+    store.putMachineKey(key());
+    store.putMachineKey(key({ id: "mk_2", state: "issuing", keyId: null }));
+    store.putMachineKey(key({ id: "mk_3", bindingId: "cb_otherother1" }));
+    let writes = 0;
+    store.onChange(() => (writes += 1));
+    store.removeBinding("cb_abcdefgh12");
+    expect(writes).toBe(1);
+    expect(store.bindings()).toEqual([]);
+    expect(store.machineKeys().map((entry) => [entry.id, entry.state])).toEqual([
+      ["mk_1", "revoke"],
+      ["mk_2", "revoke"],
+      ["mk_3", "active"],
+    ]);
+  });
+
+  it("skips a record that doesn't read, and keeps it on disk", () => {
+    const backend = disk();
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [],
+      machineKeys: [key({ state: "someday" }), key({ id: "mk_2" })],
+    });
+    const store = new CloudHostStore(backend);
+    expect(store.machineKeys().map((entry) => entry.id)).toEqual(["mk_2"]);
+    store.removeMachineKey("mk_2");
+    expect((backend.raw() as unknown as { machineKeys: unknown[] }).machineKeys).toHaveLength(1);
   });
 });

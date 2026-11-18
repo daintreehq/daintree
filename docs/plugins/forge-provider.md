@@ -72,6 +72,7 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
 | `capabilities` | no | Informational hints driving the "Supports" row in the provider's Settings → Code forge page only. The host does **not** gate behavior on this array — see [Add optional capabilities](#add-optional-capabilities). |
 | `credentialFields` | no | Credential inputs the host renders a settings form from. See [Credential fields](#credential-fields). |
 | `settingsScopeRef` | no | Must exactly equal the `id` of one of this plugin's `contributes.settings[]` entries (not a prefix); anything else fails manifest parsing with `forge_settings_scope_ref_unknown`. No host code reads it today. |
+| `matchesSettingRef` | no | The `id` of one of this plugin's `contributes.settings[]` entries that is a user-scoped `string`; anything else fails manifest parsing with `forge_matches_setting_ref_invalid`. Its value, a bare hostname or an `https://` origin, is matched like one more `matches` entry: the host reads it when the plugin loads, before a lazy plugin activates, and again whenever the setting changes, then re-pushes the matcher table to workspace hosts. An empty or unreadable value adds nothing. GitHub's `enterpriseHost` setting routes a GitHub Enterprise Server host this way. |
 | `viewRefs` | no | Each entry must exactly equal a `contributes.views[].id`; anything else fails manifest parsing with `forge_view_ref_unknown`. No host code reads it today. |
 | `slots` | no | Renderer view-slot refs for provider-owned UI. See [View slots](#view-slots). |
 
@@ -278,6 +279,7 @@ The capability fields and their sub-interfaces:
 | `reviews` | `ReviewCapability` | PR review threads, plus optional review writes: `approvePR`, `requestChanges`, `dismissReview`, `requestReviewers` |
 | `issueComments` | `IssueCommentCapability` | Issue comment listing |
 | `checks` | `ChecksCapability` | Per-check results behind `getCIStatus` |
+| `deployments` | `DeploymentsCapability` | Where a branch or PR is deployed, from the deployments your forge recorded |
 | `approvals` | `ApprovalCapability` | A PR's approval state |
 | `releases` | `ReleaseCapability` | Releases |
 | `projectBoards` | `ProjectBoardCapability` | Project boards |
@@ -295,6 +297,8 @@ The capability fields and their sub-interfaces:
 Omitting the field is how you declare non-support — the base interface never changes when a capability is added.
 
 `ChecksCapability.getChecks(repo, prN, opts?)` is the per-check counterpart to `getCIStatus`: it returns every check on a PR as a `CheckRun` (`name`, `status`, `conclusion?`, `required?`, `detailsUrl?`, `workflow?`, `app?`), so an agent diagnosing a red PR can name the failing check and follow `detailsUrl` to its log. Report `workflow` (the workflow or pipeline that ran the check) and `app` (the integration that reported it) when your forge knows them: the Review Hub uses them to tell same-named jobs apart, and they ride along when failing checks are handed to an agent. Return the complete list or reject — a silently truncated list is a wrong answer, not a partial one — and page your forge's API to the end rather than serving only its first page. `null` means the PR doesn't exist; a PR with no checks is `{ checks: [] }`.
+
+`DeploymentsCapability.getDeployments(repo, target)` reports where a branch (`{ kind: "branch", branch }`, the short name) or a pull request (`{ kind: "pullRequest", prNumber }`) is deployed, as `Deployment` rows (`id`, `environment`, `state`, `url?`, `createdAt`, `updatedAt`, `commitSha?`, `ref?`), newest first by creation time. Return the deployments your forge associates with the target, and only what it recorded: `url` is the address the deployment itself reported, never one built from a host's naming pattern. Normalize states onto `pending`, `in_progress`, `success`, `failure`, `inactive` and `unknown`, and keep failed and inactive deployments rather than filtering them out. Reading only part of a target's history is fine, but when you do read an older deployment beside a rollout still in progress, return both so its live address isn't hidden. `null` means the branch or PR doesn't exist on the forge; nothing deployed is `{ deployments: [] }`. The host calls it only when a surface asks, and reports nothing for a provider that omits the field. The built-in GitHub provider reads a branch's tip commit, and for a PR its head commit plus the deployments its timeline records, up to 100 of each.
 
 ### Credential import
 
@@ -348,7 +352,7 @@ When you add a provider whose CLI the assistant should be able to drive, add an 
 
 Mirror the GitHub provider's `__tests__/` coverage. A new provider ships unit tests for:
 
-- **`parseRemote`** — HTTPS, SSH, and SCP-form URLs resolve; a URL you can't serve returns `null`. A self-hostable forge still parses a hostname outside its `matches`, since an override can route one to it (GitLab's does; GitHub's returns `null` for anything but `github.com`).
+- **`parseRemote`** — HTTPS, SSH, and SCP-form URLs resolve; a URL you can't serve returns `null`. A self-hostable forge still parses a hostname outside its `matches`, since an override can route one to it (GitLab's does; GitHub's returns `null` for anything but `github.com` and its configured Enterprise Server host).
 - **State normalization** — every provider state value maps to the right `Normalized*` value, and `rawState` round-trips verbatim.
 - **Core CRUD** — `listIssues`, `listPRs`, `getIssue`, `getPR`, `findPRByBranch`, `getCIStatus`, `getRepoMetadata` against a mocked transport, including empty pages and not-found.
 - **`getRateLimit`** — if you implement it, the provider's rate-limit transport projects into `RateLimitInfo` correctly, including the `null`-per-dimension case.

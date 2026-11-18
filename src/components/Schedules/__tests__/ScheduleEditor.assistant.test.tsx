@@ -63,6 +63,7 @@ function renderEditor(schedule: Schedule) {
         { id: null, label: "Main checkout" },
         { id: "/wt", label: "feature" },
       ]}
+      worktreeIds={new Set()}
       now={NOW}
       osJobContext={null}
       leaveStateRef={createRef<EditorLeaveState | null>()}

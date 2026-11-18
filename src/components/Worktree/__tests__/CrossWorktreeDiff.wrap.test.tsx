@@ -389,6 +389,13 @@ const FILES = [
   { path: "src/gamma.ts", status: "A", insertions: 9, deletions: 0 },
 ];
 
+/** The latest patch request, leaving out the whole-file read that follows it. */
+function lastPatchCall(): unknown[] | undefined {
+  return mockCompareWorktrees.mock.calls
+    .filter((call) => call[3] !== undefined && call[6] === undefined)
+    .at(-1);
+}
+
 async function setupSteppingComparison() {
   mockCompareWorktrees.mockImplementation((_path, _b1, _b2, filePath?: string) =>
     Promise.resolve(
@@ -418,14 +425,16 @@ describe("CrossWorktreeDiff file stepping", () => {
     await waitFor(() => {
       expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("1 of 3");
     });
-    expect(mockCompareWorktrees).toHaveBeenLastCalledWith(
+    expect(lastPatchCall()).toEqual([
       "/wt/left",
       "main",
       "feature",
       "src/alpha.ts",
       undefined,
-      false
-    );
+      false,
+      undefined,
+      undefined,
+    ]);
   });
 
   it("steps forward and back through the comparison set", async () => {
@@ -438,14 +447,16 @@ describe("CrossWorktreeDiff file stepping", () => {
     await waitFor(() => {
       expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("2 of 3");
     });
-    expect(mockCompareWorktrees).toHaveBeenLastCalledWith(
+    expect(lastPatchCall()).toEqual([
       "/wt/left",
       "main",
       "feature",
       "src/beta.ts",
       undefined,
-      false
-    );
+      false,
+      undefined,
+      undefined,
+    ]);
 
     fireEvent.keyDown(window, { key: "[" });
     await waitFor(() => {

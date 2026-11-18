@@ -28,6 +28,8 @@ import {
   terminalHasRunningAgentSession,
 } from "@/utils/destructiveSessionConfirm";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
+import { isAgentTerminal } from "@/utils/terminalType";
+import { hasLiveTerminalScreen } from "@/utils/terminalLiveScreen";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import {
   assertPlacementAllowed,
@@ -44,6 +46,7 @@ import {
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { logWarn } from "@/utils/logger";
 import {
+  ResetModesArgsSchema,
   RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
@@ -461,6 +464,46 @@ export const terminalLifecycleActionRuns = {
       peekTerminalService()?.resetRenderer(targetId, {
         force: isForegroundDispatch(ctx?.dispatchSource),
       });
+    }
+  },
+  "terminal.resetModes": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
+    const { terminalId } = ResetModesArgsSchema.parse(args ?? {});
+    requireExplicitTerminalIdForAgentDispatch("terminal.resetModes", terminalId, ctx);
+    const targetId = terminalId ?? focusedAtDispatch;
+    if (!targetId) throw new UnactionableTargetError("No terminal to reset: focus or name one.");
+    // Resolved in this view, so the confirm below reads the pane it acts on;
+    // the host still refuses one that exits in between.
+    const terminal = usePanelStore.getState().panelsById[targetId];
+    if (!hasLiveTerminalScreen(terminal)) {
+      throw new UnactionableTargetError(
+        `'${targetId}' isn't a running terminal in this project, so it has no modes to reset.`
+      );
+    }
+    // A shell a crashed program left behind resets at once. An agent the pane
+    // is still wired to would lose the paste and keyboard modes it relies on,
+    // and context injection refuses a pane without bracketed paste.
+    if (!isConfirmed(args, ctx) && isAgentTerminal(terminal)) {
+      stageConfirmation(
+        {
+          kind: "resetModes",
+          dispatchSource: ctx?.dispatchSource,
+          targetCount: 1,
+          runningAgentCount: 1,
+          terminalId: targetId,
+          terminalTitle: terminal.title,
+        },
+        "Resetting this terminal's modes"
+      );
+    }
+    clearPendingIf("resetModes");
+    if (!(await terminalClient.resetModes(targetId))) {
+      throw new Error(
+        `Couldn't reset the modes of terminal '${targetId}': it may have exited, or its terminal host didn't confirm the reset.`
+      );
     }
   },
   "terminal.rename": async (

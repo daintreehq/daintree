@@ -95,7 +95,11 @@ function seedScratches(ids: string[]): void {
   );
 }
 
-function openRun(args: { runId: string; workspaceId?: string }): Promise<unknown> {
+function openRun(args: {
+  runId: string;
+  workspaceId?: string;
+  worktreeId?: string;
+}): Promise<unknown> {
   const actions: ActionRegistry = new Map();
   registerProjectActions(actions, NO_CALLBACKS);
   return actions.get("pilot.openRun")!().run(args, NO_CTX);
@@ -112,6 +116,7 @@ function openRun(args: { runId: string; workspaceId?: string }): Promise<unknown
 async function openRunExpectingFailure(args: {
   runId: string;
   workspaceId: string;
+  worktreeId?: string;
 }): Promise<void> {
   await expect(openRun(args)).rejects.toThrow();
 }
@@ -149,6 +154,56 @@ describe("pilot.openRun", () => {
     // The focus must ride the switch — this context dies with it, so a local
     // dispatch afterwards would land in a view that is no longer active.
     expect(dispatchMock).not.toHaveBeenCalledWith("panel.focus", { panelId: "t9" });
+  });
+
+  it("names the run's worktree on the switch's focus intent", async () => {
+    // The run can exit while the destination hydrates. Without its worktree the
+    // incoming view has nowhere to land but whichever worktree it last showed.
+    await openRun({ runId: "t9", workspaceId: PROJECT_ELSEWHERE, worktreeId: "/repo/wt/alpha" });
+
+    expect(switchProject).toHaveBeenCalledWith(PROJECT_ELSEWHERE, {
+      focusIntent: { intent: "focus-panel", panelId: "t9", worktreeId: "/repo/wt/alpha" },
+    });
+  });
+
+  it("names the run's worktree on a scratch switch too", async () => {
+    seedScratches([SCRATCH_B]);
+
+    await openRun({ runId: "t7", workspaceId: SCRATCH_B, worktreeId: "/scratch/one" });
+
+    expect(switchScratch).toHaveBeenCalledWith(SCRATCH_B, {
+      focusIntent: { intent: "focus-panel", panelId: "t7", worktreeId: "/scratch/one" },
+    });
+  });
+
+  it("names no worktree for a blank id, which identifies none", async () => {
+    await openRun({ runId: "t9", workspaceId: PROJECT_ELSEWHERE, worktreeId: "  " });
+
+    // Strict: an explicit `worktreeId: undefined` key would pass a loose match.
+    expect(switchProject.mock.calls[0]).toStrictEqual([
+      PROJECT_ELSEWHERE,
+      { focusIntent: { intent: "focus-panel", panelId: "t9" } },
+    ]);
+  });
+
+  it("keeps the worktree on Try again after a rejected switch", async () => {
+    switchProject.mockRejectedValueOnce(new Error("no such project"));
+
+    await openRunExpectingFailure({
+      runId: "t9",
+      workspaceId: PROJECT_ELSEWHERE,
+      worktreeId: "/repo/wt/alpha",
+    });
+
+    const toast = notifyMock.mock.calls[0]![0] as {
+      actions?: { label: string; onClick: () => void }[];
+    };
+    toast.actions!.find((action) => action.label === "Try again")!.onClick();
+    expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
+      runId: "t9",
+      workspaceId: PROJECT_ELSEWHERE,
+      worktreeId: "/repo/wt/alpha",
+    });
   });
 
   it("focuses in place for a run in the scratch this view already owns", async () => {

@@ -76,6 +76,7 @@ vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanopyView } from "../CanopyView";
+import { UNDO_LINE_MS } from "../useCanopyInboxUndo";
 import { ALL_HOSTS_ID, useCanopyStore } from "@/store/canopyStore";
 import { allHostsKey } from "../canopyAllHosts";
 import type { CanopyFrame } from "../canopyFrame";
@@ -266,6 +267,15 @@ function installElectron() {
     setActive: vi.fn(async () => canopySnapshot()),
     setShown: vi.fn(async () => {}),
     setRead: vi.fn(async () => null),
+    markAllRead: vi.fn(async (targets: Array<{ runId: string; spawnedAt: number; turn: number }>) =>
+      targets.map((target) => ({
+        ...target,
+        readTurn: target.turn,
+        markedUnreadAt: null,
+        version: 2,
+      }))
+    ),
+    restoreReads: vi.fn(async (_restores: unknown[]) => {}),
     archive: vi.fn(async (): Promise<unknown> => null),
     unarchive: vi.fn(async () => {}),
     markSeen: vi.fn(async () => {}),
@@ -312,6 +322,13 @@ async function settle() {
   });
 }
 
+/** The link to a host came back: its viewer reads it again. */
+function resync(hostId: string) {
+  act(() => {
+    for (const listener of state.listeners) listener({ kind: "resync", hostId });
+  });
+}
+
 function channelsCalled(): string[] {
   return state.invoke.mock.calls.map((call) => `${String(call[0])} ${String(call[1])}`);
 }
@@ -345,6 +362,7 @@ beforeEach(() => {
     if (channel === "fleet:get-snapshot") return remoteFleet;
     if (channel === "canopy:run-branch") return "remote-branch";
     if (channel === "canopy:trash") return 7;
+    if (channel === "canopy:search-screens") return [];
     return null;
   });
   useProjectStore.setState({
@@ -426,6 +444,26 @@ describe("the Canopy host picker", () => {
       expect.objectContaining({ runId: "remote-run", terms: ["segfault"] }),
     ]);
     expect(own.searchScreens).not.toHaveBeenCalled();
+  });
+
+  it("names the picked host when its terminals couldn't be searched (#17594)", async () => {
+    installElectron();
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") throw new Error("offline");
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    expect(screen.getByText("Couldn't search terminals on studio-01").id).toBe("canopy-search-gap");
   });
 
   it("draws no counts for a host that isn't connected, rather than zero", async () => {
@@ -864,6 +902,57 @@ describe("the Canopy host picker", () => {
     expect(state.release).toHaveBeenCalledWith("studio");
   });
 
+  it("asks the picked host for its projects again each time its link comes back", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    expect(state.retryHostProjects).not.toHaveBeenCalled();
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["studio"]]);
+  });
+
+  it("doesn't ask a host picked again for its projects until its link comes back again", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    act(() => useCanopyStore.getState().setHostId(ALL_HOSTS_ID));
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    // Its last recovery was asked about when it happened.
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["studio"]]);
+  });
+
+  it("asks a host for its projects when its link comes back in the same moment the panel leaves it", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    // One render takes both: the host's new epoch is never drawn under it.
+    act(() => {
+      for (const listener of state.listeners) listener({ kind: "resync", hostId: "studio" });
+      useCanopyStore.getState().setHostId(null);
+    });
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+  });
+
   it("says the list is what the host last showed once its link drops", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
@@ -969,6 +1058,48 @@ describe("All hosts", () => {
     expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("*");
   });
 
+  it("takes a trash back on the host that made it, to the last moment of its undo line", async () => {
+    const own = installElectron();
+    // The line's timer and the route's receipt clock move together.
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    try {
+      render(<CanopyView frame={frame} />);
+      await settle();
+      const row = cardOf("studio", "shared-run")!;
+      act(() => row.focus());
+      fireEvent.keyDown(row, { key: "Backspace", metaKey: true, ctrlKey: true });
+      await act(async () => {
+        fireEvent.keyDown(row, { key: "Backspace", metaKey: true, ctrlKey: true });
+      });
+      await settle();
+      expect(state.invoke).toHaveBeenCalledWith(
+        "studio",
+        "canopy:trash",
+        "shared-run",
+        expect.anything()
+      );
+      expect(own.trash).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(UNDO_LINE_MS - 1);
+      });
+      const undo = [...document.querySelectorAll("[data-canopy-undo-line] button")].find(
+        (button) => button.textContent === "Undo"
+      );
+      expect(undo).toBeDefined();
+      await act(async () => {
+        fireEvent.click(undo!);
+      });
+      expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:untrash", 7);
+      expect(own.untrash).not.toHaveBeenCalled();
+    } finally {
+      try {
+        cleanup();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
   it("names this machine on an assistant's place line, as on its workers', not in its name (#15370)", async () => {
     const own = installElectron();
     const entry = (
@@ -1018,6 +1149,83 @@ describe("All hosts", () => {
     expect(where(global!).querySelector("[data-canopy-project]")!.textContent).toBe("Global");
   });
 
+  it("says how many agents were marked read and which host couldn't, with Undo for the marked ones", async () => {
+    const unread = (runId: string) => ({
+      runId,
+      spawnedAt: NOW - 3_600_000,
+      turn: 2,
+      readTurn: 0,
+      markedUnreadAt: null,
+      version: 1,
+    });
+    const own = installElectron();
+    const localSnapshot = canopySnapshot({ reads: [unread("shared-run")] });
+    own.setActive.mockResolvedValue(localSnapshot);
+    useCanopyStore.setState({ snapshot: localSnapshot });
+    remoteCanopy = canopySnapshot({ reads: [unread("shared-run")] });
+    const base = state.invoke.getMockImplementation()!;
+    state.invoke.mockImplementation(async (hostId: string, channel: string, ...rest: unknown[]) => {
+      if (channel === "canopy:mark-all-read") throw new Error("studio-01 went away");
+      return base(hostId, channel, ...rest);
+    });
+    const { container } = render(<CanopyView frame={frame} />);
+    await settle();
+    vi.mocked(notify).mockClear();
+    const first = container.ownerDocument.querySelector<HTMLElement>("[data-canopy-card]")!;
+    await act(async () => {
+      fireEvent.keyDown(first, { key: "Dead", code: "KeyU", altKey: true });
+    });
+    await settle();
+    expect(own.markAllRead).toHaveBeenCalledWith([
+      { runId: "shared-run", spawnedAt: NOW - 3_600_000, turn: 2 },
+    ]);
+    const toast = vi.mocked(notify).mock.calls[0]![0];
+    expect(toast).toMatchObject({ type: "warning", title: "Marked as read" });
+    expect(toast.message).toContain("1 agent of 2");
+    expect(toast.message).toContain("studio-01");
+    await act(async () => {
+      toast.actions![0]!.onClick();
+    });
+    expect(own.restoreReads).toHaveBeenCalledWith([
+      { mark: unread("shared-run"), expectVersion: 2 },
+    ]);
+  });
+
+  it("names every host that couldn't mark its agents read, offering Retry and no Undo, when none could", async () => {
+    const unread = (runId: string) => ({
+      runId,
+      spawnedAt: NOW - 3_600_000,
+      turn: 2,
+      readTurn: 0,
+      markedUnreadAt: null,
+      version: 1,
+    });
+    const own = installElectron();
+    const localSnapshot = canopySnapshot({ reads: [unread("shared-run")] });
+    own.setActive.mockResolvedValue(localSnapshot);
+    useCanopyStore.setState({ snapshot: localSnapshot });
+    remoteCanopy = canopySnapshot({ reads: [unread("shared-run")] });
+    own.markAllRead.mockRejectedValue(new Error("this machine refused"));
+    const base = state.invoke.getMockImplementation()!;
+    state.invoke.mockImplementation(async (hostId: string, channel: string, ...rest: unknown[]) => {
+      if (channel === "canopy:mark-all-read") throw new Error("studio-01 went away");
+      return base(hostId, channel, ...rest);
+    });
+    const { container } = render(<CanopyView frame={frame} />);
+    await settle();
+    vi.mocked(notify).mockClear();
+    const first = container.ownerDocument.querySelector<HTMLElement>("[data-canopy-card]")!;
+    await act(async () => {
+      fireEvent.keyDown(first, { key: "Dead", code: "KeyU", altKey: true });
+    });
+    await settle();
+    const toast = vi.mocked(notify).mock.calls[0]![0];
+    expect(toast).toMatchObject({ type: "error", title: "Couldn't mark as read" });
+    expect(toast.actions!.map((action) => action.label)).toEqual(["Retry"]);
+    expect(toast.message).toContain("studio-01");
+    expect(own.restoreReads).not.toHaveBeenCalled();
+  });
+
   it("asks each host about its own terminals, by the id it knows", async () => {
     const own = installElectron();
     render(<CanopyView frame={frame} />);
@@ -1036,6 +1244,103 @@ describe("All hosts", () => {
     expect(own.searchScreens).toHaveBeenCalledWith([
       expect.objectContaining({ runId: "shared-run", terms: ["segfault"] }),
     ]);
+  });
+
+  it("names a host whose terminals went unsearched, keeps the others' matches, and retries the same search (#17594)", async () => {
+    const own = installElectron();
+    own.searchScreens.mockResolvedValue(["shared-run"]);
+    let studioSearches = false;
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") {
+        if (!studioSearches) throw new Error("offline");
+        return ["shared-run"];
+      }
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).toBeNull();
+    const note = screen.getByTestId("canopy-search-incomplete");
+    expect(screen.getByText("Couldn't search terminals on studio-01").id).toBe("canopy-search-gap");
+
+    studioSearches = true;
+    const searchesBefore = state.invoke.mock.calls.filter(
+      (call) => call[1] === "canopy:search-screens"
+    ).length;
+    await act(async () => {
+      fireEvent.click(within(note).getByRole("button", { name: "Retry" }));
+    });
+    await screenSearchSettled();
+    const retried = state.invoke.mock.calls.filter((call) => call[1] === "canopy:search-screens");
+    expect(retried).toHaveLength(searchesBefore + 1);
+    expect(retried.at(-1)![2]).toEqual([
+      expect.objectContaining({ runId: "shared-run", terms: ["segfault"] }),
+    ]);
+    expect(input.value).toBe("segfault");
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    expect(screen.queryByTestId("canopy-search-incomplete")).toBeNull();
+  });
+
+  it("names every host that couldn't search in the host list's order (#17594)", async () => {
+    state.hosts = [host("studio", "studio-01"), host("lab", "lab-02")];
+    const own = installElectron();
+    own.searchScreens.mockResolvedValue([]);
+    state.invoke.mockImplementation(async (hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") {
+        // The studio's run asks for the user, so it is listed, and asked, first.
+        return hostId === "studio"
+          ? canopySnapshot({ cards: [approvalCard("shared-run")] })
+          : remoteCanopy;
+      }
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") throw new Error("offline");
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    const asked = state.invoke.mock.calls
+      .filter((call) => call[1] === "canopy:search-screens")
+      .map((call) => call[0]);
+    expect(asked).toEqual(["studio", "lab"]);
+    expect(screen.getByText("Couldn't search terminals on lab-02 and studio-01")).not.toBeNull();
+  });
+
+  it("never calls a search with an unsearched host's terminals a search with no match (#17594)", async () => {
+    installElectron();
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      if (channel === "fleet:get-snapshot") return remoteFleet;
+      if (channel === "canopy:search-screens") throw new Error("offline");
+      return null;
+    });
+    render(<CanopyView frame={frame} />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    expect(cardOf("local", "shared-run")).toBeNull();
+    expect(cardOf("studio", "shared-run")).toBeNull();
+    expect(screen.getByTestId("canopy-search-incomplete").textContent).toContain("studio-01");
+    const said = [...document.querySelectorAll("p")].map((p) => p.textContent);
+    expect(said).not.toContain("No agent matches");
+    expect(said).toContain("No agent matches so far");
+    expect(document.body.textContent).toContain("Nothing matches “segfault” so far");
   });
 
   it("says once, in the empty Assistants line, that only this machine's assistants are listed", async () => {
@@ -1245,6 +1550,49 @@ describe("All hosts", () => {
     expect(cardOf("build", "shared-run")).not.toBeNull();
     saysNothingOf("studio-01");
     expect(summaryWords()).toBe("Nothing needs you");
+  });
+
+  it("asks again for the projects of only the host whose link came back (#17558)", async () => {
+    installElectron();
+    state.hosts = [host("studio", "studio-01"), host("build", "build-02")];
+    render(<CanopyView frame={frame} />);
+    await settle();
+    expect(state.retryHostProjects).not.toHaveBeenCalled();
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    // Another host coming back asks nothing of studio.
+    resync("build");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["build"]]);
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["build"], ["studio"]]);
+  });
+
+  it("asks again for a host's projects when it comes back after leaving the list and rejoining", async () => {
+    installElectron();
+    state.hosts = [host("studio", "studio-01"), host("build", "build-02")];
+    const { rerender } = render(<CanopyView frame={frame} />);
+    await settle();
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    state.hosts = [host("build", "build-02")];
+    rerender(<CanopyView frame={frame} />);
+    await settle();
+    expect(state.release).toHaveBeenCalledWith("studio");
+    state.invoke.mockClear();
+    state.hosts = [host("studio", "studio-01"), host("build", "build-02")];
+    rerender(<CanopyView frame={frame} />);
+    await settle();
+    // Rejoining opens a new viewer on it and reads its agents again, without
+    // asking for its projects; its link coming back again does.
+    expect(channelsCalled()).toContain("studio canopy:set-active");
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"]]);
+    resync("studio");
+    await settle();
+    expect(state.retryHostProjects.mock.calls).toEqual([["studio"], ["studio"]]);
   });
 
   it("says a host whose link failed can't be reached while its reads are still owed", async () => {

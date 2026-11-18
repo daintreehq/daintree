@@ -8,6 +8,10 @@ import type {
 } from "@shared/types/remoteHosts";
 import type {
   AddHostPayload,
+  AnswerSshSignInPayload,
+  SshSignInEvent,
+  SshSignInResult,
+  StartSshSignInPayload,
   DiscoveredHost,
   HostAgentForwardingCheck,
   HostInstallPlan,
@@ -117,4 +121,13 @@ export const remoteHostsClient = {
     ),
   onEvent: (callback: (event: RemoteHostsEvent) => void): (() => void) =>
     window.electron.remoteHosts.onEvent(callback),
+  /** Resolves once the sign-in ends; its prompts arrive through {@link onSshSignInEvent} meanwhile. */
+  startSshSignIn: (payload: StartSshSignInPayload): Promise<SshSignInResult> =>
+    window.electron.remoteHosts.startSshSignIn(payload),
+  answerSshSignIn: (payload: AnswerSshSignInPayload): Promise<boolean> =>
+    window.electron.remoteHosts.answerSshSignIn(payload),
+  cancelSshSignIn: (attemptId: string): Promise<boolean> =>
+    window.electron.remoteHosts.cancelSshSignIn({ attemptId }),
+  onSshSignInEvent: (callback: (event: SshSignInEvent) => void): (() => void) =>
+    window.electron.remoteHosts.onSshSignInEvent(callback),
 };

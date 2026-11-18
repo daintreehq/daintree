@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render } from "@testing-library/react";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { act, render } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WorktreeState } from "@/types";
 
 class ResizeObserverStub {
@@ -34,6 +34,7 @@ vi.mock("@/hooks/useKeybinding", () => ({
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreePalette } from "../WorktreePalette";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 
 const MARK = ".bg-overlay-medium";
 
@@ -104,5 +105,99 @@ describe("WorktreePalette match highlighting", () => {
   it("marks nothing with an empty query", () => {
     renderPalette("", rows);
     expect(document.querySelectorAll(MARK)).toHaveLength(0);
+  });
+});
+
+describe("WorktreePalette custom titles", () => {
+  const titled = worktree("t", "feature/auth-refresh", "feature/auth-refresh");
+  const plain = worktree("p", "billing", "feature/billing");
+
+  const setTitles = (titles: Record<string, string>) =>
+    act(() => useWorktreeFilterStore.setState({ worktreeCustomTitles: titles }));
+
+  // The headline is the one `font-medium` text in the row; the qualifier is the
+  // one span that caps its own width.
+  const headline = (id: string) => option(id).querySelector<HTMLElement>("span.font-medium");
+  const qualifier = (id: string) => option(id).querySelector<HTMLElement>('span[class*="max-w-"]');
+
+  afterEach(() => setTitles({}));
+
+  it("shows the title the sidebar shows, the branch it displaced beside it, the path under it", () => {
+    setTitles({ t: "Release planning" });
+    renderPalette("", [titled]);
+    expect(headline("t")?.textContent).toBe("Release planning");
+    expect(qualifier("t")?.textContent).toContain("feature/auth-refresh");
+    const detail = option("t").querySelector<HTMLElement>("div.mt-0\\.5");
+    expect(detail?.textContent).toContain("/repo/t");
+    expect(headline("t")?.textContent).not.toContain("/repo/t");
+    // Under the headline line, which the qualifier shares.
+    expect(headline("t")!.parentElement?.nextElementSibling).toBe(detail);
+    expect(qualifier("t")!.parentElement).toBe(headline("t")!.parentElement);
+  });
+
+  it("sets a custom title as a name, and an untitled linked worktree as the mono identifier", () => {
+    setTitles({ t: "Release planning" });
+    renderPalette("", [titled, plain]);
+    expect(headline("t")?.className).not.toContain("font-mono");
+    expect(headline("p")?.className).not.toContain("font-mono");
+    renderPalette("", [worktree("q", "feature/x", "feature/x")]);
+    expect(headline("q")?.className).toContain("font-mono");
+  });
+
+  it("marks the title when the query found the title", () => {
+    setTitles({ t: "Release planning" });
+    renderPalette("planning", [titled]);
+    expect(marks(headline("t")!)).toEqual(["planning"]);
+    expect(qualifier("t")?.querySelector(MARK)).toBeNull();
+  });
+
+  it("marks the branch when the query found the branch the title displaced", () => {
+    setTitles({ t: "Release planning" });
+    renderPalette("refresh", [titled]);
+    expect(marks(qualifier("t")!)).toEqual(["refresh"]);
+    expect(headline("t")?.textContent).toBe("Release planning");
+    expect(marks(headline("t")!)).toEqual([]);
+  });
+
+  it("names a worktree without a title by its name and gives it its differing branch beside it", () => {
+    setTitles({ t: "Release planning" });
+    renderPalette("", [plain]);
+    expect(headline("p")?.textContent).toBe("billing");
+    expect(qualifier("p")?.textContent).toContain("feature/billing");
+  });
+
+  it("does not repeat the branch when the title is the branch, and shows the folder instead", () => {
+    const folder = worktree("f", "refresh-dir", "feature/auth-refresh");
+    setTitles({ f: "feature/auth-refresh" });
+    renderPalette("", [folder]);
+    expect(headline("f")?.textContent).toBe("feature/auth-refresh");
+    expect(qualifier("f")?.textContent).toContain("refresh-dir");
+    expect(qualifier("f")?.textContent).not.toContain("feature/auth-refresh");
+  });
+
+  it("says detached with its commit instead of the branch the snapshot still carries", () => {
+    const detached = {
+      ...worktree("d", "scratch-dir", "feature/auth-refresh"),
+      isDetached: true,
+      head: "0123456789abcdef",
+    };
+    setTitles({ d: "Release planning" });
+    renderPalette("", [detached]);
+    expect(headline("d")?.textContent).toBe("Release planning");
+    expect(qualifier("d")?.textContent).toContain("detached at 0123456");
+    expect(option("d").textContent).not.toContain("feature/auth-refresh");
+  });
+
+  it("follows a retitle while the row is mounted", () => {
+    setTitles({ t: "Release planning" });
+    renderPalette("", [titled]);
+    expect(headline("t")?.textContent).toBe("Release planning");
+
+    setTitles({ t: "Hotfix rollout" });
+    expect(headline("t")?.textContent).toBe("Hotfix rollout");
+
+    setTitles({});
+    expect(headline("t")?.textContent).toBe("feature/auth-refresh");
+    expect(qualifier("t")).toBeNull();
   });
 });

@@ -273,7 +273,9 @@ test.describe.serial("Cloud hosts: a Boat machine as a Remote Host", () => {
     await expect(section).toContainText("Connect a cloud provider account");
     await shoot(page, "settings-empty-cloud-providers");
 
+    // Boat isn't the only built-in provider: the connect button is a choice first.
     await section.getByTestId("cloud-connect-account").click();
+    await page.getByRole("menuitem", { name: "Boat" }).click();
     const dialog = page.getByTestId("connect-cloud-account-dialog");
     await expect(dialog).toBeVisible();
     await dialog.getByTestId("cloud-account-api-key").fill("boat_e2e_wrong_key_000000000000");

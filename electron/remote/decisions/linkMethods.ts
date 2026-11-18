@@ -40,6 +40,22 @@ export const DecisionsLinkMethod = {
    * answers UNSUPPORTED, which changes nothing.
    */
   HOST_RUNTIME: "decisions.hostRuntime",
+  /**
+   * Shell → Host (#17230): the Host's own questions, as a content-free list,
+   * and one of them read by reference (content, an image part, opening
+   * lines). Answered only to the owner that enrolled the Host, while that
+   * owner's Decisions is on. A Host from before it answers UNSUPPORTED, and
+   * its questions aren't listed.
+   */
+  QUESTIONS: "decisions.questions",
+  /** Shell → Host (#17230): the person withdrawing one of the Host's questions by reference. */
+  CANCEL_QUESTION: "decisions.cancelQuestion",
+  /**
+   * Host → Shell (#17230): the Host's list changed, sent whole to the Shells
+   * whose owner enrolled it. A Shell from before it answers UNSUPPORTED, and
+   * is sent no more.
+   */
+  QUESTIONS_CHANGED: "decisions.questionsChanged",
 } as const;
 
 /**
@@ -52,6 +68,9 @@ export const DECISIONS_LINK_METHOD_LOCALITY = {
   [DecisionsLinkMethod.OWNER_STATE]: "host",
   [DecisionsLinkMethod.OWNER_STATE_V2]: "host",
   [DecisionsLinkMethod.HOST_RUNTIME]: "shell",
+  [DecisionsLinkMethod.QUESTIONS]: "host",
+  [DecisionsLinkMethod.CANCEL_QUESTION]: "host",
+  [DecisionsLinkMethod.QUESTIONS_CHANGED]: "shell",
 } as const satisfies Record<
   (typeof DecisionsLinkMethod)[keyof typeof DecisionsLinkMethod],
   "host" | "shell"

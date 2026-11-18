@@ -288,6 +288,15 @@ describe("WorkspaceService — resource environments saved in Project settings (
       expect(spawned).toEqual(["home-provision"]);
     });
 
+    it("offers the home settings file's environments to the New Worktree dialog (#17358)", async () => {
+      writeHomeSettings({
+        resourceEnvironments: { cloud: { provision: ["home-provision"] }, gpu: { status: "x" } },
+      });
+      host()["projectId"] = randomBytes(32).toString("hex");
+
+      expect(await host().resourceEnvironmentKeys()).toEqual(["cloud", "gpu"]);
+    });
+
     it("reads the home settings file when the host has no userData folder", async () => {
       delete process.env.DAINTREE_USER_DATA;
 
@@ -301,6 +310,12 @@ describe("WorkspaceService — resource environments saved in Project settings (
       expect(host()["projectSettingsFilePath"](projectId)).toBeNull();
       expect(spawned).toEqual(["home-provision"]);
     });
+  });
+
+  it("offers the saved environments, not a home file's, while Project settings has some (#17358)", async () => {
+    writeHomeSettings({ resourceEnvironments: { home: { provision: ["home-provision"] } } });
+
+    expect(await host().resourceEnvironmentKeys()).toEqual(["cloud"]);
   });
 
   it("is reported as configured by the resource probe", async () => {

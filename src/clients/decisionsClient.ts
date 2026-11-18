@@ -6,16 +6,22 @@ import type {
 } from "@shared/types/decisionsAttention";
 import type {
   AnswerDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   DecisionQuestionImagePart,
   DecisionQuestionImagePartResult,
   DecisionQuestionImageResult,
   DecisionQuestionList,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
+  SendDecisionFollowUpPayload,
 } from "@shared/types/decisionsQuestion";
 
 /** The protocol's largest image: a part claiming more is refused before anything is allocated. */
@@ -92,10 +98,13 @@ export const decisionsClient = {
   /**
    * Decisions' status from now on: subscribes before reading, and keeps
    * whichever carries the higher revision, so a read that lands after a push
-   * can't roll it back. A read that fails calls nothing. The returned
-   * function stops it, read included.
+   * can't roll it back. A read that fails calls `onReadFailed`, and only while
+   * no status has arrived. The returned function stops it, read included.
    */
-  watchStatus: (onStatus: (status: DecisionsStatus) => void): (() => void) => {
+  watchStatus: (
+    onStatus: (status: DecisionsStatus) => void,
+    onReadFailed?: () => void
+  ): (() => void) => {
     let latest = -1;
     let stopped = false;
     const accept = (status: DecisionsStatus) => {
@@ -106,7 +115,9 @@ export const decisionsClient = {
       onStatus(status);
     };
     const off = window.electron.events.on("decisions:status-changed", accept);
-    window.electron.decisions.getStatus().then(accept, () => {});
+    window.electron.decisions.getStatus().then(accept, () => {
+      if (!stopped && latest === -1) onReadFailed?.();
+    });
     return () => {
       stopped = true;
       off();
@@ -209,10 +220,14 @@ export const decisionsClient = {
   /**
    * That list from now on: subscribes before reading, and keeps whichever
    * carries the higher revision, so a read that lands after a push can't roll
-   * it back. A read that fails calls nothing. The returned function stops it,
+   * it back. A read that fails calls `onReadFailed`, and only while no list has
+   * arrived; a later push still delivers one. The returned function stops it,
    * read included.
    */
-  watchQuestions: (onList: (list: DecisionQuestionList) => void): (() => void) => {
+  watchQuestions: (
+    onList: (list: DecisionQuestionList) => void,
+    onReadFailed?: () => void
+  ): (() => void) => {
     let latest = -1;
     let stopped = false;
     const accept = (list: DecisionQuestionList) => {
@@ -221,7 +236,9 @@ export const decisionsClient = {
       onList(list);
     };
     const off = window.electron.events.on("decisions:questions-changed", accept);
-    window.electron.decisions.listQuestions().then(accept, () => {});
+    window.electron.decisions.listQuestions().then(accept, () => {
+      if (!stopped && latest === -1) onReadFailed?.();
+    });
     return () => {
       stopped = true;
       off();
@@ -230,10 +247,22 @@ export const decisionsClient = {
 
   /**
    * Main asking this window to open one question in its question view: a
-   * click on the question's desktop notification (#17232).
+   * click on the question's desktop notification (#17232), or on a
+   * follow-up's, which opens it at that follow-up (#17235).
    */
-  onOpenQuestion: (callback: (reference: DecisionQuestionReference) => void): (() => void) =>
-    window.electron.events.on("decisions:open-question", ({ reference }) => callback(reference)),
+  onOpenQuestion: (
+    callback: (reference: DecisionQuestionReference, messageId: string | undefined) => void
+  ): (() => void) =>
+    window.electron.events.on("decisions:open-question", ({ reference, messageId }) =>
+      callback(reference, messageId)
+    ),
+
+  /**
+   * Main asking this window to open the list of answers needing attention at
+   * a pane's: a click on a stalled answer's desktop notification (#17235).
+   */
+  onOpenAttention: (callback: (terminalId: string) => void): (() => void) =>
+    window.electron.events.on("decisions:open-attention", ({ terminalId }) => callback(terminalId)),
 
   /**
    * A question by its reference, from any window on this computer, whatever
@@ -281,6 +310,30 @@ export const decisionsClient = {
   /** Where an answer stands, by the id it was submitted with: a queued one settles later. */
   getAnswerResult: (answerId: string): Promise<DecisionAnswerResultRead> =>
     window.electron.decisions.getAnswerResult({ answerId }),
+
+  /**
+   * The person's decline of a question (#17239), signed by this computer,
+   * named as an answer is. Send the same `declineId` again when a result is lost.
+   */
+  declineQuestion: (
+    payload: DeclineDecisionQuestionPayload
+  ): Promise<DecisionQuestionDeclineResult> => window.electron.decisions.declineQuestion(payload),
+
+  /** Where a decline stands, by the id it was submitted with: a queued one settles later. */
+  getDeclineResult: (declineId: string): Promise<DecisionDeclineResultRead> =>
+    window.electron.decisions.getDeclineResult({ declineId }),
+
+  /**
+   * The person's follow-up on a question's thread (#17238), signed by this
+   * computer, named by the reference its content was read with. Send the
+   * same `messageId` again with the same text when a result is lost.
+   */
+  sendFollowUp: (payload: SendDecisionFollowUpPayload): Promise<DecisionQuestionFollowUpResult> =>
+    window.electron.decisions.sendFollowUp(payload),
+
+  /** Where a follow-up stands, by the id it was submitted with: a queued one settles later. */
+  getFollowUpResult: (messageId: string): Promise<DecisionFollowUpResultRead> =>
+    window.electron.decisions.getFollowUpResult({ messageId }),
 
   /** Every pane's state changes for this project. Callers filter by `terminalId`. */
   onPaneState: (callback: (state: PaneDecisionState) => void): (() => void) =>

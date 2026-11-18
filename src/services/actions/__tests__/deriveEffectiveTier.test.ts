@@ -74,15 +74,3 @@ describe("deriveEffectiveTier — worktree.delete", () => {
     ).toBe("D2");
   });
 });
-
-describe("deriveEffectiveTier — portal bulk close", () => {
-  it.each([
-    ["portal.closeAllTabs", 0, "D0"],
-    ["portal.closeAllTabs", 2, "D0"],
-    ["portal.closeAllTabs", 3, "D1"],
-    ["portal.closeOthers", 2, "D0"],
-    ["portal.closeOthers", 3, "D1"],
-  ] as const)("%s with %i tabs → %s", (actionId, tabCount, expected) => {
-    expect(deriveEffectiveTier(actionId, { tabCount })).toBe(expected);
-  });
-});

@@ -477,6 +477,49 @@ describe("GitHubRateLimitService", () => {
       expect(budget?.multiplier).toBe(1);
     });
 
+    it("reads a window with no limit as no budget, not an exhausted one (rate limiting off)", () => {
+      // A budget seen before the server turned limits off no longer holds.
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(1000, 5000));
+      expect(gitHubRateLimitService._getBudgetStateForTests()).not.toBeNull();
+
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(0, 0));
+
+      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+      expect(gitHubRateLimitService._getBudgetStateForTests()).toBeNull();
+    });
+
+    it("lifts a quota block once the server reports a zero-sized window", () => {
+      const resetAt = new Date(Date.now() + ONE_HOUR_MS).toISOString();
+      gitHubRateLimitService.updateFromGraphQL({
+        rateLimit: { cost: 1, remaining: 0, resetAt, limit: 5000 },
+      });
+      expect(gitHubRateLimitService.shouldBlockRequest("graphql").blocked).toBe(true);
+
+      gitHubRateLimitService.updateFromGraphQL(graphQLData(0, 0));
+
+      expect(gitHubRateLimitService.shouldBlockRequest("graphql").blocked).toBe(false);
+    });
+
+    it("doesn't block on REST headers that report a zero-sized window", () => {
+      const reset = String(Math.floor(Date.now() / 1000) + 3600);
+      gitHubRateLimitService.update(
+        new Headers({ "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset }),
+        403
+      );
+      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(true);
+
+      gitHubRateLimitService.update(
+        new Headers({
+          "x-ratelimit-limit": "0",
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600),
+        }),
+        200
+      );
+
+      expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+    });
+
     it("ignores missing rateLimit object", () => {
       gitHubRateLimitService.updateFromGraphQL({ repository: {} });
       expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);

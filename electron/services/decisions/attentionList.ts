@@ -2,6 +2,7 @@ import {
   answeredOn,
   formatAnswerNotice,
   formatFollowupNotice,
+  messageSentOn,
   noticeChunk,
   parseAnswers,
   parseMessages,
@@ -20,6 +21,7 @@ import {
   sanitizeAnswerText,
   type DecisionBlock,
 } from "./answerNotice.js";
+import { declineOf } from "./questionClosed.js";
 
 /**
  * The answers a person has marked handled (#16020), by question, at the
@@ -108,9 +110,19 @@ export function heldFollowUps(row: QuestionRow): StoredMessage[] {
     .sort((a, b) => a.event_seq - b.event_seq);
 }
 
-/** The question's answer needs a person, and they haven't marked it handled. */
+/**
+ * The question's answer needs a person, and they haven't marked it handled.
+ * A person's own decline (#17234) never does: a cancel drops every answer not
+ * yet typed, so its notice is all that could have stopped, and it is news only
+ * for an agent still listening. It counts as handled, so it shows nowhere a
+ * person acts and keeps nothing of the question waiting.
+ */
 export function answerNeedsAttention(row: QuestionRow, handled: HandledAnswers): boolean {
-  return needsAttention(row) && handled.get(row.question_id) !== answerRevision(row);
+  return (
+    needsAttention(row) &&
+    declineOf(row) === undefined &&
+    handled.get(row.question_id) !== answerRevision(row)
+  );
 }
 
 /** Its answer or a follow-up after it needs a person. */
@@ -130,7 +142,8 @@ export function withoutHandled(
   rows: readonly QuestionRow[],
   handled: HandledAnswers
 ): QuestionRow[] {
-  return handled.size === 0 ? [...rows] : rows.filter((row) => !isHandled(row, handled));
+  // A stopped decline is handled with nothing marked, so every read filters.
+  return rows.filter((row) => !isHandled(row, handled));
 }
 
 /** What would be typed in, the delivery engine's own test: marked for delivery and not yet delivered. */
@@ -228,6 +241,7 @@ export function copiedAnswerText(
       text,
       // As the delivery engine tells it: an answer came before it in the thread.
       answered: given.some((entry) => seqOf(entry) < message.event_seq),
+      ...(messageSentOn(message) === "computer" ? { onComputer: true } : {}),
       ...(images.has(message.message_id) ? { images: images.get(message.message_id) } : {}),
       injectionId: copyId(opened.length + index),
     }),

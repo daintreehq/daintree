@@ -86,8 +86,6 @@ export function registerIntrospectionActions(
       focusedTerminalId: z.string().optional(),
       focusedTerminalKind: z.string().optional(),
       focusedTerminalTitle: z.string().optional(),
-      portalOpen: z.boolean(),
-      portalActiveTabId: z.string().nullable(),
       terminalCount: z.number(),
       worktreeCount: z.number(),
     }),

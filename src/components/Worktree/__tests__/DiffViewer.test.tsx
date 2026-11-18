@@ -531,6 +531,19 @@ describe("DiffViewer directional context expansion", () => {
 
     expect(screen.getByRole("button", { name: "Expand all 77" })).toBeTruthy();
   });
+
+  it("offers expansion once a source lands after the diff is already showing", () => {
+    const { rerender } = render(
+      wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={null} viewType="split" />)
+    );
+    expect(renderedContent()).toContain("line2-changed");
+    expect(screen.queryByRole("button", { name: /^Expand (up|down|all)/ })).toBeNull();
+
+    rerender(wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={FAR_HUNKS_SOURCE} viewType="split" />));
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand all 97" }));
+    expect(renderedContent()).toContain("line50");
+  });
 });
 
 describe("DiffViewer hunk copy", () => {
@@ -2085,5 +2098,95 @@ describe("DiffViewer full file scope", () => {
     const content = renderedContent();
     expect(content).not.toContain("line1");
     expect(content.some((line) => line.startsWith("unrelated"))).toBe(false);
+  });
+});
+
+describe("DiffViewer file origin", () => {
+  const PURE_RENAME = `diff --git a/src/old.ts b/src/new.ts
+similarity index 100%
+rename from src/old.ts
+rename to src/new.ts
+`;
+
+  const EDITED_RENAME = `diff --git a/src/old.ts b/src/new.ts
+similarity index 99%
+rename from src/old.ts
+rename to src/new.ts
+index 0123456..abcdefg 100644
+--- a/src/old.ts
++++ b/src/new.ts
+@@ -100,0 +101 @@ line 100
++line 101
+`;
+
+  function originText(): string | null {
+    return screen.queryByTestId("diff-file-origin")?.textContent?.trim() ?? null;
+  }
+
+  it("names where a hunkless rename came from in its header", () => {
+    render(
+      wrap(<DiffViewer diff={PURE_RENAME} origin={{ kind: "renamed", path: "src/old.ts" }} />)
+    );
+
+    expect(originText()).toBe("renamed from src/old.ts");
+    expect(screen.queryAllByTestId("hunk")).toHaveLength(0);
+    expect(screen.queryByRole("region")).toBeNull();
+  });
+
+  it("names the host's exact source, not the patch's quoted spelling of it", () => {
+    const quoted = String.raw`diff --git "a/src/o\"ld.ts" b/src/new.ts
+similarity index 100%
+rename from "src/o\"ld.ts"
+rename to src/new.ts
+`;
+    render(wrap(<DiffViewer diff={quoted} origin={{ kind: "renamed", path: 'src/o"ld.ts' }} />));
+
+    expect(originText()).toBe('renamed from src/o"ld.ts');
+  });
+
+  it("offers no generated-file disclosure for a move with nothing to show", () => {
+    const lockfileMove = `diff --git a/package-lock.json b/web/package-lock.json
+similarity index 100%
+rename from package-lock.json
+rename to web/package-lock.json
+`;
+    render(
+      wrap(
+        <DiffViewer diff={lockfileMove} origin={{ kind: "renamed", path: "package-lock.json" }} />
+      )
+    );
+
+    expect(originText()).toBe("renamed from package-lock.json");
+    expect(screen.queryByText("Generated file")).toBeNull();
+  });
+
+  it("names the source of an edited copy, which the patch parses as a modify", () => {
+    render(
+      wrap(<DiffViewer diff={EDITED_RENAME} origin={{ kind: "copied", path: "src/old.ts" }} />)
+    );
+
+    expect(originText()).toBe("copied from src/old.ts");
+    expect(screen.getAllByTestId("hunk")).toHaveLength(1);
+  });
+
+  it("leaves the header alone when the host names no origin", () => {
+    render(wrap(<DiffViewer diff={PURE_RENAME} />));
+
+    expect(screen.getByText("new.ts")).toBeTruthy();
+    expect(originText()).toBeNull();
+  });
+
+  it("drops the origin when the patch holds more than one file", () => {
+    render(
+      wrap(
+        <DiffViewer
+          diff={`${PURE_RENAME}${SMALL_DIFF}\n`}
+          origin={{ kind: "renamed", path: "src/old.ts" }}
+        />
+      )
+    );
+
+    expect(screen.getByText("a.ts")).toBeTruthy();
+    expect(originText()).toBeNull();
   });
 });

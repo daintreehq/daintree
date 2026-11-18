@@ -433,6 +433,42 @@ export type {
   ContextProviderCallOptions,
 } from "./pluginContextProvider.js";
 
+// ── Cloud provider contract (#17351) ────────────────────────────────
+
+export type {
+  CloudProviderCallCredentials,
+  CloudProviderCatalog,
+  CloudProviderContribution,
+  CloudProviderCreateRequest,
+  CloudProviderDescriptor,
+  CloudProviderImpl,
+  CloudProviderMethod,
+  CloudProviderResource,
+  CloudProviderSshAccess,
+} from "./pluginCloudProvider.js";
+export type {
+  CloudAccountCheckResult,
+  CloudAccountScopeChoice,
+  CloudBillingScope,
+  CloudCredentialField,
+  CloudCredentialValues,
+  CloudHostErrorCode,
+  CloudLifetimeModel,
+  CloudMachineState,
+  CloudMachineType,
+  CloudProviderCapabilities,
+  CloudProviderPersistence,
+  CloudProvisioning,
+  CloudProvisioningChoice,
+  CloudProvisioningDimension,
+  CloudProvisioningInput,
+  CloudProvisioningOptions,
+  CloudProvisioningSelection,
+  CloudSshTransport,
+  CloudSshTrust,
+  CloudSshTunnelCommand,
+} from "./cloudHosts.js";
+
 // ── Services between plugins (#14105) ───────────────────────────────
 
 export type {
@@ -492,6 +528,10 @@ export type {
   RateLimitInfo,
   FileDecoration,
   ChecksCapability,
+  DeploymentsCapability,
+  Deployment,
+  DeploymentState,
+  DeploymentTarget,
   AutoMergeCapability,
   EnableAutoMergeInput,
   EnableAutoMergeResult,

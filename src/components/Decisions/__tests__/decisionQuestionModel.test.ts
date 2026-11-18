@@ -4,6 +4,7 @@ import {
   choiceLabels,
   emptyEntryText,
   positionText,
+  questionStatusText,
   threadEntryHeading,
 } from "../decisionQuestionModel";
 
@@ -69,8 +70,9 @@ describe("decisionQuestionModel", () => {
       threadEntryHeading(message({ from: "person" })),
       threadEntryHeading(message({ from: "agent" })),
       threadEntryHeading({ type: "expired", entryId: "e", sentAt: "2026-11-02T10:00:00.000Z" }),
+      threadEntryHeading({ type: "declined", entryId: "d", sentAt: "2026-11-02T10:00:00.000Z" }),
     ]);
-    expect(headings.size).toBe(7);
+    expect(headings.size).toBe(8);
     expect(threadEntryHeading(message({ from: "person" }))).not.toBe(
       threadEntryHeading(message({ from: "agent" }))
     );
@@ -97,7 +99,41 @@ describe("decisionQuestionModel", () => {
     );
   });
 
+  it("tells a question the person declined apart from one withdrawn, and from every other status (#17234)", () => {
+    const declined = questionStatusText({ status: "cancelled", closedReason: "declined" });
+    const others = (
+      [
+        ["queued", null],
+        ["open", null],
+        ["proxy-answered", null],
+        ["human-answered", null],
+        ["cancelled", "withdrawn"],
+        ["expired", "expired"],
+        ["publish-failed", null],
+      ] as const
+    ).map(([status, closedReason]) => questionStatusText({ status, closedReason }));
+    expect(new Set(others).size).toBe(others.length);
+    expect(others).not.toContain(declined);
+  });
+
+  it("names a follow-up sent from the computer, and the agent's request for a reply (#17238)", () => {
+    const computer = threadEntryHeading(message({ from: "person", onComputer: true }));
+    expect(computer).not.toBe(threadEntryHeading(message({ from: "person" })));
+    expect(computer).toMatch(/computer/);
+    // A Remote Host from before it doesn't say: its person's messages are a phone's.
+    expect(threadEntryHeading(message({ from: "person", onComputer: undefined }))).toBe(
+      threadEntryHeading(message({ from: "person", onComputer: false }))
+    );
+    const asking = threadEntryHeading(message({ from: "agent", expectsReply: true }));
+    expect(asking).not.toBe(threadEntryHeading(message({ from: "agent" })));
+    expect(asking).toMatch(/reply/);
+  });
+
   it("says why an entry has nothing to read, and nothing when it does", () => {
+    // A notice carries nothing to read, and isn't missing anything.
+    expect(
+      emptyEntryText({ type: "declined", entryId: "d", sentAt: "2026-11-02T10:00:00.000Z" })
+    ).toBeNull();
     expect(emptyEntryText(answer({ text: "Yes" }))).toBeNull();
     expect(emptyEntryText(answer({ choices: [{ id: "a", label: "A" }] }))).toBeNull();
     // Unreadable wins over words that may be left over, and reads differently from an empty entry.

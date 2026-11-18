@@ -127,7 +127,7 @@ export type ElementPickerPushPayload =
  * that project; nothing here names a path main has not already authorised.
  */
 export interface ElementPickerWorkspaceOpenRequest {
-  /** The dev preview the workspace serves; source changes are pushed about it. */
+  /** The dev preview or browser panel the workspace serves; source changes are pushed about it. */
   panelId: string;
   worktreeId: string;
   /**
@@ -158,7 +158,14 @@ export type ElementPickerWorkspaceOpenResult =
   /** More than one app, and nothing says which one the preview serves: the user chooses. */
   | { status: "ambiguous"; appPaths: string[]; scanComplete: boolean }
   /** The worktree is not one of the sender's project's, or the chosen app is not inside it. */
-  | { status: "unavailable"; reason: "unknown-worktree" | "invalid-app" };
+  | { status: "unavailable"; reason: "unknown-worktree" | "invalid-app" }
+  /**
+   * A browser panel's page whose server runs from another of the project's
+   * worktrees, by the working directory of the process listening on its port.
+   * Main reads the port from the panel's own guest; nothing in the request
+   * names it.
+   */
+  | { status: "unavailable"; reason: "other-worktree"; serverWorktreeId: string };
 
 export interface ElementPickerWorkspaceRequest {
   workspaceId: string;

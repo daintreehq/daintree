@@ -419,6 +419,33 @@ describe("HostRegistry", () => {
       expect(new HostRegistry(store).get(host.id)).not.toHaveProperty("pendingPlacement");
     });
 
+    it("adds a host with a worktree already waiting on it, made for that worktree", () => {
+      const store = memoryStore();
+      const registry = new HostRegistry(store);
+      const host = registry.add({
+        name: "feature-x",
+        connection: { kind: "cloud", bindingId: "cb_0123456789ab" },
+        pendingPlacement: { ...placement, createdMachine: true },
+      });
+      expect(host.pendingPlacement).toEqual({ ...placement, createdMachine: true });
+      expect(new HostRegistry(store).get(host.id)?.pendingPlacement).toEqual({
+        ...placement,
+        createdMachine: true,
+      });
+    });
+
+    it("refuses a host whose waiting worktree is missing its identity, adding nothing", () => {
+      const registry = new HostRegistry(memoryStore());
+      expect(() =>
+        registry.add({
+          name: "feature-x",
+          connection: { kind: "ssh", target: "feature-x" },
+          pendingPlacement: { ...placement, worktreeId: "" },
+        })
+      ).toThrow(/project, worktree and label/);
+      expect(registry.list()).toEqual([]);
+    });
+
     it("records a failure only on the placement it names", () => {
       const registry = new HostRegistry(memoryStore());
       const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });

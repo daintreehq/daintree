@@ -32,6 +32,40 @@ function run(args?: { panelId?: string }, ctx: ActionContext = {}): Promise<unkn
   return definition().run(args, ctx);
 }
 
+const BROWSER = "browser-1";
+
+/** A dev preview beside a browser panel showing `url`, with `focusedId` focused. */
+function previewBesideBrowser(
+  url: string,
+  focusedId: string | null,
+  options: {
+    preview?: string;
+    browser?: string | null;
+    browserLocation?: "grid" | "dock";
+  } = {}
+): void {
+  const browserWorktree = options.browser === undefined ? "wt-a" : (options.browser ?? undefined);
+  usePanelStore.setState({
+    panelIds: [PANEL, BROWSER],
+    focusedId,
+    panelsById: {
+      [PANEL]: {
+        id: PANEL,
+        kind: "dev-preview",
+        location: "grid",
+        worktreeId: options.preview ?? "wt-a",
+      },
+      [BROWSER]: {
+        id: BROWSER,
+        kind: "browser",
+        location: options.browserLocation ?? "grid",
+        browserUrl: url,
+        worktreeId: browserWorktree,
+      },
+    },
+  } as never);
+}
+
 function previews(...ids: string[]): void {
   usePanelStore.setState({
     panelIds: ids,
@@ -86,6 +120,88 @@ describe("devPreview.toggleElementPicker", () => {
     const result = await run();
     expect(dispatch).toHaveBeenCalledWith("devServer.start", undefined, expect.anything());
     expect(result).toEqual({ panelId: "started-1", active: true });
+  });
+
+  it("acts on the focused browser panel when it shows a local page", async () => {
+    previewBesideBrowser("http://localhost:5173/", BROWSER);
+    expect(await run()).toEqual({ panelId: BROWSER, active: true });
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({
+      [BROWSER]: ELEMENT_PICKER_TOOL_ID,
+    });
+    expect(dispatch).not.toHaveBeenCalledWith("devServer.start", undefined, expect.anything());
+
+    expect(await run()).toEqual({ panelId: BROWSER, active: false });
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+  });
+
+  it("refuses a focused browser on a page outside the picker's origins, and opens nothing", async () => {
+    previewBesideBrowser("https://example.com/", BROWSER);
+    await expect(run()).rejects.toThrow("local address");
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("acts on a browser panel it is named, and still switches it off on a foreign page", async () => {
+    previewBesideBrowser("http://app.test:3000/", null);
+    expect(await run({ panelId: BROWSER })).toEqual({ panelId: BROWSER, active: true });
+
+    // The page leaves for a site elsewhere with the picker on.
+    usePanelStore.setState((state) => ({
+      panelsById: {
+        ...state.panelsById,
+        [BROWSER]: { ...state.panelsById[BROWSER]!, browserUrl: "https://example.com/" },
+      },
+    }));
+    expect(await run({ panelId: BROWSER })).toEqual({ panelId: BROWSER, active: false });
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+    await expect(run({ panelId: BROWSER })).rejects.toThrow("local address");
+  });
+
+  it("acts on a focused browser of the active worktree, and leaves one of another alone", async () => {
+    previewBesideBrowser("http://localhost:5173/", BROWSER, { preview: "wt-a", browser: "wt-a" });
+    expect(await run(undefined, { activeWorktreeId: "wt-a" })).toEqual({
+      panelId: BROWSER,
+      active: true,
+    });
+
+    useDevPreviewToolStore.setState({ activeByPanel: {} });
+    previewBesideBrowser("http://localhost:5173/", BROWSER, { preview: "wt-a", browser: "wt-b" });
+    expect(await run(undefined, { activeWorktreeId: "wt-a" })).toEqual({
+      panelId: PANEL,
+      active: true,
+    });
+  });
+
+  it("treats a focused global browser in the dock as the one in front of the user", async () => {
+    // Visible in every worktree, as the dock shows it; it has no checkout of
+    // its own to trace into, so the picker won't switch on there.
+    previewBesideBrowser("http://localhost:5173/", BROWSER, {
+      browser: null,
+      browserLocation: "dock",
+    });
+    await expect(run(undefined, { activeWorktreeId: "wt-a" })).rejects.toThrow(
+      "belongs to a worktree"
+    );
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // One that is on there (its worktree since removed) still switches off.
+    useDevPreviewToolStore.setState({ activeByPanel: { [BROWSER]: ELEMENT_PICKER_TOOL_ID } });
+    expect(await run(undefined, { activeWorktreeId: "wt-a" })).toEqual({
+      panelId: BROWSER,
+      active: false,
+    });
+  });
+
+  it("refuses a trashed browser panel by name", async () => {
+    previewBesideBrowser("http://localhost:5173/", null);
+    usePanelStore.setState((state) => ({
+      panelsById: {
+        ...state.panelsById,
+        [BROWSER]: { ...state.panelsById[BROWSER]!, location: "trash" },
+      },
+    }));
+    await expect(run({ panelId: BROWSER })).rejects.toThrow("not an open dev preview or browser");
   });
 
   it("is a neutral, described command an agent can find", () => {

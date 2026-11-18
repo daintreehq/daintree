@@ -1320,6 +1320,111 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     }
   });
 
+  it("wakes a snooze that ended before it opened, so the unread count matches its rows", () => {
+    setEntries([
+      makeEntry({
+        type: "error",
+        message: "Overdue wake",
+        correlationId: "overdue-thread",
+        seenAsToast: false,
+      }),
+    ]);
+    // Mounted but closed, as during the exit animation of a reopen.
+    const { rerender } = render(<NotificationCenter open={false} onClose={vi.fn()} />);
+    const overdue = { "overdue-thread": Date.now() - 1000 };
+    act(() => {
+      useNotificationHistoryStore.setState({ snoozedThreads: overdue, unreadCount: 0 });
+    });
+    expect(useNotificationHistoryStore.getState().snoozedThreads).toEqual(overdue);
+
+    rerender(<NotificationCenter open onClose={vi.fn()} />);
+
+    expect(useNotificationHistoryStore.getState().snoozedThreads).toEqual({});
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+  });
+
+  it("offers the Snoozed tab only while a row stands behind a snooze", () => {
+    setEntries([makeEntry({ message: "Plain" })]);
+    useNotificationHistoryStore.setState({
+      snoozedThreads: { orphan: Date.now() + 10 * 60_000 },
+    });
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+
+    // Archived rows live in Archived, so one behind a snooze doesn't earn the tab.
+    act(() => {
+      setEntries([
+        makeEntry({ message: "Plain" }),
+        makeEntry({ message: "Done", correlationId: "orphan", archivedAt: Date.now() }),
+      ]);
+    });
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+
+    act(() => {
+      setEntries([
+        makeEntry({ message: "Plain" }),
+        makeEntry({ message: "Held back", correlationId: "orphan", seenAsToast: false }),
+      ]);
+    });
+    expect(screen.getByRole("radio", { name: "Snoozed" })).toBeTruthy();
+  });
+
+  it("leaves a Snoozed tab whose row is gone even when the snooze key outlives it", () => {
+    setEntries([
+      makeEntry({ message: "Plain" }),
+      makeEntry({ message: "Held back", correlationId: "thread", seenAsToast: false }),
+    ]);
+    useNotificationHistoryStore.setState({
+      snoozedThreads: { thread: Date.now() + 10 * 60_000 },
+    });
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    act(() => {
+      fireEvent.click(screen.getByRole("radio", { name: "Snoozed" }));
+    });
+    expect(screen.getByRole("radio", { name: "Snoozed" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+
+    act(() => {
+      setEntries([makeEntry({ message: "Plain" })]);
+    });
+
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+    expect(screen.getByRole("radio", { name: "All" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("leaves the Snoozed tab for All when pruning removes the snoozed thread's last row", () => {
+    const until = Date.now() + 10 * 60_000;
+    setEntries([
+      makeEntry({ message: "Plain" }),
+      makeEntry({ message: "Held back", correlationId: "thread", seenAsToast: false }),
+    ]);
+    useNotificationHistoryStore.setState({ snoozedThreads: { thread: until } });
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    act(() => {
+      fireEvent.click(screen.getByRole("radio", { name: "Snoozed" }));
+    });
+    expect(screen.getByRole("radio", { name: "Snoozed" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+
+    act(() => {
+      useNotificationHistoryStore
+        .getState()
+        .importEntries(
+          Array.from({ length: 200 }, (_, i) =>
+            makeEntry({ message: `Newer ${i}`, timestamp: Date.now() + 1000 + i })
+          )
+        );
+    });
+
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+    expect(screen.getByRole("radio", { name: "All" }).getAttribute("aria-checked")).toBe("true");
+  });
+
   it("keeps a thread off the rail when it wakes from a snooze after aging out", () => {
     vi.useFakeTimers();
     try {

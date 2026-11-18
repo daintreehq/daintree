@@ -25,6 +25,16 @@ import {
 import { bulkTrashTarget } from "./canopyBulkTrash";
 import { useCanopyFrame } from "./canopyFrame";
 import { placeOf } from "./canopyInboxPlace";
+import { parseAllHostsKey, type AllHostsRoute } from "./canopyAllHosts";
+
+/** The hosts a bulk call left alone, by the names their agents carry in the list. */
+function hostNamesOf(items: readonly CanopyItem[], refused: readonly string[]): string {
+  const names = refused.map((hostId) => {
+    const on = items.find((item) => parseAllHostsKey(item.runId)?.hostId === hostId);
+    return on?.workspace.host || hostId;
+  });
+  return [...new Set(names)].join(", ");
+}
 
 /** An error toast whose one recovery is the place the action can be done by hand. */
 function failToast(
@@ -45,7 +55,7 @@ function failToast(
 interface UndoReservation {
   land: (
     restoreOnce: () => void,
-    shown?: { title: string; message: string } | { line: string }
+    shown?: { title: string; message: string; partial?: boolean } | { line: string }
   ) => void;
   forget: () => void;
 }
@@ -59,6 +69,7 @@ export function useCanopyInboxActions({
   hostId,
   ownHostId,
   api,
+  markAllReadReport,
   terminalApi,
   listed,
   focusedItem,
@@ -82,6 +93,8 @@ export function useCanopyInboxActions({
   hostId: HostId | null;
   ownHostId: HostId;
   api: CanopyApi;
+  /** All hosts only: the bulk mark that also says which hosts didn't answer. */
+  markAllReadReport: AllHostsRoute["markAllReadReport"] | null;
   terminalApi: CanopyTerminalApi;
   /** The inbox as listed, filters included. */
   listed: CanopyItem[];
@@ -360,26 +373,50 @@ export function useCanopyInboxActions({
     if (unread.length === 0) return;
     const before = unread.flatMap((item) => (item.readMark ? [item.readMark] : []));
     const undo = reserveUndo();
+    const targets = unread.map((item) => ({
+      runId: item.runId,
+      spawnedAt: item.row.run.spawnedAt,
+      turn: item.readMark?.turn ?? 0,
+    }));
     safeFireAndForget(
-      api
-        .markAllRead(
-          unread.map((item) => ({
-            runId: item.runId,
-            spawnedAt: item.row.run.spawnedAt,
-            turn: item.readMark?.turn ?? 0,
-          }))
-        )
-        .then(
-          (after) =>
+      (markAllReadReport
+        ? markAllReadReport(targets)
+        : api.markAllRead(targets).then((marks) => ({ marks, refused: [] as string[] }))
+      ).then(
+        ({ marks: after, refused }) => {
+          // Only the runs a host marked count and can be undone.
+          const left = refused.length > 0 ? hostNamesOf(unread, refused) : null;
+          if (left === null) {
             undo.land(() => undoReads(before, after), {
               title: "Marked as read",
-              message: pluralize(unread.length, "agent"),
-            }),
-          (error: unknown) => {
-            undo.forget();
-            failToast("Couldn't mark as read", error, { label: "Retry", onClick: markAllRead });
+              message: pluralize(after.length, "agent"),
+            });
+            return;
           }
-        )
+          const notDone = `Couldn't confirm it on ${left}. Its agents may still be unread.`;
+          if (after.length === 0) {
+            undo.forget();
+            notify({
+              type: "error",
+              title: "Couldn't mark as read",
+              message: notDone,
+              context: { eventKind: "agent" },
+              duration: 6000,
+              actions: [{ label: "Retry", onClick: markAllRead }],
+            });
+            return;
+          }
+          undo.land(() => undoReads(before, after), {
+            title: "Marked as read",
+            message: `${pluralize(after.length, "agent")} of ${unread.length}. ${notDone}`,
+            partial: true,
+          });
+        },
+        (error: unknown) => {
+          undo.forget();
+          failToast("Couldn't mark as read", error, { label: "Retry", onClick: markAllRead });
+        }
+      )
     );
   };
 

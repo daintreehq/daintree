@@ -26,7 +26,8 @@ import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 import type { Issue, ListOptions, PR } from "@shared/types/forge";
-import type { GitHubSortOrder } from "../../shared/types.js";
+import type { GitHubSortOrder, GitHubTokenConfig } from "../../shared/types.js";
+import { hasAnyGitHubToken } from "../../shared/enterprise.js";
 import { prScopeQualifier, type PRScopeFilter } from "../stores/githubFilterStore";
 import { MULTI_FETCH_CAP, parseNumberQuery } from "@/lib/parseNumberQuery";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -137,7 +138,7 @@ interface UseGitHubResourceListSWRParams {
   /** PR-only narrowing to the signed-in user's PRs; ignored for issues. */
   scope?: PRScopeFilter;
   sortOrder: GitHubSortOrder;
-  githubConfig: { hasToken: boolean } | null;
+  githubConfig: GitHubTokenConfig | null;
   onFreshFetch?: () => void;
   onCountUpdate?: (count: number, hasMore: boolean, observedAt: number) => void;
 }
@@ -301,7 +302,7 @@ export function useGitHubResourceListSWR({
       // shows a dedicated empty state; firing fetches here would just produce
       // a token-error toast for users who haven't set up GitHub yet.
       const cfg = githubConfigRef.current;
-      if (cfg && !cfg.hasToken) return;
+      if (cfg && !hasAnyGitHubToken(cfg)) return;
 
       // Skip fetches while GitHub-wide rate-limit pause is active — the main
       // process would block the request and surface a rate-limit error, but
@@ -802,7 +803,7 @@ export function useGitHubResourceListSWR({
     // Skip numeric fetches when no token is configured — the empty state
     // takes over the UI and any leftover store search would otherwise
     // produce a token error.
-    if (githubConfig && !githubConfig.hasToken) {
+    if (githubConfig && !hasAnyGitHubToken(githubConfig)) {
       return;
     }
     // Skip numeric fetches while rate-limit pause is active. The render

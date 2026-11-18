@@ -47,6 +47,7 @@ export interface SetupDiagnosticTyping {
   revision: number;
   source: "human" | "proxy" | "system";
   expired: boolean;
+  declined: boolean;
   injectionId: string;
   text: string;
 }
@@ -121,10 +122,14 @@ export class SetupDiagnosticTerminal {
     return this.open && sameAsker(paneIdentityOf(this.origin), pane);
   }
 
-  /** A person's answer to `questionId`, once one has been typed; never an expiry notice or a proxy's. */
+  /** A person's answer to `questionId`, once one has been typed; never an expiry or decline notice, or a proxy's. */
   answerTypedFor(questionId: string): SetupDiagnosticTyping | undefined {
     return this.typings.find(
-      (typing) => typing.questionId === questionId && typing.source === "human" && !typing.expired
+      (typing) =>
+        typing.questionId === questionId &&
+        typing.source === "human" &&
+        !typing.expired &&
+        !typing.declined
     );
   }
 
@@ -152,6 +157,7 @@ export class SetupDiagnosticTerminal {
         revision: block.revision,
         source: block.source,
         expired: block.expired,
+        declined: block.declined,
         injectionId: block.injectionId,
         text: typed,
       });

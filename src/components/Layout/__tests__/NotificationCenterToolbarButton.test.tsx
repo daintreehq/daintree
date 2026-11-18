@@ -23,6 +23,7 @@ if (typeof AnimationEvent === "undefined") {
 }
 import { render, act } from "@testing-library/react";
 import { NotificationCenterToolbarButton } from "../NotificationCenterToolbarButton";
+import { useNotificationSnoozeExpiry } from "@/hooks/app/useNotificationSnoozeExpiry";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useUIStore } from "@/store/uiStore";
@@ -126,6 +127,7 @@ function resetStores() {
     entries: [],
     unreadCount: 0,
     evictedToInboxCount: 0,
+    snoozedThreads: {},
   });
   useNotificationSettingsStore.setState({
     enabled: true,
@@ -267,6 +269,34 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
       const dot = getByTestId("notification-unread-dot");
       expect(dot.getAttribute("data-visible")).toBe("true");
       expect(dot.textContent).toBe("");
+    });
+
+    it("relights when a snooze taken with the inbox closed ends (#17590)", () => {
+      vi.useFakeTimers();
+      const start = new Date(2024, 0, 3, 12, 0).getTime();
+      vi.setSystemTime(start);
+      useNotificationHistoryStore
+        .getState()
+        .addEntry({ type: "info", message: "Build failed", correlationId: "thread-a" });
+      function BellWithSnoozeExpiry() {
+        useNotificationSnoozeExpiry();
+        return <NotificationCenterToolbarButton />;
+      }
+      const { getByTestId, queryByTestId } = render(<BellWithSnoozeExpiry />);
+      const dot = getByTestId("notification-unread-dot");
+      expect(dot.getAttribute("data-visible")).toBe("true");
+
+      act(() =>
+        useNotificationHistoryStore.getState().snoozeThread("thread-a", start + 10 * 60_000)
+      );
+      expect(dot.getAttribute("data-visible")).toBe("false");
+
+      act(() => {
+        vi.advanceTimersByTime(10 * 60_000);
+      });
+      // Nothing rendered the inbox: the bell came back on the snooze's own end.
+      expect(queryByTestId("notification-center")).toBeNull();
+      expect(dot.getAttribute("data-visible")).toBe("true");
     });
   });
 

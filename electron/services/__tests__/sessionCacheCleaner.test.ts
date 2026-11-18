@@ -3,7 +3,7 @@ import {
   buildBrowserPartition,
   buildDevPreviewPartition,
   partitionProjectKey,
-  remotePortalPartition,
+  remotePartitionKeyPrefix,
 } from "../../../shared/utils/partitionUtils.js";
 import os from "node:os";
 import path from "node:path";
@@ -38,7 +38,9 @@ import {
   _resetSessionCacheCleanerForTesting,
   clearAllSessionCaches,
   clearHostPartitions,
+  clearRetiredPortalPartitions,
   isHostPartitionDirName,
+  isRetiredPortalPartitionDirName,
   startSessionCacheTracking,
   trackSession,
 } from "../sessionCacheCleaner.js";
@@ -103,6 +105,15 @@ function expectPreserved(dir: string): void {
   }
 }
 
+const dirName = (partition: string) => partition.replace(/^persist:/, "");
+const browserOf = (hostId: string, projectId: string) =>
+  dirName(buildBrowserPartition(partitionProjectKey(projectId, hostId)));
+const devPreviewOf = (hostId: string, projectId: string) =>
+  dirName(buildDevPreviewPartition(partitionProjectKey(projectId, hostId), "main", "panel-1"));
+/** The directory of a host's Portal session, as builds before #17257 named it. */
+const retiredPortalOf = (hostId: string) =>
+  dirName(buildBrowserPartition(`${remotePartitionKeyPrefix(hostId)}-portal`));
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -148,10 +159,9 @@ describe("session tracking", () => {
 });
 
 describe("clearAllSessionCaches — live sessions", () => {
-  it("clears HTTP and code caches for default, app, portal, browser, and preview sessions", async () => {
+  it("clears HTTP and code caches for default, app, browser, and preview sessions", async () => {
     const live = [
       fakeSession(partitionDir("daintree")),
-      fakeSession(partitionDir("portal")),
       fakeSession(partitionDir("browser-alpha")),
       fakeSession(partitionDir("dev-preview-alpha-main-panel1")),
     ];
@@ -163,7 +173,7 @@ describe("clearAllSessionCaches — live sessions", () => {
       expect(ses.clearCache).toHaveBeenCalledTimes(1);
       expect(ses.clearCodeCaches).toHaveBeenCalledWith({});
     }
-    expect(result).toEqual({ cleared: 5, failed: 0 });
+    expect(result).toEqual({ cleared: 4, failed: 0 });
     expect(sessionMock.fromPartition).not.toHaveBeenCalled();
   });
 
@@ -179,15 +189,15 @@ describe("clearAllSessionCaches — live sessions", () => {
   });
 
   it("still clears the code cache and other sessions when one HTTP clear fails", async () => {
-    const portal = fakeSession(partitionDir("portal"));
-    portal.clearCache.mockRejectedValue(new Error("disk cache busy"));
+    const app = fakeSession(partitionDir("daintree"));
+    app.clearCache.mockRejectedValue(new Error("disk cache busy"));
     const browser = fakeSession(partitionDir("browser-alpha"));
-    trackSession(asSession(portal));
+    trackSession(asSession(app));
     trackSession(asSession(browser));
 
     const result = await clearAllSessionCaches();
 
-    expect(portal.clearCodeCaches).toHaveBeenCalledWith({});
+    expect(app.clearCodeCaches).toHaveBeenCalledWith({});
     expect(browser.clearCache).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ cleared: 2, failed: 1 });
   });
@@ -299,7 +309,7 @@ describe("clearAllSessionCaches — unopened partitions on disk", () => {
   });
 
   it("removes cache dirs a previous clear detached but could not delete", async () => {
-    const dir = seedPartition("portal");
+    const dir = seedPartition("daintree");
     trackSession(asSession(fakeSession(dir)));
     seedFile(path.join(dir, "Cache.daintree-clearing-0a1b2c", "Cache_Data", "index"));
 
@@ -383,24 +393,18 @@ describe("clearAllSessionCaches — unopened partitions on disk", () => {
 });
 
 describe("clearHostPartitions", () => {
-  const dirName = (partition: string) => partition.replace(/^persist:/, "");
-  const browserOf = (hostId: string, projectId: string) =>
-    dirName(buildBrowserPartition(partitionProjectKey(projectId, hostId)));
-  const devPreviewOf = (hostId: string, projectId: string) =>
-    dirName(buildDevPreviewPartition(partitionProjectKey(projectId, hostId), "main", "panel-1"));
-
-  it("names every session a host's projects and portal use, and no other host's", () => {
+  it("names every session a host's projects and retired portal use, and no other host's", () => {
     for (const name of [
       browserOf("studio", "proj-1"),
       devPreviewOf("studio", "proj-1"),
-      dirName(remotePortalPartition("studio")),
+      retiredPortalOf("studio"),
     ]) {
       expect(isHostPartitionDirName(name, "studio")).toBe(true);
     }
     for (const name of [
       browserOf("studio-2", "proj-1"),
       devPreviewOf("studio-2", "proj-1"),
-      dirName(remotePortalPartition("studio-2")),
+      retiredPortalOf("studio-2"),
       dirName(buildBrowserPartition("proj-1")),
       "daintree",
     ]) {
@@ -433,7 +437,7 @@ describe("clearHostPartitions", () => {
     for (const name of [
       browserOf(longId, "proj-1"),
       devPreviewOf(longId, "proj-1"),
-      dirName(remotePortalPartition(longId)),
+      retiredPortalOf(longId),
     ]) {
       expect(isHostPartitionDirName(name, longId)).toBe(true);
       expect(isHostPartitionDirName(name, otherLong)).toBe(false);
@@ -459,5 +463,224 @@ describe("clearHostPartitions", () => {
 
   it("has nothing to do when no partition was ever made", async () => {
     await expect(clearHostPartitions("studio")).resolves.toEqual({ cleared: 0, failed: 0 });
+  });
+});
+
+describe("clearRetiredPortalPartitions", () => {
+  const LONG_HOST = `h${"-".repeat(30)}`;
+
+  function seedFullPartition(name: string): string {
+    const dir = seedPartition(name);
+    seedFile(path.join(dir, "Network", "Cookies"));
+    return dir;
+  }
+
+  function expectUntouched(dir: string): void {
+    expectPreserved(dir);
+    expect(fs.existsSync(path.join(dir, "Network", "Cookies"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, "Cache", "Cache_Data", "index"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, "Code Cache", "js", "index"))).toBe(true);
+  }
+
+  function leftovers(): string[] {
+    return fs.readdirSync(partitionsRoot).filter((name) => name.includes("daintree-clearing"));
+  }
+
+  it("names the host Portal sessions older builds wrote, escaped and hashed", () => {
+    expect(retiredPortalOf("studio")).toBe("browser-remote__studio__-portal");
+    expect(retiredPortalOf("Studio.Local")).toBe(
+      "browser-remote___0053tudio_002e_004cocal__-portal"
+    );
+    expect(retiredPortalOf(LONG_HOST)).toBe("browser-remote__-1fbb310b7169e9__-portal");
+  });
+
+  it("names this machine's Portal session and every host's, in any host encoding", () => {
+    for (const name of [
+      "portal",
+      "browser-remote__studio__-portal",
+      "browser-remote___0053tudio_002e_004cocal__-portal",
+      "browser-remote__-1fbb310b7169e9__-portal",
+      "browser-remote__-0__-portal",
+      "browser-remote__-1fffffffffffff__-portal",
+      `browser-remote__${"a".repeat(64)}__-portal`,
+      retiredPortalOf("studio"),
+      retiredPortalOf("Studio.Local"),
+      retiredPortalOf(LONG_HOST),
+      `${retiredPortalOf("studio")}.daintree-clearing-0123456789ab`,
+      `portal.daintree-clearing-0123456789ab.daintree-clearing-ba9876543210`,
+    ]) {
+      expect(isRetiredPortalPartitionDirName(name), name).toBe(true);
+    }
+  });
+
+  it("names no other session, however close its name", () => {
+    for (const name of [
+      "daintree",
+      "browser",
+      "browser-default",
+      "browser-portal",
+      "browser-team-portal",
+      dirName(buildBrowserPartition("-portal")),
+      browserOf("studio", "-portal"),
+      browserOf("studio", "proj-1"),
+      browserOf(LONG_HOST, "proj-1"),
+      devPreviewOf("studio", "proj-1"),
+      dirName(buildDevPreviewPartition("portal", "main", "panel-1")),
+      "browser-remote__studio__-portalfoo",
+      "browser-remote__studio__-portal-2",
+      "browser-remote__stu-dio__-portal",
+      "browser-remote____-portal",
+      "dev-preview-remote__studio__-portal",
+      "portal-old",
+      "portals",
+      "sidecar",
+      "portal.daintree-clearing-xyz",
+      "portal.daintree-clearing-0123456789a",
+      "portal.daintree-clearing-0123456789abc",
+      `${browserOf("studio", "proj-1")}.daintree-clearing-0123456789ab`,
+      // Spellings partitionPart never wrote: an escape past 64 characters, a
+      // malformed escape, and hashes that aren't its canonical hex.
+      `browser-remote__${"a".repeat(65)}__-portal`,
+      "browser-remote___12__-portal",
+      "browser-remote__-000000000000001__-portal",
+      "browser-remote__-01__-portal",
+      "browser-remote__-1fbb310b7169e9a__-portal",
+    ]) {
+      expect(isRetiredPortalPartitionDirName(name), name).toBe(false);
+    }
+  });
+
+  it("wipes the Portal sessions whole and leaves every other partition as it was", async () => {
+    const retired = ["portal", retiredPortalOf("studio"), retiredPortalOf(LONG_HOST)].map(
+      seedFullPartition
+    );
+    const kept = [
+      "daintree",
+      "project-legacy",
+      "browser",
+      dirName(buildBrowserPartition("proj-1")),
+      "browser-team-portal",
+      browserOf("studio", "proj-1"),
+      browserOf("studio", "-portal"),
+      devPreviewOf("studio", "proj-1"),
+      dirName(buildDevPreviewPartition("proj-1", "main", "panel-1")),
+      "browser-remote__studio__-portalfoo",
+      "plugin-foo",
+    ].map(seedFullPartition);
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    const result = await clearRetiredPortalPartitions();
+
+    expect(result).toEqual({ cleared: retired.length, failed: 0 });
+    for (const dir of retired) expect(fs.existsSync(dir)).toBe(false);
+    for (const dir of kept) expectUntouched(dir);
+    expect(renameSpy.mock.calls.map(([from]) => path.basename(String(from))).sort()).toEqual(
+      retired.map((dir) => path.basename(dir)).sort()
+    );
+    expect(leftovers()).toEqual([]);
+    expect(sessionMock.fromPartition).not.toHaveBeenCalled();
+    expect(defaultSession.clearCache).not.toHaveBeenCalled();
+  });
+
+  it("finds nothing to do on the next launch", async () => {
+    seedFullPartition("portal");
+    const kept = seedFullPartition(browserOf("studio", "proj-1"));
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 0 });
+    const renameSpy = vi.spyOn(fs, "renameSync");
+    const rmSpy = vi.spyOn(fs.promises, "rm");
+
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 0, failed: 0 });
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(rmSpy).not.toHaveBeenCalled();
+    expectUntouched(kept);
+  });
+
+  it("has nothing to do when no partition was ever made", async () => {
+    await expect(clearRetiredPortalPartitions()).resolves.toEqual({ cleared: 0, failed: 0 });
+  });
+
+  it("reports a failed listing and leaves the rest of startup to carry on", async () => {
+    fs.writeFileSync(partitionsRoot, "not a directory");
+
+    await expect(clearRetiredPortalPartitions()).resolves.toEqual({ cleared: 0, failed: 1 });
+  });
+
+  it("leaves a Portal session it can't detach for the next launch, clearing the others", async () => {
+    const stuck = seedFullPartition("portal");
+    const other = seedFullPartition(retiredPortalOf("studio"));
+    const realRename = fs.renameSync;
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (path.basename(String(from)) === "portal") {
+        throw Object.assign(new Error("EBUSY: resource busy"), { code: "EBUSY" });
+      }
+      realRename(from, to);
+    });
+
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 1 });
+    expectUntouched(stuck);
+    expect(fs.existsSync(other)).toBe(false);
+
+    renameSpy.mockRestore();
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 0 });
+    expect(fs.existsSync(stuck)).toBe(false);
+  });
+
+  it("finishes a detached Portal session it couldn't remove on the next launch", async () => {
+    seedFullPartition("portal");
+    vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(
+      Object.assign(new Error("EBUSY: resource busy"), { code: "EBUSY" })
+    );
+
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 0, failed: 1 });
+    expect(leftovers()).toHaveLength(1);
+    expect(leftovers()[0]).toMatch(/^portal\.daintree-clearing-[0-9a-f]{12}$/);
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 0 });
+    expect(fs.readdirSync(partitionsRoot)).toEqual([]);
+    expect(renameSpy).not.toHaveBeenCalled();
+  });
+
+  it("removes a leftover in place, however many failed removals named it", async () => {
+    const name = `portal${".daintree-clearing-0123456789ab".repeat(8)}`;
+    seedFullPartition(name);
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 0 });
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(fs.readdirSync(partitionsRoot)).toEqual([]);
+  });
+
+  it("removes what host removal detached from a Portal session, and nothing a host still uses", async () => {
+    const detachedPortal = `${retiredPortalOf("studio")}.daintree-clearing-0123456789ab`;
+    const detachedBrowser = `${browserOf("studio", "proj-1")}.daintree-clearing-0123456789ab`;
+    seedFullPartition(detachedPortal);
+    const browserLeftover = seedFullPartition(detachedBrowser);
+
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 0 });
+    expect(fs.readdirSync(partitionsRoot)).toEqual([detachedBrowser]);
+    expectUntouched(browserLeftover);
+  });
+
+  it("never follows a symlinked Portal session to its target", async () => {
+    const target = seedFullPartition("daintree");
+    fs.symlinkSync(target, partitionDir("portal"), "dir");
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 0, failed: 1 });
+    expect(renameSpy).not.toHaveBeenCalled();
+    expectUntouched(target);
+  });
+
+  it("clears an open Portal session through the Session API", async () => {
+    const dir = seedFullPartition("portal");
+    const live = { storagePath: dir, clearData: vi.fn(() => Promise.resolve()) };
+    trackSession(live as unknown as Electron.Session);
+
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 0 });
+    // No options: every data type, the sign-in cookies included.
+    expect(live.clearData).toHaveBeenCalledTimes(1);
+    expect(live.clearData).toHaveBeenCalledWith();
+    expect(fs.existsSync(dir)).toBe(true);
   });
 });

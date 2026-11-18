@@ -647,10 +647,10 @@ export class ProjectViewManager {
         if (child === view || child === outgoing) continue;
         const childWc = child.webContents;
         if (!childWc || childWc.isDestroyed()) continue;
-        // Only sync project views. Non-project children (PortalManager parks
-        // hidden portal tabs at OFFSCREEN_BOUNDS while still attached, the
-        // unbound welcome view, devtools) own their own bounds — forcing them
-        // to full-window here would yank a hidden portal onscreen on resize.
+        // Only sync project views. Non-project children (paint-surface views
+        // SurfaceViewManager places, the unbound welcome view, devtools) own
+        // their own bounds — forcing them to full-window here would stretch a
+        // surface over the active project view on resize.
         if (!this.webContentsToProject.has(childWc.id)) continue;
         child.setBounds({ x: 0, y: 0, width, height });
       }

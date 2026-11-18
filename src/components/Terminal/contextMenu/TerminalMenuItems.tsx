@@ -55,6 +55,7 @@ import {
   Radio,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Send,
   SquareTerminal,
@@ -396,6 +397,7 @@ export function TerminalSessionMenuItems({
   terminalId,
   terminalPty,
   hasPty,
+  canResetModes,
   isPaused,
   isInputLocked,
   isVoiceLockedHere,
@@ -411,6 +413,8 @@ export function TerminalSessionMenuItems({
   terminalId: string;
   terminalPty: PtyPanelData | undefined;
   hasPty: boolean;
+  /** A live screen to reset: hidden once the process exits or while restore holds the pane. */
+  canResetModes: boolean;
   isPaused: boolean;
   isInputLocked: boolean | undefined;
   isVoiceLockedHere: boolean;
@@ -449,6 +453,12 @@ export function TerminalSessionMenuItems({
             <ContextMenuItem onSelect={() => onAction("redraw")}>
               <RefreshCw className={ICON_CLASS} aria-hidden="true" />
               Redraw
+            </ContextMenuItem>
+          )}
+          {canResetModes && (
+            <ContextMenuItem onSelect={() => onAction("reset-modes")}>
+              <RotateCcw className={ICON_CLASS} aria-hidden="true" />
+              Reset terminal modes
             </ContextMenuItem>
           )}
           {terminalPty?.launchAgentId && !terminalPty.restoreRecovery && (

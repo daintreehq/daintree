@@ -2,6 +2,11 @@ import { create } from "zustand";
 import type { GitHubTokenConfig } from "../../shared/types.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import {
+  ENTERPRISE_CHANNELS,
+  GITHUB_PLUGIN_ID,
+  type EnterpriseStatus,
+} from "../../shared/enterprise.js";
 
 interface GitHubConfigState {
   config: GitHubTokenConfig | null;
@@ -26,8 +31,26 @@ let initPromise: Promise<void> | null = null;
 // credential-status payload — consumers that need the authenticated user
 // resolve it per-repo via `forge.getCurrentUser`.
 async function loadConfig(): Promise<GitHubTokenConfig> {
-  const status = await window.electron.forge.getCredentialStatus(BUILTIN_GITHUB_PROVIDER_ID);
-  return { hasToken: status.hasCredential };
+  const [status, hasEnterpriseToken] = await Promise.all([
+    window.electron.forge.getCredentialStatus(BUILTIN_GITHUB_PROVIDER_ID),
+    loadHasEnterpriseToken(),
+  ]);
+  return { hasToken: status.hasCredential, hasEnterpriseToken };
+}
+
+// The Enterprise Server token is the plugin's own, not a host forge
+// credential. An unreachable plugin reads as no token rather than failing the
+// whole load: github.com's state still stands.
+async function loadHasEnterpriseToken(): Promise<boolean> {
+  try {
+    const status = (await window.electron.plugin.invoke(
+      GITHUB_PLUGIN_ID,
+      ENTERPRISE_CHANNELS.status
+    )) as EnterpriseStatus | null;
+    return status?.hasToken === true;
+  } catch {
+    return false;
+  }
 }
 
 export const useGitHubConfigStore = create<GitHubConfigStore>()((set, get) => ({
@@ -68,8 +91,17 @@ export const useGitHubConfigStore = create<GitHubConfigStore>()((set, get) => ({
     }
   },
 
+  // Callers report what changed for github.com; the Enterprise Server's
+  // presence stays as last read unless they name it.
   updateConfig: (config: GitHubTokenConfig) => {
-    set({ config, error: null });
+    const previous = get().config?.hasEnterpriseToken;
+    set({
+      config:
+        config.hasEnterpriseToken === undefined && previous !== undefined
+          ? { ...config, hasEnterpriseToken: previous }
+          : config,
+      error: null,
+    });
   },
 }));
 

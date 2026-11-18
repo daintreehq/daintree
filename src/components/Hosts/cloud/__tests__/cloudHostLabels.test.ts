@@ -32,6 +32,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     machineName: "build",
     ownership: "created-by-daintree",
     createdFor: null,
+    worktreeCleanup: null,
     provisioning: null,
     machine: "running",
     rawState: "ready",
@@ -53,6 +54,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     hostKeyFingerprint: null,
     hostKeyReview: null,
     keptRunningAt: null,
+    asleep: false,
     ...overrides,
   };
 }
@@ -124,6 +126,7 @@ describe("cloud host labels", () => {
       lost: "caches",
       saveRetryBilled: false,
       stoppedComputeBilled: false,
+      stoppedStorageBilled: false,
     };
     expect(stopKeepsSentence({ ...persistence, retentionDays: 14 })).toBe(
       "Files are kept for at least 14 days while it's stopped, and may be deleted after that; caches aren't."
@@ -290,6 +293,29 @@ describe("idleClockSentence (#17357)", () => {
       `Idle since ${at(base)}. Its idle time ended ${at(base + 30 * 60_000)}.`
     );
   });
+
+  it("says the machine stops by itself only when its host says it holds a key to (#17361)", () => {
+    const idle = {
+      idleAfterMinutes: 30,
+      lastWorkAt: base,
+      busy: false,
+      idleEndsAt: base + 30 * 60_000,
+    };
+    const armed = { ...idle, stopsWhenIdle: true };
+    expect(idleClockSentence(armed, base + 60_000)).toBe(
+      `Idle since ${at(base)}. It stops by itself ${at(base + 30 * 60_000)} if it stays idle.`
+    );
+    expect(idleClockSentence(armed, base + 30 * 60_000)).toBe(
+      `Idle since ${at(base)}. Its idle time ended ${at(base + 30 * 60_000)}, so it stops by itself.`
+    );
+    expect(idleClockSentence({ ...armed, busy: true, idleEndsAt: null }, base)).toMatch(
+      /^In use now\. .*stops by itself once idle that long\.$/
+    );
+    // A host that doesn't say so keeps the clock's own words.
+    expect(idleClockSentence({ ...idle, stopsWhenIdle: false }, base + 60_000)).toBe(
+      idleClockSentence(idle, base + 60_000)
+    );
+  });
 });
 
 describe("what stopping and deleting mean for each provider (#17346)", () => {
@@ -303,6 +329,28 @@ describe("what stopping and deleting mean for each provider (#17346)", () => {
     expect(cloudCostFacts(stopped, BOAT_PROVIDER)).toEqual(["$0.036/h when started"]);
     expect(cloudChipStatus(stopped, BOAT_PROVIDER)).toBe("machine stopped");
     expect(canDeleteMachines(BOAT_PROVIDER)).toBe(true);
+  });
+
+  it("words a stopped machine's bill as its provider does, still saying how to stop paying", () => {
+    const worded = (stoppedComputeBilled: boolean, deletion: boolean) => {
+      const declared = provider({ stoppedComputeBilled, deletion });
+      declared.capabilities = {
+        ...declared.capabilities,
+        persistence: {
+          ...declared.capabilities.persistence,
+          stoppedBilling: "Acme bills a stopped box in full until it's deleted.",
+        },
+      };
+      return stoppedBillingSentence(declared);
+    };
+    expect(worded(true, true)).toBe(
+      "Acme bills a stopped box in full until it's deleted. To stop paying for it, remove the host and delete its machine."
+    );
+    expect(worded(true, false)).toBe(
+      "Acme bills a stopped box in full until it's deleted. To stop paying for it, delete the machine in Acme's console."
+    );
+    // The wording only says how a billed stop bills: a stop that ends the bill needs no warning.
+    expect(worded(false, true)).toBeNull();
   });
 
   it("says a stopped machine still bills, and that deleting it is how to stop paying", () => {
@@ -342,5 +390,47 @@ describe("what stopping and deleting mean for each provider (#17346)", () => {
     expect(cloudCostFacts(stopped, null)).toEqual(["$0.036/h when started"]);
     // A delete through it is refused in main with the reason it's unavailable.
     expect(canDeleteMachines(null)).toBe(true);
+  });
+});
+
+describe("a machine that sleeps when idle and bills its disk while parked (#17347)", () => {
+  const sleeper = provider({
+    name: "Agent 37",
+    stoppedComputeBilled: false,
+    stoppedStorageBilled: true,
+    lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+  });
+
+  it("says a stopped or asleep machine bills only for its disk", () => {
+    expect(stoppedBillingSentence(sleeper)).toBe(
+      "Agent 37 bills only for its disk while it's stopped or asleep."
+    );
+    const stopsOnly = provider({
+      name: "Agent 37",
+      stoppedComputeBilled: false,
+      stoppedStorageBilled: true,
+    });
+    expect(stoppedBillingSentence(stopsOnly)).toBe(
+      "Agent 37 bills only for its disk while it's stopped."
+    );
+    // Storage alone is no compute bill: a stopped machine's facts and chip stay a start's price.
+    const stopped = status({ machine: "stopped", lifetime: sleeper.capabilities.lifetime });
+    expect(cloudCostFacts(stopped, sleeper)).toEqual(["$0.036/h when started"]);
+    expect(cloudChipStatus(stopped, sleeper)).toBe("machine stopped");
+  });
+
+  it("calls a machine the provider slept on idle asleep, and offers to start it", () => {
+    // The normalized fact decides, whatever the provider's own word for it.
+    const asleep = status({ machine: "stopped", asleep: true, rawState: "parked" });
+    expect(cloudStatusLabel(asleep)).toBe("Machine asleep");
+    expect(cloudStatusLabel(asleep, true)).toBe("Last reported asleep");
+    expect(cloudChipStatus(asleep, sleeper)).toBe("machine asleep");
+    expect(canStartMachine(asleep)).toBe(true);
+    expect(canStopMachine(asleep)).toBe(false);
+    // Running, it says it sleeps when idle rather than claiming no auto-stop.
+    expect(cloudCostFacts(status({ lifetime: sleeper.capabilities.lifetime }), sleeper)).toEqual([
+      "$0.036/h",
+      "sleeps when idle",
+    ]);
   });
 });

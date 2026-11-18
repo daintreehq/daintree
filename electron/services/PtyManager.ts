@@ -439,6 +439,11 @@ export class PtyManager extends EventEmitter {
     }
   }
 
+  /** Reset the input modes a dead program left on, without touching the process. */
+  resetTerminalModes(terminalId: string): boolean {
+    return this.registry.get(terminalId)?.resetTerminalModes() ?? false;
+  }
+
   /**
    * Replay recent terminal history.
    */

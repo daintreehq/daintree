@@ -42,6 +42,7 @@ import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
 import { installHostIdle } from "./hostIdle.js";
+import { installMachineKeeperHost } from "./machineKeeperHost.js";
 import {
   installHostMetricsHost,
   installLinkActivityHost,
@@ -297,6 +298,8 @@ async function buildHostListener(
   teardowns.push(installSettingsCopyHost(server));
   // This machine's own settings, read and changed by name when a Shell asks (#14167).
   teardowns.push(installSettingsControlHost(server));
+  // A cloud machine renewing and stopping itself by its idle clock, with the key a Shell hands it (#17361).
+  teardowns.push(installMachineKeeperHost(server));
   // Plugin prompts go to the project's driving frontend; view bundles are
   // served per endpoint alongside its other streams.
   teardowns.push(installPluginHost());

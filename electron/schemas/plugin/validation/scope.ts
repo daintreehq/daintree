@@ -188,6 +188,17 @@ export function validateProjectRuntimeContributions(
         params: { errorCode: "projectTemplates_project_scope_forbidden" },
       });
     }
+    // Not deferred: a provider creates machines that bill the person, and a
+    // repository must never be able to add one by being opened (#17351).
+    if (manifest.contributes.cloudProviders.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contributes", "cloudProviders"],
+        message:
+          'contributes.cloudProviders is not available to a "scope": "project" plugin or an "instanceMode": "project" package — a cloud provider creates machines on the person\'s accounts, so only a plugin they installed may contribute one, never a repository they opened.',
+        params: { errorCode: "cloudProviders_project_scope_forbidden" },
+      });
+    }
     // Not deferred either: Canopy spans every project and stands in none, so
     // there is no project for a project's plugin to run its view in there.
     if (manifest.contributes.canopyViews.length > 0) {

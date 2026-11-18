@@ -12,6 +12,11 @@ import type {
   ResourceRef,
 } from "./forge.js";
 import type { PluginArtifactApi } from "./pluginArtifacts.js";
+import type {
+  CloudProviderContribution,
+  CloudProviderDescriptor,
+  CloudProviderImpl,
+} from "./pluginCloudProvider.js";
 export type {
   PluginArtifact,
   PluginArtifactApi,
@@ -632,7 +637,13 @@ export interface PluginSearchProviderInfo {
   kind: "declarative" | "runtime";
   /** The user's "Show in quick switcher" choice. */
   shown: boolean;
-  /** Another plugin's provider registered the same keyword first in this project; this one is refused. */
+  /**
+   * A shown provider of another plugin registered the same keyword first in
+   * this project, so this one is refused, and would still be if it were
+   * switched off and then on. A switched-off provider claims no keyword.
+   * Daintree's own file search holds its keyword (`files`) ahead of every
+   * plugin, and is named here as "Daintree".
+   */
   keywordTakenBy?: string;
 }
 
@@ -3117,6 +3128,14 @@ export interface PluginManifest {
      */
     worktreeDeleteNotes?: WorktreeDeleteNotesContribution[];
     /**
+     * Cloud providers an installed plugin runs in its worker (#17351), each
+     * registered as `{pluginId}.{id}`. Optional in the type but always
+     * materialized by the manifest schema's `.default([])`. Refused for a
+     * project plugin: a repository must never add a provider that creates
+     * machines.
+     */
+    cloudProviders?: CloudProviderContribution[];
+    /**
      * Plugin-contributed file editors (#12323): an extra, writable mode on the
      * host's file panel for the declared extensions. Built-in plugins only in
      * v1 — the slot resolves through the host-bundled builtin view registry,
@@ -4928,9 +4947,11 @@ export interface PluginWorktreeStatus {
 /**
  * A git operation the host saw in progress in a worktree, read from the
  * operation's marker files under the git directory. Only operations that block
- * normal work appear here; a worktree with none reads as `null`.
+ * normal work appear here; a worktree with none reads as `null`. `am` is a
+ * halted `git am`, kept apart from `rebase` because the two finish with
+ * different commands.
  */
-export type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
+export type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert" | "am";
 
 /**
  * How far a worktree's post-create setup has got.
@@ -7404,6 +7425,33 @@ export interface PluginActivationApi {
   registerWorktreeDeleteNotesProvider(
     descriptor: WorktreeDeleteNotesProviderDescriptor,
     impl: WorktreeDeleteNotesProviderImpl
+  ): Promise<() => void>;
+  /**
+   * Bind the implementation of a cloud provider the manifest declares in
+   * `contributes.cloudProviders` (#17351). Daintree lists the provider, and
+   * names its accounts and machines, from the manifest; every call it makes
+   * of the provider (checking credentials, the catalog, creating, starting,
+   * stopping and deleting machines, SSH access) comes to `impl` here. A
+   * plugin that isn't running is activated for the call.
+   *
+   * Each call has 30 seconds, activation included. A late answer, a crash or
+   * a throw is a provider error on that account; a throw whose `code` is a
+   * `CloudHostErrorCode` keeps that code. The impl must have every method the
+   * declared capabilities need: `renewLifetime` for a renewable lifetime,
+   * `authorizeSsh` or `sshAccess` for the declared SSH key timing.
+   *
+   * Returns a disposer that unbinds the impl; the binding also goes when the
+   * plugin's worker stops or the plugin unloads. Must be called during
+   * `activate()`. Calling it again with the same id replaces the binding, and
+   * the older disposer becomes inert.
+   *
+   * @throws {Error} If called after activation resolves or times out, with an
+   *   id `contributes.cloudProviders` does not declare, or with an impl
+   *   missing a method the declaration needs.
+   */
+  registerCloudProvider(
+    descriptor: CloudProviderDescriptor,
+    impl: CloudProviderImpl
   ): Promise<() => void>;
   /**
    * Subscribe to active-worktree changes. The callback fires with the new

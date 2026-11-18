@@ -9,17 +9,22 @@ vi.mock("../GitHubAuth.js", () => ({
   GITHUB_API_TIMEOUT_MS: 5000,
 }));
 
-vi.mock("../GitHubRateLimitService.js", () => ({
-  gitHubRateLimitService: {
+vi.mock("../GitHubRateLimitService.js", () => {
+  const gitHubRateLimitService = {
     updateFromGraphQL: vi.fn(),
-  },
-}));
+  };
+  return {
+    gitHubRateLimitService,
+    rateLimitServiceForHost: () => gitHubRateLimitService,
+    releaseRateLimitServiceForHost: () => {},
+  };
+});
 
 vi.mock("../GitHubRepoContext.js", () => ({
   withRepoContextRetry: async <T>(
     _cwd: string,
-    fn: (ctx: { owner: string; repo: string }) => Promise<T>
-  ) => fn({ owner: "owner", repo: "repo" }),
+    fn: (ctx: { host: string; owner: string; repo: string }) => Promise<T>
+  ) => fn({ host: "github.com", owner: "owner", repo: "repo" }),
 }));
 
 const mockCache = new Map<string, Record<string, number>>();

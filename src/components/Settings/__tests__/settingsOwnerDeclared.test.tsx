@@ -170,6 +170,7 @@ describe("the declared settings behind each section", () => {
       gridLayout: "device",
       scrollback: "device",
       assistiveTechnology: "device",
+      osc52Clipboard: "device",
       worktreePathPattern: "host",
       clientPreferences: "device",
       worktreeSidebar: "device",

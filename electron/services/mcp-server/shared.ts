@@ -799,8 +799,8 @@ export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
  * agent, a duplicate issue/PR/comment/review — and (c) an intentional
  * same-argument repeat inside the TTL is not a normal use case.
  *
- * (c) is what bounds the list. Navigation (`forge.open*`, portal/browser
- * opens) is out: reopening a URL the user closed must dispatch again, and a
+ * (c) is what bounds the list. Navigation (`forge.open*`, browser opens)
+ * is out: reopening a URL the user closed must dispatch again, and a
  * silent 120s no-op reads as a broken tool. Repeatable commands
  * (`terminal.sendCommand`, `git.stage*`) are out for the same reason. So are
  * idempotent state-sets (close/reopen/draft/edit, label and assignee

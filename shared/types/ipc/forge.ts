@@ -3,6 +3,7 @@ import type {
   CheckRunStatus,
   CIStatusState,
   CredentialImportFailureReason,
+  DeploymentState,
   ForgePullRequestTerm,
   ForgeTokenHealthState,
   Issue,
@@ -140,6 +141,28 @@ export interface ForgeCheckRun {
   workflow?: string;
   /** App or integration that reported the check. Omitted if the provider didn't report one. */
   app?: string;
+}
+
+/**
+ * Renderer-facing projection of {@link import("../forge.js").Deployment}, used
+ * by `forge:get-deployments`. Drops `rawData`, and drops a `url` that isn't a
+ * plain http(s) address, so a link the launcher opens is always one the forge
+ * recorded and the system browser can open safely.
+ */
+export interface ForgeDeployment {
+  id: string;
+  /** Environment name exactly as the forge records it. */
+  environment: string;
+  state: DeploymentState;
+  /** Address the deployment reported. Omitted when it reported none, or none that is http(s). */
+  url?: string;
+  /** Epoch milliseconds. */
+  createdAt: number;
+  /** Epoch milliseconds. */
+  updatedAt: number;
+  commitSha?: string;
+  /** Qualified ref (`refs/heads/main`), when the forge recorded one rather than a commit. */
+  ref?: string;
 }
 
 /** Payload for PR cleared notification. */
@@ -384,6 +407,7 @@ export type ForgeProviderMethodName =
   | "getPR"
   | "getCIStatus"
   | "getChecks"
+  | "getDeployments"
   | "listIssueComments"
   | "getRepoMetadata"
   | "createIssue"

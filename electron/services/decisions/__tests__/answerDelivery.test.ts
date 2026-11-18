@@ -1650,6 +1650,142 @@ describe("AnswerDelivery", () => {
   });
 });
 
+/**
+ * A question the person declined from their phone (#17234), stored as the
+ * library's inbox stores one: cancelled at the revision it was open at, its
+ * content-free decline the one entry marked for delivery.
+ */
+async function declined(
+  store: DaintreeLocalStore,
+  id: string,
+  alias: number,
+  over: Partial<QuestionRow> = {}
+): Promise<void> {
+  const entry: AnswerEntry = {
+    entry_id: `${id}-d1`,
+    kind: "declined",
+    action: "cancel",
+    revision: 0,
+    source: "human",
+    correction: false,
+    created_at: "2026-11-01T09:00:00.000Z",
+    event_seq: 7,
+    deliver: true,
+    delivered: false,
+    sealed: null,
+  };
+  await answered(store, id, alias, "approve", {
+    question_revision: 0,
+    local_status: "cancelled",
+    answers_json: serializeAnswers([entry]),
+    ...over,
+  });
+}
+
+describe("AnswerDelivery, a person's decline (#17234)", () => {
+  const declineOf = async (h: ReturnType<typeof setup>) =>
+    parseAnswers((await h.question(Q1))!.answers_json)[0]!;
+
+  it("types the decline into the run still listening once its line is free, once, as Daintree's block", async () => {
+    const h = setup();
+    h.works({ typed: true });
+    await declined(h.store, Q1, 1);
+
+    h.delivery.start();
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+
+    h.settles();
+    await until(() => h.client.submitted.length === 1);
+    const [typed] = h.client.submitted;
+    expect(typed.id).toBe(PANE);
+    expect(typed.text).toContain(DECISION_BLOCK_START);
+    expect(typed.text).toContain("source: human\nstatus: declined\nauthorised: no\nnote: ");
+    expect(typed.text).not.toMatch(/^(choice|comment):/m);
+    await until(async () => (await declineOf(h)).delivered);
+    expect(await declineOf(h)).toMatchObject({ deliver: true, delivered: true });
+    expect(typed.text).toContain(markerFor((await declineOf(h)).injection_id!));
+    // A notice has no relay delivery to report.
+    expect(h.terminalReports()).toEqual([]);
+    expect(await h.delivery.attentionItems()).toEqual([]);
+
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toHaveLength(1);
+    await stopped(h.delivery);
+  });
+
+  it.each([
+    ["gone", (h: ReturnType<typeof setup>) => h.client.terminals.delete(PANE)],
+    ["relaunched", (h: ReturnType<typeof setup>) => h.principals.set(PANE, "principal-2")],
+  ] as const)(
+    "never resumes a %s run to tell it, and never asks a person about it",
+    async (_label, change) => {
+      // Its session could be reopened: an answer would be typed there.
+      const h = setup({ resume: {} });
+      const origin = { ...ORIGIN, agent_session_id: "claude-session-9" };
+      await declined(h.store, Q1, 1, { origin });
+      change(h);
+
+      h.delivery.start();
+      await until(async () => !(await declineOf(h)).deliver);
+      const row = (await h.question(Q1))!;
+      expect(await declineOf(h)).toMatchObject({ deliver: false, delivered: false });
+      expect(row.origin).toEqual(origin);
+      expect(row.delivery_status).toBe("desktop-received");
+      expect(h.launches).toEqual([]);
+      expect(h.client.submitted).toEqual([]);
+      expect(h.failedReports()).toEqual([]);
+      expect(await h.delivery.attentionItems()).toEqual([]);
+      // Nothing is left for the minute check to look for.
+      expect(await h.store.hasPendingDelivery()).toBe(false);
+
+      await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+      expect(h.launches).toEqual([]);
+      expect(h.client.submitted).toEqual([]);
+      await stopped(h.delivery);
+    }
+  );
+
+  it("waits for a terminal's host that is only offline, never dropping it, then types it", async () => {
+    const h = setup();
+    // Held behind a line typed into the busy pane, then its host goes away.
+    h.works({ typed: true });
+    await declined(h.store, Q1, 1);
+    h.delivery.start();
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+
+    h.pty.ready = false;
+    h.settles();
+    await until(async () => (await h.question(Q1))?.delivery_status === "pending-host");
+    expect(await declineOf(h)).toMatchObject({ deliver: true, delivered: false });
+    expect(h.client.submitted).toEqual([]);
+    expect(await h.delivery.attentionItems()).toEqual([]);
+
+    h.pty.ready = true;
+    h.signal("appeared");
+    await until(() => h.client.submitted.length === 1);
+    expect(h.client.submitted[0].text).toContain("status: declined");
+    await stopped(h.delivery);
+  });
+
+  it("never types a decline a crash may have typed, and never asks a person about it", async () => {
+    const h = setup();
+    await declined(h.store, Q1, 1);
+    await h.store.putIntent(intent(CRASHED, Q1, { answer_revision: 0 }));
+    h.client.screens.set(PANE, "❯ \r\n");
+
+    h.delivery.start();
+    await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
+    expect(await h.delivery.attentionItems()).toEqual([]);
+
+    h.signal("settled");
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+    await stopped(h.delivery);
+  });
+});
+
 describe("AnswerDelivery follow-ups (#16231)", () => {
   const messageOf = async (h: ReturnType<typeof setup>, id: string) =>
     parseMessages((await h.question(Q1))!.messages_json).find((m) => m.message_id === id)!;
@@ -1865,6 +2001,7 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
       followUps: [
         {
           messageId: M1,
+          onComputer: false,
           status: "needs-attention",
           reason: "pane_gone",
           text: "Use the staging bucket.",

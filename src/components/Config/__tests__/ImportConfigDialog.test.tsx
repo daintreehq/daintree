@@ -23,7 +23,6 @@ vi.mock("@/services/configBundleRefresh", () => ({ refreshImportedConfig: refres
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/hooks", async (importOriginal) => ({
   ...((await importOriginal()) as Record<string, unknown>),
   useOverlayState: () => {},

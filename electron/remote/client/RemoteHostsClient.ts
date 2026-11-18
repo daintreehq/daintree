@@ -32,7 +32,7 @@ import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { withTimeout } from "../../utils/withTimeout.js";
-import { sshAccessDenied } from "./sshAccessError.js";
+import { parkedLinkError } from "./parkedLinkError.js";
 import { hostModeOff, hostRestarting } from "./hostModeOffError.js";
 import { HostModeOffRedial } from "./hostModeOffRedial.js";
 import {
@@ -2120,10 +2120,12 @@ export class RemoteHostsClient {
       return hostModeOff(name, (descriptor?.lastSeenAt ?? null) !== null);
     }
     if (readiness === "stopped-retrying") {
-      // ssh couldn't log in (Host mode off is ruled out above). It won't
-      // change by waiting, and a new window could never show the host either.
+      // Host mode off is ruled out above. What stopped it won't change by
+      // waiting, and a new window could never show the host either.
       const link = connection.linkState;
-      return sshAccessDenied(name, link.status === "unreachable" ? link.detail : null);
+      return link.status === "unreachable"
+        ? parkedLinkError(name, link.blocker, link.detail)
+        : parkedLinkError(name, undefined, null);
     }
     if (connection.restarting) return hostRestarting(hostId, name);
     return new AppError({

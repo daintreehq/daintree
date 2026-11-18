@@ -22,6 +22,12 @@ export interface TerminalResourceState {
  */
 export interface ResourceSampleBatch {
   samples: TerminalResourceBatchPayload;
+  /**
+   * When the host took the samples (epoch ms). The census backs off from 2.5s
+   * to 15s between polls, so a consumer that turns samples into a rate needs
+   * this rather than a per-sample constant.
+   */
+  sampledAt: number;
 }
 
 interface ResourceMonitoringStore {
@@ -34,7 +40,7 @@ interface ResourceMonitoringStore {
    */
   lastBatch: ResourceSampleBatch | null;
   setEnabled: (enabled: boolean) => void;
-  updateMetrics: (batch: TerminalResourceBatchPayload) => void;
+  updateMetrics: (batch: TerminalResourceBatchPayload, sampledAt?: number) => void;
   removePanel: (id: string) => void;
   clear: () => void;
 }
@@ -90,7 +96,7 @@ export const useResourceMonitoringStore = create<ResourceMonitoringStore>((set) 
       return { enabled };
     }),
 
-  updateMetrics: (batch) =>
+  updateMetrics: (batch, sampledAt = Date.now()) =>
     set((state) => {
       const ids = Object.keys(batch);
       if (ids.length === 0) return state;
@@ -121,11 +127,12 @@ export const useResourceMonitoringStore = create<ResourceMonitoringStore>((set) 
         next ??= new Map(state.metrics);
         next.set(id, entry);
       }
-      return { metrics: next ?? state.metrics, lastBatch: { samples: batch } };
+      return { metrics: next ?? state.metrics, lastBatch: { samples: batch, sampledAt } };
     }),
 
   removePanel: (id) =>
     set((state) => {
+      if (!state.metrics.has(id)) return state;
       const next = new Map(state.metrics);
       next.delete(id);
       return { metrics: next };

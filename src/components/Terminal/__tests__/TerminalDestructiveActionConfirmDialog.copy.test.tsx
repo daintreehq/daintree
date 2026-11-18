@@ -11,8 +11,8 @@ class ResizeObserverStub implements ResizeObserver {
 globalThis.ResizeObserver ??= ResizeObserverStub;
 
 // Typed explicitly so asserting on `toHaveBeenCalledWith` needs no cast.
-const dispatch = vi.fn<(id: string, args: unknown, opts: unknown) => Promise<void>>(() =>
-  Promise.resolve()
+const dispatch = vi.fn<(id: string, args: unknown, opts: unknown) => Promise<{ ok: boolean }>>(() =>
+  Promise.resolve({ ok: true })
 );
 
 vi.mock("@/services/ActionService", () => ({
@@ -21,9 +21,17 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
-vi.mock("@/lib/accessibility", () => ({
-  closeAndAnnounce: (clear: () => void) => clear(),
-}));
+// Forwards to the real announcer, so an announcement made at click time shows
+// up where the timing tests look for one.
+vi.mock("@/lib/accessibility", async () => {
+  const { useAnnouncerStore } = await import("@/store/accessibilityAnnouncerStore");
+  return {
+    closeAndAnnounce: (clear: () => void, message: string) => {
+      clear();
+      useAnnouncerStore.getState().announce(message);
+    },
+  };
+});
 
 import {
   useTerminalPendingDestructiveActionStore,
@@ -31,6 +39,7 @@ import {
   type TerminalPendingDestructiveActionSnapshot,
 } from "@/store/terminalPendingDestructiveActionStore";
 import { TRASH_TTL_SECONDS } from "@/components/Layout/trashCountdown";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { TerminalDestructiveActionConfirmDialog } from "../TerminalDestructiveActionConfirmDialog";
 
 beforeEach(() => {
@@ -545,4 +554,82 @@ describe("TerminalDestructiveActionConfirmDialog — confirmed re-dispatch sourc
       expect(opts).toEqual({ source: origin === "keybinding" ? "keybinding" : "user" });
     }
   );
+});
+
+describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#17328)", () => {
+  const RESET: TerminalPendingDestructiveActionSnapshot = {
+    kind: "resetModes",
+    targetCount: 1,
+    runningAgentCount: 1,
+    terminalId: "t1",
+    terminalTitle: "Build agent",
+  };
+
+  const announced = () => {
+    const { polite, assertive } = useAnnouncerStore.getState();
+    return polite?.msg ?? assertive?.msg ?? null;
+  };
+
+  beforeEach(() => {
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  it("names the pane, and what an agent still in it would lose, without claiming one is", () => {
+    const { title, described } = open({ ...RESET, terminalTitle: "Nightly migration" });
+
+    expect(title).toContain("'Nightly migration'");
+    // Asked on launch affinity too, where the agent may already have gone.
+    expect(described).toMatch(/^An agent may still be running/);
+    expect(described).toMatch(/If one is, it loses bracketed paste/);
+    expect(described).toMatch(/multi-line paste can arrive as separate lines/);
+  });
+
+  it("points at Redraw outside the accessible description", () => {
+    const { described } = open(RESET);
+
+    expect(screen.getByText(/use Redraw instead/)).toBeTruthy();
+    expect(described).not.toMatch(/Redraw/);
+  });
+
+  it("closes at once on confirm, and says it reset only once the host has", async () => {
+    let settle: (result: { ok: boolean }) => void = () => {};
+    dispatch.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+    open(RESET);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset terminal modes" }));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.resetModes",
+      { terminalId: "t1", confirmed: true },
+      { source: "user" }
+    );
+    expect(useTerminalPendingDestructiveActionStore.getState().pending).toBeNull();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    // Microtasks and a timer turn pass with the host still answering.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(announced()).toBeNull();
+
+    settle({ ok: true });
+    await vi.waitFor(() => expect(announced()).toBe("Terminal modes reset"));
+  });
+
+  it("announces nothing when the reset didn't happen", async () => {
+    dispatch.mockResolvedValueOnce({ ok: false });
+    open(RESET);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset terminal modes" }));
+
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(announced()).toBeNull();
+    expect(useTerminalPendingDestructiveActionStore.getState().pending).toBeNull();
+  });
+
+  it("dispatches nothing when the snapshot lost its terminal", () => {
+    open({ ...RESET, terminalId: undefined });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset terminal modes" }));
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });

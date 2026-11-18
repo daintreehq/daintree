@@ -9,10 +9,6 @@ import { useProjectStore } from "@/store/projectStore";
 import type { Project, TerminalRecipe } from "@/types";
 import { RecipeEditor } from "../RecipeEditor";
 
-vi.mock("@/store/portalStore", () => ({
-  usePortalStore: () => ({ isOpen: false, width: 0 }),
-}));
-
 vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));

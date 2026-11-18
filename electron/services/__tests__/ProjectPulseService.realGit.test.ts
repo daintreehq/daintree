@@ -131,3 +131,60 @@ describe("Project Pulse age across unrelated histories (#17509)", () => {
     expect(pulse.heatmap.every((cell) => !cell.isBeforeProject)).toBe(true);
   });
 });
+
+describe("Project Pulse past 20,000 commits in the window (#17455)", () => {
+  it("counts every commit from the first cell's local midnight on", async () => {
+    const repo = path.join(root, "busy");
+    fs.mkdirSync(repo);
+    git(repo, null, "init", "-q", "-b", "main");
+
+    // The grid's first cell is 179 local days before today. One commit a minute
+    // before its local midnight, one exactly on it and one a minute after, one
+    // 100 days back, then 20,000 in the seconds before NOW: built with
+    // fast-import because 20,004 `git commit` runs would take minutes. git fills
+    // a bare --since=YYYY-MM-DD with its own clock's time of day, so this proves
+    // the commits from midnight on count; the one before midnight has no cell
+    // either way, and the exact cutoff is pinned by the unit suite.
+    const firstMidnight = Math.floor(
+      new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() - 179).getTime() / 1000
+    );
+    const nowSeconds = Math.floor(NOW.getTime() / 1000);
+    const outside = firstMidnight - 60;
+    const inWindow = [firstMidnight, firstMidnight + 60, nowSeconds - 100 * 86_400];
+    for (let i = 20_000; i >= 1; i--) inWindow.push(nowSeconds - i);
+    const stream = [outside, ...inWindow]
+      .map((s) => `commit refs/heads/main\ncommitter T <t@example.com> ${s} +0000\ndata 0\n\n`)
+      .join("");
+    execFileSync("git", ["fast-import", "--quiet"], {
+      cwd: repo,
+      input: stream,
+      env: { PATH: process.env.PATH ?? "", HOME: home, GIT_CONFIG_NOSYSTEM: "1" },
+      stdio: ["pipe", "ignore", "pipe"],
+      timeout: 10_000,
+    });
+    expect(git(repo, null, "rev-list", "--count", "HEAD").trim()).toBe("20004");
+
+    const pulse = await new ProjectPulseService().getPulse({
+      worktreePath: repo,
+      worktreeId: "wt-busy",
+      mainBranch: "main",
+      rangeDays: 180 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    });
+
+    const expected = new Map<string, number>();
+    for (const s of inWindow) {
+      const day = localDay(new Date(s * 1000).toISOString());
+      expected.set(day, (expected.get(day) ?? 0) + 1);
+    }
+    expect(pulse.heatmap[0].date).toBe(localDay(new Date(firstMidnight * 1000).toISOString()));
+    expect(pulse.heatmap.map((cell) => [cell.date, cell.count])).toEqual(
+      pulse.heatmap.map((cell) => [cell.date, expected.get(cell.date) ?? 0])
+    );
+    expect(pulse.heatmap[0].count).toBe(2);
+    expect(pulse.heatmap.reduce((sum, cell) => sum + cell.count, 0)).toBe(20_003);
+    expect(pulse.commitsInRange).toBe(20_003);
+    expect(pulse.activeDays).toBe(expected.size);
+  });
+});

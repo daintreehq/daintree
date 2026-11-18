@@ -65,13 +65,22 @@ describe("hand-typed IPC handler contracts", () => {
 
     it("git:commit — args + result", () => {
       expectTypeOf<InvokeArgs<"git:commit">>().toEqualTypeOf<
-        [payload: { cwd: string; message: string }]
+        [
+          payload: {
+            cwd: string;
+            message: string;
+            expectedBranch?: string;
+            expectedHeadOid?: string;
+            expectedStagedIdentity?: string;
+          },
+        ]
       >();
       expectTypeOf<InvokeResult<"git:commit">>().toEqualTypeOf<{
         hash: string;
         summary: string;
         oid: string | null;
         parentOids: string[];
+        stagedIdentity?: string | null;
       }>();
     });
 

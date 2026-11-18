@@ -497,7 +497,7 @@
     outline-offset: -2px;
   }
 
-  /* A selected document tab (grid, dock, portal and assistant strips) marks
+  /* A selected document tab (grid, dock and assistant strips) marks
      itself with a background tint plus a framer-motion underline, both
      background-color based and stripped here. Fall back to a system-color
      bottom border so the selected tab stays visible. Scoped to

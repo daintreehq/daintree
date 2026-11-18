@@ -326,8 +326,10 @@ export interface GitHubCliStatus {
 
 /** GitHub token configuration status */
 export interface GitHubTokenConfig {
-  /** Whether a token is configured */
+  /** Whether a github.com token is configured */
   hasToken: boolean;
+  /** Whether a token is saved for the configured GitHub Enterprise Server host */
+  hasEnterpriseToken?: boolean;
   /** Token scopes (only available after validation) */
   scopes?: string[];
   /** GitHub username (only available after validation) */

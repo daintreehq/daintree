@@ -495,6 +495,8 @@ export function HostChip() {
       status === "unreachable" ||
       status === "host-mode-off" ||
       status === "access-denied" ||
+      status === "wsl-distro-missing" ||
+      status === "connection-unavailable" ||
       status === "version-mismatch");
   const TroubleGlyph = SEVERITY_GLYPH.warning;
   // Down, deliberately or not: the same machine, crossed out, and the words in

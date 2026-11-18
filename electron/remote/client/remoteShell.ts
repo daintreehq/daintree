@@ -4,7 +4,13 @@ import type {
   CommandResult,
   CommandRunner,
 } from "./commandRunner.js";
-import { buildExitArgs, noteSshMaster, shellQuote, sshCommonArgs } from "./sshTransport.js";
+import {
+  BATCH_SSH_ENV,
+  buildExitArgs,
+  noteSshMaster,
+  shellQuote,
+  sshCommonArgs,
+} from "./sshTransport.js";
 import { sshExecutable } from "./sshExecutable.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
@@ -85,13 +91,18 @@ export function createSshCommandChannel(params: {
     noteSshMaster(target, controlPath, async (timeoutMs) => {
       await run(ssh, buildExitArgs(target, controlPath), { timeoutMs });
     });
+  // Batch on every hop, a ProxyJump's included (see BATCH_SSH_ENV).
+  const batch = (options?: CommandOptions): CommandOptions => ({
+    ...options,
+    env: { ...options?.env, ...BATCH_SSH_ENV },
+  });
   const exec = (script: string, options?: CommandOptions) => {
     noteMaster();
-    return run(ssh, remoteShellArgs(target, controlPath, script), options);
+    return run(ssh, remoteShellArgs(target, controlPath, script), batch(options));
   };
   const execWithInput = (script: string, input: CommandInput, options?: CommandOptions) => {
     noteMaster();
-    return run(ssh, remoteShellArgs(target, controlPath, script), { ...options, input });
+    return run(ssh, remoteShellArgs(target, controlPath, script), { ...batch(options), input });
   };
   return {
     exec,
@@ -100,7 +111,7 @@ export function createSshCommandChannel(params: {
       const copied = await run(
         params.scpPath ?? "scp",
         scpArgs(target, controlPath, localPath, remotePath, ssh),
-        options
+        batch(options)
       );
       // A host without an sftp subsystem refuses modern scp; the same ssh
       // login can still take the bytes on stdin. A stop or deadline is final.

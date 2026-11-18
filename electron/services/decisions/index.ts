@@ -1,3 +1,4 @@
+import { Notification } from "electron";
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { hostname } from "node:os";
@@ -27,7 +28,15 @@ import {
   setDecisionQuestions,
 } from "../decisionsQuestionList.js";
 import { QuestionNotifier, type QuestionNotifications } from "./questionNotifications.js";
+import { ThreadNotifier } from "./threadNotifications.js";
 import type { MetaStore } from "./attentionList.js";
+import type { HostServedQuestions } from "./DecisionsService.js";
+import type {
+  DecisionsHostQuestionRead,
+  DecisionsHostsPort,
+  HostCallOutcome,
+} from "../../types/decisionsHosts.js";
+import type { HostQuestionList } from "../../remote/decisions/questionSchemas.js";
 import type { agentNotificationService } from "../AgentNotificationService.js";
 import {
   BridgeError,
@@ -100,10 +109,15 @@ import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
   CancelDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionListItem,
   DecisionQuestionReference,
@@ -116,6 +130,9 @@ import type {
   GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
   GetDecisionAnswerResultPayload,
+  GetDecisionDeclineResultPayload,
+  GetDecisionFollowUpResultPayload,
+  SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -133,9 +150,11 @@ import {
 import type { AnswerDelivery, PaneSignal } from "./answerDelivery.js";
 import type {
   DecisionsDeliveryDeps,
+  DecisionsPresenceDeps,
   DecisionsService,
   DecisionsSnapshotDeps,
 } from "./DecisionsService.js";
+import { onNotificationSettingsWritten } from "../../utils/notificationSettingsPatch.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
 import {
@@ -360,12 +379,29 @@ function publishPaneState(projectId: string, state: PaneDecisionState): void {
   });
 }
 
+/** This computer's own questions as its owner lifetime last listed them, while it lists any. */
+let ownQuestions: readonly DecisionQuestionListItem[] = [];
+/** The owner lifetime lists questions now: its store is read. */
+let listingQuestions = false;
+/** Follows the Remote Hosts client's port for its Hosts' questions (#17230), while listing. */
+let unfollowHostQuestions: (() => void) | null = null;
+
 /**
- * Every question this computer asked (#17229), for main's own consumers and
- * every window here: the list is this computer's, so a remote Shell's views
- * never get it. Ids, labels, times and statuses only; never any content.
+ * Every question this computer asked (#17229), and those its enrolled Remote
+ * Hosts last reported (#17230), for main's own consumers and every window
+ * here: the list is this computer's, so a remote Shell's views never get it.
+ * Ids, labels, times and statuses only; never any content.
  */
-function publishQuestions(questions: readonly DecisionQuestionListItem[]): void {
+function publishQuestions(questions: readonly DecisionQuestionListItem[], listing = true): void {
+  ownQuestions = listing ? questions : [];
+  listingQuestions = listing;
+  if (listing) followHostQuestions();
+  else stopFollowingHostQuestions();
+  refreshQuestionList();
+}
+
+function refreshQuestionList(): void {
+  const questions = listingQuestions ? withHostQuestions(ownQuestions) : [];
   // Once quit begins the list only empties, for main's consumers; the windows are going.
   if (shutDown && questions.length > 0) return;
   const changed = setDecisionQuestions(questions);
@@ -373,34 +409,150 @@ function publishQuestions(questions: readonly DecisionQuestionListItem[]): void 
   sendToLocalViews("decisions:questions-changed", changed);
 }
 
+/** Lists the Hosts' questions again whenever they, their links or the port itself change. */
+function followHostQuestions(): void {
+  if (unfollowHostQuestions !== null) return;
+  let offPort: (() => void) | null = null;
+  const unwatch = watchDecisionsHostsPort((port) => {
+    offPort?.();
+    offPort = port?.onHostQuestionsChanged(refreshQuestionList) ?? null;
+    refreshQuestionList();
+  });
+  unfollowHostQuestions = () => {
+    unwatch();
+    offPort?.();
+    offPort = null;
+  };
+}
+
+function stopFollowingHostQuestions(): void {
+  unfollowHostQuestions?.();
+  unfollowHostQuestions = null;
+}
+
+/** When a question was asked, for ordering; one with no readable time goes last. */
+function askedAtMs(question: DecisionQuestionListItem): number {
+  const ms = Date.parse(question.askedAt);
+  return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+}
+
 /**
- * Desktop notifications for the questions agents ask (#17232), from the list
- * every window here reads, so a Remote Host's questions notify once they are
- * listed too. Raised by the agent notification service, which owns this
- * computer's notification settings and sounds: loaded on demand, since
- * Decisions can start before the startup task that loads it has run.
+ * This computer's questions with every enrolled Host's, each named by its
+ * Host, oldest first across machines: aliases repeat from one machine to the
+ * next, so only the time orders them. A Host whose questions name this
+ * computer's own id is never listed.
+ */
+function withHostQuestions(
+  own: readonly DecisionQuestionListItem[]
+): readonly DecisionQuestionListItem[] {
+  const hosts = getDecisionsHostsPort()?.hostQuestions() ?? [];
+  const ownHostId = service?.getSettings()?.hostId ?? null;
+  const theirs: DecisionQuestionListItem[] = [];
+  for (const host of hosts) {
+    if (host.questionHostId === ownHostId) continue;
+    const remoteHost = { hostId: host.hostId, name: host.name, connected: host.connected };
+    for (const question of host.questions) theirs.push({ ...question, remoteHost });
+  }
+  if (theirs.length === 0) return own;
+  // A stable sort: questions asked at the same moment keep this computer's first, then each Host's order.
+  return [...own, ...theirs].sort((a, b) => {
+    const at = askedAtMs(a);
+    const bt = askedAtMs(b);
+    return at === bt ? 0 : at < bt ? -1 : 1;
+  });
+}
+
+/** What this Remote Host's lifetime serves its owner's Shell of its questions (#17230); null while none. */
+let hostServedQuestions: HostQuestionList | null = null;
+const hostQuestionListeners = new Set<() => void>();
+
+function publishHostQuestions(list: HostServedQuestions | null): void {
+  hostServedQuestions =
+    list === null ? null : { hostId: list.hostId, questions: [...list.questions] };
+  for (const listener of [...hostQuestionListeners]) {
+    try {
+      listener();
+    } catch (err) {
+      console.warn("[Decisions] A Host question listener threw:", err);
+    }
+  }
+}
+
+/**
+ * This Remote Host's own questions (#17230), content-free, as its lifetime
+ * last listed them, for the owner's Shell that enrolled it; null while no
+ * Host lifetime lists any.
+ */
+export function decisionsHostQuestions(): HostQuestionList | null {
+  return hostServedQuestions;
+}
+
+/** Calls `listener` whenever this Host's own questions may have changed. */
+export function onDecisionsHostQuestionsChanged(listener: () => void): () => void {
+  hostQuestionListeners.add(listener);
+  return () => {
+    hostQuestionListeners.delete(listener);
+  };
+}
+
+/** The owner lifetime's question notifications, the latest made; following only while they can show one. */
+let questionNotifier: QuestionNotifier | null = null;
+
+/**
+ * Desktop notifications for the questions agents ask (#17232), and for the
+ * follow-ups that want a reply and the answers delivery stops on (#17235),
+ * from the list every window here reads, so a Remote Host's questions notify
+ * once they are listed too. Raised by the agent notification service, which
+ * owns this computer's notification settings and sounds: loaded on demand,
+ * since Decisions can start before the startup task that loads it has run.
  */
 function notifyQuestions(store: MetaStore): QuestionNotifications {
   let presenter: typeof agentNotificationService | null = null;
-  const notifier = new QuestionNotifier({
+  const questions = { get: getDecisionQuestionList, onChange: onDecisionQuestionsChanged };
+  const readOpeningLine = async (reference: DecisionQuestionReference) => {
+    const read = await getDecisionQuestionSummariesByReference({ references: [reference] });
+    const summary = read.result === "read" ? read.summaries[0] : undefined;
+    return summary?.result === "read" ? summary.line : null;
+  };
+  const prepare = async (reference: DecisionQuestionReference) => {
+    presenter ??= (await import("../AgentNotificationService.js")).agentNotificationService;
+    await presenter.prepareDecisionQuestion(reference.projectId);
+  };
+  const notificationsOn = (projectId: string) =>
+    presenter?.decisionQuestionNotificationsOn(projectId) ?? false;
+  const close = (key: string) => presenter?.closeDecisionQuestion(key);
+  const asked = new QuestionNotifier({
+    // Presence holds the phone only while a question can show here (#17240).
+    onFollowing: () => service?.presenceChanged(),
     store,
-    questions: { get: getDecisionQuestionList, onChange: onDecisionQuestionsChanged },
-    readOpeningLine: async (reference) => {
-      const read = await getDecisionQuestionSummariesByReference({ references: [reference] });
-      const summary = read.result === "read" ? read.summaries[0] : undefined;
-      return summary?.result === "read" ? summary.line : null;
-    },
-    prepare: async (reference) => {
-      presenter ??= (await import("../AgentNotificationService.js")).agentNotificationService;
-      await presenter.prepareDecisionQuestion(reference.projectId);
-    },
-    notificationsOn: (projectId) => presenter?.decisionQuestionNotificationsOn(projectId) ?? false,
+    questions,
+    readOpeningLine,
+    prepare,
+    notificationsOn,
     show: (question, openingLine, key) =>
       presenter?.notifyDecisionQuestion(question, openingLine, key),
-    close: (key) => presenter?.closeDecisionQuestion(key),
+    close,
   });
-  void notifier.start();
-  return notifier;
+  const thread = new ThreadNotifier({
+    store,
+    questions,
+    readOpeningLine,
+    prepare,
+    notificationsOn,
+    showReply: (question, openingLine, key) =>
+      presenter?.notifyDecisionReply(question, openingLine, key),
+    showStall: (question, key) => presenter?.notifyDecisionStall(question, key),
+    close,
+  });
+  questionNotifier = asked;
+  void asked.start();
+  void thread.start();
+  return {
+    stop: () => {
+      asked.stop();
+      thread.stop();
+    },
+  };
 }
 
 /**
@@ -670,6 +822,35 @@ const snapshotDeps: DecisionsSnapshotDeps = {
   watchPanes: watchSnapshotPanes,
 };
 
+/**
+ * Whether the person's presence may be reported now (#17240): Decisions on in
+ * this run, holding phone pushes on, and #17232's question notifications able
+ * to show a question here: turned on, supported by the system, and following
+ * this lifetime's questions. Read each time, so it answers false as soon as
+ * any of them stops holding; a setting that can't be read holds nothing.
+ */
+function presenceAllowed(): boolean {
+  try {
+    const settings = readDecisionsSettings(store);
+    return (
+      !shutDown &&
+      settings.enabled &&
+      settings.holdPhonePushes &&
+      store.get("notificationSettings")?.enabled !== false &&
+      questionNotifier?.following === true &&
+      Notification.isSupported()
+    );
+  } catch {
+    return false;
+  }
+}
+
+const presenceDeps: DecisionsPresenceDeps = { allowed: presenceAllowed };
+
+// Turning desktop notifications off ends presence at once, and on starts it.
+// This module loads only once Decisions is on, so vanilla Daintree never listens.
+onNotificationSettingsWritten(() => service?.presenceChanged());
+
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
   transitions = run.catch(() => {});
@@ -690,6 +871,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         publishPaneState,
         publishAnswerAttention: setAnswerAttention,
         publishQuestions,
+        publishHostQuestions,
         notifyQuestions,
         onRelayRevoked: (relay, role) =>
           role === "host" ? void hostRevoked(relay) : recordRevocation(relay),
@@ -698,6 +880,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
           openDecisionsMcpRoute(source, sources, previousClosed),
         delivery: deliveryDeps,
         snapshots: snapshotDeps,
+        presence: presenceDeps,
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
@@ -760,6 +943,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(settings.relayOrigin ? { relayOrigin: settings.relayOrigin } : {}),
     ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
     ...(settings.terminalSnapshots ? { terminalSnapshots: true } : {}),
+    ...(settings.holdPhonePushes ? {} : { holdPhonePushes: false }),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
     ...(checked !== null
@@ -918,21 +1102,158 @@ export function getDecisionQuestionSummaries(
 
 /**
  * One question with its content opened, by its reference (#17229), for any
- * window on this computer whatever project it shows. Never makes or starts
+ * window on this computer whatever project it shows: read on the Remote Host
+ * that asked it when the reference names one (#17230). Never makes or starts
  * the service.
  */
-export function getDecisionQuestionContentByReference(
+export async function getDecisionQuestionContentByReference(
   payload: GetDecisionQuestionByReferencePayload
 ): Promise<DecisionQuestionContentResult> {
   const { reference } = payload;
+  const onHost = hostRouteFor(reference)?.readHostQuestion(reference.hostId, {
+    read: "content",
+    reference,
+  });
+  if (onHost) return answeredByHost(await onHost);
+  return readOwnQuestionContent(reference);
+}
+
+/** Part of one image of a question, by its reference (#17229), on its Host when a Host asked it. Never makes or starts the service. */
+export async function getDecisionQuestionImageByReference(
+  payload: GetDecisionQuestionImageByReferencePayload
+): Promise<DecisionQuestionImagePartResult> {
+  const { reference, attachmentId, offset } = payload;
+  const onHost = hostRouteFor(reference)?.readHostQuestion(reference.hostId, {
+    read: "image",
+    reference,
+    attachmentId,
+    offset,
+  });
+  if (onHost) return answeredByHost(await onHost) as DecisionQuestionImagePartResult;
+  return readOwnQuestionImage(payload);
+}
+
+/**
+ * The opening lines of questions by their references (#17229), in the order
+ * asked for, each question once; a Remote Host's read on that Host (#17230).
+ * Never makes or starts the service.
+ */
+export async function getDecisionQuestionSummariesByReference(
+  payload: GetDecisionQuestionSummariesByReferencePayload
+): Promise<DecisionQuestionSummariesResult> {
+  const seen = new Set<string>();
+  const references: DecisionQuestionReference[] = [];
+  for (const reference of payload.references) {
+    if (seen.has(reference.questionId)) continue;
+    seen.add(reference.questionId);
+    references.push(reference);
+  }
+  // Each Host's references go to it in one read.
+  const byHost = new Map<string, DecisionQuestionReference[]>();
+  for (const reference of references) {
+    if (hostRouteFor(reference) === null) continue;
+    const named = byHost.get(reference.hostId);
+    if (named) named.push(reference);
+    else byHost.set(reference.hostId, [reference]);
+  }
+  const fromHosts = new Map<string, DecisionQuestionSummary>();
+  await Promise.all(
+    [...byHost].map(async ([questionHostId, named]) => {
+      const onHost = hostRouteFor(named[0])?.readHostQuestion(questionHostId, {
+        read: "summaries",
+        references: named,
+      });
+      // No Host's questions name it: this computer's to answer, as one it doesn't hold.
+      if (!onHost) return;
+      const answered = await onHost;
+      for (const reference of named) {
+        fromHosts.set(reference.questionId, summaryFromHost(reference, answered));
+      }
+    })
+  );
+  if (fromHosts.size === 0) return readOwnQuestionSummaries(references);
+  const own = references.filter((reference) => !fromHosts.has(reference.questionId));
+  const ownRead: DecisionQuestionSummariesResult =
+    own.length === 0 ? { result: "read", summaries: [] } : await readOwnQuestionSummaries(own);
+  return {
+    result: "read",
+    summaries: references.map(
+      (reference) =>
+        fromHosts.get(reference.questionId) ??
+        (ownRead.result === "read"
+          ? ownRead.summaries.find((summary) => summary.questionId === reference.questionId)
+          : undefined) ?? { questionId: reference.questionId, result: "unreadable" }
+    ),
+  };
+}
+
+/**
+ * The Remote Hosts client's port when `reference` names a question another
+ * machine asked (#17230): only an owner's lifetime reads its Hosts' questions,
+ * and never through a reference naming this computer.
+ */
+function hostRouteFor(reference: DecisionQuestionReference): DecisionsHostsPort | null {
+  const running = service;
+  if (running === null || running.getRole() !== "owner") return null;
+  const ownHostId = running.getSettings()?.hostId ?? null;
+  if (ownHostId !== null && reference.hostId === ownHostId) return null;
+  return getDecisionsHostsPort();
+}
+
+/**
+ * A Host's answer as a read answers: a link that was down before the read
+ * went out says the Host isn't connected; any other failure, a link that
+ * went or timed out under the read included, is a failed read to retry.
+ */
+function answeredByHost<T>(answered: HostCallOutcome<T>): T | { result: "host-not-connected" } {
+  if (answered.ok) return answered.value;
+  if (answered.failure === "disconnected") return { result: "host-not-connected" };
+  throw new Error(`The Remote Host didn't answer the read (${answered.failure})`);
+}
+
+/**
+ * A Host's answer to a cancel: as a read's, except that a link that went or
+ * timed out after the cancel went out says the Host isn't connected too, so
+ * the person is told it may not have been withdrawn, and nothing sends it again.
+ */
+function cancelledByHost(
+  answered: HostCallOutcome<DecisionQuestionCancelResult>
+): DecisionQuestionCancelResult {
+  if (!answered.ok && answered.failure === "outcome-unknown") {
+    return { result: "host-not-connected" };
+  }
+  return answeredByHost(answered);
+}
+
+function summaryFromHost(
+  reference: DecisionQuestionReference,
+  answered: HostCallOutcome<DecisionQuestionSummariesResult>
+): DecisionQuestionSummary {
+  const { questionId } = reference;
+  if (!answered.ok) {
+    return answered.failure === "disconnected"
+      ? { questionId, result: "host-not-connected" }
+      : { questionId, result: "unreadable" };
+  }
+  if (answered.value.result !== "read") return { questionId, result: "unreadable" };
+  return (
+    answered.value.summaries.find((summary) => summary.questionId === questionId) ?? {
+      questionId,
+      result: "not-found",
+    }
+  );
+}
+
+function readOwnQuestionContent(
+  reference: DecisionQuestionReference
+): Promise<DecisionQuestionContentResult> {
   return whileReading<DecisionQuestionContentResult>(
     (delivery) => delivery.questionContent(referenceScope(reference), reference.questionId),
     { result: "not-running" }
   );
 }
 
-/** Part of one image of a question, by its reference (#17229). Never makes or starts the service. */
-export function getDecisionQuestionImageByReference(
+function readOwnQuestionImage(
   payload: GetDecisionQuestionImageByReferencePayload
 ): Promise<DecisionQuestionImagePartResult> {
   const { reference } = payload;
@@ -948,20 +1269,14 @@ export function getDecisionQuestionImageByReference(
   );
 }
 
-/**
- * The opening lines of questions by their references (#17229), in the order
- * asked for, each question once. Never makes or starts the service.
- */
-export function getDecisionQuestionSummariesByReference(
-  payload: GetDecisionQuestionSummariesByReferencePayload
+/** Opening lines of this machine's own questions, each reference once, in order. */
+function readOwnQuestionSummaries(
+  references: readonly DecisionQuestionReference[]
 ): Promise<DecisionQuestionSummariesResult> {
   return whileReading<DecisionQuestionSummariesResult>(
     async (delivery) => {
-      const seen = new Set<string>();
       const summaries: DecisionQuestionSummary[] = [];
-      for (const reference of payload.references) {
-        if (seen.has(reference.questionId)) continue;
-        seen.add(reference.questionId);
+      for (const reference of references) {
         summaries.push(
           ...(await delivery.questionSummaries(referenceScope(reference), [reference.questionId]))
         );
@@ -970,6 +1285,42 @@ export function getDecisionQuestionSummariesByReference(
     },
     { result: "not-running" }
   );
+}
+
+/** This machine runs as a Remote Host now: only then does its owner's Shell read its questions. */
+function servingAsHost(): boolean {
+  return service?.getRole() === "host";
+}
+
+/**
+ * One of this Remote Host's own questions read by reference for the owner's
+ * Shell that enrolled it (#17230): on this machine only, never routed on to
+ * another, and only while this machine runs as a Host, so a machine that has
+ * since taken up an owner identity of its own never serves that owner's
+ * questions over the link. Never makes or starts the service.
+ */
+export async function readHostServedQuestion(
+  read: DecisionsHostQuestionRead
+): Promise<
+  DecisionQuestionContentResult | DecisionQuestionImagePartResult | DecisionQuestionSummariesResult
+> {
+  if (!servingAsHost()) return { result: "off" };
+  switch (read.read) {
+    case "content":
+      return readOwnQuestionContent(read.reference);
+    case "image":
+      return readOwnQuestionImage(read);
+    case "summaries": {
+      const seen = new Set<string>();
+      return readOwnQuestionSummaries(
+        read.references.filter((reference) => {
+          if (seen.has(reference.questionId)) return false;
+          seen.add(reference.questionId);
+          return true;
+        })
+      );
+    }
+  }
 }
 
 /** The reference's machine, project and terminal, read on this machine only. */
@@ -1000,12 +1351,34 @@ export function cancelDecisionQuestion(
 
 /**
  * A person withdrawing a question by its reference (#17229), from any window
- * on this computer. Never makes or starts the service.
+ * on this computer: on the Remote Host that asked it when the reference names
+ * one (#17230). A link that went before the Host answered says the Host isn't
+ * connected, and the cancel isn't sent again. Never makes or starts the service.
  */
-export function cancelDecisionQuestionByReference(
+export async function cancelDecisionQuestionByReference(
   payload: CancelDecisionQuestionByReferencePayload
 ): Promise<DecisionQuestionCancelResult> {
-  return cancelling((running) => running.cancelQuestionByReference(payload.reference));
+  const onHost = hostRouteFor(payload.reference)?.cancelHostQuestion(payload.reference);
+  if (onHost) return cancelledByHost(await onHost);
+  return cancelOwnQuestion(payload.reference);
+}
+
+/**
+ * The person withdrawing one of this Remote Host's own questions by
+ * reference, for the owner's Shell that enrolled it (#17230): only while
+ * this machine runs as a Host, and never routed on to another machine.
+ */
+export async function cancelHostServedQuestion(
+  reference: DecisionQuestionReference
+): Promise<DecisionQuestionCancelResult> {
+  if (!servingAsHost()) return { result: "off" };
+  return cancelOwnQuestion(reference);
+}
+
+function cancelOwnQuestion(
+  reference: DecisionQuestionReference
+): Promise<DecisionQuestionCancelResult> {
+  return cancelling((running) => running.cancelQuestionByReference(reference));
 }
 
 async function cancelling(
@@ -1045,6 +1418,44 @@ export function getDecisionAnswerResult(
   payload: GetDecisionAnswerResultPayload
 ): Promise<DecisionAnswerResultRead> {
   return whileRunning((running) => running.getAnswerResult(payload.answerId));
+}
+
+/**
+ * The person's decline from Daintree's own view (#17239), signed by this
+ * computer when it is the owner's, as their answer is. Never makes or starts
+ * the service; a decline it committed stays committed, and the same decline
+ * id submitted again finds it.
+ */
+export function declineDecisionQuestion(
+  payload: DeclineDecisionQuestionPayload
+): Promise<DecisionQuestionDeclineResult> {
+  return whileRunning((running) => running.declineQuestion(payload));
+}
+
+/** Where a person's decline stands, by its id (#17239). Never makes or starts the service. */
+export function getDecisionDeclineResult(
+  payload: GetDecisionDeclineResultPayload
+): Promise<DecisionDeclineResultRead> {
+  return whileRunning((running) => running.getDeclineResult(payload.declineId));
+}
+
+/**
+ * The person's follow-up from Daintree's own view (#17238), signed by this
+ * computer when it is the owner's. Never makes or starts the service; a
+ * follow-up committed before its connection ended stays committed, and the
+ * same message id submitted again finds it.
+ */
+export function sendDecisionFollowUp(
+  payload: SendDecisionFollowUpPayload
+): Promise<DecisionQuestionFollowUpResult> {
+  return whileRunning((running) => running.sendFollowUp(payload));
+}
+
+/** Where a person's follow-up stands, by its id (#17238). Never makes or starts the service. */
+export function getDecisionFollowUpResult(
+  payload: GetDecisionFollowUpResultPayload
+): Promise<DecisionFollowUpResultRead> {
+  return whileRunning((running) => running.getFollowUpResult(payload.messageId));
 }
 
 async function whileRunning<T>(
@@ -1636,6 +2047,41 @@ export function setDecisionsTerminalSnapshots(
     service?.updateSettings(saved);
     service?.snapshotsChanged();
     getDecisionsHostsPort()?.announceOwnerState();
+    publishStatus();
+    return getDecisionsStatus();
+  });
+}
+
+/** Rises with each turn off of holding phone pushes, so a turn on queued before one never lands after it. */
+let holdPhonePushesOffs = 0;
+
+/**
+ * Turns holding phone pushes while the person is here on or off (#17240).
+ * Off is saved to the store before the queue, as terminal snapshots' is, so
+ * presence stops being reported the moment it's turned off; the service hears
+ * of the setting in turn.
+ */
+export function setDecisionsHoldPhonePushes(enabled: boolean): Promise<DecisionsStatus> {
+  const offs = enabled ? holdPhonePushesOffs : ++holdPhonePushesOffs;
+  if (!enabled) {
+    const current = readDecisionsSettings(store);
+    if (current.holdPhonePushes) {
+      writeDecisionsSettings(store, { ...current, holdPhonePushes: false });
+      service?.presenceChanged();
+      // Every window shows it off now, not once the queue reaches it.
+      publishStatus();
+    }
+  }
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (enabled) {
+      if (shutDown || !current.enabled) throw setupRefused();
+      // Turned off since this was asked for, here or in another window: the later off stands.
+      if (offs !== holdPhonePushesOffs) return getDecisionsStatus();
+    }
+    const saved = writeDecisionsSettings(store, { ...current, holdPhonePushes: enabled });
+    service?.updateSettings(saved);
+    service?.presenceChanged();
     publishStatus();
     return getDecisionsStatus();
   });
@@ -2693,6 +3139,8 @@ export function _resetDecisionsForTesting(): void {
   setupCheckEpoch = 0;
   service = null;
   creating = null;
+  questionNotifier = null;
+  holdPhonePushesOffs = 0;
   shutDown = false;
   transitions = Promise.resolve();
   statusRevision = 0;
@@ -2708,4 +3156,9 @@ export function _resetDecisionsForTesting(): void {
   hostRuntimeListeners.clear();
   relayRemovals?.dispose();
   relayRemovals = null;
+  stopFollowingHostQuestions();
+  ownQuestions = [];
+  listingQuestions = false;
+  hostServedQuestions = null;
+  hostQuestionListeners.clear();
 }

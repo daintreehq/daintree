@@ -64,7 +64,7 @@ export function useCanopyInboxUndo({
     return {
       land: (
         restoreOnce: () => void,
-        shown?: { title: string; message: string } | { line: string }
+        shown?: { title: string; message: string; partial?: boolean } | { line: string }
       ) => {
         // Z and the toast's Undo take back the same one action, once: the
         // second of them finds it done.
@@ -98,7 +98,7 @@ export function useCanopyInboxUndo({
         }
         const toast = shown;
         notify({
-          type: "success",
+          type: toast.partial ? "warning" : "success",
           transient: true,
           title: toast.title,
           message: toast.message,

@@ -11,6 +11,7 @@ export const CLOUD_HOSTS_METHOD_CHANNELS = {
   getCatalog: "cloud-hosts:get-catalog",
   listResources: "cloud-hosts:list-resources",
   createHost: "cloud-hosts:create-host",
+  createHostForWorktree: "cloud-hosts:create-host-for-worktree",
   importHost: "cloud-hosts:import-host",
   startHost: "cloud-hosts:start-host",
   stopHost: "cloud-hosts:stop-host",
@@ -19,6 +20,10 @@ export const CLOUD_HOSTS_METHOD_CHANNELS = {
   deleteMachine: "cloud-hosts:delete-machine",
   setLifetime: "cloud-hosts:set-lifetime",
   trustHostKey: "cloud-hosts:trust-host-key",
+  prepareWorktreeCleanup: "cloud-hosts:prepare-worktree-cleanup",
+  settleWorktreeCleanup: "cloud-hosts:settle-worktree-cleanup",
+  retryWorktreeCleanup: "cloud-hosts:retry-worktree-cleanup",
+  dismissWorktreeCleanup: "cloud-hosts:dismiss-worktree-cleanup",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CLOUD_HOSTS_METHOD_CHANNELS;

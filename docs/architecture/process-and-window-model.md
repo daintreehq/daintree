@@ -33,7 +33,7 @@ One more process class exists but is not part of the steady-state topology: the 
    ipc send/on (push)    │                    WorktreePortBroker         │
                          │                    MainProcessWatchdogClient  │
                          │  Per-window (WindowContext.services):         │
-                         │    PortalManager, EventBuffer, ProjectViewMgr │
+                         │    EventBuffer, ProjectViewMgr                │
                          └───┬───────────┬──────────────┬───────────┬────┘
                              │ fork      │ fork          │ fork      │ ping/sleep/wake
                              │ +ports    │ +ports        │           │ (send/on)
@@ -116,7 +116,7 @@ These look similar and are the easiest thing to get wrong. They serve different 
 | Scope | Held in | Examples |
 | --- | --- | --- |
 | **Global** (shared across all windows) | `electron/window/serviceRefs.ts` (leaf module, zero runtime imports), set by `globalServicesInit.ts` | `PtyClient`, `WorkspaceClient`, `WorktreePortBroker`, `MainProcessWatchdogClient`, `ResourceProfileService`, agent/CCR services |
-| **Per-window** | `WindowContext.services` (`WindowServices`), set by `perWindowInit.ts` | `PortalManager`, `EventBuffer`, `ProjectSwitchService`, `ProjectViewManager`, `activeRendererPort`, `activePtyHostPort` |
+| **Per-window** | `WindowContext.services` (`WindowServices`), set by `perWindowInit.ts` | `EventBuffer`, `ProjectSwitchService`, `ProjectViewManager`, `activeRendererPort`, `activePtyHostPort` |
 
 `globalServicesInit.ts` runs once (guarded by `globalServicesInitialized`); most of it registers **deferred tasks** that drain after the renderer reports first-interactive (`registerDeferredTask`), so service starts don't contend with React hydration. `perWindowInit.ts` runs per window and wires the per-window event fanout (e.g. `ptyClient.on("host-crash-details")` → `terminal:backend-recovering` push to every window's app webContents).
 
@@ -152,7 +152,7 @@ The PTY host and workspace host share an almost-identical fork/exit/restart loop
 
 | Process | Owned services / state | Talks to | Channels / transport |
 | --- | --- | --- | --- |
-| **Main** | `PtyClient`, `WorkspaceClient`, `WorktreePortBroker`, `MainProcessWatchdogClient`, all IPC handlers, `WindowRegistry`, per-window `PortalManager`/`EventBuffer`/`ProjectViewManager` | every other process + all renderers | `invoke/handle`, `send/on`, `MessageChannelMain`, `utilityProcess.postMessage` |
+| **Main** | `PtyClient`, `WorkspaceClient`, `WorktreePortBroker`, `MainProcessWatchdogClient`, all IPC handlers, `WindowRegistry`, per-window `EventBuffer`/`ProjectViewManager` | every other process + all renderers | `invoke/handle`, `send/on`, `MessageChannelMain`, `utilityProcess.postMessage` |
 | **PTY host** (`daintree-pty-host`) | node-pty processes, scrollback, backpressure (`pty-host/`), FD monitor, resource governor | Main (`PtyClient`), renderers (direct via MessagePort) | broker over UtilityProcess channel; `terminal-port` MessagePort per window |
 | **Workspace host** (per project) | `WorkspaceService`, `WorktreeMonitor`, file watchers, `PRIntegrationService`, forge polling | Main (`WorkspaceClient` / `WorkspaceHostProcess`), renderer views | broker over UtilityProcess channel; `worktree-port` MessagePort per view; forge RPC round-trips back to main |
 | **Watchdog host** (`daintree-watchdog`) | deadlock-kill timer + kill flag | Main only | `ping`/`sleep`/`wake`/`dispose` (one-way `postMessage`) |

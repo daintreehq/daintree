@@ -3,9 +3,14 @@ import type { ComponentProps } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HostListEntry } from "@shared/types/remoteHosts";
+import type { CloudCatalog, CloudHostsSnapshot } from "@shared/types/cloudHosts";
 import { HANDSHAKE, makeCapacitySummary } from "./fixtures";
 
-const { hostList, dispatch } = vi.hoisted(() => ({
+const { hostList, dispatch, cloud, getCatalog } = vi.hoisted(() => ({
+  cloud: {
+    snapshot: { providers: [], accounts: [], hosts: [] } as CloudHostsSnapshot,
+  },
+  getCatalog: vi.fn(),
   hostList: { hosts: [] as HostListEntry[], localSummary: null as unknown },
   dispatch: vi.fn(
     async (..._args: unknown[]): Promise<{ ok: boolean; result?: unknown; error?: unknown }> => ({
@@ -20,6 +25,10 @@ vi.mock("../../hostList", () => ({
   hasRemoteHosts: (state: { hosts: unknown[] }) => state.hosts.length > 0,
 }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
+vi.mock("../../cloud/cloudHostsState", () => ({
+  useCloudHosts: () => ({ snapshot: cloud.snapshot, loaded: true, loadError: null }),
+}));
+vi.mock("@/clients/cloudHostsClient", () => ({ cloudHostsClient: { getCatalog } }));
 
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
 import { clientPlatform, localHostLabel } from "../../hostModel";
@@ -34,9 +43,14 @@ import {
 import {
   WorktreePlacementRow,
   placedRelativePath,
+  type CloudMachineCommit,
   type PlacementCommit,
   type PlacementDraft,
 } from "../WorktreePlacementRow";
+import {
+  BOAT_PROVIDER,
+  provider as providerWith,
+} from "../../cloud/__tests__/cloudProviderFixtures";
 
 const ROOT = "/Users/greg/Projects/daintree";
 const DRAFT: PlacementDraft = {
@@ -99,6 +113,8 @@ function entry(id: string, cpuPercent: number, usedGb: number, connected = true)
 }
 
 beforeEach(() => {
+  cloud.snapshot = { providers: [], accounts: [], hosts: [] };
+  getCatalog.mockReset();
   dispatch.mockReset();
   dispatch.mockImplementation(openOnHostLikeTheAction);
   _resetHostSwitchRequestsForTesting();
@@ -301,6 +317,191 @@ describe("WorktreePlacementRow", () => {
 
   it("renders nothing until another host exists", () => {
     hostList.hosts = [];
+    const { container } = renderRow();
+    expect(container.textContent).toBe("");
+  });
+});
+
+describe("WorktreePlacementRow new machine (#17359)", () => {
+  const ACCOUNT = {
+    id: "ca_0123456789",
+    providerId: "boat",
+    providerUnavailable: null,
+    displayName: "Personal",
+    identity: "octocat",
+    billingScope: { kind: "personal" as const, id: "personal", name: "Personal" },
+    validation: { status: "valid" as const, checkedAt: 0 },
+    hostCount: 0,
+    addedAt: 0,
+    keyHint: "abcd",
+  };
+  const REGIONS = {
+    ...BOAT_PROVIDER,
+    capabilities: {
+      ...BOAT_PROVIDER.capabilities,
+      provisioning: { ...BOAT_PROVIDER.capabilities.provisioning, location: "required" as const },
+    },
+  };
+  const CATALOG: CloudCatalog = {
+    accountId: ACCOUNT.id,
+    machineTypes: [
+      {
+        id: "small",
+        label: "Small",
+        vcpu: 2,
+        memoryGB: 4,
+        hourlyDollars: 0.02,
+        available: true,
+        reason: null,
+      },
+      {
+        id: "large",
+        label: "Large",
+        vcpu: 16,
+        memoryGB: 64,
+        hourlyDollars: 0.5,
+        available: false,
+        reason: "over your plan's limit",
+      },
+    ],
+    provisioning: {
+      location: {
+        label: "Region",
+        defaultId: "lhr",
+        choices: [
+          {
+            id: "lhr",
+            label: "London",
+            description: "Closest to you",
+            available: true,
+            reason: null,
+            locations: null,
+          },
+          {
+            id: "sfo",
+            label: "San Francisco",
+            description: null,
+            available: true,
+            reason: null,
+            locations: null,
+          },
+        ],
+      },
+      image: null,
+      network: null,
+    },
+    lastChoice: null,
+    canStart: true,
+    includedHoursRemaining: null,
+    startsRemaining: null,
+  } as unknown as CloudCatalog;
+
+  type CloudListener = (commit: CloudMachineCommit | null) => void;
+
+  async function choose(trigger: HTMLElement, option: string | RegExp) {
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    });
+    const item = await screen.findByRole("option", { name: option });
+    await act(async () => {
+      fireEvent.click(item);
+    });
+  }
+
+  it("offers a new machine from each connected account, even before any other host exists", async () => {
+    hostList.hosts = [];
+    cloud.snapshot = { providers: [REGIONS], accounts: [ACCOUNT], hosts: [] };
+    getCatalog.mockResolvedValue(CATALOG);
+    const onCloudChange = vi.fn<CloudListener>();
+    const { onCommitChange } = renderRow({ onCloudChange });
+    expect(onCloudChange.mock.lastCall?.[0] ?? null).toBeNull();
+
+    await choose(screen.getByTestId("worktree-host-select"), /New machine · Personal/);
+    expect(screen.getByTestId("worktree-new-machine-note").textContent).toContain(
+      "Boat then creates a machine for it in Personal"
+    );
+    // The provider's own word for its choice, its suggestion, and the size with its price.
+    const region = await screen.findByTestId("worktree-machine-location");
+    expect(screen.getByText("Region")).toBeTruthy();
+    expect(region.textContent).toContain("London");
+    expect(screen.getByText("Closest to you")).toBeTruthy();
+    expect(screen.getByTestId("worktree-machine-size").textContent).toContain("Small · 2 vCPU");
+    expect(screen.getByTestId("worktree-machine-review").textContent).toContain(
+      "about $0.020 an hour while it runs"
+    );
+    expect(lastCommit(onCommitChange)).toBeNull();
+
+    const commit = onCloudChange.mock.lastCall?.[0];
+    expect(commit).toMatchObject({
+      accountId: ACCOUNT.id,
+      label: "New machine · Personal",
+      blocked: null,
+    });
+    expect(commit!.machine()).toEqual({
+      accountId: ACCOUNT.id,
+      machineType: "small",
+      lifetimeHours: 2,
+      provisioning: { location: "lhr", image: null, network: null },
+    });
+
+    await choose(region, "San Francisco");
+    expect(onCloudChange.mock.lastCall?.[0]!.machine()).toMatchObject({
+      provisioning: { location: "sfo", image: null, network: null },
+    });
+  });
+
+  it("names a stopped machine's billing, and leaves Cmd+Enter to the dialog's Create", async () => {
+    const billed = providerWith({ stoppedComputeBilled: true });
+    hostList.hosts = [];
+    cloud.snapshot = {
+      providers: [billed],
+      accounts: [{ ...ACCOUNT, providerId: billed.id }],
+      hosts: [],
+    };
+    getCatalog.mockResolvedValue({
+      ...CATALOG,
+      provisioning: { location: null, image: null, network: null },
+    });
+    renderRow();
+    await choose(screen.getByTestId("worktree-host-select"), /New machine · Personal/);
+    const review = await screen.findByTestId("worktree-machine-review");
+    expect(review.textContent).toContain(
+      "Acme keeps billing a stopped machine for compute until it's deleted."
+    );
+    const size = screen.getByTestId("worktree-machine-size");
+    const shortcut = new KeyboardEvent("keydown", {
+      key: "Enter",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      size.dispatchEvent(shortcut);
+    });
+    expect(shortcut.defaultPrevented).toBe(true);
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("holds Create while the sizes can't be read, saying why", async () => {
+    hostList.hosts = [];
+    cloud.snapshot = { providers: [BOAT_PROVIDER], accounts: [ACCOUNT], hosts: [] };
+    getCatalog.mockRejectedValue(new Error("Boat is unreachable"));
+    const onCloudChange = vi.fn<CloudListener>();
+    renderRow({ onCloudChange });
+    await choose(screen.getByTestId("worktree-host-select"), /New machine · Personal/);
+    await screen.findByRole("button", { name: "Retry" });
+    const commit = onCloudChange.mock.lastCall?.[0];
+    expect(commit?.blocked).toContain("Boat is unreachable");
+    expect(commit?.machine()).toBeNull();
+  });
+
+  it("offers no new machine on a provider this machine can't use", () => {
+    hostList.hosts = [];
+    cloud.snapshot = {
+      providers: [{ ...BOAT_PROVIDER, unsupportedReason: "Not on this platform" }],
+      accounts: [ACCOUNT],
+      hosts: [],
+    };
     const { container } = renderRow();
     expect(container.textContent).toBe("");
   });

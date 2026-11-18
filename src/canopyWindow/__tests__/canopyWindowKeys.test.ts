@@ -442,8 +442,9 @@ describe("Cmd+W in the Canopy window (#16618)", () => {
   });
 
   it("leaves Cmd+W to another binding that outranks the close, closing nothing", () => {
-    // The portal's close-tab binding holds Cmd+W at a higher priority in its scope.
-    keybindingService.setScope("portal");
+    // Dev preview's reload, moved onto Cmd+W, keeps its higher priority in its scope.
+    keybindingService.applyOverrides({ "devPreview.reloadPreview": ["Cmd+W"] });
+    keybindingService.setScope("dev-preview");
     try {
       const inPane = press(paneReply, "w");
       const onList = press(document.body, "w");
@@ -454,7 +455,7 @@ describe("Cmd+W in the Canopy window (#16618)", () => {
       expect(trashed).toBe(0);
       expect(closeWindow).not.toHaveBeenCalled();
     } finally {
-      keybindingService.restoreScope("portal");
+      keybindingService.restoreScope("dev-preview");
     }
   });
 

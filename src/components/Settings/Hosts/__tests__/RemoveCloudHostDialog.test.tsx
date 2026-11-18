@@ -42,6 +42,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     machineName: "feature-login-box",
     ownership: "created-by-daintree",
     createdFor: MARK,
+    worktreeCleanup: null,
     provisioning: null,
     machine: "stopped",
     rawState: "archived",
@@ -63,6 +64,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     hostKeyFingerprint: null,
     hostKeyReview: null,
     keptRunningAt: null,
+    asleep: false,
     ...overrides,
   };
 }
@@ -184,6 +186,37 @@ describe("RemoveCloudHostDialog by what the provider declares (#17346)", () => {
       "It's running and keeps billing Personal until it's deleted, even once it stops."
     );
     expect(screen.getByRole("radio", { name: /Delete the machine too/ })).toBeTruthy();
+  });
+
+  it("says a kept machine's disk keeps billing where its provider bills storage alone (#17347)", () => {
+    const sleeper = providerWith({
+      stoppedComputeBilled: false,
+      stoppedStorageBilled: true,
+      deletion: true,
+      lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+    });
+    open(status({ createdFor: null, rawState: "stopped" }), sleeper);
+    expect(dialogText()).toContain(
+      "It stays stopped in your account, where its disk keeps billing Personal until it's deleted. You can add it back from Add host."
+    );
+    cleanup();
+    open(status({ createdFor: null, asleep: true, rawState: "sleeping" }), sleeper);
+    expect(dialogText()).toContain(
+      "It stays asleep in your account, where its disk keeps billing Personal until it's deleted."
+    );
+    cleanup();
+    // Running, compute ends with the stop, and the disk bills on after it.
+    open(status({ createdFor: null, machine: "running", rawState: "running" }), sleeper);
+    expect(dialogText()).toContain(
+      "It's running and keeps billing Personal until it stops on Acme, and for its disk after that until it's deleted."
+    );
+    cleanup();
+    open(status({ createdFor: null, machine: "unknown", rawState: "?" }), sleeper);
+    expect(dialogText()).toContain("and for its disk until it's deleted");
+    cleanup();
+    // A machine already deleted has no disk left to bill.
+    open(status({ createdFor: null, machine: "deleted", rawState: "terminated" }), sleeper);
+    expect(dialogText()).not.toContain("for its disk");
   });
 
   it("offers no Delete for a provider that can't delete, and only forgets the host", async () => {

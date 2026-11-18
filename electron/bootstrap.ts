@@ -8,8 +8,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { app } from "electron";
 import { setCompileCacheEnableStatus } from "./utils/hostPerformance.js";
-import { isAttachStdioRequested, shouldUseHeadlessOzone } from "./boot/hostModeLaunch.js";
-import { isRemoteHostSupported } from "./remote/buildGate.js";
+import {
+  isAttachStdioRequested,
+  isSshAskpassRequested,
+  shouldUseHeadlessOzone,
+} from "./boot/hostModeLaunch.js";
+import { isRemoteHostSupported, isRemoteShellSupported } from "./remote/buildGate.js";
 import {
   applyDevUserDataPath,
   applyHeadlessOzoneSwitches,
@@ -49,6 +53,29 @@ if (isRemoteHostSupported() && isAttachStdioRequested(process.argv)) {
   }
   app.exit(code);
   // Nothing below may run in this process.
+  await new Promise<never>(() => {});
+}
+
+// `--ssh-askpass` is ssh's SSH_ASKPASS while a Remote Hosts sign-in runs (see
+// remote/client/sshAskpass.ts): it hands one prompt to the Daintree that
+// started that ssh and prints the answer. Dispatched here for the same
+// reasons as the attach bridge; stdout carries the answer. Windows never
+// runs ssh for a host.
+if (
+  isRemoteShellSupported() &&
+  process.platform !== "win32" &&
+  isSshAskpassRequested(process.argv)
+) {
+  let code = 1;
+  if (__DAINTREE_REMOTE_HOSTS__) {
+    try {
+      const { runSshAskpassCli } = await import("./remote/client/sshAskpassCli.js");
+      code = await runSshAskpassCli();
+    } catch (error) {
+      process.stderr.write(`daintree: askpass failed: ${String(error)}\n`);
+    }
+  }
+  app.exit(code);
   await new Promise<never>(() => {});
 }
 

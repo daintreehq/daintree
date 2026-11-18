@@ -40,6 +40,8 @@ function question(
     expiresAt: null,
     settledAt: null,
     standing,
+    replyRequest: null,
+    stall: null,
   };
 }
 
@@ -507,5 +509,50 @@ describe("QuestionNotifier", () => {
 
     expect(show).not.toHaveBeenCalled();
     expect(list.listening()).toBe(0);
+  });
+});
+
+describe("QuestionNotifier following (#17240)", () => {
+  it("follows once its record is read, says so, and says so again when it stops", async () => {
+    const onFollowing = vi.fn();
+    const list = questionList();
+    const { notifier: made } = notifier(recorded(), list, { onFollowing });
+    expect(made.following).toBe(false);
+
+    await made.start();
+    expect(made.following).toBe(true);
+    expect(list.listening()).toBe(1);
+    expect(onFollowing).toHaveBeenCalledTimes(1);
+
+    made.stop();
+    expect(made.following).toBe(false);
+    expect(onFollowing).toHaveBeenCalledTimes(2);
+    made.stop();
+    expect(onFollowing).toHaveBeenCalledTimes(2);
+  });
+
+  it("never follows a lifetime whose record couldn't be read", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onFollowing = vi.fn();
+    const store = metaStore();
+    store.getMeta.mockRejectedValueOnce(new Error("database is locked"));
+    const { notifier: made } = notifier(store, questionList(), { onFollowing });
+
+    await made.start();
+    expect(made.following).toBe(false);
+    expect(onFollowing).not.toHaveBeenCalled();
+    made.stop();
+    expect(onFollowing).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("doesn't follow when stopped while its record was being read", async () => {
+    const onFollowing = vi.fn();
+    const { notifier: made } = notifier(recorded(), questionList(), { onFollowing });
+    const starting = made.start();
+    made.stop();
+    await starting;
+    expect(made.following).toBe(false);
+    expect(onFollowing).not.toHaveBeenCalled();
   });
 });

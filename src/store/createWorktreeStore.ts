@@ -3,6 +3,7 @@ import type { WorktreeSnapshot, WorktreeEventVersion, AttachIssuePayload } from 
 import { usePanelStore } from "./panelStore";
 import { getWorktreeSelectionSnapshot } from "./storeAccessors";
 import { logDebug } from "@/utils/logger";
+import { settleWorktreeCloudCleanup } from "./worktreeCloudCleanup";
 import {
   FENCE_TTL_MS,
   TOMBSTONE_TTL_MS,
@@ -895,6 +896,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         if (acked.has(entry.mutationId)) {
           next.delete(entry.mutationId);
           changed = true;
+          // The host says it went: its machines' choices are due (#17360).
+          if (entry.type === "delete-worktree" && entry.options.cloudCleanup) {
+            settleWorktreeCloudCleanup(entry.options.cloudCleanup, true, entry.mutationId);
+          }
           // The success path normally clears `deletingIds` via `applyRemove`
           // (driven by the `worktree-removed` event). But if the host crashed
           // between sending `worktree-removed` and the result ack, the
@@ -1080,6 +1085,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           // "Worktree not found" and surface a spurious error).
           nextOutbox.delete(entry.mutationId);
           outboxChanged = true;
+          // Absent from the list proves only that its monitor went: unknown, for main to look at.
+          if (entry.type === "delete-worktree" && entry.options.cloudCleanup) {
+            settleWorktreeCloudCleanup(entry.options.cloudCleanup, null, entry.mutationId);
+          }
           if (nextDeletingIds.delete(entry.worktreeId)) deletingChanged = true;
           if (nextIssueMutatingIds.delete(entry.worktreeId)) issueMutatingChanged = true;
           continue;

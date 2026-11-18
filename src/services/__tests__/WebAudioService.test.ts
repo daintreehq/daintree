@@ -115,6 +115,7 @@ describe("WebAudioService", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).electron = {
       sound: { getSoundDir: vi.fn().mockResolvedValue("/app/resources/sounds") },
+      notificationSounds: { getCustomDir: vi.fn().mockResolvedValue("/user/sounds/custom") },
     };
 
     const service = await import("@/services/WebAudioService");
@@ -145,6 +146,135 @@ describe("WebAudioService", () => {
     expect(sources[0]!.connect).toHaveBeenCalled();
     expect(sources[0]!.gainNode).toBeTruthy();
     expect(mockStart).toHaveBeenCalledWith(0);
+  });
+
+  it("fetches an imported sound from the custom directory by its uuid", async () => {
+    const { service, mockFetch, mockSuccessfulFetch, mockStart } = await setupTest();
+    mockSuccessfulFetch();
+    const uuid = "0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";
+
+    await service.playSound(`custom:${uuid}`);
+
+    const url = new URL(mockFetch.mock.calls[0]![0] as string);
+    expect(url.searchParams.get("path")).toBe(`/user/sounds/custom/${uuid}.wav`);
+    expect(url.searchParams.get("root")).toBe("/user/sounds/custom");
+    expect(mockStart).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps only the most recently played imports decoded, and every bundled sound", async () => {
+    const { service, mockFetch, mockSuccessfulFetch } = await setupTest();
+    const ids = Array.from(
+      { length: 9 },
+      (_, i) => `custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e${String(i).padStart(2, "0")}`
+    );
+    for (let i = 0; i < 12; i++) mockSuccessfulFetch();
+
+    await service.playSound("chime.wav");
+    for (const id of ids.slice(0, 8)) await service.playSound(id);
+    // Playing the oldest import again makes the next-oldest the one to go.
+    await service.playSound(ids[0]!);
+    await service.playSound(ids[8]!);
+    expect(mockFetch).toHaveBeenCalledTimes(10);
+
+    await service.playSound(ids[0]!);
+    await service.playSound("chime.wav");
+    expect(mockFetch).toHaveBeenCalledTimes(10);
+
+    await service.playSound(ids[1]!);
+    expect(mockFetch).toHaveBeenCalledTimes(11);
+  });
+
+  it("asks for the imports directory once, and again after dispose", async () => {
+    const { service, mockSuccessfulFetch } = await setupTest();
+    const getCustomDir = window.electron.notificationSounds.getCustomDir as ReturnType<
+      typeof vi.fn
+    >;
+    for (let i = 0; i < 3; i++) mockSuccessfulFetch();
+
+    await service.playSound("custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e01");
+    await service.playSound("custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e02");
+    expect(getCustomDir).toHaveBeenCalledTimes(1);
+
+    service.dispose();
+    await service.playSound("custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e03");
+    expect(getCustomDir).toHaveBeenCalledTimes(2);
+  });
+
+  it("doesn't keep a directory looked up by a play that began before dispose", async () => {
+    const { service, mockSuccessfulFetch } = await setupTest();
+    const getCustomDir = window.electron.notificationSounds.getCustomDir as ReturnType<
+      typeof vi.fn
+    >;
+    mockSuccessfulFetch();
+    mockSuccessfulFetch();
+
+    const pending = service.playSound("custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e01");
+    service.dispose();
+    await pending;
+    await service.playSound("custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e02");
+
+    expect(getCustomDir).toHaveBeenCalledTimes(2);
+  });
+
+  it("doesn't keep a bundled directory looked up across dispose", async () => {
+    const { service, mockSuccessfulFetch } = await setupTest();
+    const getSoundDir = window.electron.sound.getSoundDir as ReturnType<typeof vi.fn>;
+    let resolveDir!: (dir: string) => void;
+    getSoundDir.mockReturnValueOnce(new Promise<string>((r) => (resolveDir = r)));
+    mockSuccessfulFetch();
+    mockSuccessfulFetch();
+
+    const pending = service.playSound("chime.wav");
+    await vi.waitFor(() => expect(getSoundDir).toHaveBeenCalledTimes(1));
+    service.dispose();
+    resolveDir("/stale/sounds");
+    await pending;
+    await service.playSound("ping.wav");
+
+    expect(getSoundDir).toHaveBeenCalledTimes(2);
+  });
+
+  it("decodes again after dispose rather than keeping a decode that finished after it", async () => {
+    const { service, mockFetch, mockDecodeAudioData } = await setupTest();
+    const ok = () => ({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(16)) });
+    mockFetch.mockResolvedValue(ok());
+    let finishDecode!: (buffer: AudioBuffer) => void;
+    mockDecodeAudioData.mockReturnValueOnce(
+      new Promise<AudioBuffer>((r) => {
+        finishDecode = r;
+      })
+    );
+    mockDecodeAudioData.mockResolvedValue({ duration: 1, length: 1 } as AudioBuffer);
+
+    const pending = service.playSound("chime.wav");
+    await vi.waitFor(() => expect(mockDecodeAudioData).toHaveBeenCalledTimes(1));
+    service.dispose();
+    finishDecode({ duration: 1, length: 1 } as AudioBuffer);
+    await pending;
+    await service.playSound("chime.wav");
+
+    expect(mockDecodeAudioData).toHaveBeenCalledTimes(2);
+  });
+
+  it("doesn't keep a directory or buffer that arrives after dispose", async () => {
+    const { service, mockSuccessfulFetch } = await setupTest();
+    const getCustomDir = window.electron.notificationSounds.getCustomDir as ReturnType<
+      typeof vi.fn
+    >;
+    let resolveDir!: (dir: string) => void;
+    getCustomDir.mockReturnValueOnce(new Promise<string>((r) => (resolveDir = r)));
+    mockSuccessfulFetch();
+    mockSuccessfulFetch();
+    const id = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e01";
+
+    const pending = service.playSound(id);
+    await vi.waitFor(() => expect(getCustomDir).toHaveBeenCalledTimes(1));
+    service.dispose();
+    resolveDir("/stale/custom");
+    await pending;
+    await service.playSound(id);
+
+    expect(getCustomDir).toHaveBeenCalledTimes(2);
   });
 
   it("caches decoded buffers on second play", async () => {
@@ -235,12 +365,35 @@ describe("WebAudioService", () => {
     const { service, mockSuccessfulFetch, sources, mockStart } = await setupTest();
     mockSuccessfulFetch();
 
-    await service.playSound("pulse.wav", 12);
+    await service.playSound("pulse.wav", { detune: 12 });
 
     // Snapshot captured at start() proves detune was assigned BEFORE start,
     // not after — the entire premise of this feature.
     expect(sources[0]!.detuneAtStart).toBe(12);
     expect(mockStart).toHaveBeenCalledWith(0);
+  });
+
+  it("plays at the level Main sent, so decay and the volume setting are audible", async () => {
+    const { service, mockSuccessfulFetch, sources } = await setupTest();
+    mockSuccessfulFetch();
+
+    await service.playSound("waiting.wav", { volume: 0.35 });
+
+    expect(sources[0]!.gainNode!.gain.value).toBeCloseTo(0.35);
+  });
+
+  it.each([
+    [undefined, 1],
+    [1.7, 1],
+    [-0.2, 0],
+    [Number.NaN, 1],
+  ])("clamps a trigger level of %s to %s", async (volume, expected) => {
+    const { service, mockSuccessfulFetch, sources } = await setupTest();
+    mockSuccessfulFetch();
+
+    await service.playSound("waiting.wav", { volume });
+
+    expect(sources[0]!.gainNode!.gain.value).toBe(expected);
   });
 
   it("cancelSound during async decode aborts the pending playback", async () => {

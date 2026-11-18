@@ -22,6 +22,8 @@ function item(alias: number, kind: "waiting" | "queued" = "waiting"): DecisionQu
     expiresAt: null,
     settledAt: null,
     standing: kind === "waiting" ? { kind, reason: "open" } : { kind },
+    replyRequest: null,
+    stall: null,
   };
 }
 

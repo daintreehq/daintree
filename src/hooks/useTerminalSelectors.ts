@@ -60,9 +60,15 @@ export function useWorktreeIds(): Set<string> {
   return useWorktreeStore(useShallow((state) => buildWorktreeIds(state.worktrees)));
 }
 
-export function useTerminalNotificationCounts(blurTime?: number | null): {
-  waitingCount: number;
-} {
+const NO_PANEL_IDS: string[] = [];
+
+/**
+ * The panes this view counts in the title's `(N)` and the Dock badge, by
+ * panel id, so main can count a pane once with any Decisions question waiting
+ * in it (#17233). Empty while the window is focused (`blurTime` null); with a
+ * `blurTime`, only panes that changed state after it.
+ */
+export function useTerminalNotificationPanelIds(blurTime?: number | null): string[] {
   const worktreeIds = useWorktreeIds();
   // Only a run in Needs you reaches the title's `(N)` or the Dock badge — the
   // same call every other waiting count makes. A prompt that asks nothing and
@@ -71,11 +77,9 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 
   return usePanelStore(
     useShallow((state) => {
-      if (blurTime === null) {
-        return { waitingCount: 0 };
-      }
+      if (blurTime === null) return NO_PANEL_IDS;
 
-      let waitingCount = 0;
+      const panelIds: string[] = [];
 
       for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
         if (!isPtyPanel(panel)) continue;
@@ -88,12 +92,18 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
           if (panel.lastStateChange <= blurTime) continue;
         }
 
-        waitingCount += 1;
+        panelIds.push(panel.id);
       }
 
-      return { waitingCount };
+      return panelIds;
     })
   );
+}
+
+export function useTerminalNotificationCounts(blurTime?: number | null): {
+  waitingCount: number;
+} {
+  return { waitingCount: useTerminalNotificationPanelIds(blurTime).length };
 }
 
 const EMPTY_TERMINALS: PtyPanelData[] = [];

@@ -1,4 +1,4 @@
-import type { GitDiffSide, GitStatus } from "../git.js";
+import type { ConflictSideChoice, GitDiffSide, GitStatus } from "../git.js";
 
 /** Get file diff payload */
 export interface GitGetFileDiffPayload {
@@ -42,9 +42,9 @@ export interface GitFileDiffResult {
 
 /** Single file entry in a cross-worktree comparison */
 export interface CrossWorktreeFile {
-  /** File path (new path for renames) */
+  /** File path (new path for renames and copies) */
   path: string;
-  /** Original path before rename (only set for renamed files) */
+  /** Source path of a rename or copy (only set for those) */
   oldPath?: string;
   /** Change status: A=added, D=deleted, M=modified, R=renamed, C=copied, U=unmerged */
   status: "A" | "D" | "M" | "R" | "C" | "U" | string;
@@ -68,9 +68,16 @@ export interface CrossWorktreeDiffResult {
 export interface ConflictMarkerScanEntry {
   /** Path relative to the worktree root (matches the request path verbatim) */
   path: string;
-  /** Count of `<<<<<<<` opening markers — one per hunk. `null` when the scan failed or the file was skipped (binary/oversized/unreadable). */
+  /** Count of `<<<<<<<` opening markers — one per hunk. `null` when the file was skipped: missing, not a regular file, past the size cap, or unreadable. */
   hunkCount: number | null;
-  /** 1-based line number of the first `<<<<<<<` marker, or `null` when unavailable. */
+  /**
+   * Whether any marker line the commit scan refuses remains (opening, base or
+   * closing; a lone `=======` divider is not one), so a closer left behind
+   * after its opener was deleted still counts. `null` when the file was
+   * skipped, as for `hunkCount`.
+   */
+  hasMarkers: boolean | null;
+  /** 1-based line number of the first marker of any kind, or `null` when unavailable. */
   firstMarkerLine: number | null;
 }
 
@@ -82,15 +89,13 @@ export interface GitScanConflictMarkersPayload {
   filePaths: string[];
 }
 
-/** Payload for whole-file conflict resolution via `git checkout --ours/--theirs` */
-export interface GitCheckoutOursTheirsPayload {
+/** Payload for whole-file conflict resolution: `git checkout --ours/--theirs`, or `git rm` for a side without the file */
+export type GitCheckoutOursTheirsPayload = {
   /** Worktree path */
   cwd: string;
   /** Path relative to the worktree root */
   filePath: string;
-  /** Which side of the conflict to take. */
-  side: "ours" | "theirs";
-}
+} & ConflictSideChoice;
 
 /** Payload to compare two branches */
 export interface GitCompareWorktreesPayload {
@@ -112,4 +117,9 @@ export interface GitCompareWorktreesPayload {
    * text in full: the source a reader expands hidden context from.
    */
   contextLines?: number;
+  /**
+   * Source path of a renamed or copied `filePath`, from the listing's
+   * `oldPath`. Without it the file diffs as a newly added one.
+   */
+  oldPath?: string;
 }

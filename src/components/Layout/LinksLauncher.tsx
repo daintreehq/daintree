@@ -7,11 +7,12 @@ import {
   type ReactNode,
 } from "react";
 import { Globe, ServerCog } from "lucide-react";
-import { Link } from "@/components/icons";
+import { GitPullRequest, Link, ListChecks } from "@/components/icons";
+import type { DeclaredProjectLink, DeclaredProjectLinkSource } from "@shared/types";
 import { linkHost } from "@shared/utils/projectLinks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChoiceCard } from "@/components/ui/card";
+import { FactRun } from "@/components/ui/FactSeparator";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   DropdownMenuGroup,
@@ -27,17 +28,24 @@ import { enterFocusedPanel } from "@/components/Terminal/contentGridFocus";
 import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
 import {
   hasLauncherLinks,
+  useLinksLauncherDeploymentTarget,
   useLinksLauncherLinks,
+  useLinksLauncherPullRequest,
+  type LauncherDeploymentTarget,
+  type LauncherPullRequest,
   type LinksLauncherLinks,
 } from "@/hooks/useLinksLauncher";
+import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
-import { opensInPanel, openLinkUrl } from "@/services/openLinkUrl";
+import { opensInPanel, openLinkUrl, openUrlExternally } from "@/services/openLinkUrl";
 import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { useLinksLauncherStore } from "@/store/linksLauncherStore";
 import { usePanelStore } from "@/store/panelStore";
 import { logError } from "@/utils/logger";
+import { pullRequestWords } from "@/components/Worktree/ReviewHub/prWords";
+import { usePullRequestTerm } from "@/components/Worktree/ReviewHub/usePullRequestTerm";
 import {
   DEV_SERVERS_HEADING,
   LinksLauncherDevServers,
@@ -46,6 +54,21 @@ import {
   summarizeDevServers,
   type DevSessionsSnapshot,
 } from "./LinksLauncherDevServers";
+import {
+  LinksLauncherDeployments,
+  showsDeployments,
+  useLauncherDeployments,
+  type LauncherDeployments,
+} from "./LinksLauncherDeployments";
+import {
+  LinksLauncherPullRequest,
+  pullRequestFacts,
+  pullRequestTitle,
+  showsPullRequest,
+  useLauncherPullRequestChecks,
+  type LauncherChecks,
+} from "./LinksLauncherPullRequest";
+import { LinksLauncherRow } from "./LinksLauncherRow";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { focusToolbarControl } from "./PluginToolbarPopover";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
@@ -56,11 +79,47 @@ const LINKS_LABEL = "Links";
 export const PROJECT_LINKS_HEADING = "Project links";
 export const GLOBAL_LINKS_HEADING = "Your links";
 
+interface DeclaredLinkGroup {
+  source: DeclaredProjectLinkSource;
+  links: readonly DeclaredProjectLink[];
+}
+
+/**
+ * The declared links, one group per manifest, in the order Main lists the
+ * manifests. A manifest this build doesn't know (a newer Remote Host's) still
+ * shows, under its own file name.
+ */
+function declaredLinkGroups(links: readonly DeclaredProjectLink[]): DeclaredLinkGroup[] {
+  const groups = new Map<DeclaredProjectLinkSource, DeclaredProjectLink[]>();
+  for (const link of links) {
+    const group = groups.get(link.source);
+    if (group) group.push(link);
+    else groups.set(link.source, [link]);
+  }
+  return Array.from(groups, ([source, own]) => ({ source, links: own }));
+}
+
+function declaredLinksHeading(source: DeclaredProjectLinkSource): string {
+  return `From ${source}`;
+}
+
+/** Read after a declared row's host, so the row says where it came from. */
+function DeclaredNote({ source }: { source: DeclaredProjectLinkSource }) {
+  return <span className="sr-only">, declared in the project&apos;s {source}</span>;
+}
+
 /** Marks the launcher's content, so a close can tell whether focus was inside it. */
 const CONTENT_ATTR = "data-links-launcher";
 
 function openLink(url: string): void {
   openLinkUrl(url).catch((error: unknown) => logError("Failed to open link", error));
+}
+
+const LOG_PREFIX = "[LinksLauncher]";
+
+function deploymentSectionKey(target: LauncherDeploymentTarget): string {
+  const ref = target.kind === "pullRequest" ? `pr:${target.prNumber}` : `branch:${target.branch}`;
+  return `${target.worktreeId}:${ref}`;
 }
 
 /**
@@ -90,50 +149,34 @@ interface LinkRowProps {
   title: string;
   url: string;
   addedByAssistant: boolean;
+  /** The manifest that declares the link, for one nobody saved. */
+  declaredIn?: DeclaredProjectLinkSource;
   onOpen: (url: string) => void;
 }
 
-function LinkRow({ rowId, title, url, addedByAssistant, onOpen }: LinkRowProps) {
-  const focusRestore = useOverlayFocusRestore();
-  const titleId = `${rowId}-title`;
-  const hostId = `${rowId}-host`;
+function LinkRow({ rowId, title, url, addedByAssistant, declaredIn, onOpen }: LinkRowProps) {
   return (
-    <li>
-      <ChoiceCard
-        tone="row"
-        padding="sm"
-        aria-labelledby={titleId}
-        aria-describedby={hostId}
-        onClick={() => {
-          // A panel takes focus as it comes forward; the close mustn't pull it back.
-          if (opensInPanel(url)) focusRestore?.expectHandoff();
-          onOpen(url);
-        }}
-        className="group flex w-full items-center gap-2.5 text-left"
-      >
-        <Globe className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
-        <span className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span
-            id={titleId}
-            className="min-w-0 shrink-0 max-w-[60%] truncate text-sm text-text-primary"
-          >
-            {title}
-          </span>
-          <span
-            id={hostId}
-            className="min-w-0 truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150"
-          >
-            {linkHost(url)}
-            {addedByAssistant && <span className="sr-only">, added by the Assistant</span>}
-          </span>
-        </span>
-        {addedByAssistant && (
+    <LinksLauncherRow
+      rowId={rowId}
+      icon={<Globe className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />}
+      title={title}
+      detail={
+        <>
+          {linkHost(url)}
+          {addedByAssistant && <span className="sr-only">, added by the Assistant</span>}
+          {declaredIn !== undefined && <DeclaredNote source={declaredIn} />}
+        </>
+      }
+      trailing={
+        addedByAssistant && (
           <Badge size="xs" tone="neutral" aria-hidden="true" className="shrink-0">
             Assistant
           </Badge>
-        )}
-      </ChoiceCard>
-    </li>
+        )
+      }
+      url={url}
+      onOpen={onOpen}
+    />
   );
 }
 
@@ -166,28 +209,53 @@ function openProjectLinkSettings(): void {
 }
 
 /**
- * The launcher's list: this project's links, then the person's own, then the
- * dev servers across every worktree.
+ * The launcher's list: this project's saved links, then the ones its
+ * manifests declare, one section per file, then the person's own, then the
+ * active worktree's pull request and where it is deployed, then the dev
+ * servers across every worktree.
  */
 export function LinksLauncherList({
   links,
+  pullRequest,
+  checks,
+  deploymentTarget,
+  deployments,
   devSessions,
   onOpen,
+  onOpenExternal,
   onManage,
 }: {
   links: LinksLauncherLinks;
+  pullRequest: LauncherPullRequest | null;
+  checks: LauncherChecks;
+  deploymentTarget: LauncherDeploymentTarget | null;
+  deployments: LauncherDeployments;
   devSessions: DevSessionsSnapshot;
   onOpen: (url: string) => void;
+  /** Opens in the system browser, whatever the address. */
+  onOpenExternal: (url: string) => void;
   onManage: () => void;
 }) {
   const baseId = useId();
-  const { projectLinks, globalLinks } = links;
-  if (!hasLauncherLinks(links) && !hasDevServersSection(devSessions)) {
+  const { projectLinks, declaredLinks, globalLinks } = links;
+  const shownPullRequest = showsPullRequest(pullRequest, checks) ? pullRequest : null;
+  const deploymentSkeleton = useSkeletonFloor(useSkeletonGate(deployments.kind === "loading"));
+  // Still being read, or shown: either way the prompt to add a link would be
+  // premature, since the answer may be all the launcher has to show.
+  const holdsDeployments =
+    deploymentTarget !== null &&
+    (deployments.kind === "loading" || showsDeployments(deployments, deploymentSkeleton));
+  if (
+    !hasLauncherLinks(links) &&
+    shownPullRequest === null &&
+    !holdsDeployments &&
+    !hasDevServersSection(devSessions)
+  ) {
     return (
       <div className="flex flex-col items-start gap-2 p-3">
         <p className="text-xs text-text-secondary">
-          Links you or the Assistant save for this project, and dev servers running in any worktree,
-          show here.
+          Links you or the Assistant save for this project, links declared in its manifests, and dev
+          servers running in any worktree show here.
         </p>
         <Button type="button" variant="outline" size="sm" onClick={onManage}>
           Add a project link
@@ -211,6 +279,25 @@ export function LinksLauncherList({
           ))}
         </LinkSection>
       )}
+      {declaredLinkGroups(declaredLinks).map((group, groupIndex) => (
+        <LinkSection
+          key={group.source}
+          heading={declaredLinksHeading(group.source)}
+          sectionId={`${baseId}-declared-${groupIndex}`}
+        >
+          {group.links.map((link, index) => (
+            <LinkRow
+              key={link.url}
+              rowId={`${baseId}-declared-${groupIndex}-${index}`}
+              title={link.title}
+              url={link.url}
+              addedByAssistant={false}
+              declaredIn={group.source}
+              onOpen={onOpen}
+            />
+          ))}
+        </LinkSection>
+      ))}
       {globalLinks.length > 0 && (
         <LinkSection heading={GLOBAL_LINKS_HEADING} sectionId={`${baseId}-global`}>
           {globalLinks.map((link) => (
@@ -224,6 +311,27 @@ export function LinksLauncherList({
             />
           ))}
         </LinkSection>
+      )}
+      {shownPullRequest !== null && (
+        <LinksLauncherPullRequest
+          // A section per pull request: nothing one painted carries over to another.
+          key={`${shownPullRequest.worktreeId}:${shownPullRequest.number}`}
+          pullRequest={shownPullRequest}
+          checks={checks}
+          sectionId={`${baseId}-pull-request`}
+          onOpen={onOpen}
+        />
+      )}
+      {deploymentTarget !== null && (
+        <LinksLauncherDeployments
+          // A section per target, like the pull request's.
+          key={deploymentSectionKey(deploymentTarget)}
+          worktreeLabel={deploymentTarget.worktreeLabel}
+          deployments={deployments}
+          showSkeleton={deploymentSkeleton}
+          sectionId={`${baseId}-deployments`}
+          onOpen={onOpenExternal}
+        />
       )}
       <LinksLauncherDevServers snapshot={devSessions} sectionId={`${baseId}-dev-servers`} />
     </div>
@@ -246,9 +354,18 @@ function LinksLauncherPopoverContent({
   onCloseAutoFocus: NonNullable<ComponentProps<typeof PopoverContent>["onCloseAutoFocus"]>;
 }) {
   const links = useLinksLauncherLinks();
-  // Read here rather than in the section, so a server leaving the list
-  // re-runs the focus repair below like a link leaving it does.
+  // Read here rather than in their sections, so a server, a check or a
+  // deployment leaving the list re-runs the focus repair below like a link
+  // leaving it does.
   const devSessions = useAllDevSessions();
+  const pullRequest = useLinksLauncherPullRequest();
+  const checks = useLauncherPullRequestChecks(pullRequest, seq);
+  // Asked of the pull request the list shows: once the forge says it is gone,
+  // the branch it was opened from may still be deployed.
+  const deploymentTarget = useLinksLauncherDeploymentTarget(
+    showsPullRequest(pullRequest, checks) ? pullRequest : null
+  );
+  const deployments = useLauncherDeployments(deploymentTarget, seq);
   const close = useLinksLauncherStore((s) => s.close);
   const contentRef = useRef<HTMLDivElement>(null);
   // The control inside that last held focus. Kept through its removal, which
@@ -287,10 +404,18 @@ function LinksLauncherPopoverContent({
     >
       <LinksLauncherList
         links={links}
+        pullRequest={pullRequest}
+        checks={checks}
+        deploymentTarget={deploymentTarget}
+        deployments={deployments}
         devSessions={devSessions}
         onOpen={(url) => {
           close(seq ?? undefined);
           openLink(url);
+        }}
+        onOpenExternal={(url) => {
+          close(seq ?? undefined);
+          openUrlExternally(url, LOG_PREFIX);
         }}
         onManage={() => {
           close(seq ?? undefined);
@@ -430,12 +555,15 @@ export function LinksLauncherDetachedHost() {
 /**
  * The launcher's links inlined into a `…` menu its button went into, as menu
  * rows. Mounted with the menu's content, so each opening of the menu re-reads
- * this project's list the way an opening of the popover does. Dev servers
- * have controls of their own a menu row can't hold, so one row opens the
- * launcher for them once the menu has closed.
+ * this project's list the way an opening of the popover does. A pull
+ * request's checks are read when the launcher opens, and dev servers have
+ * controls of their own a menu row can't hold, so each gets one row that
+ * opens the launcher once the menu has closed.
  */
 export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" }) {
   const links = useLinksLauncherLinks();
+  const pullRequest = useLinksLauncherPullRequest();
+  const prWords = pullRequestWords(usePullRequestTerm(pullRequest?.providerId ?? null));
   const { sessions } = useAllDevSessions();
   const listedServers = listedDevSessions(sessions);
   const focusRestore = useOverlayFocusRestore();
@@ -446,7 +574,7 @@ export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" })
     if (opensInPanel(url)) focusRestore?.expectHandoff();
     openLink(url);
   };
-  const { projectLinks, globalLinks } = links;
+  const { projectLinks, declaredLinks, globalLinks } = links;
   return (
     <>
       {projectLinks.length > 0 && (
@@ -471,6 +599,21 @@ export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" })
           ))}
         </DropdownMenuGroup>
       )}
+      {declaredLinkGroups(declaredLinks).map((group) => (
+        <DropdownMenuGroup key={`declared-${group.source}`}>
+          <DropdownMenuLabel>{declaredLinksHeading(group.source)}</DropdownMenuLabel>
+          {group.links.map((link) => (
+            <DropdownMenuItem key={`declared-${link.url}`} onClick={() => select(link.url)}>
+              <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{link.title}</span>
+              <DropdownMenuMeta aria-hidden={false}>
+                {linkHost(link.url)}
+                <DeclaredNote source={group.source} />
+              </DropdownMenuMeta>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
+      ))}
       {globalLinks.length > 0 && (
         <DropdownMenuGroup>
           <DropdownMenuLabel>{GLOBAL_LINKS_HEADING}</DropdownMenuLabel>
@@ -481,6 +624,27 @@ export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" })
               <DropdownMenuMeta aria-hidden={false}>{linkHost(link.url)}</DropdownMenuMeta>
             </DropdownMenuItem>
           ))}
+        </DropdownMenuGroup>
+      )}
+      {pullRequest !== null && (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>{prWords.title}</DropdownMenuLabel>
+          <DropdownMenuItem onClick={() => select(pullRequest.url)}>
+            <GitPullRequest className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            {/* Capped: a pull request's title can be long, and the menu sizes to its widest row. */}
+            <span className="min-w-0 max-w-64 flex-1 truncate">
+              {pullRequestTitle(pullRequest, prWords)}
+            </span>
+            <DropdownMenuMeta aria-hidden={false}>
+              <FactRun facts={pullRequestFacts(pullRequest, prWords)} />
+            </DropdownMenuMeta>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => useLinksLauncherStore.getState().deferFromOverflow(side)}
+          >
+            <ListChecks className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">Checks…</span>
+          </DropdownMenuItem>
         </DropdownMenuGroup>
       )}
       {listedServers.length > 0 && (

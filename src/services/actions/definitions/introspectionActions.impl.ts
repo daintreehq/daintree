@@ -12,7 +12,6 @@ import { listActionManifest, searchActionManifest } from "@shared/utils/actionMa
 import { ACTIONS_LIST_WALK_LIMIT } from "@shared/config/mcpIntrospection";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
-import { usePortalStore } from "@/store/portalStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -34,7 +33,6 @@ export async function runActionsGetContext() {
   const terminalState = usePanelStore.getState();
   const worktreeSelection = useWorktreeSelectionStore.getState();
   const worktrees = getCurrentViewStore().getState().worktrees;
-  const portal = usePortalStore.getState();
 
   const focusedId = terminalState.focusedId;
   const focusedTerminal = focusedId ? (terminalState.panelsById[focusedId] ?? null) : null;
@@ -59,8 +57,6 @@ export async function runActionsGetContext() {
 
   return {
     ...ctx,
-    portalOpen: portal.isOpen,
-    portalActiveTabId: portal.activeTabId,
     terminalCount: terminalState.panelIds.filter(
       (id) => terminalState.panelsById[id]?.location !== "trash"
     ).length,

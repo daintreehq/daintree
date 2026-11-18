@@ -19,7 +19,7 @@ import type { ToolbarButtonId } from "../types/toolbar.js";
  * preview is the exception (#14069): it is offered from more than the toolbar,
  * and a project that serves no web app hides every one of those places. The
  * toolbar buttons that carry state or reach the rest of the app — the app
- * menu, sidebar, assistant and portal toggles, memory pause, voice recording,
+ * menu, sidebar and assistant toggles, memory pause, voice recording,
  * problems, notifications, Canopy, settings, the launcher, the plugin tray and
  * the overflow itself — are never features.
  *

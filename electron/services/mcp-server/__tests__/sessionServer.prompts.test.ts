@@ -8,6 +8,7 @@ vi.mock("electron", () => ({
 }));
 
 import { createSessionServer } from "../sessionServer.js";
+import type { DispatchEnvelope } from "../shared.js";
 import {
   fakeDeps,
   makeMockTransport,
@@ -115,6 +116,68 @@ describe("sessionServer prompt handler", () => {
 
     const worktreeCalls = dispatchAction.mock.calls.filter(([id]) => id === "worktree.getCurrent");
     expect(worktreeCalls).toHaveLength(0);
+  });
+
+  it("asks for the named terminal's output while worktree.getCurrent is still pending (#17492)", async () => {
+    let resolveWorktree!: (value: DispatchEnvelope) => void;
+    let resolveOutput!: (value: DispatchEnvelope) => void;
+    const worktree = new Promise<DispatchEnvelope>((resolve) => (resolveWorktree = resolve));
+    const output = new Promise<DispatchEnvelope>((resolve) => (resolveOutput = resolve));
+    const dispatchAction = vi.fn<(actionId: string, args?: unknown) => Promise<DispatchEnvelope>>(
+      (actionId) => {
+        if (actionId === "worktree.getCurrent") return worktree;
+        if (actionId === "terminal.getOutput") return output;
+        return Promise.resolve({ result: { ok: true, result: null } });
+      }
+    );
+    const deps = fakeDeps({ dispatchAction });
+    const server = createSessionServer("s_triage_failed_concurrent", deps);
+    await server.connect(makeMockTransport());
+
+    const rendering = getPrompt(server, {
+      name: "triage_failed_agent",
+      arguments: { terminal_id: "t-failed" },
+    }) as Promise<{ messages: Array<{ content: { text: string } }> }>;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(dispatchAction.mock.calls.map(([id]) => id)).toEqual([
+      "worktree.getCurrent",
+      "terminal.getOutput",
+    ]);
+    expect(dispatchAction).toHaveBeenLastCalledWith(
+      "terminal.getOutput",
+      expect.objectContaining({ terminalId: "t-failed" })
+    );
+
+    resolveOutput({ result: { ok: true, result: { content: "panic: boom" } } });
+    resolveWorktree({ result: { ok: true, result: { path: "/repo/wt", branch: "fix/boom" } } });
+
+    const text = (await rendering).messages[0].content.text;
+    expect(text).toContain("/repo/wt");
+    expect(text).toContain("fix/boom");
+    expect(text).toContain("panic: boom");
+  });
+
+  it("still renders the terminal output when worktree.getCurrent fails (#17492)", async () => {
+    const dispatchAction = vi.fn(async (actionId: string): Promise<DispatchEnvelope> => {
+      if (actionId === "worktree.getCurrent") throw new Error("renderer gone");
+      if (actionId === "terminal.getOutput") {
+        return { result: { ok: true, result: { content: "panic: boom" } } };
+      }
+      return { result: { ok: true, result: null } };
+    });
+    const deps = fakeDeps({ dispatchAction });
+    const server = createSessionServer("s_triage_failed_worktree_down", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await getPrompt(server, {
+      name: "triage_failed_agent",
+      arguments: { terminal_id: "t-failed" },
+    })) as { messages: Array<{ content: { text: string } }> };
+
+    const text = result.messages[0].content.text;
+    expect(text).toContain("(no active worktree detected)");
+    expect(text).toContain("panic: boom");
   });
 
   it("lists triage_terminals in prompts/list with no arguments", async () => {

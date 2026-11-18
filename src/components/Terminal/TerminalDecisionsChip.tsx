@@ -5,7 +5,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Button } from "@/components/ui/button";
 import { decisionsClient } from "@/clients/decisionsClient";
+import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import { usePanelStore } from "@/store/panelStore";
@@ -31,6 +33,7 @@ import {
 } from "@/components/ui/popoverHeader";
 import { pluralize } from "@/lib/pluralize";
 import { DecisionCancelDialog } from "@/components/Decisions/DecisionCancelDialog";
+import { dismissingQuestionIds } from "@/components/Decisions/decisionDeclineSend";
 import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
 import { paneQuestion, questionOf } from "@/components/Decisions/decisionQuestionTarget";
 import type { PaneDecisionState } from "@shared/types/decisions";
@@ -147,23 +150,42 @@ function ReviewAnswersButton({ onReview }: { onReview: () => void }) {
   );
 }
 
+// Under the Popover root for its focus policy, as `ReviewAnswersButton` is.
+function OpenInboxButton({ onOpen }: { onOpen: () => void }) {
+  const focusRestore = useOverlayFocusRestore();
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      onClick={() => {
+        // The inbox takes focus; the popover mustn't take it back.
+        focusRestore?.expectHandoff();
+        onOpen();
+      }}
+      data-testid="terminal-decisions-inbox"
+    >
+      Open inbox
+    </Button>
+  );
+}
+
 function DecisionRow({
   item,
   line,
   onOpen,
-  onCancel,
+  onDismiss,
 }: {
   item: DecisionItem;
   line: string | null;
   onOpen: () => void;
-  /** Null for a question that can't be withdrawn now. */
-  onCancel: (() => void) | null;
+  /** Null for a question that can't be dismissed now. */
+  onDismiss: (() => void) | null;
 }) {
   const attention = ATTENTION_KINDS.has(item.kind);
   const focusRestore = useOverlayFocusRestore();
   return (
     // Two sibling controls, never one inside the other: the row opens the
-    // question, and Cancel asks before withdrawing it.
+    // question, and Dismiss asks before declining it.
     <li className="flex items-start hover:bg-overlay-subtle">
       <button
         type="button"
@@ -220,20 +242,20 @@ function DecisionRow({
           />
         )}
       </button>
-      {onCancel !== null && (
+      {onDismiss !== null && (
         <Button
           variant="ghost"
           size="xs"
           className="mt-1.5 mr-2 shrink-0"
-          aria-label={`Cancel question ${item.label}…`}
+          aria-label={`Dismiss question ${item.label}…`}
           onClick={() => {
             // The confirmation takes focus; the popover mustn't take it back.
             focusRestore?.expectHandoff();
-            onCancel();
+            onDismiss();
           }}
-          data-testid="terminal-decisions-cancel"
+          data-testid="terminal-decisions-dismiss"
         >
-          Cancel…
+          Dismiss…
         </Button>
       )}
     </li>
@@ -252,6 +274,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const headingId = useId();
   const [open, setOpen] = useState(false);
   const openAttention = useDecisionsAttentionStore((s) => s.open);
+  const openInbox = useDecisionsInboxStore((s) => s.open);
   // Every pane header mounts this chip, so only one with something to say reads the drafts.
   const watchDrafts = readsPaneWait(state);
   const hasDraft = useTerminalInputStore(
@@ -270,11 +293,19 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   // Withdrawals main committed and the relay hasn't confirmed, held in memory
   // for as long as this view shows the pane; each shows until the pane's state drops it.
   const [cancelling, setCancelling] = useState<ReadonlySet<string>>(() => new Set());
+  // The pane's questions dismissed from this computer (#17239), here or in the
+  // question view: each shows as dismissing while its decline is under way or
+  // taken, and as waiting again if it couldn't be. Joined, so the chip renders
+  // again only when the set changes, not on every draft keystroke.
+  const dismissingIds = useDecisionsAnswerStore((store) =>
+    dismissingQuestionIds(store.records, terminalId)
+  );
+  const dismissing = new Set(dismissingIds === "" ? [] : dismissingIds.split("\u0000"));
   const [cancel, setCancel] = useState<{ target: DecisionCancelTarget; open: boolean } | null>(
     null
   );
   const chipRef = useRef<HTMLButtonElement>(null);
-  const items = state === null ? [] : decisionItems(state, wait, cancelling);
+  const items = state === null ? [] : decisionItems(state, wait, cancelling, dismissing);
   const questionIds = items.map((item) => item.questionId);
   const lines = useQuestionLines(terminalId, questionIds, open);
 
@@ -286,7 +317,11 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
     <DecisionCancelDialog
       target={cancel?.target ?? null}
       isOpen={cancel?.open === true}
-      waiting={items.some((item) => asked?.(item.questionId) === true && isCancellable(item))}
+      // A question being dismissed from here still waits until it closes.
+      waiting={items.some(
+        (item) =>
+          asked?.(item.questionId) === true && (isCancellable(item) || item.kind === "dismissing")
+      )}
       queued={items.some((item) => asked?.(item.questionId) === true && item.kind === "queued")}
       onClose={() =>
         setCancel((current) => (current === null ? null : { ...current, open: false }))
@@ -402,7 +437,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                     setOpen(false);
                     openQuestion(terminalId, questionIds, item.questionId);
                   }}
-                  onCancel={
+                  onDismiss={
                     isCancellable(item)
                       ? () => {
                           setOpen(false);
@@ -411,6 +446,8 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                               question: paneQuestion(terminalId, item.questionId),
                               label: item.label,
                               line: lines.get(item.questionId) ?? null,
+                              // Named by alias alone: dismissed as it is open when confirmed.
+                              revision: null,
                             },
                             open: true,
                           });
@@ -427,17 +464,26 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                 ))}
               </div>
             )}
-            {/* The list reads this computer's answers; a Remote Host keeps its own panes'. */}
-            {attention && !isRemoteWindow() && (
-              <div className="flex justify-end border-t border-divider px-3 py-2">
-                {/* The answers that need a person are acted on in the list, which
-                also holds those whose pane is gone. */}
-                <ReviewAnswersButton
-                  onReview={() => {
+            {/* Both lists read this computer's questions; a Remote Host keeps its own panes'. */}
+            {!isRemoteWindow() && (
+              <div className="flex justify-end gap-2 border-t border-divider px-3 py-2">
+                {/* Every question on this computer, this pane's first (#17231). */}
+                <OpenInboxButton
+                  onOpen={() => {
                     setOpen(false);
-                    openAttention(terminalId);
+                    openInbox({ terminalId });
                   }}
                 />
+                {/* The answers that need a person are acted on in the list, which
+                also holds those whose pane is gone. */}
+                {attention && (
+                  <ReviewAnswersButton
+                    onReview={() => {
+                      setOpen(false);
+                      openAttention(terminalId);
+                    }}
+                  />
+                )}
               </div>
             )}
           </PopoverContent>

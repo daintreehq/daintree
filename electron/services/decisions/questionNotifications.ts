@@ -4,6 +4,7 @@ import type {
   DecisionQuestionReference,
 } from "../../../shared/types/decisionsQuestion.js";
 import type { MetaStore } from "./attentionList.js";
+import { NotificationClaims } from "./notificationClaims.js";
 
 /**
  * The questions this computer has raised a desktop notification for (#17232),
@@ -11,8 +12,6 @@ import type { MetaStore } from "./attentionList.js";
  * reconnect or a Remote Host coming back never raises one again. Ids only.
  */
 export const NOTIFIED_QUESTIONS_META_KEY = "daintree:notified-questions";
-
-const MAX_KEY_LENGTH = 1024;
 
 /**
  * Most claims kept for settled questions. A settled question can be reopened,
@@ -47,6 +46,8 @@ export interface QuestionNotifierOptions {
   show: (question: DecisionQuestionListItem, openingLine: string | null, key: string) => void;
   /** Takes down the banner shown under `key`, once its question no longer waits. */
   close: (key: string) => void;
+  /** It started following the list, or stopped: `following` changed (#17240). */
+  onFollowing?: () => void;
   now?: () => number;
 }
 
@@ -66,24 +67,6 @@ function isNewlyAsked(question: DecisionQuestionListItem): boolean {
   return standing.kind === "queued" || (standing.kind === "waiting" && standing.reason === "open");
 }
 
-/** The record as stored, or null when there is none or it can't be read as one. */
-function parseRecord(text: string | null): Set<string> | null {
-  if (text === null) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
-  return new Set(
-    parsed.filter(
-      (key): key is string =>
-        typeof key === "string" && key.length > 0 && key.length <= MAX_KEY_LENGTH
-    )
-  );
-}
-
 /**
  * Raises one desktop notification for each question an agent asks (#17232),
  * whatever terminal asked it and whether anyone watches it, for one owner
@@ -95,10 +78,7 @@ function parseRecord(text: string | null): Set<string> | null {
  */
 export class QuestionNotifier implements QuestionNotifications {
   private claimed: Set<string> | null = null;
-  /** The claims as last saved in the store. */
-  private saved = new Set<string>();
-  private written = "";
-  private writing: Promise<void> = Promise.resolve();
+  private readonly record: NotificationClaims;
   private shown = new Set<string>();
   private stopped = false;
   private off: (() => void) | null = null;
@@ -108,13 +88,18 @@ export class QuestionNotifier implements QuestionNotifications {
 
   constructor(private readonly o: QuestionNotifierOptions) {
     this.startedAt = (o.now ?? Date.now)();
+    this.record = new NotificationClaims(
+      o.store,
+      NOTIFIED_QUESTIONS_META_KEY,
+      "question notification"
+    );
   }
 
   /** Reads the record, then follows the list. A record that can't be read leaves it silent. */
   async start(): Promise<void> {
-    let text: string | null;
+    let record: Set<string> | null;
     try {
-      text = await this.o.store.getMeta(NOTIFIED_QUESTIONS_META_KEY);
+      record = await this.record.read();
     } catch (error) {
       // Without the record every open question could show again: show none.
       console.warn(
@@ -124,24 +109,33 @@ export class QuestionNotifier implements QuestionNotifications {
       return;
     }
     if (this.stopped) return;
-    const record = parseRecord(text);
     this.claimed = new Set(record ?? []);
-    this.saved = new Set(record ?? []);
-    this.written = record === null ? "" : JSON.stringify([...record]);
     this.seenBefore = record === null ? this.startedAt : null;
     this.off = this.o.questions.onChange((list) => this.follow(list));
     this.follow(this.o.questions.get());
+    this.o.onFollowing?.();
   }
 
   stop(): void {
     this.stopped = true;
+    const following = this.off !== null;
     this.off?.();
     this.off = null;
+    if (following) this.o.onFollowing?.();
+  }
+
+  /**
+   * Following the list, so a newly asked question can show (#17240): false
+   * before its record is read, for a lifetime whose record couldn't be, and
+   * once stopped.
+   */
+  get following(): boolean {
+    return this.off !== null;
   }
 
   /** Resolves once every claim made so far has been written, or failed to be. */
   settled(): Promise<void> {
-    return this.writing;
+    return this.record.settled();
   }
 
   private follow(list: DecisionQuestionList): void {
@@ -177,29 +171,8 @@ export class QuestionNotifier implements QuestionNotifications {
         this.o.close(key);
       }
     }
-    this.persist(claimed);
+    this.record.save(claimed);
     for (const question of fresh) void this.deliver(question);
-  }
-
-  /** Writes the record when it changed, one write at a time. */
-  private persist(claimed: ReadonlySet<string>): void {
-    const snapshot = new Set(claimed);
-    const text = JSON.stringify([...snapshot]);
-    if (text === this.written) return;
-    this.written = text;
-    this.writing = this.writing.then(async () => {
-      try {
-        await this.o.store.setMeta(NOTIFIED_QUESTIONS_META_KEY, text);
-        this.saved = snapshot;
-      } catch (error) {
-        // The next change writes it again.
-        if (this.written === text) this.written = "";
-        console.warn(
-          "[Decisions] The question notification record couldn't be saved:",
-          error instanceof Error ? error.name : "error"
-        );
-      }
-    });
   }
 
   private async deliver(asked: DecisionQuestionListItem): Promise<void> {
@@ -207,13 +180,13 @@ export class QuestionNotifier implements QuestionNotifications {
     // Until a saved snapshot holds the claim: a later one may save what an earlier one failed to.
     let writes: Promise<void>;
     do {
-      writes = this.writing;
+      writes = this.record.settled();
       await writes;
-    } while (!this.saved.has(key) && writes !== this.writing);
+    } while (!this.record.isSaved(key) && writes !== this.record.settled());
     if (this.stopped) return;
-    if (!this.saved.has(key)) {
+    if (!this.record.isSaved(key)) {
       // Shown unsaved, a restart would show it again; the list's next change claims it afresh.
-      if (this.claimed?.delete(key)) this.persist(this.claimed);
+      if (this.claimed?.delete(key)) this.record.save(this.claimed);
       return;
     }
     let line: string | null;

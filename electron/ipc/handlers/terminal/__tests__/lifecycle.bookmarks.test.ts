@@ -42,7 +42,7 @@ const m = vi.hoisted(() => ({
   renameBookmark: vi.fn(),
   deleteBookmark: vi.fn(),
   listBookmarks: vi.fn(() => []),
-  listAgentSessions: vi.fn(() => []),
+  listAgentSessionsOrThrow: vi.fn(() => []),
   readSessionHistorySync: vi.fn<() => { sessionId: string; projectId: string | null }[]>(() => []),
   // Typed so the evicted-ledger case (mockReturnValue(undefined)) type-checks.
   currentGeneration: vi.fn<() => number | undefined>(() => 1),
@@ -51,7 +51,7 @@ const m = vi.hoisted(() => ({
 
 vi.mock("../../../../services/pty/agentSessionHistory.js", () => ({
   persistAgentSession: vi.fn().mockResolvedValue(undefined),
-  listAgentSessions: m.listAgentSessions,
+  listAgentSessionsOrThrow: m.listAgentSessionsOrThrow,
   clearAgentSessions: vi.fn().mockResolvedValue(undefined),
   pruneAgentSessions: vi.fn().mockResolvedValue(undefined),
   readSessionHistorySync: m.readSessionHistorySync,
@@ -129,6 +129,7 @@ vi.mock("../../../utils.js", () => ({
   },
 }));
 
+import { app } from "electron";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
 
 const agentInfo = {
@@ -469,12 +470,17 @@ describe("bookmark mutator handlers", () => {
     const list = handlerFor(CHANNELS.AGENT_SESSION_LIST);
 
     await list({}, { worktreeId: "wt-1", projectId: "proj-1" });
-    expect(m.listAgentSessions).toHaveBeenLastCalledWith("wt-1", expect.any(String), 30, "proj-1");
+    expect(m.listAgentSessionsOrThrow).toHaveBeenLastCalledWith(
+      "wt-1",
+      expect.any(String),
+      30,
+      "proj-1"
+    );
 
     // The ordinary worktree-scoped path: a handler that only forwarded
     // worktreeId when projectId was also present would break this.
     await list({}, { worktreeId: "wt-only" });
-    expect(m.listAgentSessions).toHaveBeenLastCalledWith(
+    expect(m.listAgentSessionsOrThrow).toHaveBeenLastCalledWith(
       "wt-only",
       expect.any(String),
       30,
@@ -483,7 +489,7 @@ describe("bookmark mutator handlers", () => {
 
     // A project-only scope must not accidentally land in the worktree slot.
     await list({}, { projectId: "proj-2" });
-    expect(m.listAgentSessions).toHaveBeenLastCalledWith(
+    expect(m.listAgentSessionsOrThrow).toHaveBeenLastCalledWith(
       undefined,
       expect.any(String),
       30,
@@ -492,11 +498,34 @@ describe("bookmark mutator handlers", () => {
 
     // No payload at all still means the unscoped read the resume palette uses.
     await list({}, {});
-    expect(m.listAgentSessions).toHaveBeenLastCalledWith(
+    expect(m.listAgentSessionsOrThrow).toHaveBeenLastCalledWith(
       undefined,
       expect.any(String),
       30,
       undefined
     );
+  });
+
+  // #17483 — an unreadable journal must reach the resume UI as a failed read so
+  // it shows its error state and Retry, not the "nothing closed" empty state.
+  it("session list returns the journal's rows, and rejects when it exists but can't be read", async () => {
+    register();
+    const list = handlerFor(CHANNELS.AGENT_SESSION_LIST);
+    const rows = [{ sessionId: "s1" }];
+    m.listAgentSessionsOrThrow.mockReturnValueOnce(rows as never);
+
+    await expect(list({}, {})).resolves.toBe(rows);
+    expect(app.getPath).toHaveBeenLastCalledWith("userData");
+    expect(m.listAgentSessionsOrThrow).toHaveBeenLastCalledWith(
+      undefined,
+      "/tmp/test",
+      30,
+      undefined
+    );
+
+    m.listAgentSessionsOrThrow.mockImplementationOnce(() => {
+      throw new Error("The session history couldn't be read.");
+    });
+    await expect(list({}, {})).rejects.toThrow("couldn't be read");
   });
 });

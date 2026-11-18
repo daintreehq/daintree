@@ -138,8 +138,6 @@ const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
   await import("../cliAvailabilityStore");
 const { useAgentSettingsStore, cleanupAgentSettingsStore } = await import("../agentSettingsStore");
 const { agentSettingsClient } = await import("@/clients");
-const { useHelpPanelStore } = await import("../helpPanelStore");
-const { usePortalStore } = await import("../portalStore");
 const { useProjectHomeStore, selectProjectMainAreaRoute } = await import("../projectHomeStore");
 const { useProjectPluginStore } = await import("../projectPluginStore");
 const { useDictationRangeStore } = await import("../dictationRangeStore");
@@ -158,6 +156,19 @@ const {
 } = await import("@/components/Terminal/uploads/pendingUploads");
 const { _resetComposerSnapshotsForTesting, keepComposerSnapshot, takeComposerSnapshot } =
   await import("@/lib/composerRemount");
+const {
+  __test_getArtifactStoreSize,
+  __test_getArtifactsFor,
+  __test_resetArtifactStore,
+  __test_simulateArtifactDetected,
+} = await import("@/hooks/useArtifacts");
+
+const lateArtifact = {
+  id: "late",
+  type: "code" as const,
+  content: "late",
+  extractedAt: 0,
+};
 
 describe("rendererStoreOrchestrator", () => {
   beforeEach(async () => {
@@ -596,6 +607,112 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.getState().removePanel("term-1");
 
     expect(clearSpy).toHaveBeenCalledWith("term-1");
+  });
+
+  describe("artifacts of panels this view no longer holds (#17577)", () => {
+    const panel = (id: string, kind: "terminal" | "browser" | "dev-preview"): PanelInstance =>
+      ({
+        id,
+        kind,
+        title: id,
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      }) as PanelInstance;
+    const addPanels = (...panels: PanelInstance[]) => {
+      const state = usePanelStore.getState();
+      usePanelStore.setState({
+        panelsById: {
+          ...state.panelsById,
+          ...Object.fromEntries(panels.map((added) => [added.id, added])),
+        },
+        panelIds: [...state.panelIds, ...panels.map((added) => added.id)],
+      });
+    };
+    const detect = (id: string, artifactId = "late") =>
+      __test_simulateArtifactDetected(id, [{ ...lateArtifact, id: artifactId }]);
+
+    beforeEach(() => {
+      __test_resetArtifactStore();
+    });
+
+    afterEach(() => {
+      __test_resetArtifactStore();
+    });
+
+    it("turns away late packets for every retired id, keeping only live panels' entries", () => {
+      addPanels(panel("kept", "terminal"));
+      expect(detect("kept")).toBe(true);
+
+      const retired: string[] = [];
+      for (let i = 0; i < 40; i++) {
+        const ids = [`term-${i}`, `browser-${i}`, `preview-${i}`];
+        addPanels(
+          panel(ids[0]!, "terminal"),
+          panel(ids[1]!, "browser"),
+          panel(ids[2]!, "dev-preview")
+        );
+        for (const id of ids) {
+          expect(detect(id, "early")).toBe(true);
+          expect(__test_getArtifactsFor(id)).toHaveLength(1);
+          usePanelStore.getState().removePanel(id);
+          expect(__test_getArtifactsFor(id)).toBeUndefined();
+        }
+        retired.push(...ids);
+      }
+
+      const { panelsById, panelIds } = usePanelStore.getState();
+      for (const id of retired) {
+        expect(panelsById[id]).toBeUndefined();
+        expect(panelIds).not.toContain(id);
+        expect(detect(id)).toBe(false);
+      }
+      expect(__test_getArtifactStoreSize()).toBe(1);
+      expect(__test_getArtifactsFor("kept")).toHaveLength(1);
+    });
+
+    it("holds a trashed terminal's packets back, takes them after restore, and drops them once it is removed", () => {
+      addPanels(panel("term-1", "terminal"));
+      expect(detect("term-1")).toBe(true);
+
+      usePanelStore.getState().trashPanel("term-1");
+      expect(__test_getArtifactsFor("term-1")).toBeUndefined();
+      expect(detect("term-1")).toBe(false);
+
+      usePanelStore.getState().restoreTerminal("term-1");
+      expect(detect("term-1")).toBe(true);
+      expect(__test_getArtifactsFor("term-1")).toHaveLength(1);
+
+      usePanelStore.getState().trashPanel("term-1");
+      const trashed = usePanelStore.getState();
+      expect(trashed.trashedTerminals.has("term-1")).toBe(true);
+      expect(trashed.panelsById["term-1"]?.location).toBe("trash");
+      expect(trashed.panelIds).toContain("term-1");
+      usePanelStore.getState().removePanel("term-1");
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["term-1"]).toBeUndefined();
+      expect(state.panelIds).not.toContain("term-1");
+      expect(state.trashedTerminals.has("term-1")).toBe(false);
+      expect(detect("term-1")).toBe(false);
+      expect(__test_getArtifactStoreSize()).toBe(0);
+    });
+
+    it("takes packets for a reused id as soon as its panel is registered again", () => {
+      addPanels(panel("term-1", "terminal"));
+      expect(detect("term-1", "old")).toBe(true);
+      expect(__test_getArtifactsFor("term-1")!.map((artifact) => artifact.id)).toEqual(["old"]);
+      usePanelStore.getState().removePanel("term-1");
+      expect(__test_getArtifactsFor("term-1")).toBeUndefined();
+      expect(detect("term-1")).toBe(false);
+      expect(__test_getArtifactsFor("term-1")).toBeUndefined();
+
+      addPanels(panel("term-1", "terminal"));
+
+      expect(detect("term-1", "new")).toBe(true);
+      expect(__test_getArtifactsFor("term-1")!.map((artifact) => artifact.id)).toEqual(["new"]);
+    });
   });
 
   it("keeps a panel's last message through the trash and forgets it once removed (#16746)", () => {
@@ -2478,41 +2595,6 @@ describe("rendererStoreOrchestrator", () => {
       stores.useFleetArmingStore.getState().clear();
       expect(stores.useFleetFailureStore.getState().failedIds.size).toBe(0);
       expect(stores.useFleetFailureStore.getState().payload).toBeNull();
-    });
-  });
-
-  describe("assistant / web chat exclusivity", () => {
-    beforeEach(() => {
-      useHelpPanelStore.setState({ isOpen: false });
-      usePortalStore.setState({ isOpen: false });
-    });
-
-    it("closes web chat when the assistant opens", () => {
-      usePortalStore.getState().toggle();
-      expect(usePortalStore.getState().isOpen).toBe(true);
-
-      useHelpPanelStore.getState().toggle();
-
-      expect(useHelpPanelStore.getState().isOpen).toBe(true);
-      expect(usePortalStore.getState().isOpen).toBe(false);
-    });
-
-    it("closes the assistant when web chat opens", () => {
-      useHelpPanelStore.getState().setOpen(true);
-
-      usePortalStore.getState().toggle();
-
-      expect(usePortalStore.getState().isOpen).toBe(true);
-      expect(useHelpPanelStore.getState().isOpen).toBe(false);
-    });
-
-    it("stops enforcing after the orchestrator is destroyed", () => {
-      destroyStoreOrchestrator();
-      useHelpPanelStore.getState().setOpen(true);
-      usePortalStore.getState().setOpen(true);
-
-      expect(useHelpPanelStore.getState().isOpen).toBe(true);
-      expect(usePortalStore.getState().isOpen).toBe(true);
     });
   });
 

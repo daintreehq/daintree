@@ -12,10 +12,15 @@ import {
   type TitleProjectViewManager,
 } from "../windowTitle.js";
 
-function pvm(activeId: string | null, bridgedId: string | null = null): TitleProjectViewManager {
+function pvm(
+  activeId: string | null,
+  bridgedId: string | null = null,
+  switchBridged = bridgedId !== null
+): TitleProjectViewManager {
   return {
     getActiveProjectId: () => activeId,
     getOutgoingBridgeProjectId: () => bridgedId,
+    isSwitchBridged: () => switchBridged,
   };
 }
 
@@ -169,6 +174,10 @@ describe("resolveWindowProjectName", () => {
 
   it("prefers the still-painted bridge over the incoming project mid-switch", () => {
     expect(resolveWindowProjectName(pvm("proj-open", "proj-background"), rows)).toBe("billing");
+  });
+
+  it("names nothing while the project picker is still painted over the incoming project", () => {
+    expect(resolveWindowProjectName(pvm("proj-open", null, true), rows)).toBeNull();
   });
 
   it("falls through to the active project when the bridge names a closed row", () => {

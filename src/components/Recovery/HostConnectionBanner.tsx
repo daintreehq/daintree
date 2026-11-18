@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useNow } from "@/hooks/useNow";
-import { reconnectHost } from "@/hooks/useHostConnection";
+import { nudgeHostReconnect, reconnectHost } from "@/hooks/useHostConnection";
 import {
   HOST_LINK_SETTLE_MS,
   selectHostBannerVariant,
@@ -64,15 +64,24 @@ export function HostConnectionBanner() {
       setStartingMachine(false);
     }
   }, [startingMachine, variant, cloudMachine]);
-  // Started from elsewhere (the host menu, Settings) while this window waits: dial it now.
-  const lastMachine = useRef(cloudMachine);
+  // Started from here or elsewhere (the host menu, Settings) while this window
+  // waits: dial it now. The start's reply and every other window showing the
+  // host ask too, so none of them abandons a dial already under way (#17546).
+  const lastMachine = useRef({ hostId, machine: cloudMachine });
   useEffect(() => {
     const before = lastMachine.current;
-    lastMachine.current = cloudMachine;
-    if (cloudMachine === "running" && before !== null && before !== "running" && variant !== null) {
-      reconnectHost();
+    lastMachine.current = { hostId, machine: cloudMachine };
+    if (
+      hostId !== null &&
+      before.hostId === hostId &&
+      before.machine !== null &&
+      before.machine !== "running" &&
+      cloudMachine === "running" &&
+      variant !== null
+    ) {
+      nudgeHostReconnect(hostId);
     }
-  }, [cloudMachine, variant]);
+  }, [hostId, cloudMachine, variant]);
   const hostName = useHostConnectionStore((s) => s.hostName ?? s.hostId ?? "");
   const lastSeenAt = useHostConnectionStore((s) => s.lastSeenAt);
   const detail = useHostConnectionStore((s) =>
@@ -80,6 +89,9 @@ export function HostConnectionBanner() {
   );
   const mismatch = useHostConnectionStore((s) =>
     s.connection?.status === "version-mismatch" ? s.connection.mismatch : null
+  );
+  const blocker = useHostConnectionStore((s) =>
+    s.connection?.status === "unreachable" ? (s.connection.blocker ?? null) : null
   );
   const everConnected = useHostConnectionStore((s) => s.everConnected);
   const dropped =
@@ -106,7 +118,8 @@ export function HostConnectionBanner() {
     lastSeenAt,
     now,
     detail,
-    mismatch === null ? null : olderBuildSide(mismatch)
+    mismatch === null ? null : olderBuildSide(mismatch),
+    blocker
   );
 
   // A cloud host whose machine isn't running: the way back is starting it, on
@@ -134,8 +147,8 @@ export function HostConnectionBanner() {
       setStartingMachine(true);
       setMachineError(null);
       cloudHostsClient.startHost(hostId).then(
-        // Stays "starting" until the link is back (the effect above lets go of it).
-        () => reconnectHost(),
+        // Beside the running push's own ask: Main keeps whichever dial is under way.
+        () => nudgeHostReconnect(hostId),
         (err: unknown) => {
           setStartingMachine(false);
           failed(err, "Couldn't start the machine", false);
@@ -170,8 +183,8 @@ export function HostConnectionBanner() {
           ? "last reported an error"
           : "reported an error"
         : stale
-          ? "last reported stopped"
-          : "is stopped";
+          ? `last reported ${cloud.asleep ? "asleep" : "stopped"}`
+          : `is ${cloud.asleep ? "asleep" : "stopped"}`;
     const unknownReason = cloud.lastError?.message.replace(/\.$/, "") ?? null;
     // A provider that bills a stopped machine says so where its stop is shown.
     const stoppedBilling =
@@ -283,7 +296,8 @@ export function HostConnectionBanner() {
 
   if (variant === "version-mismatch") {
     // The way out is the update the host chip and Settings → Hosts offer, of
-    // whichever side is behind.
+    // whichever side is behind. A host updated (or rolled back) from elsewhere
+    // leaves this link parked on its old answer, so Retry asks it again.
     return (
       <InlineStatusBanner
         title={title}
@@ -301,6 +315,13 @@ export function HostConnectionBanner() {
                   label: updateActionLabel(mismatch, hostName),
                   variant: "primary",
                   onClick: () => runHostUpdate(updateTargetFor(mismatch), hostId),
+                },
+                {
+                  id: "reconnect",
+                  label: "Retry",
+                  icon: RefreshCw,
+                  variant: "dismiss",
+                  onClick: reconnectHost,
                 },
               ]
         }
@@ -338,9 +359,15 @@ export function HostConnectionBanner() {
     );
   }
 
-  if (variant === "access-denied" && hostId !== null) {
-    // Fixed outside Daintree (a key, known_hosts), then tried again; the
-    // host's details show the whole of what ssh said.
+  if (
+    (variant === "access-denied" ||
+      variant === "wsl-distro-missing" ||
+      variant === "connection-unavailable") &&
+    hostId !== null
+  ) {
+    // Fixed outside Daintree (a key, known_hosts, a WSL distribution) or, for
+    // ssh, by a Sign in on the host's details, which also show everything the
+    // transport said; then tried again.
     return (
       <InlineStatusBanner
         title={title}

@@ -57,7 +57,6 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => ({}) } }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: { getState: () => ({}) } }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: { getState: () => ({}) } }));
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: { getState: () => ({}) },

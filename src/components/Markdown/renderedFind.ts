@@ -168,25 +168,67 @@ function forcedColors(): boolean {
  * One find bar's share of the two document-wide highlights. Several documents
  * can have a find open at once (a file panel beside the file browser), so each
  * adds and removes only its own ranges.
+ *
+ * Every write restyles the ranges a highlight holds, so stepping through the
+ * same matches (the same `ranges` array) moves only the two that trade places;
+ * new matches, or forced colours turning on or off, repaint them all.
  */
 export function createFindPainter() {
-  let painted: Range[] = [];
-  let paintedCurrent: Range | null = null;
+  let painted: readonly Range[] = [];
+  let paintedIndex = -1;
+  let paintedForced = false;
+  let paintedInto: { matches: Highlight; active: Highlight } | null = null;
+
+  // From the entries it painted into, not the registry's: those may have been
+  // replaced since, or the Highlight API withdrawn.
+  const unpaint = () => {
+    if (!paintedInto) return;
+    const previous = painted[paintedIndex];
+    if (!paintedForced) {
+      for (const range of painted) if (range !== previous) paintedInto.matches.delete(range);
+    }
+    if (previous) paintedInto.active.delete(previous);
+    painted = [];
+    paintedIndex = -1;
+    paintedInto = null;
+  };
+
   return {
-    paint(ranges: Range[], current: Range | null) {
+    /** `activeIndex` is the current match in `ranges`; -1 for none. */
+    paint(ranges: readonly Range[], activeIndex: number) {
       const matches = sharedHighlight(FIND_MATCH_HIGHLIGHT, 0);
       const active = sharedHighlight(FIND_CURRENT_HIGHLIGHT, 1);
       if (!matches || !active) return;
-      for (const range of painted) matches.delete(range);
-      if (paintedCurrent) active.delete(paintedCurrent);
-      painted = forcedColors() ? [] : ranges.filter((range) => range !== current);
-      for (const range of painted) matches.add(range);
-      paintedCurrent = current;
-      if (current) active.add(current);
+      const forced = forcedColors();
+      const current = ranges[activeIndex];
+      if (
+        ranges === painted &&
+        forced === paintedForced &&
+        matches === paintedInto?.matches &&
+        active === paintedInto.active
+      ) {
+        const previous = painted[paintedIndex];
+        if (current === previous) return;
+        if (previous) {
+          active.delete(previous);
+          if (!forced) matches.add(previous);
+        }
+        if (current) {
+          if (!forced) matches.delete(current);
+          active.add(current);
+        }
+      } else {
+        unpaint();
+        if (!forced) for (const range of ranges) if (range !== current) matches.add(range);
+        if (current) active.add(current);
+      }
+      painted = ranges;
+      paintedIndex = activeIndex;
+      paintedForced = forced;
+      paintedInto = { matches, active };
     },
-    clear() {
-      this.paint([], null);
-    },
+    /** Removes this painter's ranges; a painter that painted nothing touches nothing. */
+    clear: unpaint,
   };
 }
 

@@ -9,6 +9,7 @@ import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import { pluralize } from "@/lib/pluralize";
+import { type RepoOperationState, toRepoOperationState } from "@/components/Git/repoOperationCopy";
 import type { ReviewReadinessItemId } from "./reviewReadinessItemIds";
 
 export type ReviewReadinessLevel = "ready" | "needs-review" | "blocked" | "unknown";
@@ -80,11 +81,12 @@ export interface ReviewReadinessSummary {
   nextActions: ReviewReadinessItem[];
 }
 
-const OPERATION_LABELS: Partial<Record<StagingStatus["repoState"], string>> = {
+const OPERATION_LABELS: Record<RepoOperationState, string> = {
   MERGING: "Merge in progress",
   REBASING: "Rebase in progress",
   CHERRY_PICKING: "Cherry-pick in progress",
   REVERTING: "Revert in progress",
+  APPLYING_MAILBOX: "Patch apply in progress",
 };
 
 export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadinessSummary {
@@ -110,7 +112,8 @@ export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadin
 
   const conflictCount = status.conflicted.length;
   const totalChanges = status.staged.length + status.unstaged.length + conflictCount;
-  const operationLabel = OPERATION_LABELS[status.repoState];
+  const operation = toRepoOperationState(status.repoState);
+  const operationLabel = operation ? OPERATION_LABELS[operation] : undefined;
   const isOperationState = operationLabel !== undefined;
   const prOpen = pr !== null && pr.state === "open";
 

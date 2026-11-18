@@ -2,6 +2,8 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
   CheckRun,
   CIStatus,
+  Deployment,
+  DeploymentTarget,
   FetchOptions,
   ForgeNumberReference,
   Issue,
@@ -38,9 +40,12 @@ import {
   buildBatchPRsQuery,
   buildBatchReferencesQuery,
   buildBatchRequiredChecksQuery,
+  BRANCH_DEPLOYMENTS_QUERY,
+  PR_DEPLOYMENTS_QUERY,
 } from "./GitHubQueries.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import { gitHubRateLimitService, rateLimitServiceForHost } from "./GitHubRateLimitService.js";
 import {
+  cacheOwner,
   forgeIssueListCache,
   forgePRListCache,
   getIssueCommentsEpoch,
@@ -77,6 +82,7 @@ import {
   toForgePR,
   toForgeNumberReference,
   gitHubIssueToForgeIssue,
+  mapGitHubDeployment,
 } from "./mappers.js";
 import {
   dedupe,
@@ -88,6 +94,7 @@ import {
   getPRInflight,
   getCIStatusInflight,
   getChecksInflight,
+  getDeploymentsInflight,
   findPRsByBranchesInflight,
   findPRsByNumbersInflight,
   getCIStatusesInflight,
@@ -215,7 +222,7 @@ function uniquePositiveIntegers(values: number[]): number[] {
 }
 
 function buildNumberBatchInflightKey(repo: RepoRef, numbers: number[]): string {
-  return `${repo.owner}/${repo.repo}:${[...numbers].sort((a, b) => a - b).join(",")}`;
+  return `${cacheOwner(repo)}/${repo.repo}:${[...numbers].sort((a, b) => a - b).join(",")}`;
 }
 
 /**
@@ -249,10 +256,11 @@ async function searchIssuesImpl(
   const prefix = `repo:${repo.owner}/${repo.repo} is:issue${stateQualifier} ${sortQualifier} `;
   const available = 256 - prefix.length;
   const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
-  const dedupeKey = `search:${searchQuery}:${cursor ?? ""}:${limit}`;
+  const dedupeKey = `search:${repo.host}:${searchQuery}:${cursor ?? ""}:${limit}`;
 
   return dedupe(listIssuesInflight, dedupeKey, bypass, async () => {
     const response = await runQuery(
+      repo.host,
       SEARCH_QUERY,
       {
         searchQuery,
@@ -323,7 +331,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
   // routes through `searchIssuesImpl` above and never touches this cache.
   const cacheKey = buildListCacheKey({
     type: "issue",
-    owner: repo.owner,
+    owner: cacheOwner(repo),
     repo: repo.repo,
     state,
     search: "",
@@ -344,10 +352,11 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // Captured before the network call: if the count-as-cache-buster bumps
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
-    const epochAtStart = getRepoListEpoch("issue", repo.owner, repo.repo);
+    const epochAtStart = getRepoListEpoch("issue", cacheOwner(repo), repo.repo);
     const readAt = issueReadStamp();
 
     const response = await runQuery(
+      repo.host,
       LIST_ISSUES_QUERY,
       {
         owner: repo.owner,
@@ -384,7 +393,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // Skip the shared-cache write when a newer bypass call has superseded us
     // or the count buster invalidated this repo's issue pages mid-flight, so
     // a slow stale fetch can't clobber the fresher committed result.
-    if (isCurrent() && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
+    if (isCurrent() && getRepoListEpoch("issue", cacheOwner(repo), repo.repo) === epochAtStart) {
       forgeIssueListCache.set(cacheKey, page);
     }
     // The open total is held on its own terms: the ledger orders it by when
@@ -392,7 +401,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // an unconfirmed REST delta must not swallow it (#16866).
     const openTotal = state === "open" && !cursor ? openTotalOf(issues) : undefined;
     if (openTotal !== undefined) {
-      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", openTotal, readAt);
+      updateRepoStatsCount(`${cacheOwner(repo)}/${repo.repo}`, "issue", openTotal, readAt);
     }
     return page;
   });
@@ -524,10 +533,11 @@ async function searchPRsImpl(repo: RepoRef, search: string, opts: ListOptions): 
   const prefix = `repo:${repo.owner}/${repo.repo} is:pr${stateQualifier} ${sortQualifier} `;
   const available = 256 - prefix.length;
   const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
-  const dedupeKey = `search:${searchQuery}:${cursor ?? ""}:${limit}`;
+  const dedupeKey = `search:${repo.host}:${searchQuery}:${cursor ?? ""}:${limit}`;
 
   return dedupe(listPRsInflight, dedupeKey, bypass, async () => {
     const response = await runQuery(
+      repo.host,
       SEARCH_QUERY,
       {
         searchQuery,
@@ -585,7 +595,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
   // routes through `searchPRsImpl` above and never touches this cache.
   const cacheKey = buildListCacheKey({
     type: "pr",
-    owner: repo.owner,
+    owner: cacheOwner(repo),
     repo: repo.repo,
     state,
     search: "",
@@ -604,10 +614,11 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
   return dedupe(listPRsInflight, cacheKey, bypass, async (isCurrent) => {
     const orderBy = buildOrderBy(sortOrder, direction);
     // Same mid-flight count-buster guard as the issues list above.
-    const epochAtStart = getRepoListEpoch("pr", repo.owner, repo.repo);
+    const epochAtStart = getRepoListEpoch("pr", cacheOwner(repo), repo.repo);
     const readAt = issueReadStamp();
 
     const response = await runQuery(
+      repo.host,
       LIST_PRS_QUERY,
       {
         owner: repo.owner,
@@ -644,21 +655,22 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
       source: "network",
     };
 
-    if (isCurrent() && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
+    if (isCurrent() && getRepoListEpoch("pr", cacheOwner(repo), repo.repo) === epochAtStart) {
       forgePRListCache.set(cacheKey, page);
     }
     const openTotal = state === "open" && !cursor ? openTotalOf(prs) : undefined;
     if (openTotal !== undefined) {
-      updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", openTotal, readAt);
+      updateRepoStatsCount(`${cacheOwner(repo)}/${repo.repo}`, "pr", openTotal, readAt);
     }
     return page;
   });
 }
 
 export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue | null> {
-  const key = `${repo.owner}/${repo.repo}:${number}`;
+  const key = `${cacheOwner(repo)}/${repo.repo}:${number}`;
   return dedupe(getIssueInflight, key, false, async () => {
     const response = await runQuery(
+      repo.host,
       GET_ISSUE_QUERY,
       {
         owner: repo.owner,
@@ -685,12 +697,13 @@ export async function getPRImpl(
   options?: FetchOptions
 ): Promise<PR | null> {
   const fresh = options?.fresh === true;
-  const key = `${repo.owner}/${repo.repo}:${number}`;
+  const key = `${cacheOwner(repo)}/${repo.repo}:${number}`;
   // A fresh read never joins one already in flight: that one may predate a
   // write the caller is about to preview against.
   return dedupe(getPRInflight, key, fresh, async () => {
     const requestedAt = Date.now();
     const response = await runQuery(
+      repo.host,
       GET_PR_QUERY,
       {
         owner: repo.owner,
@@ -707,7 +720,7 @@ export async function getPRImpl(
     // Side-effect tooltip pre-warm (write-through only); guarded by the
     // ownership-token timestamp so a slow response can't clobber a fresher one.
     const tooltip = prToTooltipData(forgePR);
-    if (tooltip) writePRTooltip(repo.owner, repo.repo, number, tooltip, requestedAt);
+    if (tooltip) writePRTooltip(cacheOwner(repo), repo.repo, number, tooltip, requestedAt);
     return forgePR;
   });
 }
@@ -732,13 +745,13 @@ export async function findPRsByBranchesImpl(
   // Coalesce concurrent fleet-wide sweeps requesting the same branch set
   // (order-independent) into one round-trip. The result Map preserves each
   // caller's branch keys regardless of the sorted key used for coalescing.
-  const inflightKey = `${repo.owner}/${repo.repo}:${[...unique].sort().join(",")}`;
+  const inflightKey = `${cacheOwner(repo)}/${repo.repo}:${[...unique].sort().join(",")}`;
   return dedupe(findPRsByBranchesInflight, inflightKey, false, async () => {
     const result = new Map<string, PR | null>();
 
     // Skip the network entirely while rate-limited — the caller's missing-key
     // fallback handles every omitted branch. Mirrors `batchCheckLinkedPRs`.
-    const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+    const block = rateLimitServiceForHost(repo.host).shouldBlockRequest("graphql");
     if (block.blocked) return result;
 
     const requestedAt = Date.now();
@@ -751,7 +764,10 @@ export async function findPRsByBranchesImpl(
       const query = buildBatchBranchPRQuery(repo.owner, repo.repo, chunk);
       let response: Record<string, unknown>;
       try {
-        response = (await runQuery(query, {}, "BATCH_BRANCH_PR_QUERY")) as Record<string, unknown>;
+        response = (await runQuery(repo.host, query, {}, "BATCH_BRANCH_PR_QUERY")) as Record<
+          string,
+          unknown
+        >;
       } catch {
         // Omit this chunk's branches from the result — caller's missing-key
         // fallback path handles them.
@@ -777,7 +793,8 @@ export async function findPRsByBranchesImpl(
         // warmed entry is complete (not a partial that a later hover refetches).
         if (forgePR) {
           const tooltip = prToTooltipData(forgePR);
-          if (tooltip) writePRTooltip(repo.owner, repo.repo, forgePR.number, tooltip, requestedAt);
+          if (tooltip)
+            writePRTooltip(cacheOwner(repo), repo.repo, forgePR.number, tooltip, requestedAt);
         }
       }
     }
@@ -793,6 +810,7 @@ export async function findPRByBranchImpl(repo: RepoRef, branchName: string): Pro
   const escapedBranch = branchName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const searchQuery = `repo:${repo.owner}/${repo.repo} is:pr head:"${escapedBranch}" sort:created-desc`;
   const response = await runQuery(
+    repo.host,
     SEARCH_QUERY,
     {
       searchQuery,
@@ -822,7 +840,7 @@ export async function findPRsByNumbersImpl(
   return dedupe(findPRsByNumbersInflight, inflightKey, fresh, async () => {
     const result = new Map<number, PR | null>();
 
-    const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+    const block = rateLimitServiceForHost(repo.host).shouldBlockRequest("graphql");
     if (block.blocked) return result;
 
     const requestedAt = Date.now();
@@ -833,7 +851,7 @@ export async function findPRsByNumbersImpl(
 
       let response: GraphQlQueryResponseData;
       try {
-        response = await runQuery(query, {}, "BATCH_PRS_QUERY", fresh);
+        response = await runQuery(repo.host, query, {}, "BATCH_PRS_QUERY", fresh);
       } catch {
         // Omit this chunk so callers treat it as transient and keep stale data.
         continue;
@@ -851,7 +869,8 @@ export async function findPRsByNumbersImpl(
 
         if (forgePR) {
           const tooltip = prToTooltipData(forgePR);
-          if (tooltip) writePRTooltip(repo.owner, repo.repo, forgePR.number, tooltip, requestedAt);
+          if (tooltip)
+            writePRTooltip(cacheOwner(repo), repo.repo, forgePR.number, tooltip, requestedAt);
         }
       }
     }
@@ -903,14 +922,14 @@ export async function findReferencesByNumbersImpl(
 
   for (let start = 0; start < unique.length; start += GRAPHQL_BATCH_CHUNK_SIZE) {
     // Per chunk: the response before this one may have spent the budget.
-    if (gitHubRateLimitService.shouldBlockRequest("graphql").blocked) break;
+    if (rateLimitServiceForHost(repo.host).shouldBlockRequest("graphql").blocked) break;
     const chunk = unique.slice(start, start + GRAPHQL_BATCH_CHUNK_SIZE);
     const query = buildBatchReferencesQuery(repo.owner, repo.repo, chunk);
     if (!query) continue;
 
     let repository: Record<string, unknown> | null;
     try {
-      const response = await runQuery(query, {}, "BATCH_REFERENCES_QUERY");
+      const response = await runQuery(repo.host, query, {}, "BATCH_REFERENCES_QUERY");
       repository = (response?.repository as Record<string, unknown> | undefined) ?? null;
     } catch (error) {
       repository = repositoryDespiteMissingNumbers(error, new Set(chunk.map((n) => `r${n}`)));
@@ -946,7 +965,7 @@ export async function getCIStatusesImpl(
     const missing: number[] = [];
 
     for (const prNumber of unique) {
-      const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+      const cacheKey = `${cacheOwner(repo)}/${repo.repo}:${prNumber}`;
       const cached = getPRRequiredStatusForCurrentHead(cacheKey);
       if (cached) {
         result.set(prNumber, buildCIStatus(cached, null));
@@ -957,7 +976,7 @@ export async function getCIStatusesImpl(
 
     if (missing.length === 0) return result;
 
-    const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+    const block = rateLimitServiceForHost(repo.host).shouldBlockRequest("graphql");
     if (block.blocked) return result;
 
     for (let start = 0; start < missing.length; start += GRAPHQL_BATCH_CHUNK_SIZE) {
@@ -971,7 +990,7 @@ export async function getCIStatusesImpl(
       // rejected as stale.
       let response: GraphQlQueryResponseData;
       try {
-        response = await runQuery(query, {}, "BATCH_REQUIRED_CHECKS_QUERY", true);
+        response = await runQuery(repo.host, query, {}, "BATCH_REQUIRED_CHECKS_QUERY", true);
       } catch {
         // Omit this chunk so callers treat it as transient and retry later.
         continue;
@@ -991,7 +1010,7 @@ export async function getCIStatusesImpl(
           ciStatus: undefined,
           ciSummary: undefined,
         };
-        const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+        const cacheKey = `${cacheOwner(repo)}/${repo.repo}:${prNumber}`;
         prRequiredStatusCache.set(cacheKey, entry);
         // GitHub can still answer for the previous head seconds after a push.
         // Omitted rather than returned: per the batch contract that is a
@@ -1011,7 +1030,7 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
   // and {@link PRRequiredStatusEntry} value). This is the hottest forge path —
   // the worktree dashboard polls CI per open PR across every view — so the
   // cache + single-flight collapse the fan-out to one request per PR per 60s.
-  const cacheKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+  const cacheKey = `${cacheOwner(repo)}/${repo.repo}:${prNumber}`;
   const cached = getPRRequiredStatusForCurrentHead(cacheKey);
   if (cached) return buildCIStatus(cached, null);
 
@@ -1071,7 +1090,7 @@ async function fetchCIRollupPage(
   let response: GraphQlQueryResponseData;
   let recoveredFrom: unknown = null;
   try {
-    response = await runQuery(PR_CI_STATUS_QUERY, variables, "PR_CI_STATUS_QUERY", true);
+    response = await runQuery(repo.host, PR_CI_STATUS_QUERY, variables, "PR_CI_STATUS_QUERY", true);
   } catch (error) {
     const partial = withIdentity ? workflowRunOnlyPartialData(error) : null;
     if (!partial) throw error;
@@ -1196,7 +1215,7 @@ export async function getChecksImpl(
   repo: RepoRef,
   prNumber: number
 ): Promise<{ checks: CheckRun[] } | null> {
-  const inflightKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+  const inflightKey = `${cacheOwner(repo)}/${repo.repo}:${prNumber}`;
   return dedupe(getChecksInflight, inflightKey, false, async () => {
     const incomplete = (why: string): Error =>
       new Error(`Could not read all checks for PR #${prNumber}: ${why}`);
@@ -1263,18 +1282,171 @@ export async function getChecksImpl(
   });
 }
 
+/**
+ * Map a deployment connection's nodes, rejecting rather than dropping one it
+ * can't read: the deployment left out could be the one that is live.
+ */
+function readDeploymentNodes(
+  connection: unknown,
+  incomplete: (why: string) => Error
+): Deployment[] {
+  const nodes = (connection as { nodes?: unknown } | null | undefined)?.nodes;
+  if (!Array.isArray(nodes)) throw incomplete("the provider returned no deployment list");
+  return nodes.map((node) => {
+    const deployment = mapGitHubDeployment(node);
+    if (!deployment) throw incomplete("the provider returned an unreadable deployment");
+    return deployment;
+  });
+}
+
+/**
+ * Whether a deployment found on a commit belongs to the branch or PR it was
+ * read for. One recorded against the bare commit (Vercel, Cloudflare Pages)
+ * does; one GitHub recorded against a different branch or a tag at the same
+ * commit — main's production rollout on a branch just cut from main — doesn't.
+ * `branch` is null for a fork PR's head: its branch lives in the fork, so a
+ * same-named branch in this repository is a different branch.
+ */
+function isRecordedFor(deployment: Deployment, branch: string | null, prNumber?: number): boolean {
+  const { ref } = deployment;
+  if (ref === undefined) return true;
+  if (branch !== null && ref === `refs/heads/${branch}`) return true;
+  return prNumber !== undefined && ref.startsWith(`refs/pull/${prNumber}/`);
+}
+
+/** Newest deployment first; a stable sort keeps the response order on a tie. */
+function newestFirst(deployments: Iterable<Deployment>): Deployment[] {
+  return [...deployments].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+async function readBranchDeployments(
+  repo: RepoRef,
+  branch: string
+): Promise<{ deployments: Deployment[] } | null> {
+  const incomplete = (why: string): Error =>
+    new Error(`Could not read the branch's deployments: ${why}`);
+  const response = await runQuery(
+    repo.host,
+    BRANCH_DEPLOYMENTS_QUERY,
+    { owner: repo.owner, repo: repo.repo, qualifiedName: `refs/heads/${branch}` },
+    "BRANCH_DEPLOYMENTS_QUERY",
+    true
+  );
+  const repository = response?.repository as Record<string, unknown> | null | undefined;
+  if (!repository) throw incomplete("the provider returned no repository");
+  // A branch the remote doesn't have (never pushed, or deleted) resolves to null.
+  if (repository.ref === null) return null;
+  const target = (repository.ref as { target?: { deployments?: unknown } } | undefined)?.target;
+  const deployments = readDeploymentNodes(target?.deployments, incomplete).filter((d) =>
+    isRecordedFor(d, branch)
+  );
+  return { deployments: newestFirst(deployments) };
+}
+
+async function readPRDeployments(
+  repo: RepoRef,
+  prNumber: number
+): Promise<{ deployments: Deployment[] } | null> {
+  const incomplete = (why: string): Error =>
+    new Error(`Could not read deployments for PR #${prNumber}: ${why}`);
+  let response: GraphQlQueryResponseData;
+  try {
+    response = await runQuery(
+      repo.host,
+      PR_DEPLOYMENTS_QUERY,
+      { owner: repo.owner, repo: repo.repo, number: prNumber },
+      "PR_DEPLOYMENTS_QUERY",
+      true
+    );
+  } catch (error) {
+    // A missing PR is a NOT_FOUND error at `repository.pullRequest`; any other
+    // error (no repository, no access, transport) is a failed read.
+    if (repositoryDespiteMissingNumbers(error, new Set(["pullRequest"]))) return null;
+    throw error;
+  }
+  const repository = response?.repository as Record<string, unknown> | null | undefined;
+  if (!repository) throw incomplete("the provider returned no repository");
+  if (repository.pullRequest === null) return null;
+  const pr = repository.pullRequest as
+    | {
+        headRefName?: unknown;
+        isCrossRepository?: unknown;
+        commits?: { nodes?: unknown };
+        timelineItems?: { nodes?: unknown };
+      }
+    | undefined;
+  if (!pr || typeof pr.headRefName !== "string" || typeof pr.isCrossRepository !== "boolean") {
+    throw incomplete("the provider returned no head branch");
+  }
+  const headBranch = pr.isCrossRepository ? null : pr.headRefName;
+
+  // An empty commit list is a PR with nothing on its head yet; a missing one is
+  // a response we can't read, and skipping it would drop the head's deployments.
+  const commits = pr.commits?.nodes;
+  if (!Array.isArray(commits)) throw incomplete("the provider returned no head commit list");
+  const byId = new Map<string, Deployment>();
+  if (commits.length > 0) {
+    const headCommit = (commits[0] as { commit?: { deployments?: unknown } } | null)?.commit;
+    if (!headCommit) throw incomplete("the provider returned an unreadable head commit");
+    for (const deployment of readDeploymentNodes(headCommit.deployments, incomplete)) {
+      if (isRecordedFor(deployment, headBranch, prNumber)) byId.set(deployment.id, deployment);
+    }
+  }
+  // GitHub ties a deployed event to this PR itself, which is what reaches a
+  // merge-ref rollout and earlier pushes' previews, so these need no ref check.
+  const events = pr.timelineItems?.nodes;
+  if (!Array.isArray(events)) throw incomplete("the provider returned no deployment timeline");
+  const timeline = readDeploymentNodes(
+    { nodes: events.map((event) => (event as { deployment?: unknown } | null)?.deployment) },
+    incomplete
+  );
+  for (const deployment of timeline) byId.set(deployment.id, deployment);
+  return { deployments: newestFirst(byId.values()) };
+}
+
+/**
+ * Where a branch or pull request is deployed, from GitHub's deployment records
+ * (#17248). A branch is read at its tip commit, so its earlier commits'
+ * deployments are reached only through its PR, whose deployed events GitHub
+ * keeps; a deployment recorded against the bare commit is reported for every
+ * branch at that commit. Each source is its newest `DEPLOYMENTS_PER_SOURCE`.
+ *
+ * One GraphQL request per call, never served from or written to the response
+ * cache, so a launcher reopened mid-rollout sees the rollout move. Concurrent
+ * identical reads share one request; the key carries the token version so a
+ * credential switch never answers from the previous account.
+ */
+export async function getDeploymentsImpl(
+  repo: RepoRef,
+  target: DeploymentTarget
+): Promise<{ deployments: Deployment[] } | null> {
+  const key = JSON.stringify([
+    GitHubAuth.getTokenVersion(repo.host),
+    repo.host,
+    repo.owner,
+    repo.repo,
+    target.kind,
+    target.kind === "branch" ? target.branch : target.prNumber,
+  ]);
+  return dedupe(getDeploymentsInflight, key, false, () =>
+    target.kind === "branch"
+      ? readBranchDeployments(repo, target.branch)
+      : readPRDeployments(repo, target.prNumber)
+  );
+}
+
 export async function probeOpenPRListImpl(
   repo: RepoRef,
   tracked: PRSnapshot[]
 ): Promise<PRListProbeResult> {
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(repo.host);
   // No token → the conditional GET can't be made; let the caller revalidate
   // through its normal (also token-gated) path rather than claim "unchanged".
   if (!token) return { kind: "fallback" };
-  const result = await probeOpenPRList(repo.owner, repo.repo, token, tracked);
+  const result = await probeOpenPRList(repo, token, tracked);
   if (result.kind === "changed") {
     for (const snap of result.changed) {
-      recordObservedPRHead(`${repo.owner}/${repo.repo}:${snap.number}`, snap.headSha);
+      recordObservedPRHead(`${cacheOwner(repo)}/${repo.repo}:${snap.number}`, snap.headSha);
     }
   }
   return result;
@@ -1282,6 +1454,7 @@ export async function probeOpenPRListImpl(
 
 export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> {
   const response = await runQuery(
+    repo.host,
     REPO_METADATA_QUERY,
     {
       owner: repo.owner,
@@ -1346,6 +1519,7 @@ export async function getReviewThreadsImpl(
   let pageCount = 0;
   while (true) {
     const response = await runQuery(
+      repo.host,
       GET_PR_REVIEW_THREADS_QUERY,
       {
         owner: repo.owner,
@@ -1431,17 +1605,18 @@ export async function listIssueCommentsImpl(
   // as `null` keeps it from colliding with the real first page's dedupe slot.
   const cursor = opts.cursor?.trim() ? opts.cursor : null;
   const dedupeKey = JSON.stringify([
-    GitHubAuth.getTokenVersion(),
-    repo.owner,
+    GitHubAuth.getTokenVersion(repo.host),
+    cacheOwner(repo),
     repo.repo,
     issueNumber,
-    getIssueCommentsEpoch(repo.owner, repo.repo),
+    getIssueCommentsEpoch(cacheOwner(repo), repo.repo),
     cursor,
     limit,
   ]);
 
   return dedupe(listIssueCommentsInflight, dedupeKey, bypass, async () => {
     const response = await runQuery(
+      repo.host,
       LIST_ISSUE_COMMENTS_QUERY,
       { owner: repo.owner, repo: repo.repo, number: issueNumber, cursor, limit },
       "LIST_ISSUE_COMMENTS_QUERY",
@@ -1517,7 +1692,7 @@ export async function findIssuesByNumbersImpl(
   issueNumbers: number[]
 ): Promise<Map<number, Issue | null>> {
   const items = await getIssuesByNumbersForContext(
-    { owner: repo.owner, repo: repo.repo },
+    { host: repo.host, owner: repo.owner, repo: repo.repo },
     issueNumbers
   );
   const result = new Map<number, Issue | null>();

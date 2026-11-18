@@ -280,6 +280,12 @@ import {
 } from "./fileDecorationRegistry.js";
 import { unregisterWorktreeDeleteNotesBinding } from "./plugin/worktreeDeleteNotesRegistry.js";
 import {
+  pluginCloudProviderStatusChanged,
+  pluginDeclaresCloudProviders,
+  setPluginCloudProviderRuntime,
+  unbindPluginCloudProviders,
+} from "./plugin/pluginCloudProviders.js";
+import {
   collectWorktreeDeleteNotes as collectDeleteNotes,
   getWorktreeDeleteNotes as getDeleteNotes,
   listWorktreeDeleteNoteSources as listDeleteNoteSources,
@@ -1478,6 +1484,8 @@ export class PluginService {
         else if (change === "removed") this.pluginThemeRemovals.add(pluginId);
         this.schedulePluginThemeSync();
       },
+      readUserSetting: (pluginId, key, manifest) =>
+        this.readUserSettingForHost(pluginId, key, manifest),
     });
 
     this.promptDispatcher = new PluginUIPromptDispatcher({
@@ -1491,7 +1499,10 @@ export class PluginService {
       // renders a settings form whether or not the plugin is running.
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
-      onSettingChanged: (pluginId) => this.emitSettingsChanged(pluginId),
+      onSettingChanged: (pluginId) => {
+        this.emitSettingsChanged(pluginId);
+        void this.contributions.refreshForgeSettingMatches(pluginId).catch(() => undefined);
+      },
     });
 
     this.accounts = new PluginAccountService({
@@ -1869,6 +1880,9 @@ export class PluginService {
       // Publish any authoritative snapshot an unload owed while the catalog
       // was still partial.
       this.broadcaster.flushDeferredCompleteSnapshots();
+      // Every plugin has loaded or failed to: a cloud account whose provider
+      // never registered can now say which (#17351).
+      pluginCloudProviderStatusChanged();
     }
   }
 
@@ -3016,6 +3030,9 @@ export class PluginService {
           this.removeHandlers(pluginId);
           this.unregisterImperativePluginActions(pluginId);
           this.flushPluginEventCleanups(pluginId);
+          // Not an event subscription (those hold a worker against idle disposal),
+          // so a provider bound before the throw goes here instead.
+          unbindPluginCloudProviders(pluginId);
         };
         this.cleanupMap.set(pluginId, rollback);
 
@@ -3223,6 +3240,7 @@ export class PluginService {
             // latch from the generation before it, so a notes check it bound
             // before throwing would still be asked (#13805).
             unregisterWorktreeDeleteNotesBinding(pluginId);
+            unbindPluginCloudProviders(pluginId);
           }
         }
         if (result.ok) {
@@ -3768,6 +3786,34 @@ export class PluginService {
     const visible = selectContributionsForProject(targets, (id) => id, projectId);
     if (visible.length === 0) return;
     await Promise.allSettled(visible.map((id) => this.activatePlugin(id)));
+  }
+
+  /**
+   * Why a cloud provider in `pluginId`'s namespace that no loaded plugin
+   * declares can't be used (#17351): the words its accounts and hosts show.
+   */
+  cloudProviderUnavailableReason(pluginId: string, providerId: string): string {
+    const from = `Its cloud provider comes from the ${pluginId} plugin`;
+    if (this.plugins.has(pluginId)) return `${from}, which no longer provides ${providerId}.`;
+    const blocked = this.blockedPlugins.get(pluginId);
+    if (blocked) return `${from}, which Daintree blocked: ${blocked.reason}`;
+    if (this.disabledPlugins.has(pluginId)) {
+      return `${from}, which is turned off. Turn it on in Settings → Plugins.`;
+    }
+    const loadError = this.getPluginLoadError(pluginId)?.message.split("\n")[0]?.trim();
+    if (loadError) return `${from}, which failed to load: ${loadError}`;
+    if (this.records.getInstalledRecord(pluginId)) {
+      return this.initialized ? `${from}, which didn't load.` : `${from}, which hasn't loaded yet.`;
+    }
+    return `${from}, which isn't installed.`;
+  }
+
+  /** Why `pluginId`'s worker failed to start this session (#17351), or null when it hasn't. */
+  cloudProviderStartFailure(pluginId: string): string | null {
+    const status = this.workerStatuses.get(pluginId);
+    if (status?.state !== "failed") return null;
+    const detail = status.detail?.split("\n")[0]?.trim();
+    return detail || (status.reason ?? "it stopped");
   }
 
   private worktreeDeleteNotesHost(): WorktreeDeleteNotesHost {
@@ -5782,6 +5828,14 @@ export class PluginService {
       detail,
     });
     this.emitRuntimeStatus(pluginId);
+    // A worker that failed to start leaves its cloud providers unavailable, until it starts
+    // again; a failure reworded (activation failed, then crash loop) rewords them too.
+    if (
+      (state === "failed" || prior?.state === "failed") &&
+      pluginDeclaresCloudProviders(pluginId)
+    ) {
+      pluginCloudProviderStatusChanged();
+    }
 
     // A crash reports as `starting` + `crashed` while the supervisor decides
     // whether to respawn, so it warns alongside an outright failure.
@@ -6377,6 +6431,31 @@ export class PluginService {
    * them (the panel "needs setup" strip) re-reads. Scoped like runtime status:
    * a project instance's key stays in its own project's views.
    */
+  /**
+   * A user-scope setting's stored value, or its declared default, read the way
+   * `host.settings.get` reads it. Never a secret: the host routes on this.
+   */
+  private async readUserSettingForHost(
+    pluginId: string,
+    key: string,
+    manifest: Readonly<PluginManifest>
+  ): Promise<unknown> {
+    if (this.settings.isSecretKey(pluginId, key, manifest)) return undefined;
+    const filePath = this.settings.resolveSettingsFilePathForKey(
+      pluginId,
+      key,
+      "user",
+      null,
+      manifest
+    );
+    const stored = filePath
+      ? await this.settings.getOrCreateSettingsStore(pluginId, filePath).get<unknown>(key)
+      : undefined;
+    return stored !== undefined
+      ? stored
+      : this.settings.getDeclaredDefault(pluginId, key, manifest);
+  }
+
   private emitSettingsChanged(pluginId: string): void {
     if (this.disposed) return;
     const event = { name: "plugin:settings-changed" as const, payload: { pluginId } };
@@ -8319,6 +8398,9 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterWorktreeDeleteNotesBinding", () =>
       unregisterWorktreeDeleteNotesBinding(pluginId)
     );
+    runUnloadStep(pluginId, "unbindPluginCloudProviders", () =>
+      unbindPluginCloudProviders(pluginId)
+    );
     runUnloadStep(pluginId, "cancelUiPrompts", () =>
       this.promptDispatcher.cancelForPlugin(pluginId)
     );
@@ -9686,6 +9768,14 @@ export const pluginService = new PluginService(undefined, undefined, {
 setPluginAssistantReachSource({
   has: (actionId) => pluginService.isAssistantReachAction(actionId),
   ids: () => pluginService.listAssistantReachActionIds(),
+});
+
+setPluginCloudProviderRuntime({
+  activate: (pluginId) => pluginService.activatePlugin(pluginId),
+  isActivated: (pluginId) => pluginService.isPluginActivated(pluginId),
+  unavailableReason: (pluginId, providerId) =>
+    pluginService.cloudProviderUnavailableReason(pluginId, providerId),
+  startFailure: (pluginId) => pluginService.cloudProviderStartFailure(pluginId),
 });
 
 // E2E backdoor: activate a loaded plugin by id without adding a production IPC

@@ -35,15 +35,25 @@ export interface ResourceBox {
    * would have nothing left to remove it.
    */
   isCurrent?: () => boolean;
+  /**
+   * Whether the switch dialog may open now. When it may not (nobody can see
+   * this view, or another switch is under way), the worktree waits on the
+   * host instead, and the switch dialog opens, asking first, once it can.
+   */
+  placeNow?: () => boolean;
 }
 
 /**
  * Where the handoff left off: the switch dialog is placing the worktree on
- * the box, or the box needs Daintree set up first and Settings → Hosts has
- * opened its setup, with the worktree waiting to be placed once it finishes.
+ * the box; the box needs Daintree set up first and Settings → Hosts has
+ * opened its setup, with the worktree waiting to be placed once it finishes;
+ * or the box is ready and the worktree waits for the switch dialog to be
+ * able to open.
  */
 export type ResourceHandoffOutcome =
-  { status: "placing"; hostId: string } | { status: "setup"; hostId: string };
+  | { status: "placing"; hostId: string }
+  | { status: "setup"; hostId: string }
+  | { status: "waiting"; hostId: string };
 
 /**
  * A box can be offered as a host only from a window on this machine (a remote
@@ -153,19 +163,27 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
   };
   if (!stillCurrent()) return cancel();
 
-  const setup = async (): Promise<ResourceHandoffOutcome> => {
+  const hold = async (askFirst: boolean): Promise<void> => {
     await holdPlacement(host.id, {
       projectId: box.projectId,
       worktreeId: box.worktreeId,
       worktreePath: box.worktreePath,
       label: box.label?.trim() || placementLabel(box.worktreePath),
-      ...(box.askFirst ? { askFirst: true as const } : {}),
+      ...(askFirst ? { askFirst: true as const } : {}),
     });
     if (!stillCurrent()) {
       // A host that stays (the user's own) mustn't keep waiting for a worktree that's gone.
       if (existing) await cancelPlacement(host.id).catch(() => {});
-      return cancel();
+      await cancel();
     }
+  };
+  const setup = async (): Promise<ResourceHandoffOutcome> => {
+    // Set up where nobody can see it, or behind another switch: the switch
+    // that follows asks before it moves the window.
+    const askFirst = box.askFirst === true || (box.placeNow !== undefined && !box.placeNow());
+    await hold(askFirst);
+    // Hidden, or another switch begun, while the placement was written.
+    if (!askFirst && box.placeNow && !box.placeNow()) await hold(true);
     retryPlacementSetup(host.id);
     return { status: "setup", hostId: host.id };
   };
@@ -173,6 +191,12 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
   const state = await remoteHostsClient.connectAndSettle(host.id);
   if (!stillCurrent()) return cancel();
   if (!isUsable(state)) return setup();
+  // Asked at the last moment, after every wait: the resume hook hands a held
+  // worktree to the switch dialog once the view is seen with no switch under way.
+  if (box.placeNow && !box.placeNow()) {
+    await hold(true);
+    return { status: "waiting", hostId: host.id };
+  }
 
   const requestId = requestHostSwitch({
     toHostId: host.id,

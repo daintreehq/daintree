@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type {
+  DecisionsAnswerDestination,
+  DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionItem,
   DecisionsAttentionList,
@@ -15,6 +18,8 @@ vi.mock("@/hooks/useWorktrees", () => ({ useWorktrees: () => ({ worktrees: [] })
 const listAttention = vi.fn<() => Promise<DecisionsAttentionList>>();
 const markAnswerHandled =
   vi.fn<(payload: { questionId: string }) => Promise<DecisionsAnswerOutcome>>();
+const listAnswerDestinations =
+  vi.fn<(questionId: string) => Promise<DecisionsAnswerDestinations>>();
 
 /** The list as main would read it now; actions change it before the next read. */
 let listed: DecisionsAttentionItem[] = [];
@@ -55,10 +60,10 @@ function makeItem(
   };
 }
 
-function tree(isOpen: boolean) {
+function tree(isOpen: boolean, onClose: () => void = vi.fn()) {
   return (
     <TooltipProvider>
-      <DecisionsAttentionDialog isOpen={isOpen} onClose={vi.fn()} />
+      <DecisionsAttentionDialog isOpen={isOpen} onClose={onClose} />
     </TooltipProvider>
   );
 }
@@ -108,6 +113,17 @@ async function ask(alias: number): Promise<HTMLElement> {
   return asking;
 }
 
+function stubElectron() {
+  Object.defineProperty(window, "electron", {
+    value: {
+      decisions: { listAttention, markAnswerHandled, listAnswerDestinations },
+      terminal: { onDecisionState: () => () => {} },
+    },
+    configurable: true,
+    writable: true,
+  });
+}
+
 function handlesQuestions() {
   markAnswerHandled.mockImplementation(async ({ questionId }) => {
     listed = listed.filter((item) => item.questionId !== questionId);
@@ -121,14 +137,7 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
     listAttention.mockReset();
     markAnswerHandled.mockReset();
     listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
-    Object.defineProperty(window, "electron", {
-      value: {
-        decisions: { listAttention, markAnswerHandled },
-        terminal: { onDecisionState: () => () => {} },
-      },
-      configurable: true,
-      writable: true,
-    });
+    stubElectron();
     useDecisionsAttentionStore.setState({
       isOpen: true,
       request: { terminalId: null, returnFocusTo: null, seq: 1 },
@@ -253,6 +262,32 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
     );
   });
 
+  it("names where each held follow-up was sent from (#17238)", async () => {
+    const held = {
+      status: "needs-attention" as const,
+      reason: "pane_gone",
+      unreadable: false,
+      sentAt: "2026-11-01T10:00:00.000Z",
+    };
+    listed = [
+      makeItem(5, {
+        answer: null,
+        followUps: [
+          { ...held, messageId: "m-phone", onComputer: false, text: "From the phone." },
+          { ...held, messageId: "m-desk", onComputer: true, text: "From the desk." },
+        ],
+      }),
+    ];
+    render(tree(true));
+    await listedRows(1);
+
+    const captions = [...document.querySelectorAll("figcaption")].map((el) => el.textContent ?? "");
+    expect(captions.filter((text) => text.startsWith("Your follow-up from"))).toEqual([
+      expect.stringContaining("from your phone"),
+      expect.stringContaining("from your computer"),
+    ]);
+  });
+
   it("drops a confirmation with the list that asked it, so a reopening shows none", async () => {
     listed = [makeItem(3), makeItem(4)];
     const { rerender } = render(tree(true));
@@ -266,5 +301,399 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
 
     expect(confirm()).toBeNull();
     expect(markAnswerHandled).not.toHaveBeenCalled();
+  });
+});
+
+function destination(terminalId: string, title: string): DecisionsAnswerDestination {
+  return {
+    terminalId,
+    title,
+    agentId: "claude",
+    agentName: "Claude",
+    projectId: "project-1",
+    projectName: "Helios",
+    worktreeId: "worktree-1",
+    worktreeName: "main",
+    askedHere: false,
+  };
+}
+
+function settleable<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function destinationsMenu(): HTMLElement | null {
+  return screen.queryByRole("menu");
+}
+
+async function openDestinations(alias: number) {
+  const trigger = screen.getByRole("button", { name: `Choose destination for q-${alias}` });
+  act(() => trigger.focus());
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  await waitFor(() => expect(destinationsMenu()).not.toBeNull());
+}
+
+async function closeDestinations() {
+  fireEvent.keyDown(destinationsMenu()!, { key: "Escape" });
+  await waitFor(() => expect(destinationsMenu()).toBeNull());
+}
+
+function menuRows(): string[] {
+  return within(destinationsMenu()!)
+    .getAllByRole("menuitem")
+    .map((row) => row.textContent ?? "");
+}
+
+describe("DecisionsAttentionDialog: Choose destination (#17560)", () => {
+  beforeEach(() => {
+    listed = [makeItem(3)];
+    listAttention.mockReset();
+    listAnswerDestinations.mockReset();
+    listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
+    stubElectron();
+    useDecisionsAttentionStore.setState({
+      isOpen: true,
+      request: { terminalId: null, returnFocusTo: null, seq: 1 },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each([
+    {
+      how: "lists agents that have since gone",
+      settle: (older: ReturnType<typeof settleable<DecisionsAnswerDestinations>>) =>
+        older.resolve({ result: "listed", destinations: [destination("pane-old", "Gone agent")] }),
+    },
+    {
+      how: "fails",
+      settle: (older: ReturnType<typeof settleable<DecisionsAnswerDestinations>>) =>
+        older.reject(new Error("The relay went away")),
+    },
+  ])(
+    "keeps the reopened menu's agents when the lookup of a closed opening $how afterwards",
+    async ({ settle }) => {
+      const older = settleable<DecisionsAnswerDestinations>();
+      const newer = settleable<DecisionsAnswerDestinations>();
+      listAnswerDestinations.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+      const onClose = vi.fn();
+      render(tree(true, onClose));
+      await listedRows(1);
+
+      await openDestinations(3);
+      expect(menuRows()).toEqual(["Looking…"]);
+      await closeDestinations();
+      // Escape closed the menu alone: the same row reopens it, not a remounted list.
+      expect(onClose).not.toHaveBeenCalled();
+      await openDestinations(3);
+      expect(listAnswerDestinations).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        newer.resolve({ result: "listed", destinations: [destination("pane-new", "Fresh agent")] });
+      });
+      await waitFor(() => expect(menuRows()[0]).toContain("Fresh agent"));
+
+      await act(async () => {
+        settle(older);
+        await older.promise.catch(() => {});
+      });
+
+      const rows = menuRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toContain("Fresh agent");
+      expect(destinationsMenu()!.textContent).not.toContain("Gone agent");
+      expect(destinationsMenu()!.textContent).not.toContain("The relay went away");
+    }
+  );
+});
+
+describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
+  /** Reads held until the test lets them land, oldest first. */
+  let held: Array<() => void> = [];
+  /** A pane's Decisions state changing, as main pushes it to the open list. */
+  let pushPaneState: ((state: unknown) => void) | null = null;
+
+  /** Each read lists `listed` as it stood when the read began, or fails with `failure`. */
+  function holdReads(failure?: Error) {
+    listAttention.mockImplementation(() => {
+      const snapshot = listed;
+      return new Promise((resolve, reject) => {
+        held.push(() =>
+          failure === undefined ? resolve({ result: "listed", items: snapshot }) : reject(failure)
+        );
+      });
+    });
+  }
+
+  async function landReads() {
+    await act(async () => {
+      const pending = held;
+      held = [];
+      for (const land of pending) land();
+    });
+  }
+
+  async function landOldestRead() {
+    await act(async () => {
+      held.shift()?.();
+    });
+  }
+
+  function openFor(terminalId: string) {
+    act(() => useDecisionsAttentionStore.getState().open(terminalId));
+  }
+
+  /** The dialog's own surface, where its initial focus goes while a read is out. */
+  function surface(): Element | null {
+    return screen.getByTestId("decisions-attention-dialog").firstElementChild;
+  }
+
+  /** The list's own place in the dialog, holding its description. */
+  function listPlace(): Element | null {
+    const id = screen.getByTestId("decisions-attention-dialog").getAttribute("aria-describedby");
+    return id === null ? null : (document.getElementById(id)?.parentElement ?? null);
+  }
+
+  /** Opened for pane 3 alone, settled on its answer, then closed with the list kept. */
+  async function closeAfterFirstOpening(rerender: (ui: ReactElement) => void) {
+    listed = [makeItem(3)];
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(1);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
+
+    act(() => useDecisionsAttentionStore.getState().close());
+    rerender(tree(false));
+    await waitFor(() => expect(screen.queryByTestId("decisions-attention-dialog")).toBeNull());
+  }
+
+  /**
+   * Reopened for pane 4 with its read held, listing `next` once it lands: the
+   * last opening's list, pane 3 alone, shows meanwhile, and the dialog's own
+   * surface holds focus.
+   */
+  async function reopenForPane4(
+    rerender: (ui: ReactElement) => void,
+    next = [makeItem(3), makeItem(4)]
+  ) {
+    listed = next;
+    holdReads();
+    openFor("pane-4");
+    rerender(tree(true));
+    await waitFor(() => expect(held).toHaveLength(1));
+    expect(
+      screen.getAllByTestId("decisions-attention-item").map((row) => row.dataset.questionId)
+    ).toEqual(["qid-3"]);
+    await waitFor(() => expect(document.activeElement).toBe(surface()));
+  }
+
+  beforeEach(() => {
+    listed = [];
+    held = [];
+    pushPaneState = null;
+    listAttention.mockReset();
+    markAnswerHandled.mockReset();
+    listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
+    Object.defineProperty(window, "electron", {
+      value: {
+        decisions: { listAttention, markAnswerHandled },
+        terminal: {
+          onDecisionState: (callback: (state: unknown) => void) => {
+            pushPaneState = callback;
+            return () => {
+              pushPaneState = null;
+            };
+          },
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    useDecisionsAttentionStore.setState({
+      isOpen: false,
+      request: { terminalId: null, returnFocusTo: null, seq: 0 },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("lands on the opening pane's answer from the first read", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-4");
+    rerender(tree(true));
+
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("reopened for a pane whose answer arrived while it was closed, lands on that answer once it is read", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    await landReads();
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("leaves focus where the person moved it while the opening's read was out", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    const chosen = markButton(3);
+    act(() => chosen.focus());
+    await landReads();
+    await listedRows(2);
+
+    expect(document.activeElement).toBe(chosen);
+  });
+
+  it("lands on the answer when the control the person moved to went with the refresh", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender, [makeItem(4)]);
+
+    act(() => markButton(3).focus());
+    await landReads();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Mark q-3 handled" })).toBeNull()
+    );
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("lands on the answer when focus went back behind the dialog during the read", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    // What a closing popover does when it hands focus back to the chip that opened the list.
+    const chip = document.createElement("button");
+    document.body.append(chip);
+    onTestFinished(() => chip.remove());
+    act(() => chip.focus());
+    await landReads();
+    await listedRows(2);
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("leaves focus in a confirmation opened while the opening's read was out", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    // An assistive technology's press activates a control without focusing it.
+    fireEvent.click(markButton(3));
+    const asking = await screen.findByRole("alertdialog");
+    const cancel = within(asking).getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
+    await landReads();
+    await listedRows(2);
+
+    expect(document.activeElement).toBe(cancel);
+  });
+
+  /**
+   * Opened for pane 3 and settled on its answer, then opened for pane 4 with
+   * its read held, with the window away from the start when `windowAway`.
+   */
+  async function reopenWhileOpenForPane4({ windowAway = false } = {}): Promise<HTMLElement> {
+    listed = [makeItem(3)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(1);
+    const old = firstAction(3);
+    await waitFor(() => expect(document.activeElement).toBe(old));
+
+    listed = [makeItem(3), makeItem(4)];
+    holdReads();
+    const away = windowAway ? vi.spyOn(document, "hasFocus").mockReturnValue(false) : null;
+    onTestFinished(() => away?.mockRestore());
+    openFor("pane-4");
+    await waitFor(() => expect(held).toHaveLength(1));
+    away?.mockRestore();
+    return old;
+  }
+
+  it("reopened while open, lands on the new pane's answer though the window hands focus back to the old one", async () => {
+    const old = await reopenWhileOpenForPane4();
+
+    // Coming back to the window, the browser fires focus at what held it when the window lost it.
+    act(() => {
+      window.dispatchEvent(new FocusEvent("blur"));
+      old.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    });
+    await landReads();
+    await listedRows(2);
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("reopened while the window was away, lands on the new pane's answer once it comes back", async () => {
+    const old = await reopenWhileOpenForPane4({ windowAway: true });
+
+    act(() => {
+      old.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    });
+    await landReads();
+    await listedRows(2);
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("reopened while open, leaves focus on the old answer when the person goes back to it", async () => {
+    const old = await reopenWhileOpenForPane4();
+
+    act(() => old.blur());
+    act(() => old.focus());
+    await landReads();
+    await listedRows(2);
+
+    expect(document.activeElement).toBe(old);
+  });
+
+  it("waits for the opening's latest read, not one a later read superseded", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+    await reopenForPane4(rerender);
+
+    // A pane's push reads again for the same opening once its burst settles.
+    act(() => pushPaneState?.({}));
+    await waitFor(() => expect(held).toHaveLength(2));
+    await landOldestRead();
+    expect(screen.getAllByTestId("decisions-attention-item")).toHaveLength(1);
+    expect(document.activeElement).toBe(surface());
+
+    await landReads();
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("holds focus in the list's place, not a stale row, when the opening's read fails", async () => {
+    const { rerender } = render(tree(false));
+    await closeAfterFirstOpening(rerender);
+
+    holdReads(new Error("The relay went away"));
+    openFor("pane-3");
+    rerender(tree(true));
+    await waitFor(() => expect(document.activeElement).toBe(surface()));
+    await landReads();
+
+    await waitFor(() => expect(screen.getByText("The relay went away")).toBeTruthy());
+    // The last opening's row for the pane is still on show beside the error.
+    await listedRows(1);
+    await waitFor(() => expect(document.activeElement).toBe(listPlace()));
   });
 });

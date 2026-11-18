@@ -246,6 +246,8 @@ export function useReviewHubKeyboard({
         if (!item) return;
         e.preventDefault();
         e.stopPropagation();
+        // One press toggles once: a held key would re-stage as the row moves under the cursor.
+        if (e.repeat) return;
         if (item.section === "staged") {
           handleToggleStaged(item.file.path);
         } else {
@@ -260,6 +262,8 @@ export function useReviewHubKeyboard({
           if (!item) return;
           e.preventDefault();
           e.stopPropagation();
+          // A held V would flip the marker back and forth on key-repeat timing.
+          if (e.repeat) return;
           const viewedKey = workingTreeViewedKey(item.file.path);
           handleViewedChange(viewedKey, !viewedFiles.has(viewedKey));
         }

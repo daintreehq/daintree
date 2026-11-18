@@ -49,6 +49,7 @@ function renderPanel(overrides: Partial<ComponentProps<typeof CommitPanel>> = {}
     onCommitMessageChange: vi.fn(),
     onCommit: vi.fn().mockResolvedValue(undefined),
     onCommitAndPush: vi.fn().mockResolvedValue(undefined),
+    onCommitThenReviewPush: vi.fn().mockResolvedValue(undefined),
     onFocusBlocker: vi.fn(),
     isPushing: false,
     pushProgress: new Map(),
@@ -103,7 +104,7 @@ describe("CommitPanel shortcut handler", () => {
     expect(props.onCommitAndPush).toHaveBeenCalledWith("fix: bug", {
       branch: "feature/x",
       destination: { remote: "origin", branch: "feature/x" },
-      reviewedHeadOid: null,
+      reviewed: null,
     });
   });
 

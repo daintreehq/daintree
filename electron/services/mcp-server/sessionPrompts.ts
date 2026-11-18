@@ -104,20 +104,17 @@ async function collectPromptContext(
   // triage_terminals is a static recipe — render() ignores context, so skip
   // the worktree dispatch to avoid a 30s safeDispatch timeout penalty when the
   // renderer is unavailable (startup, view teardown, project switch).
-  if (definition.name !== "triage_terminals") {
-    const worktree = await safeDispatch("worktree.getCurrent", undefined, dispatchAction);
-    if (worktree && typeof worktree === "object") {
-      const w = worktree as Record<string, unknown>;
-      if (typeof w.path === "string") context.worktreePath = w.path;
-      if (typeof w.branch === "string") context.worktreeBranch = w.branch;
-      if (typeof w.issueNumber === "number") context.worktreeIssueNumber = w.issueNumber;
-    }
-  }
-
-  if (definition.name === "triage_failed_agent") {
-    const terminalId = args.terminal_id?.trim();
-    if (terminalId) {
-      const result = await safeDispatch(
+  const worktreeRead =
+    definition.name !== "triage_terminals"
+      ? safeDispatch("worktree.getCurrent", undefined, dispatchAction)
+      : null;
+  // The named terminal's output does not depend on the worktree, so it is asked
+  // for alongside it rather than after it (#17492). Both reads settle to null
+  // on failure, so neither can cost the other its result.
+  const terminalId =
+    definition.name === "triage_failed_agent" ? args.terminal_id?.trim() : undefined;
+  const outputRead = terminalId
+    ? safeDispatch(
         "terminal.getOutput",
         {
           terminalId,
@@ -125,18 +122,26 @@ async function collectPromptContext(
           stripAnsi: true,
         },
         dispatchAction
-      );
-      if (result && typeof result === "object") {
-        const r = result as Record<string, unknown>;
-        if (typeof r.content === "string") {
-          const content = r.content;
-          if (content.length > PROMPT_TERMINAL_OUTPUT_MAX_CHARS) {
-            const tail = content.slice(-PROMPT_TERMINAL_OUTPUT_MAX_CHARS);
-            context.terminalOutput = `… [truncated to last ${PROMPT_TERMINAL_OUTPUT_MAX_CHARS} chars]\n${tail}`;
-          } else {
-            context.terminalOutput = content;
-          }
-        }
+      )
+    : null;
+  const [worktree, output] = await Promise.all([worktreeRead, outputRead]);
+
+  if (worktree && typeof worktree === "object") {
+    const w = worktree as Record<string, unknown>;
+    if (typeof w.path === "string") context.worktreePath = w.path;
+    if (typeof w.branch === "string") context.worktreeBranch = w.branch;
+    if (typeof w.issueNumber === "number") context.worktreeIssueNumber = w.issueNumber;
+  }
+
+  if (output && typeof output === "object") {
+    const r = output as Record<string, unknown>;
+    if (typeof r.content === "string") {
+      const content = r.content;
+      if (content.length > PROMPT_TERMINAL_OUTPUT_MAX_CHARS) {
+        const tail = content.slice(-PROMPT_TERMINAL_OUTPUT_MAX_CHARS);
+        context.terminalOutput = `… [truncated to last ${PROMPT_TERMINAL_OUTPUT_MAX_CHARS} chars]\n${tail}`;
+      } else {
+        context.terminalOutput = content;
       }
     }
   }

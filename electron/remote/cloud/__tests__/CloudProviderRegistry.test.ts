@@ -58,7 +58,7 @@ function fakeProvider(id: string, machine: () => ProviderResource): CloudProvide
     id,
     info: (platform) => ({ ...boat.info(platform), id, name: `Provider ${id}` }),
     describeError: (error) => boat.describeError(error),
-    checkKey: vi.fn(async () => ({
+    checkCredentials: vi.fn(async () => ({
       identity: "octocat",
       scopes: [
         { scope: { kind: "personal" as const, id: "personal", name: "Personal" }, active: true },
@@ -184,6 +184,46 @@ describe("CloudProviderRegistry", () => {
     expect([...registry.values()]).toEqual([]);
     registry.register(
       declaring({ sshTrust: "provider-tunnel", transport: "provider-command", tunnel }),
+      { owner, apiUrl: "" }
+    );
+    expect(registry.has(PLUGIN_PROVIDER)).toBe(true);
+  });
+
+  it("refuses a provider whose credential fields a form couldn't render or keep apart", () => {
+    const registry = new CloudProviderRegistry();
+    const owner = { kind: "plugin" as const, pluginId: "acme.clouds" };
+    const declaring = (credentialFields: unknown) => {
+      const provider = fakeProvider(PLUGIN_PROVIDER, () => resource());
+      const info = provider.info;
+      provider.info = (platform) => ({ ...info(platform), credentialFields }) as never;
+      return provider;
+    };
+    const apiKey = {
+      id: "apiKey",
+      label: "API key",
+      secret: true,
+      input: "single-line",
+      required: true,
+      help: null,
+    };
+    for (const [fields, problem] of [
+      [[], /no credential fields/],
+      [[apiKey, { ...apiKey }], /twice/],
+      [[{ ...apiKey, id: "__proto__" }], /invalid id/],
+      [[{ ...apiKey, id: "constructor", required: false }], /invalid id/],
+      [[{ ...apiKey, id: "toString" }], /invalid id/],
+      [[{ ...apiKey, input: "dropdown" }], /unknown input/],
+      [[{ ...apiKey, label: " " }], /without a label/],
+      [[{ ...apiKey, secret: "yes" }], /secret and required/],
+    ] as const) {
+      expect(() => registry.register(declaring(fields), { owner, apiUrl: "" })).toThrow(problem);
+    }
+    expect([...registry.values()]).toEqual([]);
+    registry.register(
+      declaring([
+        { ...apiKey, id: "keyFile", input: "key-file" },
+        { ...apiKey, id: "project", secret: false },
+      ]),
       { owner, apiUrl: "" }
     );
     expect(registry.has(PLUGIN_PROVIDER)).toBe(true);
@@ -377,11 +417,23 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
       owner: pluginOwner,
       apiUrl: "https://api.acme.test",
     });
-    const account = await env.accounts.addAccount({
+    // Connect refuses a plugin's provider until it can ask consent (#17352), so its account is
+    // seeded as one connected then would be kept.
+    const account = { id: "ca_acmeplugin" };
+    env.store.putAccount({
+      id: account.id,
       providerId: PLUGIN_PROVIDER,
-      apiKey: "acme_live_x",
-      scopeId: "personal",
+      displayName: "octocat",
+      identity: "octocat",
+      scope: { kind: "personal", id: "personal", name: "Personal" },
+      apiUrl: "https://api.acme.test",
+      keyHint: null,
+      credentialRevision: "rev-1",
+      addedAt: NOW,
+      validation: { status: "valid", checkedAt: NOW },
+      lastProvisioning: null,
     });
+    await env.vault.put(account.id, { apiKey: "acme_live_x" });
     const { hostId } = await env.lifecycle.importMachine({
       accountId: account.id,
       resourceId: "i-0123456789",
@@ -600,7 +652,7 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
     env.registry.register(boat, { owner: { kind: "built-in" }, apiUrl: "https://boat.test" });
     const boatAccount = await env.accounts.addAccount({
       providerId: "boat",
-      apiKey: "boat_live_x",
+      credentials: { apiKey: "boat_live_x" },
       scopeId: "personal",
     });
     await env.lifecycle.importMachine({
@@ -705,7 +757,7 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
       }),
     ]);
     // Removing the unbound account needs nothing from its provider.
-    await env.vault.put("ca_ijklmnop", "agent37_key");
+    await env.vault.put("ca_ijklmnop", { apiKey: "agent37_key" });
     await env.accounts.removeAccount("ca_ijklmnop");
     expect(await env.vault.get("ca_ijklmnop")).toBeNull();
     expect(env.store.accounts().map((account) => account.id)).toEqual(["ca_abcdefgh"]);
@@ -758,7 +810,7 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
   async function pendingCreateEnv() {
     const env = await setup(pendingCreate());
     env.hosts.push({ id: "h_acme", name: "build" } as HostDescriptor);
-    await env.vault.put("ca_abcdefgh", "acme_live_x");
+    await env.vault.put("ca_abcdefgh", { apiKey: "acme_live_x" });
     return env;
   }
 

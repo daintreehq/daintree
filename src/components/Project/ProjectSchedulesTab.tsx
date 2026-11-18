@@ -413,6 +413,7 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
             </ScheduleSwitches>
           }
           worktreeLabels={worktrees.labels}
+          worktreeIds={worktrees.ids}
           pendingEnabled={pendingEnabled}
           enabledError={enabledError}
           pendingRunNow={pendingRunNow}
@@ -456,7 +457,7 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
                 schedule={shown}
                 now={now}
                 schedulesOn={state.snapshot?.switches.schedulesOn ?? false}
-                worktreeLabel={scheduleWorktreeLabel(shown.launch, worktrees.labels)}
+                worktreeLabel={scheduleWorktreeLabel(shown.launch, worktrees.labels, worktrees.ids)}
                 presetName={shown.launch.presetId === null ? null : (shownPreset?.name ?? null)}
                 presetMissing={presetMissing}
                 runsState={runsState}

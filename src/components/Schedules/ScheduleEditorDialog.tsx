@@ -27,6 +27,8 @@ interface ScheduleEditorDialogProps {
   /** The starter a new schedule was opened from, or null. */
   starter?: ScheduleStarter | null;
   worktrees: readonly WorktreeChoice[];
+  /** The project's worktree ids once known, null until then. */
+  worktreeIds: ReadonlySet<string> | null;
   now: number;
   osJobContext: ScheduleOsJobContext | null;
   /** The project's switches, kept current while editing; null until read. */
@@ -57,6 +59,7 @@ export function ScheduleEditorDialog({
   defaultAgentId,
   starter = null,
   worktrees,
+  worktreeIds,
   now,
   osJobContext,
   projectSwitches,
@@ -126,6 +129,7 @@ export function ScheduleEditorDialog({
           defaultAgentId={defaultAgentId}
           starter={starter}
           worktrees={worktrees}
+          worktreeIds={worktreeIds}
           now={now}
           osJobContext={osJobContext}
           projectSwitches={projectSwitches}

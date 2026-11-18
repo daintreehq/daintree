@@ -6,6 +6,7 @@ import { registerDevServerActions } from "../definitions/devServerActions";
 import type { DevPreviewToolDefinition } from "@/services/devPreviewTools/types";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
+import { ELEMENT_PICKER_TOOL_ID } from "@/panels/dev-preview/element-picker/toolId";
 
 // The action focuses the panel it acted on through the service singleton; the
 // refusal these tests are about happens before that, and a real dispatch here
@@ -101,5 +102,32 @@ describe("devPreview.toggleTool availability", () => {
     useDevPreviewToolStore.setState({ activeByPanel: { [PANEL]: TOOL } });
     const result = await runToggleTool({ toolId: TOOL });
     expect(result).toEqual({ panelId: PANEL, active: false });
+  });
+
+  it("never acts on a browser panel: only the Element Picker's own command does", async () => {
+    // The picker's own id, so routing that keyed on the tool rather than the
+    // command would show here.
+    builtIn.tool = { id: ELEMENT_PICKER_TOOL_ID, label: "Element Picker", Button: () => null };
+    usePanelStore.setState({
+      panelIds: [PANEL, "browser-1"],
+      focusedId: "browser-1",
+      panelsById: {
+        [PANEL]: { id: PANEL, kind: "dev-preview", location: "grid" },
+        "browser-1": {
+          id: "browser-1",
+          kind: "browser",
+          location: "grid",
+          worktreeId: "wt-1",
+          browserUrl: "http://localhost:5173/",
+        },
+      },
+    } as never);
+    await expect(
+      runToggleTool({ toolId: ELEMENT_PICKER_TOOL_ID, panelId: "browser-1" })
+    ).rejects.toThrow("not an open dev preview");
+    expect(await runToggleTool({ toolId: ELEMENT_PICKER_TOOL_ID })).toEqual({
+      panelId: PANEL,
+      active: true,
+    });
   });
 });

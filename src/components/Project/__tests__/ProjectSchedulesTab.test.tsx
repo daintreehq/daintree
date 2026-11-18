@@ -18,7 +18,7 @@ const client = vi.hoisted(() => ({
   remove: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
-  listRuns: vi.fn(async (): Promise<ScheduledRun[]> => []),
+  listLatestRuns: vi.fn(async (): Promise<ScheduledRun[]> => []),
   listScheduleRuns: vi.fn(async (): Promise<ScheduledRun[]> => []),
   onRunsChanged: vi.fn(() => () => {}),
 }));
@@ -28,7 +28,13 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 const reveal = vi.hoisted(() => vi.fn());
 vi.mock("@/services/scheduledRunLanding", () => ({ revealRunTerminal: reveal }));
 const worktreeList = vi.hoisted(() => ({
-  current: [] as Array<{ id: string; path: string; name: string; isMainWorktree: boolean }>,
+  current: [] as Array<{
+    id: string;
+    path: string;
+    name: string;
+    branch?: string;
+    isMainWorktree: boolean;
+  }>,
   initialized: true,
   loading: false,
   reconnecting: false,
@@ -147,8 +153,8 @@ beforeEach(() => {
   client.list.mockReset();
   client.list.mockResolvedValue(snapshot([NIGHTLY, WEEKLY]));
   client.update.mockReset();
-  client.listRuns.mockReset();
-  client.listRuns.mockResolvedValue([]);
+  client.listLatestRuns.mockReset();
+  client.listLatestRuns.mockResolvedValue([]);
   client.remove.mockReset();
   dispatch.mockReset();
   reveal.mockReset();
@@ -445,6 +451,157 @@ describe("ProjectSchedulesTab — a saved preset (#17210)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
 
     expect(await screen.findByText("Missing preset")).toBeTruthy();
+  });
+});
+
+describe("ProjectSchedulesTab — a schedule in another worktree (#17467)", () => {
+  const FEATURE_ID = "/repo-worktrees/feature";
+  const inFeature = {
+    ...NIGHTLY,
+    launch: { ...NIGHTLY.launch, worktreeId: FEATURE_ID },
+  };
+  const MAIN = { id: "/repo", path: "/repo", name: "repo", branch: "main", isMainWorktree: true };
+  const FEATURE = { id: FEATURE_ID, path: FEATURE_ID, name: "feature", isMainWorktree: false };
+
+  afterEach(() => {
+    worktreeList.current = [];
+    worktreeList.initialized = true;
+    worktreeList.loading = false;
+    worktreeList.reconnecting = false;
+    worktreeList.error = null;
+  });
+
+  const openHistory = async () => {
+    const open = await screen.findByRole("button", { name: "Run history of Nightly audit" });
+    await act(async () => {
+      fireEvent.click(open);
+    });
+    // The list is gone once the history is up, so its badge can't answer for the history.
+    await screen.findByTestId("schedules-back");
+  };
+  const editSchedule = async () => {
+    const edit = await screen.findByRole("button", { name: "Edit schedule" });
+    await act(async () => {
+      fireEvent.click(edit);
+    });
+    return screen.findByRole("combobox", { name: "Worktree" });
+  };
+
+  it("keeps the target unconfirmed in the list and the history while the host hasn't reported", async () => {
+    worktreeList.initialized = false;
+    client.list.mockResolvedValue(snapshot([inFeature]));
+    renderTab();
+
+    expect(await screen.findByText("Worktree unconfirmed")).toBeTruthy();
+    expect(screen.queryByText("Missing worktree")).toBeNull();
+
+    // The history names it inside its sentence of facts, so match a part of the text.
+    await openHistory();
+    expect(await screen.findByText(/Worktree unconfirmed/)).toBeTruthy();
+    expect(screen.queryByText(/Missing worktree/)).toBeNull();
+  });
+
+  it.each([
+    ["loading", () => (worktreeList.loading = true)],
+    ["reconnecting", () => (worktreeList.reconnecting = true)],
+    ["failed", () => (worktreeList.error = "worktree host unreachable")],
+  ])("keeps the target unconfirmed while the worktrees are %s", async (_state, apply) => {
+    worktreeList.current = [MAIN];
+    apply();
+    client.list.mockResolvedValue(snapshot([inFeature]));
+    renderTab();
+
+    expect(await screen.findByText("Worktree unconfirmed")).toBeTruthy();
+    expect(screen.queryByText("Missing worktree")).toBeNull();
+  });
+
+  it("names the worktree in the list once it arrives", async () => {
+    worktreeList.current = [MAIN];
+    worktreeList.reconnecting = true;
+    client.list.mockResolvedValue(snapshot([inFeature]));
+    const view = renderTab();
+    expect(await screen.findByText("Worktree unconfirmed")).toBeTruthy();
+
+    worktreeList.current = [MAIN, FEATURE];
+    worktreeList.reconnecting = false;
+    view.update({ onClose: vi.fn() });
+
+    expect(await screen.findByText("feature")).toBeTruthy();
+    expect(screen.queryByText("Worktree unconfirmed")).toBeNull();
+    expect(screen.queryByText("Missing worktree")).toBeNull();
+  });
+
+  it("names the worktree in the history once it arrives", async () => {
+    worktreeList.current = [MAIN];
+    worktreeList.reconnecting = true;
+    client.list.mockResolvedValue(snapshot([inFeature]));
+    const view = renderTab();
+    await openHistory();
+    expect(await screen.findByText(/Worktree unconfirmed/)).toBeTruthy();
+
+    worktreeList.current = [MAIN, FEATURE];
+    worktreeList.reconnecting = false;
+    view.update({ onClose: vi.fn() });
+
+    expect(await screen.findByText(/feature/)).toBeTruthy();
+    expect(screen.queryByText(/Worktree unconfirmed/)).toBeNull();
+    expect(screen.queryByText(/Missing worktree/)).toBeNull();
+  });
+
+  it("calls the target missing only once the worktrees are known without it", async () => {
+    worktreeList.current = [MAIN];
+    client.list.mockResolvedValue(snapshot([inFeature]));
+    renderTab();
+
+    expect(await screen.findByText("Missing worktree")).toBeTruthy();
+    expect(screen.queryByText("Worktree unconfirmed")).toBeNull();
+
+    await openHistory();
+    expect(await screen.findByText(/Missing worktree/)).toBeTruthy();
+    expect(screen.queryByText(/Worktree unconfirmed/)).toBeNull();
+
+    expect((await editSchedule()).textContent).toContain("Missing worktree");
+  });
+
+  it("reads the main checkout's own id as the main checkout once the worktrees are known", async () => {
+    client.list.mockResolvedValue(
+      snapshot([{ ...NIGHTLY, launch: { ...NIGHTLY.launch, worktreeId: MAIN.id } }])
+    );
+    worktreeList.current = [MAIN, FEATURE];
+    worktreeList.reconnecting = true;
+    const view = renderTab();
+    expect(await screen.findByText("Worktree unconfirmed")).toBeTruthy();
+
+    worktreeList.reconnecting = false;
+    view.update({ onClose: vi.fn() });
+    expect(await screen.findByText("Main checkout")).toBeTruthy();
+    expect(screen.queryByText("Missing worktree")).toBeNull();
+
+    // Reconnecting again, so the history shows the id it was given, not a main checkout it was never given.
+    worktreeList.reconnecting = true;
+    view.update({ onClose: vi.fn() });
+    expect(screen.getByText("Worktree unconfirmed")).toBeTruthy();
+    await openHistory();
+    expect(await screen.findByText(/Worktree unconfirmed/)).toBeTruthy();
+
+    worktreeList.reconnecting = false;
+    view.update({ onClose: vi.fn() });
+    expect(await screen.findByText(/Main checkout/)).toBeTruthy();
+    expect(screen.queryByText(/Worktree unconfirmed|Missing worktree/)).toBeNull();
+
+    // The stored id's own option, not the main-checkout choice (which names its branch).
+    expect((await editSchedule()).textContent).toBe("Main checkout");
+  });
+
+  it("opens the editor on an unconfirmed target while the worktrees are unknown", async () => {
+    worktreeList.initialized = false;
+    client.list.mockResolvedValue(snapshot([inFeature]));
+    renderTab();
+    await openHistory();
+
+    const trigger = await editSchedule();
+    expect(trigger.textContent).toContain("Worktree unconfirmed");
+    expect(trigger.textContent).not.toContain("Missing worktree");
   });
 });
 
@@ -926,24 +1083,24 @@ describe("ProjectSchedulesTab — the editor's answer (#16907)", () => {
 
 describe("ProjectSchedulesTab — Last run's Retry (#16907)", () => {
   it("shows Last run's Retry busy while it reads, and takes no second click", async () => {
-    client.listRuns.mockRejectedValueOnce(new Error("The history couldn't be read"));
+    client.listLatestRuns.mockRejectedValueOnce(new Error("The history couldn't be read"));
     renderTab();
     await screen.findByText("Couldn't read run history, so Last run may be out of date");
 
     let answer: (value: ScheduledRun[]) => void = () => {};
-    client.listRuns.mockImplementationOnce(
+    client.listLatestRuns.mockImplementationOnce(
       () => new Promise<ScheduledRun[]>((resolve) => (answer = resolve))
     );
-    const reads = client.listRuns.mock.calls.length;
+    const reads = client.listLatestRuns.mock.calls.length;
     const retry = screen.getByRole("button", { name: "Retry" });
     retry.focus();
     fireEvent.click(retry);
-    await waitFor(() => expect(client.listRuns).toHaveBeenCalledTimes(reads + 1));
+    await waitFor(() => expect(client.listLatestRuns).toHaveBeenCalledTimes(reads + 1));
     expect(retry.getAttribute("aria-busy")).toBe("true");
     expect(retry.hasAttribute("disabled")).toBe(false);
     expect(document.activeElement).toBe(retry);
     fireEvent.click(retry);
-    expect(client.listRuns).toHaveBeenCalledTimes(reads + 1);
+    expect(client.listLatestRuns).toHaveBeenCalledTimes(reads + 1);
 
     await act(async () => answer([]));
     await waitFor(() =>
@@ -954,23 +1111,23 @@ describe("ProjectSchedulesTab — Last run's Retry (#16907)", () => {
   });
 
   it("takes Last run's Retry again once a retried read fails too", async () => {
-    client.listRuns.mockRejectedValueOnce(new Error("The history couldn't be read"));
+    client.listLatestRuns.mockRejectedValueOnce(new Error("The history couldn't be read"));
     renderTab();
     await screen.findByText("Couldn't read run history, so Last run may be out of date");
 
     let fail: (error: Error) => void = () => {};
-    client.listRuns.mockImplementationOnce(
+    client.listLatestRuns.mockImplementationOnce(
       () => new Promise<ScheduledRun[]>((_, reject) => (fail = reject))
     );
-    const reads = client.listRuns.mock.calls.length;
+    const reads = client.listLatestRuns.mock.calls.length;
     const retry = screen.getByRole("button", { name: "Retry" });
     fireEvent.click(retry);
-    await waitFor(() => expect(client.listRuns).toHaveBeenCalledTimes(reads + 1));
+    await waitFor(() => expect(client.listLatestRuns).toHaveBeenCalledTimes(reads + 1));
     expect(retry.getAttribute("aria-busy")).toBe("true");
 
     await act(async () => fail(new Error("Still unreadable")));
     expect(screen.getByRole("button", { name: "Retry" }).getAttribute("aria-busy")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(client.listRuns).toHaveBeenCalledTimes(reads + 2));
+    await waitFor(() => expect(client.listLatestRuns).toHaveBeenCalledTimes(reads + 2));
   });
 });

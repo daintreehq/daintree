@@ -30,6 +30,7 @@ export type BuiltInKeyAction =
   | "nav.toggleSidebar"
   | "nav.toggleFocusMode"
   | "nav.quickSwitcher"
+  | "nav.quickOpenFile"
   | "nav.focusRegion.next"
   | "nav.focusRegion.prev"
 
@@ -168,19 +169,12 @@ export type BuiltInKeyAction =
   // Panel management
   | "panel.palette"
   | "panel.toggleDiagnostics"
-  | "panel.togglePortal"
   | "panel.diagnosticsLogs"
   | "panel.diagnosticsEvents"
   | "panel.diagnosticsMessages"
 
   // Notification inbox
   | "notifications.toggle"
-
-  // Portal actions
-  | "portal.newTab"
-  | "portal.closeTab"
-  | "portal.nextTab"
-  | "portal.prevTab"
 
   // Dev preview actions
   | "devPreview.reloadPreview"
@@ -195,6 +189,8 @@ export type BuiltInKeyAction =
   | "pilot.openProject"
   | "canopy.toggle"
   | "canopy.openWindow"
+  | "decisions.openInbox"
+  | "decisions.openNextQuestion"
   | "project.switcherPalette"
   | "project.mruCycleOlder"
   | "project.openInNewWindow"
@@ -256,6 +252,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "nav.toggleSidebar",
   "nav.toggleFocusMode",
   "nav.quickSwitcher",
+  "nav.quickOpenFile",
   "nav.focusRegion.next",
   "nav.focusRegion.prev",
   "file.open",
@@ -382,16 +379,11 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "window.zoomReset",
   "panel.palette",
   "panel.toggleDiagnostics",
-  "panel.togglePortal",
   "notifications.toggle",
   "panel.diagnosticsLogs",
   "panel.diagnosticsEvents",
   "panel.diagnosticsMessages",
   "notifications.toggle",
-  "portal.newTab",
-  "portal.closeTab",
-  "portal.nextTab",
-  "portal.prevTab",
   "devPreview.reloadPreview",
   "action.palette",
   "action.palette.open",
@@ -400,6 +392,8 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "pilot.openProject",
   "canopy.toggle",
   "canopy.openWindow",
+  "decisions.openInbox",
+  "decisions.openNextQuestion",
   "project.switcherPalette",
   "project.mruCycleOlder",
   "project.openInNewWindow",

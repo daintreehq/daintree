@@ -100,6 +100,63 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+/** Assertions.json as `plutil -convert json` prints it while a Focus mode is on. */
+function focusAssertions(modeIdentifier: string): string {
+  return JSON.stringify({
+    data: [
+      {
+        storeAssertionRecords: [
+          {
+            assertionUUID: "8C1D0A54-6A43-4C4B-9F57-3D2C1B0A9E11",
+            assertionStartDateTimestamp: 784393200.5,
+            assertionDetails: {
+              assertionDetailsIdentifier: "com.apple.control-center.focus",
+              assertionDetailsModeIdentifier: modeIdentifier,
+              assertionDetailsReason: "user-action",
+            },
+          },
+        ],
+        storeInvalidationRecords: [],
+      },
+    ],
+    header: { timestamp: 784393200.5, version: 2 },
+  });
+}
+
+const ACTIVE = focusAssertions("com.apple.focus.work");
+
+// Ending a Focus drops `storeAssertionRecords` rather than emptying it.
+function inactiveAssertions(invalidations: number): string {
+  return JSON.stringify({
+    data: [
+      {
+        storeInvalidationRecords: Array.from({ length: invalidations }, (_, index) => ({
+          invalidationAssertion: {
+            assertionUUID: `8C1D0A54-6A43-4C4B-9F57-${String(index).padStart(12, "0")}`,
+            assertionStartDateTimestamp: 784393200.5 + index,
+            assertionDetails: {
+              assertionDetailsIdentifier: "com.apple.control-center.focus",
+              assertionDetailsModeIdentifier: "com.apple.focus.work",
+              assertionDetailsReason: "user-action",
+            },
+          },
+          invalidationDate: 784396800.5 + index,
+          invalidationReason: "user-action",
+        })),
+      },
+    ],
+    header: { timestamp: 784393200.5, version: 2 },
+  });
+}
+
+const INACTIVE = inactiveAssertions(1);
+// Invalidation history accumulates, so the probe's output cap must hold it.
+const INACTIVE_LONG_HISTORY = inactiveAssertions(200);
+
+function execError(message: string, extra: Record<string, unknown> = {}): Error {
+  return Object.assign(new Error(message), extra);
+}
+
 /** Completes the oldest in-flight plutil probe and lets its continuation run. */
 async function settleProbe(stdout: string, err: Error | null = null): Promise<void> {
   const callback = childProcessMock.pending.shift();
@@ -131,7 +188,7 @@ describe("OsDndService — macOS", () => {
     setPlatform("darwin");
   });
 
-  it("starts the plutil probe asynchronously and never blocks on execFileSync", () => {
+  it("starts the plutil probe asynchronously, bounded in time and output, never via execFileSync", () => {
     const svc = getOsDndService();
     svc.initialize();
 
@@ -139,10 +196,11 @@ describe("OsDndService — macOS", () => {
     expect(childProcessMock.execFile).toHaveBeenCalledTimes(1);
     const [file, args, options] = childProcessMock.execFile.mock.calls[0]!;
     expect(file).toBe("/usr/bin/plutil");
+    // The whole file, not one key path: a missing key path fails plutil the
+    // same way an unreadable file does, and Focus being off removes the key.
     expect(args).toEqual([
-      "-extract",
-      "data.0.storeAssertionRecords.0.assertionDetailsModeIdentifier",
-      "raw",
+      "-convert",
+      "json",
       "-o",
       "-",
       path.join(os.homedir(), "Library", "DoNotDisturb", "DB", "Assertions.json"),
@@ -156,45 +214,209 @@ describe("OsDndService — macOS", () => {
     expect(encoding).toBe("utf8");
     expect(timeout).toBeGreaterThan(0);
     expect(timeout).toBeLessThanOrEqual(5000);
-    expect(maxBuffer).toBeGreaterThan(0);
+    expect(maxBuffer).toBeGreaterThanOrEqual(Buffer.byteLength(INACTIVE_LONG_HISTORY));
     expect(maxBuffer).toBeLessThanOrEqual(1024 * 1024);
     // Unknown until the probe settles: the sync audio gate treats this as
     // "do not gate".
     expect(svc.getState()).toBeUndefined();
   });
 
-  it("initial probe reads Focus mode identifier from Assertions.json (active → true)", async () => {
-    const svc = await initializeWithProbe("com.apple.donotdisturb.mode.default\n");
+  it.each(["com.apple.donotdisturb.mode.default", "com.apple.focus.work"])(
+    "an assertion naming %s reports Focus on",
+    async (mode) => {
+      const svc = await initializeWithProbe(focusAssertions(mode));
+      expect(svc.getState()).toBe(true);
+      await expect(svc.getStateWhenReady()).resolves.toBe(true);
+    }
+  );
+
+  it.each([
+    ["a store without assertions", {}],
+    ["a store that is not an object", "store"],
+    ["a store whose records are not an array", { storeAssertionRecords: {} }],
+  ])("an active assertion after %s still reports Focus on", async (_case, sibling) => {
+    const active = JSON.parse(ACTIVE) as { data: unknown[] };
+    const svc = await initializeWithProbe(JSON.stringify({ data: [sibling, ...active.data] }));
     expect(svc.getState()).toBe(true);
   });
 
-  it("initial probe with empty plutil output reports DND off", async () => {
-    const svc = await initializeWithProbe("");
-    expect(svc.getState()).toBe(false);
+  it("an active assertion before a store without assertions still reports Focus on", async () => {
+    const active = JSON.parse(ACTIVE) as { data: unknown[] };
+    const svc = await initializeWithProbe(
+      JSON.stringify({ data: [...active.data, {}, { storeAssertionRecords: [] }] })
+    );
+    expect(svc.getState()).toBe(true);
   });
 
-  it("initial probe with whitespace-only plutil output reports DND off", async () => {
-    const svc = await initializeWithProbe("  \n");
-    expect(svc.getState()).toBe(false);
+  it("an active assertion after a malformed record in the same store reports Focus on", async () => {
+    const svc = await initializeWithProbe(
+      JSON.stringify({
+        data: [
+          {
+            storeAssertionRecords: [
+              null,
+              { assertionDetails: null },
+              { assertionDetails: { assertionDetailsModeIdentifier: "com.apple.focus.work" } },
+            ],
+          },
+        ],
+      })
+    );
+    expect(svc.getState()).toBe(true);
   });
 
-  it("initial probe failure (file missing / plutil errors or times out) reports DND off", async () => {
+  it.each([
+    ["the assertion records key is absent", INACTIVE],
+    [
+      "the assertion records are empty",
+      JSON.stringify({ data: [{ storeAssertionRecords: [] }], header: { version: 2 } }),
+    ],
+    [
+      "no store holds assertions",
+      JSON.stringify({ data: [{}, { storeAssertionRecords: [] }], header: { version: 2 } }),
+    ],
+    ["only a long invalidation history remains", INACTIVE_LONG_HISTORY],
+  ])("a readable file where %s reports Focus off", async (_case, stdout) => {
     const svc = getOsDndService();
     svc.initialize();
-    // stdout is ignored on error: a timeout or maxBuffer overflow can leave
-    // partial output behind.
-    await settleProbe("com.apple.focus.work\n", new Error("ENOENT"));
+    const listener = vi.fn();
+    svc.onStateChanged(listener);
+
+    await settleProbe(stdout);
     expect(svc.getState()).toBe(false);
+    await expect(svc.getStateWhenReady()).resolves.toBe(false);
+    expect(listener).toHaveBeenCalledWith(false);
   });
 
-  it("a synchronous execFile throw reports DND off and settles readiness", async () => {
+  it.each([
+    // A non-FDA read of the TCC-protected DB can surface as a missing file.
+    ["plutil cannot open the file", execError("Command failed", { code: 1 })],
+    [
+      "plutil cannot be spawned",
+      execError("spawn /usr/bin/plutil ENOENT", {
+        code: "ENOENT",
+        errno: -2,
+        syscall: "spawn /usr/bin/plutil",
+      }),
+    ],
+    [
+      "plutil times out",
+      execError("Command failed", { killed: true, signal: "SIGTERM", code: null }),
+    ],
+    [
+      "the output overflows maxBuffer",
+      execError("stdout maxBuffer length exceeded", { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }),
+    ],
+  ])("leaves Focus unknown when %s, whatever stdout holds", async (_case, err) => {
+    const svc = getOsDndService();
+    svc.initialize();
+    const listener = vi.fn();
+    svc.onStateChanged(listener);
+
+    // A killed or overflowing probe can leave partial output behind.
+    await settleProbe(ACTIVE, err);
+    expect(svc.getState()).toBeUndefined();
+    await expect(svc.getStateWhenReady()).resolves.toBeUndefined();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["empty output", ""],
+    ["whitespace-only output", "  \n"],
+    ["output that is not JSON", "com.apple.focus.work\n"],
+    ["a null root", "null"],
+    ["a JSON array root", "[]"],
+    ["a root without a data array", JSON.stringify({ header: { version: 2 } })],
+    ["a data value that is not an array", JSON.stringify({ data: {} })],
+    ["an empty data array", JSON.stringify({ data: [] })],
+    ["a store that is not an object", JSON.stringify({ data: ["store"] })],
+    ["a null store", JSON.stringify({ data: [null] })],
+    ["a store that is an array", JSON.stringify({ data: [[]] })],
+    [
+      "assertion records that are not an array",
+      JSON.stringify({ data: [{ storeAssertionRecords: {} }] }),
+    ],
+    ["null assertion records", JSON.stringify({ data: [{ storeAssertionRecords: null }] })],
+    [
+      "a malformed store followed by an empty one",
+      JSON.stringify({ data: [{ storeAssertionRecords: {} }, {}] }),
+    ],
+    ["a null record", JSON.stringify({ data: [{ storeAssertionRecords: [null] }] })],
+    [
+      "a record with null details",
+      JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionDetails: null }] }] }),
+    ],
+    [
+      "a record with a numeric mode identifier",
+      JSON.stringify({
+        data: [
+          { storeAssertionRecords: [{ assertionDetails: { assertionDetailsModeIdentifier: 1 } }] },
+        ],
+      }),
+    ],
+    [
+      "a record whose mode identifier is not under assertionDetails",
+      JSON.stringify({
+        data: [
+          { storeAssertionRecords: [{ assertionDetailsModeIdentifier: "com.apple.focus.work" }] },
+        ],
+      }),
+    ],
+    [
+      "a record with a blank mode identifier",
+      JSON.stringify({
+        data: [
+          {
+            storeAssertionRecords: [{ assertionDetails: { assertionDetailsModeIdentifier: " " } }],
+          },
+        ],
+      }),
+    ],
+  ])("leaves Focus unknown for unreadable data: %s", async (_case, stdout) => {
+    const svc = getOsDndService();
+    svc.initialize();
+    const listener = vi.fn();
+    svc.onStateChanged(listener);
+
+    await settleProbe(stdout);
+    expect(svc.getState()).toBeUndefined();
+    await expect(svc.getStateWhenReady()).resolves.toBeUndefined();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("a synchronous execFile throw leaves Focus unknown and settles readiness", async () => {
     childProcessMock.execFile.mockImplementationOnce(() => {
       throw new Error("spawn EAGAIN");
     });
     const svc = getOsDndService();
     svc.initialize();
-    expect(svc.getState()).toBe(false);
-    await expect(svc.getStateWhenReady()).resolves.toBe(false);
+    expect(svc.getState()).toBeUndefined();
+    await expect(svc.getStateWhenReady()).resolves.toBeUndefined();
+  });
+
+  it("a live transition after an unknown probe sets the state", async () => {
+    const svc = getOsDndService();
+    svc.initialize();
+    await settleProbe(ACTIVE, execError("Command failed", { code: 1 }));
+    expect(svc.getState()).toBeUndefined();
+
+    const listener = vi.fn();
+    svc.onStateChanged(listener);
+    systemPreferencesMock.__fireByName("_NSDoNotDisturbEnabledNotification");
+    expect(svc.getState()).toBe(true);
+    expect(listener).toHaveBeenCalledWith(true);
+  });
+
+  it("an unknown probe result never clears a live notification that landed first", async () => {
+    const svc = getOsDndService();
+    svc.initialize();
+    const ready = svc.getStateWhenReady();
+
+    systemPreferencesMock.__fireByName("_NSDoNotDisturbEnabledNotification");
+    await settleProbe(INACTIVE, execError("Command failed", { killed: true, signal: "SIGTERM" }));
+
+    expect(svc.getState()).toBe(true);
+    await expect(ready).resolves.toBe(true);
   });
 
   it("subscribes to both notifications before launching the probe", () => {
@@ -213,7 +435,7 @@ describe("OsDndService — macOS", () => {
     const listener = vi.fn();
     svc.onStateChanged(listener);
 
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE);
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith(true);
   });
@@ -224,7 +446,7 @@ describe("OsDndService — macOS", () => {
     const first = svc.getStateWhenReady();
     const second = svc.getStateWhenReady();
 
-    await settleProbe("");
+    await settleProbe(INACTIVE);
     await expect(Promise.all([first, second])).resolves.toEqual([false, false]);
     expect(childProcessMock.execFile).toHaveBeenCalledTimes(1);
   });
@@ -241,12 +463,12 @@ describe("OsDndService — macOS", () => {
     await flush();
     expect(resolved).toBe("pending");
 
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE);
     await expect(ready).resolves.toBe(true);
   });
 
   it("getStateWhenReady resolves immediately once the probe has settled", async () => {
-    const svc = await initializeWithProbe("");
+    const svc = await initializeWithProbe(INACTIVE);
     await expect(svc.getStateWhenReady()).resolves.toBe(false);
   });
 
@@ -261,7 +483,7 @@ describe("OsDndService — macOS", () => {
     expect(svc.getState()).toBe(true);
     expect(listener).toHaveBeenCalledWith(true);
 
-    await settleProbe("");
+    await settleProbe(INACTIVE);
     expect(svc.getState()).toBe(true);
     await expect(ready).resolves.toBe(true);
     expect(listener).toHaveBeenCalledTimes(1);
@@ -276,7 +498,7 @@ describe("OsDndService — macOS", () => {
 
     systemPreferencesMock.__fireByName("_NSDoNotDisturbEnabledNotification");
     systemPreferencesMock.__fireByName("_NSDoNotDisturbDisabledNotification");
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE);
 
     expect(svc.getState()).toBe(false);
     await expect(ready).resolves.toBe(false);
@@ -294,7 +516,7 @@ describe("OsDndService — macOS", () => {
 
       expect(systemPreferencesMock.subscribeNotification).toHaveBeenCalledTimes(2);
       expect(childProcessMock.execFile).toHaveBeenCalledTimes(1);
-      await settleProbe("com.apple.focus.work\n");
+      await settleProbe(ACTIVE);
       expect(svc.getState()).toBe(true);
 
       systemPreferencesMock.__fireByName("_NSDoNotDisturbDisabledNotification");
@@ -316,14 +538,14 @@ describe("OsDndService — macOS", () => {
     expect(svc.getState()).toBe(false);
     expect(listener).toHaveBeenCalledWith(false);
 
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE);
     expect(svc.getState()).toBe(false);
     await expect(ready).resolves.toBe(false);
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it("flips state to true on the enabled notification and notifies listeners", async () => {
-    const svc = await initializeWithProbe("");
+    const svc = await initializeWithProbe(INACTIVE);
     expect(svc.getState()).toBe(false);
 
     const listener = vi.fn();
@@ -335,7 +557,7 @@ describe("OsDndService — macOS", () => {
   });
 
   it("flips state to false on the disabled notification", async () => {
-    const svc = await initializeWithProbe("com.apple.focus.work\n");
+    const svc = await initializeWithProbe(ACTIVE);
     expect(svc.getState()).toBe(true);
 
     const listener = vi.fn();
@@ -347,7 +569,7 @@ describe("OsDndService — macOS", () => {
   });
 
   it("does not notify listeners on a no-op transition (already in the target state)", async () => {
-    const svc = await initializeWithProbe("");
+    const svc = await initializeWithProbe(INACTIVE);
 
     const listener = vi.fn();
     svc.onStateChanged(listener);
@@ -368,7 +590,7 @@ describe("OsDndService — macOS", () => {
   });
 
   it("dispose unsubscribes every notification and clears state", async () => {
-    const svc = await initializeWithProbe("");
+    const svc = await initializeWithProbe(INACTIVE);
     const subscribedIds = systemPreferencesMock.__returnedIds();
     expect(subscribedIds).toHaveLength(2);
     svc.dispose();
@@ -380,13 +602,13 @@ describe("OsDndService — macOS", () => {
   });
 
   it("dispose detaches listeners from the next lifecycle", async () => {
-    const svc = await initializeWithProbe("");
+    const svc = await initializeWithProbe(INACTIVE);
     const staleListener = vi.fn();
     svc.onStateChanged(staleListener);
     svc.dispose();
 
     svc.initialize();
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE);
     systemPreferencesMock.__fireByName("_NSDoNotDisturbDisabledNotification");
     expect(staleListener).not.toHaveBeenCalled();
   });
@@ -406,8 +628,8 @@ describe("OsDndService — macOS", () => {
     expect(svc.getState()).toBeUndefined();
     expect(listener).not.toHaveBeenCalled();
 
-    await settleProbe(""); // the disposed lifecycle's probe: discarded
-    await settleProbe(""); // the fresh probe: accepted
+    await settleProbe(INACTIVE); // the disposed lifecycle's probe: discarded
+    await settleProbe(INACTIVE); // the fresh probe: accepted
     expect(svc.getState()).toBe(false);
     expect(listener).toHaveBeenCalledWith(false);
   });
@@ -440,7 +662,7 @@ describe("OsDndService — macOS", () => {
     svc.initialize();
     svc.dispose();
 
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE);
     expect(svc.getState()).toBeUndefined();
   });
 
@@ -455,11 +677,11 @@ describe("OsDndService — macOS", () => {
     const ready = svc.getStateWhenReady();
 
     // The first (stale) probe settles active; the fresh one reports off.
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE);
     expect(svc.getState()).toBeUndefined();
     expect(listener).not.toHaveBeenCalled();
 
-    await settleProbe("");
+    await settleProbe(INACTIVE);
     expect(svc.getState()).toBe(false);
     await expect(ready).resolves.toBe(false);
     expect(listener).toHaveBeenCalledTimes(1);
@@ -467,7 +689,7 @@ describe("OsDndService — macOS", () => {
   });
 
   it("onStateChanged returns an unsubscribe that detaches the listener", async () => {
-    const svc = await initializeWithProbe("");
+    const svc = await initializeWithProbe(INACTIVE);
 
     const listener = vi.fn();
     const off = svc.onStateChanged(listener);
@@ -478,14 +700,14 @@ describe("OsDndService — macOS", () => {
   });
 
   it("dispose followed by initialize re-probes and re-subscribes", async () => {
-    const svc = await initializeWithProbe("");
+    const svc = await initializeWithProbe(INACTIVE);
     const firstSubCount = systemPreferencesMock.subscribeNotification.mock.calls.length;
 
     svc.dispose();
     expect(svc.getState()).toBeUndefined();
 
     svc.initialize();
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE);
     expect(svc.getState()).toBe(true);
     expect(systemPreferencesMock.subscribeNotification.mock.calls.length).toBe(firstSubCount * 2);
   });

@@ -16,7 +16,13 @@ import {
 } from "@/store/decisionsAnswerStore";
 import { useReviewedImages } from "@/store/decisionsImageReviewStore";
 import type { DecisionQuestionContent } from "@shared/types/decisionsQuestion";
-import { canStartAnswer, followAnswer, isCommitted, sendAnswer } from "./decisionAnswerSend";
+import {
+  canStartAnswer,
+  followAnswer,
+  isCommitted,
+  isDeclineCommitted,
+  sendAnswer,
+} from "./decisionAnswerSend";
 import { attemptText, closedText, holdText, progressText } from "./decisionAnswerText";
 import {
   chosenOption,
@@ -64,7 +70,8 @@ function useExpiryClock(expiresAt: string | null): number {
  * - `form`: it takes an answer, and none from here is being sent or taken;
  * - `progress`: one from here is being sent or was taken;
  * - `closed`: it stopped taking answers while one was being written;
- * - `none`: nothing to show, so the question's options read as they always did.
+ * - `none`: nothing to show, so the question's options read as they always did,
+ *   as they do while a dismissal from here is under way or was taken.
  */
 export type AnswerComposerMode = "form" | "progress" | "closed" | "none";
 
@@ -84,6 +91,8 @@ export function answerComposerMode(
   ) {
     return "progress";
   }
+  // Dismissed from here, or being dismissed: nothing to answer unless that falls through.
+  if (isDeclineCommitted(record)) return "none";
   if (isAnswerable(question, nowMs)) return "form";
   const writing = record.draft !== null || record.hold !== null || submission !== null;
   return writing ? "closed" : "none";

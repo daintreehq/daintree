@@ -15,23 +15,28 @@ vi.mock("../GitHubAuth.js", () => ({
     globalThis.fetch(input, init),
 }));
 
-vi.mock("../GitHubRateLimitService.js", () => ({
-  gitHubRateLimitService: {
+vi.mock("../GitHubRateLimitService.js", () => {
+  const gitHubRateLimitService = {
     updateFromGraphQL: vi.fn(),
     shouldBlockRequest: vi.fn(() => ({ blocked: false, reason: null })),
-  },
-  GitHubRateLimitError: class GitHubRateLimitError extends Error {
-    constructor(message: string) {
-      super(message);
-      this.name = "GitHubRateLimitError";
-    }
-  },
-}));
+  };
+  return {
+    gitHubRateLimitService,
+    rateLimitServiceForHost: () => gitHubRateLimitService,
+    releaseRateLimitServiceForHost: () => {},
+    GitHubRateLimitError: class GitHubRateLimitError extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = "GitHubRateLimitError";
+      }
+    },
+  };
+});
 
 vi.mock("../GitHubRepoContext.js", () => ({
   withRepoContextRetry: vi.fn(
-    (_cwd: string, fn: (ctx: { owner: string; repo: string }) => unknown) =>
-      fn({ owner: "testowner", repo: "testrepo" })
+    (_cwd: string, fn: (ctx: { host: string; owner: string; repo: string }) => unknown) =>
+      fn({ host: "github.com", owner: "testowner", repo: "testrepo" })
   ),
 }));
 

@@ -47,7 +47,12 @@ function result(
 }
 
 async function renderRow(
-  props: { connected?: boolean; idle?: HostIdleObservation; sampledAt?: number | null } = {}
+  props: {
+    connected?: boolean;
+    idle?: HostIdleObservation;
+    sampledAt?: number | null;
+    selfStopProblem?: string | null;
+  } = {}
 ) {
   const tree = (connected: boolean) => (
     <SettingsGroup>
@@ -57,6 +62,7 @@ async function renderRow(
         connected={connected}
         idle={props.idle}
         sampledAt={props.sampledAt ?? null}
+        selfStopProblem={props.selfStopProblem}
       />
     </SettingsGroup>
   );
@@ -151,6 +157,36 @@ describe("HostIdleTimeRow (#17357)", () => {
     expect(document.body.textContent).toContain(
       `Idle since ${clockTime(new Date(lastWorkAt).toISOString())}. Its idle time ends ${clockTime(new Date(lastWorkAt + 30 * 60_000).toISOString())}.`
     );
+  });
+
+  it("says why the machine can't stop itself, until its host says it holds a key (#17361)", async () => {
+    api.read.mockResolvedValue(snapshot(30));
+    const lastWorkAt = Date.UTC(2026, 10, 17, 14, 2);
+    const idle = {
+      idleAfterMinutes: 30,
+      lastWorkAt,
+      busy: false,
+      idleEndsAt: lastWorkAt + 30 * 60_000,
+    };
+    const problem = "This machine can't stop itself when idle: the key isn't allowed.";
+    await renderRow({ idle, sampledAt: lastWorkAt + 60_000, selfStopProblem: problem });
+    expect(document.body.textContent).toContain(
+      `Its idle time ends ${clockTime(new Date(lastWorkAt + 30 * 60_000).toISOString())}. ${problem}`
+    );
+
+    cleanup();
+    await renderRow({
+      idle: { ...idle, stopsWhenIdle: true },
+      sampledAt: lastWorkAt + 60_000,
+      selfStopProblem: problem,
+    });
+    expect(document.body.textContent).toContain("if it stays idle.");
+    expect(document.body.textContent).not.toContain(problem);
+
+    // Opened while disconnected: nothing read from the host, the reason still said.
+    cleanup();
+    await renderRow({ connected: false, selfStopProblem: problem });
+    expect(document.body.textContent).toContain(`Connect to see or change it. ${problem}`);
   });
 
   it("names the update a host from before the setting needs, from the refusal such a host gives", async () => {

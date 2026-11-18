@@ -4,6 +4,12 @@ import { app, BrowserWindow } from "electron";
 import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
 import { broadcastToRenderer, sendToOneVisibleRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { store } from "../store.js";
+import {
+  CUSTOM_SOUND_MAX_SECONDS,
+  isCustomSoundId,
+} from "../../shared/types/ipc/notificationSounds.js";
+import { isPlayableCustomSound, resolveCustomSoundPath } from "./customNotificationSounds.js";
 
 export function getSoundsDir(): string {
   return app.isPackaged
@@ -41,10 +47,27 @@ export type SoundId = keyof typeof SOUND_FILES;
 /** Set of all valid base sound filenames (for input validation). */
 export const ALLOWED_SOUND_FILES = new Set<string>(Object.values(SOUND_FILES));
 
+/**
+ * Every sound a setting may name: the bundled files, plus imports registered on
+ * this device whose file is still there. Live, so an import is playable at once.
+ */
+export const PLAYABLE_SOUND_FILES: { has(value: string): boolean } = {
+  has: (value) => ALLOWED_SOUND_FILES.has(value) || isPlayableCustomSound(value),
+};
+
+/** The Notifications volume setting as linear gain; absent or malformed is full volume. */
+function settingsVolume(): number {
+  const volume: unknown = store.get("notificationSettings")?.soundVolume;
+  if (typeof volume !== "number" || !Number.isFinite(volume)) return 1;
+  return Math.max(0, Math.min(1, volume));
+}
+
 interface ActiveVoice {
   handle: SoundHandle;
   priority: number;
   startedAt: number;
+  /** How long the OS player may still be sounding it; an import can run to the 3 s cap. */
+  durationMs: number;
 }
 
 const DEBOUNCE_MS = 150;
@@ -53,6 +76,7 @@ const DECAY_FACTOR = 0.7;
 const VOLUME_FLOOR = 0.1;
 const MAX_VOICES = 3;
 const MAX_SOUND_DURATION_MS = 600;
+const MAX_CUSTOM_SOUND_DURATION_MS = CUSTOM_SOUND_MAX_SECONDS * 1000;
 const CHORD_WINDOW_MS = 2000;
 
 const PRIORITY_MAP: Record<string, number> = {
@@ -88,6 +112,9 @@ class SoundService {
   private completionBurstWindowStart = 0;
 
   play(id: SoundId, variant?: number): void {
+    // Muted plays leave no trace in the chord, debounce or decay state, so the
+    // first sound after unmuting plays as if the muted ones never happened.
+    if (settingsVolume() <= 0) return;
     const now = Date.now();
     const isChordable = id === "complete" || id === "chime";
 
@@ -104,10 +131,15 @@ class SoundService {
   }
 
   playFile(soundFile: string): void {
+    // Checked before the throttle, so a muted or unplayable file can't swallow the
+    // next audible one. Settings are validated on the way in, but a project's save
+    // reaches here before its next decode.
+    if (settingsVolume() <= 0 || !PLAYABLE_SOUND_FILES.has(soundFile)) return;
     const now = Date.now();
     if (now - this.lastPlayFileAt < SOUND_THROTTLE_MS) return;
     this.lastPlayFileAt = now;
-    const resolved = this.pickVariant(soundFile);
+    // An import has no variants, and its name isn't a bundled file to look for siblings of.
+    const resolved = isCustomSoundId(soundFile) ? soundFile : this.pickVariant(soundFile);
     this.playDampened(resolved, {
       debounceKey: soundFile,
       priority: this.priorityForFile(soundFile),
@@ -119,6 +151,7 @@ class SoundService {
   }
 
   previewFile(soundFile: string): void {
+    if (!PLAYABLE_SOUND_FILES.has(soundFile)) return;
     this.playBypassed(soundFile);
   }
 
@@ -145,6 +178,7 @@ class SoundService {
   }
 
   playPulse(soundFile: string, detuneCents?: number): void {
+    if (!PLAYABLE_SOUND_FILES.has(soundFile)) return;
     this.playBypassed(soundFile, detuneCents);
   }
 
@@ -164,6 +198,16 @@ class SoundService {
   // -- Private: dampening --
 
   private playBypassed(soundFile: string, detune?: number): void {
+    // Previews and the pulse skip the decay but not the volume setting, so a
+    // preview plays what a notification will.
+    const volume = settingsVolume();
+    // Muted: some OS players have no volume control, so play nothing at all.
+    if (volume <= 0) return;
+    // An import that is no longer registered or whose file is gone plays nothing,
+    // even from a renderer that still holds it decoded.
+    const customPath = isCustomSoundId(soundFile) ? resolveCustomSoundPath(soundFile) : undefined;
+    if (customPath === null) return;
+
     // Try Web Audio via renderer first — renderer fetches via daintree-file://
     // and falls through gracefully on a miss, so no need to stat here.
     // One renderer per machine: every app view owns an AudioContext, so a
@@ -171,7 +215,7 @@ class SoundService {
     // cached views wakes frozen renderers — Chromium won't keep an audible page
     // frozen (#12177).
     if (BrowserWindow.getAllWindows().length > 0) {
-      const payload: { soundFile: string; detune?: number } = { soundFile };
+      const payload: { soundFile: string; detune?: number; volume: number } = { soundFile, volume };
       if (detune !== undefined) payload.detune = detune;
       if (sendToOneVisibleRenderer(CHANNELS.SOUND_TRIGGER, payload)) return;
     }
@@ -179,10 +223,15 @@ class SoundService {
     // Fallback to OS process spawning when no renderer took the trigger (no window,
     // or a window mid-teardown/crash with no eligible renderer)
     // (OS playback doesn't support detune — cadence variation still helps)
-    const soundPath = path.join(getSoundsDir(), soundFile);
+    const soundPath = customPath ?? path.join(getSoundsDir(), soundFile);
     if (!existsSync(soundPath)) return;
-    const handle = playSound(soundPath);
-    this.activeVoices.push({ handle, priority: 0, startedAt: Date.now() });
+    const handle = playSound(soundPath, volume);
+    this.activeVoices.push({
+      handle,
+      priority: 0,
+      startedAt: Date.now(),
+      durationMs: customPath ? MAX_CUSTOM_SOUND_DURATION_MS : MAX_SOUND_DURATION_MS,
+    });
   }
 
   private playDampened(
@@ -197,8 +246,12 @@ class SoundService {
     if (now - lastPlayed < DEBOUNCE_MS) return;
     this.lastPlayedAt.set(key, now);
 
-    // Compute volume via exponential decay
-    const effectiveVolume = opts.volume ?? this.computeVolume(now);
+    // The repeat decay (or a fixed level) scaled by the volume setting
+    const effectiveVolume = (opts.volume ?? this.computeVolume(now)) * settingsVolume();
+    // Muted: some OS players have no volume control, so play nothing at all.
+    if (effectiveVolume <= 0) return;
+    const customPath = isCustomSoundId(soundFile) ? resolveCustomSoundPath(soundFile) : undefined;
+    if (customPath === null) return;
 
     // Try Web Audio via renderer first — renderer fetches via daintree-file://
     // and falls through gracefully on a miss, so no need to stat here.
@@ -213,14 +266,19 @@ class SoundService {
 
     // Fallback to OS process spawning when no renderer took the trigger (no window,
     // or a window mid-teardown/crash with no eligible renderer)
-    const soundPath = path.join(getSoundsDir(), soundFile);
+    const soundPath = customPath ?? path.join(getSoundsDir(), soundFile);
     if (!existsSync(soundPath)) return;
 
     this.pruneStaleVoices(now);
     if (!this.acquireVoiceSlot(opts.priority)) return;
 
     const handle = playSound(soundPath, effectiveVolume);
-    this.activeVoices.push({ handle, priority: opts.priority, startedAt: now });
+    this.activeVoices.push({
+      handle,
+      priority: opts.priority,
+      startedAt: now,
+      durationMs: customPath ? MAX_CUSTOM_SOUND_DURATION_MS : MAX_SOUND_DURATION_MS,
+    });
   }
 
   private computeVolume(now: number): number {
@@ -234,7 +292,7 @@ class SoundService {
   }
 
   private pruneStaleVoices(now: number): void {
-    this.activeVoices = this.activeVoices.filter((v) => now - v.startedAt < MAX_SOUND_DURATION_MS);
+    this.activeVoices = this.activeVoices.filter((v) => now - v.startedAt < v.durationMs);
   }
 
   private acquireVoiceSlot(priority: number): boolean {

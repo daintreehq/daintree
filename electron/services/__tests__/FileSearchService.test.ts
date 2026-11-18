@@ -195,6 +195,53 @@ describe("FileSearchService", () => {
     expect(result).toEqual(["a.ts", "src/", "README.md"]);
   });
 
+  describe("files only", () => {
+    it("fills the limit with files when short folder names would crowd them out", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "a/x/deep-file.ts\0b/y/deep-file.ts\0top-level-file.ts\0");
+      const service = await createService();
+
+      expect(await service.search({ cwd: dir, query: "", limit: 3 })).toEqual(["a/", "b/", "a/x/"]);
+      expect(await service.search({ cwd: dir, query: "", limit: 3, filesOnly: true })).toEqual([
+        "a/x/deep-file.ts",
+        "b/y/deep-file.ts",
+        "top-level-file.ts",
+      ]);
+    });
+
+    it("fills an empty query's page with files past more than a page of folders", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      const listing = Array.from(
+        { length: 120 },
+        (_, i) => `d${String(i).padStart(3, "0")}/a-much-longer-file-name.ts`
+      );
+      gitRepo(dir, `${listing.join("\0")}\0`);
+      const service = await createService();
+
+      const page = await service.search({ cwd: dir, query: "", limit: 5, filesOnly: true });
+      expect(page).toEqual(listing.slice(0, 5));
+    });
+
+    it("leaves folders out of a typed search, and the next search still finds them", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "docs/docs-index.md\0docs/guide/docs-guide.md\0");
+      const service = await createService();
+
+      // A folder would take the one slot without filesOnly.
+      expect(await service.search({ cwd: dir, query: "doc", limit: 1 })).toEqual(["docs/"]);
+      service.invalidate(dir);
+      const files = await service.search({ cwd: dir, query: "doc", limit: 1, filesOnly: true });
+      expect(files).toHaveLength(1);
+      expect(files[0]?.endsWith("/")).toBe(false);
+      // "docs" narrows from the files-only search's candidates.
+      const all = await service.search({ cwd: dir, query: "docs", limit: 10 });
+      expect(all).toContain("docs/");
+    });
+  });
+
   describe("empty-query ranking", () => {
     const collator = new Intl.Collator();
 
@@ -697,9 +744,8 @@ describe("FileSearchService", () => {
     });
 
     it("fences a descendant load in flight when its ancestor is invalidated", async () => {
-      // The root is always in the invalidation set, so a root-scoped test passes
-      // even with the in-flight descendant loop deleted. Only a nested cwd
-      // exercises it.
+      // The in-flight scan has to match a cwd beneath the invalidated root, not
+      // only the root itself.
       const dir = makeTempDir();
       tempDirs.push(dir);
       const nested = path.join(dir, "src");
@@ -721,9 +767,127 @@ describe("FileSearchService", () => {
       expect(afterFence).toEqual(["fresh.ts"]);
     });
 
+    it("retains nothing for roots it was told about but never searched", async () => {
+      // The watcher reports every worktree it sees change, searched or not, and
+      // a long-lived main process sees many come and go.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const pending = deferGitListing();
+
+      const service = await createService();
+      const baseline = service.getRetainedKeyCount();
+      const inFlight = service.search({ cwd: dir, query: "", limit: 5 });
+      await pending.reached;
+
+      const worktrees = Array.from({ length: 200 }, (_, i) =>
+        path.resolve(os.tmpdir(), `daintree-retired-worktree-${i}`)
+      );
+      const cwds = Array.from({ length: 200 }, (_, i) =>
+        path.resolve(os.tmpdir(), `daintree-retired-cwd-${i}`)
+      );
+      const retired = new Set([...worktrees, ...cwds]);
+
+      // Record every Map or Set the invalidations write a retired path into, so
+      // the check below covers structures `getRetainedKeyCount` doesn't know of.
+      const holders: Array<Map<unknown, unknown> | Set<unknown>> = [];
+      const mapSet = Map.prototype.set;
+      const setAdd = Set.prototype.add;
+      Map.prototype.set = function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+        if (typeof key === "string" && retired.has(key)) holders.push(this);
+        return mapSet.call(this, key, value);
+      } as typeof mapSet;
+      Set.prototype.add = function (this: Set<unknown>, value: unknown) {
+        if (typeof value === "string" && retired.has(value)) holders.push(this);
+        return setAdd.call(this, value);
+      } as typeof setAdd;
+      try {
+        for (let i = 0; i < worktrees.length; i++) {
+          service.invalidateUnder(worktrees[i]);
+          service.invalidate(cwds[i]);
+        }
+      } finally {
+        Map.prototype.set = mapSet;
+        Set.prototype.add = setAdd;
+      }
+
+      service.invalidateUnder(dir);
+      pending.release("stale.ts\0");
+      await inFlight;
+      service.sweep();
+
+      // A structure the service keeps collects the paths of many calls; a call's
+      // own scratch set holds at most its own path and is garbage once it
+      // returns, though `holders` keeps it reachable here.
+      const heldPerHolder = [...new Set(holders)].map(
+        (holder) => [...retired].filter((key) => holder.has(key)).length
+      );
+      expect(heldPerHolder.filter((held) => held > 1)).toEqual([]);
+      expect(service.getRetainedKeyCount()).toBe(baseline);
+    });
+
+    it("keeps a newer index when an invalidated load settles after it", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const first = deferGitListing();
+
+      const service = await createService();
+      const stale = service.search({ cwd: dir, query: "", limit: 5 });
+      await first.reached;
+      service.invalidateUnder(dir);
+
+      gitClientMock.raw.mockResolvedValue("fresh.ts\0");
+      await expect(service.search({ cwd: dir, query: "", limit: 5 })).resolves.toEqual([
+        "fresh.ts",
+      ]);
+
+      first.release("stale.ts\0");
+      await stale;
+
+      await expect(service.search({ cwd: dir, query: "", limit: 5 })).resolves.toEqual([
+        "fresh.ts",
+      ]);
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(2);
+      expect(service.getRetainedKeyCount()).toBe(1);
+    });
+
+    it("keeps a newer load's index when an invalidated load settles before it", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const first = deferGitListing();
+
+      const service = await createService();
+      const stale = service.search({ cwd: dir, query: "", limit: 5 });
+      await first.reached;
+      service.invalidateUnder(dir);
+
+      const second = deferGitListing();
+      const fresh = service.search({ cwd: dir, query: "", limit: 5 });
+      await second.reached;
+      first.release("stale.ts\0");
+      await stale;
+      // Checked here, not only at the end: the newer load would paper over a
+      // stale commit by overwriting it when it lands. The one retained key is
+      // the newer load's own slot, which the stale one must not have taken.
+      expect(service.getCacheStats().size).toBe(0);
+      expect(service.getRetainedKeyCount()).toBe(1);
+      second.release("fresh.ts\0");
+      await expect(fresh).resolves.toEqual(["fresh.ts"]);
+
+      await expect(service.search({ cwd: dir, query: "", limit: 5 })).resolves.toEqual([
+        "fresh.ts",
+      ]);
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(2);
+    });
+
     it("fences a load still settling when dispose runs", async () => {
-      // Disposal that only forgot the in-flight entry would let the load's
-      // completion reseed the cache — and rearm the sweep — after teardown.
+      // A load that completes after teardown must not reseed the cache — and
+      // rearm the sweep — for a service that has been disposed.
       const dir = makeTempDir();
       tempDirs.push(dir);
       gitClientMock.checkIsRepo.mockResolvedValue(true);

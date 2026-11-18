@@ -41,6 +41,13 @@ const soundServiceMock = vi.hoisted(() => ({
 const soundModuleMock = vi.hoisted(() => ({
   soundService: soundServiceMock,
   ALLOWED_SOUND_FILES: new Set(["completed.mp3", "waiting.mp3", "escalation.mp3"]),
+  // Imports are playable too, though never in the bundled set.
+  PLAYABLE_SOUND_FILES: new Set([
+    "completed.mp3",
+    "waiting.mp3",
+    "escalation.mp3",
+    "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f",
+  ]),
   SOUND_FILES: { click: "click.mp3", error: "error.mp3" },
   getSoundsDir: vi.fn(() => "/sounds"),
 }));
@@ -59,6 +66,7 @@ import { registerNotificationHandlers, setNotificationHostRelay } from "../notif
 import { getIpcDispatcher } from "../../dispatcher.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
+import { onNotificationSettingsWritten } from "../../../utils/notificationSettingsPatch.js";
 
 function getHandler(channel: string): InvokeHandler {
   const fn = ipcHandlers.get(channel);
@@ -140,6 +148,24 @@ describe("notifications IPC adversarial", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
+  it("settingsSet tells the settings' followers after a write, and not when nothing was written (#17240)", async () => {
+    const heard = vi.fn(() => storeMock.set.mock.calls.length);
+    const off = onNotificationSettingsWritten(heard);
+    try {
+      await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), {
+        completedSoundFile: "../../secret.wav",
+      });
+      expect(heard).not.toHaveBeenCalled();
+
+      await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), { enabled: false });
+      // Heard once the write is in the store, so a follower reads the new value.
+      expect(heard).toHaveBeenCalledTimes(1);
+      expect(heard.mock.results[0]!.value).toBe(1);
+    } finally {
+      off();
+    }
+  });
+
   it("settingsSet accepts allowed sound file names", async () => {
     await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), {
       completedSoundFile: "waiting.mp3",
@@ -149,6 +175,18 @@ describe("notifications IPC adversarial", () => {
       ...defaultSettings,
       completedSoundFile: "waiting.mp3",
     });
+  });
+
+  it("settingsSet and preview accept an import this device has, not just bundled files", async () => {
+    const id = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";
+    await getHandler(CHANNELS.NOTIFICATION_SETTINGS_SET)(fakeEvent(), { waitingSoundFile: id });
+    await getHandler(CHANNELS.NOTIFICATION_PLAY_SOUND)(fakeEvent(), id);
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("notificationSettings", {
+      ...defaultSettings,
+      waitingSoundFile: id,
+    });
+    expect(soundServiceMock.previewFile).toHaveBeenCalledWith(id);
   });
 
   it("settingsSet writes a multi-field patch once, keeping untouched fields and dropping rejected ones (#17026)", async () => {
@@ -341,13 +379,99 @@ describe("notifications IPC adversarial", () => {
     it("attributes a badge update to the sending renderer", () => {
       getListener(CHANNELS.NOTIFICATION_UPDATE)(
         fakeEvent(createSender(42)) as Electron.IpcMainEvent,
-        { waitingCount: 3 }
+        { waitingPanelIds: ["t-1", "t-2", "t-3"] }
       );
 
       expect(notificationServiceMock.updateNotifications).toHaveBeenCalledWith(42, {
-        waitingCount: 3,
+        waitingPanelIds: ["t-1", "t-2", "t-3"],
       });
     });
+
+    it("takes each waiting pane once and drops anything that isn't a panel id", () => {
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(
+        fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+        { waitingPanelIds: ["t-1", 7, "", null, "t-1", "t-2"] }
+      );
+
+      expect(notificationServiceMock.updateNotifications).toHaveBeenCalledWith(42, {
+        waitingPanelIds: ["t-1", "t-2"],
+      });
+    });
+
+    it("keeps every pane of a large report whole", () => {
+      const ids = Array.from({ length: 5000 }, (_, i) => `t-${i}`);
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(
+        fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+        { waitingPanelIds: ids }
+      );
+
+      const [, state] = notificationServiceMock.updateNotifications.mock.calls[0]!;
+      expect(state.waitingPanelIds).toEqual(ids);
+    });
+
+    it("bounds what a runaway report makes it read, junk included", () => {
+      const junk = Array.from({ length: 20_000 }, () => 0);
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(
+        fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+        { waitingPanelIds: [...junk, "t-late"] }
+      );
+
+      expect(notificationServiceMock.updateNotifications).toHaveBeenCalledWith(42, {
+        waitingPanelIds: [],
+      });
+    });
+
+    it("drops an id longer than any panel's", () => {
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(
+        fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+        { waitingPanelIds: ["t-1", "x".repeat(5000)] }
+      );
+
+      expect(notificationServiceMock.updateNotifications).toHaveBeenCalledWith(42, {
+        waitingPanelIds: ["t-1"],
+      });
+    });
+
+    it("carries a report marked membership-only, and nothing else that claims it", () => {
+      const event = fakeEvent(createSender(42)) as Electron.IpcMainEvent;
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, {
+        waitingPanelIds: ["t-2"],
+        membershipOnly: true,
+      });
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, {
+        waitingPanelIds: ["t-3"],
+        membershipOnly: "yes",
+      });
+
+      expect(notificationServiceMock.updateNotifications.mock.calls).toEqual([
+        [42, { waitingPanelIds: ["t-2"], membershipOnly: true }],
+        [42, { waitingPanelIds: ["t-3"] }],
+      ]);
+    });
+
+    it("keeps a view's last report through a malformed one, and clears it on an empty one", () => {
+      const event = fakeEvent(createSender(42)) as Electron.IpcMainEvent;
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingPanelIds: ["t-1"] });
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingCount: 0 });
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingPanelIds: [] });
+
+      expect(notificationServiceMock.updateNotifications.mock.calls).toEqual([
+        [42, { waitingPanelIds: ["t-1"] }],
+        [42, { waitingPanelIds: [] }],
+      ]);
+    });
+
+    it.each([null, 3, "t-1", {}, { waitingCount: 3 }, { waitingPanelIds: "t-1" }])(
+      "ignores a badge update that names no panes: %j",
+      (payload) => {
+        getListener(CHANNELS.NOTIFICATION_UPDATE)(
+          fakeEvent(createSender(42)) as Electron.IpcMainEvent,
+          payload
+        );
+
+        expect(notificationServiceMock.updateNotifications).not.toHaveBeenCalled();
+      }
+    );
 
     it("attributes a watch notification to the sending renderer", () => {
       getListener(CHANNELS.NOTIFICATION_SHOW_WATCH)(
@@ -386,7 +510,7 @@ describe("notifications IPC adversarial", () => {
     it("purges an owner from both services when its renderer is destroyed", async () => {
       const sender = createSender(42);
       getListener(CHANNELS.NOTIFICATION_UPDATE)(fakeEvent(sender) as Electron.IpcMainEvent, {
-        waitingCount: 3,
+        waitingPanelIds: ["t-1"],
       });
 
       sender.destroy();
@@ -400,8 +524,8 @@ describe("notifications IPC adversarial", () => {
       const sender = createSender(42);
       const event = fakeEvent(sender) as Electron.IpcMainEvent;
 
-      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingCount: 1 });
-      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingCount: 2 });
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingPanelIds: ["t-1"] });
+      getListener(CHANNELS.NOTIFICATION_UPDATE)(event, { waitingPanelIds: ["t-1", "t-2"] });
       getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED)(event, ["term-1"]);
 
       expect(sender.once).toHaveBeenCalledTimes(1);
@@ -416,7 +540,7 @@ describe("notifications IPC adversarial", () => {
 
       getListener(CHANNELS.NOTIFICATION_UPDATE)(
         fakeEvent(createSender(42)) as Electron.IpcMainEvent,
-        { waitingCount: 3 }
+        { waitingPanelIds: ["t-1"] }
       );
 
       closeWindow();

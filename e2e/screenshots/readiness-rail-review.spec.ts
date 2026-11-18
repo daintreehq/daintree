@@ -161,6 +161,7 @@ function status(over: Partial<StagingStatus> = {}): StagingStatus {
     pushDestination: branch ? { remote: "origin", branch } : null,
     pullSource: branch ? { remote: "origin", branch } : null,
     repoState: "CLEAN",
+    repoOperationId: null,
     rebaseStep: null,
     rebaseTotalSteps: null,
     rebaseSequence: null,

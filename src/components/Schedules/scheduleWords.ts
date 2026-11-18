@@ -9,14 +9,32 @@ import type {
   ScheduleOverlapPolicy,
 } from "@shared/types/scheduledRuns";
 
+export const WORKTREE_UNCONFIRMED_LABEL = "Worktree unconfirmed";
+export const WORKTREE_MISSING_LABEL = "Missing worktree";
+
+/**
+ * A fixed worktree target the listed choices don't name. Called missing only
+ * once the project's worktrees are known (`worktreeIds` non-null): before that
+ * the list is empty, still loading or out of date, so the target stays
+ * unconfirmed. A known id with no choice of its own is the main checkout.
+ */
+export function unlistedWorktreeLabel(
+  worktreeId: string,
+  worktreeIds: ReadonlySet<string> | null
+): string {
+  if (worktreeIds === null) return WORKTREE_UNCONFIRMED_LABEL;
+  return worktreeIds.has(worktreeId) ? "Main checkout" : WORKTREE_MISSING_LABEL;
+}
+
 /** Where a schedule's runs start, in words; null for the main checkout. */
 export function scheduleWorktreeLabel(
   launch: Pick<ScheduleLaunch, "worktreeId" | "newWorktree">,
-  labels: ReadonlyMap<string, string>
+  labels: ReadonlyMap<string, string>,
+  worktreeIds: ReadonlySet<string> | null
 ): string | null {
   if (launch.newWorktree) return `New worktree from ${launch.newWorktree.baseBranch}`;
   if (launch.worktreeId === null) return null;
-  return labels.get(launch.worktreeId) ?? "Missing worktree";
+  return labels.get(launch.worktreeId) ?? unlistedWorktreeLabel(launch.worktreeId, worktreeIds);
 }
 
 /** The cadence in words, or null when it has no short reading and the expression has to speak for itself. */

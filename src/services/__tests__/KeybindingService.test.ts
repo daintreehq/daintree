@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import {
   DEFAULT_KEYBINDINGS,
   KeybindingService,
@@ -301,23 +302,6 @@ describe("KeybindingService", () => {
     expect(match?.actionId).toBe("terminal.close");
   });
 
-  it("resolves Cmd+W to portal.closeTab (priority 20) over terminal.close (priority 10) in portal scope", () => {
-    setPlatform("MacIntel");
-
-    const service = new KeybindingService();
-    service.setScope("portal");
-
-    const event = createKeyboardEvent({
-      key: "w",
-      code: "KeyW",
-      metaKey: true,
-    });
-
-    const match = service.findMatchingAction(event);
-    expect(match?.actionId).toBe("portal.closeTab");
-    expect(match?.priority).toBe(20);
-  });
-
   it("resolves Cmd+K Cmd+W chord to terminal.closeAll, not terminal.close", () => {
     setPlatform("MacIntel");
 
@@ -370,25 +354,27 @@ describe("KeybindingService", () => {
   });
 
   describe("findConflicts scope filtering and chord shadowing", () => {
-    // Default `portal.closeTab` is bound to Cmd+W in "portal" scope.
-    // `worktreeGrid` and `portal` scopes are disjoint, so a grid-scoped Cmd+W
-    // candidate must not collide with `portal.closeTab` (it still collides
-    // with the global `terminal.close`, which fires everywhere).
+    // Default `devPreview.reloadPreview` is bound to Cmd+R in "dev-preview"
+    // scope. `worktreeGrid` and `dev-preview` scopes are disjoint, so a
+    // grid-scoped Cmd+R candidate must not collide with it, while a grid-scoped
+    // Cmd+W still collides with the global `terminal.close`, which fires
+    // everywhere.
     it("does not flag scope-disjoint bindings as conflicts", () => {
       const service = new KeybindingService();
 
-      const conflicts = service.findConflicts("Cmd+W", undefined, "worktreeGrid");
-      expect(conflicts.some((c) => c.actionId === "portal.closeTab")).toBe(false);
-      expect(conflicts.some((c) => c.actionId === "terminal.close")).toBe(true);
+      const disjoint = service.findConflicts("Cmd+R", undefined, "worktreeGrid");
+      expect(disjoint.some((c) => c.actionId === "devPreview.reloadPreview")).toBe(false);
+      const global = service.findConflicts("Cmd+W", undefined, "worktreeGrid");
+      expect(global.some((c) => c.actionId === "terminal.close")).toBe(true);
     });
 
     it("flags global-scoped candidates against any scope", () => {
       const service = new KeybindingService();
 
       // A "global" candidate would fire everywhere, so it must collide with the
-      // portal-scoped Cmd+W binding.
-      const conflicts = service.findConflicts("Cmd+W", undefined, "global");
-      expect(conflicts.some((c) => c.actionId === "portal.closeTab")).toBe(true);
+      // dev-preview-scoped Cmd+R binding.
+      const conflicts = service.findConflicts("Cmd+R", undefined, "global");
+      expect(conflicts.some((c) => c.actionId === "devPreview.reloadPreview")).toBe(true);
     });
 
     it("marks exact-combo collisions as kind: 'conflict'", () => {
@@ -558,14 +544,14 @@ describe("KeybindingService", () => {
       service.registerBinding({
         actionId: "terminal.redraw",
         combo: "Cmd+K Cmd+F12",
-        scope: "portal",
+        scope: "dev-preview",
         priority: 0,
       });
       const offersF12 = () =>
         service.getChordCompletions("Cmd+K").some((c) => /F12/.test(c.secondKey));
 
       expect(offersF12()).toBe(false);
-      service.setScope("portal");
+      service.setScope("dev-preview");
       expect(offersF12()).toBe(true);
     });
 
@@ -715,6 +701,42 @@ describe("KeybindingService", () => {
 
       expect(conflict?.combo).toBe("Cmd+Alt+Shift+J");
     });
+
+    it.each(["decisions.openInbox", "decisions.openNextQuestion"])(
+      "lists %s unbound, and fires it from a binding the person gives it",
+      (actionId) => {
+        setPlatform("MacIntel");
+        const service = new KeybindingService();
+        // Unbound on every platform's table, not just the one this run loaded.
+        for (const [isWindows, isLinux] of [
+          [false, false],
+          [true, false],
+          [false, true],
+        ] as const) {
+          const rows = buildDefaultKeybindings(isWindows, isLinux).filter(
+            (b) => b.actionId === actionId
+          );
+          expect(rows.length).toBeGreaterThan(0);
+          expect(rows.map((b) => b.combo).filter((combo) => combo !== "")).toEqual([]);
+        }
+        const rows = service
+          .getAllBindingsWithEffectiveCombos()
+          .filter((b) => b.actionId === actionId);
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.map((b) => b.effectiveCombo).filter((combo) => combo !== "")).toEqual([]);
+        expect(service.findConflicts("Cmd+Alt+Shift+J")).toEqual([]);
+
+        seedOverride(service, actionId, ["Cmd+Alt+Shift+J"]);
+        const press = createKeyboardEvent({
+          key: "J",
+          code: "KeyJ",
+          metaKey: true,
+          altKey: true,
+          shiftKey: true,
+        });
+        expect(service.resolveKeybinding(press).match?.actionId).toBe(actionId);
+      }
+    );
   });
 
   describe("shortcut capture ownership", () => {
@@ -1333,9 +1355,9 @@ describe("KeybindingService", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       service.registerBinding({
-        actionId: "test.portalOnly",
+        actionId: "test.previewOnly",
         combo: "Cmd+Shift+F4",
-        scope: "portal",
+        scope: "dev-preview",
         priority: 0,
       });
       service.registerBinding({
@@ -1346,7 +1368,7 @@ describe("KeybindingService", () => {
       });
 
       expect(warnSpy).not.toHaveBeenCalled();
-      expect(service.getBinding("test.portalOnly")).toBeDefined();
+      expect(service.getBinding("test.previewOnly")).toBeDefined();
       expect(service.getBinding("test.gridOnly")).toBeDefined();
 
       warnSpy.mockRestore();
@@ -1357,14 +1379,14 @@ describe("KeybindingService", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       service.registerBinding({
-        actionId: "test.portalStealsClaude",
+        actionId: "test.previewStealsClaude",
         combo: "Cmd+Alt+C",
-        scope: "portal",
+        scope: "dev-preview",
         priority: 0,
       });
 
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(service.getBinding("test.portalStealsClaude")).toBeUndefined();
+      expect(service.getBinding("test.previewStealsClaude")).toBeUndefined();
       expect(service.getBinding("agent.claude")?.combo).toBe("Cmd+Alt+C");
 
       warnSpy.mockRestore();
@@ -1464,8 +1486,8 @@ describe("KeybindingService", () => {
       // directly without going through registerBinding's guard, so this audit
       // is the only place that catches built-in collisions.
       //
-      // Intentional overlaps disambiguated by priority (e.g. terminal.close at
-      // priority 10 + portal.closeTab at priority 20 on "Cmd+W") are allowed
+      // Intentional overlaps disambiguated by priority (e.g. a global binding
+      // and a scoped one at a higher priority on the same combo) are allowed
       // because findMatchingAction picks the higher priority deterministically.
       // A silent shadow is two defaults with overlapping scope + identical
       // platform-normalized combo + identical priority — that's the failure
@@ -1652,14 +1674,14 @@ describe("KeybindingService", () => {
       expect(service.getPendingChord()).not.toBeNull();
 
       // First setScope changes scope and clears the chord (expected).
-      service.setScope("portal");
+      service.setScope("dev-preview");
       expect(service.getPendingChord()).toBeNull();
 
       // Re-establish a chord under the new scope, then push the same scope again.
       service.resolveKeybinding(cmdK);
       expect(service.getPendingChord()).not.toBeNull();
 
-      service.setScope("portal");
+      service.setScope("dev-preview");
 
       // Second push is the StrictMode/concurrent-instance case: scope didn't
       // change, so the chord must survive.
@@ -1670,16 +1692,16 @@ describe("KeybindingService", () => {
       const service = new KeybindingService();
       const stack = (service as unknown as { scopeStack: string[] }).scopeStack;
 
-      service.setScope("portal");
-      service.setScope("portal");
-      expect(stack.filter((s) => s === "portal").length).toBe(2);
+      service.setScope("dev-preview");
+      service.setScope("dev-preview");
+      expect(stack.filter((s) => s === "dev-preview").length).toBe(2);
 
-      service.restoreScope("portal");
-      expect(stack.filter((s) => s === "portal").length).toBe(1);
-      expect(service.getScope()).toBe("portal");
+      service.restoreScope("dev-preview");
+      expect(stack.filter((s) => s === "dev-preview").length).toBe(1);
+      expect(service.getScope()).toBe("dev-preview");
 
-      service.restoreScope("portal");
-      expect(stack.filter((s) => s === "portal").length).toBe(0);
+      service.restoreScope("dev-preview");
+      expect(stack.filter((s) => s === "dev-preview").length).toBe(0);
       expect(service.getScope()).toBe("global");
     });
   });
@@ -2127,20 +2149,6 @@ describe("KeybindingService", () => {
         createKeyboardEvent({ key: "F4", code: "F4", ctrlKey: true })
       );
       expect(match?.actionId).toBe("terminal.close");
-    });
-
-    it("resolves Ctrl+F4 to portal.closeTab (priority 20) over terminal.close (priority 10) in portal scope on Win32", async () => {
-      setPlatform("Win32");
-      vi.resetModules();
-      const { KeybindingService: WinKeybindingService } = await import("../KeybindingService");
-
-      const service = new WinKeybindingService();
-      service.setScope("portal");
-      const match = service.findMatchingAction(
-        createKeyboardEvent({ key: "F4", code: "F4", ctrlKey: true })
-      );
-      expect(match?.actionId).toBe("portal.closeTab");
-      expect(match?.priority).toBe(20);
     });
 
     it("does NOT resolve Ctrl+F4 to any action on macOS", async () => {

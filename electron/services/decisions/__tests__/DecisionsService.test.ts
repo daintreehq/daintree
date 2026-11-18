@@ -14,6 +14,7 @@ import {
   DecisionsService,
   type DecisionsServiceOptions,
   type DecisionsStoreOpener,
+  type HostServedQuestions,
 } from "../DecisionsService.js";
 import type { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
@@ -29,8 +30,10 @@ import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.
 import type { QuestionReadScope } from "../questionContent.js";
 import type {
   AnswerDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionListItem,
+  SendDecisionFollowUpPayload,
 } from "../../../../shared/types/decisionsQuestion.js";
 import { HANDLED_ANSWERS_META_KEY } from "../attentionList.js";
 import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
@@ -614,12 +617,19 @@ describe("DecisionsService question list (#17229)", () => {
         key === HANDLED_ANSWERS_META_KEY && handled !== null ? JSON.stringify(handled) : null,
     } as unknown as DaintreeLocalStore;
     const lists: DecisionQuestionListItem[][] = [];
+    const listing: boolean[] = [];
+    const hostLists: Array<HostServedQuestions | null> = [];
     const panes: PaneDecisionState[] = [];
     const service = new DecisionsService({
       openStore: async () => store,
       keyFilePath: () => ABSENT_KEY_FILE,
       publishPaneState: (_projectId, state) => panes.push(state),
-      publishQuestions: (questions) => lists.push([...questions]),
+      publishQuestions: (questions, nowListing) => {
+        lists.push([...questions]);
+        listing.push(nowListing);
+      },
+      publishHostQuestions: (list) =>
+        hostLists.push(list === null ? null : { ...list, questions: [...list.questions] }),
       notifyQuestions: options.notifyQuestions,
     });
     const commit = async (next: QuestionRow[]) => {
@@ -632,6 +642,8 @@ describe("DecisionsService question list (#17229)", () => {
       service,
       store,
       lists,
+      listing,
+      hostLists,
       panes,
       commit,
       setRows: (next: QuestionRow[]) => (rows = next),
@@ -751,16 +763,19 @@ describe("DecisionsService question list (#17229)", () => {
   });
 
   it("empties the list when it stops, and a read that lands after lists nothing", async () => {
-    const { service, lists, setRows, fireCommit, hold } = listed();
+    const { service, lists, listing, setRows, fireCommit, hold } = listed();
     setRows([row(1)]);
     await service.start(on(HOST));
     expect(lists.at(-1)).toHaveLength(1);
+    expect(listing.at(-1)).toBe(true);
 
     const release = hold();
     setRows([row(1), row(2)]);
     fireCommit();
     await service.stop();
     expect(lists.at(-1)).toEqual([]);
+    // Not an empty store: nothing is listed at all, so no Host's questions are either (#17230).
+    expect(listing.at(-1)).toBe(false);
     const after = lists.length;
     release();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -800,6 +815,43 @@ describe("DecisionsService question list (#17229)", () => {
     await service.start(on(HOST), "host");
     expect(lists.flat()).toEqual([]);
     await service.stop();
+  });
+
+  it("hands a Remote Host lifetime's own questions to its owner's Shell after each commit, and nothing once it stops (#17230)", async () => {
+    const { service, hostLists, setRows, fireCommit } = listed();
+    setRows([row(1), row(2, { origin: { host_id: "host_other" } })]);
+    await service.start(on(HOST), "host");
+    await vi.waitFor(() => expect(hostLists.at(-1)?.questions).toHaveLength(1));
+    expect(hostLists.at(-1)).toEqual({
+      hostId: "host_1",
+      questions: [
+        expect.objectContaining({ reference: expect.objectContaining({ hostId: "host_1" }) }),
+      ],
+    });
+
+    setRows([
+      row(1, { local_status: "cancelled" }),
+      row(3, { origin: { project_id: "project-c", pane_id: "pane-c" } }),
+    ]);
+    fireCommit();
+    await vi.waitFor(() =>
+      expect(hostLists.at(-1)?.questions.map((question) => question.standing)).toEqual([
+        { kind: "settled", outcome: "withdrawn" },
+        { kind: "waiting", reason: "open" },
+      ])
+    );
+
+    await service.stop();
+    expect(hostLists.at(-1)).toBeNull();
+  });
+
+  it("hands nothing to a Remote Host's owner from an owner's lifetime", async () => {
+    const { service, hostLists, setRows, lists } = listed();
+    setRows([row(1)]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)).toHaveLength(1);
+    await service.stop();
+    expect(hostLists.filter((list) => list !== null)).toEqual([]);
   });
 });
 
@@ -1219,6 +1271,10 @@ describe("DecisionsService relay connection", () => {
     const cancels: Array<{ route: number; questionId: string; scope: QuestionReadScope }> = [];
     const answers: Array<{ route: number; payload: unknown; hostId: string | null }> = [];
     const results: Array<{ route: number; answerId: string }> = [];
+    const declines: Array<{ route: number; payload: unknown; hostId: string | null }> = [];
+    const declineReads: Array<{ route: number; declineId: string }> = [];
+    const followUps: Array<{ route: number; payload: unknown; hostId: string | null }> = [];
+    const followUpReads: Array<{ route: number; messageId: string }> = [];
     const openQuestions = (source: QuestionSource, previous: Promise<void>) => {
       let release!: () => void;
       const released = new Promise<void>((resolve) => {
@@ -1251,6 +1307,33 @@ describe("DecisionsService relay connection", () => {
           results.push({ route: opened.indexOf(record) + 1, answerId });
           return { result: "not-found" as const };
         },
+        declineForPerson: async (
+          payload: DeclineDecisionQuestionPayload,
+          hostId: string | null
+        ) => {
+          declines.push({ route: opened.indexOf(record) + 1, payload, hostId });
+          return {
+            result: "submitted" as const,
+            declineId: payload.declineId,
+            outcome: { status: "declined" as const },
+          };
+        },
+        declineResultForPerson: async (declineId: string) => {
+          declineReads.push({ route: opened.indexOf(record) + 1, declineId });
+          return { result: "not-found" as const };
+        },
+        followUpForPerson: async (payload: SendDecisionFollowUpPayload, hostId: string | null) => {
+          followUps.push({ route: opened.indexOf(record) + 1, payload, hostId });
+          return {
+            result: "submitted" as const,
+            messageId: payload.messageId,
+            outcome: { status: "queued" as const },
+          };
+        },
+        followUpResultForPerson: async (messageId: string) => {
+          followUpReads.push({ route: opened.indexOf(record) + 1, messageId });
+          return { result: "not-found" as const };
+        },
         close: () => {
           record.closed += 1;
           events.push(`questions closed ${opened.indexOf(record) + 1}`);
@@ -1260,7 +1343,17 @@ describe("DecisionsService relay connection", () => {
         },
       };
     };
-    return { opened, openQuestions, cancels, answers, results };
+    return {
+      opened,
+      openQuestions,
+      cancels,
+      answers,
+      results,
+      declines,
+      declineReads,
+      followUps,
+      followUpReads,
+    };
   }
 
   const SOURCE: QuestionSource = {
@@ -1401,6 +1494,93 @@ describe("DecisionsService relay connection", () => {
     await service.stop();
     await expect(service.answerQuestion(payload)).resolves.toEqual({ result: "not-running" });
     expect(routes.answers).toHaveLength(1);
+  });
+
+  it("hands the person's dismissal to the current route with this computer's host id, and never on a Host (#17239)", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    const payload: DeclineDecisionQuestionPayload = {
+      reference: {
+        hostId: "host_studio",
+        projectId: "project-b",
+        terminalId: "pane-1",
+        questionId: "q_0123456789",
+      },
+      declineId: "0190f0aa-1111-4222-8333-44445555dddd",
+      expectedRevision: 2,
+    };
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }));
+    await expect(service.declineQuestion(payload)).resolves.toEqual({ result: "not-running" });
+    await expect(service.getDeclineResult(payload.declineId)).resolves.toEqual({
+      result: "not-running",
+    });
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    await expect(service.declineQuestion(payload)).resolves.toEqual({
+      result: "submitted",
+      declineId: payload.declineId,
+      outcome: { status: "declined" },
+    });
+    await expect(service.getDeclineResult(payload.declineId)).resolves.toEqual({
+      result: "not-found",
+    });
+    expect(routes.declines).toEqual([{ route: 1, payload, hostId: "host_aaaaaaaa" }]);
+    expect(routes.declineReads).toEqual([{ route: 1, declineId: payload.declineId }]);
+    for (const route of routes.opened) route.release();
+    await service.stop();
+    await expect(service.declineQuestion(payload)).resolves.toEqual({ result: "not-running" });
+
+    // A Remote Host's own lifetime never signs the person's decline, and its route is never asked to.
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }), "host");
+    made.at(-1)!.options.onQuestionsReady!(SOURCE);
+    await expect(service.declineQuestion(payload)).resolves.toEqual({
+      result: "refused",
+      reason: "not-owner",
+    });
+    await expect(service.getDeclineResult(payload.declineId)).resolves.toEqual({
+      result: "not-found",
+    });
+    expect(routes.declines).toHaveLength(1);
+    expect(routes.declineReads).toHaveLength(1);
+    for (const route of routes.opened) route.release();
+    await service.stop();
+  });
+
+  it("hands the person's follow-up to the current route with this computer's host id (#17238)", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    const payload: SendDecisionFollowUpPayload = {
+      reference: {
+        hostId: "host_studio",
+        projectId: "project-b",
+        terminalId: "pane-1",
+        questionId: "q_0123456789",
+      },
+      messageId: "0190f0aa-2222-4222-8333-444455550001",
+      text: "Prefer the one already deployed.",
+    };
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }));
+    await expect(service.sendFollowUp(payload)).resolves.toEqual({ result: "not-running" });
+    await expect(service.getFollowUpResult(payload.messageId)).resolves.toEqual({
+      result: "not-running",
+    });
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    await expect(service.sendFollowUp(payload)).resolves.toEqual({
+      result: "submitted",
+      messageId: payload.messageId,
+      outcome: { status: "queued" },
+    });
+    await expect(service.getFollowUpResult(payload.messageId)).resolves.toEqual({
+      result: "not-found",
+    });
+    expect(routes.followUps).toEqual([{ route: 1, payload, hostId: "host_aaaaaaaa" }]);
+    expect(routes.followUpReads).toEqual([{ route: 1, messageId: payload.messageId }]);
+
+    for (const route of routes.opened) route.release();
+    await service.stop();
+    await expect(service.sendFollowUp(payload)).resolves.toEqual({ result: "not-running" });
+    expect(routes.followUps).toHaveLength(1);
   });
 
   it("hands a launch the route's port once the connection opens it, waiting while its identity loads", async () => {
@@ -1769,6 +1949,45 @@ describe("DecisionsService deleting local data", () => {
       await connections[1]!.store.updateQuestion("q_1", { local_status: "open" });
       await vi.waitFor(() => expect(stores[1]!.listQuestions).toHaveBeenCalledTimes(2));
       expect(stores[0]!.listQuestions).toHaveBeenCalledTimes(1);
+      await service.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists nothing once the store a failed deletion closed doesn't reopen (#17230)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "decisions-service-erase-unlist-"));
+    try {
+      const published: Array<{ count: number; listing: boolean }> = [];
+      let opens = 0;
+      const service = new DecisionsService({
+        keyFilePath: () => join(dir, "keys.bin"),
+        openStore: async () => {
+          opens += 1;
+          if (opens > 1) throw new Error("still locked");
+          return Object.assign(fakeStore(), {
+            listQuestions: vi.fn(async () => [row(1, { origin: { host_id: RELAY.hostId } })]),
+          });
+        },
+        openRows: async () => ({
+          erase: () => {
+            throw new Error("database is locked");
+          },
+          exist: () => true,
+        }),
+        forgetIdentity: () => on(RELAY),
+        publishQuestions: (questions, listing) =>
+          published.push({ count: questions.length, listing }),
+        connect: () => ({ start: () => {}, stop: () => {} }),
+      });
+      await service.start(on(RELAY));
+      await vi.waitFor(() => expect(published.at(-1)).toEqual({ count: 1, listing: true }));
+
+      await service.eraseLocalData();
+
+      expect(opens).toBe(2);
+      // Not listing at all, so no Remote Host's questions stay listed with no store here.
+      expect(published.at(-1)).toEqual({ count: 0, listing: false });
       await service.stop();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -2175,6 +2394,65 @@ describe("DecisionsService terminal snapshots (#16230)", () => {
     expect(made[0]!.rows).toEqual([[row(1), row(2)]]);
     expect(made[0]!.changed).toBe(1);
     await service.stop();
+  });
+});
+
+describe("DecisionsService presence (#17240)", () => {
+  const RELAY = {
+    relayOrigin: "https://relay.example.com",
+    installationId: "inst_12345678",
+    deviceId: "dev_12345678",
+    hostId: "host_12345678",
+  };
+
+  function reporting() {
+    const made: Array<{ options: RelayConnectionOptions; changed: number }> = [];
+    const allowed = vi.fn(() => true);
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => ABSENT_KEY_FILE,
+      presence: { allowed },
+      connect: (options) => {
+        const record = { options, changed: 0 };
+        made.push(record);
+        return {
+          start: () => {},
+          stop: () => {},
+          presenceChanged: () => {
+            record.changed += 1;
+          },
+        };
+      },
+    });
+    return { service, made, allowed };
+  }
+
+  it("gives the owner's connection presence to report, and a Remote Host's none", async () => {
+    const { service, made, allowed } = reporting();
+
+    await service.start(on(RELAY));
+    expect(made[0]!.options.role).toBe("owner-desktop");
+    expect(made[0]!.options.presence?.allowed()).toBe(true);
+    expect(allowed).toHaveBeenCalledTimes(1);
+
+    await service.start(on(RELAY), "host");
+    expect(made[1]!.options.role).toBe("desktop-host");
+    expect(made[1]!.options.presence).toBeUndefined();
+    await service.stop();
+  });
+
+  it("passes each change of what presence depends on to the running connection only", async () => {
+    const { service, made } = reporting();
+    service.presenceChanged();
+    expect(made).toHaveLength(0);
+
+    await service.start(on(RELAY));
+    service.presenceChanged();
+    expect(made[0]!.changed).toBe(1);
+
+    await service.dispose();
+    service.presenceChanged();
+    expect(made[0]!.changed).toBe(1);
   });
 });
 

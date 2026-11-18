@@ -189,7 +189,13 @@ describe("watchHostConnectionAnnouncements", () => {
 
   it("calls a failed retry after an ssh refusal unreachable, not a lost connection", () => {
     stop = watchHostConnectionAnnouncements("studio-01");
-    link({ status: "unreachable", lastSeenAt: null, detail: null, stoppedRetrying: true });
+    link({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      stoppedRetrying: true,
+      blocker: { kind: "ssh-access" },
+    });
     vi.advanceTimersByTime(400);
     link(RECONNECTING);
     vi.advanceTimersByTime(1_000);
@@ -199,6 +205,110 @@ describe("watchHostConnectionAnnouncements", () => {
       "Couldn't log in to studio-01 over ssh.",
       "studio-01 is unreachable. Terminals are read-only until it reconnects.",
     ]);
+  });
+
+  it("names a missing WSL distribution once, and never as an ssh refusal", () => {
+    useHostConnectionStore.setState({ hostName: "Ubuntu" });
+    stop = watchHostConnectionAnnouncements("studio-01");
+    const missing: HostConnectionState = {
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "There is no distribution with the supplied name.",
+      stoppedRetrying: true,
+      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+    };
+    link(missing);
+    vi.advanceTimersByTime(400);
+    // A Retry that finds it still missing is the same episode, not news,
+    // however long the dial takes.
+    link({ status: "connecting", attempt: 1 });
+    vi.advanceTimersByTime(2_000);
+    link({ ...missing });
+    vi.advanceTimersByTime(400);
+    expect(spoken()).toEqual([
+      "WSL couldn't find Ubuntu-24.04 for Ubuntu. Restore it under that name, then retry.",
+    ]);
+  });
+
+  it("says the distribution that settled the episode, even when a Retry is already dialling", () => {
+    useHostConnectionStore.setState({ hostName: "Build" });
+    stop = watchHostConnectionAnnouncements("studio-01");
+    link({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      stoppedRetrying: true,
+      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+    });
+    vi.advanceTimersByTime(200);
+    link({ status: "connecting", attempt: 1 });
+    vi.advanceTimersByTime(400);
+    expect(spoken()).toEqual([
+      "WSL couldn't find Ubuntu-24.04 for Build. Restore it under that name, then retry.",
+    ]);
+  });
+
+  it("says nothing again when the watcher remounts while a Retry is dialling", () => {
+    stop = watchHostConnectionAnnouncements("studio-01");
+    link({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      stoppedRetrying: true,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    });
+    vi.advanceTimersByTime(400);
+    link({ status: "connecting", attempt: 1 });
+    stop();
+    stop = watchHostConnectionAnnouncements("studio-01");
+    vi.advanceTimersByTime(1_000);
+    expect(spoken()).toEqual(["Couldn't connect to studio-01. WSL isn't available on this PC."]);
+  });
+
+  it("says each settled refusal once as it changes: ssh, distribution, unusable", () => {
+    stop = watchHostConnectionAnnouncements("studio-01");
+    const parked = {
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      stoppedRetrying: true,
+    } as const;
+    link({ ...parked, blocker: { kind: "ssh-access" } });
+    vi.advanceTimersByTime(400);
+    link({ ...parked, blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" } });
+    vi.advanceTimersByTime(400);
+    link({ ...parked, blocker: { kind: "unusable", message: "The cloud account can't be used" } });
+    vi.advanceTimersByTime(400);
+    // The same refusal again, however it's padded, is not news; a different one is.
+    link({
+      ...parked,
+      blocker: { kind: "unusable", message: "The cloud account can't be used. " },
+    });
+    vi.advanceTimersByTime(400);
+    link({
+      ...parked,
+      blocker: { kind: "unusable", message: "Confirm the host key in its details." },
+    });
+    vi.advanceTimersByTime(400);
+    expect(spoken()).toEqual([
+      "Couldn't log in to studio-01 over ssh.",
+      "WSL couldn't find Ubuntu-24.04 for studio-01. Restore it under that name, then retry.",
+      "Couldn't connect to studio-01. The cloud account can't be used.",
+      "Couldn't connect to studio-01. Confirm the host key in its details.",
+    ]);
+  });
+
+  it("says an unusable connection in the transport's words", () => {
+    stop = watchHostConnectionAnnouncements("studio-01");
+    link({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      stoppedRetrying: true,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    });
+    vi.advanceTimersByTime(400);
+    expect(spoken()).toEqual(["Couldn't connect to studio-01. WSL isn't available on this PC."]);
   });
 
   it("says connected, not reconnected, when a host first reached after failing comes up", () => {

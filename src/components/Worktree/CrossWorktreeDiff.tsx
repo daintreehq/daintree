@@ -10,6 +10,12 @@ import {
 } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
 import {
+  GroupedVirtuoso,
+  type CalculateViewLocation,
+  type GroupedVirtuosoHandle,
+  type ListItem,
+} from "react-virtuoso";
+import {
   GitCompare,
   ChevronLeft,
   ChevronRight,
@@ -25,6 +31,7 @@ import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
 import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -33,19 +40,24 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import type { GitStatus } from "@shared/types";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "@shared/types/ipc/git";
 import { basename, dirname } from "@shared/utils/path";
-import { DiffFilePath, DiffViewer, type DiffViewerSideLabels } from "./DiffViewer";
+import {
+  DiffFilePath,
+  DiffViewer,
+  type DiffFileOrigin,
+  type DiffViewerSideLabels,
+} from "./DiffViewer";
 import { WorktreeSelector } from "./WorktreeSelector";
 import {
   WHOLE_FILE_CONTEXT_LINES,
   comparableBranch,
   comparisonBlocker,
-  committedSourceFromFullDiff,
+  committedSourceForPatch,
   sortWorktreesForComparison,
   worktreeOptionLabel,
   type ComparisonBlocker,
 } from "./crossWorktreeDiffUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import { isElementTruncated, useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { PathTail } from "@/components/ui/PathTail";
 import { usePreferencesStore, type DiffViewType } from "@/store/preferencesStore";
@@ -121,6 +133,11 @@ function isSameFile(a: CrossWorktreeFile, b: CrossWorktreeFile): boolean {
   return a.path === b.path && a.status === b.status;
 }
 
+function fileOrigin(file: CrossWorktreeFile): DiffFileOrigin | undefined {
+  if (!file.oldPath) return undefined;
+  return { kind: file.status === "C" ? "copied" : "renamed", path: file.oldPath };
+}
+
 /**
  * The name of the comparison control holding focus, if one does. A reload
  * started from a header control unmounts it with the diff it sat on, and the
@@ -142,9 +159,17 @@ interface CrossWorktreeFileRowProps {
   roving: RowRoving;
 }
 
-type RowRoving = Pick<UseRovingRowsResult, "tabStopKey" | "onRowFocus" | "rowRef">;
+type RowRoving = Pick<
+  UseRovingRowsResult,
+  "tabStopKey" | "onRowFocus" | "rowRef" | "reportTabStopMounted"
+>;
 
 const fileKey = (file: CrossWorktreeFile) => `${file.status}:${file.path}`;
+
+/** The band names fewer segments than the directory has. */
+function isDirectoryShortened(dir: string): boolean {
+  return dir !== "" && formatDiffDir(dir) !== dir;
+}
 
 function CrossWorktreeFileRow({
   file,
@@ -158,6 +183,15 @@ function CrossWorktreeFileRow({
   const status = statusDisplay(file.status);
   const insertions = file.insertions ?? 0;
   const deletions = file.deletions ?? 0;
+  const isTabStop = roving.tabStopKey === key;
+  const { reportTabStopMounted } = roving;
+  // A windowed shelf has to know when the one row holding the tab stop has
+  // scrolled out of the DOM, so the list itself can stand in for it.
+  useEffect(() => {
+    if (!isTabStop) return;
+    reportTabStopMounted(true);
+    return () => reportTabStopMounted(false);
+  }, [isTabStop, reportTabStopMounted]);
 
   return (
     <TruncatedTooltip content={file.path} isTruncated={isTruncated || directoryHidden}>
@@ -167,7 +201,7 @@ function CrossWorktreeFileRow({
         ref={roving.rowRef(key)}
         data-roving-row=""
         // One tab stop for the shelf; the arrow keys move it.
-        tabIndex={roving.tabStopKey === key ? 0 : -1}
+        tabIndex={isTabStop ? 0 : -1}
         onFocus={() => roving.onRowFocus(key)}
         aria-current={isSelected || undefined}
         // A list-detail row, not a listbox option: `aria-current` for AT and
@@ -198,51 +232,106 @@ function CrossWorktreeFileRow({
   );
 }
 
-function FileGroupSection({
-  group,
-  selectedFile,
-  onOpen,
-  roving,
+/**
+ * The directory band above each run of files. Sticky on the windowed path, so
+ * it carries the shelf's own fill over the rows scrolling under it.
+ *
+ * Whether the band is clipped is measured here but read by every row under it,
+ * and on the windowed path the band and its rows are separate items, so the
+ * measurement goes up to the shelf through `onClipChange`. The hook's first
+ * value is a placeholder until it has measured, so a mounting band reports a
+ * reading of its own, and after that only the changes the hook observes.
+ */
+function FileGroupHeader({
+  dir,
+  onClipChange,
 }: {
-  group: FileGroup;
-  selectedFile: CrossWorktreeFile | null;
-  onOpen: (file: CrossWorktreeFile) => void;
-  roving: RowRoving;
+  dir: string;
+  onClipChange: (dir: string, clipped: boolean) => void;
 }) {
   const { ref, isTruncated } = useTruncationDetection();
-  const label = formatDiffDir(group.dir);
-  const directoryHidden = isTruncated || (group.dir !== "" && label !== group.dir);
+  const label = formatDiffDir(dir);
+  const pathRef = useRef<HTMLElement | null>(null);
+  const setPath = useCallback(
+    (element: HTMLElement | null) => {
+      pathRef.current = element;
+      ref(element);
+    },
+    [ref]
+  );
+  useLayoutEffect(() => {
+    if (pathRef.current) onClipChange(dir, isElementTruncated(pathRef.current));
+  }, [dir, onClipChange]);
+  const observedRef = useRef(isTruncated);
+  useEffect(() => {
+    if (isTruncated === observedRef.current) return;
+    observedRef.current = isTruncated;
+    onClipChange(dir, isTruncated);
+  }, [isTruncated, dir, onClipChange]);
   return (
-    <div className="mb-1.5">
-      <div className="flex items-center gap-1.5 px-1.5 py-1 text-2xs text-text-secondary">
-        <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
-        {/* Cut from its start like the file paths, so the folder the files sit
-            in survives; the whole path is disclosed whenever any of it is hidden. */}
-        <TruncatedTooltip
-          content={group.dir}
-          contentClassName="font-mono [overflow-wrap:anywhere]"
-          isTruncated={directoryHidden}
-          focusable={false}
-        >
-          <PathTail ref={ref} className="min-w-0 font-mono">
-            {label}
-          </PathTail>
-        </TruncatedTooltip>
-      </div>
-      <div className="flex flex-col gap-px">
-        {group.files.map((file) => (
-          <CrossWorktreeFileRow
-            key={fileKey(file)}
-            roving={roving}
-            file={file}
-            isSelected={selectedFile !== null && isSameFile(selectedFile, file)}
-            directoryHidden={directoryHidden}
-            onClick={() => onOpen(file)}
-          />
-        ))}
-      </div>
+    <div
+      data-shelf-band=""
+      className="flex items-center gap-1.5 bg-surface-sidebar px-1.5 py-1 text-2xs text-text-secondary"
+    >
+      <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
+      {/* Cut from its start like the file paths, so the folder the files sit
+          in survives; the whole path is disclosed whenever any of it is hidden. */}
+      <TruncatedTooltip
+        content={dir}
+        contentClassName="font-mono [overflow-wrap:anywhere]"
+        isTruncated={isTruncated || isDirectoryShortened(dir)}
+        focusable={false}
+      >
+        <PathTail ref={setPath} className="min-w-0 font-mono">
+          {label}
+        </PathTail>
+      </TruncatedTooltip>
     </div>
   );
+}
+
+/**
+ * How the windowed shelf lays the groups out for the virtualizer. Its two
+ * index spaces differ: `itemContent` and the handle's `scrollIntoView` take a
+ * file's position in the drawn order (the virtualizer adds the headers ahead of
+ * it itself), while `computeItemKey` is called with a SLOT, which counts a
+ * header ahead of every directory's files. So the keys are built in slot order.
+ */
+interface ShelfLayout {
+  counts: number[];
+  /** Position of each group's last file in the drawn order. */
+  lastPositions: number[];
+  keysBySlot: string[];
+}
+
+function layoutShelf(groups: FileGroup[]): ShelfLayout {
+  const counts: number[] = [];
+  const lastPositions: number[] = [];
+  const keysBySlot: string[] = [];
+  let position = 0;
+  for (const group of groups) {
+    counts.push(group.files.length);
+    keysBySlot.push(`group:${group.dir}`);
+    for (const file of group.files) keysBySlot.push(`file:${fileKey(file)}`);
+    position += group.files.length;
+    lastPositions.push(position - 1);
+  }
+  return { counts, lastPositions, keysBySlot };
+}
+
+/**
+ * Treats a row under the sticky directory band as out of view. The default
+ * counts only the scroller's edges, so a row the band covers reads as visible
+ * and stays hidden. Start alignment already lands below the band (the
+ * virtualizer subtracts its sticky header), so only the test changes.
+ * `bandHeight` is read at reveal time.
+ */
+function viewLocationBelowBand(bandHeight: () => number): CalculateViewLocation {
+  return ({ itemTop, itemBottom, viewportTop, viewportBottom, locationParams }) => {
+    if (itemTop < viewportTop + bandHeight()) return { ...locationParams, align: "start" };
+    if (itemBottom > viewportBottom) return { ...locationParams, align: "end" };
+    return null;
+  };
 }
 
 function ChangeSetSummary({ files }: { files: CrossWorktreeFile[] }) {
@@ -480,60 +569,72 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         setFileDiffLoading(true);
       }
 
-      // Hidden context comes from the same refs as the patch, asked for in the
-      // same breath: a whole-file diff carries the compare side's committed
-      // text. Only a file present on both sides has gaps to fill, and a failed
-      // read costs the expanders, never the diff.
+      // Hidden context comes from the same refs as the patch: a whole-file diff
+      // carries the compare side's committed text. Only a file present on both
+      // sides has gaps to fill, and a failed read costs the expanders, never
+      // the diff.
       const expandable = file.status === "M" || file.status === "R" || file.status === "C";
-      const sourceRequest = expandable
-        ? window.electron.git
-            .compareWorktrees(
-              leftPath,
-              leftBranch,
-              rightBranch,
-              file.path,
-              undefined,
-              undefined,
-              WHOLE_FILE_CONTEXT_LINES
-            )
-            .then((full) => (typeof full === "string" ? committedSourceFromFullDiff(full) : null))
-            .catch(() => null)
-        : Promise.resolve(null);
+      const readWholeFile = () =>
+        window.electron.git
+          .compareWorktrees(
+            leftPath,
+            leftBranch,
+            rightBranch,
+            file.path,
+            undefined,
+            undefined,
+            WHOLE_FILE_CONTEXT_LINES,
+            file.oldPath
+          )
+          .then((full) => (typeof full === "string" ? full : null))
+          .catch(() => null);
 
+      // A refresh swaps the patch and its source together, so the old pair stays
+      // readable meanwhile: a source from the previous revision can pass the
+      // viewer's hunk check while the lines it would reveal have changed.
+      let diff: string | null = null;
+      let refreshedSource: string | null = null;
       try {
-        const [diff, source] = await Promise.all([
+        const [patch, full] = await Promise.all([
           window.electron.git.compareWorktrees(
             leftPath,
             leftBranch,
             rightBranch,
             file.path,
             undefined,
-            ignoreWhitespaceRef.current
+            ignoreWhitespaceRef.current,
+            undefined,
+            file.oldPath
           ),
-          sourceRequest,
+          refresh && expandable ? readWholeFile() : null,
         ]);
-        if (token !== fileDiffTokenRef.current) return; // stale response
         // Anything but diff text is a failure the user can retry, not a blank pane.
-        const ok = typeof diff === "string";
-        if (ok) {
-          setFileDiff(diff);
-          setFileSource(source);
-          setFileDiffError(false);
-        } else if (!refresh) {
-          setFileDiff(null);
-          setFileSource(null);
-          setFileDiffError(true);
+        if (typeof patch === "string") {
+          diff = patch;
+          refreshedSource = committedSourceForPatch(full, patch);
         }
       } catch {
-        if (token !== fileDiffTokenRef.current) return;
-        if (!refresh) {
-          setFileDiff(null);
-          setFileSource(null);
-          setFileDiffError(true);
-        }
-      } finally {
-        if (token === fileDiffTokenRef.current) setFileDiffLoading(false);
+        // A rejected read takes the same retryable failure path.
       }
+      if (token !== fileDiffTokenRef.current) return; // stale response
+      setFileDiffLoading(false);
+      if (diff === null) {
+        if (!refresh) setFileDiffError(true);
+        return;
+      }
+      setFileDiff(diff);
+      setFileDiffError(false);
+      if (refresh) {
+        setFileSource(refreshedSource);
+        return;
+      }
+
+      // A selection shows its patch without waiting on the whole-file read and
+      // asks for it only when the patch lands with the file still open, so
+      // stepping past a file never pays for it. The expanders appear with it.
+      if (!expandable || DIFF_SENTINELS.has(diff)) return;
+      const full = await readWholeFile();
+      if (token === fileDiffTokenRef.current) setFileSource(committedSourceForPatch(full, diff));
     },
     [leftPath, leftBranch, rightBranch]
   );
@@ -603,7 +704,12 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           const open = selectedFileRef.current;
           const kept = open ? res.files.find((f) => isSameFile(f, open)) : undefined;
           if (kept) {
-            void fetchFileDiff(kept, true);
+            // A destination now paired with another source is a different
+            // patch, so the old one can't stay on screen under the new origin.
+            // The foreground load unmounts the header the focus may be in.
+            const sameSource = kept.oldPath === open?.oldPath;
+            if (!sameSource) refocusLabelRef.current = focusedComparisonControl();
+            void fetchFileDiff(kept, sameSource);
           } else {
             fileDiffTokenRef.current++;
             setSelectedFile(null);
@@ -643,16 +749,47 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   // File stepping through the comparison set, mirroring the diff modals:
   // `[` / `]` keys plus a footer stepper in the diff panel.
   const groups = useMemo(() => (result ? groupComparisonFiles(result.files) : null), [result]);
-  const rovingKeys = useMemo(
-    () => groups?.flatMap((group) => group.files.map(fileKey)) ?? [],
-    [groups]
-  );
+  // Stepping walks the list in the order it is drawn, not git's output order.
+  const files = useMemo(() => groups?.flatMap((group) => group.files) ?? null, [groups]);
+  const rovingKeys = useMemo(() => files?.map(fileKey) ?? [], [files]);
+  const shelfLayout = useMemo(() => (groups ? layoutShelf(groups) : null), [groups]);
+  // A branch-wide move can change thousands of files; past the threshold the
+  // shelf mounts only the rows near its viewport. Totals, stepping and the
+  // roving keys all read `files`, never the DOM, so they still see every file.
+  const windowed = files !== null && shouldVirtualizeFileList(files.length);
+
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const virtuosoRef = useRef<GroupedVirtuosoHandle | null>(null);
+  const revealPosition = useCallback((position: number) => {
+    virtuosoRef.current?.scrollIntoView({
+      index: position,
+      behavior: "auto",
+      calculateViewLocation: viewLocationBelowBand(
+        () => listRef.current?.querySelector<HTMLElement>("[data-shelf-band]")?.offsetHeight ?? 0
+      ),
+    });
+  }, []);
   const roving = useRovingRows({
     keys: rovingKeys,
     preferredKey: selectedFile ? fileKey(selectedFile) : null,
+    reveal: revealPosition,
+    windowed,
+    containerRef: listRef,
   });
-  // Stepping walks the list in the order it is drawn, not git's output order.
-  const files = useMemo(() => groups?.flatMap((group) => group.files) ?? null, [groups]);
+
+  // Kept when a band scrolls out of the window, so its rows still disclose
+  // their paths; changed only by a band that measured again.
+  const [clippedDirs, setClippedDirs] = useState<ReadonlySet<string>>(() => new Set());
+  const setDirClipped = useCallback((dir: string, clipped: boolean) => {
+    setClippedDirs((current) => {
+      if (current.has(dir) === clipped) return current;
+      const next = new Set(current);
+      if (clipped) next.add(dir);
+      else next.delete(dir);
+      return next;
+    });
+  }, []);
+  const directoryHidden = (dir: string) => isDirectoryShortened(dir) || clippedDirs.has(dir);
   // `null` means auto — prose wraps, code doesn't. Derived from the file on
   // screen during render so the diff is already wrapped on first paint (#12170).
   const effectiveWrapLines =
@@ -709,17 +846,18 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     };
   }, [isOpen, files, navigateFile]);
 
-  // Keep the open file's row in view while stepping with the keyboard.
-  const listRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!selectedFile || !listRef.current) return;
-    const row = Array.from(listRef.current.querySelectorAll<HTMLElement>("[data-file-path]")).find(
-      (el) => el.dataset.filePath === selectedFile.path
-    );
-    if (typeof row?.scrollIntoView === "function") {
-      row.scrollIntoView({ behavior: "instant", block: "nearest" });
-    }
-  }, [selectedFile]);
+  // Bumped the first time each mounted virtualizer renders an item with a
+  // measured size: until then its scroll is a no-op (its first pass is an
+  // unmeasured probe), and measurement alone re-runs no effect. Without it a
+  // shelf put away and brought back mid-list would come up at the top. Re-armed
+  // below whenever the windowed list leaves the screen.
+  const [measuredGeneration, setMeasuredGeneration] = useState(0);
+  const awaitingMeasureRef = useRef(true);
+  const handleItemsRendered = useCallback((items: ListItem<unknown>[]) => {
+    if (!awaitingMeasureRef.current || !items.some((item) => item.size > 0)) return;
+    awaitingMeasureRef.current = false;
+    setMeasuredGeneration((current) => current + 1);
+  }, []);
 
   // Gated and floored: a fast comparison shows nothing, a slow one shows a
   // skeleton that stays long enough to read as one.
@@ -742,6 +880,53 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const showShelf =
     canCompare &&
     ((showListSkeleton && diffShowFileList) || (hasFiles && (diffShowFileList || !selectedFile)));
+
+  // The virtualizer mounts exactly while this holds; the next one to mount
+  // has to measure again before a reveal can land.
+  const windowedListShown = showShelf && listReady && windowed;
+  useEffect(() => {
+    if (!windowedListShown) awaitingMeasureRef.current = true;
+  }, [windowedListShown]);
+
+  // Keep the open file's row in view while stepping, and bring it back when
+  // the list does. Keyed on the file's path and place, not its object: a
+  // refresh hands back fresh objects for an unchanged list, and must not pull
+  // the list away from a row the arrow keys moved to. Windowed, the row may not
+  // exist to be queried, so the virtualizer is asked for it by position;
+  // either way a row already in view is left alone.
+  const selectedPath = selectedFile?.path;
+  const listShown = showShelf && listReady;
+  // The open row's place among rows AND bands: a refresh can add bands ahead
+  // of it without changing its place among the files, and still move it.
+  const selectedRow =
+    selectedFileIndex < 0 || !shelfLayout
+      ? -1
+      : selectedFileIndex +
+        shelfLayout.lastPositions.findIndex((last) => last >= selectedFileIndex) +
+        1;
+  useEffect(() => {
+    if (!listShown || selectedPath === undefined) return;
+    if (windowed) {
+      if (selectedFileIndex >= 0) revealPosition(selectedFileIndex);
+      return;
+    }
+    if (!listRef.current) return;
+    const row = Array.from(listRef.current.querySelectorAll<HTMLElement>("[data-file-path]")).find(
+      (el) => el.dataset.filePath === selectedPath
+    );
+    if (typeof row?.scrollIntoView === "function") {
+      row.scrollIntoView({ behavior: "instant", block: "nearest" });
+    }
+    // `selectedRow` is a trigger: a refresh that moves the row asks again.
+  }, [
+    listShown,
+    selectedPath,
+    windowed,
+    selectedFileIndex,
+    selectedRow,
+    revealPosition,
+    measuredGeneration,
+  ]);
 
   const rightPath = rightWorktree?.path;
 
@@ -886,6 +1071,18 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     if (diffHeaderShown) refocusLabelRef.current = null;
   }, [canvasElement, diffHeaderShown, selectedFile, fileDiff]);
 
+  // One row for both shelf paths, so the windowed one cannot drift.
+  const renderFileRow = (file: CrossWorktreeFile, dir: string) => (
+    <CrossWorktreeFileRow
+      key={fileKey(file)}
+      roving={roving}
+      file={file}
+      isSelected={selectedFile !== null && isSameFile(selectedFile, file)}
+      directoryHidden={directoryHidden(dir)}
+      onClick={() => void fetchFileDiff(file)}
+    />
+  );
+
   let canvas: ReactNode = null;
   if (blocker) {
     const copy = blockedCopy(
@@ -1013,9 +1210,15 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
               </div>
             )}
             <div
-              ref={listRef}
               onKeyDown={roving.onKeyDown}
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1.5"
+              {...roving.containerProps}
+              ref={listRef}
+              className={cn(
+                "min-h-0 flex-1 overscroll-contain px-2 py-1.5",
+                // The virtualizer brings its own scroller; two nested ones
+                // would give the shelf two scrollbars.
+                windowed ? "overflow-hidden" : "overflow-y-auto"
+              )}
             >
               {showListSkeleton && (
                 <Skeleton label="Comparing files" className="flex flex-col gap-1 py-1">
@@ -1028,14 +1231,56 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 </Skeleton>
               )}
               {listReady &&
-                groups?.map((group) => (
-                  <FileGroupSection
-                    key={group.dir || "(root)"}
-                    group={group}
-                    selectedFile={selectedFile}
-                    onOpen={(file) => void fetchFileDiff(file)}
-                    roving={roving}
+                groups &&
+                files &&
+                shelfLayout &&
+                (windowed ? (
+                  <GroupedVirtuoso
+                    ref={virtuosoRef}
+                    groupCounts={shelfLayout.counts}
+                    style={{ height: "100%" }}
+                    // The rows rove the shelf's one tab stop; a focusable
+                    // scroller would be a second one.
+                    tabIndex={-1}
+                    // A row that focus scrolls in from above lands clear of the sticky band.
+                    className="overscroll-contain scroll-pt-7"
+                    itemsRendered={handleItemsRendered}
+                    groupContent={(groupIndex) => (
+                      <FileGroupHeader
+                        // One instance per directory: a sticky band reused for
+                        // the next directory would carry the last one's measure.
+                        key={groups[groupIndex]?.dir ?? ""}
+                        dir={groups[groupIndex]?.dir ?? ""}
+                        onClipChange={setDirClipped}
+                      />
+                    )}
+                    itemContent={(position, groupIndex) => {
+                      const file = files[position];
+                      const group = groups[groupIndex];
+                      if (!file || !group) return null;
+                      const lastInGroup = position === shelfLayout.lastPositions[groupIndex];
+                      // The static path spaces rows with `gap-px` and groups
+                      // with `mb-1.5`; the virtualizer places items itself and
+                      // never sees either, so the space rides inside the item.
+                      return (
+                        <div className={lastInGroup ? "pb-1.5" : "pb-px"}>
+                          {renderFileRow(file, group.dir)}
+                        </div>
+                      );
+                    }}
+                    computeItemKey={(slot) => shelfLayout.keysBySlot[slot] ?? slot}
+                    increaseViewportBy={200}
+                    skipAnimationFrameInResizeObserver
                   />
+                ) : (
+                  groups.map((group) => (
+                    <div key={`dir:${group.dir}`} className="mb-1.5">
+                      <FileGroupHeader dir={group.dir} onClipChange={setDirClipped} />
+                      <div className="flex flex-col gap-px">
+                        {group.files.map((file) => renderFileRow(file, group.dir))}
+                      </div>
+                    </div>
+                  ))
                 ))}
             </div>
           </div>
@@ -1049,7 +1294,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           {selectedFile && !diffHeaderShown && (
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-default bg-surface-sidebar px-3 py-1.5 font-mono text-xs">
               <div className="-ml-1.5 flex shrink-0 items-center">{fileListToggle}</div>
-              <DiffFilePath path={selectedFile.path} />
+              <DiffFilePath path={selectedFile.path} origin={fileOrigin(selectedFile)} />
               <div className="flex shrink-0 items-center gap-2 font-sans text-text-secondary">
                 {comparisonControls}
               </div>
@@ -1079,6 +1324,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                   ignoreWhitespace ? () => setDiffIgnoreWhitespace(false) : undefined
                 }
                 sideLabels={sideLabels}
+                origin={fileOrigin(selectedFile)}
                 headerLeading={fileListToggle}
                 headerActions={comparisonControls}
               />

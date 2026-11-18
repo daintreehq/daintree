@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
 import { projectDecisionQuestions, standingOf } from "../questionList.js";
 import { threadNeedsAttention } from "../attentionList.js";
-import { SECRET, answers, askedAt, messages, qid, row } from "./questionRows.js";
+import { DECLINE, SECRET, answers, askedAt, messages, qid, row } from "./questionRows.js";
 
 const HOST = "host_1";
 
@@ -136,8 +136,10 @@ describe("projectDecisionQuestions", () => {
         "expiresAt",
         "projectLabel",
         "reference",
+        "replyRequest",
         "requirement",
         "settledAt",
+        "stall",
         "standing",
         "worktreeId",
         "worktreeRoot",
@@ -223,6 +225,30 @@ describe("standingOf", () => {
         }),
       })
     ).toMatchObject({ kind: "settled", outcome: "answered" });
+  });
+
+  // A reply from the computer is the person's like a phone's, so it takes the question out of Needs you (#17238).
+  it("counts the person's follow-up from the owner computer as their reply", () => {
+    const reply = (status: "received" | "terminal-delivered") =>
+      standing(
+        row(1, {
+          ...delivered,
+          answers_json: answers({ delivered: true, event_seq: 5 }),
+          messages_json: messages(
+            { side: "agent", expects_reply: true, event_seq: 6, delivery: null },
+            {
+              message_id: "message-2",
+              event_seq: 7,
+              signer_device_id: "owner-1",
+              signer_role: "owner-desktop",
+              delivery: { status },
+            }
+          ),
+        })
+      );
+    // Taken off the wait at once; typed in, it is settled.
+    expect(reply("received")).toEqual({ kind: "to-type" });
+    expect(reply("terminal-delivered")).toMatchObject({ kind: "settled", outcome: "answered" });
   });
 
   it("never counts the model's own answer as the person replying", () => {
@@ -502,6 +528,47 @@ describe("standingOf", () => {
     expect(superseded?.settledAt).toBe("2026-11-01T10:05:00.000Z");
   });
 
+  it("settles a question the person declined at their decline, apart from a withdrawal and an expiry, whatever became of its notice (#17234)", () => {
+    const declined = { local_status: "cancelled" as const, answers_json: answers(DECLINE) };
+    const list = projectDecisionQuestions(
+      [
+        // Its notice waiting for the agent, typed in, or stopped: the question is settled either way.
+        row(1, { ...declined, delivery_status: "desktop-received" }),
+        row(2, {
+          ...declined,
+          delivery_status: "terminal-delivered",
+          answers_json: answers({ ...DECLINE, delivered: true }),
+        }),
+        row(3, { ...declined, delivery_status: "delivery-uncertain" }),
+        row(4, { ...declined, answers_json: answers({ ...DECLINE, deliver: false }) }),
+        // Declined at revision 1, reopened, then withdrawn at revision 2.
+        row(5, { ...declined, question_revision: 2 }),
+        // Declined, reopened, then declined again: settled at the decline that closed it.
+        row(6, {
+          ...declined,
+          question_revision: 2,
+          answers_json: answers(DECLINE, {
+            ...DECLINE,
+            entry_id: "decline-2",
+            revision: 2,
+            created_at: "2026-11-01T11:20:00.000Z",
+          }),
+        }),
+      ],
+      new Map(),
+      HOST
+    );
+
+    expect(list.map((item) => [item.alias, item.standing, item.settledAt])).toEqual([
+      [1, { kind: "settled", outcome: "declined" }, "2026-11-01T11:07:00.000Z"],
+      [2, { kind: "settled", outcome: "declined" }, "2026-11-01T11:07:00.000Z"],
+      [3, { kind: "settled", outcome: "declined" }, "2026-11-01T11:07:00.000Z"],
+      [4, { kind: "settled", outcome: "declined" }, "2026-11-01T11:07:00.000Z"],
+      [5, { kind: "settled", outcome: "withdrawn" }, null],
+      [6, { kind: "settled", outcome: "declined" }, "2026-11-01T11:20:00.000Z"],
+    ]);
+  });
+
   it("settles a closed question even when its delivery status is left from before", () => {
     expect(
       standing(row(1, { local_status: "cancelled", delivery_status: "desktop-received" }))
@@ -515,5 +582,136 @@ describe("standingOf", () => {
         })
       )
     ).toEqual({ kind: "settled", outcome: "expired" });
+  });
+});
+
+describe("follow-up and stall events (#17235)", () => {
+  const project = (r: QuestionRow, handled: ReadonlyMap<string, number> = new Map()) =>
+    projectDecisionQuestions([r], handled, HOST)[0]!;
+  const request = (id: string, seq: number) => ({
+    message_id: id,
+    side: "agent" as const,
+    expects_reply: true,
+    event_seq: seq,
+    delivery: null,
+  });
+  const answered = (messagesJson: string) =>
+    row(1, {
+      ...delivered,
+      answers_json: answers({ delivered: true, event_seq: 5 }),
+      messages_json: messagesJson,
+    });
+
+  it("names the agent's follow-up asking for a reply, by id, until the person replies", () => {
+    expect(project(answered(messages(request("ask-1", 6)))).replyRequest).toBe("ask-1");
+    // A second request is a new one, named by its own id.
+    expect(
+      project(
+        answered(
+          messages(
+            request("ask-1", 6),
+            { message_id: "reply-1", event_seq: 7 },
+            request("ask-2", 8)
+          )
+        )
+      ).replyRequest
+    ).toBe("ask-2");
+    // The latest by the ledger's order, however the thread is stored.
+    expect(
+      project(
+        answered(
+          messages(
+            request("ask-2", 8),
+            { message_id: "reply-1", event_seq: 7 },
+            request("ask-1", 6)
+          )
+        )
+      ).replyRequest
+    ).toBe("ask-2");
+    // Replied to, or superseded by a follow-up asking nothing: none.
+    expect(
+      project(answered(messages(request("ask-1", 6), { message_id: "reply-1", event_seq: 7 })))
+        .replyRequest
+    ).toBeNull();
+    expect(
+      project(
+        answered(
+          messages(request("ask-1", 6), {
+            message_id: "note-1",
+            side: "agent",
+            expects_reply: false,
+            event_seq: 7,
+            delivery: null,
+          })
+        )
+      ).replyRequest
+    ).toBeNull();
+    // A question still open waits for its answer, not a reply.
+    expect(project(row(1, { messages_json: messages(request("ask-1", 6)) })).replyRequest).toBe(
+      null
+    );
+  });
+
+  it("names a reply request even while the question's standing shows its answer needing attention", () => {
+    const item = project(
+      row(1, {
+        local_status: "human-answered",
+        delivery_status: "needs-attention",
+        error_code: "pane_gone",
+        answers_json: answers({ event_seq: 5 }),
+        messages_json: messages(request("ask-1", 6)),
+      })
+    );
+    expect(item.standing.kind).toBe("needs-attention");
+    expect(item.replyRequest).toBe("ask-1");
+  });
+
+  it("names what delivery stopped on, by id, with the library's code for why", () => {
+    expect(project(answered("[]")).stall).toBeNull();
+    expect(
+      project(
+        row(1, {
+          local_status: "human-answered",
+          delivery_status: "needs-attention",
+          error_code: "pane_gone",
+          answers_json: answers({ revision: 2 }),
+          messages_json: messages({
+            message_id: "held-1",
+            delivery: { status: "needs-attention", error_code: "inject_rejected" },
+          }),
+        })
+      ).stall
+    ).toEqual({ answerRevision: 2, followUpIds: ["held-1"], reason: "pane_gone" });
+    // With the answer handled, only the follow-ups are held, for their own reason.
+    const handledAnswer = row(1, {
+      local_status: "human-answered",
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      answers_json: answers({ revision: 2 }),
+      messages_json: messages(
+        {
+          message_id: "held-1",
+          event_seq: 10,
+          delivery: { status: "delivery-uncertain", error_code: "inject_ambiguous" },
+        },
+        { message_id: "held-2", event_seq: 11, delivery: { status: "needs-attention" } }
+      ),
+    });
+    expect(project(handledAnswer, new Map([[qid(1), 2]])).stall).toEqual({
+      answerRevision: null,
+      followUpIds: ["held-1", "held-2"],
+      reason: "inject_ambiguous",
+    });
+    // Free text never passes for a code.
+    expect(
+      project(
+        row(1, {
+          local_status: "human-answered",
+          delivery_status: "needs-attention",
+          error_code: `free text ${SECRET}`,
+          answers_json: answers({}),
+        })
+      ).stall?.reason
+    ).toBe("unspecified");
   });
 });

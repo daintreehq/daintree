@@ -703,12 +703,14 @@ export function WorktreeMenuItems({
         </C.Item>,
         ...(baseOperation
           ? [
-              <C.Item
-                key="git-continue"
-                onSelect={() => dispatchGit("git.continueRepositoryOperation", {})}
-              >
+              // Opens Review Hub rather than continuing from here (#17559). This
+              // row names only the kind, from the last poll, so a one-click
+              // continue would advance whichever operation is there by the
+              // time it lands, a replacement included. Review Hub reads the
+              // operation, shows it, and pins its Continue to that one.
+              <C.Item key="git-continue" onSelect={() => dispatchGit("worktree.openReviewHub", {})}>
                 <Play className={ICON} />
-                Continue {OPERATION_LABEL[baseOperation].toLowerCase()}
+                Continue {OPERATION_LABEL[baseOperation].toLowerCase()} in Review Hub
               </C.Item>,
               <C.Item
                 key="git-abort"

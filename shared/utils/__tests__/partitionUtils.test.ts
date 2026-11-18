@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   sanitizePartitionToken,
   buildDevPreviewPartition,
-  isDevPreviewPartition,
   buildBrowserPartition,
   isBrowserPartition,
   partitionProjectKey,
@@ -65,28 +64,6 @@ describe("buildDevPreviewPartition", () => {
   });
 });
 
-describe("isDevPreviewPartition", () => {
-  it("accepts a well-formed dev-preview partition", () => {
-    expect(isDevPreviewPartition("persist:dev-preview-proj-main-panel")).toBe(true);
-    expect(isDevPreviewPartition(buildDevPreviewPartition("a", "b", "c"))).toBe(true);
-  });
-
-  it("rejects the default portal partition", () => {
-    expect(isDevPreviewPartition("persist:portal")).toBe(false);
-  });
-
-  it("rejects non-persist or malformed partitions", () => {
-    expect(isDevPreviewPartition("dev-preview-a-b-c")).toBe(false);
-    expect(isDevPreviewPartition("persist:dev-preview-a-b")).toBe(false);
-    expect(isDevPreviewPartition("persist:dev-preview-a-b-c!")).toBe(false);
-  });
-
-  it("rejects non-string values", () => {
-    expect(isDevPreviewPartition(undefined)).toBe(false);
-    expect(isDevPreviewPartition(123)).toBe(false);
-  });
-});
-
 describe("buildBrowserPartition", () => {
   it("composes the per-project persist:browser-* partition", () => {
     expect(buildBrowserPartition("proj")).toBe("persist:browser-proj");
@@ -144,7 +121,7 @@ describe("partitionProjectKey", () => {
     expect(remote).not.toBe(local);
     expect(isBrowserPartition(remote)).toBe(true);
     const preview = buildDevPreviewPartition(partitionProjectKey("proj-1", "studio"), "main", "p1");
-    expect(isDevPreviewPartition(preview)).toBe(true);
+    expect(preview).toMatch(/^persist:dev-preview-[a-z0-9_-]+-[a-z0-9_-]+-[a-z0-9_-]+$/);
     expect(preview).not.toBe(buildDevPreviewPartition("proj-1", "main", "p1"));
   });
 

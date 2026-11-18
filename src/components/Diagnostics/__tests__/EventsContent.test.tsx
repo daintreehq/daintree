@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
+import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { EventRecord } from "@shared/types";
 import { EventsContent } from "../EventsContent";
@@ -152,5 +153,41 @@ describe("EventsContent — disposed guard", () => {
     expect(mockSetEvents).toHaveBeenCalledTimes(1);
     const hydrated = mockSetEvents.mock.calls[0]![0] as EventRecord[];
     expect(hydrated.map((e) => e.id)).toEqual(["1", "2"]);
+  });
+});
+
+describe("EventsContent — first-read skeleton onset", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOnEventBatch.mockReturnValue(() => {});
+    mockSubscribe.mockReturnValue(undefined);
+    mockUnsubscribe.mockReturnValue(undefined);
+    stubGlobals();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("paints no loading rows when the snapshot settles inside the onset gate", async () => {
+    mockGetEvents.mockResolvedValue([]);
+    const { queryByRole } = render(<EventsContent />);
+    expect(queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS - 1);
+    });
+    expect(queryByRole("status")).toBeNull();
+  });
+
+  it("paints the loading rows once a slow snapshot crosses the onset gate", async () => {
+    mockGetEvents.mockReturnValue(new Promise(() => {}));
+    const { queryByRole, getByRole } = render(<EventsContent />);
+    expect(queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
+    expect(getByRole("status").getAttribute("aria-label")).toBe("Loading events");
   });
 });

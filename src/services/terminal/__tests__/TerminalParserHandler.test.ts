@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalParserHandler } from "../TerminalParserHandler";
 import { ManagedTerminal } from "../types";
 
+const { handleOsc52 } = vi.hoisted(() => ({ handleOsc52: vi.fn() }));
+vi.mock("../osc52Clipboard", () => ({ handleOsc52 }));
+
 // Mock global process.env
 const originalEnv = process.env;
 
@@ -140,15 +143,22 @@ describe("TerminalParserHandler", () => {
     expect(() => new TerminalParserHandler(mockManaged)).not.toThrow();
   });
 
-  it("should block OSC 52 clipboard write on regular terminals", () => {
+  it("hands OSC 52 to the clipboard policy with the live pane, and always consumes it", () => {
     mockManaged.kind = "terminal";
     mockManaged.launchAgentId = undefined;
     mockManaged.runtimeAgentId = undefined;
+    handleOsc52.mockReset();
 
     new TerminalParserHandler(mockManaged);
 
     const osc52 = oscHandlers.find((h) => h.ident === 52);
-    expect(osc52).toBeDefined();
+    expect(osc52.handler("c;dGVzdA==")).toBe(true);
+    expect(handleOsc52).toHaveBeenCalledWith(mockManaged, "c;dGVzdA==");
+
+    // A throwing policy still swallows the sequence rather than leak it.
+    handleOsc52.mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
     expect(osc52.handler("c;dGVzdA==")).toBe(true);
   });
 

@@ -23,6 +23,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Navigation",
   },
   {
+    // Unbound by default: ⌘P then "files" + Tab reaches the same scope, and the
+    // nearby chords are taken. Rebindable for anyone who wants a direct key.
+    actionId: "nav.quickOpenFile",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open file by name",
+    category: "Navigation",
+  },
+  {
     actionId: "nav.focusRegion.next",
     combo: "F6",
     scope: "global",
@@ -417,6 +427,24 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
+    // Unbound by default; here so it can be bound (#17236).
+    actionId: "decisions.openInbox",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open Decisions inbox",
+    category: "Agents",
+  },
+  {
+    // Unbound by default; here so it can be bound (#17236).
+    actionId: "decisions.openNextQuestion",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open next Decisions question",
+    category: "Agents",
+  },
+  {
     actionId: "agent.focusNextWorking",
     combo: "Cmd+Alt+.",
     scope: "global",
@@ -716,46 +744,6 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Toggle notification inbox",
     category: "Panels",
-  },
-  {
-    actionId: "panel.togglePortal",
-    combo: "Cmd+\\",
-    scope: "global",
-    priority: 0,
-    description: "Toggle portal panel",
-    category: "Panels",
-  },
-  {
-    actionId: "portal.closeTab",
-    combo: "Cmd+W",
-    scope: "portal",
-    priority: 20,
-    description: "Close active portal tab",
-    category: "Portal",
-  },
-  {
-    actionId: "portal.nextTab",
-    combo: "Ctrl+Tab",
-    scope: "portal",
-    priority: 20,
-    description: "Next portal tab",
-    category: "Portal",
-  },
-  {
-    actionId: "portal.prevTab",
-    combo: "Ctrl+Shift+Tab",
-    scope: "portal",
-    priority: 20,
-    description: "Previous portal tab",
-    category: "Portal",
-  },
-  {
-    actionId: "portal.newTab",
-    combo: "Cmd+T",
-    scope: "portal",
-    priority: 20,
-    description: "New portal tab",
-    category: "Portal",
   },
   {
     actionId: "devPreview.reloadPreview",
@@ -1286,14 +1274,6 @@ const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
     description: "Close focused panel",
     category: "Terminal",
   },
-  {
-    actionId: "portal.closeTab",
-    combo: "Ctrl+F4",
-    scope: "portal",
-    priority: 20,
-    description: "Close active portal tab",
-    category: "Portal",
-  },
 ];
 
 // Windows and Linux replacements for core rows whose Cmd folds to a Ctrl key
@@ -1493,7 +1473,6 @@ export const KEYBINDING_CATEGORY_ORDER: readonly string[] = [
   "Search",
   "Project",
   "Git",
-  "Portal",
   "Dev preview",
   "View",
   "Voice",

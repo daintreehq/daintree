@@ -29,6 +29,7 @@ import {
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import type { PluginActionDescriptor, PluginScopeKey } from "../../../shared/types/plugin.js";
 import type { TerminalRecipe } from "../../../shared/types/project.js";
+import { pluginCloudProviderStatusChanged } from "./pluginCloudProviders.js";
 
 /**
  * Scope of a plugin's contributions: `"global"` for installed and builtin
@@ -488,6 +489,8 @@ export class PluginContributionBroadcaster {
 
   broadcastProvenanceChanged(): void {
     if (this.deps.isDisposed()) return;
+    // A plugin turned off, blocked, or uninstalled changes what its cloud accounts say.
+    pluginCloudProviderStatusChanged();
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "plugin:provenance-changed",
       payload: {},

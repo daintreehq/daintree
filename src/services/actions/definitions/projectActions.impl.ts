@@ -210,7 +210,11 @@ export const projectActionRuns = {
     // Parsed rather than asserted: this is the one action whose args arrive
     // from a click payload, and a parse both narrows the type and rejects a
     // malformed dispatch instead of trusting it.
-    const { runId, workspaceId: requestedWorkspaceId } = openRunArgs.parse(args);
+    const {
+      runId,
+      workspaceId: requestedWorkspaceId,
+      worktreeId: requestedWorktreeId,
+    } = openRunArgs.parse(args);
 
     // The workspace THIS view owns, not the one the app is globally pointed
     // at. `currentProject` is per-view — main answers `project:get-current`
@@ -298,7 +302,13 @@ export const projectActionRuns = {
     // incoming view applies once its state has hydrated. Closing first is
     // right here: the view holding this dialog is about to be replaced.
     usePilotStore.getState().close();
-    const focusIntent = { intent: "focus-panel", panelId: runId } as const;
+    // A blank id names no worktree, so it carries no fallback either.
+    const worktreeId = requestedWorktreeId?.trim() ? requestedWorktreeId : undefined;
+    const focusIntent = {
+      intent: "focus-panel",
+      panelId: runId,
+      ...(worktreeId !== undefined ? { worktreeId } : {}),
+    } as const;
 
     // Projects and scratches are disjoint id spaces with separate stores,
     // switch handlers and current-pointers (#11518), so the destination has
@@ -331,7 +341,11 @@ export const projectActionRuns = {
         label: "Try again",
         variant: "primary",
         onClick: () => {
-          void actionService.dispatch("pilot.openRun", { runId, workspaceId });
+          void actionService.dispatch("pilot.openRun", {
+            runId,
+            workspaceId,
+            ...(worktreeId !== undefined ? { worktreeId } : {}),
+          });
         },
       });
     }
@@ -612,6 +626,8 @@ export const projectActionRuns = {
     delete sanitized.daintreeMcpTier;
     delete sanitized.daintreeMcpSkipConfirmations;
     delete sanitized.exposeDaintreeMcpToAgents;
+    // Standing consent to unattended removals (#17321): Project Settings only.
+    delete sanitized.removeMergedWorktrees;
     // Changed only through the project link actions, which hold the Assistant
     // to its own links; main keeps the stored list through a save anyway. The
     // pre-#17243 key goes too, since a stored list under it is still read.

@@ -93,7 +93,7 @@ export function registerFilesHandlers(): () => void {
 
   const handleSearch = async (
     ctx: IpcContext,
-    { cwd, query, limit }: FileSearchPayload
+    { cwd, query, limit, filesOnly }: FileSearchPayload
   ): Promise<{ files: string[] }> => {
     checkRateLimit(CHANNELS.FILES_SEARCH, 20, 10_000);
 
@@ -105,7 +105,7 @@ export function registerFilesHandlers(): () => void {
     }
 
     try {
-      const files = await fileSearchService.search({ cwd, query, limit });
+      const files = await fileSearchService.search({ cwd, query, limit, filesOnly });
       return { files };
     } catch (error) {
       console.error("[IPC] files:search failed:", error);

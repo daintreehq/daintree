@@ -90,6 +90,17 @@ export class UnusableConnectionError extends TransportError {
   }
 }
 
+/** wsl.exe has no distribution by the host's saved name: removed, renamed, or never installed. */
+export class WslDistroMissingError extends UnusableConnectionError {
+  constructor(
+    readonly distro: string,
+    detail: string
+  ) {
+    super(`${distro} isn't installed in WSL`, detail);
+    this.name = "WslDistroMissingError";
+  }
+}
+
 /** ssh reached the host and found no Daintree listening there in Host mode. */
 export class HostModeOffError extends TransportError {
   constructor(detail: string) {

@@ -135,6 +135,8 @@ export interface PtyEventRouterDeps {
   callbacks: PtyEventRouterCallbacks;
   /** Logger for warnings — keeps the router free of console.* coupling. */
   logWarn: (message: string) => void;
+  /** True for a terminal Main owns on a different shard than this router's. */
+  isForeignTerminal?: (terminalId: string) => boolean;
 }
 
 /**
@@ -163,6 +165,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     onHostThrottled: (payload) => {
       deps.emitter.emit("host-throttled", payload);
     },
+    isForeignTerminal: deps.isForeignTerminal,
   });
 
   if (bridged) {
@@ -321,6 +324,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
 
     case "replay-history-result":
       broker.resolve(event.requestId, event.replayed ?? 0);
+      return true;
+
+    case "reset-terminal-modes-result":
+      broker.resolve(event.requestId, event.reset === true);
       return true;
 
     case "available-terminals":

@@ -19,7 +19,7 @@ vi.mock("@/clients/decisionsClient", () => ({
   },
 }));
 
-import { useDecisionsOn, useDecisionsSwitch } from "../useDecisionsOn";
+import { readDecisionsSwitch, useDecisionsOn, useDecisionsSwitch } from "../useDecisionsOn";
 
 const seen: string[] = [];
 
@@ -72,5 +72,26 @@ describe("useDecisionsSwitch", () => {
     render(<Probe />);
 
     expect(seen.at(-1)).toBe("off/false");
+  });
+
+  it("is read outside React as the view's watch last heard it, and unknown once nobody holds it", () => {
+    expect(readDecisionsSwitch()).toBe("unknown");
+    const { unmount } = render(<Probe />);
+    report({ state: "connected" } as DecisionsStatus);
+    expect(readDecisionsSwitch()).toBe("on");
+    report({ state: "off" } as DecisionsStatus);
+    expect(readDecisionsSwitch()).toBe("off");
+    unmount();
+    expect(readDecisionsSwitch()).toBe("unknown");
+  });
+
+  it("watches nothing and reads unknown while inactive", () => {
+    function Inactive() {
+      seen.push(useDecisionsSwitch(false));
+      return null;
+    }
+    render(<Inactive />);
+    expect(watch.listener).toBeNull();
+    expect(seen.at(-1)).toBe("unknown");
   });
 });

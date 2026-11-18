@@ -665,7 +665,7 @@ label:focus-within .brand-mark,
   }
 }
 
-/* The document tab family (`ui/document-tab`): grid, dock, portal and assistant
+/* The document tab family (`ui/document-tab`): grid, dock and assistant
    tabs. Under either reduce-motion trigger their colour fades and the close
    control's reveal snap, like the palette row's; the sliding underline is
    Framer's and follows `MotionConfig`. */

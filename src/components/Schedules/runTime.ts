@@ -1,8 +1,29 @@
 import { machineTimeZone } from "@shared/utils/cron";
 
+// Every zone a schedule names gets its own formatters, so a form typing zones by
+// hand shouldn't grow the cache without bound.
+const FORMATTER_CACHE_LIMIT = 32;
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+// Building a formatter resolves its locale and zone, which costs far more than
+// formatting with it, and a column of runs asks for the same few again and again.
+function dateTimeFormat(
+  locale: string | undefined,
+  options: Intl.DateTimeFormatOptions
+): Intl.DateTimeFormat {
+  const key = `${locale ?? ""} ${JSON.stringify(options)}`;
+  let formatter = formatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, options);
+    if (formatters.size >= FORMATTER_CACHE_LIMIT) formatters.clear();
+    formatters.set(key, formatter);
+  }
+  return formatter;
+}
+
 /** The calendar year of an instant in a zone. */
 function yearIn(epochMs: number, timeZone: string): number {
-  return Number(new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric" }).format(epochMs));
+  return Number(dateTimeFormat("en-US", { timeZone, year: "numeric" }).format(epochMs));
 }
 
 /**
@@ -17,7 +38,7 @@ export function formatRunInstant(
   now: number = Date.now()
 ): string {
   const foreign = timeZone !== machineTimeZone();
-  return new Intl.DateTimeFormat(undefined, {
+  return dateTimeFormat(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -29,35 +50,59 @@ export function formatRunInstant(
   }).format(epochMs);
 }
 
-/** A run's date and its wall-clock time as the schedule's zone reads them, for a column of runs. */
-export function formatRunParts(
-  epochMs: number,
+/** A run's instant, and its date and wall-clock time as the schedule's zone reads them. */
+export interface RunParts {
+  at: number;
+  day: string;
+  time: string;
+}
+
+/**
+ * A column of runs as the schedule's zone reads them, and whether that zone is
+ * foreign here. The machine's zone is read once for the whole column, so every
+ * row and the column's caption agree on it.
+ */
+export function formatRunColumn(
+  runs: readonly number[],
   timeZone: string,
   now: number
-): { day: string; time: string } {
+): { foreign: boolean; rows: RunParts[] } {
   const foreign = timeZone !== machineTimeZone();
-  return {
-    day: new Intl.DateTimeFormat(undefined, {
+  // Held for the whole column, so the shared cache clearing partway through it
+  // never rebuilds one.
+  const year = dateTimeFormat("en-US", { timeZone, year: "numeric" });
+  const time = dateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+    ...(foreign ? { timeZoneName: "short" } : {}),
+  });
+  const dayFormat = (withYear: boolean) =>
+    dateTimeFormat(undefined, {
       weekday: "short",
       month: "short",
       day: "numeric",
       timeZone,
-      ...(yearIn(epochMs, timeZone) !== yearIn(now, timeZone) ? { year: "numeric" } : {}),
-    }).format(epochMs),
-    time: new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone,
-      ...(foreign ? { timeZoneName: "short" } : {}),
-    }).format(epochMs),
-  };
+      ...(withYear ? { year: "numeric" } : {}),
+    });
+  const thisYear = year.format(now);
+  let sameYearDay: Intl.DateTimeFormat | undefined;
+  let otherYearDay: Intl.DateTimeFormat | undefined;
+  const rows = runs.map((run) => {
+    const day =
+      year.format(run) === thisYear
+        ? (sameYearDay ??= dayFormat(false))
+        : (otherYearDay ??= dayFormat(true));
+    return { at: run, day: day.format(run), time: time.format(run) };
+  });
+  return { foreign, rows };
 }
 
 const RELATIVE = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 
 /** The local calendar date of an instant in a zone, as a day count for subtraction. */
 export function localDayNumber(epochMs: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
+  const parts = dateTimeFormat("en-US", {
     timeZone,
     year: "numeric",
     month: "numeric",

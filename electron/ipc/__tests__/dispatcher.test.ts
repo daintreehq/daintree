@@ -309,9 +309,14 @@ describe("invokeForEndpoint", () => {
     UNCLASSIFIED_CHANNEL,
     "user-prompt-templates:list",
     "user-prompt-templates:open-folder",
-    // A Host can never have its owner sign the person's answer (#17101).
+    // A Host can never have its owner sign the person's answer (#17101) or follow-up (#17238).
     "decisions:answer-question",
     "decisions:get-answer-result",
+    "decisions:send-follow-up",
+    "decisions:get-follow-up-result",
+    // Nor their decline (#17239).
+    "decisions:decline-question",
+    "decisions:get-decline-result",
   ])("refuses %s over a link even with a context handler", async (channel) => {
     const handler = vi.fn(() => "ran");
     getIpcDispatcher().registerInvoke(channel, handler);
@@ -454,13 +459,18 @@ describe("remote router", () => {
 
   // A person's prompt templates are this machine's, even in a window on a host
   // (#16398), while the plugin templates beside them come from that host. The
-  // person's Decisions answer is signed by this computer's owner key, even for
-  // a question a Host asked, whose own key never signs one (#17101).
+  // person's Decisions answer, decline and follow-up are signed by this
+  // computer's owner key, even for a question a Host asked, whose own key never
+  // signs one (#17101, #17239, #17238).
   it.each([
     "user-prompt-templates:list",
     "user-prompt-templates:open-folder",
     "decisions:answer-question",
     "decisions:get-answer-result",
+    "decisions:decline-question",
+    "decisions:get-decline-result",
+    "decisions:send-follow-up",
+    "decisions:get-follow-up-result",
   ])("answers %s from this machine for a window driving a host", async (channel) => {
     const router = installRouter();
     const handler = vi.fn(() => "from-this-machine");
@@ -1098,6 +1108,19 @@ describe("remote scope gate", () => {
     expect((await ask(endpoint, "git:get-staging-status", [P2])).ok).toBe(false);
     expect((await ask(endpoint, "git:get-staging-status", ["/etc"])).ok).toBe(false);
     expect(status).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a remote view read only its own project's package.json links (#17252)", async () => {
+    installScope();
+    const declared = handle("project-links:get-declared");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+
+    expect((await ask(endpoint, "project-links:get-declared", [{ projectId: "proj-1" }])).ok).toBe(
+      true
+    );
+    const other = await ask(endpoint, "project-links:get-declared", [{ projectId: "proj-2" }]);
+    expect(other.ok ? null : other.error.code).toBe("PERMISSION");
+    expect(declared).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a remote view's review marks to its own project's worktrees", async () => {

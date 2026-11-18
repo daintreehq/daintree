@@ -70,7 +70,7 @@ export {
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Link, // the toolbar's links launcher — the addresses saved with this project and the person's own
   Link2Off, // detach the issue linked to a worktree
-  ListChecks, // bulk selection of forge rows — the preset picker that selects many issues or PRs at once
+  ListChecks, // bulk selection of forge rows — the preset picker that selects many issues or PRs at once — and a pull request's CI checks, the links launcher's `…` row that opens them
   MemoryStick, // a terminal host's own memory budget — the governor's app-wide output pause
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen

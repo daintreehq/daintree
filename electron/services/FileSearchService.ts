@@ -11,6 +11,8 @@ interface FileListCacheEntry {
   normalizedFiles: string[];
   basenameStarts: Int32Array;
   shortestFiles?: string[];
+  /** `shortestFiles` without directory entries, for a files-only empty query. */
+  shortestOnlyFiles?: string[];
   lastSearchQuery?: string;
   lastSearchCandidates?: number[];
 }
@@ -52,8 +54,14 @@ const FILE_LIST_CACHE = new Cache<string, FileListCacheEntry>({
   maxSize: 30,
   defaultTTL: FILE_LIST_TTL_MS,
 });
+/**
+ * Also the fence. A load commits its index only while it is still this map's
+ * value for its cwd, and every invalidation deletes the entry, so a load the
+ * invalidation overtook can never commit: its key is gone, or a newer load has
+ * taken it. Holding the fence in the entry itself means invalidating a cwd
+ * nobody is loading stores nothing, and the map drains as loads settle.
+ */
 const FILE_LIST_IN_FLIGHT = new Map<string, Promise<FileListCacheEntry>>();
-const FILE_LIST_EPOCHS = new Map<string, number>();
 
 let fileListSweepTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -103,18 +111,12 @@ function scopesOverlap(a: string, b: string): boolean {
 }
 
 /**
- * Drop one already-resolved cwd.
- *
- * The epoch is bumped even when nothing was cached: a load already in flight
- * captured the previous value and `getFiles` refuses to commit a result whose
- * captured epoch has moved. Epochs are deliberately never pruned — deleting one
- * would let a fenced load's captured value compare equal again through the
- * `?? 0` default and reseed the cache with a listing from before the change.
+ * Drop one already-resolved cwd: its index, and the in-flight entry that a load
+ * still running needs in order to commit (see `FILE_LIST_IN_FLIGHT`).
  */
 function invalidateResolvedCwd(resolvedCwd: string): void {
   FILE_LIST_CACHE.invalidate(resolvedCwd);
   FILE_LIST_IN_FLIGHT.delete(resolvedCwd);
-  FILE_LIST_EPOCHS.set(resolvedCwd, (FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) + 1);
 }
 
 const MAX_RESULTS_DEFAULT = 50;
@@ -230,7 +232,14 @@ function buildScoringInputs(files: string[]): {
  * The empty-query ranking, cut at the largest page any caller can ask for, so
  * every limit is a prefix of one cached list rather than of its own selection.
  */
-function shortestFilesFor(entry: FileListCacheEntry): string[] {
+function shortestFilesFor(entry: FileListCacheEntry, filesOnly: boolean): string[] {
+  if (filesOnly) {
+    entry.shortestOnlyFiles ??= selectShortestFiles(
+      entry.files.filter((file) => !file.endsWith("/")),
+      MAX_RESULTS_LIMIT
+    );
+    return entry.shortestOnlyFiles;
+  }
   entry.shortestFiles ??= selectShortestFiles(entry.files, MAX_RESULTS_LIMIT);
   return entry.shortestFiles;
 }
@@ -311,13 +320,18 @@ function findWorstIdx(best: ScoredMatch[]): number {
   return worstIdx;
 }
 
-function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number): string[] {
+function pickTopMatches(
+  entry: FileListCacheEntry,
+  query: string,
+  limit: number,
+  filesOnly = false
+): string[] {
   const queryLower = normalizeQuery(query).toLowerCase();
   const normalizedQuery = queryLower.endsWith("/") ? queryLower.slice(0, -1) : queryLower;
   const effectiveLimit = clampInt(limit, 1, MAX_RESULTS_LIMIT, MAX_RESULTS_DEFAULT);
 
   if (normalizedQuery.length === 0) {
-    return shortestFilesFor(entry).slice(0, effectiveLimit);
+    return shortestFilesFor(entry, filesOnly).slice(0, effectiveLimit);
   }
 
   const best: ScoredMatch[] = [];
@@ -340,7 +354,10 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
       entry.basenameStarts[fileIdx]
     );
     if (score === null) continue;
+    // Recorded before the files-only skip: the next query narrows from this
+    // list whatever it asks for, and must still find the directories.
     matchingCandidates.push(fileIdx);
+    if (filesOnly && file.endsWith("/")) continue;
 
     const match = { file, score };
     if (best.length < effectiveLimit) {
@@ -544,14 +561,19 @@ export class FileSearchService {
     }
   }
 
-  async search(payload: { cwd: string; query: string; limit?: number }): Promise<string[]> {
+  async search(payload: {
+    cwd: string;
+    query: string;
+    limit?: number;
+    filesOnly?: boolean;
+  }): Promise<string[]> {
     try {
       const resolvedCwd = path.resolve(payload.cwd);
       const limit = clampInt(payload.limit, 1, MAX_RESULTS_LIMIT, MAX_RESULTS_DEFAULT);
 
       const entry = await this.getFiles(resolvedCwd);
 
-      return pickTopMatches(entry, payload.query, limit);
+      return pickTopMatches(entry, payload.query, limit, payload.filesOnly === true);
     } catch {
       return [];
     }
@@ -592,9 +614,7 @@ export class FileSearchService {
    */
   invalidateUnder(root: string): void {
     const resolvedRoot = path.resolve(root);
-    // The root itself always, cached or not, so this keeps `invalidate`'s
-    // fencing contract for a load in flight against the root.
-    const targets = new Set<string>([resolvedRoot]);
+    const targets = new Set<string>();
 
     // `Cache.forEach` skips expired entries without deleting them, so sweep
     // first: an expired descendant would otherwise be invisible here and
@@ -624,15 +644,24 @@ export class FileSearchService {
   }
 
   /**
+   * How many cwd keys the index cache and the in-flight loads hold between
+   * them, for tests that check invalidation leaves nothing behind once loads
+   * settle.
+   */
+  getRetainedKeyCount(): number {
+    return FILE_LIST_CACHE.size() + FILE_LIST_IN_FLIGHT.size;
+  }
+
+  /**
    * Drop every index and stop the sweep.
    *
    * For tests and perf fixtures. The app has no need of it: the timer is
-   * `unref()`'d and disarms itself once the cache drains. In-flight keys are
-   * fenced rather than merely forgotten, so a load still settling cannot reseed
-   * the cache after teardown.
+   * `unref()`'d and disarms itself once the cache drains. Clearing the
+   * in-flight map is what fences a load still settling, so it cannot reseed the
+   * cache after teardown.
    */
   dispose(): void {
-    for (const key of [...FILE_LIST_IN_FLIGHT.keys()]) invalidateResolvedCwd(key);
+    FILE_LIST_IN_FLIGHT.clear();
     FILE_LIST_CACHE.clear();
     disarmFileListSweep();
   }
@@ -674,7 +703,6 @@ export class FileSearchService {
       return existing;
     }
 
-    const epoch = FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0;
     const loadPromise: Promise<FileListCacheEntry> = this.loadFileList(resolvedCwd)
       .then((loaded) => {
         const { normalizedFiles, basenameStarts } = buildScoringInputs(loaded);
@@ -683,7 +711,7 @@ export class FileSearchService {
           normalizedFiles,
           basenameStarts,
         };
-        if ((FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) === epoch) {
+        if (FILE_LIST_IN_FLIGHT.get(resolvedCwd) === loadPromise) {
           FILE_LIST_CACHE.set(resolvedCwd, entry);
           armFileListSweep();
         }

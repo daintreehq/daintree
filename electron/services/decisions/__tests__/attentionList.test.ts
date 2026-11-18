@@ -9,6 +9,7 @@ import {
 } from "@daintreehq/decisions-client";
 import {
   HANDLED_ANSWERS_META_KEY,
+  answerNeedsAttention,
   answerPreviewOf,
   copiedAnswerText,
   heldFollowUps,
@@ -22,7 +23,7 @@ import {
   withoutHandled,
 } from "../attentionList.js";
 import { DECISION_BLOCK_START, DECISION_FOLLOWUP_START } from "../answerNotice.js";
-import { entry, message, messages, row as baseRow } from "./questionRows.js";
+import { DECLINE, entry, message, messages, row as baseRow } from "./questionRows.js";
 
 /**
  * A question id as the library mints it: long enough for the id pattern the
@@ -75,6 +76,31 @@ describe("needs attention", () => {
     expect(needsAttention(row(4, { delivery_status: "needs-attention", history_only: true }))).toBe(
       false
     );
+  });
+
+  it("never asks a person about their own decline, however its notice stopped, and counts it handled (#17234)", () => {
+    const declined = {
+      local_status: "cancelled" as const,
+      answers_json: serializeAnswers([entry(DECLINE)]),
+    };
+    for (const delivery_status of ["needs-attention", "delivery-uncertain"] as const) {
+      const r = row(1, { ...declined, delivery_status });
+      expect(answerNeedsAttention(r, new Map())).toBe(false);
+      expect(threadNeedsAttention(r, new Map())).toBe(false);
+      // Handled with nothing marked, so it keeps nothing of its question waiting.
+      expect(isHandled(r, new Map())).toBe(true);
+      expect(withoutHandled([r], new Map())).toEqual([]);
+    }
+    const withdrawn = row(2, { local_status: "cancelled", delivery_status: "needs-attention" });
+    expect(answerNeedsAttention(withdrawn, new Map())).toBe(true);
+    expect(isHandled(withdrawn, new Map())).toBe(false);
+    // Declined, reopened, then withdrawn: the decline no longer closed it.
+    const superseded = row(3, {
+      ...declined,
+      question_revision: 2,
+      delivery_status: "needs-attention",
+    });
+    expect(answerNeedsAttention(superseded, new Map())).toBe(true);
   });
 });
 
@@ -181,9 +207,29 @@ describe("follow-ups that need a person (#16231)", () => {
     // Each follow-up says whether the answer came before it.
     expect(text).toContain("before answering");
     expect(text).toContain("about a decision already made");
+    // Both from the phone.
+    expect(text.match(/^sent_from: phone$/gm)).toHaveLength(2);
+    expect(text).not.toContain("sent_from: computer");
     expect(text.split(FOLLOWUP_BLOCK_END)).toHaveLength(3);
     expect(text).not.toContain("decision-injection");
     expect(text).not.toContain("injection_id");
+  });
+
+  it("copies a follow-up written on the computer as sent from it (#17238)", () => {
+    const fromComputer = message({
+      message_id: "0193f1a2b3c4d5e6aaaa000000000003",
+      event_seq: 10,
+      signer_device_id: "dev_owner_1",
+      signer_role: "owner-desktop",
+    });
+    const text = copiedAnswerText(
+      row(41),
+      [],
+      [{ message: fromComputer, text: "From the desk." }]
+    )!;
+    expect(text).toContain("source: human\nsent_from: computer\n");
+    expect(text).toContain("The person sent this from their computer before answering.");
+    expect(text).not.toContain("sent_from: phone");
   });
 
   it("copies a thread longer than one typed chunk could hold", () => {

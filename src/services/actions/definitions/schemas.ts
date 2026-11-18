@@ -639,12 +639,6 @@ export const PersistedStoreInfoSchema = z.object({
   parseStatus: z.enum(["ok", "missing", "corrupt"]),
 });
 
-export const PortalTabSummarySchema = z.object({
-  id: z.string(),
-  url: z.string().nullable(),
-  title: z.string(),
-});
-
 export const RecipeSummarySchema = z.object({
   id: z.string(),
   name: z.string(),

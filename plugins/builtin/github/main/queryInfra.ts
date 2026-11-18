@@ -4,22 +4,33 @@ import { configure } from "safe-stable-stringify";
 import type {
   CheckRun,
   CIStatus,
+  Deployment,
   Issue,
   IssueComment,
   Page,
   PR,
 } from "../../../../shared/types/forge.js";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import { rateLimitServiceForHost } from "./GitHubRateLimitService.js";
+import { GITHUB_COM_HOST } from "./GitHubHost.js";
 import { forgeQueryCache, forgeQueryInflight } from "./GitHubCaches.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 
-function requireClient(): NonNullable<ReturnType<typeof GitHubAuth.createClient>> {
-  const client = GitHubAuth.createClient();
+export function requireGitHubClient(
+  host: string
+): NonNullable<ReturnType<typeof GitHubAuth.createClient>> {
+  const client = GitHubAuth.createClient(host);
   if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
+    throw new Error(missingTokenMessage(host));
   }
   return client;
+}
+
+/** What a request for `host` reports when that host has no token. */
+export function missingTokenMessage(host: string): string {
+  return host.toLowerCase() === GITHUB_COM_HOST
+    ? "GitHub token not configured. Set it in Settings."
+    : `No GitHub token for ${host}. Set it in Settings.`;
 }
 
 // Deterministic stringify so equivalent variables produce one cache key
@@ -34,36 +45,44 @@ const stringifyVariables = configure({ bigint: false });
 // they'd all collide on one key. `\0` can't appear in a GraphQL document or
 // queryLabel, so neither field can be forged by the serialized variables.
 function buildCacheKey(
+  host: string,
   query: string,
   variables: Record<string, unknown>,
   queryLabel: string
 ): string {
+  // The host leads: the same owner/repo on github.com and an Enterprise
+  // Server are different repositories. The host's token version follows, so a
+  // response fetched with a replaced or cleared token is never served again,
+  // even when it lands after the caches were cleared.
+  const scope = `${host.toLowerCase()}#${GitHubAuth.getTokenVersion(host)}`;
   return createHash("sha256")
-    .update(`${queryLabel}\0${stringifyVariables(variables) ?? ""}\0${query}`)
+    .update(`${scope}\0${queryLabel}\0${stringifyVariables(variables) ?? ""}\0${query}`)
     .digest("hex");
 }
 
 export async function dispatchQuery(
+  host: string,
   query: string,
   variables: Record<string, unknown>,
   queryLabel: string
 ): Promise<GraphQlQueryResponseData> {
-  const client = requireClient();
+  const client = requireGitHubClient(host);
+  const rateLimits = rateLimitServiceForHost(host);
   try {
     const response = (await client(query, {
       ...variables,
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
-    gitHubRateLimitService.updateFromGraphQL(response, queryLabel);
+    rateLimits.updateFromGraphQL(response, queryLabel);
     return response;
   } catch (error) {
     // A response that carried errors still spent budget, and says how much:
     // read it here, once per request, however many callers share the result.
     const data = (error as { data?: unknown } | null)?.data;
     if (data && typeof data === "object") {
-      gitHubRateLimitService.updateFromGraphQL(data as Record<string, unknown>, queryLabel);
+      rateLimits.updateFromGraphQL(data as Record<string, unknown>, queryLabel);
     }
-    throw new Error(parseGitHubError(error), { cause: error });
+    throw new Error(parseGitHubError(error, host), { cause: error });
   }
 }
 
@@ -74,12 +93,13 @@ export async function dispatchQuery(
  * cached — a transient failure must not block retries for the full TTL.
  */
 export async function runQuery(
+  host: string,
   query: string,
   variables: Record<string, unknown>,
   queryLabel: string,
   bypass = false
 ): Promise<GraphQlQueryResponseData> {
-  const key = buildCacheKey(query, variables, queryLabel);
+  const key = buildCacheKey(host, query, variables, queryLabel);
 
   if (!bypass) {
     const cached = forgeQueryCache.get(key);
@@ -89,7 +109,7 @@ export async function runQuery(
     if (inflight !== undefined) return inflight;
   }
 
-  const request = dispatchQuery(query, variables, queryLabel)
+  const request = dispatchQuery(host, query, variables, queryLabel)
     .then((response) => {
       // `bypass` skips the raw-response cache write too: the list paths
       // (LIST_ISSUES/LIST_PRS) hold the strictly-larger raw response only to
@@ -123,6 +143,10 @@ export const getIssueInflight = new Map<string, Promise<Issue | null>>();
 export const getPRInflight = new Map<string, Promise<PR | null>>();
 export const getCIStatusInflight = new Map<string, Promise<CIStatus | null>>();
 export const getChecksInflight = new Map<string, Promise<{ checks: CheckRun[] } | null>>();
+export const getDeploymentsInflight = new Map<
+  string,
+  Promise<{ deployments: Deployment[] } | null>
+>();
 export const findPRsByBranchesInflight = new Map<string, Promise<Map<string, PR | null>>>();
 export const findPRsByNumbersInflight = new Map<string, Promise<Map<number, PR | null>>>();
 export const getCIStatusesInflight = new Map<string, Promise<Map<number, CIStatus | null>>>();

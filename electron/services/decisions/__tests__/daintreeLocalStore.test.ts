@@ -42,7 +42,7 @@ import {
   eraseDecisionsData,
   hasDecisionsData,
 } from "../daintreeLocalStore.js";
-import { messages } from "./questionRows.js";
+import { DECLINE, answers, messages } from "./questionRows.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../persistence/migrations");
@@ -896,6 +896,31 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.hasPendingDelivery()).toBe(false);
   });
 
+  it("says a person's decline waits only while its notice is still to be typed (#17234)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const declined = {
+      local_status: "cancelled" as const,
+      delivery_status: "desktop-received" as const,
+      answers_json: answers(DECLINE),
+    };
+    await store.commitNewQuestion(row("q1", 1, declined), item("o1", "q1"));
+    expect(await store.hasPendingDelivery()).toBe(true);
+
+    // Dropped for a run that has gone: the row keeps its status, and nothing waits.
+    await store.updateQuestion("q1", { answers_json: answers({ ...DECLINE, deliver: false }) });
+    expect(await store.hasPendingDelivery()).toBe(false);
+    await store.updateQuestion("q1", { delivery_status: "pending-host" });
+    expect(await store.hasPendingDelivery()).toBe(false);
+
+    // Entries that can't be read are taken as waiting, and never fail the read.
+    for (const unreadable of ["not json", '["damaged"]', "[5]", '{"deliver":true}', "{}", '"x"']) {
+      await store.updateQuestion("q1", { answers_json: unreadable });
+      expect(await store.hasPendingDelivery()).toBe(true);
+    }
+    await store.updateQuestion("q1", { answers_json: answers({ ...DECLINE, deliver: false }) });
+    expect(await store.hasPendingDelivery()).toBe(false);
+  });
+
   it("says a follow-up waits while one waits to be typed or its receipt to be sent (#16231)", async () => {
     const store = new DaintreeLocalStore(sqlite);
     const settled = { status: "terminal-delivered" as const, injection_id: "i1" };
@@ -1063,6 +1088,39 @@ describe("DaintreeLocalStore ordering and failures", () => {
       last_attempt_at: "2026-11-02T00:00:00.000Z",
     });
     expect(await store.getQuestion("q2")).toMatchObject(failed);
+  });
+
+  it("keeps a question past a later event when its create's receipt is read after it (#17234)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    // Declined on the phone at seq 9, before the create's response (seq 4) was read.
+    await store.commitNewQuestion(
+      row("q1", 1, { local_status: "cancelled", remote_event_seq: 9, error_code: "pane_gone" }),
+      item("o1", "q1")
+    );
+    await store.commitNewQuestion(row("q2", 2), item("o2", "q2"));
+    const receipt = (seq: number) =>
+      ({ local_status: "open", remote_event_seq: seq, error_code: null }) as const;
+
+    await store.updateQuestion("q1", receipt(4));
+    await store.updateQuestion("q2", receipt(5));
+
+    expect(await store.getQuestion("q1")).toMatchObject({
+      local_status: "cancelled",
+      remote_event_seq: 9,
+      error_code: "pane_gone",
+    });
+    expect(await store.getQuestion("q2")).toMatchObject({
+      local_status: "open",
+      remote_event_seq: 5,
+    });
+
+    // A reopen is a later event, and applies.
+    await store.updateQuestion("q1", { ...receipt(12), question_revision: 1 });
+    expect(await store.getQuestion("q1")).toMatchObject({
+      local_status: "open",
+      remote_event_seq: 12,
+      question_revision: 1,
+    });
   });
 
   it("never writes back a create it has deleted, from a copy a flush still holds", async () => {

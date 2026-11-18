@@ -7,9 +7,15 @@ import {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type {
   AnswerDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
+  DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
+  SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import type { ListenerRoute } from "../mcp-server/listenerHold.js";
 import { createPaneAccess, type PaneAccessSources } from "./paneAccess.js";
@@ -143,6 +149,26 @@ export interface DecisionsQuestions {
   ): Promise<DecisionQuestionAnswerResult>;
   /** Where a person's answer stands, by its id. */
   answerResultForPerson(answerId: string): Promise<DecisionAnswerResultRead>;
+  /**
+   * The person's decline from Daintree's own view (#17239), signed with this
+   * computer's key like their answer, on the same bridge.
+   */
+  declineForPerson(
+    payload: DeclineDecisionQuestionPayload,
+    hostId: string | null
+  ): Promise<DecisionQuestionDeclineResult>;
+  /** Where a person's decline stands, by its id. */
+  declineResultForPerson(declineId: string): Promise<DecisionDeclineResultRead>;
+  /**
+   * The person's follow-up from Daintree's own view (#17238), signed as
+   * their answer is, on the bridge that refuses an agent's.
+   */
+  followUpForPerson(
+    payload: SendDecisionFollowUpPayload,
+    hostId: string | null
+  ): Promise<DecisionQuestionFollowUpResult>;
+  /** Where a person's follow-up stands, by its id. */
+  followUpResultForPerson(messageId: string): Promise<DecisionFollowUpResultRead>;
   close(): Promise<void>;
 }
 
@@ -168,6 +194,10 @@ export function openDecisionsMcpRoute(
     cancelForPerson: (questionId, scope) => bridge.cancelForPerson(questionId, scope),
     answerForPerson: (payload, hostId) => bridge.answerForPerson(payload, hostId),
     answerResultForPerson: (answerId) => bridge.answerResultForPerson(answerId),
+    declineForPerson: (payload, hostId) => bridge.declineForPerson(payload, hostId),
+    declineResultForPerson: (declineId) => bridge.declineResultForPerson(declineId),
+    followUpForPerson: (payload, hostId) => bridge.followUpForPerson(payload, hostId),
+    followUpResultForPerson: (messageId) => bridge.followUpResultForPerson(messageId),
     close: () => route.close(),
   };
 }

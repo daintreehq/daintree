@@ -87,6 +87,7 @@ import {
   type TerminalAgentDetectionHost,
 } from "./TerminalAgentDetection.js";
 import { offerAgentRunArgvSession } from "./agentRunArgv.js";
+import { TERMINAL_MODE_RESET } from "./terminalModeReset.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import { isTerminalAgentLive } from "./agentLiveness.js";
 import { readScheduledRunRef } from "../../../shared/utils/scheduledRunProvenance.js";
@@ -1707,6 +1708,23 @@ export class TerminalProcess {
     this.emitDataDirect(historyChunk);
 
     return linesToReplay;
+  }
+
+  /**
+   * Put back the input modes a program left on when it died (#17328), as
+   * output Daintree makes itself: the mirror and the pane get the same bytes in
+   * stream order, and the process gets none. False when there is no live
+   * screen to reset: an exited or killed pane, or one showing the snapshot it
+   * kept at exit, which must stay as captured.
+   */
+  resetTerminalModes(): boolean {
+    const terminal = this.terminalInfo;
+    if (terminal.wasKilled || terminal.isExited || !this.lifecycle.isAlive) return false;
+    if (terminal.preservedSnapshot !== undefined) return false;
+    if (!this.analysis.feedModeReset(TERMINAL_MODE_RESET)) return false;
+    this.sessionSnapshotter.schedule();
+    this.emitDataDirect(TERMINAL_MODE_RESET);
+    return true;
   }
 
   shouldPreserveOnExit(exitCode: number): boolean {

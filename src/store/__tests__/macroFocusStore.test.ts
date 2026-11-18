@@ -9,7 +9,7 @@ describe("macroFocusStore", () => {
     store.setVisibility("grid", true);
     store.setVisibility("dock", false);
     store.setVisibility("sidebar", true);
-    store.setVisibility("portal", false);
+    store.setVisibility("assistant", false);
     store.refs.clear();
   });
 
@@ -29,12 +29,12 @@ describe("macroFocusStore", () => {
     it("includes all four regions when all visible", () => {
       const store = useMacroFocusStore.getState();
       store.setVisibility("dock", true);
-      store.setVisibility("portal", true);
+      store.setVisibility("assistant", true);
       store.cycleNext(); // grid
       store.cycleNext(); // dock
       store.cycleNext(); // sidebar
-      store.cycleNext(); // portal
-      expect(useMacroFocusStore.getState().focusedRegion).toBe("portal");
+      store.cycleNext(); // assistant
+      expect(useMacroFocusStore.getState().focusedRegion).toBe("assistant");
       store.cycleNext(); // wraps to grid
       expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
     });

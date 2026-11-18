@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { updateFaviconBadge, clearFaviconBadge } from "@/services/FaviconBadgeService";
-import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
+import { useTerminalNotificationPanelIds } from "@/hooks/useTerminalSelectors";
 
 const DEBOUNCE_MS = 300;
 const FOCUS_BLUR_DEBOUNCE_MS = 150;
 
+function samePanes(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((panelId, index) => panelId === b[index]);
+}
+
+const NO_PANES: readonly string[] = [];
+
 export function useWindowNotifications(): void {
-  const prevWaitingRef = useRef(0);
+  // The panes last seen, so a swap at the same count (one pane stops waiting
+  // as another starts) still reaches main, which counts each pane once with
+  // any Decisions question waiting in it (#17233). The pending send reads it.
+  const prevWaitingRef = useRef<readonly string[]>(NO_PANES);
+  // Whether the count moved while the pending send waited. A send whose count
+  // didn't is marked membership-only, so main runs every pass it ran when only
+  // counts were sent, and the swap's own only while a question waits.
+  const countMovedRef = useRef(false);
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurDimTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -17,7 +30,7 @@ export function useWindowNotifications(): void {
   const faviconBadgedRef = useRef(false);
   const [blurTime, setBlurTime] = useState<number | null>(null);
 
-  const { waitingCount } = useTerminalNotificationCounts(blurTime);
+  const waitingPanelIds = useTerminalNotificationPanelIds(blurTime);
 
   useEffect(() => {
     const handleFocus = () => {
@@ -35,7 +48,8 @@ export function useWindowNotifications(): void {
         debounceTimerRef.current = null;
       }
 
-      prevWaitingRef.current = 0;
+      prevWaitingRef.current = NO_PANES;
+      countMovedRef.current = false;
 
       if (faviconBadgedRef.current) {
         faviconBadgedRef.current = false;
@@ -44,7 +58,7 @@ export function useWindowNotifications(): void {
 
       if (sentBadgeCountRef.current !== 0 && window.electron?.notification?.updateBadge) {
         sentBadgeCountRef.current = 0;
-        window.electron.notification.updateBadge({ waitingCount: 0 });
+        window.electron.notification.updateBadge({ waitingPanelIds: [] });
       }
     };
 
@@ -76,8 +90,15 @@ export function useWindowNotifications(): void {
   }, []);
 
   useEffect(() => {
-    if (prevWaitingRef.current !== waitingCount) {
-      prevWaitingRef.current = waitingCount;
+    const previous = prevWaitingRef.current;
+    if (!samePanes(previous, waitingPanelIds)) {
+      prevWaitingRef.current = waitingPanelIds;
+      const countMoved = previous.length !== waitingPanelIds.length;
+
+      // A swap at the same count rides on a send already pending rather than
+      // postponing it, so panes trading places can't hold a steady count back.
+      if (!countMoved && debounceTimerRef.current) return;
+      if (countMoved) countMovedRef.current = true;
 
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
@@ -86,11 +107,24 @@ export function useWindowNotifications(): void {
 
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
+        const panes = prevWaitingRef.current;
+        const membershipOnly = !countMovedRef.current;
+        countMovedRef.current = false;
+        const waitingCount = panes.length;
 
         if (window.electron?.notification?.updateBadge) {
-          sentBadgeCountRef.current = waitingCount;
-          window.electron.notification.updateBadge({ waitingCount });
+          if (membershipOnly) {
+            window.electron.notification.updateBadge({
+              waitingPanelIds: [...panes],
+              membershipOnly,
+            });
+          } else {
+            sentBadgeCountRef.current = waitingCount;
+            window.electron.notification.updateBadge({ waitingPanelIds: [...panes] });
+          }
         }
+        // The count, and so the favicon, stayed where it was.
+        if (membershipOnly) return;
 
         if (!windowFocusedRef.current) {
           if (waitingCount > 0) {
@@ -103,7 +137,7 @@ export function useWindowNotifications(): void {
         }
       }, DEBOUNCE_MS);
     }
-  }, [waitingCount]);
+  }, [waitingPanelIds]);
 
   useEffect(() => {
     return () => {
@@ -113,7 +147,7 @@ export function useWindowNotifications(): void {
       }
 
       if (window.electron?.notification?.updateBadge) {
-        window.electron.notification.updateBadge({ waitingCount: 0 });
+        window.electron.notification.updateBadge({ waitingPanelIds: [] });
       }
       clearFaviconBadge();
     };

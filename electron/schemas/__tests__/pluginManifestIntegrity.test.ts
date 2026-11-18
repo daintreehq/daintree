@@ -140,6 +140,32 @@ describe("forgeProvider cross-references (#10620)", () => {
     expect(issue?.path).toEqual(["contributes", "forgeProviders", 0, "settingsScopeRef"]);
   });
 
+  it("accepts matchesSettingRef that names a user-scoped string setting", () => {
+    const result = manifestWith({
+      settings: [setting("enterpriseHost")],
+      forgeProviders: [forgeProvider({ matchesSettingRef: "enterpriseHost" })],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["names no declared setting", []],
+    ["names a secret", [{ id: "enterpriseHost", type: "secret" }]],
+    [
+      "names a project-scoped setting",
+      [{ id: "enterpriseHost", type: "string", scope: "project" }],
+    ],
+    ["names a non-string setting", [{ id: "enterpriseHost", type: "boolean" }]],
+  ])("rejects matchesSettingRef that %s", (_label, settings) => {
+    const result = manifestWith({
+      settings,
+      forgeProviders: [forgeProvider({ matchesSettingRef: "enterpriseHost" })],
+    });
+    expect(result.success).toBe(false);
+    const issue = issueWithCode(result, "forge_matches_setting_ref_invalid");
+    expect(issue?.path).toEqual(["contributes", "forgeProviders", 0, "matchesSettingRef"]);
+  });
+
   it("accepts viewRefs that name declared views", () => {
     const result = manifestWith({
       panels: [panel("v1")],

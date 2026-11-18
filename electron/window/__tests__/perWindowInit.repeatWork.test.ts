@@ -83,7 +83,6 @@ vi.mock("../portDistribution.js", () => ({
   distributePortsToView: vi.fn(),
   releaseAllTerminalWorkerPorts: vi.fn(),
 }));
-vi.mock("../skeletonCss.js", () => ({ resolveInitialCanvasBackgroundColor: () => "#000000" }));
 vi.mock("../../../shared/theme/index.js", () => ({
   resolveAppTheme: () => ({ tokens: { "surface-canvas": "#000" } }),
 }));
@@ -91,9 +90,6 @@ vi.mock("../../services/PtyClient.js", () => ({ PtyClient: vi.fn() }));
 vi.mock("../../services/AgentVersionService.js", () => ({ AgentVersionService: vi.fn() }));
 vi.mock("../../services/AgentModelCatalogService.js", () => ({
   AgentModelCatalogService: vi.fn(),
-}));
-vi.mock("../../services/PortalManager.js", () => ({
-  PortalManager: vi.fn(function PortalManager() {}),
 }));
 vi.mock("../../services/EventBuffer.js", () => ({
   EventBuffer: vi.fn(function EventBuffer(this: { start: () => void }) {

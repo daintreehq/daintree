@@ -369,7 +369,9 @@ export class ProjectSettingsManager {
    * from a copy read before it was approved. The dictation vocabulary and the
    * project links are kept as stored: only {@link changeVoiceDictionary} and
    * {@link changeLinks} write them, and a save carrying links could
-   * otherwise change one the Assistant may not.
+   * otherwise change one the Assistant may not. The merged-worktree switch is
+   * kept as stored too: only {@link setRemoveMergedWorktrees} writes it, so a
+   * settings form holding a copy read before it was flipped can't undo it.
    */
   async saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
     return this.serializeWrite(projectId, async () => {
@@ -383,9 +385,24 @@ export class ProjectSettingsManager {
         ...(browserAllowedHosts ? { browserAllowedHosts } : {}),
         voiceDictionary: saved?.voiceDictionary,
         links: saved?.links,
+        removeMergedWorktrees: saved?.removeMergedWorktrees === true ? true : undefined,
       };
       if (next.voiceDictionary === undefined) delete next.voiceDictionary;
       if (next.links === undefined) delete next.links;
+      if (next.removeMergedWorktrees === undefined) delete next.removeMergedWorktrees;
+      await this.writeProjectSettings(projectId, next);
+    });
+  }
+
+  /**
+   * Turn the merged-worktree rule (#17321) on or off for the project, applied
+   * to the settings as they are on disk. Off is stored as absent.
+   */
+  async setRemoveMergedWorktrees(projectId: string, enabled: boolean): Promise<void> {
+    return this.serializeWrite(projectId, async () => {
+      const settings = await this.readProjectSettings(projectId);
+      const next: ProjectSettings = { ...settings, removeMergedWorktrees: true };
+      if (!enabled) delete next.removeMergedWorktrees;
       await this.writeProjectSettings(projectId, next);
     });
   }

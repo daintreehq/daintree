@@ -9,7 +9,9 @@ import {
   SettingsActions,
   SettingsGroup,
   SettingsRow,
+  settingsRowFrameClass,
 } from "@/components/Settings/SettingsGroup";
+import { Callout } from "@/components/ui/Callout";
 import {
   Select,
   SelectContent,
@@ -22,7 +24,12 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
-import { KNOWN_EDITOR_IDS } from "@shared/types/editor";
+import {
+  JETBRAINS_EDITOR_IDS,
+  KNOWN_EDITOR_IDS,
+  LEGACY_JETBRAINS_EDITOR_ID,
+  terminalOnlyEditorCommand,
+} from "@shared/types/editor";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { invalidateProjectSettingsCache, withProjectSettingsWrite } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -44,7 +51,16 @@ const EDITOR_LABELS: Record<KnownEditorId, string> = {
   "antigravity-ide": "Antigravity IDE",
   zed: "Zed",
   neovim: "Neovim",
-  webstorm: "WebStorm / IntelliJ",
+  webstorm: "Any JetBrains IDE",
+  "jetbrains-webstorm": "WebStorm",
+  "jetbrains-idea": "IntelliJ IDEA",
+  "jetbrains-phpstorm": "PhpStorm",
+  "jetbrains-pycharm": "PyCharm",
+  "jetbrains-goland": "GoLand",
+  "jetbrains-rider": "Rider",
+  "jetbrains-clion": "CLion",
+  "jetbrains-datagrip": "DataGrip",
+  "jetbrains-rubymine": "RubyMine",
   sublime: "Sublime Text",
   custom: "Custom…",
 };
@@ -148,9 +164,12 @@ export function EditorIntegrationTab() {
         setDiscoveredEditors(discovered);
         setPreferredEditor(pref ?? null);
         setDefaultEditor(fallback ?? null);
-        // The draft starts at what a launch would try first, else the first editor found.
-        const start = pref ??
-          fallback ?? { id: discovered.find((d) => d.available)?.id ?? DEFAULT_EDITOR_ID };
+        // The draft starts at what a launch would try first, else the first editor found
+        // that automatic selection would also launch.
+        const firstLaunchable = discovered.find(
+          (d) => d.available && !terminalOnlyEditorCommand(d.id)
+        );
+        const start = pref ?? fallback ?? { id: firstLaunchable?.id ?? DEFAULT_EDITOR_ID };
         const draft = draftFieldsOf(start);
         setSelectedId(draft.id);
         setCustomCommand(draft.command);
@@ -335,7 +354,9 @@ export function EditorIntegrationTab() {
         path: activeProjectPath,
         projectId: activeProjectId,
       });
-      // A remote window copies the host path when no editor here can open it: not a pass.
+      // A remote window copies the host path when no editor here can open it, and a
+      // terminal-only editor launches nothing: neither is a pass. The notice always fires,
+      // since the selection can change, here or in another window, before main answers.
       announceOpenInEditorFallback(fallback);
       if (!isMountedRef.current) return;
       setTestResult(fallback ? "error" : "ok");
@@ -348,12 +369,35 @@ export function EditorIntegrationTab() {
   };
 
   const availabilityMap = new Map(discoveredEditors.map((d) => [d.id, d]));
+  const selectedTerminalCommand = terminalOnlyEditorCommand(selectedId);
+  // The legacy JetBrains choice is kept wherever it is already in use, never offered anew.
+  const offersLegacyJetBrains = [
+    selectedId,
+    acceptedDraft?.id,
+    preferredEditor?.id,
+    defaultEditor?.id,
+  ].includes(LEGACY_JETBRAINS_EDITOR_ID);
+  // What a saved legacy JetBrains choice opens: the first of them the scan found.
+  const firstFoundJetBrains = JETBRAINS_EDITOR_IDS.map((id) => availabilityMap.get(id)).find(
+    (d) => d?.available
+  );
 
   // The inventory rule: the current choice and anything that needs attention stay in
   // view; the healthy remainder, with its paths, sits behind a disclosure.
-  const selectedEntry = discoveredEditors.find((d) => d.id === selectedId);
-  const missingEditors = discoveredEditors.filter((d) => !d.available && d.id !== selectedId);
-  const otherFoundEditors = discoveredEditors.filter((d) => d.available && d.id !== selectedId);
+  const selectedEntry =
+    selectedId === LEGACY_JETBRAINS_EDITOR_ID
+      ? (firstFoundJetBrains ?? {
+          id: selectedId,
+          name: EDITOR_LABELS[selectedId],
+          available: false,
+        })
+      : availabilityMap.get(selectedId);
+  const missingEditors = discoveredEditors.filter(
+    (d) => !d.available && d.id !== selectedEntry?.id
+  );
+  const otherFoundEditors = discoveredEditors.filter(
+    (d) => d.available && d.id !== selectedEntry?.id
+  );
   const foundCount = discoveredEditors.filter((d) => d.available).length;
 
   const renderEditorEntry = (d: DiscoveredEditor) => (
@@ -409,7 +453,7 @@ export function EditorIntegrationTab() {
         : "Saved for this project. No default set on this machine"
       : defaultEditor
         ? `Using the default on this machine: ${editorLabel(defaultEditor)}`
-        : "No default set: Daintree tries $VISUAL, $EDITOR, then the first editor it finds";
+        : "No default set: Daintree tries $VISUAL, $EDITOR, then the first editor it finds that opens its own window";
 
   if (!activeProjectId) {
     return (
@@ -474,9 +518,15 @@ export function EditorIntegrationTab() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {KNOWN_EDITOR_IDS.map((id) => {
-                    const disc = availabilityMap.get(id);
-                    const available = id === "custom" ? true : (disc?.available ?? false);
+                  {KNOWN_EDITOR_IDS.filter(
+                    (id) => id !== LEGACY_JETBRAINS_EDITOR_ID || offersLegacyJetBrains
+                  ).map((id) => {
+                    const available =
+                      id === "custom"
+                        ? true
+                        : id === LEGACY_JETBRAINS_EDITOR_ID
+                          ? Boolean(firstFoundJetBrains)
+                          : (availabilityMap.get(id)?.available ?? false);
                     return (
                       <SelectItem key={id} value={id}>
                         {EDITOR_LABELS[id]}
@@ -489,6 +539,20 @@ export function EditorIntegrationTab() {
             </>
           )}
         />
+
+        {selectedTerminalCommand && (
+          <div className={settingsRowFrameClass(0)}>
+            <Callout
+              severity="warning"
+              title={`${EDITOR_LABELS[selectedId]} runs in a terminal`}
+              data-testid="editor-terminal-only-note"
+            >
+              Daintree can&apos;t open it directly. To use it, choose Custom… with your terminal app
+              as the command, like kitty, and &quot;{selectedTerminalCommand} {"{file}"}&quot; as
+              the arguments.
+            </Callout>
+          </div>
+        )}
 
         {selectedId !== "custom" && discoveredEditors.length > 0 && (
           <>
@@ -646,7 +710,7 @@ export function EditorIntegrationTab() {
                 )}
               </span>
             ) : (
-              "Not saved yet — Daintree uses the first editor it finds"
+              "Not saved yet — Daintree picks an editor automatically"
             )
           }
         >

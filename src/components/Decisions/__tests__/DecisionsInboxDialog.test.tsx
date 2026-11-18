@@ -1,0 +1,767 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import type { DecisionsStatus } from "@shared/types/decisions";
+import type {
+  DecisionDeclineResultRead,
+  DecisionQuestionCancelResult,
+  DecisionQuestionContent,
+  DecisionQuestionContentResult,
+  DecisionQuestionDeclineResult,
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+  DecisionQuestionReference,
+  DecisionQuestionStanding,
+  DecisionQuestionSummariesResult,
+  DeclineDecisionQuestionPayload,
+} from "@shared/types/decisionsQuestion";
+import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+
+let decisionsOn = true;
+const onListeners = new Set<() => void>();
+vi.mock("@/hooks/useDecisionsOn", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    onListeners.add(listener);
+    return () => onListeners.delete(listener);
+  };
+  const snapshot = () => (decisionsOn ? "on" : "off");
+  return {
+    useDecisionsSwitch: () => useSyncExternalStore(subscribe, snapshot),
+    useDecisionsOn: () => useSyncExternalStore(subscribe, () => snapshot() === "on"),
+  };
+});
+
+let remote = false;
+vi.mock("@/hooks/useHostPlatform", () => ({ isRemoteWindow: () => remote }));
+vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => "project-a" }));
+
+/** The panels of this view (project A). */
+let panels: Record<string, { location: string }> = {};
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: (select: (state: { panelsById: typeof panels }) => unknown) =>
+    select({ panelsById: panels }),
+}));
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: (select: (state: { projects: { id: string; name: string }[] }) => unknown) =>
+    select({ projects: [{ id: "project-a", name: "Alpha" }] }),
+}));
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStoreOptional: (_select: unknown, fallback: unknown) => fallback,
+}));
+
+const getAllTerminals = vi.fn<() => Promise<BackendTerminalInfo[]>>();
+vi.mock("@/clients/terminalClient", () => ({
+  terminalClient: { getAll: () => getAllTerminals() },
+}));
+
+const dispatch = vi.fn<(id: string, args: unknown) => Promise<{ ok: boolean }>>();
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (id: string, args: unknown) => dispatch(id, args) },
+}));
+
+import { DecisionsInboxDialog } from "../DecisionsInboxDialog";
+
+type ByReference = { reference: DecisionQuestionReference };
+const listQuestions = vi.fn<() => Promise<DecisionQuestionList>>();
+const getStatus = vi.fn<() => Promise<DecisionsStatus>>();
+const getQuestionContentByReference =
+  vi.fn<(payload: ByReference) => Promise<DecisionQuestionContentResult>>();
+const getQuestionSummariesByReference =
+  vi.fn<
+    (payload: {
+      references: DecisionQuestionReference[];
+    }) => Promise<DecisionQuestionSummariesResult>
+  >();
+const cancelQuestionByReference =
+  vi.fn<(payload: ByReference) => Promise<DecisionQuestionCancelResult>>();
+const declineQuestion =
+  vi.fn<(payload: DeclineDecisionQuestionPayload) => Promise<DecisionQuestionDeclineResult>>();
+const getDeclineResult =
+  vi.fn<(payload: { declineId: string }) => Promise<DecisionDeclineResultRead>>();
+let listListeners: Array<(list: DecisionQuestionList) => void> = [];
+let statusListeners: Array<(status: DecisionsStatus) => void> = [];
+
+function reference(questionId: string, over: Partial<DecisionQuestionReference> = {}) {
+  return { hostId: "host_1", projectId: "project-a", terminalId: "t1", questionId, ...over };
+}
+
+function terminal(info: Partial<BackendTerminalInfo> & { id: string }): BackendTerminalInfo {
+  return { cwd: "/repos", spawnedAt: 0, ...info };
+}
+
+function item(
+  questionId: string,
+  alias: number,
+  standing: DecisionQuestionStanding,
+  over: Partial<DecisionQuestionListItem> = {}
+): DecisionQuestionListItem {
+  return {
+    reference: reference(questionId),
+    alias,
+    agentKind: "claude",
+    projectLabel: "Alpha (as asked)",
+    worktreeId: "w1",
+    worktreeRoot: "/repos/alpha/feature-x",
+    requirement: "human-required",
+    askedAt: "2026-11-02T10:00:00.000Z",
+    expiresAt: null,
+    settledAt: null,
+    standing,
+    replyRequest: null,
+    stall: null,
+    ...over,
+  };
+}
+
+const OPEN: DecisionQuestionStanding = { kind: "waiting", reason: "open" };
+
+/** Project A's open question, project B's answer being delivered, and A's expired one. */
+const LIST: DecisionQuestionList = {
+  revision: 1,
+  questions: [
+    item(
+      "question-1",
+      1,
+      { kind: "settled", outcome: "expired" },
+      { askedAt: "2026-11-02T08:00:00.000Z", settledAt: "2026-11-02T11:00:00Z" }
+    ),
+    item("question-2", 2, OPEN, { askedAt: "2026-11-02T09:00:00.000Z" }),
+    item(
+      "question-3",
+      3,
+      { kind: "to-type" },
+      {
+        reference: reference("question-3", { projectId: "project-b", terminalId: "t9" }),
+        projectLabel: "Beta",
+        agentKind: "codex",
+        askedAt: "2026-11-02T10:00:00.000Z",
+      }
+    ),
+  ],
+};
+
+function content(questionId: string, alias: number, over: Partial<DecisionQuestionContent> = {}) {
+  const question: DecisionQuestionContent = {
+    questionId,
+    alias,
+    terminalId: "t1",
+    reference: reference(questionId),
+    revision: 1,
+    question: `Body of question ${alias}`,
+    context: null,
+    kind: "choice",
+    options: [{ id: "yes", label: "Ship it", description: null }],
+    allowText: false,
+    requirement: "human-required",
+    askedAt: "2026-11-02T10:00:00.000Z",
+    expiresAt: null,
+    status: "expired",
+    closedReason: null,
+    deliveryStatus: "terminal-delivered",
+    attachments: [],
+    thread: [],
+    ...over,
+  };
+  return question;
+}
+
+const CONTENT: Record<string, DecisionQuestionContent> = {
+  "question-1": content("question-1", 1),
+  "question-2": content("question-2", 2, { status: "open" }),
+  "question-3": content("question-3", 3, {
+    status: "human-answered",
+    reference: reference("question-3", { projectId: "project-b", terminalId: "t9" }),
+  }),
+  "question-4": content("question-4", 4, { status: "open" }),
+};
+
+function waitFor(check: () => void) {
+  return vi.waitFor(check, { timeout: 4000 });
+}
+
+function push(list: DecisionQuestionList) {
+  act(() => {
+    for (const listener of [...listListeners]) listener(list);
+  });
+}
+
+function pushStatus(status: DecisionsStatus) {
+  act(() => {
+    for (const listener of [...statusListeners]) listener(status);
+  });
+}
+
+function rows() {
+  return screen.queryAllByTestId("decisions-inbox-row");
+}
+
+function rowNamed(alias: string) {
+  const row = rows().find((candidate) => candidate.textContent?.startsWith(alias));
+  if (!row) throw new Error(`no row ${alias}`);
+  return row;
+}
+
+function shownBody() {
+  return screen.getByTestId("decision-question-content").textContent ?? "";
+}
+
+function open(options?: { terminalId?: string }) {
+  act(() => useDecisionsInboxStore.getState().open(options));
+}
+
+function readsOf(questionId: string) {
+  return getQuestionContentByReference.mock.calls.filter(
+    ([payload]) => payload.reference.questionId === questionId
+  ).length;
+}
+
+beforeEach(() => {
+  decisionsOn = true;
+  remote = false;
+  panels = {};
+  listListeners = [];
+  statusListeners = [];
+  useDecisionsInboxStore.setState({ isOpen: false, request: { terminalId: null, seq: 0 } });
+  listQuestions.mockReset().mockResolvedValue(LIST);
+  getStatus
+    .mockReset()
+    .mockResolvedValue({ state: "connected", relayOrigin: "https://relay.example", revision: 1 });
+  getQuestionContentByReference.mockReset().mockImplementation(async ({ reference }) => {
+    const question = CONTENT[reference.questionId];
+    return question ? { result: "read", question } : { result: "not-found" };
+  });
+  getQuestionSummariesByReference.mockReset().mockImplementation(async ({ references }) => ({
+    result: "read",
+    summaries: references.map((ref) => ({
+      questionId: ref.questionId,
+      result: "read" as const,
+      line: `Line of ${ref.questionId}`,
+    })),
+  }));
+  cancelQuestionByReference.mockReset().mockResolvedValue({ result: "cancelling" });
+  declineQuestion.mockReset().mockImplementation(async ({ declineId }) => ({
+    result: "submitted",
+    declineId,
+    outcome: { status: "declined" },
+  }));
+  getDeclineResult.mockReset().mockResolvedValue({ result: "not-found" });
+  useDecisionsAnswerStore.getState().clear();
+  getAllTerminals.mockReset().mockResolvedValue([]);
+  dispatch.mockReset().mockResolvedValue({ ok: true });
+  Reflect.set(window, "electron", {
+    decisions: {
+      listQuestions,
+      getStatus,
+      getQuestionContentByReference,
+      getQuestionSummariesByReference,
+      cancelQuestionByReference,
+      declineQuestion,
+      getDeclineResult,
+    },
+    events: {
+      on: (
+        name: string,
+        callback: ((list: DecisionQuestionList) => void) & ((status: DecisionsStatus) => void)
+      ) => {
+        if (name === "decisions:questions-changed") {
+          listListeners.push(callback);
+          return () => {
+            listListeners = listListeners.filter((listener) => listener !== callback);
+          };
+        }
+        if (name === "decisions:status-changed") {
+          statusListeners.push(callback);
+          return () => {
+            statusListeners = statusListeners.filter((listener) => listener !== callback);
+          };
+        }
+        return () => {};
+      },
+    },
+    terminal: { onDecisionState: () => () => {} },
+  });
+  render(
+    <TooltipProvider>
+      <DecisionsInboxDialog />
+    </TooltipProvider>
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  Reflect.deleteProperty(window, "electron");
+});
+
+describe("DecisionsInboxDialog", () => {
+  it("lists every question in its group, each named by its line, agent, place, age and state", async () => {
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    const groups = Array.from(
+      screen.getByTestId("decisions-inbox-list").querySelectorAll("section")
+    ).map((section) => section.getAttribute("data-testid"));
+    expect(groups).toEqual([
+      "decisions-inbox-group-needs-you",
+      "decisions-inbox-group-delivering",
+      "decisions-inbox-group-history",
+    ]);
+    expect(screen.getByTestId("decisions-inbox-group-needs-you").textContent).toContain("q-2");
+    expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-3");
+    expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-1");
+
+    await waitFor(() => expect(rowNamed("q-2").textContent).toContain("Line of question-2"));
+    const own = rowNamed("q-2");
+    // This view's project by its current name, a worktree by its folder.
+    expect(own.textContent).toContain(getEffectiveAgentConfig("claude")!.name);
+    expect(own.textContent).toContain("Alpha");
+    expect(own.textContent).not.toContain("Alpha (as asked)");
+    expect(own.textContent).toContain("feature-x");
+    expect(own.textContent).toContain("Waiting for an answer");
+    // The dots between agent, project and worktree are hidden from assistive technology.
+    const dots = Array.from(own.querySelectorAll("span")).filter(
+      (span) => span.textContent?.trim() === "·"
+    );
+    expect(dots).toHaveLength(2);
+    for (const dot of dots) expect(dot.getAttribute("aria-hidden")).toBe("true");
+    // Another project's question keeps the name it was asked under, and its own agent.
+    const other = rowNamed("q-3");
+    expect(other.textContent).toContain("Beta");
+    expect(other.textContent).toContain(getEffectiveAgentConfig("codex")!.name);
+    expect(other.textContent).not.toContain(getEffectiveAgentConfig("claude")!.name);
+    // Each row's age is its own question's.
+    const ages = ["q-1", "q-2", "q-3"].map(
+      (alias) => rowNamed(alias).querySelector("time")?.getAttribute("datetime") ?? null
+    );
+    expect(ages).toEqual(LIST.questions.map((entry) => new Date(entry.askedAt).toISOString()));
+    // One read of the lines, by reference, for every row.
+    expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
+    expect(getQuestionSummariesByReference.mock.calls[0]![0].references).toHaveLength(3);
+  });
+
+  it("shows the first question beside the list, read by reference", async () => {
+    open();
+    await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+    expect(getQuestionContentByReference).toHaveBeenCalledWith({
+      reference: reference("question-2"),
+    });
+    expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+    expect(screen.getByTestId("decisions-inbox-detail-title").textContent).toContain("q-2");
+  });
+
+  it("waits on the dialog while the list loads, then puts the keyboard on the question shown", async () => {
+    let resolveList!: (list: DecisionQuestionList) => void;
+    listQuestions.mockImplementationOnce(
+      () => new Promise<DecisionQuestionList>((resolve) => (resolveList = resolve))
+    );
+    open();
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    // Not Close: Enter there would dismiss the inbox before anything shows.
+    expect(document.activeElement?.tagName).not.toBe("BUTTON");
+    await act(async () => resolveList(LIST));
+    await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+  });
+
+  it("starts at the question of the pane that opened it", async () => {
+    open({ terminalId: "t9" });
+    await waitFor(() => expect(rowNamed("q-3").getAttribute("aria-current")).toBe("true"));
+    await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+  });
+
+  it("picks from this opening's list, never one an earlier opening read", async () => {
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    act(() => useDecisionsInboxStore.getState().close());
+
+    // Pane t4 asks its first question while the inbox is closed.
+    let resolveList!: (list: DecisionQuestionList) => void;
+    listQuestions.mockImplementationOnce(
+      () => new Promise<DecisionQuestionList>((resolve) => (resolveList = resolve))
+    );
+    open({ terminalId: "t4" });
+    expect(rows()).toHaveLength(0);
+    await act(async () =>
+      resolveList({
+        revision: 2,
+        questions: [
+          ...LIST.questions,
+          item("question-4", 4, OPEN, { reference: reference("question-4", { terminalId: "t4" }) }),
+        ],
+      })
+    );
+    await waitFor(() => expect(rowNamed("q-4").getAttribute("aria-current")).toBe("true"));
+    await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+  });
+
+  it("keeps the chosen question as the list regroups, and takes its place's when it goes", async () => {
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    fireEvent.click(rowNamed("q-3"));
+    await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+
+    // q-3 settles and moves from second place to the top of history; it stays shown.
+    const settled = {
+      ...LIST.questions[2]!,
+      standing: { kind: "settled", outcome: "answered", handled: false } as const,
+      settledAt: "2026-11-02T12:00:00Z",
+    };
+    push({ revision: 2, questions: [LIST.questions[0]!, LIST.questions[1]!, settled] });
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-3")
+    );
+    expect(rows().map((row) => row.textContent?.slice(0, 3))).toEqual(["q-2", "q-3", "q-1"]);
+    expect(rowNamed("q-3").getAttribute("aria-current")).toBe("true");
+    expect(shownBody()).toContain("Body of question 3");
+    expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
+
+    // Gone from the list: the question now at its place, q-1, is shown instead.
+    push({ revision: 3, questions: [LIST.questions[0]!, LIST.questions[1]!] });
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true");
+    await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+  });
+
+  it("moves through native buttons with one tab stop, reading only the row chosen", async () => {
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    await waitFor(() => expect(readsOf("question-2")).toBeGreaterThan(0));
+    // Native buttons, so Enter and Space choose a row as a click does.
+    for (const row of rows()) expect(row.tagName).toBe("BUTTON");
+    expect(rows().filter((row) => row.tabIndex === 0)).toEqual([rowNamed("q-2")]);
+
+    act(() => rows()[0]!.focus());
+    fireEvent.keyDown(rows()[0]!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows()[1]);
+    fireEvent.keyDown(rows()[1]!, { key: "End" });
+    expect(document.activeElement).toBe(rows()[2]);
+    fireEvent.keyDown(rows()[2]!, { key: "Home" });
+    expect(document.activeElement).toBe(rows()[0]);
+    fireEvent.keyDown(rows()[0]!, { key: "End" });
+    // Moving the focus reads nothing; choosing does.
+    expect(readsOf("question-1")).toBe(0);
+    expect(rows()[2]!.getAttribute("aria-current")).toBeNull();
+    fireEvent.click(rows()[2]!);
+    await waitFor(() => expect(readsOf("question-1")).toBe(1));
+    expect(rows()[2]!.getAttribute("aria-current")).toBe("true");
+    expect(rows().filter((row) => row.tabIndex === 0)).toEqual([rows()[2]]);
+  });
+
+  it("puts the keyboard back on a focused row that moves to another group", async () => {
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    act(() => rowNamed("q-2").focus());
+    push({
+      revision: 2,
+      questions: [
+        LIST.questions[0]!,
+        { ...LIST.questions[1]!, standing: { kind: "to-type" } },
+        LIST.questions[2]!,
+      ],
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+    );
+    expect(document.activeElement).toBe(rowNamed("q-2"));
+  });
+
+  it("leaves the keyboard where it went when a row it left moves later", async () => {
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    act(() => rowNamed("q-2").focus());
+    act(() => rowNamed("q-2").blur());
+    // The blur's own turn has passed before the list moves.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    push({
+      revision: 2,
+      questions: [
+        LIST.questions[0]!,
+        { ...LIST.questions[1]!, standing: { kind: "to-type" } },
+        LIST.questions[2]!,
+      ],
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
+    );
+    expect(document.activeElement).not.toBe(rowNamed("q-2"));
+  });
+
+  it("says when no relay is connected, and nothing once one is", async () => {
+    getStatus.mockResolvedValue({ state: "not-connected", revision: 1 });
+    open();
+    const notice = await screen.findByTestId("decisions-inbox-connection");
+    const noRelay = notice.textContent;
+    expect(noRelay).toContain("Settings → Decisions");
+
+    pushStatus({ state: "reconnecting", relayOrigin: "https://relay.example", revision: 2 });
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-connection").textContent).not.toBe(noRelay)
+    );
+    pushStatus({ state: "connected", relayOrigin: "https://relay.example", revision: 3 });
+    await waitFor(() => expect(screen.queryByTestId("decisions-inbox-connection")).toBeNull());
+    // The questions this computer holds stay listed throughout.
+    expect(rows()).toHaveLength(3);
+  });
+
+  it("waits for the relay's status before calling an empty list new, and not for good", async () => {
+    listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+    let rejectStatus!: (error: Error) => void;
+    getStatus.mockImplementationOnce(
+      () => new Promise<DecisionsStatus>((_resolve, reject) => (rejectStatus = reject))
+    );
+    open();
+    await waitFor(() => expect(listQuestions).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByTestId("decisions-inbox-empty")).toBeNull();
+    await act(async () => rejectStatus(new Error("gone")));
+    await screen.findByTestId("decisions-inbox-empty");
+  });
+
+  it("doesn't call an empty list new while the store can't be read", async () => {
+    listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+    getStatus.mockResolvedValue({
+      state: "not-connected",
+      relayOrigin: "https://relay.example",
+      problem: "storage",
+      revision: 1,
+    });
+    open();
+    await screen.findByTestId("decisions-inbox-connection");
+    expect(screen.queryByTestId("decisions-inbox-empty")).toBeNull();
+
+    pushStatus({ state: "connected", relayOrigin: "https://relay.example", revision: 2 });
+    await screen.findByTestId("decisions-inbox-empty");
+  });
+
+  it("says when there's nothing yet, and offers Retry when the list can't be read", async () => {
+    listQuestions.mockRejectedValueOnce(new Error("gone"));
+    open();
+    const failed = await screen.findByTestId("decisions-inbox-failed");
+    listQuestions.mockResolvedValue({ revision: 4, questions: [] });
+    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+    await screen.findByTestId("decisions-inbox-empty");
+    expect(screen.queryByTestId("decisions-inbox-failed")).toBeNull();
+    expect(screen.queryByTestId("decisions-inbox-detail-title")).toBeNull();
+  });
+
+  it("reads every line once, in reads the IPC takes, and leaves an unreadable row named by alias", async () => {
+    const many = Array.from({ length: 130 }, (_, index) =>
+      item(`question-${String(index).padStart(3, "0")}`, 100 + index, OPEN)
+    );
+    listQuestions.mockResolvedValue({ revision: 1, questions: many });
+    getQuestionSummariesByReference.mockImplementation(async ({ references }) => ({
+      result: "read",
+      summaries: references.map((ref) =>
+        ref.questionId === "question-000"
+          ? { questionId: ref.questionId, result: "unreadable" as const }
+          : { questionId: ref.questionId, result: "read" as const, line: `Line ${ref.questionId}` }
+      ),
+    }));
+    open();
+    await waitFor(() => expect(rowNamed("q-229").textContent).toContain("Line question-129"));
+    const asked = getQuestionSummariesByReference.mock.calls.map(([payload]) => payload.references);
+    for (const references of asked) expect(references.length).toBeLessThanOrEqual(64);
+    const ids = asked.flat().map((ref) => ref.questionId);
+    expect(ids.slice().sort()).toEqual(many.map((entry) => entry.reference.questionId).sort());
+    expect(within(rowNamed("q-100")).getByTestId("decisions-inbox-row-line").textContent).toBe("");
+  });
+
+  it("dismisses the question shown only after the confirmation naming it, at the revision read (#17239)", async () => {
+    open();
+    const dismiss = await screen.findByTestId("decisions-inbox-dismiss");
+    fireEvent.click(dismiss);
+    const confirm = await screen.findByRole("alertdialog");
+    expect(confirm.textContent).toContain("Dismiss question q-2?");
+    expect(declineQuestion).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+    });
+    await waitFor(() => expect(declineQuestion).toHaveBeenCalledOnce());
+    expect(declineQuestion).toHaveBeenCalledWith({
+      reference: reference("question-2"),
+      declineId: expect.any(String),
+      expectedRevision: 1,
+    });
+    expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toMatch(/^Dismissed/)
+    );
+  });
+
+  it("withdraws the question shown only after a second confirmation, once the relay can't take a dismissal", async () => {
+    declineQuestion.mockImplementationOnce(async ({ declineId }) => ({
+      result: "submitted",
+      declineId,
+      outcome: { status: "unsupported", by: "relay" },
+    }));
+    open();
+    fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+    const asked = await screen.findByRole("alertdialog");
+    await act(async () => {
+      fireEvent.click(within(asked).getByRole("button", { name: "Dismiss question" }));
+    });
+    expect(asked.textContent).toContain("Withdraw question q-2?");
+    fireEvent.click(within(asked).getByRole("button", { name: "Keep question" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toContain(
+      "Your relay needs an update"
+    );
+    expect(cancelQuestionByReference).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByTestId("decisions-inbox-withdraw"));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(confirm.textContent).toContain("Withdraw question q-2?");
+    const withdraw = within(confirm).getByRole("button", { name: "Withdraw question" });
+    await waitFor(() => expect(withdraw.hasAttribute("aria-disabled")).toBe(false));
+    await act(async () => {
+      fireEvent.click(withdraw);
+    });
+    await waitFor(() => expect(cancelQuestionByReference).toHaveBeenCalledOnce());
+    expect(cancelQuestionByReference).toHaveBeenCalledWith({ reference: reference("question-2") });
+    expect(declineQuestion).toHaveBeenCalledOnce();
+  });
+
+  it("offers no dismissal for a question that has stopped waiting", async () => {
+    open();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    fireEvent.click(rowNamed("q-1"));
+    await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+    expect(screen.queryByTestId("decisions-inbox-dismiss")).toBeNull();
+  });
+
+  describe("going to the terminal that asked", () => {
+    it("focuses a panel of this view only once the inbox has closed", async () => {
+      panels = { t1: { location: "grid" } };
+      open();
+      const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+      fireEvent.click(go);
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+      expect(dispatch).not.toHaveBeenCalled();
+      await waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+      expect(dispatch).toHaveBeenCalledWith("panel.focus", { panelId: "t1" });
+    });
+
+    it("forgets a way to the terminal once the inbox opens again before it had gone", async () => {
+      panels = { t1: { location: "grid" } };
+      open();
+      fireEvent.click(await screen.findByTestId("decisions-inbox-go-to-terminal"));
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      act(() => useDecisionsInboxStore.getState().close());
+      await waitFor(() => expect(screen.queryByTestId("decisions-inbox-dialog")).toBeNull());
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("offers nothing for a panel that's gone or in the trash", async () => {
+      panels = { t1: { location: "trash" } };
+      open();
+      await screen.findByTestId("decision-question-content");
+      expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
+    });
+
+    it("switches to another project whose terminal still runs here", async () => {
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+      ]);
+      open({ terminalId: "t9" });
+      const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+      fireEvent.click(go);
+      await waitFor(() =>
+        expect(dispatch).toHaveBeenCalledWith("pilot.openRun", {
+          runId: "t9",
+          workspaceId: "project-b",
+        })
+      );
+    });
+
+    it("looks again before switching, and stays when the terminal has gone", async () => {
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+      ]);
+      open({ terminalId: "t9" });
+      const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+      getAllTerminals.mockResolvedValue([]);
+      await act(async () => {
+        fireEvent.click(go);
+      });
+      await waitFor(() =>
+        expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull()
+      );
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("does nothing from a button pressed while the inbox is closing", async () => {
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+      ]);
+      open({ terminalId: "t9" });
+      const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+      const looks = getAllTerminals.mock.calls.length;
+      act(() => useDecisionsInboxStore.getState().close());
+      fireEvent.click(go);
+      await act(async () => {});
+      expect(getAllTerminals.mock.calls.length).toBe(looks);
+      await waitFor(() => expect(screen.queryByTestId("decisions-inbox-dialog")).toBeNull());
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("drops a look that lands after another question was chosen", async () => {
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+      ]);
+      open({ terminalId: "t9" });
+      const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+      let resolveLook!: (terminals: BackendTerminalInfo[]) => void;
+      getAllTerminals.mockImplementationOnce(
+        () => new Promise<BackendTerminalInfo[]>((resolve) => (resolveLook = resolve))
+      );
+      fireEvent.click(go);
+      fireEvent.click(rowNamed("q-2"));
+      await waitFor(() => expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true"));
+      await act(async () =>
+        resolveLook([terminal({ id: "t9", projectId: "project-b", hasPty: true })])
+      );
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("never matches the same terminal id in another project, nor a trashed one", async () => {
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-c", hasPty: true }),
+        terminal({ id: "t9", projectId: "project-b", isTrashed: true }),
+      ]);
+      open({ terminalId: "t9" });
+      await waitFor(() => expect(getAllTerminals).toHaveBeenCalled());
+      await screen.findByTestId("decision-question-content");
+      expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
+    });
+
+    it("offers nothing from a Remote Host's window, and names questions as they were asked", async () => {
+      remote = true;
+      panels = { t1: { location: "grid" } };
+      open();
+      await screen.findByTestId("decision-question-content");
+      expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
+      expect(getAllTerminals).not.toHaveBeenCalled();
+      // Its projects are another computer's, whatever their ids.
+      expect(rowNamed("q-2").textContent).toContain("Alpha (as asked)");
+    });
+  });
+
+  it("closes as soon as Decisions turns off", async () => {
+    open();
+    await screen.findByTestId("decision-question-content");
+    act(() => {
+      decisionsOn = false;
+      for (const listener of [...onListeners]) listener();
+    });
+    expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
+  });
+});

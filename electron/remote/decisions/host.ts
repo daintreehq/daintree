@@ -1,5 +1,13 @@
 import type { DecisionsHostRuntime } from "../../../shared/types/decisionsHosts.js";
 import type {
+  DecisionQuestionCancelResult,
+  DecisionQuestionContentResult,
+  DecisionQuestionImagePartResult,
+  DecisionQuestionReference,
+  DecisionQuestionSummariesResult,
+} from "../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsHostQuestionRead,
   HeldHost,
   HostAcceptResult,
   HostIdentityReport,
@@ -20,6 +28,15 @@ import {
   type HostRuntimePayload,
   type HostStatusResult,
 } from "./linkMethods.js";
+import {
+  HostCancelQuestionPayloadSchema,
+  HostQuestionReadSchema,
+  MAX_HOST_QUESTION_LIST_BYTES,
+  MAX_HOST_QUESTIONS,
+  type HostQuestionList,
+  type HostQuestionListPayload,
+  type HostQuestionRead,
+} from "./questionSchemas.js";
 
 /** One attached Shell's session; the session itself is what pending keys are bound to. */
 export interface DecisionsSessionContext {
@@ -50,6 +67,41 @@ export interface DecisionsHostEnrollment {
 
 type Answer = HostStatusResult | HostRequestResult | HostAcceptResult;
 
+/** What a Shell this Host doesn't serve its questions to reads of one: off, for it. */
+const OFF = { result: "off" } as const;
+
+/** What a Shell this Host doesn't serve its questions to is told: a list of none. */
+const NO_QUESTIONS = { hostId: null, owner: null, questions: [] } as const;
+
+/** The longest owner ids a list can name, for sizing its envelope before knowing which owner. */
+const LONGEST_OWNER = { installationId: "x".repeat(64), ownerDeviceId: "x".repeat(64) };
+
+/** The newest questions within what one message carries, by count and by size. */
+function bounded(list: HostQuestionList): HostQuestionList {
+  const kept: HostQuestionList["questions"] = [];
+  let bytes = Buffer.byteLength(
+    JSON.stringify({ hostId: list.hostId, owner: LONGEST_OWNER, questions: [] })
+  );
+  for (let i = list.questions.length - 1; i >= 0 && kept.length < MAX_HOST_QUESTIONS; i--) {
+    const question = list.questions[i]!;
+    // Each question, and the comma before it when one is already kept.
+    bytes += Buffer.byteLength(JSON.stringify(question)) + (kept.length > 0 ? 1 : 0);
+    if (bytes > MAX_HOST_QUESTION_LIST_BYTES) break;
+    kept.push(question);
+  }
+  if (kept.length === list.questions.length) return list;
+  return { hostId: list.hostId, questions: kept.reverse() };
+}
+
+/** The list as sent to one session: named with the owner that session's announcement named. */
+function servedTo(list: HostQuestionList, owner: OwnerOf): HostQuestionListPayload {
+  return {
+    hostId: list.hostId,
+    owner: { installationId: owner.installationId, ownerDeviceId: owner.ownerDeviceId },
+    questions: list.questions,
+  };
+}
+
 type OwnerOf = Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">;
 
 /** This Host's own Decisions (#16022), once loaded. */
@@ -65,6 +117,20 @@ export interface DecisionsHostLifetime {
   reportFor(owner: OwnerOf): DecisionsHostRuntime;
   /** Called whenever what it reports may have changed. */
   onChanged(listener: () => void): () => void;
+  /** This Host's own questions (#17230), content-free; null while it serves none. */
+  questions(): HostQuestionList | null;
+  /** Called whenever its questions may have changed. */
+  onQuestionsChanged(listener: () => void): () => void;
+  /** One of this Host's own questions read by reference, here and never on another machine. */
+  readQuestion(
+    read: DecisionsHostQuestionRead
+  ): Promise<
+    | DecisionQuestionContentResult
+    | DecisionQuestionImagePartResult
+    | DecisionQuestionSummariesResult
+  >;
+  /** The person withdrawing one of this Host's own questions by reference. */
+  cancelQuestion(reference: DecisionQuestionReference): Promise<DecisionQuestionCancelResult>;
 }
 
 /** How the link reaches this Host's own Decisions, loading nothing until it must. */
@@ -84,6 +150,11 @@ export interface DecisionsHostRuntimeSource {
  * (#16022), which turns this Host's own off or on, and hears what the Host
  * reports of it whenever that changes. An owner that never enrolled this
  * Host loads nothing.
+ *
+ * The owner that enrolled this Host, while its Decisions is on, also reads
+ * the Host's own questions (#17230): their content-free list, pushed again
+ * whenever it changes, and each one by reference. Nothing of them goes to a
+ * session whose owner didn't enroll it.
  */
 export function installDecisionsHostWith(
   server: DecisionsSessionSource,
@@ -104,6 +175,44 @@ export function installDecisionsHostWith(
   const ownerKey = (owner: OwnerOf) => `${owner.installationId}\n${owner.ownerDeviceId}`;
   let lifetime: Promise<DecisionsHostLifetime> | null = null;
   let offChanged: (() => void) | null = null;
+  let offQuestions: (() => void) | null = null;
+  /** The list each session was last sent, so one it already has isn't sent again. */
+  const toldQuestions = new Map<LinkSession, string>();
+  /** Sessions whose Shell answered a pushed list UNSUPPORTED: from before #17230, sent no more. */
+  const beforeQuestions = new WeakSet<LinkSession>();
+
+  /** The session's owner enrolled this Host and has Decisions on: only it reads the questions. */
+  const servesQuestions = (session: LinkSession): boolean => {
+    if (disposed || !session.isOpen) return false;
+    const owner = owners.get(session);
+    return owner !== undefined && owner.enabled && runtime?.enrolledBy(owner) === true;
+  };
+
+  const tellQuestions = (session: LinkSession, list: HostQuestionListPayload): void => {
+    const key = JSON.stringify(list);
+    if (toldQuestions.get(session) === key || beforeQuestions.has(session)) return;
+    toldQuestions.set(session, key);
+    session.call(DecisionsLinkMethod.QUESTIONS_CHANGED, list).catch((error: unknown) => {
+      if ((error as { code?: unknown } | null)?.code === "UNSUPPORTED") {
+        beforeQuestions.add(session);
+      } else if (toldQuestions.get(session) === key) {
+        // Not heard: the next change, or the Shell's next read, sends it again.
+        toldQuestions.delete(session);
+      }
+    });
+  };
+
+  /** The Host's questions changed: every session it serves them to hears the new list. */
+  const pushQuestions = (made: DecisionsHostLifetime): void => {
+    if (disposed) return;
+    const list = made.questions();
+    // A Host that stopped serving its questions says nothing: its owner keeps what it last heard.
+    if (list === null) return;
+    const sent = bounded(list);
+    for (const [session, owner] of owners) {
+      if (servesQuestions(session)) tellQuestions(session, servedTo(sent, owner));
+    }
+  };
 
   const tell = (session: LinkSession, report: DecisionsHostRuntime): void => {
     const key = JSON.stringify(report);
@@ -126,6 +235,7 @@ export function installDecisionsHostWith(
       const made = runtime.load().then((loadedLifetime) => {
         if (!disposed && offChanged === null) {
           offChanged = loadedLifetime.onChanged(() => tellOwners(loadedLifetime));
+          offQuestions = loadedLifetime.onQuestionsChanged(() => pushQuestions(loadedLifetime));
           // Sessions told "not enrolled" before an enrollment hear what it is now.
           tellOwners(loadedLifetime);
         }
@@ -231,6 +341,39 @@ export function installDecisionsHostWith(
     }
   };
 
+  /** A read of the Host's questions (#17230), for the owner that enrolled it only. */
+  const readQuestions = async (session: LinkSession, payload: HostQuestionRead) => {
+    if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return payload.read === "list" ? NO_QUESTIONS : OFF;
+    const made = await followLifetime();
+    if (!made || disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    // Checked again: the owner may have said otherwise while the lifetime loaded.
+    if (!servesQuestions(session)) return payload.read === "list" ? NO_QUESTIONS : OFF;
+    if (payload.read === "list") {
+      const list = made.questions();
+      const owner = owners.get(session);
+      if (list === null || owner === undefined) return NO_QUESTIONS;
+      const sent = servedTo(bounded(list), owner);
+      toldQuestions.set(session, JSON.stringify(sent));
+      return sent;
+    }
+    const answer = await made.readQuestion(payload);
+    // What was read goes only to a session still served: its owner may have said otherwise meanwhile.
+    return servesQuestions(session) ? answer : OFF;
+  };
+
+  const cancelQuestion = async (
+    session: LinkSession,
+    reference: DecisionQuestionReference
+  ): Promise<DecisionQuestionCancelResult> => {
+    if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    const made = await followLifetime();
+    if (!made || disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return OFF;
+    return made.cancelQuestion(reference);
+  };
+
   const wire = ({ session }: DecisionsSessionContext): void => {
     if (disposed || wired.has(session)) return;
     wired.add(session);
@@ -254,15 +397,32 @@ export function installDecisionsHostWith(
           (payload) => announced(session, payload)
         )
       : () => {};
+    const offQuestionReads = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.QUESTIONS,
+          HostQuestionReadSchema,
+          (payload) => readQuestions(session, payload)
+        )
+      : () => {};
+    const offCancelQuestion = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.CANCEL_QUESTION,
+          HostCancelQuestionPayloadSchema,
+          ({ reference }) => cancelQuestion(session, reference)
+        )
+      : () => {};
     let offClose: () => void = () => {};
     const unregister = () => {
       offCall();
       offOwnerState();
       offOwnerStateV2();
+      offQuestionReads();
+      offCancelQuestion();
       offClose();
       unregisters.delete(unregister);
       owners.delete(session);
       told.delete(session);
+      toldQuestions.delete(session);
       loaded?.forget(session);
     };
     unregisters.add(unregister);
@@ -278,6 +438,8 @@ export function installDecisionsHostWith(
     offSession();
     offChanged?.();
     offChanged = null;
+    offQuestions?.();
+    offQuestions = null;
     for (const unregister of [...unregisters]) unregister();
     const made = loaded ?? (loading ? await loading.catch(() => null) : null);
     await made?.dispose();

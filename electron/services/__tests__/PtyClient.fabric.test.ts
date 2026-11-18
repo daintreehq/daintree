@@ -1022,6 +1022,74 @@ describe("PtyClient fabric", () => {
     });
   });
 
+  describe("pause-duration gauge ownership (#17575)", () => {
+    const gaugeEvent = (held: string[], cleared?: string[]) => ({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: 1,
+        perTerminalHeld: held.map((terminalId) => ({ terminalId, heldDurationMs: 1000 })),
+        ...(cleared ? { clearedTerminalIds: cleared } : {}),
+      },
+    });
+
+    // From the post-`resetModules` graph, the bus PtyClient emits on.
+    const collectGauges = async () => {
+      const { events } = await import("../events.js");
+      const seen: Array<{ held: string[]; cleared: string[] | undefined }> = [];
+      events.on("terminal:reliability-metric", (payload) => {
+        if (payload.metricType !== "pause-duration-gauge") return;
+        seen.push({
+          held: (payload.perTerminalHeld ?? []).map((entry) => entry.terminalId),
+          cleared: payload.clearedTerminalIds,
+        });
+      });
+      return seen;
+    };
+
+    it("drops a former shard's word on a terminal that moved, keeps the new owner's", async () => {
+      const seen = await collectGauges();
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      client.spawn("t2", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      const shardB = projectShard("project-b");
+      shardB.child.emit("message", { type: "ready" });
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+      client.spawn("t1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+
+      shardA.child.emit("message", gaugeEvent([], ["t1"]));
+      shardB.child.emit("message", gaugeEvent(["t1", "t2"]));
+
+      expect(seen).toEqual([{ held: ["t1", "t2"], cleared: undefined }]);
+      client.dispose();
+    });
+
+    it("clears every live terminal a crashed shard owned, and none of a sibling's", async () => {
+      const seen = await collectGauges();
+      const client = createFabricClient();
+      client.spawn("t0", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t3", { cwd: "/tmp", cols: 80, rows: 24 });
+      client.spawn("t4", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      // Exited but kept on the shard: its own exit already cleared it.
+      shardA.child.emit("message", { type: "exit", id: "t0", exitCode: 0, preserved: true });
+      // Killed, with the exit the crash swallows still to come.
+      client.kill("t4");
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(seen).toEqual([{ held: [], cleared: ["t1", "t2", "t4"] }]);
+      client.dispose();
+    });
+  });
+
   describe("window port routing", () => {
     it("routes a window's port to its active project's shard and disconnects the previous shard", () => {
       const client = createFabricClient();
@@ -1521,6 +1589,128 @@ describe("PtyClient fabric", () => {
     });
   });
 
+  describe("semantic search scope (#17516)", () => {
+    const twoProjects = () => {
+      const client = createFabricClient();
+      client.spawn("a1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("a2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("a3", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("b1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      const shardA = projectShard("project-a");
+      const shardB = projectShard("project-b");
+      shardA.child.emit("message", { type: "ready" });
+      shardB.child.emit("message", { type: "ready" });
+      return { client, shardA, shardB };
+    };
+
+    it("asks only the owning shard, for only the requested terminals", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.searchSemanticBuffersAsync("done", false, ["a1", "a2"]);
+
+      const requests = messagesOfType(shardA.child, "search-semantic-buffers");
+      expect(requests).toEqual([
+        expect.objectContaining({ query: "done", isRegex: false, terminalIds: ["a1", "a2"] }),
+      ]);
+      expect(messagesOfType(shardB.child, "search-semantic-buffers")).toHaveLength(0);
+      expect(messagesOfType(defaultShard().child, "search-semantic-buffers")).toHaveLength(0);
+
+      const matches = [
+        { terminalId: "a1", line: "build done", matchStart: 6, matchEnd: 10 },
+        { terminalId: "a2", line: "tests done", matchStart: 6, matchEnd: 10 },
+      ];
+      shardA.child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requests[0].requestId,
+        matches,
+      });
+      await expect(promise).resolves.toEqual({ matches, complete: true });
+      client.dispose();
+    });
+
+    it("splits a scope that spans projects into one request per owning shard", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.searchSemanticBuffersAsync("done", false, ["b1", "a1", "a3"]);
+
+      const requestsA = messagesOfType(shardA.child, "search-semantic-buffers");
+      const requestsB = messagesOfType(shardB.child, "search-semantic-buffers");
+      expect(requestsA).toEqual([expect.objectContaining({ terminalIds: ["a1", "a3"] })]);
+      expect(requestsB).toEqual([expect.objectContaining({ terminalIds: ["b1"] })]);
+      const [requestA] = requestsA;
+      const [requestB] = requestsB;
+      expect(messagesOfType(defaultShard().child, "search-semantic-buffers")).toHaveLength(0);
+
+      const fromA = { terminalId: "a3", line: "a done", matchStart: 2, matchEnd: 6 };
+      const fromB = { terminalId: "b1", line: "b done", matchStart: 2, matchEnd: 6 };
+      shardA.child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requestA.requestId,
+        matches: [fromA],
+      });
+      shardB.child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requestB.requestId,
+        matches: [fromB],
+      });
+      const { matches: merged, complete } = await promise;
+      expect(merged).toHaveLength(2);
+      expect(merged).toEqual(expect.arrayContaining([fromA, fromB]));
+      expect(complete).toBe(true);
+      client.dispose();
+    });
+
+    it("sends nothing for an empty scope", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      await expect(client.searchSemanticBuffersAsync("done", false, [])).resolves.toEqual({
+        matches: [],
+        complete: true,
+      });
+
+      for (const child of [shardA.child, shardB.child, defaultShard().child]) {
+        expect(messagesOfType(child, "search-semantic-buffers")).toHaveLength(0);
+      }
+      client.dispose();
+    });
+
+    it("skips a shard that is not ready, as the unscoped fan-out does, and says so", async () => {
+      const client = createFabricClient();
+      client.spawn("a1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("b1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      projectShard("project-a").child.emit("message", { type: "ready" });
+
+      const promise = client.searchSemanticBuffersAsync("done", false, ["a1", "b1"]);
+
+      const requests = messagesOfType(projectShard("project-a").child, "search-semantic-buffers");
+      expect(requests).toEqual([expect.objectContaining({ terminalIds: ["a1"] })]);
+      expect(messagesOfType(projectShard("project-b").child, "search-semantic-buffers")).toEqual(
+        []
+      );
+      projectShard("project-a").child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requests[0].requestId,
+        matches: [],
+      });
+      // b1's output went unsearched, so no match there is not evidence of none.
+      await expect(promise).resolves.toEqual({ matches: [], complete: false });
+      client.dispose();
+    });
+
+    it("still scans every ready shard when no scope is given", () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      void client.searchSemanticBuffersAsync("done", false);
+
+      for (const child of [shardA.child, shardB.child, defaultShard().child]) {
+        const [request] = messagesOfType(child, "search-semantic-buffers");
+        expect(request).toBeDefined();
+        expect(request).not.toHaveProperty("terminalIds");
+      }
+      client.dispose();
+    });
+  });
+
   describe("cross-shard aggregation", () => {
     it("merges memory rollups across shards", async () => {
       const client = createFabricClient();
@@ -1684,6 +1874,97 @@ describe("PtyClient fabric", () => {
       expect(snapshot.terminals.map((t) => t.id)).toEqual(["t0"]);
       expect(snapshot).toMatchObject({ degraded: true, shardsTotal: 2, shardsFailed: 1 });
       client.dispose();
+    });
+
+    describe("semantic buffer search (#17517)", () => {
+      const match = (terminalId: string) => ({
+        terminalId,
+        line: "token here",
+        matchStart: 0,
+        matchEnd: 5,
+      });
+
+      it("reports a search every shard answered as complete", async () => {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const shardA = projectShard("project-a");
+        shardA.child.emit("message", { type: "ready" });
+
+        const promise = client.searchSemanticBuffersAsync("token", false);
+        const defaultReq = messagesOfType(defaultShard().child, "search-semantic-buffers")[0];
+        const shardAReq = messagesOfType(shardA.child, "search-semantic-buffers")[0];
+        defaultShard().child.emit("message", {
+          type: "semantic-search-result",
+          requestId: defaultReq.requestId,
+          matches: [match("t0")],
+        });
+        shardA.child.emit("message", {
+          type: "semantic-search-result",
+          requestId: shardAReq.requestId,
+          matches: [match("t1")],
+        });
+
+        const result = await promise;
+        expect(result.complete).toBe(true);
+        expect(result.matches.map((m) => m.terminalId).sort()).toEqual(["t0", "t1"]);
+        client.dispose();
+      });
+
+      it("does not let a host that hasn't announced ready vouch for a complete search", async () => {
+        // Flag off: the lone host is the fallback target even before it is ready,
+        // and an answer from it may predate its terminals' replay.
+        const client = new PtyClientClass({ fabric: false });
+
+        const promise = client.searchSemanticBuffersAsync("token", false);
+        const req = messagesOfType(defaultShard().child, "search-semantic-buffers")[0];
+        defaultShard().child.emit("message", {
+          type: "semantic-search-result",
+          requestId: req.requestId,
+          matches: [],
+        });
+
+        await expect(promise).resolves.toEqual({ matches: [], complete: false });
+        client.dispose();
+      });
+
+      it("keeps the answering shard's matches but reports a shard that went away as incomplete", async () => {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const shardA = projectShard("project-a");
+        shardA.child.emit("message", { type: "ready" });
+
+        const promise = client.searchSemanticBuffersAsync("token", false);
+        const defaultReq = messagesOfType(defaultShard().child, "search-semantic-buffers")[0];
+        expect(messagesOfType(shardA.child, "search-semantic-buffers")).toHaveLength(1);
+        defaultShard().child.emit("message", {
+          type: "semantic-search-result",
+          requestId: defaultReq.requestId,
+          matches: [match("t0")],
+        });
+        shardA.child.emit("exit", 1);
+
+        await expect(promise).resolves.toEqual({ matches: [match("t0")], complete: false });
+        client.dispose();
+      });
+
+      it("counts a shard that was never asked because it is still booting as unsearched", async () => {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const shardA = projectShard("project-a");
+        // Deliberately never ready.
+
+        const promise = client.searchSemanticBuffersAsync("token", false);
+        const defaultReq = messagesOfType(defaultShard().child, "search-semantic-buffers")[0];
+        defaultShard().child.emit("message", {
+          type: "semantic-search-result",
+          requestId: defaultReq.requestId,
+          matches: [],
+        });
+
+        expect(messagesOfType(shardA.child, "search-semantic-buffers")).toHaveLength(0);
+        await expect(promise).resolves.toEqual({ matches: [], complete: false });
+        client.dispose();
+      });
     });
 
     // #13501: a fleet read must not take an unanswered inventory for an empty one.

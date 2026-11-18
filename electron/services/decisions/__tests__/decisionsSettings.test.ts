@@ -39,6 +39,7 @@ const connected: DecisionsSettings = {
   askHumanAgents: ["claude", "acme.agent-2"],
   terminalSnapshots: true,
   terminalSnapshotsConsentedAt: 1_761_955_270_000,
+  holdPhonePushes: true,
 };
 
 /** `connected`, with a recovery kit verified for its identity. */
@@ -83,6 +84,25 @@ describe("sanitizeDecisionsSettings", () => {
     const { store, current } = memoryStore({ ...connected, autoEnrollHosts: false });
     writeDecisionsSettings(store, readDecisionsSettings(store));
     expect(current()).toEqual({ ...connected, autoEnrollHosts: false });
+  });
+
+  it("holds phone pushes while present unless the saved value is exactly false (#17240)", () => {
+    // A setting saved before the field existed has none: it holds them, with no migration and no new consent.
+    const { holdPhonePushes: _absent, ...beforeTheField } = connected;
+    const before = sanitizeDecisionsSettings(beforeTheField);
+    expect(before.holdPhonePushes).toBe(true);
+    expect(before.consentedAt).toBe(connected.consentedAt);
+    expect(defaultDecisionsSettings().holdPhonePushes).toBe(true);
+    for (const value of [true, "false", 0, null, {}]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, holdPhonePushes: value }).holdPhonePushes,
+        String(value)
+      ).toBe(true);
+    }
+    // Turning it off survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore({ ...connected, holdPhonePushes: false });
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual({ ...connected, holdPhonePushes: false });
   });
 
   it("switches no agent on for ask_human until one is saved, and keeps only agent ids, once each", () => {

@@ -17,6 +17,8 @@ const bus = vi.hoisted(() => {
 });
 const terminals = vi.hoisted(() => ({
   snapshot: { terminals: [] as unknown[], degraded: false },
+  /** What a direct read of the PTY host answers, past the shared cache. */
+  live: { terminals: [] as unknown[], degraded: false },
 }));
 const stored = vi.hoisted(() => ({ values: {} as Record<string, unknown> }));
 
@@ -25,7 +27,9 @@ vi.mock("../../../services/sharedTerminalSnapshot.js", () => ({
   getSharedTerminalSnapshot: async () => terminals.snapshot,
 }));
 vi.mock("../../../store.js", () => ({ store: { get: (key: string) => stored.values[key] } }));
-vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => ({}) }));
+vi.mock("../../../window/serviceRefs.js", () => ({
+  getPtyClient: () => ({ getAllTerminalsWithCompletenessAsync: async () => terminals.live }),
+}));
 
 import { _resetRemoteServicesForTest, getRemoteService } from "../../runtime.js";
 import { installHostIdle } from "../hostIdle.js";
@@ -34,6 +38,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   bus.listeners.clear();
   terminals.snapshot = { terminals: [], degraded: false };
+  terminals.live = { terminals: [], degraded: false };
   stored.values = {};
   _resetRemoteServicesForTest();
 });
@@ -43,6 +48,20 @@ afterEach(() => {
 });
 
 describe("installHostIdle (#17357)", () => {
+  it("reads the PTY host itself, past the shared snapshot, for a check before acting (#17361)", async () => {
+    const dispose = installHostIdle({ servesViews: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getRemoteService("hostIdle")?.observation().busy).toBe(false);
+    // The shared snapshot is from before an agent started; the PTY host knows it now.
+    terminals.live = {
+      terminals: [{ id: "t1", detectedAgentId: "claude", agentState: "working" }],
+      degraded: false,
+    };
+    await getRemoteService("hostIdle")?.checkFresh();
+    expect(getRemoteService("hostIdle")?.observation().busy).toBe(true);
+    dispose();
+  });
+
   it("runs the idle clock with no Shell attached, at the host's stored idle time", async () => {
     stored.values.hostIdle = { idleAfterMinutes: 45 };
     const dispose = installHostIdle({ servesViews: false });

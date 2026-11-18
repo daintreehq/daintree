@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useLayoutEffect } from "react";
 import { act, renderHook } from "@testing-library/react";
 import type { StagingStatus } from "@shared/types";
 import type { ReviewMarkCaptureOutcome } from "@shared/types/ipc/reviewMarks";
@@ -32,6 +33,7 @@ const status: StagingStatus = {
   pushDestination: { remote: "origin", branch: "feature" },
   pullSource: { remote: "origin", branch: "feature" },
   repoState: "DIRTY",
+  repoOperationId: null,
   rebaseStep: null,
   rebaseTotalSteps: null,
   rebaseSequence: null,
@@ -347,11 +349,74 @@ describe("useReviewHubStatus failed reads", () => {
     await advance(0);
     expect(result.current.loadError).toBeNull();
 
+    getStagingStatus.mockClear();
     getStagingStatus.mockRejectedValueOnce(new Error("not a git repository"));
     await act(async () => heldRefresh());
 
-    expect(getStagingStatus).toHaveBeenLastCalledWith(WT);
+    // It never reads a worktree the hub has left, so it has no failure to show.
+    expect(getStagingStatus).not.toHaveBeenCalled();
     expect(result.current.loadError).toBeNull();
     expect(result.current.loading).toBe(false);
+  });
+});
+
+describe("useReviewHubStatus after a worktree switch", () => {
+  const OTHER = "/repo/other";
+
+  it("ignores a refresh held from the previous worktree, so the new one's read still lands", async () => {
+    marks.available = false;
+    const { result, rerender } = renderHook(
+      ({ path }: { path: string }) =>
+        useReviewHubStatus({ isOpen: true, worktreePath: path, worktreeId: "wt-1" }),
+      { initialProps: { path: WT } }
+    );
+    await advance(0);
+    // What a staging write started on the first worktree calls once it settles.
+    const heldRefresh = result.current.refresh;
+
+    const otherRead = deferred<StagingStatus>();
+    getStagingStatus.mockReturnValueOnce(otherRead.promise);
+    rerender({ path: OTHER });
+    act(() => result.current.beginOpen());
+    expect(getStagingStatus).toHaveBeenLastCalledWith(OTHER);
+    getStagingStatus.mockClear();
+
+    await act(async () => {
+      await heldRefresh();
+    });
+    expect(getStagingStatus).not.toHaveBeenCalled();
+
+    await act(async () => otherRead.resolve({ ...status, currentBranch: "other" }));
+    expect(result.current.status?.currentBranch).toBe("other");
+    expect(result.current.statusIsFresh).toBe(true);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("answers whether a path is the worktree open now, from the switch's own commit", async () => {
+    marks.available = false;
+    // A layout effect declared after the hook runs after its own: what anything
+    // settling between the switch's commit and its passive effects would see.
+    const seenAtCommit: boolean[] = [];
+    const { result, rerender } = renderHook(
+      ({ path }: { path: string }) => {
+        const hub = useReviewHubStatus({ isOpen: true, worktreePath: path, worktreeId: "wt-1" });
+        const { isOpenPath } = hub;
+        useLayoutEffect(() => {
+          seenAtCommit.push(isOpenPath(WT));
+        }, [isOpenPath, path]);
+        return hub;
+      },
+      { initialProps: { path: WT } }
+    );
+    await advance(0);
+    expect(result.current.isOpenPath(WT)).toBe(true);
+    seenAtCommit.length = 0;
+
+    rerender({ path: OTHER });
+    await advance(0);
+
+    expect(seenAtCommit[0]).toBe(false);
+    expect(result.current.isOpenPath(WT)).toBe(false);
+    expect(result.current.isOpenPath(OTHER)).toBe(true);
   });
 });

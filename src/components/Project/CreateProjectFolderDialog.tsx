@@ -20,7 +20,7 @@ import { ProjectTemplateFileList } from "./ProjectTemplateFileList";
 import { useProjectStore } from "@/store/projectStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
-import { validateFolderName } from "@shared/utils/folderName";
+import { validateHostFolderName } from "@/utils/validateHostFolderName";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
 import {
@@ -206,7 +206,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   const effectiveEmoji = pickedEmoji ?? suggestedEmoji;
 
   const handleCreate = useCallback(async () => {
-    const validationError = validateFolderName(folderName);
+    const validationError = validateHostFolderName(folderName);
     if (validationError) {
       setError(validationError);
       return;
@@ -275,7 +275,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
 
   // Validated as it is typed, not only on submit, so the footer never promises
   // a path that Create would then refuse.
-  const nameError = folderName.trim() ? validateFolderName(folderName) : null;
+  const nameError = folderName.trim() ? validateHostFolderName(folderName) : null;
   const shownError = error ?? nameError;
 
   const previewPath = useMemo(() => {

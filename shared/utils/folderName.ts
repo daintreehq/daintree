@@ -6,21 +6,74 @@ const WIN32_ILLEGAL_CHARS = /[<>:"|?*]/;
 const PATH_SEPARATORS = /[/\\]/;
 const TRAILING_DOT_OR_SPACE = /[. ]$/;
 
+const MAX_NAME_LENGTH = 255;
+const utf8 = new TextEncoder();
+
+export interface ValidateFolderNameOptions {
+  /**
+   * Platform of the machine that will create the folder, as `process.platform`
+   * spells it. A renderer in a view bound to another host must pass that host's
+   * platform, because its own `process` is absent and its machine isn't where
+   * the folder lands. Omitted, it is this process's platform when there is one.
+   */
+  platform?: string;
+}
+
+function defaultPlatform(): string | undefined {
+  return typeof process !== "undefined" && typeof process.platform === "string"
+    ? process.platform
+    : undefined;
+}
+
+/**
+ * NTFS and APFS/HFS+ bound a name by characters (255 UTF-16 units covers all
+ * three), but Linux bounds it by UTF-8 bytes, so 100 CJK characters fit on a Mac
+ * and fail with ENAMETOOLONG on ext4. An unknown platform keeps only the unit
+ * limit.
+ */
+function limitsNameInBytes(platform: string | undefined): boolean {
+  return platform === "linux";
+}
+
+/**
+ * Whether `name`, exactly as it will be written, is too long for one directory
+ * entry on the platform. For callers whose naming policy is their own, such as a
+ * relocation that must not reject names it already accepts.
+ */
+export function folderNameLengthError(
+  name: string,
+  options: ValidateFolderNameOptions = {}
+): string | null {
+  if (name.length > MAX_NAME_LENGTH) return "Folder name is too long";
+  if (
+    limitsNameInBytes(options.platform ?? defaultPlatform()) &&
+    utf8.encode(name).length > MAX_NAME_LENGTH
+  ) {
+    return `Folder name is too long (${MAX_NAME_LENGTH} bytes max; some characters use several)`;
+  }
+  return null;
+}
+
 /**
  * Validate a single folder-name segment for project creation. Returns a
  * user-facing error string if invalid, or `null` if the name is acceptable.
  *
  * Used by both renderer dialogs and main-process IPC handlers so all three
- * project-add paths apply the same rules. Pure string logic — no Node APIs —
- * so it imports cleanly from either side of the contextBridge.
+ * project-add paths apply the same rules. Pure string logic — no Node APIs
+ * beyond a guarded `process.platform` read — so it imports cleanly from either
+ * side of the contextBridge.
  */
-export function validateFolderName(name: string): string | null {
+export function validateFolderName(
+  name: string,
+  options: ValidateFolderNameOptions = {}
+): string | null {
   if (typeof name !== "string") return "Folder name is required";
   const trimmed = name.trim();
   if (!trimmed) return "Folder name is required";
   if (trimmed === "." || trimmed === "..") return "Invalid folder name";
 
-  if (trimmed.length > 255) return "Folder name is too long";
+  const lengthError = folderNameLengthError(trimmed, options);
+  if (lengthError) return lengthError;
 
   if (PATH_SEPARATORS.test(trimmed)) {
     return "Folder name must not contain path separators";

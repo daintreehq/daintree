@@ -57,9 +57,12 @@ import type {
 } from "@shared/types/ipc/remoteHosts";
 import { AddHostDiscovery } from "./AddHostDiscovery";
 import { AddHostNotes } from "./AddHostNotes";
+import { CloudSetupHostKey } from "./CloudHostKeyReview";
 import { WizardFooterActions, WizardStepBar, type WizardStepView } from "./AddHostWizardChrome";
 import { HostCommand } from "./HostCommand";
 import { SshRefusalHelp } from "./SshRefusalHelp";
+import { SshSignInDialog } from "./SshSignInDialog";
+import { useSshSignIn } from "./useSshSignIn";
 import {
   awaitFirstConnect,
   requestHostCopySettings,
@@ -428,6 +431,10 @@ type LocalUpdate =
 /** How long a check of this machine's updater spins before it is said to be quiet. */
 const LOCAL_UPDATE_QUIET_MS = 10_000;
 
+/** How often, and how many times, a new cloud machine that can't be reached yet is checked again: ten minutes. */
+const LOGIN_RECHECK_MS = 10_000;
+const LOGIN_RECHECKS = 60;
+
 /** What "Update this machine" led to, under the verdict that offered it. */
 function LocalUpdateStatus({ update }: { update: LocalUpdate }) {
   const showSpinner = useDeferredLoading(update.phase === "checking", UI_DOHERTY_THRESHOLD);
@@ -507,10 +514,20 @@ export function AddHostDialog({
   const [target, setTarget] = useState(existing ? addressOf(existing.connection) : "");
   // What this dialog adds or updates.
   const connectionFor = () => makeConnection(target.trim());
+  // Signed in, ssh's master is up: the check rides it like any other call.
+  const signIn = useSshSignIn(() => check());
   const [name, setName] = useState(existing?.name ?? "");
   /** The user typed a name: a target typed or picked after that no longer renames the host. */
   const [nameEdited, setNameEdited] = useState(existing !== null);
   const [probe, setProbe] = useState<HostProbeResult | null>(null);
+  // A cloud machine just made can't be reached at first: its SSH server comes up after it reports
+  // running, and once its key is trusted it turns this device away until it has finished setting
+  // itself up. Its setup checks again for a while (null: not waiting; 0: stopped waiting).
+  const [loginRechecks, setLoginRechecks] = useState<number | null>(
+    cloudExisting && existing?.intent === "setup" ? LOGIN_RECHECKS : null
+  );
+  // A trust asks for a check as soon as none is running, and only while the dialog is open.
+  const [checkAfterTrust, setCheckAfterTrust] = useState(false);
   const [plan, setPlan] = useState<HostInstallPlan | null>(null);
   // The AppImage is the Linux build the release feed publishes a checksum for.
   const [linuxPackage, setLinuxPackage] = useState<LinuxPackagePreference>("appimage");
@@ -810,6 +827,11 @@ export function AddHostDialog({
       () => remoteHostsClient.probe(connection),
       (result) => {
         if (!result.reachable) noteFailure(result.sshError ?? `Couldn't reach ${hostLabel}`);
+        // In: a later check that fails (after an install, say) is the person's, not first boot's.
+        else {
+          setLoginRechecks(null);
+          setCheckAfterTrust(false);
+        }
         setProbe(result);
         setLinuxPackage(result.install?.packaging === "deb" ? "deb" : "appimage");
         setApplying(null);
@@ -819,6 +841,28 @@ export function AddHostDialog({
         setStep("check");
       }
     );
+  };
+
+  const recheckForLogin = useEffectEvent(() => {
+    setCheckAfterTrust(false);
+    setLoginRechecks((left) => (left === null ? null : Math.max(0, left - 1)));
+    check();
+  });
+  const unreachable = probe !== null && !probe.reachable;
+  const awaitingLogin = loginRechecks !== null && loginRechecks > 0 && unreachable;
+  // Said once the last check has answered, not while it runs.
+  const stoppedAwaitingLogin = loginRechecks === 0 && unreachable && !busy;
+  useEffect(() => {
+    // Only from the check itself: never pulls setup back once it has moved on to an install.
+    if (!isOpen || busy || step !== "check" || !(checkAfterTrust || awaitingLogin)) {
+      return undefined;
+    }
+    const timer = setTimeout(() => recheckForLogin(), checkAfterTrust ? 0 : LOGIN_RECHECK_MS);
+    return () => clearTimeout(timer);
+  }, [isOpen, busy, step, checkAfterTrust, awaitingLogin, probe, loginRechecks]);
+  const trustedHostKey = () => {
+    setLoginRechecks(LOGIN_RECHECKS);
+    setCheckAfterTrust(true);
   };
 
   // An existing host is checked as the dialog opens: its target is already known.
@@ -1546,8 +1590,47 @@ export function AddHostDialog({
                 Daintree runs programs in the distribution with <code>wsl.exe</code>. Check that{" "}
                 <code>wsl -d {wslCommandArg(target)}</code> opens a shell there.
               </p>
-            ) : cloudExisting ? null : (
-              <SshRefusalHelp refusal={refusal} target={target} testId="add-host-ssh-refusal" />
+            ) : cloudExisting ? (
+              <>
+                {existingId !== null && (
+                  <CloudSetupHostKey
+                    hostId={existingId}
+                    onTrusted={trustedHostKey}
+                    // Only once no key waits on the person: until then, that's what setup is stopped on.
+                    note={
+                      awaitingLogin ? (
+                        <p
+                          className="mt-3 text-xs text-text-secondary"
+                          data-testid="add-host-awaiting-login"
+                        >
+                          A new machine can take a few minutes to start answering and finish setting
+                          up. Daintree checks again every 10 seconds.
+                        </p>
+                      ) : stoppedAwaitingLogin ? (
+                        <p
+                          className="mt-3 text-xs text-text-secondary"
+                          data-testid="add-host-stopped-awaiting-login"
+                        >
+                          Daintree stopped checking by itself. Check again once the machine has
+                          finished setting up.
+                        </p>
+                      ) : null
+                    }
+                  />
+                )}
+              </>
+            ) : (
+              <SshRefusalHelp
+                refusal={refusal}
+                target={target}
+                testId="add-host-ssh-refusal"
+                // Not while a check runs: its answer, not this one's, is the refusal to sign in past.
+                onSignIn={
+                  refusal === "login-refused" && !busy
+                    ? () => signIn.start(connectionFor())
+                    : undefined
+                }
+              />
             )}
           </>
         ) : (
@@ -1612,7 +1695,9 @@ export function AddHostDialog({
     announce =
       verdict === "newer" && localUpdate?.phase === "failed"
         ? `Couldn't check for an update to this machine. ${localUpdate.message}`
-        : (copy?.title ?? (checking && showChecking ? `Checking ${hostLabel}` : ""));
+        : awaitingLogin
+          ? `Waiting for ${hostLabel} to finish setting up`
+          : (copy?.title ?? (checking && showChecking ? `Checking ${hostLabel}` : ""));
     if (!probe) {
       // The first check is running, or it couldn't run at all (said below).
       primary = checking ? undefined : checkAgain;
@@ -2128,48 +2213,59 @@ export function AddHostDialog({
     ) : undefined;
 
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      dismissible={!locked}
-      size="md"
-      initialFocus={screen === "discover" ? undefined : focusCancel ? "cancel" : "confirm"}
-      focusResetKey={screen}
-      data-testid="add-host-dialog"
-    >
-      <AppDialog.Header>
-        <AppDialog.Title>
-          {existing
-            ? `${existing.intent === "setup" ? "Set up" : "Update"} ${existing.name}`
-            : step === "discover"
-              ? "Add host"
-              : `Add ${hostLabel}`}
-        </AppDialog.Title>
-        <AppDialog.CloseButton />
-      </AppDialog.Header>
-      <AppDialog.Body>
-        {/* An existing host's flow branches on what the check finds: no fixed steps to show. */}
-        {!existing && step !== "done" && !finished && <WizardStepBar steps={steps} />}
-        {placement && existing && (
-          <Callout severity="info" className="mb-4">
-            When setup finishes, {placement.label} opens on {existing.name}.
-          </Callout>
-        )}
-        {body}
-        {error && <ErrorLine message={error} />}
-        {/* No role: the discovery list's own status line stays the dialog's one status. */}
-        <p aria-live="polite" aria-atomic="true" className="sr-only">
-          {announce}
-        </p>
-      </AppDialog.Body>
-      <AppDialog.Footer
-        // A step with an alternative and three actions wraps it onto its own row when narrow.
-        className="flex-wrap gap-y-3"
-        leadingAction={leading}
-        hint={hint ?? savedHint}
+    <>
+      <AppDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        dismissible={!locked}
+        size="md"
+        initialFocus={screen === "discover" ? undefined : focusCancel ? "cancel" : "confirm"}
+        focusResetKey={screen}
+        data-testid="add-host-dialog"
       >
-        <WizardFooterActions dismiss={secondary} back={back} primary={primary} />
-      </AppDialog.Footer>
-    </AppDialog>
+        <AppDialog.Header>
+          <AppDialog.Title>
+            {existing
+              ? `${existing.intent === "setup" ? "Set up" : "Update"} ${existing.name}`
+              : step === "discover"
+                ? "Add host"
+                : `Add ${hostLabel}`}
+          </AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <AppDialog.Body>
+          {/* An existing host's flow branches on what the check finds: no fixed steps to show. */}
+          {!existing && step !== "done" && !finished && <WizardStepBar steps={steps} />}
+          {placement && existing && (
+            <Callout severity="info" className="mb-4">
+              When setup finishes, {placement.label} opens on {existing.name}.
+            </Callout>
+          )}
+          {body}
+          {error && <ErrorLine message={error} />}
+          {/* No role: the discovery list's own status line stays the dialog's one status. */}
+          <p aria-live="polite" aria-atomic="true" className="sr-only">
+            {announce}
+          </p>
+        </AppDialog.Body>
+        <AppDialog.Footer
+          // A step with an alternative and three actions wraps it onto its own row when narrow.
+          className="flex-wrap gap-y-3"
+          leadingAction={leading}
+          hint={hint ?? savedHint}
+        >
+          <WizardFooterActions dismiss={secondary} back={back} primary={primary} />
+        </AppDialog.Footer>
+      </AppDialog>
+      {isOpen && (
+        <SshSignInDialog
+          hostLabel={hostLabel}
+          state={signIn.state}
+          onAnswer={signIn.answer}
+          onRetry={() => signIn.start(connectionFor())}
+          onClose={signIn.close}
+        />
+      )}
+    </>
   );
 }

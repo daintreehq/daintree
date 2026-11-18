@@ -140,6 +140,9 @@ installPreviewShims({
     getCurrent: async () => PREVIEW_PROJECT,
     onSwitch: () => () => {},
   }),
+  // The links launcher reads the project's declared links from mount;
+  // `undefined` from the inert shim isn't a list.
+  projectLinks: withFallback({ getDeclared: async () => [] }),
   // The links launcher holds the cross-worktree dev server list from mount;
   // `undefined` from the inert shim isn't a list, and it is iterated.
   devPreview: withFallback({
@@ -175,6 +178,12 @@ installPreviewShims({
     onEvent: () => () => {},
   }),
   hostMetrics: withFallback({ onEvent: () => () => {} }),
+  // The toolbar holds Decisions' switch for its inbox button; `undefined` from
+  // the inert shim isn't a status. Off, as on a fresh install.
+  decisions: withFallback({
+    getStatus: async () => ({ state: "off" }),
+    listQuestions: async () => ({ revision: 0, questions: [] }),
+  }),
   // The host chip reads the cloud picture; the inert shim's `undefined` isn't one.
   cloudHosts: withFallback({
     getSnapshot: async () => ({ providers: [], accounts: [], hosts: [] }),

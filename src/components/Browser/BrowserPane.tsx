@@ -39,6 +39,14 @@ import {
   BrowserNoUrlState,
 } from "./BrowserPaneStates";
 import { FindBar } from "./FindBar";
+import {
+  DevPreviewToolButtons,
+  DevPreviewToolDrawer,
+  DevPreviewToolToolbar,
+  useDevPreviewToolEscape,
+} from "@/components/DevPreview/DevPreviewTools";
+import { BROWSER_PANEL_TOOLS } from "@/services/devPreviewTools/builtInTools";
+import { isPickablePageUrl } from "@shared/elementPicker/originPolicy";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -135,6 +143,7 @@ export function BrowserPane({
   onRestore,
   showRestoreControl,
   isMultiPanelGrid,
+  worktreeId,
   tabs,
   onTabClick,
   onTabClose,
@@ -1054,10 +1063,12 @@ export function BrowserPane({
   }, [isEvicted]);
 
   useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
+  // The kind is what lets main bind the Element Picker to this guest.
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
     id,
     isEvicted ? null : webviewElement,
-    isWebviewReady && !isEvicted
+    isWebviewReady && !isEvicted,
+    "browser"
   );
   const paneRef = useRef<HTMLDivElement>(null);
   const findInPage = useFindInPage(
@@ -1067,6 +1078,20 @@ export function BrowserPane({
     isFocused,
     paneRef
   );
+  useDevPreviewToolEscape(id, paneRef, findInPage.isOpen ? findInPage.close : null);
+
+  // The Element Picker, offered only on a page at a local address (the same
+  // rule main installs it by, so the button never offers what the bind
+  // refuses) and in a panel of a worktree, whose checkout it traces into.
+  const toolHost = {
+    panelId: id,
+    projectId,
+    worktreeId,
+    url: currentUrl,
+    isWebviewReady: isWebviewReady && !isEvicted,
+    tools: BROWSER_PANEL_TOOLS,
+    pageQualifies: worktreeId !== undefined && isPickablePageUrl(currentUrl),
+  };
 
   const handleOpenExternal = useCallback(() => {
     if (!hasValidUrl) return;
@@ -1127,6 +1152,7 @@ export function BrowserPane({
           { source: "user" }
         )
       }
+      extraActions={<DevPreviewToolButtons {...toolHost} />}
     />
   );
 
@@ -1170,6 +1196,7 @@ export function BrowserPane({
           <BrowserEvictedPlaceholder />
         ) : (
           <>
+            <DevPreviewToolToolbar {...toolHost} />
             {loadError && (
               <BrowserLoadErrorOverlay
                 loadError={loadError}
@@ -1257,37 +1284,42 @@ export function BrowserPane({
                   onDismiss={() => setBlockedNav(null)}
                 />
               ))}
-            <div className="relative flex-1 min-h-0">
-              {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
-              {isLoading && (
-                <BrowserLoadingOverlay
-                  key={loadAttempt}
-                  isLoading={isLoading}
-                  onCancel={stoppedLoadFocus.wrapCancel(handleCancelLoad)}
-                />
-              )}
-              {findInPage.isOpen && <FindBar find={findInPage} />}
-              {hostForward === "ready" && (
-                <webview
-                  ref={setWebviewNode}
-                  // Remount if the partition ever changes after attach (e.g. a window
-                  // seeded only via ?projectId= where the store resolves later) so the
-                  // webview never keeps a stale cross-project session (#9965).
-                  key={webviewPartition}
-                  // Seed-only: never re-bind to navigation state (#9940). A fresh
-                  // guest is seeded with the current page (#17220).
-                  src={webviewSeedUrl}
-                  partition={webviewPartition}
-                  // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
-                  allowpopups=""
-                  className={cn(
-                    "w-full h-full border-0",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    isDragging && "invisible pointer-events-none"
-                  )}
-                />
-              )}
-              <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
+            {/* `relative`: a tool drawer floats over the page rather than squeezing it
+                when the pane is too narrow to share (`DevPreviewToolDrawerChrome`). */}
+            <div className="relative flex flex-1 min-h-0">
+              <div className="relative flex-1 min-w-0 min-h-0">
+                {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
+                {isLoading && (
+                  <BrowserLoadingOverlay
+                    key={loadAttempt}
+                    isLoading={isLoading}
+                    onCancel={stoppedLoadFocus.wrapCancel(handleCancelLoad)}
+                  />
+                )}
+                {findInPage.isOpen && <FindBar find={findInPage} />}
+                {hostForward === "ready" && (
+                  <webview
+                    ref={setWebviewNode}
+                    // Remount if the partition ever changes after attach (e.g. a window
+                    // seeded only via ?projectId= where the store resolves later) so the
+                    // webview never keeps a stale cross-project session (#9965).
+                    key={webviewPartition}
+                    // Seed-only: never re-bind to navigation state (#9940). A fresh
+                    // guest is seeded with the current page (#17220).
+                    src={webviewSeedUrl}
+                    partition={webviewPartition}
+                    // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
+                    allowpopups=""
+                    className={cn(
+                      "w-full h-full border-0",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                      isDragging && "invisible pointer-events-none"
+                    )}
+                  />
+                )}
+                <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
+              </div>
+              <DevPreviewToolDrawer {...toolHost} />
             </div>
           </>
         )}

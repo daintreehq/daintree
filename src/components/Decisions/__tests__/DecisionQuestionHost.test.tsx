@@ -61,6 +61,21 @@ describe("DecisionQuestionHost", () => {
     });
   });
 
+  it("opens a follow-up's question at that follow-up (#17235)", () => {
+    render(<DecisionQuestionHost followsOpenRequests />);
+
+    act(() => send("decisions:open-question", { reference, messageId: "ask-1" }));
+
+    expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
+      isOpen: true,
+      request: {
+        questions: [{ scope: "reference", reference }],
+        index: 0,
+        threadMessageId: "ask-1",
+      },
+    });
+  });
+
   it("stops following them once it unmounts", () => {
     const { unmount } = render(<DecisionQuestionHost followsOpenRequests />);
     expect(handlers.get("decisions:open-question")?.size).toBe(1);

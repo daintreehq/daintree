@@ -1,20 +1,26 @@
 import type {
   CloudAccountCheckResult,
+  CloudCredentialValues,
   CloudHostError,
-  CloudMachineState,
-  CloudMachineType,
   CloudProviderId,
   CloudProviderInfo,
   CloudProvisioning,
-  CloudProvisioningDimension,
-  CloudProvisioningOptions,
-  CloudProvisioningSelection,
 } from "../../../shared/types/cloudHosts.js";
-import type { SshEndpoint } from "./sshEndpoint.js";
+import type {
+  CloudProviderCatalog,
+  CloudProviderCreateRequest,
+  CloudProviderResource,
+  CloudProviderSshAccess,
+} from "../../../shared/types/pluginCloudProvider.js";
+
+/** Why a cloud host can't run here: the Shell reaches hosts on Windows through WSL only. */
+export const CLOUD_HOSTS_UNSUPPORTED_ON_WINDOWS =
+  "Cloud hosts need Daintree for macOS or Linux. Daintree for Windows reaches hosts through WSL only.";
 
 /** What a provider call needs to act for one account. Lives in main only. */
 export interface ProviderCredentials {
-  apiKey: string;
+  /** The account's whole credential set, keyed by the provider's declared field ids. */
+  values: Readonly<CloudCredentialValues>;
   /** The billing scope every request names. */
   scopeId: string;
   /** The API origin the account was connected against. */
@@ -22,77 +28,48 @@ export interface ProviderCredentials {
   signal?: AbortSignal;
 }
 
-/** A machine as a provider reports it, normalised. */
-export interface ProviderResource {
-  resourceId: string;
-  name: string;
-  machine: CloudMachineState;
-  rawState: string;
-  machineType: string | null;
-  vcpu: number | null;
-  memoryGB: number | null;
-  autoStopAt: string | null;
-  lifetimeSeconds: number | null;
-  stoppedAt: string | null;
-  createdAt: string | null;
-  stop: {
-    id: string;
-    status: "pending" | "failing" | "completed" | "superseded" | "unknown";
-    error: string | null;
-  } | null;
-  lastSnapshotAt: string | null;
-  dataExpired: boolean;
-  /** Snapshots were turned off at create: a stop erases the disk. */
-  snapshotsDisabled: boolean;
-  labels: Record<string, string>;
-  /** This account may see the machine but not start or reach it. */
-  restricted: boolean;
-  /** The provider's word on why it is stopped or failed. */
-  error: string | null;
+export type ProviderResource = CloudProviderResource;
+export type ProviderSshAccess = CloudProviderSshAccess;
+export type ProviderCatalog = CloudProviderCatalog;
+export type ProviderCreateRequest = CloudProviderCreateRequest;
+
+/** A key that lets one machine act on itself, as the provider issued it. */
+export interface IssuedMachineKey {
+  keyId: string;
+  /** Shown once; Daintree hands it to the machine and never stores it here. */
+  secret: string;
+  /** When the provider turns it off by itself (epoch ms). */
+  expiresAt: number;
 }
 
-/** How to reach the machine's sshd right now, as the provider's authenticated API said. */
-export interface ProviderSshAccess {
-  user: string;
-  endpoint: SshEndpoint;
-  /**
-   * The server's public key, `type base64`. Null when the provider doesn't
-   * vouch for one: its tunnel does (`sshTrust: "provider-tunnel"`), or the
-   * person confirms the key the machine presents (`"confirm-on-first-connect"`).
-   */
-  hostKey: string | null;
+/** A key the provider issued but not as asked: never delivered, and revoked by its id. */
+export class UnusableMachineKeyError extends Error {
+  constructor(
+    readonly keyId: string,
+    /** When the provider said it expires; null when it vouched for none, so it works until revoked. */
+    readonly expiresAt: number | null,
+    message: string
+  ) {
+    super(message);
+    this.name = "UnusableMachineKeyError";
+  }
 }
 
-export interface ProviderCatalog {
-  machineTypes: CloudMachineType[];
-  canStart: boolean;
-  includedHoursRemaining: number | null;
-  startsRemaining: number | null;
-  savedSnapshotDayDollars: number | null;
-  /**
-   * The regions, images and networks this account may create with, for each
-   * dimension the provider's capabilities say a create takes. One left out
-   * reads as offering nothing; one the provider doesn't take is ignored.
-   */
-  provisioning?: Partial<Record<CloudProvisioningDimension, CloudProvisioningOptions>>;
-}
-
-export interface ProviderCreateRequest {
-  name: string;
-  machineType: string;
-  /** The runtime limit, for a provider whose create takes one; always null for the rest. */
-  lifetimeSeconds: number | null;
-  /** What the person chose, checked against the catalog; the same on every retry of this create. */
-  provisioning: CloudProvisioningSelection;
-  /** Non-secret identifiers that let a lost create be found again. */
-  labels: Record<string, string>;
-  idempotencyKey: string;
-  /**
-   * The account's SSH public key, `type base64 comment`, for a provider whose
-   * `provisioning.sshKey` is "at-create"; null for one that authorizes it after.
-   * A retried create carries the same key.
-   */
-  publicKey: string | null;
+/**
+ * Keys a machine uses to keep itself running while its host sees work and to
+ * stop itself once idle: limited to that one machine, to reading it, moving
+ * its lifetime and a normal stop, and revocable from the account.
+ */
+export interface MachineKeyIssuer {
+  issue(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    request: { name: string; ttlDays: number }
+  ): Promise<IssuedMachineKey>;
+  /** Resolves once the key is off, including when it was already gone. */
+  revoke(credentials: ProviderCredentials, keyId: string): Promise<void>;
+  /** The ids of the account's keys with this exact name, to find one whose create lost its answer. */
+  findByName(credentials: ProviderCredentials, name: string): Promise<string[]>;
 }
 
 /**
@@ -102,13 +79,36 @@ export interface ProviderCreateRequest {
  */
 export interface CloudProvider {
   readonly id: CloudProviderId;
+  /**
+   * What a create whose answer was lost may do once a lookup by its labels
+   * finds nothing: send it again with the same idempotency key, which the
+   * provider answers with the machine it made, if any (`same-key`, the
+   * default); or only look again (`lookup-only`), for a provider with no such
+   * key, where a second send could make a second machine.
+   */
+  readonly createReplay?: "same-key" | "lookup-only";
   info(platform: NodeJS.Platform): CloudProviderInfo;
-  /** Checks a key the person pasted and lists the scopes it may bill. */
-  checkKey(apiKey: string, apiUrl: string, signal?: AbortSignal): Promise<CloudAccountCheckResult>;
+  /**
+   * Checks credentials the person entered, already normalised against the
+   * declared fields, and lists the scopes they may bill. Runs before anything
+   * is kept, for a new account and for a replacement alike.
+   */
+  checkCredentials(
+    values: Readonly<CloudCredentialValues>,
+    apiUrl: string,
+    signal?: AbortSignal
+  ): Promise<CloudAccountCheckResult>;
   validate(credentials: ProviderCredentials): Promise<{ identity: string | null }>;
   catalog(credentials: ProviderCredentials): Promise<ProviderCatalog>;
-  /** Every machine in the scope; with `label`, only those carrying that `key=value`. */
-  list(credentials: ProviderCredentials, options?: { label?: string }): Promise<ProviderResource[]>;
+  /**
+   * Every machine in the scope; with `label`, only those carrying that
+   * `key=value`; with `location`, only those in that location, for a provider
+   * whose create takes one (where a create was sent, when one is looked for).
+   */
+  list(
+    credentials: ProviderCredentials,
+    options?: { label?: string; location?: string }
+  ): Promise<ProviderResource[]>;
   inspect(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource>;
   create(
     credentials: ProviderCredentials,
@@ -140,7 +140,9 @@ export interface CloudProvider {
   delete(credentials: ProviderCredentials, resourceId: string): Promise<void>;
   /**
    * Puts `publicKey` on the machine and says how to reach its sshd. Required
-   * when `provisioning.sshKey` is "after-create", and only called then.
+   * when `provisioning.sshKey` is "after-create". A provider that takes the
+   * key at create may have it too, for a machine it didn't create with the
+   * key (an imported one); it is then called for those alone.
    */
   authorizeSsh?(
     credentials: ProviderCredentials,
@@ -155,6 +157,8 @@ export interface CloudProvider {
   sshAccess?(credentials: ProviderCredentials, resourceId: string): Promise<ProviderSshAccess>;
   /** A provider failure as a typed, user-facing error. */
   describeError(error: unknown): CloudHostError;
+  /** Present only for a provider whose machines can renew and stop themselves (#17361). */
+  readonly machineKeys?: MachineKeyIssuer;
 }
 
 /** A provider that can move a running machine's automatic stop. */

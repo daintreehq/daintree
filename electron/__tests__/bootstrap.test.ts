@@ -40,7 +40,10 @@ vi.mock("../setup/earlyEnvironment.js", () => ({
   applyHeadlessOzoneSwitches: () => trace.push("applyHeadlessOzoneSwitches"),
 }));
 
-vi.mock("../remote/buildGate.js", () => ({ isRemoteHostSupported: () => true }));
+vi.mock("../remote/buildGate.js", () => ({
+  isRemoteHostSupported: () => true,
+  isRemoteShellSupported: () => true,
+}));
 
 const originalArgv = [...process.argv];
 const originalPlatform = process.platform;
@@ -65,6 +68,15 @@ describe("bootstrap", () => {
     vi.doMock("../boot/appBoot.js", () => {
       trace.push("appBoot");
       return {};
+    });
+    vi.doMock("../remote/client/sshAskpassCli.js", () => {
+      trace.push("sshAskpassCli");
+      return {
+        runSshAskpassCli: async () => {
+          trace.push("askpass");
+          return 0;
+        },
+      };
     });
     vi.doMock("../remote/host/attachStdioCli.js", () => {
       trace.push("attachStdioCli");
@@ -121,6 +133,33 @@ describe("bootstrap", () => {
       "exit:0",
     ]);
     expect(fs.existsSync(path.join(userData.dir, "compile-cache"))).toBe(false);
+  });
+
+  it("enters the --ssh-askpass helper with no compile cache, reset or boot", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "bootstrap.js", "--ssh-askpass", "--reset-data"];
+
+    void import("../bootstrap.js");
+    await vi.waitFor(() => expect(electronMock.app.exit).toHaveBeenCalled());
+
+    expect(trace).toEqual([
+      "installStdioDeadFdGuards",
+      "applyDevUserDataPath",
+      "sshAskpassCli",
+      "askpass",
+      "exit:0",
+    ]);
+    expect(fs.existsSync(path.join(userData.dir, "compile-cache"))).toBe(false);
+  });
+
+  it("never answers --ssh-askpass on Windows, which runs no ssh for a host", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    process.argv = ["electron", "bootstrap.js", "--ssh-askpass"];
+
+    await import("../bootstrap.js");
+
+    expect(trace).not.toContain("sshAskpassCli");
+    expect(trace).toContain("appBoot");
   });
 
   it("runs the relay headless on Linux without a display", async () => {

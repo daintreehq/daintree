@@ -396,7 +396,9 @@ describe("getGitRecoveryHint", () => {
       "conflict-unresolved",
       "push-rejected-outdated",
       "push-rejected-policy",
+      "commit-review-stale",
       "pull-rebase-review-stale",
+      "repo-operation-changed",
       "pathspec-invalid",
       "lfs-missing",
       "lfs-quota-exceeded",
@@ -606,6 +608,18 @@ describe("getGitRecoveryAction", () => {
     // Same for a pull whose preview went stale (#17188): pulling again opens a
     // fresh confirm, never a retry of the stale approval or a conflict panel.
     expect(getGitRecoveryAction("pull-rebase-review-stale")?.actionId).toBe("git.pullRebase");
+    // An abort or continue refused because the operation changed (#17559)
+    // sends the user to the operation that is there now, never back into the
+    // abort or continue it refused.
+    const changed = getGitRecoveryAction("repo-operation-changed")?.actionId;
+    expect(changed).toBeDefined();
+    expect(["git.abortRepositoryOperation", "git.continueRepositoryOperation"]).not.toContain(
+      changed
+    );
+    // A refused commit leaves its changes staged and unpushed (#17563), so
+    // `git.push`'s fresh review would show none of them; the composer's own
+    // Commit & push is the fresh review.
+    expect(getGitRecoveryAction("commit-review-stale")).toBeUndefined();
   });
 
   it("returns undefined for reasons without a CTA", () => {

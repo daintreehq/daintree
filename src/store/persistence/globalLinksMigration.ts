@@ -1,5 +1,5 @@
 import type { GlobalLink } from "../globalLinksStore";
-import { createSafeJSONStorage, readLocalStorageItemSafely } from "./safeStorage";
+import { backupKeyFor, safeJSONParse } from "./safeStorage";
 
 /**
  * Links a person added for every project on this machine (#17242), kept apart
@@ -10,8 +10,8 @@ export const GLOBAL_LINKS_STORAGE_KEY = "daintree-global-links";
 /**
  * Where global links lived before they had a store of their own (#17242): the
  * Portal dock's persisted state, beside its tabs, width and the built-in web
- * chats. Read raw, never through the Portal store, so a user who upgrades past
- * the dock's removal still gets their links.
+ * chats. Read raw, since the Portal store is gone (#17256), so a user who
+ * upgrades straight past both releases still gets their links.
  */
 export const LEGACY_PORTAL_STORAGE_KEY = "portal-storage";
 
@@ -71,24 +71,97 @@ export function readLegacyUserLinks(envelope: unknown): GlobalLink[] {
   return links;
 }
 
-/**
- * The URLs of the person's own links as the global list last stored them, read
- * with the same backup recovery that list's hydration has, or null while it
- * has never been written (or can't be read), when the Portal's copy is still
- * the person's list. A stored list nothing can be recovered from holds none.
- */
-export function readStoredGlobalLinkUrls(): string[] | null {
-  if (readLocalStorageItemSafely(GLOBAL_LINKS_STORAGE_KEY) === null) return null;
-  const envelope = createSafeJSONStorage<unknown>().getItem(GLOBAL_LINKS_STORAGE_KEY);
-  if (!envelope || envelope instanceof Promise) return [];
-  const { state } = envelope;
-  if (!state || typeof state !== "object") return [];
-  const stored = field(state, "links");
-  if (!Array.isArray(stored)) return [];
-  const urls: string[] = [];
-  for (const entry of stored) {
-    const link = sanitizeGlobalLink(entry, 0);
-    if (link) urls.push(link.url);
+/** What storage holds for the Portal's payload, read once so one answer decides the move. */
+export type LegacyPortalPayload =
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "read"; readonly envelope: unknown };
+
+/** A key and its backup as real localStorage holds them, or null when a read throws. */
+function readWithBackup(key: string): { live: string | null; backup: string | null } | null {
+  try {
+    const ls = globalThis.localStorage;
+    // storage-key: portal-storage daintree-global-links
+    const live = ls.getItem(key);
+    // storage-key: portal-storage daintree-global-links
+    const backup = ls.getItem(backupKeyFor(key));
+    return { live, backup };
+  } catch {
+    return null;
   }
-  return urls;
+}
+
+/** The `state.links` list an envelope holds, or null when it holds none. */
+export function linksIn(envelope: unknown): unknown[] | null {
+  if (!envelope || typeof envelope !== "object") return null;
+  const state = field(envelope, "state");
+  if (!state || typeof state !== "object") return null;
+  const links = field(state, "links");
+  return Array.isArray(links) ? links : null;
+}
+
+/**
+ * The Portal's persisted envelope: its live copy when that holds a link list,
+ * else its last-good backup when that does, which also covers a live copy
+ * already gone. A read that throws is `unreadable`, never an empty list, so
+ * the move waits for a later launch with both copies kept.
+ */
+export function readLegacyPortalPayload(): LegacyPortalPayload {
+  const stored = readWithBackup(LEGACY_PORTAL_STORAGE_KEY);
+  if (!stored) return { kind: "unreadable" };
+  if (stored.live === null && stored.backup === null) return { kind: "absent" };
+  const context = { store: "globalLinksStore", key: LEGACY_PORTAL_STORAGE_KEY };
+  const live = safeJSONParse<unknown>(stored.live, context, null);
+  if (linksIn(live)) return { kind: "read", envelope: live };
+  const backup = safeJSONParse<unknown>(stored.backup, context, null);
+  return { kind: "read", envelope: linksIn(backup) ? backup : live };
+}
+
+/**
+ * Whether the global list on disk holds every one of `links`, read as its
+ * hydration reads it: the live copy, or its backup when the live one is
+ * corrupt, at the store's own `version`. False when it can't be read, holds no
+ * list, or is at a version hydration would refuse, so the Portal's copy is
+ * never let go for a list that doesn't carry its links.
+ */
+export function globalListOnDiskHolds(links: readonly GlobalLink[], version: number): boolean {
+  const stored = readWithBackup(GLOBAL_LINKS_STORAGE_KEY);
+  if (!stored || stored.live === null) return false;
+  const context = { store: "globalLinksStore", key: GLOBAL_LINKS_STORAGE_KEY };
+  const live = safeJSONParse<unknown>(stored.live, context, undefined);
+  const envelope = live !== undefined ? live : safeJSONParse<unknown>(stored.backup, context, null);
+  if (!envelope || typeof envelope !== "object") return false;
+  // Hydration refuses only a numbered version other than its own.
+  const storedVersion = field(envelope, "version");
+  if (typeof storedVersion === "number" && storedVersion !== version) return false;
+  const list = linksIn(envelope);
+  if (!list) return false;
+  const ids = new Set<string>();
+  for (const entry of list) {
+    const link = sanitizeGlobalLink(entry, 0);
+    if (link) ids.add(link.id);
+  }
+  return links.every((link) => ids.has(link.id));
+}
+
+/**
+ * Removes the Portal's payload and its backup. Called only once the global
+ * list on disk holds the links it kept; a removal that fails is retried on the
+ * next launch.
+ */
+export function removeLegacyPortalPayload(): void {
+  let ls: Storage;
+  try {
+    ls = globalThis.localStorage;
+  } catch {
+    return;
+  }
+  // storage-key: portal-storage
+  for (const key of [LEGACY_PORTAL_STORAGE_KEY, backupKeyFor(LEGACY_PORTAL_STORAGE_KEY)]) {
+    try {
+      ls.removeItem(key);
+    } catch {
+      // Retried on the next launch, which finds the links on disk again.
+    }
+  }
 }

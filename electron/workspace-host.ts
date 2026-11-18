@@ -283,7 +283,8 @@ async function handleWorktreePortRequest(
 
       case "has-resource-config": {
         const hasConfig = await workspaceService.hasResourceConfig(msg.payload.rootPath);
-        result = { hasConfig };
+        const environmentKeys = await workspaceService.resourceEnvironmentKeys();
+        result = { hasConfig, environmentKeys };
         break;
       }
 
@@ -688,6 +689,18 @@ port.on("message", async (rawMsg: any) => {
           request.worktreeId,
           request.force,
           request.deleteBranch
+        );
+        break;
+
+      case "remove-merged-worktree":
+        await workspaceService.deleteWorktree(
+          request.requestId,
+          request.worktreeId,
+          false,
+          false,
+          undefined,
+          false,
+          { unattended: request.guard }
         );
         break;
 

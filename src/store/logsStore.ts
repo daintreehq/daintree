@@ -7,6 +7,8 @@ const KNOWN_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 export interface DisplayEntry {
   entry: LogEntry;
   count: number;
+  /** Every entry the row stands for, oldest first; `entry` is the first. */
+  members: LogEntry[];
 }
 
 interface ParsedSearch {
@@ -240,8 +242,9 @@ export function collapseConsecutiveDuplicates(logs: LogEntry[]): DisplayEntry[] 
       last.entry.source === log.source
     ) {
       last.count++;
+      last.members.push(log);
     } else {
-      result.push({ entry: log, count: 1 });
+      result.push({ entry: log, count: 1, members: [log] });
     }
   }
   return result;

@@ -253,6 +253,12 @@ export interface ManagedTerminal {
 
   // Focus state
   isFocused: boolean;
+  /**
+   * `performance.now()` of the last real key press or click in this pane,
+   * which opens its OSC 52 clipboard window (#17327). Never stamped by PTY
+   * writes made on the user's behalf.
+   */
+  lastUserGestureAt?: number;
 
   // Render backpressure / synchronization hints
   pendingWrites?: number;

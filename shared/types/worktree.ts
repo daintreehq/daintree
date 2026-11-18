@@ -335,7 +335,7 @@ export interface Worktree {
   /** Whether this worktree is in detached HEAD state */
   isDetached?: boolean;
 
-  /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING). Absent when no blocking operation is in progress. */
+  /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING, APPLYING_MAILBOX). Absent when no blocking operation is in progress. */
   repoState?: RepoState;
 
   /** Whether this is the currently active worktree based on cwd */

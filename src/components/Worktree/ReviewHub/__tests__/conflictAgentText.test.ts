@@ -103,6 +103,14 @@ describe("composeConflictAgentText", () => {
     expect(payload.replayingCommit).toBeUndefined();
   });
 
+  it("names a halted git am as one, never as a rebase", () => {
+    const text = composeConflictAgentText(base({ operation: "APPLYING_MAILBOX" }))!;
+
+    expect(parsePayload(text).operation).toBe("git am session");
+    expect(text).toContain("do not continue, skip or abort the git am session");
+    expect(text).not.toMatch(/rebase/i);
+  });
+
   it("names no operation, and no operation's commands, for conflicts with none behind them", () => {
     const text = composeConflictAgentText(base({ operation: null }))!;
 
@@ -121,7 +129,14 @@ describe("composeConflictAgentText", () => {
   });
 
   it("keeps every character a shell would act on out of the prose, apostrophes included", () => {
-    for (const operation of [null, "MERGING", "REBASING", "CHERRY_PICKING", "REVERTING"] as const) {
+    for (const operation of [
+      null,
+      "MERGING",
+      "REBASING",
+      "CHERRY_PICKING",
+      "REVERTING",
+      "APPLYING_MAILBOX",
+    ] as const) {
       const text = composeConflictAgentText(
         base({
           operation,

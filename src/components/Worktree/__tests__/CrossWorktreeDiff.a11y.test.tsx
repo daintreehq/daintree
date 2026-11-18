@@ -12,8 +12,6 @@ vi.mock("zustand/react/shallow", () => ({
 vi.mock("@/store", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (sel: (s: { worktrees: Map<string, unknown> }) => unknown) =>
     sel({ worktrees: new Map() }),

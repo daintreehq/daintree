@@ -31,13 +31,13 @@ import {
   CLOUD_LIFETIME_CHOICES,
   CLOUD_PROVISIONING_DIMENSIONS,
   type CloudHostCreatedFor,
-  type CloudHostKeyReview,
 } from "@shared/types/cloudHosts";
 import type { HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsGroup, SettingsRow, SettingsRowActions } from "../SettingsGroup";
 import { SettingsSelect } from "../SettingsSelect";
 import { HostIdleTimeRow } from "./HostIdleTimeRow";
+import { HostKeyReviewDetails } from "./CloudHostKeyReview";
 
 function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
@@ -49,54 +49,6 @@ function errorText(err: unknown, fallback: string): string {
 function createdForLabel(mark: CloudHostCreatedFor): string {
   const where = `${mark.worktreeName} in ${mark.projectName}`;
   return mark.hostName === null ? where : `${where} on ${mark.hostName}`;
-}
-
-/**
- * A host key the machine presented, for the person to compare and trust:
- * once on a first connect, and again, as a warning, whenever it changes.
- */
-function HostKeyReviewDetails({
-  review,
-  providerName,
-}: {
-  review: CloudHostKeyReview;
-  providerName: string;
-}) {
-  const presented = (
-    <span className="select-text break-all font-mono text-2xs">
-      {review.keyType} {review.fingerprint}
-    </span>
-  );
-  if (review.reason === "first-connect") {
-    return (
-      <div className="flex flex-col gap-1.5" data-testid="cloud-host-key-review">
-        <span>
-          {providerName} can&apos;t vouch for this machine&apos;s host key, so Daintree asks you
-          once. Compare it with the fingerprint {providerName} shows for the machine; once trusted,
-          Daintree refuses any other key.
-        </span>
-        {presented}
-      </div>
-    );
-  }
-  return (
-    <div className="flex flex-col gap-1.5" data-testid="cloud-host-key-review">
-      <Callout severity="warning" title="This machine's identity changed">
-        It presents a different host key from the one you trusted
-        {review.previousTrustedAt !== null
-          ? ` on ${new Date(review.previousTrustedAt).toLocaleDateString()}`
-          : ""}
-        , so Daintree won&apos;t connect. Trust the new key only if you expect the change, such as
-        after the machine was rebuilt.
-      </Callout>
-      <span className="select-text break-all font-mono text-2xs">
-        Trusted {review.previousFingerprint}
-      </span>
-      <span className="select-text break-all font-mono text-2xs">
-        Now {review.keyType} {review.fingerprint}
-      </span>
-    </div>
-  );
 }
 
 const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>
@@ -124,7 +76,10 @@ export function CloudMachineSection({
   const { snapshot } = useCloudHosts();
   const status = cloudStatusFor(snapshot, hostId);
   const machines = useCloudMachineActions();
-  const [busy, setBusy] = useState<"retry" | "lifetime" | "trust" | null>(null);
+  const [busy, setBusy] = useState<
+    "retry" | "lifetime" | "trust" | "cleanup-retry" | "cleanup-keep" | null
+  >(null);
+  const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lifetimeError, setLifetimeError] = useState<string | null>(null);
   // Kept with the fingerprint it was about: a different key on show is a different decision.
@@ -145,13 +100,22 @@ export function CloudMachineSection({
       ? stoppedBillingSentence(provider)
       : null;
   const actionError = machines.errorFor(hostId) ?? error;
+  // While its provider is missing nothing here can reach the machine, so why comes first,
+  // beside what was last known: an unconfirmed create may still be a billable machine.
+  const lastError = status.operation === null ? (status.lastError?.message ?? null) : null;
+  // Unavailable, nothing in flight can settle, so what was last known shows whatever is running.
   const shownError =
-    actionError ?? (status.operation === null ? (status.lastError?.message ?? null) : null);
+    status.providerUnavailable !== null
+      ? [...new Set([actionError, status.providerUnavailable, status.lastError?.message ?? null])]
+          .filter(Boolean)
+          .join(" ")
+      : (actionError ?? lastError);
   const tunnel = provider?.capabilities.tunnel ?? null;
   // Offered only beside the error that names the command, never beside another one.
   const tunnelMissing =
     tunnel !== null &&
     actionError === null &&
+    status.providerUnavailable === null &&
     status.operation === null &&
     status.lastError?.code === "ssh-tunnel-command-missing";
   const presetValue =
@@ -240,7 +204,10 @@ export function CloudMachineSection({
         label={lifetime.kind === "none" ? "Stops by itself" : "Sleeps when idle"}
         description={
           <span data-testid="cloud-machine-lifetime">
-            {providerStopSentence(lifetime, providerName)}
+            {lifetime.kind === "none" && provider?.capabilities.lifetime.kind === "idle-sleep"
+              ? // The provider sleeps idle machines, but this one has it turned off.
+                "Sleeping when idle is off for this machine: it runs until you stop it."
+              : providerStopSentence(lifetime, providerName)}
           </span>
         }
       />
@@ -294,7 +261,7 @@ export function CloudMachineSection({
               ? status.lifetimeSeconds === null
                 ? `This run stops by itself ${autoStop}. A change applies from now.`
                 : `This run stops by itself ${autoStop}${status.keptRunningAt !== null ? `, pushed back ${clockTime(new Date(status.keptRunningAt).toISOString())}` : ""}. Daintree pushes it back while a window here shows it or its agents are working; a change applies from now.`
-              : "This run doesn't stop by itself. A change applies from now."
+              : "This run has no lifetime limit. A change applies from now."
             : "Counted from each start, and pushed back while a window here shows it or its agents are working. A guard against a machine left running, not a spending limit.")
         }
         value={lifetimeValue}
@@ -309,8 +276,133 @@ export function CloudMachineSection({
   // What Daintree is doing to it, in its own words; the provider's raw state stays in diagnostics.
   const stateDetail = status.operation?.stage || null;
 
+  const cleanup = status.worktreeCleanup;
+  const cleanupAct = (
+    kind: "cleanup-retry" | "cleanup-keep",
+    work: () => Promise<void>,
+    fallback: string
+  ) => {
+    setBusy(kind);
+    setCleanupError(null);
+    work().then(
+      () => setBusy(null),
+      (err: unknown) => {
+        setBusy(null);
+        setCleanupError(errorText(err, fallback));
+      }
+    );
+  };
+  const worktreeLabel = status.createdFor ? `'${status.createdFor.worktreeName}'` : "its worktree";
+  const keepButton = (
+    <Button
+      variant="ghost"
+      size="sm"
+      loading={busy === "cleanup-keep"}
+      disabled={busy !== null}
+      onClick={() =>
+        cleanupAct(
+          "cleanup-keep",
+          () => cloudHostsClient.dismissWorktreeCleanup(hostId),
+          "Couldn't keep the machine"
+        )
+      }
+    >
+      Keep machine
+    </Button>
+  );
+  const consoleButton = provider && (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => void systemClient.openExternal(provider.dashboardUrl)}
+    >
+      <ExternalLink aria-hidden="true" />
+      Open {providerName} console
+    </Button>
+  );
+  let cleanupNotice: ReactNode = null;
+  if (cleanup) {
+    const verb = cleanup.choice === "delete" ? "delete" : "stop";
+    const done = cleanup.choice === "delete" ? "deleted" : "stopped";
+    const retryButton = (label: string) => (
+      <Button
+        variant="outline"
+        size="sm"
+        loading={busy === "cleanup-retry"}
+        disabled={busy !== null}
+        onClick={() =>
+          cleanupAct(
+            "cleanup-retry",
+            () => cloudHostsClient.retryWorktreeCleanup(hostId),
+            `Couldn't ${verb} the machine`
+          )
+        }
+      >
+        {label}
+      </Button>
+    );
+    if (cleanup.phase === "failed") {
+      cleanupNotice = (
+        <Callout
+          severity="error"
+          className="mb-3"
+          data-testid="cloud-machine-cleanup"
+          title={`Couldn't ${verb} it with ${worktreeLabel}`}
+          action={retryButton("Retry")}
+        >
+          <p role="alert">{cleanupError ?? cleanup.error?.message ?? "It didn't finish."}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {consoleButton}
+            {keepButton}
+          </div>
+        </Callout>
+      );
+    } else if (cleanup.phase === "unconfirmed") {
+      // Never a Retry here: nothing on this device can tell whether that worktree went.
+      cleanupNotice = (
+        <Callout
+          severity="warning"
+          className="mb-3"
+          data-testid="cloud-machine-cleanup"
+          title={`Not ${done} with ${worktreeLabel}`}
+        >
+          <p>
+            {cleanupError ??
+              `${cleanup.error?.message ?? "Daintree didn't hear whether the worktree was deleted."} If it was, ${verb} the machine here.`}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {consoleButton}
+            {keepButton}
+          </div>
+        </Callout>
+      );
+    } else if (cleanup.phase === "waiting") {
+      cleanupNotice = (
+        <Callout
+          severity="info"
+          className="mb-3"
+          data-testid="cloud-machine-cleanup"
+          // Only a worktree on this device can be looked at again from here.
+          action={cleanup.worktreeHostId === null ? retryButton("Check again") : undefined}
+        >
+          <p>{cleanupError ?? `It will be ${done} once ${worktreeLabel} is deleted.`}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">{keepButton}</div>
+        </Callout>
+      );
+    } else {
+      cleanupNotice = (
+        <Callout severity="info" className="mb-3" data-testid="cloud-machine-cleanup">
+          {cleanup.error
+            ? `It will be ${done} once ${providerName} is available again.`
+            : `It's being ${done} with ${worktreeLabel}.`}
+        </Callout>
+      );
+    }
+  }
+
   return (
     <SettingsSection title="Cloud machine" id="host-cloud-machine">
+      {cleanupNotice}
       <SettingsGroup>
         <SettingsRow
           label="Machine"
@@ -330,7 +422,10 @@ export function CloudMachineSection({
                   <>
                     {" "}
                     <FactSeparator />{" "}
-                    <TimeAgo prefix="stopped " timestamp={Date.parse(status.stoppedAt)} />
+                    <TimeAgo
+                      prefix={status.asleep ? "fell asleep " : "stopped "}
+                      timestamp={Date.parse(status.stoppedAt)}
+                    />
                   </>
                 )}
                 {status.observedAt !== null && (
@@ -367,22 +462,25 @@ export function CloudMachineSection({
           }
           control={
             <div className="flex items-center gap-1.5">
-              {status.resourceId === null && status.operation === null && status.lastError && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  loading={busy === "retry"}
-                  onClick={() =>
-                    act(
-                      "retry",
-                      () => cloudHostsClient.retryCreate(hostId),
-                      "Couldn't create the machine"
-                    )
-                  }
-                >
-                  Retry
-                </Button>
-              )}
+              {status.resourceId === null &&
+                status.operation === null &&
+                status.lastError &&
+                status.providerUnavailable === null && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={busy === "retry"}
+                    onClick={() =>
+                      act(
+                        "retry",
+                        () => cloudHostsClient.retryCreate(hostId),
+                        "Couldn't create the machine"
+                      )
+                    }
+                  >
+                    Retry
+                  </Button>
+                )}
               {canStartMachine(status) && (
                 <Button
                   variant="outline"
@@ -496,6 +594,7 @@ export function CloudMachineSection({
           connected={connected}
           idle={liveSummary?.idle}
           sampledAt={liveSummary?.sampledAt ?? null}
+          selfStopProblem={status.selfStopProblem ?? null}
         />
         <SettingsRow
           label="Disk"

@@ -17,7 +17,8 @@ vi.mock("@/services/WebAudioService", () => ({
 import { useSoundPlaybackListener } from "../useSoundPlaybackListener";
 
 describe("useSoundPlaybackListener", () => {
-  let triggerCallback: ((payload: { soundFile: string; detune?: number }) => void) | null = null;
+  let triggerCallback:
+    ((payload: { soundFile: string; detune?: number; volume?: number }) => void) | null = null;
   let cancelCallback: (() => void) | null = null;
   const cleanupTrigger = vi.fn();
   const cleanupCancel = vi.fn();
@@ -33,10 +34,12 @@ describe("useSoundPlaybackListener", () => {
 
     window.electron = {
       sound: {
-        onTrigger: vi.fn((cb: (payload: { soundFile: string; detune?: number }) => void) => {
-          triggerCallback = cb;
-          return cleanupTrigger;
-        }),
+        onTrigger: vi.fn(
+          (cb: (payload: { soundFile: string; detune?: number; volume?: number }) => void) => {
+            triggerCallback = cb;
+            return cleanupTrigger;
+          }
+        ),
         onCancel: vi.fn((cb: () => void) => {
           cancelCallback = cb;
           return cleanupCancel;
@@ -55,7 +58,24 @@ describe("useSoundPlaybackListener", () => {
     renderHook(() => useSoundPlaybackListener());
     triggerCallback!({ soundFile: "pulse.wav", detune });
 
-    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", detune);
+    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", { detune, volume: undefined });
+  });
+
+  it("forwards the trigger's volume to playSound", () => {
+    renderHook(() => useSoundPlaybackListener());
+    triggerCallback!({ soundFile: "waiting.wav", volume: 0.49 });
+
+    expect(mockPlaySound).toHaveBeenCalledWith("waiting.wav", {
+      detune: undefined,
+      volume: 0.49,
+    });
+  });
+
+  it("forwards detune and volume together, as a working pulse sends them", () => {
+    renderHook(() => useSoundPlaybackListener());
+    triggerCallback!({ soundFile: "pulse.wav", detune: -12, volume: 0.3 });
+
+    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", { detune: -12, volume: 0.3 });
   });
 
   it("calls cancelSound when cancel event fires", () => {

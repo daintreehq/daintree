@@ -14,7 +14,6 @@ export const ACTION_CATEGORY_ORDER: readonly string[] = [
   "terminal",
   "files",
   "browser",
-  "portal",
   "recipes",
   "devServer",
   "copyTree",

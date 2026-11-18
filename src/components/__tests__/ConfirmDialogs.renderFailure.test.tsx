@@ -414,7 +414,7 @@ describe("single-slot dialogs answer a request whose content throws on its first
         useGitWorktreeOperationConfirmStore
           .getState()
           .requestConfirmation({ kind: "merge-base", cwd: "/repo", baseBranch: "main" }),
-      declined: { confirmed: false, pinned: null },
+      declined: { confirmed: false, pinned: null, operation: null },
     },
     {
       name: "force push",

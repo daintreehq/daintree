@@ -71,6 +71,28 @@ describe("Decisions disclosure", () => {
     }
   });
 
+  it("says presence is a yes or no the relay reads, when it's sent, and how to stop it (#17240)", () => {
+    render(
+      <TooltipProvider>
+        <DecisionsConsentDialog isOpen onCancel={noop} onAccept={noop} />
+      </TooltipProvider>
+    );
+    const item = [...document.querySelectorAll("li")].find((li) =>
+      li.textContent?.startsWith("Whether you're at this computer.")
+    );
+    const text = item?.textContent ?? "";
+    for (const promise of [
+      "While desktop notifications are on",
+      "tells your relay whether you're here",
+      "up to two minutes before notifying your phone",
+      "only a yes or no, which the relay can read",
+      "Remote Hosts never send it",
+      "on unless you turn it off under Questions",
+    ]) {
+      expect(text, promise).toContain(promise);
+    }
+  });
+
   it("agrees to snapshots in the same words the Decisions consent and the Data list show", () => {
     const words = snapshotWords();
     render(

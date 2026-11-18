@@ -28,6 +28,12 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { title: "", url: "" };
 
+// A row's Edit and Remove buttons are registered side by side. A saved id is any
+// non-empty string, so each button's key is prefixed to keep one link's id from
+// reading as another button's.
+const editButtonKey = (id: string) => `edit:${id}`;
+const removeButtonKey = (id: string) => `remove:${id}`;
+
 type ChangeOutcome = "saved" | "dropped" | "failed" | ProjectLinkRefusal;
 
 /**
@@ -56,7 +62,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
   const urlInputRef = useRef<HTMLInputElement>(null);
   const editTitleRef = useRef<HTMLInputElement>(null);
   const editUrlRef = useRef<HTMLInputElement>(null);
-  const { register: registerRemove, registerFallback, focusAfterDelete } = useRowFocus();
+  const { register: registerRow, registerFallback, focusRow, focusAfterDelete } = useRowFocus();
   // Bumped whenever the page moves to a project, so anything still in flight
   // for an earlier one is dropped.
   const visitRef = useRef(0);
@@ -149,6 +155,14 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
     setRowError(null);
   };
 
+  // The editor replaced the row's Edit button, so closing it hands focus back to
+  // that button instead of letting it fall to the page.
+  const cancelEdit = () => {
+    if (!editing) return;
+    focusRow(editButtonKey(editing.id));
+    setEditing(null);
+  };
+
   const saveEdit = async () => {
     if (!editing) return;
     setEditError(null);
@@ -156,21 +170,25 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
       { op: "update", id: editing.id, title: editing.draft.title, url: editing.draft.url },
       setEditError
     );
-    if (outcome === "saved") setEditing(null);
-    else if (outcome !== "dropped") {
+    if (outcome === "saved") {
+      // Only while focus is stranded: the save was out for a while, and the user
+      // may have moved on to another field.
+      focusRow(editButtonKey(editing.id), { onlyIfStranded: true });
+      setEditing(null);
+    } else if (outcome !== "dropped") {
       (outcome === "invalid-title" ? editTitleRef : editUrlRef).current?.focus();
     }
   };
 
   const remove = async (link: ProjectLink) => {
     setRowError(null);
-    const ids = links.map((l) => l.id);
-    const index = ids.indexOf(link.id);
+    const keys = links.map((l) => removeButtonKey(l.id));
+    const index = links.findIndex((l) => l.id === link.id);
     const outcome = await change({ op: "remove", id: link.id }, (message) =>
       setRowError({ id: link.id, message })
     );
     // The removed row's button is gone, so focus goes to a neighbour's, or to the add field.
-    if (outcome === "saved") focusAfterDelete(ids, index);
+    if (outcome === "saved") focusAfterDelete(keys, index);
   };
 
   const submitOnEnter = (action: () => void) => (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -183,7 +201,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
     <SettingsSection
       id="project-links"
       title="Project links"
-      description="Addresses offered in this project's Portal launchpad, above the chat services, such as its staging site or CI dashboard. Kept in your local project settings, never in the repo."
+      description="Addresses offered in the toolbar's links launcher for this project, such as its staging site or CI dashboard. Kept in your local project settings, never in the repo."
     >
       {loadError && (
         <SettingsLoadErrorBanner
@@ -254,6 +272,8 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
                 <div className="flex flex-wrap gap-2">
                   <Input
                     ref={editTitleRef}
+                    // The Edit button that opened the editor has just unmounted.
+                    autoFocus
                     type="text"
                     value={editing.draft.title}
                     maxLength={MAX_PROJECT_LINK_TITLE_LENGTH}
@@ -282,12 +302,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
                     className="w-auto min-w-48 flex-[2]"
                     readOnly={pending}
                   />
-                  <Button
-                    onClick={() => setEditing(null)}
-                    disabled={pending}
-                    size="sm"
-                    variant="outline"
-                  >
+                  <Button onClick={cancelEdit} disabled={pending} size="sm" variant="outline">
                     Cancel
                   </Button>
                   <Button
@@ -319,6 +334,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
                   <Button
                     size="icon-sm"
                     variant="ghost"
+                    ref={registerRow(editButtonKey(link.id))}
                     onClick={() => startEdit(link)}
                     disabled={pending}
                     aria-label={`Edit ${link.title}`}
@@ -328,7 +344,7 @@ export function ProjectLinksSection({ projectId }: { projectId: string }) {
                   <Button
                     size="icon-sm"
                     variant="ghost-danger"
-                    ref={registerRemove(link.id)}
+                    ref={registerRow(removeButtonKey(link.id))}
                     onClick={() => void remove(link)}
                     disabled={pending}
                     aria-label={`Remove ${link.title}`}

@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostConnection, HostDescriptor } from "../../../../shared/types/remoteHosts.js";
+import type {
+  HostConnection,
+  HostDescriptor,
+  PendingHostPlacement,
+} from "../../../../shared/types/remoteHosts.js";
 import type {
   CloudHostCreatedFor,
   CloudHostCreateRequest,
@@ -21,6 +25,7 @@ import { BoatProvider } from "../boat/BoatProvider.js";
 import { CloudAccountService } from "../CloudAccountService.js";
 import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
 import { CloudHostLifecycle } from "../CloudHostLifecycle.js";
+import { CloudHosts } from "../CloudHosts.js";
 import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
 import type {
@@ -110,7 +115,7 @@ function fakeProvider(
       };
     },
     describeError: (error) => real.describeError(error),
-    checkKey: vi.fn(async () => ({
+    checkCredentials: vi.fn(async () => ({
       identity: "octocat",
       scopes: [
         { scope: { kind: "personal" as const, id: "personal", name: "Personal" }, active: true },
@@ -188,6 +193,10 @@ async function setup(
     findCommand?: (command: string) => Promise<string | null>;
     lifetime?: CloudLifetimeModel;
     sshKey?: "at-create" | "after-create";
+    onMachineStarted?: (hostId: string) => void;
+    machineKeys?: ConstructorParameters<typeof CloudHostLifecycle>[0]["machineKeys"];
+    worktreeGone?: (worktreePath: string) => Promise<boolean | null>;
+    onWorktreeRemoved?: (listener: (worktreeId: string) => void) => () => void;
   } = {}
 ) {
   const state = { machine: resource(initial) };
@@ -256,8 +265,13 @@ async function setup(
       files,
       clientDir: root,
       hosts: {
-        add: (name: string, connection: HostConnection) => {
-          const descriptor = { id: name, name, connection } as HostDescriptor;
+        add: (name: string, connection: HostConnection, pendingPlacement) => {
+          const descriptor = {
+            id: name,
+            name,
+            connection,
+            ...(pendingPlacement ? { pendingPlacement } : {}),
+          } as HostDescriptor;
           hosts.push(descriptor);
           for (const listener of listeners) listener();
           return descriptor;
@@ -280,15 +294,19 @@ async function setup(
       changed: () => {},
       sleep: async () => {},
       activity: options.activity,
+      onMachineStarted: options.onMachineStarted,
       now: options.now,
       findCommand: options.findCommand,
+      machineKeys: options.machineKeys,
+      worktreeGone: options.worktreeGone,
+      onWorktreeRemoved: options.onWorktreeRemoved,
     });
     return { store, accounts, lifecycle };
   };
   const { store, accounts, lifecycle } = build();
   const account = await accounts.addAccount({
     providerId: "boat",
-    apiKey: "boat_live_x",
+    credentials: { apiKey: "boat_live_x" },
     scopeId: "personal",
   });
   /** Ends this run and starts the next over the same settings, keychain and hosts. */
@@ -363,6 +381,59 @@ describe("CloudHostLifecycle.create", () => {
     });
   });
 
+  it("reads a create the provider turned down as refused, so Retry sends a fresh one", async () => {
+    const turnedDown = new Error("Size is not available in this region.");
+    const { lifecycle, provider, store } = await setup(
+      {},
+      {
+        adapt: (provider) => {
+          const describe = provider.describeError.bind(provider);
+          provider.describeError = (error) =>
+            error === turnedDown
+              ? { code: "refused", message: `Acme turned this down: ${turnedDown.message}`, at: 0 }
+              : describe(error);
+        },
+      }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(turnedDown);
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "refused",
+      message: "Acme turned this down: Size is not available in this region.",
+    });
+    await lifecycle.retryCreate("build");
+    const keys = vi.mocked(provider.create).mock.calls.map(([, request]) => request.idempotencyKey);
+    expect(keys).toHaveLength(2);
+    expect(keys.every((key) => typeof key === "string" && key.length > 0)).toBe(true);
+    expect(keys[1]).not.toBe(keys[0]);
+    // Nothing was made by the refusal, so the retry doesn't go looking for it first.
+    expect(provider.list).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]).toMatchObject({ resourceId: "bx_23456789", lastError: null });
+  });
+
+  it("keeps looking for a lost create's machine when a retry is turned down", async () => {
+    const { lifecycle, provider, store } = await setup();
+    vi.mocked(provider.create)
+      .mockRejectedValueOnce(new BoatApiError("timeout", "slow", null, null, null))
+      .mockRejectedValueOnce(new BoatApiError("payment-required", "limit", 402, null, null));
+    const request = { accountId: store.accounts()[0]!.id, name: "build", machineType: "default" };
+    await lifecycle.create({ ...request, lifetimeHours: 2 });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    const firstSent = store.bindings()[0]?.creation?.sentAt;
+    expect(firstSent).toEqual(expect.any(Number));
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow();
+    // The retry was sent and turned down: that says nothing of the first request's machine.
+    expect(provider.create).toHaveBeenCalledTimes(2);
+    expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+    expect(store.bindings()[0]?.creation?.sentAt).toBe(firstSent);
+  });
+
   it("refuses a size the account can't have before anything is sent", async () => {
     const { lifecycle, provider, store } = await setup();
     await expect(
@@ -395,7 +466,9 @@ describe("CloudHostLifecycle access", () => {
       machine: "stopped",
       rawState: "archived",
     });
-    await expect(lifecycle.ensureAccess(bindingId)).rejects.toBeInstanceOf(UnusableConnectionError);
+    const error = await lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect((error as Error).message).toBe("The cloud machine is stopped. Start it to connect.");
     expect(provider.start).not.toHaveBeenCalled();
     expect(provider.authorizeSsh).not.toHaveBeenCalled();
   });
@@ -972,6 +1045,152 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
     expect(env.lifecycle.statuses()[0]!.lastError?.code).toBe("ssh-authorization");
     expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
   });
+
+  describe("when the provider's API vouches for a first key when it can", () => {
+    const OTHER_KEY = `ssh-rsa ${Buffer.alloc(64, 7).toString("base64")}`;
+    const ECDSA_KEY =
+      "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=";
+
+    async function vouching() {
+      const env = await setup({ machine: "running" }, { sshTrust: "api-or-confirm" });
+      await env.lifecycle.importMachine({
+        accountId: env.store.accounts()[0]!.id,
+        resourceId: "bx_23456789",
+        name: "build",
+      });
+      return { ...env, bindingId: env.store.bindings()[0]!.id };
+    }
+
+    const reports = (env: Awaited<ReturnType<typeof vouching>>, hostKey: string | null) =>
+      vi.mocked(env.provider.authorizeSsh).mockResolvedValue({
+        user: "user",
+        endpoint: { host: "203.0.113.10", port: 22001 },
+        hostKey,
+      });
+
+    it("trusts the key the API reports once the machine presents exactly it", async () => {
+      const env = await vouching();
+      const route = await env.lifecycle.ensureAccess(env.bindingId);
+      expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${HOST_KEY}\n`);
+      const status = env.lifecycle.statuses()[0]!;
+      expect(status.hostKeyReview).toBeNull();
+      expect(status.hostKeyFingerprint).toBe(hostKeyFingerprint(HOST_KEY));
+    });
+
+    it("asks the person while the API has no key yet, and takes the API's once it does", async () => {
+      const env = await vouching();
+      reports(env, null);
+      await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toThrow(
+        /confirm this machine's host key/i
+      );
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview?.reason).toBe("first-connect");
+
+      reports(env, HOST_KEY);
+      const route = await env.lifecycle.ensureAccess(env.bindingId);
+      expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${HOST_KEY}\n`);
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
+    });
+
+    it("refuses a machine presenting another key than the API reports, offering neither", async () => {
+      const env = await vouching();
+      reports(env, OTHER_KEY);
+      env.scan.byTypes = { rsa: "" };
+      await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toThrow(
+        /isn't the one its provider reports/
+      );
+      expect(await env.files.exists(env.bindingId)).toBe(false);
+      const status = env.lifecycle.statuses()[0]!;
+      expect(status.hostKeyReview).toBeNull();
+      expect(status.hostKeyFingerprint).toBeNull();
+      expect(status.lastError?.code).toBe("ssh-authorization");
+    });
+
+    it("looks for the reported key on its own before calling it a mismatch", async () => {
+      const env = await vouching();
+      reports(env, ECDSA_KEY);
+      // The full scan lost the ECDSA connection; asked for ECDSA alone, it answers.
+      env.scan.byTypes = { ecdsa: `203.0.113.10 ${ECDSA_KEY}\n` };
+      const route = await env.lifecycle.ensureAccess(env.bindingId);
+      expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${ECDSA_KEY}\n`);
+      const typed = env.run.mock.calls
+        .filter((call) => path.basename(String(call[0])).startsWith("ssh-keyscan"))
+        .map((call) => (call[1] as string[])[(call[1] as string[]).indexOf("-t") + 1]);
+      expect(typed).toEqual(["ed25519,ecdsa,rsa", "ecdsa"]);
+    });
+
+    it("drops a key it offered earlier once the API reports a different one", async () => {
+      const env = await vouching();
+      reports(env, null);
+      await env.lifecycle.ensureAccess(env.bindingId).catch(() => {});
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview?.fingerprint).toBe(
+        hostKeyFingerprint(HOST_KEY)
+      );
+      // The console now reports another key than the machine presents: nothing stays on offer.
+      reports(env, OTHER_KEY);
+      env.scan.byTypes = { rsa: "" };
+      await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toThrow(
+        /isn't the one its provider reports/
+      );
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
+      await expect(
+        env.lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY))
+      ).rejects.toThrow(/no new host key/);
+    });
+
+    it("withdraws an offered key as soon as the API reports another, before the machine answers", async () => {
+      const env = await vouching();
+      reports(env, null);
+      await env.lifecycle.ensureAccess(env.bindingId).catch(() => {});
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).not.toBeNull();
+      // sshd doesn't answer this time: the earlier offer still can't be trusted.
+      reports(env, OTHER_KEY);
+      env.scan.output = "";
+      await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toThrow(
+        /didn't present a host key|didn't answer with a host key/
+      );
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).toBeNull();
+    });
+
+    it("lets the person confirm the key while the API still has none", async () => {
+      const env = await vouching();
+      reports(env, null);
+      await env.lifecycle.ensureAccess(env.bindingId).catch(() => {});
+      await env.lifecycle.trustHostKey("build", hostKeyFingerprint(HOST_KEY));
+      const route = await env.lifecycle.ensureAccess(env.bindingId);
+      expect(await pinnedKey(route)).toBe(`dtc-${env.bindingId} ${HOST_KEY}\n`);
+    });
+
+    it("looks again after ssh refuses the key, offering the change for review", async () => {
+      const env = await vouching();
+      await env.lifecycle.ensureAccess(env.bindingId);
+      reports(env, OTHER_KEY);
+      env.scan.output = `203.0.113.10 ${OTHER_KEY}\n`;
+      env.scan.byTypes = { ed25519: "" };
+      await expect(env.lifecycle.recheckHostKey(env.bindingId)).rejects.toThrow(
+        /identity changed/i
+      );
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).toMatchObject({
+        reason: "changed",
+        fingerprint: hostKeyFingerprint(OTHER_KEY),
+      });
+    });
+
+    it("never lets the API's key replace a key already trusted", async () => {
+      const env = await vouching();
+      await env.lifecycle.ensureAccess(env.bindingId);
+      reports(env, OTHER_KEY);
+      env.scan.output = `203.0.113.10 ${OTHER_KEY}\n`;
+      env.scan.byTypes = { ed25519: "" };
+      await expect(
+        env.lifecycle.ensureAccess(env.bindingId, undefined, { fresh: true })
+      ).rejects.toThrow(/identity changed/i);
+      expect(env.lifecycle.statuses()[0]!.hostKeyReview).toMatchObject({
+        reason: "changed",
+        fingerprint: hostKeyFingerprint(OTHER_KEY),
+        previousFingerprint: hostKeyFingerprint(HOST_KEY),
+      });
+    });
+  });
 });
 
 describe("CloudHostLifecycle start, stop, import and removal", () => {
@@ -1015,6 +1234,79 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
       vi.mocked(provider.stop).mock.invocationCallOrder[0]!
     );
     expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
+  });
+
+  // What was last found about starting Daintree there went with the reboot (#17546).
+  it("says once that a machine it started came up, before any view hears it is running", async () => {
+    const onMachineStarted = vi.fn();
+    const { lifecycle, accounts, store } = await setup(
+      { machine: "stopped" },
+      { onMachineStarted }
+    );
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).not.toHaveBeenCalled();
+    const toldWhenViewsHeard: boolean[] = [];
+    const views = new CloudHosts({
+      accounts,
+      store,
+      emit: (snapshot) => {
+        if (snapshot.hosts[0]?.machine === "running") {
+          toldWhenViewsHeard.push(onMachineStarted.mock.calls.length > 0);
+        }
+      },
+    });
+    views.attachLifecycle(lifecycle);
+    try {
+      await lifecycle.startMachine("build");
+      expect(onMachineStarted).toHaveBeenCalledExactlyOnceWith("build");
+      expect(toldWhenViewsHeard[0]).toBe(true);
+      await lifecycle.refresh("build");
+      expect(onMachineStarted).toHaveBeenCalledOnce();
+    } finally {
+      views.dispose();
+    }
+  });
+
+  it("doesn't take a first look at a running machine for one coming up", async () => {
+    const onMachineStarted = vi.fn();
+    const { lifecycle, store, state } = await setup({}, { onMachineStarted });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    // A binding kept without an observation: its next look is its first.
+    store.updateBinding(store.bindings()[0]!.id, (current) => ({ ...current, observation: null }));
+    state.machine = resource({ machine: "running", stoppedAt: "2026-11-14T10:00:00Z" });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).not.toHaveBeenCalled();
+  });
+
+  it("says a machine came up when a stop and start were only observed, and not for one that never stopped", async () => {
+    const onMachineStarted = vi.fn();
+    const { lifecycle, store, state } = await setup({}, { onMachineStarted });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).not.toHaveBeenCalled();
+    // Stopped and started again between two looks: only its stop time says so.
+    state.machine = resource({ machine: "running", stoppedAt: "2026-11-14T10:00:00Z" });
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).toHaveBeenCalledExactlyOnceWith("build");
+    state.machine = resource({ machine: "stopped", stoppedAt: "2026-11-14T11:00:00Z" });
+    await lifecycle.refresh("build");
+    state.machine = resource({ machine: "running", stoppedAt: null });
+    await lifecycle.refresh("build");
+    await lifecycle.refresh("build");
+    expect(onMachineStarted).toHaveBeenCalledTimes(2);
   });
 
   it("drops a save failure it saw on the way once the stop completes", async () => {
@@ -1229,7 +1521,15 @@ describe("CloudHostLifecycle review fixes", () => {
       lifetimeHours: 2,
     });
     await vi.waitFor(() => expect(store.bindings()[0]?.resourceId).toBe("bx_23456789"));
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalled());
     vi.mocked(provider.inspect).mockImplementation(async () => state.machine);
+    // A Start the create refuses changes nothing it records.
+    const writes = vi.spyOn(store, "updateBinding");
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /creating operation is under way/
+    );
+    expect(writes).not.toHaveBeenCalled();
+    writes.mockRestore();
     const stopping = lifecycle.stopMachine("build");
     release();
     await stopping;
@@ -1264,6 +1564,52 @@ describe("CloudHostLifecycle review fixes", () => {
     await lifecycle.refresh("build");
     await lifecycle.ensureAccess(bindingId);
     expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a dial reading the account across a running observation reach the machine, not the stop it read first", async () => {
+    const { lifecycle, accounts, provider, store, state } = await setup({ machine: "stopped" });
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.refresh("build");
+    const bindingId = store.bindings()[0]!.id;
+    let release: () => void = () => {};
+    const credentials = accounts.credentials.bind(accounts);
+    vi.spyOn(accounts, "credentials").mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return credentials(...args);
+    });
+    const dial = lifecycle.ensureAccess(bindingId);
+    await vi.waitFor(() => expect(accounts.credentials).toHaveBeenCalled());
+    state.machine = resource({ machine: "running" });
+    await lifecycle.refresh("build");
+    release();
+    await expect(dial).resolves.toMatchObject({ target: `dtc-${bindingId}` });
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves no access for a host removed while a dial read the account", async () => {
+    const { lifecycle, accounts, provider, store } = await setup();
+    await lifecycle.importMachine({
+      accountId: store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const bindingId = store.bindings()[0]!.id;
+    let release: () => void = () => {};
+    const credentials = accounts.credentials.bind(accounts);
+    vi.spyOn(accounts, "credentials").mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return credentials(...args);
+    });
+    const dial = lifecycle.ensureAccess(bindingId);
+    await vi.waitFor(() => expect(accounts.credentials).toHaveBeenCalled());
+    store.removeBinding(bindingId);
+    release();
+    await expect(dial).rejects.toBeInstanceOf(UnusableConnectionError);
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
   });
 
   it("lets one caller give up without failing the others waiting on the same access", async () => {
@@ -1712,7 +2058,10 @@ describe("CloudHostLifecycle lifetime keeper", () => {
   });
 
   it("lets a Stop asked for during a renewal win", async () => {
-    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 10);
+    const { lifecycle, provider, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
     let release: () => void = () => {};
     vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => (release = resolve));
@@ -1721,12 +2070,161 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     const renewing = lifecycle.renewDue();
     await vi.waitFor(() => expect(provider.renewLifetime).toHaveBeenCalled());
     const stopping = lifecycle.stopMachine("build");
+    // The stop holds the machine while the renewal settles, and lets go of nothing until it has.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(lifecycle.statuses()[0]!.operation?.kind).toBe("stopping");
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(provider.stop).not.toHaveBeenCalled();
     release();
     await Promise.all([renewing, stopping]);
     expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
     expect(vi.mocked(provider.stop).mock.invocationCallOrder[0]!).toBeGreaterThan(
       vi.mocked(provider.renewLifetime).mock.invocationCallOrder[0]!
     );
+  });
+
+  it("leaves a deadline the machine's own keeper already moved, reading it before writing", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+    });
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]).toMatchObject({
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+      keptRunningAt: null,
+      lastError: null,
+    });
+  });
+
+  it("never renews a machine stopping by itself, and starts nothing", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 10 * 60_000).toISOString(),
+      stop: { id: "stop_1", status: "pending", error: null },
+    });
+    await lifecycle.renewDue();
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    expect(provider.start).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("reports no failure for a renewal refused because the machine stopped itself meanwhile", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      state.machine = resource({ machine: "stopping", rawState: "archiving" });
+      throw new BoatApiError("conflict", "stopping", 409, "sandbox_stopping", null);
+    });
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]).toMatchObject({ machine: "stopping", lastError: null });
+    expect(provider.start).not.toHaveBeenCalled();
+  });
+
+  it("records no failed renewal when only its read before writing failed", async () => {
+    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 10);
+    vi.mocked(provider.inspect).mockRejectedValueOnce(
+      new BoatApiError("not-found", "gone", 404, null, null)
+    );
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    // The read's own finding stays, not a renewal that was never sent.
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("not-found");
+  });
+
+  it("clears an earlier failed renewal once the machine's own keeper moved the deadline", async () => {
+    const { lifecycle, provider, state, clock } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+    });
+    clock.now = NOW + 3 * 60_000;
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("clears a failed renewal when any read shows the deadline moved, not only its own", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+    });
+    await lifecycle.refresh("build");
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("reports no failed renewal when the machine's own keeper moved the deadline as it failed", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      state.machine = resource({
+        machine: "running",
+        autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+      });
+      throw new BoatApiError("conflict", "busy", 409, null, null);
+    });
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("keeps a failed renewal shown while the machine's state can't be read", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    state.machine = resource({ machine: "unknown", rawState: "weird" });
+    await lifecycle.refresh("build");
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+  });
+
+  it("still reports a failed renewal when the machine is in error rather than stopping", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      state.machine = resource({ machine: "error", rawState: "error" });
+      throw new BoatApiError("server", "down", 500, null, null);
+    });
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
   });
 
   it("sends a new lifetime after a renewal under way, never before it", async () => {
@@ -1743,6 +2241,274 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     await Promise.all([renewing, changing]);
     const sent = vi.mocked(provider.renewLifetime).mock.calls.map((call) => call[2]);
     expect(sent).toEqual([7200, 3600]);
+  });
+
+  it("keeps a Stop's intent when a Start it refused arrives while the stop fails (#17549)", async () => {
+    const { lifecycle, provider, store } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(provider.stop).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(provider.stop).toHaveBeenCalled());
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    fail(new BoatApiError("server", "down", 500, null, null));
+    await expect(stopping).rejects.toThrow();
+    expect(store.bindings()[0]!.intent).toBe("stop");
+    // The provider still reports it running after the failed stop: the keeper leaves it to stop.
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    expect(provider.start).not.toHaveBeenCalled();
+  });
+
+  it("keeps a Stop's intent when a Start it refused arrives while the stop runs out of time (#17549)", async () => {
+    const { lifecycle, provider, store, state, clock } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    // The provider takes the stop, but the machine never gets there.
+    vi.mocked(provider.stop).mockImplementationOnce(async () =>
+      resource({ machine: "stopping", rawState: "archiving" })
+    );
+    let release: () => void = () => {};
+    vi.mocked(provider.inspect).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return state.machine;
+    });
+    const inspected = vi.mocked(provider.inspect).mock.calls.length;
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(inspected + 1));
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    clock.now = NOW + 16 * 60_000;
+    release();
+    await expect(stopping).rejects.toThrow(/hasn't finished stopping/);
+    expect(lifecycle.statuses()[0]!.machine).toBe("running");
+    expect(store.bindings()[0]!.intent).toBe("stop");
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+  });
+
+  it("holds the machine for a Stop while it lets go of the link, and shares it with a second Stop", async () => {
+    const { lifecycle, provider, store, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let release: () => void = () => {};
+    disconnect.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(provider.stop).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const first = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    expect(lifecycle.statuses()[0]!.operation?.kind).toBe("stopping");
+    await expect(lifecycle.startMachine("build")).rejects.toThrow(
+      /stopping operation is under way/
+    );
+    const writes = vi.spyOn(store, "updateBinding");
+    const second = lifecycle.stopMachine("build");
+    expect(writes).not.toHaveBeenCalled();
+    writes.mockRestore();
+    expect(provider.stop).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(provider.stop).toHaveBeenCalled());
+    fail(new BoatApiError("server", "down", 500, null, null));
+    const [one, two] = await Promise.allSettled([first, second]);
+    expect(one.status).toBe("rejected");
+    expect(two.status).toBe("rejected");
+    expect((two as PromiseRejectedResult).reason).toBe((one as PromiseRejectedResult).reason);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(store.bindings()[0]!.intent).toBe("stop");
+  });
+
+  it("lets a Delete cancel a Stop still letting go of the link, before the provider hears of it", async () => {
+    const { lifecycle, provider, disconnect, hosts } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let release: () => void = () => {};
+    disconnect.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    release();
+    await expect(stopping).rejects.toThrow(/Cancelled/);
+    await deleting;
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(hosts).toHaveLength(0);
+  });
+
+  it("ends a Stop as cancelled when its host goes while it lets go of the link", async () => {
+    const { lifecycle, provider, store, hosts, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    let release: () => void = () => {};
+    disconnect.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    hosts.splice(0, 1);
+    lifecycle.start();
+    try {
+      await vi.waitFor(() => expect(store.bindings()).toHaveLength(0));
+      release();
+      await expect(stopping).rejects.toThrow(/Cancelled/);
+      expect(provider.stop).not.toHaveBeenCalled();
+    } finally {
+      lifecycle.dispose();
+    }
+  });
+
+  it("never sends a Stop that a shutdown cancelled while its key was read", async () => {
+    const { lifecycle, provider, accounts } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    const read = accounts.credentials.bind(accounts);
+    let release: () => void = () => {};
+    const credentials = vi
+      .spyOn(accounts, "credentials")
+      .mockImplementationOnce(async (account, signal) => {
+        await new Promise<void>((resolve) => (release = resolve));
+        return read(account, signal);
+      });
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(credentials).toHaveBeenCalled());
+    lifecycle.dispose();
+    release();
+    await expect(stopping).rejects.toThrow(/Cancelled/);
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("deletes a machine whose Stop claimed it first after both superseded a Start", async () => {
+    const { lifecycle, provider, hosts } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10,
+      { machine: "stopped", rawState: "archived" }
+    );
+    let release: () => void = () => {};
+    vi.mocked(provider.start).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return resource({ machine: "starting", rawState: "provisioning" });
+    });
+    const starting = lifecycle.startMachine("build");
+    await vi.waitFor(() => expect(provider.start).toHaveBeenCalled());
+    const stopping = lifecycle.stopMachine("build");
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    release();
+    await expect(starting).rejects.toThrow(/Cancelled/);
+    await expect(stopping).rejects.toThrow(/Cancelled/);
+    await deleting;
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(hosts).toHaveLength(0);
+  });
+
+  it("deletes a machine a Start claimed while the delete let go of the link", async () => {
+    const { lifecycle, provider, hosts, disconnect, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10,
+      { machine: "stopped", rawState: "archived" }
+    );
+    let linkDropped: () => void = () => {};
+    disconnect.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (linkDropped = resolve))
+    );
+    let started: () => void = () => {};
+    vi.mocked(provider.start).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (started = resolve));
+      state.machine = resource({ machine: "running" });
+      return resource({ machine: "starting", rawState: "provisioning" });
+    });
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalled());
+    const starting = lifecycle.startMachine("build");
+    await vi.waitFor(() => expect(provider.start).toHaveBeenCalled());
+    linkDropped();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // A Stop asked for now waits on the same Start, behind the delete: it can't take the machine.
+    const stopping = lifecycle.stopMachine("build");
+    started();
+    await expect(starting).rejects.toThrow(/Cancelled/);
+    await expect(stopping).rejects.toThrow(/deleting operation is under way/);
+    await deleting;
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(hosts).toHaveLength(0);
+  });
+
+  it("leaves the intent and the link alone when a delete under way refuses a Stop", async () => {
+    const { lifecycle, provider, store, disconnect } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    await lifecycle.startMachine("build");
+    expect(store.bindings()[0]!.intent).toBe("run");
+    let fail: (error: Error) => void = () => {};
+    vi.mocked(provider.delete).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const deleting = lifecycle.deleteMachine("build", "bx_23456789");
+    await vi.waitFor(() => expect(provider.delete).toHaveBeenCalled());
+    const linksDropped = disconnect.mock.calls.length;
+    await expect(lifecycle.stopMachine("build")).rejects.toThrow(/deleting operation is under way/);
+    expect(disconnect).toHaveBeenCalledTimes(linksDropped);
+    fail(new BoatApiError("server", "down", 500, null, null));
+    await expect(deleting).rejects.toThrow();
+    expect(store.bindings()[0]!.intent).toBe("run");
+    expect(provider.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe("CloudHostLifecycle machine keys (#17361)", () => {
+  it("revokes the keys a removed host's machine was given, and shows why one can't stop itself", async () => {
+    const machineKeys = {
+      problemFor: vi.fn((): string | null => "This machine can't stop itself when idle."),
+      tick: vi.fn(async () => {}),
+      revokePending: vi.fn(async () => {}),
+    };
+    const env = await setup({ machine: "running" }, { machineKeys });
+    env.lifecycle.start();
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    expect(env.lifecycle.statuses()[0]!.selfStopProblem).toBe(
+      "This machine can't stop itself when idle."
+    );
+    const binding = env.store.bindings()[0]!;
+    env.store.putMachineKey({
+      id: "mk_1",
+      bindingId: binding.id,
+      accountId: binding.accountId,
+      providerId: "boat",
+      resourceId: "bx_23456789",
+      name: "daintree-mk_1",
+      keyId: "sak_1",
+      expiresAt: Date.now() + 86_400_000,
+      state: "active",
+      createdAt: Date.now(),
+    });
+    env.hosts.splice(0, env.hosts.length);
+    await (
+      env.lifecycle as unknown as { dropOrphanBindings(): Promise<void> }
+    ).dropOrphanBindings();
+    expect(env.store.machineKeys()).toEqual([
+      expect.objectContaining({ id: "mk_1", state: "revoke" }),
+    ]);
+    expect(machineKeys.revokePending).toHaveBeenCalled();
+    env.lifecycle.dispose();
   });
 });
 
@@ -1794,6 +2560,47 @@ describe("CloudHostLifecycle worktree marks", () => {
     await vi.waitFor(() => expect(lifecycle.statuses()[0]?.resourceId).toBe("bx_23456789"));
     expect(store.bindings()[0]?.creation).toBeNull();
     expect(lifecycle.statuses()[0]).toMatchObject({ createdFor: MARK, machineName: "build-box" });
+  });
+
+  it("adds the host with its worktree waiting, before the provider is asked", async () => {
+    const { lifecycle, provider, store, state, account, hosts } = await setup();
+    const placement: PendingHostPlacement = {
+      projectId: MARK.projectId,
+      worktreeId: MARK.worktreeId,
+      worktreePath: MARK.worktreeId,
+      label: MARK.worktreeName,
+      requestedAt: 1_000,
+      createdMachine: true,
+    };
+    let waitingWhenSent: unknown = null;
+    vi.mocked(provider.create).mockImplementationOnce(async (_c, sent) => {
+      waitingWhenSent = hosts[0]?.pendingPlacement;
+      state.machine = resource({ name: "build-box", labels: sent.labels });
+      return resource({ name: "build-box", machine: "starting", rawState: "provisioning" });
+    });
+    const { hostId } = await lifecycle.create(request(account.id), MARK, placement);
+    expect(hosts.find((host) => host.id === hostId)?.pendingPlacement).toEqual(placement);
+    expect(store.bindings()[0]).toMatchObject({ hostId, createdFor: MARK });
+    await vi.waitFor(() => expect(provider.create).toHaveBeenCalled());
+    expect(waitingWhenSent).toEqual(placement);
+  });
+
+  it("adds no host to wait on when the mark is refused", async () => {
+    const { lifecycle, provider, store, account, hosts } = await setup();
+    const placement: PendingHostPlacement = {
+      projectId: "0f1e2d3c",
+      worktreeId: "/w",
+      worktreePath: "/w",
+      label: "w",
+      requestedAt: 1,
+      createdMachine: true,
+    };
+    await expect(
+      lifecycle.create(request(account.id), { ...MARK, worktreeName: "" }, placement)
+    ).rejects.toThrow(/missing its project or path/);
+    expect(hosts).toHaveLength(0);
+    expect(store.bindings()).toHaveLength(0);
+    expect(provider.create).not.toHaveBeenCalled();
   });
 
   it("keeps the mark through a restart mid-create when the machine turns up", async () => {
@@ -1983,6 +2790,25 @@ describe("CloudHostLifecycle provisioning", () => {
     expect(vi.mocked(provider.create).mock.calls[0]?.[1].provisioning).toEqual(IRELAND);
     expect(lifecycle.statuses()[0]?.provisioning).toEqual(picks);
     expect(store.account(account.id)?.lastProvisioning).toEqual(IRELAND);
+  });
+
+  it("looks for an unanswered create's machine where it was sent", async () => {
+    const { lifecycle, provider, account, store } = await setup({}, { adapt: offerRegions });
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    const bindingId = store.bindings()[0]!.id;
+    vi.mocked(provider.list).mockResolvedValueOnce([
+      resource({ resourceId: "bx_found0000", labels: { "daintree-binding": bindingId } }),
+    ]);
+    await lifecycle.retryCreate("build");
+    expect(provider.list).toHaveBeenCalledWith(expect.anything(), {
+      label: `daintree-binding=${bindingId}`,
+      location: "eu-west-1",
+    });
+    expect(store.bindings()[0]!.resourceId).toBe("bx_found0000");
   });
 
   it("offers the account's last choice with every catalog, cached or read again", async () => {
@@ -2241,6 +3067,43 @@ describe("CloudHostLifecycle SSH key at create", () => {
     expect(sent[2]!.idempotencyKey).not.toBe(sent[1]!.idempotencyKey);
   });
 
+  it("puts the key on an imported machine through a create-time-key provider that can (#17347)", async () => {
+    const { lifecycle, provider, store, files, account } = await setup(
+      { machine: "running" },
+      { sshKey: "at-create" }
+    );
+    await lifecycle.importMachine({
+      accountId: account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const readKey = vi.spyOn(files, "publicKey");
+    await lifecycle.ensureAccess(store.bindings()[0]!.id);
+    // It never took the key with a create: the key is read and authorized, not assumed.
+    expect(readKey).toHaveBeenCalledWith(account.id);
+    expect(provider.authorizeSsh).toHaveBeenCalledWith(
+      expect.anything(),
+      "bx_23456789",
+      await readKey.mock.results[0]!.value
+    );
+    expect(provider.sshAccess).not.toHaveBeenCalled();
+  });
+
+  it("assumes an imported machine holds the key when the provider can't put it there", async () => {
+    const { lifecycle, provider, store, account } = await setup(
+      { machine: "running" },
+      { sshKey: "at-create" }
+    );
+    delete (provider as { authorizeSsh?: unknown }).authorizeSsh;
+    await lifecycle.importMachine({
+      accountId: account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await lifecycle.ensureAccess(store.bindings()[0]!.id);
+    expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+  });
+
   it("reaches a machine that took its key at create without authorizing a key", async () => {
     const { lifecycle, provider, store, files, account } = await setup({}, { sshKey: "at-create" });
     await lifecycle.create(request(account.id));
@@ -2425,5 +3288,1107 @@ describe("CloudHostLifecycle SSH key at create", () => {
     expect(lifecycle.statuses()[0]?.lastError?.message).toContain("unknown SSH key timing");
     expect(provider.authorizeSsh).not.toHaveBeenCalled();
     expect(provider.sshAccess).not.toHaveBeenCalled();
+  });
+
+  it("takes a create the provider couldn't make as asked for a refusal, keeping its words", async () => {
+    const { lifecycle, provider, account } = await setup({}, { sshKey: "at-create" });
+    const refusal = new Error("no network there");
+    vi.mocked(provider.create).mockRejectedValueOnce(refusal);
+    const describe = provider.describeError.bind(provider);
+    vi.spyOn(provider, "describeError").mockImplementation((error) =>
+      error === refusal
+        ? { code: "unsupported", message: "us-east-2 has no default VPC.", at: Date.now() }
+        : describe(error)
+    );
+    await lifecycle.create(request(account.id));
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "unsupported",
+      message: "us-east-2 has no default VPC.",
+    });
+    await lifecycle.retryCreate("build");
+    const sent = vi.mocked(provider.create).mock.calls.map(([, sentRequest]) => sentRequest);
+    // Nothing was made, so its retry is a new create.
+    expect(sent[1]!.idempotencyKey).not.toBe(sent[0]!.idempotencyKey);
+  });
+});
+
+describe("CloudHostLifecycle stale inspections (#17548)", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  async function host(machine: Partial<ProviderResource>) {
+    let clock = 1_000_000;
+    const env = await setup(machine, { now: () => clock });
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const bindingId = env.store.bindings()[0]!.id;
+    const tick = (ms: number) => {
+      clock += ms;
+    };
+    // The next read is held until the test answers it.
+    const holdNextInspect = () => {
+      const held = deferred<ProviderResource>();
+      vi.mocked(env.provider.inspect)
+        .mockClear()
+        .mockImplementationOnce(() => held.promise);
+      return held;
+    };
+    const pollDue = () => (env.lifecycle as unknown as { pollDue(): Promise<void> }).pollDue();
+    return { ...env, bindingId, tick, holdNextInspect, pollDue };
+  }
+
+  it("keeps a start's running state and access over a refresh that was sent before it", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    const held = holdNextInspect();
+    const refreshing = lifecycle.refresh("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await lifecycle.startMachine("build");
+    tick(1_000);
+    await lifecycle.ensureAccess(bindingId);
+    const newer = store.binding(bindingId)!;
+    expect(newer.observation?.machine).toBe("running");
+    expect(newer.access).not.toBeNull();
+
+    tick(1_000);
+    held.resolve(resource({ machine: "stopped", rawState: "archived" }));
+    await refreshing;
+    const after = store.binding(bindingId)!;
+    expect(after.observation).toEqual(newer.observation);
+    expect(after.access).toEqual(newer.access);
+    expect(lifecycle.statuses()[0]!.machine).toBe("running");
+  });
+
+  it("ignores a not-found from a poll that was sent before a start", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect, pollDue } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    tick(60 * 60_000);
+    const held = holdNextInspect();
+    const polling = pollDue();
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await lifecycle.startMachine("build");
+    tick(1_000);
+    await lifecycle.ensureAccess(bindingId);
+    const newer = store.binding(bindingId)!;
+
+    tick(1_000);
+    held.reject(new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null));
+    await polling;
+    const after = store.binding(bindingId)!;
+    expect(after.observation).toEqual(newer.observation);
+    expect(after.access).toEqual(newer.access);
+    expect(after.lastError).toBeNull();
+    expect(lifecycle.statuses()[0]!.machine).toBe("running");
+  });
+
+  it("keeps a stop's stopped state over a poll that was sent before it", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect, pollDue } = await host({
+      machine: "running",
+    });
+    tick(60 * 60_000);
+    const held = holdNextInspect();
+    const polling = pollDue();
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await lifecycle.stopMachine("build");
+    const newer = store.binding(bindingId)!;
+    expect(newer.observation?.machine).toBe("stopped");
+
+    tick(1_000);
+    held.resolve(resource({ machine: "running" }));
+    await polling;
+    expect(store.binding(bindingId)!.observation).toEqual(newer.observation);
+    expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
+  });
+
+  it("resolves a refresh quietly when its not-found was overtaken by a start", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    const held = holdNextInspect();
+    const refreshing = lifecycle.refresh("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await lifecycle.startMachine("build");
+    const newer = store.binding(bindingId)!;
+
+    tick(1_000);
+    held.reject(new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null));
+    await expect(refreshing).resolves.toBeUndefined();
+    expect(store.binding(bindingId)!.observation).toEqual(newer.observation);
+    expect(store.binding(bindingId)!.lastError).toBeNull();
+  });
+
+  it("keeps a newer not-found over an older read that answers after it", async () => {
+    const { lifecycle, provider, store, bindingId, tick, pollDue } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    tick(60 * 60_000);
+    const older = deferred<ProviderResource>();
+    vi.mocked(provider.inspect)
+      .mockClear()
+      .mockImplementationOnce(() => older.promise)
+      .mockRejectedValueOnce(
+        new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null)
+      );
+    const polling = pollDue();
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await expect(lifecycle.refresh("build")).rejects.toBeTruthy();
+    const newer = store.binding(bindingId)!;
+    expect(newer.observation?.machine).toBe("unknown");
+
+    tick(1_000);
+    older.resolve(resource({ machine: "stopped", rawState: "archived" }));
+    await polling;
+    expect(store.binding(bindingId)!.observation).toEqual(newer.observation);
+    expect(store.binding(bindingId)!.lastError?.code).toBe("not-found");
+  });
+
+  it("takes both reads when they answer in the order they were sent", async () => {
+    const { lifecycle, provider, store, bindingId, tick, pollDue } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    tick(60 * 60_000);
+    const first = deferred<ProviderResource>();
+    const second = deferred<ProviderResource>();
+    vi.mocked(provider.inspect)
+      .mockClear()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const polling = pollDue();
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    const refreshing = lifecycle.refresh("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(2));
+
+    tick(1_000);
+    first.resolve(resource({ machine: "stopped", rawState: "archived" }));
+    await polling;
+    expect(store.binding(bindingId)!.observation).toMatchObject({
+      machine: "stopped",
+      observedAt: 1_000_000 + 60 * 60_000 + 1_000,
+    });
+    tick(1_000);
+    second.resolve(resource({ machine: "running" }));
+    await refreshing;
+    expect(store.binding(bindingId)!.observation).toMatchObject({
+      machine: "running",
+      observedAt: 1_000_000 + 60 * 60_000 + 2_000,
+    });
+  });
+
+  it("dials on the newer observation when the dial's own read was overtaken", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    tick(60 * 60_000);
+    const held = holdNextInspect();
+    vi.mocked(provider.inspect).mockResolvedValueOnce(resource({ machine: "running" }));
+    const dialing = lifecycle.ensureAccess(bindingId);
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await lifecycle.refresh("build");
+    expect(store.binding(bindingId)!.observation?.machine).toBe("running");
+
+    held.reject(new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null));
+    const route = await dialing;
+    expect(route.target).toBe(`dtc-${bindingId}`);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    expect(store.binding(bindingId)!.lastError).toBeNull();
+  });
+
+  it("asks again before starting when the start's own read was overtaken", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    const preflight = holdNextInspect();
+    const again = deferred<ProviderResource>();
+    vi.mocked(provider.inspect)
+      .mockResolvedValueOnce(resource({ machine: "stopped", rawState: "archived" }))
+      .mockImplementationOnce(() => again.promise);
+    const starting = lifecycle.startMachine("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await lifecycle.refresh("build");
+    const newer = store.binding(bindingId)!;
+
+    preflight.resolve(resource({ machine: "stopped", rawState: "archived" }));
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(3));
+    expect(provider.start).not.toHaveBeenCalled();
+    expect(store.binding(bindingId)!.observation).toEqual(newer.observation);
+    again.resolve(resource({ machine: "stopped", rawState: "archived" }));
+    await starting;
+    expect(provider.start).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]!.machine).toBe("running");
+  });
+
+  it("ends a stop's wait on a newer read that saw it stopped", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect } = await host({
+      machine: "running",
+    });
+    const round = holdNextInspect();
+    vi.mocked(provider.inspect).mockResolvedValueOnce(
+      resource({ machine: "stopped", rawState: "archived" })
+    );
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    await lifecycle.refresh("build");
+    const newer = store.binding(bindingId)!;
+    expect(newer.observation?.machine).toBe("stopped");
+
+    // Past the stop's deadline: the newer word must count before the deadline does.
+    tick(16 * 60_000);
+    round.resolve(resource({ machine: "stopping", rawState: "archiving" }));
+    await stopping;
+    expect(provider.inspect).toHaveBeenCalledTimes(2);
+    expect(store.binding(bindingId)!.observation).toEqual(newer.observation);
+  });
+
+  it("keeps a stop's not-found over a refresh that was sent before it", async () => {
+    const { lifecycle, provider, store, bindingId, tick, holdNextInspect } = await host({
+      machine: "running",
+    });
+    const stopReply = deferred<ProviderResource>();
+    vi.mocked(provider.stop).mockImplementationOnce(() => stopReply.promise);
+    const stopping = lifecycle.stopMachine("build");
+    await vi.waitFor(() => expect(provider.stop).toHaveBeenCalledTimes(1));
+    const older = holdNextInspect();
+    vi.mocked(provider.inspect).mockRejectedValueOnce(
+      new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null)
+    );
+    const refreshing = lifecycle.refresh("build");
+    await vi.waitFor(() => expect(provider.inspect).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    stopReply.resolve(resource({ machine: "stopping", rawState: "archiving" }));
+    await expect(stopping).rejects.toBeTruthy();
+    const newer = store.binding(bindingId)!;
+    expect(newer.observation?.machine).toBe("unknown");
+    expect(newer.lastError?.code).toBe("not-found");
+
+    tick(1_000);
+    older.resolve(resource({ machine: "running" }));
+    await refreshing;
+    expect(store.binding(bindingId)!.observation).toEqual(newer.observation);
+    expect(store.binding(bindingId)!.lastError?.code).toBe("not-found");
+  });
+
+  it("keeps a refresh over a lifetime change's reply that was sent before it", async () => {
+    const { lifecycle, provider, store, bindingId, tick } = await host({ machine: "running" });
+    const renewed = deferred<ProviderResource>();
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(() => renewed.promise);
+    const setting = lifecycle.setLifetime("build", 4);
+    await vi.waitFor(() => expect(provider.renewLifetime).toHaveBeenCalledTimes(1));
+    tick(1_000);
+    vi.mocked(provider.inspect).mockResolvedValueOnce(
+      resource({ autoStopAt: "2026-11-17T12:00:00.000Z" })
+    );
+    await lifecycle.refresh("build");
+    const newer = store.binding(bindingId)!;
+
+    tick(1_000);
+    renewed.resolve(resource({ autoStopAt: "2026-11-17T10:00:00.000Z" }));
+    await setting;
+    expect(store.binding(bindingId)!.observation).toEqual(newer.observation);
+    expect(store.binding(bindingId)!.lifetimeSeconds).toBe(4 * 3600);
+  });
+
+  it("still takes a read sent after the last observation", async () => {
+    const { lifecycle, provider, store, bindingId, tick } = await host({
+      machine: "stopped",
+      rawState: "archived",
+    });
+    await lifecycle.startMachine("build");
+    tick(1_000);
+    vi.mocked(provider.inspect).mockResolvedValueOnce(
+      resource({ machine: "stopped", rawState: "archived" })
+    );
+    await lifecycle.refresh("build");
+    expect(store.binding(bindingId)!.observation).toMatchObject({
+      machine: "stopped",
+      observedAt: 1_001_000,
+    });
+  });
+});
+
+describe("CloudHostLifecycle with a provider that takes the key at create and sleeps idle machines (#17347)", () => {
+  const IDLE: CloudLifetimeModel = { kind: "idle-sleep", idleSeconds: 900 };
+
+  /** The fake provider as Agent 37 declares itself: an idle sleep, and the key with the create. */
+  function atCreate(provider: CloudProvider) {
+    const info = provider.info;
+    provider.info = (platform) => {
+      const described = info(platform);
+      return {
+        ...described,
+        capabilities: {
+          ...described.capabilities,
+          provisioning: { ...described.capabilities.provisioning, sshKey: "at-create" },
+        },
+      };
+    };
+  }
+
+  async function create(env: Awaited<ReturnType<typeof setup>>) {
+    await env.lifecycle.create({
+      accountId: env.store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: null,
+    });
+  }
+
+  it("never sends a lost create again for a provider with no idempotency key, only looks again", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError?.message).toContain("never asks for another")
+    );
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/remove the host/);
+    expect(env.provider.list).toHaveBeenCalledTimes(1);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+    expect(env.store.bindings()[0]!.creation!.sentAt).toEqual(expect.any(Number));
+
+    // Once the machine shows up, the next look binds it.
+    const bindingId = env.store.bindings()[0]!.id;
+    vi.mocked(env.provider.list).mockResolvedValue([
+      resource({ resourceId: "bx_found0001", labels: { "daintree-binding": bindingId } }),
+    ]);
+    await env.lifecycle.retryCreate("build");
+    expect(env.store.bindings()[0]!.resourceId).toBe("bx_found0001");
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells a restart's miss to look again, not to create, for a provider that only looks", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    await create(env);
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.lastError?.message).toContain("hasn't shown a machine")
+    );
+    expect(next.lifecycle.statuses()[0]?.lastError?.message).not.toContain("Retry to create it");
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    next.lifecycle.dispose();
+  });
+
+  it("binds the earliest machine carrying a lost create's labels, never a later copy of it", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("network", "lost", null, null, null)
+    );
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
+    );
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    const labels = { "daintree-binding": env.store.bindings()[0]!.id };
+    vi.mocked(env.provider.list).mockResolvedValue([
+      resource({ resourceId: "bx_fork00001", labels, createdAt: "2026-11-17T10:05:00.000Z" }),
+      resource({ resourceId: "bx_orig00001", labels, createdAt: "2026-11-17T10:00:00.000Z" }),
+    ]);
+    await env.lifecycle.retryCreate("build");
+    expect(env.store.bindings()[0]!.resourceId).toBe("bx_orig00001");
+  });
+
+  it("looks again before dialling a machine that sleeps by itself, so a dial never wakes one", async () => {
+    let now = 1_000_000;
+    const env = await setup({ machine: "running" }, { lifetime: IDLE, now: () => now });
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const bindingId = env.store.bindings()[0]!.id;
+    await env.lifecycle.refresh("build");
+    // It fell asleep moments after a look that found it running.
+    env.state.machine = resource({ machine: "stopped", rawState: "sleeping", asleep: true });
+    now += 5_000;
+    const inspections = vi.mocked(env.provider.inspect).mock.calls.length;
+    const error = await env.lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(vi.mocked(env.provider.inspect).mock.calls.length).toBeGreaterThan(inspections);
+    expect(env.provider.authorizeSsh).not.toHaveBeenCalled();
+  });
+
+  it("treats a key the provider refused ahead of the machine as nothing made: Retry sends afresh", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const refusal = new Error("key refused");
+    const described = env.provider.describeError;
+    env.provider.describeError = (error) =>
+      error === refusal
+        ? { code: "ssh-authorization", message: "Didn't take the key", at: 0 }
+        : described(error);
+    vi.mocked(env.provider.create).mockRejectedValueOnce(refusal);
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("ssh-authorization")
+    );
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+    // A request the provider rejected as invalid made nothing either, and keeps its reason.
+    const invalidRequest = new Error("invalid");
+    const before = env.provider.describeError;
+    env.provider.describeError = (error) =>
+      error === invalidRequest
+        ? { code: "unsupported", message: "Refused: bad shape", at: 0 }
+        : before(error);
+    vi.mocked(env.provider.create).mockRejectedValueOnce(invalidRequest);
+    await env.lifecycle.retryCreate("build").catch(() => {});
+    expect(env.lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "unsupported",
+      message: "Refused: bad shape",
+    });
+    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+    await env.lifecycle.retryCreate("build");
+    // Nothing was sent before either refusal, so nothing is looked for: the create goes again.
+    expect(env.provider.list).not.toHaveBeenCalled();
+    expect(env.provider.create).toHaveBeenCalledTimes(3);
+  });
+
+  it("reads an asleep machine as asleep, and refuses a dial to it in those words", async () => {
+    const env = await setup(
+      {
+        machine: "stopped",
+        rawState: "sleeping",
+        asleep: true,
+        idleSleep: { enabled: true, idleSeconds: 600 },
+      },
+      { lifetime: IDLE }
+    );
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const status = env.lifecycle.statuses()[0]!;
+    expect(status).toMatchObject({ machine: "stopped", asleep: true });
+    // Its own idle time, not the provider's default.
+    expect(status.lifetime).toEqual({ kind: "idle-sleep", idleSeconds: 600 });
+    const bindingId = env.store.bindings()[0]!.id;
+    const error = await env.lifecycle.ensureAccess(bindingId).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(String((error as Error).message)).toContain("asleep");
+    expect(env.provider.start).not.toHaveBeenCalled();
+    expect(env.provider.authorizeSsh).not.toHaveBeenCalled();
+  });
+
+  it("says a machine with sleeping turned off runs until it's stopped, and survives a restart", async () => {
+    const env = await setup(
+      { machine: "running", idleSleep: { enabled: false, idleSeconds: 900 } },
+      { lifetime: IDLE }
+    );
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    expect(env.lifecycle.statuses()[0]!.lifetime).toEqual({ kind: "none" });
+    expect(env.lifecycle.statuses()[0]!.asleep).toBe(false);
+    const next = env.restart(env.lifecycle);
+    expect(next.lifecycle.statuses()[0]!.lifetime).toEqual({ kind: "none" });
+    next.lifecycle.dispose();
+  });
+
+  it("keeps the provider's own words for a provider that doesn't report sleep per machine", async () => {
+    const env = await setup({ machine: "running" }, { lifetime: IDLE });
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    expect(env.lifecycle.statuses()[0]!.lifetime).toEqual(IDLE);
+  });
+});
+
+describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
+  const ROOT = "/Users/me/code/app-worktrees/feature-login";
+  const MARK: CloudHostCreatedFor = {
+    hostId: null,
+    projectId: "0f1e2d3c",
+    worktreeId: ROOT,
+    projectName: "app",
+    worktreeName: "feature/login",
+    hostName: null,
+  };
+  const WORKTREE = { hostId: null, projectId: MARK.projectId, worktreeId: ROOT };
+  const request = (accountId: string): CloudHostCreateRequest => ({
+    accountId,
+    name: "build",
+    machineType: "default",
+    lifetimeHours: 2,
+  });
+  const choose = (choice: "stop" | "delete") => [
+    { hostId: "build", resourceId: "bx_23456789", choice },
+  ];
+
+  /** A machine made for the worktree (or, with null, from Settings), up and running. */
+  async function marked(
+    mark: CloudHostCreatedFor | null = MARK,
+    options: Parameters<typeof setup>[1] = {}
+  ) {
+    const gone = { value: true as boolean | null };
+    const worktreeGone = vi.fn(async (_path: string): Promise<boolean | null> => gone.value);
+    const ctx = await setup({}, { worktreeGone, ...options });
+    await ctx.lifecycle.create(request(ctx.account.id), mark);
+    await vi.waitFor(() =>
+      expect(ctx.lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
+    );
+    return { ...ctx, gone, worktreeGone };
+  }
+
+  function deferred<T>() {
+    let resolve: (value: T) => void = () => {};
+    let reject: (reason: unknown) => void = () => {};
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  const cleanupOf = (store: CloudHostStore) => store.bindings()[0]?.worktreeCleanup ?? null;
+
+  it("stops the machine once its worktree is gone, keeping the host and saying it's stopped", async () => {
+    const { lifecycle, provider, store, hosts, worktreeGone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    expect(cleanupOf(store)).toMatchObject({ choice: "stop", phase: "waiting" });
+    expect(provider.stop).not.toHaveBeenCalled();
+
+    const outcomes = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(worktreeGone).toHaveBeenCalledWith(ROOT);
+    expect(outcomes).toEqual([
+      { hostId: "build", machineName: "build", choice: "stop", error: null },
+    ]);
+    expect(provider.stop).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(hosts.map((host) => host.id)).toEqual(["build"]);
+    expect(store.bindings()[0]).toMatchObject({ intent: "stop", worktreeCleanup: null });
+    expect(lifecycle.statuses()[0]).toMatchObject({ machine: "stopped", worktreeCleanup: null });
+  });
+
+  it("deletes the machine once its worktree is gone, and the host with it", async () => {
+    const { lifecycle, provider, store, hosts } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const outcomes = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(outcomes).toEqual([
+      { hostId: "build", machineName: "build", choice: "delete", error: null },
+    ]);
+    expect(provider.delete).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(hosts).toEqual([]);
+    lifecycle.start();
+    await vi.waitFor(() => expect(store.bindings()).toEqual([]));
+    lifecycle.dispose();
+  });
+
+  it("keeps a machine left out of the choices, dropping what an earlier attempt chose", async () => {
+    const { lifecycle, provider, store, hosts } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    // The person deletes again and keeps it this time.
+    lifecycle.prepareWorktreeCleanup(WORKTREE, []);
+    expect(cleanupOf(store)).toBeNull();
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([]);
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(hosts.map((host) => host.id)).toEqual(["build"]);
+  });
+
+  it("never touches a machine unless its mark names exactly the worktree being deleted", async () => {
+    const others: Array<CloudHostCreatedFor | null> = [
+      null,
+      { ...MARK, worktreeId: `${ROOT}-2` },
+      { ...MARK, projectId: "aaaaaaaa" },
+      { ...MARK, hostId: "devbox", hostName: "devbox" },
+    ];
+    for (const mark of others) {
+      const { lifecycle, provider, store, hosts } = await marked(mark);
+      expect(() => lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"))).toThrow(
+        /wasn't created for this worktree/
+      );
+      expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([]);
+      expect(cleanupOf(store)).toBeNull();
+      expect(provider.stop).not.toHaveBeenCalled();
+      expect(provider.delete).not.toHaveBeenCalled();
+      expect(hosts.map((host) => host.id)).toEqual(["build"]);
+    }
+  });
+
+  it("leaves another worktree's choice alone when this one settles", async () => {
+    const { lifecycle, provider, store } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const sibling = { ...WORKTREE, worktreeId: `${ROOT}-2` };
+    expect(await lifecycle.settleWorktreeCleanup(sibling, true)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(provider.delete).not.toHaveBeenCalled();
+  });
+
+  it("refuses a machine that changed since it was confirmed, writing nothing", async () => {
+    const { lifecycle, store } = await marked();
+    expect(() =>
+      lifecycle.prepareWorktreeCleanup(WORKTREE, [
+        { hostId: "build", resourceId: "bx_99999999", choice: "delete" },
+      ])
+    ).toThrow(/changed since you confirmed/);
+    expect(() =>
+      lifecycle.prepareWorktreeCleanup({ hostId: null, projectId: MARK.projectId }, [])
+    ).toThrow(/missing its project or path/);
+    expect(cleanupOf(store)).toBeNull();
+  });
+
+  it("leaves the machine while the worktree is still there, dropping the choice only on a refusal", async () => {
+    const { lifecycle, provider, store, gone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    gone.value = false;
+    // Even a delete reported as done: only the missing root counts on this device.
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    // A lost answer: the delete may still be removing it, so the choice waits on.
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, null)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, false)).toEqual([]);
+    expect(cleanupOf(store)).toBeNull();
+    expect(provider.delete).not.toHaveBeenCalled();
+  });
+
+  it("carries out a choice whose worktree went though its delete's answer was lost", async () => {
+    const { lifecycle, provider } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    const outcomes = await lifecycle.settleWorktreeCleanup(WORKTREE, null);
+    expect(outcomes[0]).toMatchObject({ choice: "stop", error: null });
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits when nothing can tell, until the person checks again", async () => {
+    const { lifecycle, provider, store, gone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    gone.value = null;
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, false)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(lifecycle.statuses()[0]?.worktreeCleanup).toMatchObject({
+      phase: "waiting",
+      worktreeHostId: null,
+    });
+    await expect(lifecycle.retryWorktreeCleanup("build")).rejects.toThrow(/couldn't tell/);
+    // A look while its delete may still be running never drops the choice.
+    gone.value = false;
+    await expect(lifecycle.retryWorktreeCleanup("build")).rejects.toThrow(/still there/);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(provider.stop).not.toHaveBeenCalled();
+
+    gone.value = true;
+    await lifecycle.retryWorktreeCleanup("build");
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(cleanupOf(store)).toBeNull();
+  });
+
+  it("never lets an answer about an earlier attempt change a later one", async () => {
+    const { lifecycle, provider, store, worktreeGone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const probe = deferred<boolean | null>();
+    worktreeGone.mockImplementationOnce(() => probe.promise);
+    const settling = lifecycle.settleWorktreeCleanup(WORKTREE, false);
+    await vi.waitFor(() => expect(worktreeGone).toHaveBeenCalledTimes(1));
+    // The card's Retry writes the choice again before the first answer lands.
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const retried = cleanupOf(store)!.attemptId;
+    probe.resolve(false);
+    expect(await settling).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting", attemptId: retried });
+    expect(provider.delete).not.toHaveBeenCalled();
+  });
+
+  it("never lets a stale 'gone' run a later attempt's choice", async () => {
+    const { lifecycle, provider, store, worktreeGone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const probe = deferred<boolean | null>();
+    worktreeGone.mockImplementationOnce(() => probe.promise);
+    const settling = lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    await vi.waitFor(() => expect(worktreeGone).toHaveBeenCalledTimes(1));
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    probe.resolve(true);
+    expect(await settling).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(provider.delete).not.toHaveBeenCalled();
+  });
+
+  it("settles only the delete an answer belongs to", async () => {
+    const { lifecycle, provider, store } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"), "mutation-b");
+    // A late answer from an earlier delete of a worktree at the same path, or one naming none.
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true, "mutation-a")).toEqual([]);
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting", mutationId: "mutation-b" });
+    expect(provider.delete).not.toHaveBeenCalled();
+    const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true, "mutation-b");
+    expect(outcome).toMatchObject({ choice: "delete", error: null });
+  });
+
+  it("sends no delete through a provider replaced while its credentials were read", async () => {
+    const { lifecycle, provider, store, accounts } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const read = accounts.credentials.bind(accounts);
+    const registered = vi.spyOn(accounts, "provider");
+    vi.spyOn(accounts, "credentials").mockImplementation(async (...args) => {
+      const credentials = await read(...args);
+      registered.mockReturnValue({ ...provider } as CloudProvider);
+      return credentials;
+    });
+    const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(outcome?.error).toMatch(/changed while the machine was being deleted/);
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(cleanupOf(store)).toMatchObject({ phase: "failed" });
+  });
+
+  it("says a Check again that lost the race to a failed delete failed, without sending it again", async () => {
+    let heard: (worktreeId: string) => void = () => {};
+    const { lifecycle, provider, store, worktreeGone, gone } = await marked(MARK, {
+      onWorktreeRemoved: (listener) => {
+        heard = listener;
+        return () => {};
+      },
+    });
+    lifecycle.start();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    gone.value = null;
+    await lifecycle.settleWorktreeCleanup(WORKTREE, null);
+    const look = deferred<boolean | null>();
+    worktreeGone.mockImplementationOnce(() => look.promise);
+    const checking = lifecycle.retryWorktreeCleanup("build");
+    await vi.waitFor(() => expect(worktreeGone).toHaveBeenCalledTimes(2));
+    vi.mocked(provider.delete).mockRejectedValueOnce(
+      new BoatApiError("server", "Upstream exploded", 500, null, null)
+    );
+    gone.value = true;
+    heard(ROOT);
+    await vi.waitFor(() => expect(cleanupOf(store)).toMatchObject({ phase: "failed" }));
+    look.resolve(true);
+    await expect(checking).rejects.toThrow(/Upstream exploded/);
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    lifecycle.dispose();
+  });
+
+  it("waits for a provider that leaves partway, rather than failing", async () => {
+    const { lifecycle, provider, store, accounts, disconnect } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const unavailable = vi.spyOn(accounts, "providerUnavailable");
+    const supported = vi.spyOn(accounts, "requireSupported");
+    // Gone while the link is let go, before the delete is sent.
+    disconnect.mockImplementationOnce(async () => {
+      unavailable.mockReturnValue("Its plugin is disabled");
+      supported.mockImplementation(() => {
+        throw new Error("Unknown cloud provider boat");
+      });
+    });
+    const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(outcome?.error).toBe("Its plugin is disabled");
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(cleanupOf(store)).toMatchObject({
+      phase: "due",
+      error: { message: "Its plugin is disabled" },
+    });
+    unavailable.mockRestore();
+    supported.mockRestore();
+    lifecycle.providersChanged();
+    await vi.waitFor(() => expect(provider.delete).toHaveBeenCalledTimes(1));
+  });
+
+  it("ends a start under way before its stop, so the machine doesn't come back up", async () => {
+    const { lifecycle, provider, store, state } = await marked();
+    state.machine = resource({ machine: "stopped", rawState: "archived" });
+    await lifecycle.refresh("build");
+    const started = deferred<ProviderResource | null>();
+    vi.mocked(provider.start).mockImplementationOnce(() => started.promise);
+    const starting = lifecycle.startMachine("build");
+    await vi.waitFor(() => expect(provider.start).toHaveBeenCalledTimes(1));
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    const settling = lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    // The start lands after it was superseded: the stop still follows.
+    state.machine = resource({ machine: "running" });
+    started.resolve(resource({ machine: "starting", rawState: "provisioning" }));
+    await starting.catch(() => {});
+    const [outcome] = await settling;
+    expect(outcome).toMatchObject({ error: null });
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(store.bindings()[0]?.intent).toBe("stop");
+    expect(lifecycle.statuses()[0]).toMatchObject({ machine: "stopped", worktreeCleanup: null });
+  });
+
+  it("runs a delete once when a removal is heard while its delete settles, keeping a failure", async () => {
+    let heard: (worktreeId: string) => void = () => {};
+    const { lifecycle, provider, store, worktreeGone } = await marked(MARK, {
+      onWorktreeRemoved: (listener) => {
+        heard = listener;
+        return () => {};
+      },
+    });
+    lifecycle.start();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const first = deferred<boolean | null>();
+    const second = deferred<boolean | null>();
+    worktreeGone
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    heard(ROOT);
+    const settling = lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    await vi.waitFor(() => expect(worktreeGone).toHaveBeenCalledTimes(2));
+    vi.mocked(provider.delete).mockRejectedValueOnce(
+      new BoatApiError("server", "Upstream exploded", 500, null, null)
+    );
+    first.resolve(true);
+    await vi.waitFor(() => expect(cleanupOf(store)).toMatchObject({ phase: "failed" }));
+    // The second look lands after the failure: it never sends the delete again.
+    second.resolve(true);
+    const [outcome] = await settling;
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(outcome?.error).toContain("Upstream exploded");
+    expect(cleanupOf(store)).toMatchObject({ phase: "failed" });
+    lifecycle.dispose();
+  });
+
+  it("runs a choice waiting when Daintree quit once the worktree is found gone", async () => {
+    const { lifecycle, provider, store, hosts, restart } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const next = restart(lifecycle);
+    await vi.waitFor(() => expect(hosts).toEqual([]));
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(next.store.bindings()).toEqual([]));
+    expect(store.bindings()).toEqual([]);
+    next.lifecycle.dispose();
+  });
+
+  it("drops a choice waiting when Daintree quit if the worktree is still there", async () => {
+    const { lifecycle, provider, gone, restart, hosts } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    gone.value = false;
+    const next = restart(lifecycle);
+    await vi.waitFor(() => expect(cleanupOf(next.store)).toBeNull());
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(hosts.map((host) => host.id)).toEqual(["build"]);
+    next.lifecycle.dispose();
+  });
+
+  it("runs a delete again after a quit partway, and the quitting run leaves it due", async () => {
+    const { lifecycle, provider, store, hosts, restart } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const sent = deferred<void>();
+    const resent = deferred<void>();
+    vi.mocked(provider.delete)
+      .mockImplementationOnce(() => sent.promise)
+      .mockImplementationOnce(() => resent.promise);
+    const quitting = lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    await vi.waitFor(() => expect(provider.delete).toHaveBeenCalledTimes(1));
+    expect(cleanupOf(store)).toMatchObject({ phase: "due" });
+
+    const next = restart(lifecycle);
+    await vi.waitFor(() => expect(provider.delete).toHaveBeenCalledTimes(2));
+    // The old run's call fails as the process goes: it never records a failure.
+    sent.reject(new BoatApiError("cancelled", "Cancelled", null, null, null));
+    await quitting;
+    expect(cleanupOf(next.store)).toMatchObject({ phase: "due", error: null });
+
+    // Already gone at the provider by the time it's asked again.
+    resent.reject(new BoatApiError("not-found", "No such sandbox", 404, "sandbox_not_found", null));
+    await vi.waitFor(() => expect(hosts).toEqual([]));
+    expect(vi.mocked(provider.delete).mock.calls[1]?.[1]).toBe("bx_23456789");
+    next.lifecycle.dispose();
+  });
+
+  it("finishes a stop that was under way when Daintree quit without asking for another", async () => {
+    const { lifecycle, provider, store, state, restart } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    // The stop goes out; Daintree quits before its answer comes back.
+    vi.mocked(provider.stop).mockImplementationOnce(() => {
+      state.machine = resource({ machine: "stopping", rawState: "archiving" });
+      return new Promise(() => {});
+    });
+    void lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    await vi.waitFor(() => expect(provider.stop).toHaveBeenCalledTimes(1));
+    expect(cleanupOf(store)).toMatchObject({ phase: "due" });
+
+    let stoppingReads = 0;
+    vi.mocked(provider.inspect).mockImplementation(async () => {
+      if (state.machine.machine === "stopping" && ++stoppingReads > 1) {
+        state.machine = resource({ machine: "stopped", rawState: "archived" });
+      }
+      return state.machine;
+    });
+    const next = restart(lifecycle);
+    await vi.waitFor(() => expect(cleanupOf(next.store)).toBeNull());
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(next.lifecycle.statuses()[0]).toMatchObject({ machine: "stopped" });
+    expect(next.store.bindings()[0]?.intent).toBe("stop");
+    next.lifecycle.dispose();
+  });
+
+  it("asks for no stop of a machine its provider reports deleted", async () => {
+    const { lifecycle, provider, store, state } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    state.machine = resource({ machine: "deleted", rawState: "deleted" });
+    const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(outcome).toMatchObject({ error: null });
+    expect(provider.stop).not.toHaveBeenCalled();
+    expect(cleanupOf(store)).toBeNull();
+  });
+
+  it("keeps a failed delete with its error for Retry, never retrying by itself", async () => {
+    const { lifecycle, provider, store, hosts, restart } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    vi.mocked(provider.delete).mockRejectedValueOnce(
+      new BoatApiError("server", "Upstream exploded", 500, null, null)
+    );
+    const [outcome] = await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(outcome).toMatchObject({ choice: "delete" });
+    expect(outcome?.error).toContain("Upstream exploded");
+    expect(lifecycle.statuses()[0]?.worktreeCleanup).toMatchObject({
+      choice: "delete",
+      phase: "failed",
+      error: { code: "provider-unreachable", message: outcome!.error },
+    });
+    expect(hosts.map((host) => host.id)).toEqual(["build"]);
+
+    const next = restart(lifecycle);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    expect(cleanupOf(next.store)).toMatchObject({
+      phase: "failed",
+      error: { message: expect.stringContaining("Upstream exploded") },
+    });
+
+    await next.lifecycle.retryWorktreeCleanup("build");
+    expect(provider.delete).toHaveBeenCalledTimes(2);
+    expect(hosts).toEqual([]);
+    expect(store.bindings().every((binding) => binding.hostId !== "build")).toBe(true);
+    next.lifecycle.dispose();
+  });
+
+  it("never lets a replay of the same delete arm a machine the person chose to keep", async () => {
+    const { lifecycle, provider, store, gone } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"), "mutation-a");
+    gone.value = false;
+    await lifecycle.settleWorktreeCleanup(WORKTREE, null, "mutation-a");
+    lifecycle.dismissWorktreeCleanup("build");
+    // The reconnect replays the parked delete with the options it was confirmed with.
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"), "mutation-a");
+    expect(cleanupOf(store)).toBeNull();
+    gone.value = true;
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true, "mutation-a")).toEqual([]);
+    expect(provider.delete).not.toHaveBeenCalled();
+    // A later delete of the worktree asks afresh.
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"), "mutation-b");
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting", mutationId: "mutation-b" });
+  });
+
+  it("lets the person keep a machine whose stop failed", async () => {
+    const { lifecycle, provider, store } = await marked();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    vi.mocked(provider.stop).mockRejectedValueOnce(
+      new BoatApiError("server", "Upstream exploded", 500, null, null)
+    );
+    await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(cleanupOf(store)).toMatchObject({ phase: "failed" });
+    lifecycle.dismissWorktreeCleanup("build");
+    expect(cleanupOf(store)).toBeNull();
+    await expect(lifecycle.retryWorktreeCleanup("build")).rejects.toThrow(/nothing left to do/);
+  });
+
+  it("takes a worktree on another host from its host's answer, and never on a guess", async () => {
+    const remote = { ...MARK, hostId: "devbox", hostName: "devbox" };
+    const ref = { ...WORKTREE, hostId: "devbox" };
+    const { lifecycle, provider, store, worktreeGone } = await marked(remote);
+
+    lifecycle.prepareWorktreeCleanup(ref, choose("delete"));
+    expect(await lifecycle.settleWorktreeCleanup(ref, null)).toEqual([]);
+    expect(cleanupOf(store)).toMatchObject({ phase: "waiting" });
+    expect(await lifecycle.settleWorktreeCleanup(ref, false)).toEqual([]);
+    expect(cleanupOf(store)).toBeNull();
+    expect(provider.delete).not.toHaveBeenCalled();
+
+    lifecycle.prepareWorktreeCleanup(ref, choose("stop"));
+    const outcomes = await lifecycle.settleWorktreeCleanup(ref, true);
+    expect(outcomes[0]).toMatchObject({ error: null });
+    expect(provider.stop).toHaveBeenCalledTimes(1);
+    expect(worktreeGone).not.toHaveBeenCalled();
+  });
+
+  it("leaves a worktree on another host unconfirmed after a quit, with no Retry that acts", async () => {
+    const remote = { ...MARK, hostId: "devbox", hostName: "devbox" };
+    const ref = { ...WORKTREE, hostId: "devbox" };
+    const { lifecycle, provider, worktreeGone, restart } = await marked(remote);
+    lifecycle.prepareWorktreeCleanup(ref, choose("delete"));
+    const next = restart(lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.worktreeCleanup).toMatchObject({
+        phase: "unconfirmed",
+        worktreeHostId: "devbox",
+        error: { message: expect.stringMatching(/quit before it heard/) },
+      })
+    );
+    await expect(next.lifecycle.retryWorktreeCleanup("build")).rejects.toThrow(/can't tell/);
+    // A later answer from the host doesn't run it either: the worktree is deleted again to ask.
+    expect(await next.lifecycle.settleWorktreeCleanup(ref, true)).toEqual([]);
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(worktreeGone).not.toHaveBeenCalled();
+    next.lifecycle.prepareWorktreeCleanup(ref, []);
+    expect(cleanupOf(next.store)).toBeNull();
+    next.lifecycle.dispose();
+  });
+
+  it("runs a choice when a removal is heard and the worktree's root is gone", async () => {
+    let heard: (worktreeId: string) => void = () => {};
+    const stopListening = vi.fn();
+    const { lifecycle, provider, gone, hosts } = await marked(MARK, {
+      onWorktreeRemoved: (listener) => {
+        heard = listener;
+        return stopListening;
+      },
+    });
+    gone.value = false;
+    lifecycle.start();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    // A monitor pruned while the folder is still there proves nothing.
+    heard(ROOT);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(provider.delete).not.toHaveBeenCalled();
+    gone.value = true;
+    heard(ROOT);
+    await vi.waitFor(() => expect(hosts).toEqual([]));
+    expect(provider.delete).toHaveBeenCalledTimes(1);
+    lifecycle.dispose();
+    expect(stopListening).toHaveBeenCalled();
   });
 });

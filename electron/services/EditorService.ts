@@ -3,7 +3,16 @@ import path from "path";
 import os from "os";
 import { openWithDefaultApp } from "../utils/openPath.js";
 import { linuxDesktopAppEnv } from "./pty/EnvironmentFilter.js";
-import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "../../shared/types/editor.js";
+import {
+  JETBRAINS_EDITOR_IDS,
+  LEGACY_JETBRAINS_EDITOR_ID,
+  terminalOnlyEditorCommand,
+  type DiscoveredEditor,
+  type EditorConfig,
+  type JetBrainsEditorId,
+  type KnownEditorId,
+} from "../../shared/types/editor.js";
+import type { SystemOpenInEditorNeedsTerminal } from "../../shared/types/ipc/system.js";
 import { withPathProbeSlot } from "../utils/findOnPath.js";
 import { findWindowsPathFile, windowsEnvValue } from "../utils/windowsExecutable.js";
 
@@ -23,6 +32,72 @@ interface EditorDefinition {
    */
   buildArgs(filePath: string, line?: number, col?: number, isDirectory?: boolean): string[];
 }
+
+interface JetBrainsProduct {
+  name: string;
+  /** The launcher name, both for a Toolbox script and inside the app bundle */
+  binary: string;
+  /** macOS app bundle names, the community edition after the paid one */
+  bundles: string[];
+}
+
+const JETBRAINS_PRODUCTS: Record<JetBrainsEditorId, JetBrainsProduct> = {
+  "jetbrains-webstorm": { name: "WebStorm", binary: "webstorm", bundles: ["WebStorm"] },
+  "jetbrains-idea": {
+    name: "IntelliJ IDEA",
+    binary: "idea",
+    bundles: ["IntelliJ IDEA", "IntelliJ IDEA CE"],
+  },
+  "jetbrains-phpstorm": { name: "PhpStorm", binary: "phpstorm", bundles: ["PhpStorm"] },
+  "jetbrains-pycharm": { name: "PyCharm", binary: "pycharm", bundles: ["PyCharm", "PyCharm CE"] },
+  "jetbrains-goland": { name: "GoLand", binary: "goland", bundles: ["GoLand"] },
+  "jetbrains-rider": { name: "Rider", binary: "rider", bundles: ["Rider"] },
+  "jetbrains-clion": { name: "CLion", binary: "clion", bundles: ["CLion"] },
+  "jetbrains-datagrip": { name: "DataGrip", binary: "datagrip", bundles: ["DataGrip"] },
+  "jetbrains-rubymine": { name: "RubyMine", binary: "rubymine", bundles: ["RubyMine"] },
+};
+
+function jetbrainsBuildArgs(filePath: string, line?: number): string[] {
+  if (line !== undefined) {
+    return ["--line", String(line), filePath];
+  }
+  return [filePath];
+}
+
+function jetbrainsDirs(products: JetBrainsProduct[]): () => string[] {
+  return () => [
+    ...jetbrainsToolboxScriptDirs(),
+    ...macAppBundleDirs(products.flatMap((product) => product.bundles).map((name) => ({ name }))),
+  ];
+}
+
+/**
+ * One entry per IDE, in the order their launchers were searched when they shared
+ * a single entry, so the automatic pick in `openFile` lands on the IDE it always did.
+ */
+const JETBRAINS_EDITORS: EditorDefinition[] = JETBRAINS_EDITOR_IDS.map((id) => {
+  const product = JETBRAINS_PRODUCTS[id];
+  return {
+    id,
+    name: product.name,
+    binaries: [product.binary],
+    extraDirs: jetbrainsDirs([product]),
+    buildArgs: jetbrainsBuildArgs,
+  };
+});
+
+/**
+ * The single entry a saved `webstorm` names: every JetBrains launcher, searched
+ * launcher first and directory second, exactly as before the split. Not
+ * discovered on its own, since each IDE it can find already is.
+ */
+const LEGACY_JETBRAINS: EditorDefinition = {
+  id: LEGACY_JETBRAINS_EDITOR_ID,
+  name: "JetBrains IDE",
+  binaries: JETBRAINS_EDITOR_IDS.map((id) => JETBRAINS_PRODUCTS[id].binary),
+  extraDirs: jetbrainsDirs(JETBRAINS_EDITOR_IDS.map((id) => JETBRAINS_PRODUCTS[id])),
+  buildArgs: jetbrainsBuildArgs,
+};
 
 const KNOWN_EDITORS: EditorDefinition[] = [
   {
@@ -101,43 +176,7 @@ const KNOWN_EDITORS: EditorDefinition[] = [
       return [filePath];
     },
   },
-  {
-    id: "webstorm",
-    name: "WebStorm / IntelliJ",
-    binaries: [
-      "webstorm",
-      "idea",
-      "phpstorm",
-      "pycharm",
-      "goland",
-      "rider",
-      "clion",
-      "datagrip",
-      "rubymine",
-    ],
-    extraDirs: () => [
-      ...jetbrainsToolboxScriptDirs(),
-      ...macAppBundleDirs([
-        { name: "WebStorm" },
-        { name: "IntelliJ IDEA" },
-        { name: "IntelliJ IDEA CE" },
-        { name: "PhpStorm" },
-        { name: "PyCharm" },
-        { name: "PyCharm CE" },
-        { name: "GoLand" },
-        { name: "Rider" },
-        { name: "CLion" },
-        { name: "DataGrip" },
-        { name: "RubyMine" },
-      ]),
-    ],
-    buildArgs(filePath, line) {
-      if (line !== undefined) {
-        return ["--line", String(line), filePath];
-      }
-      return [filePath];
-    },
-  },
+  ...JETBRAINS_EDITORS,
   {
     id: "sublime",
     name: "Sublime Text",
@@ -265,8 +304,9 @@ function jetbrainsToolboxScriptDirs(): string[] {
   } else if (process.platform === "linux") {
     dirs.push(path.posix.join(os.homedir(), ".local", "share", "JetBrains", "Toolbox", "scripts"));
   } else if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-    dirs.push(path.join(localAppData, "JetBrains", "Toolbox", "scripts"));
+    const localAppData =
+      process.env.LOCALAPPDATA || path.win32.join(os.homedir(), "AppData", "Local");
+    dirs.push(path.win32.join(localAppData, "JetBrains", "Toolbox", "scripts"));
   }
   return dirs;
 }
@@ -315,6 +355,7 @@ function findWindowsEditor(binary: string, extraDirs: string[] = []): Promise<st
 }
 
 function resolveEditorDef(id: KnownEditorId): EditorDefinition | undefined {
+  if (id === LEGACY_JETBRAINS_EDITOR_ID) return LEGACY_JETBRAINS;
   return KNOWN_EDITORS.find((e) => e.id === id);
 }
 
@@ -460,6 +501,12 @@ async function tryEnvEditor(
  * `$VISUAL`/`$EDITOR`, then whatever is discoverable, then the platform
  * launcher.
  *
+ * A terminal-only editor is never launched: every launch here is detached with
+ * its streams ignored, so it would start as a process nobody can see (#17441).
+ * Automatic selection passes over one, as `$VISUAL`/`$EDITOR` already do, and a
+ * configured one launches nothing and says so in the result, so the caller can
+ * explain how to run it through a terminal app.
+ *
  * `isDirectory` marks the target as a folder — the worktree "Open in Editor"
  * action opens one (#12329). Coordinates are meaningless there, so they are
  * dropped up front: that alone gives most editors their correct folder syntax,
@@ -474,7 +521,7 @@ export async function openFile(
   col?: number,
   config?: EditorConfig | null,
   isDirectory = false
-): Promise<void> {
+): Promise<SystemOpenInEditorNeedsTerminal | void> {
   if (!path.isAbsolute(filePath)) {
     throw new Error("Only absolute paths are allowed");
   }
@@ -538,6 +585,10 @@ export async function openFile(
       }
     } else {
       const def = resolveEditorDef(config.id);
+      const terminalCommand = def && terminalOnlyEditorCommand(def.id);
+      if (def && terminalCommand) {
+        return { outcome: "needs-terminal", editorName: def.name, command: terminalCommand };
+      }
       if (def) {
         const executable = await findExecutable(def);
         if (executable) {
@@ -566,6 +617,7 @@ export async function openFile(
 
   // 3. Try discovered editors in priority order
   for (const def of KNOWN_EDITORS) {
+    if (terminalOnlyEditorCommand(def.id)) continue;
     const executable = await findExecutable(def);
     if (executable) {
       const args = def.buildArgs(filePath, targetLine, targetCol, isDirectory);

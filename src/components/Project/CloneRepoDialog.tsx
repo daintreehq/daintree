@@ -17,7 +17,7 @@ import { mintRemoteOperationId } from "@/clients/operationsClient";
 import { runHostOperation } from "@/hooks/useHostConnection";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { validateFolderName } from "@shared/utils/folderName";
+import { validateHostFolderName } from "@/utils/validateHostFolderName";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -510,7 +510,7 @@ export function CloneRepoDialog({
   // URL-derived name is non-empty — keeps the empty-state quiet while ensuring
   // a bad auto-derived name (e.g. URL ending in "con.git") still surfaces.
   const folderNameError =
-    folderNameEdited || folderName.trim() !== "" ? validateFolderName(folderName) : null;
+    folderNameEdited || folderName.trim() !== "" ? validateHostFolderName(folderName) : null;
   const isBusy = isCloning || isStarting;
   const canClone =
     isValidCloneUrl(url, shorthandHost) &&

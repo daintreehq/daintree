@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -112,9 +111,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const clearAll = useNotificationHistoryStore((s) => s.clearAll);
   const dismissEntry = useNotificationHistoryStore((s) => s.dismissEntry);
   const dismissByCorrelationId = useNotificationHistoryStore((s) => s.dismissByCorrelationId);
-  const clearExpiredSnoozes = useNotificationHistoryStore((s) => s.clearExpiredSnoozes);
-
-  useSnoozeExpiryTimer(snoozedThreads, clearExpiredSnoozes);
+  // The rows read the clock, and a clock that jumped with the window focused
+  // leaves the view-lifetime snooze timer running late, so opening squares the
+  // stored unread count with what the rows show.
+  useEffect(() => {
+    if (open) useNotificationHistoryStore.getState().clearExpiredSnoozes();
+  }, [open]);
 
   const {
     notificationsEnabled,
@@ -639,17 +641,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // Read state belongs to the inbox views; Archived and Snoozed hold nothing
   // it would act on, so the header doesn't offer it there.
   const showMarkAllRead = unreadCount > 0 && (filter === "all" || filter === "unread");
-  // Hide the Snoozed tab when nothing is snoozed — it would otherwise be a
+  // Hide the Snoozed tab when it would list nothing — it would otherwise be a
   // dead chip that always opens to an empty state, training users to ignore
-  // it. Snap focus back to "all" if the active snooze just expired while the
-  // tab was open so the user isn't stranded on a vanished tab.
-  const hasSnoozedThreads = useMemo(() => {
-    const now = Date.now();
-    for (const value of Object.values(snoozedThreads)) {
-      if (typeof value === "number" && value > now) return true;
-    }
-    return false;
-  }, [snoozedThreads]);
+  // it. A snooze counts only while a row stands behind it, so a key left over
+  // from pruned history doesn't keep the tab. Snap focus back to "all" if the
+  // active snooze just expired while the tab was open so the user isn't
+  // stranded on a vanished tab.
+  const hasSnoozedThreads = useMemo(
+    () => filterTriageEntries(entries, "snoozed", null, snoozedThreads).length > 0,
+    [entries, snoozedThreads]
+  );
   // An emptied inbox hides the filter, so it must not stay on a tab nobody can
   // see — the next notification would open onto "You're all caught up".
   useEffect(() => {

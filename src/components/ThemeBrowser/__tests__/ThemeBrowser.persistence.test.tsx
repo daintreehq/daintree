@@ -5,7 +5,6 @@ import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSc
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useUIStore } from "@/store/uiStore";
-import { usePortalStore } from "@/store/portalStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
@@ -126,7 +125,6 @@ describe("ThemeBrowser persistence", () => {
     });
     useThemeBrowserStore.setState({ isOpen: true });
     useUIStore.setState({ overlayStack: [] });
-    usePortalStore.setState({ isOpen: false });
     render(<Harness />);
   });
 

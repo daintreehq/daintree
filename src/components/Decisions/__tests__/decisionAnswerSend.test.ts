@@ -68,6 +68,7 @@ const OPEN: DecisionQuestionContent = {
   askedAt: "2026-11-02T10:00:00.000Z",
   expiresAt: null,
   status: "open",
+  closedReason: null,
   deliveryStatus: "relay-queued",
   attachments: [],
   thread: [],

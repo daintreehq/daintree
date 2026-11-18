@@ -15,6 +15,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import type { SanitizedTelemetryEvent } from "@shared/types";
 import { TelemetryContent } from "../TelemetryContent";
+import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
+import { act } from "@testing-library/react";
 
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
@@ -104,5 +106,42 @@ describe("TelemetryContent detail header", () => {
     expect(row.textContent).toContain("ID abcd1234");
     expect(row.children[0]).toBe(detailTime);
     expect(row.children[1]).toBe(separator);
+  });
+});
+
+describe("TelemetryContent first-read skeleton onset", () => {
+  beforeEach(() => {
+    stubPreviewApi();
+    useTelemetryPreviewStore.getState().reset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    useTelemetryPreviewStore.getState().reset();
+    Reflect.deleteProperty(window, "electron");
+  });
+
+  it("paints no loading rows when the state read settles inside the onset gate", async () => {
+    render(<TelemetryContent />);
+    expect(screen.queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS - 1);
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("paints the loading rows once a slow read crosses the onset gate", async () => {
+    const preview = window.electron.telemetry.preview;
+    vi.mocked(preview.getState).mockReturnValue(new Promise(() => {}));
+    render(<TelemetryContent />);
+    expect(screen.queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
+    expect(screen.getByRole("status").getAttribute("aria-label")).toBe(
+      "Checking telemetry preview"
+    );
   });
 });

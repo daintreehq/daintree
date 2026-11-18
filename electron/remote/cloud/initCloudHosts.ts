@@ -1,14 +1,28 @@
 import { app } from "electron";
 import path from "node:path";
+import { cloudProviderNamespace, type CloudProviderId } from "../../../shared/types/cloudHosts.js";
 import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
 import { registerRemoteService } from "../runtime.js";
+import { Agent37Client, resolveAgent37ApiUrl } from "./agent37/Agent37Client.js";
+import { Agent37Provider } from "./agent37/Agent37Provider.js";
+import { AwsClient, resolveAwsApiUrl } from "./aws/AwsClient.js";
+import { AwsProvider } from "./aws/AwsProvider.js";
 import { BoatClient, resolveBoatApiUrl } from "./boat/BoatClient.js";
 import { BoatProvider } from "./boat/BoatProvider.js";
+import { GceTokenSource, gceTokenUrlFor } from "./gce/gceAuth.js";
+import { GceClient, resolveGceApiUrl } from "./gce/GceClient.js";
+import { GceProvider, type GceEndpoints } from "./gce/GceProvider.js";
 import { CloudAccountService } from "./CloudAccountService.js";
+import {
+  DigitalOceanClient,
+  resolveDigitalOceanApiUrl,
+} from "./digitalocean/DigitalOceanClient.js";
+import { DigitalOceanProvider } from "./digitalocean/DigitalOceanProvider.js";
 import { KeychainCloudCredentialVault } from "./CloudCredentialVault.js";
 import { CloudHostStore, type CloudHostsStoreBackend } from "./CloudHostStore.js";
 import { CloudHosts } from "./CloudHosts.js";
 import { CloudProviderRegistry } from "./CloudProviderRegistry.js";
+import { watchPluginCloudProviders } from "./pluginCloudProviderRegistrations.js";
 
 export interface CloudHostsRuntime {
   cloudHosts: CloudHosts;
@@ -19,6 +33,19 @@ export interface CloudHostsRuntime {
   dispose(): void;
 }
 
+/** One client per API origin, made the first time an account there is used. */
+function clientCache<C>(make: (baseUrl: string) => C): (apiUrl: string) => C {
+  const clients = new Map<string, C>();
+  return (apiUrl) => {
+    let client = clients.get(apiUrl);
+    if (!client) {
+      client = make(apiUrl);
+      clients.set(apiUrl, client);
+    }
+    return client;
+  };
+}
+
 /**
  * Builds the cloud side of Remote Hosts. Costs nothing until an account is
  * connected: no request is made and no file is written before then.
@@ -27,22 +54,48 @@ export function initCloudHosts(params: {
   backend: CloudHostsStoreBackend;
   emit(event: RemoteHostsEvent): void;
   onAccountRemoved?(accountId: string): Promise<void>;
+  beforeAccountRemoved?(accountId: string): Promise<void>;
 }): CloudHostsRuntime {
   const store = new CloudHostStore(params.backend);
   const boatUrl = resolveBoatApiUrl(app.isPackaged);
-  const clients = new Map<string, BoatClient>();
-  const boatClientFor = (apiUrl: string): BoatClient => {
-    let client = clients.get(apiUrl);
-    if (!client) {
-      client = new BoatClient({ baseUrl: apiUrl });
-      clients.set(apiUrl, client);
-    }
-    return client;
-  };
   const providers = new CloudProviderRegistry();
-  providers.register(new BoatProvider(boatClientFor), {
+  providers.register(new BoatProvider(clientCache((baseUrl) => new BoatClient({ baseUrl }))), {
     owner: { kind: "built-in" },
     apiUrl: boatUrl,
+  });
+  providers.register(
+    new Agent37Provider(clientCache((baseUrl) => new Agent37Client({ baseUrl }))),
+    { owner: { kind: "built-in" }, apiUrl: resolveAgent37ApiUrl(app.isPackaged) }
+  );
+  providers.register(
+    new DigitalOceanProvider(clientCache((baseUrl) => new DigitalOceanClient({ baseUrl }))),
+    { owner: { kind: "built-in" }, apiUrl: resolveDigitalOceanApiUrl(app.isPackaged) }
+  );
+  const gceEndpoints = new Map<string, GceEndpoints>();
+  const gce = new GceProvider((apiUrl) => {
+    let endpoints = gceEndpoints.get(apiUrl);
+    if (!endpoints) {
+      endpoints = {
+        client: new GceClient({ baseUrl: apiUrl }),
+        tokens: new GceTokenSource(gceTokenUrlFor(apiUrl)),
+      };
+      gceEndpoints.set(apiUrl, endpoints);
+    }
+    return endpoints;
+  });
+  providers.register(gce, {
+    owner: { kind: "built-in" },
+    apiUrl: resolveGceApiUrl(app.isPackaged),
+  });
+  providers.register(new AwsProvider({ client: new AwsClient() }), {
+    owner: { kind: "built-in" },
+    apiUrl: resolveAwsApiUrl(app.isPackaged),
+  });
+  // Bound below, once the accounts and hosts it reports on exist.
+  let pluginStatusChanged = () => {};
+  const pluginProviders = watchPluginCloudProviders({
+    providers,
+    statusChanged: () => pluginStatusChanged(),
   });
   const accounts = new CloudAccountService({
     store,
@@ -52,6 +105,8 @@ export function initCloudHosts(params: {
     providers,
     apiUrlFor: (providerId) => providers.apiUrlFor(providerId),
     onAccountRemoved: params.onAccountRemoved,
+    beforeAccountRemoved: params.beforeAccountRemoved,
+    unavailableReason: (providerId) => pluginProviders.unavailableReason(providerId),
   });
   const cloudHosts = new CloudHosts({
     accounts,
@@ -59,6 +114,13 @@ export function initCloudHosts(params: {
     emit: (snapshot) => params.emit({ type: "cloud-changed", snapshot }),
   });
   const stopWatchingProviders = providers.onChange(() => cloudHosts.providersChanged());
+  // A plugin that failed to load, or finished loading, rewords its accounts' reasons;
+  // with no plugin account there is nothing to reword.
+  pluginStatusChanged = () => {
+    if (store.accounts().some((account) => isPluginCloudProviderId(account.providerId))) {
+      cloudHosts.changed();
+    }
+  };
   const unregister = registerRemoteService("cloudHosts", cloudHosts);
   // Views that read before this started got the empty answer; tell them what there is.
   cloudHosts.changed();
@@ -69,8 +131,15 @@ export function initCloudHosts(params: {
     providers,
     dispose() {
       stopWatchingProviders();
+      pluginProviders.dispose();
       unregister();
       cloudHosts.dispose();
+      gce.dispose();
+      for (const endpoints of gceEndpoints.values()) endpoints.tokens.dispose();
     },
   };
+}
+
+function isPluginCloudProviderId(providerId: CloudProviderId): boolean {
+  return cloudProviderNamespace(providerId)?.kind === "plugin";
 }

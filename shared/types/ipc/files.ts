@@ -4,6 +4,12 @@ export interface FileSearchPayload {
   cwd: string;
   query: string;
   limit?: number;
+  /**
+   * Leave directory entries (`dir/`) out before ranking and the limit, so a
+   * caller that can only open files gets `limit` files rather than a page a
+   * tree's short folder names crowd out.
+   */
+  filesOnly?: boolean;
 }
 
 export interface FileSearchResult {

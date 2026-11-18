@@ -121,7 +121,7 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
   // The assistant lives on the right, so its gesture state doesn't affect
   // left-side padding. Right padding is handled by PopoverContent's
   // collisionBoundary (width: 100vw − --right-obstruction-offset), so the
-  // assistant/portal exclusion is not re-counted here.
+  // assistant's width is not re-counted here.
   const sidebarHidden = useFocusStore((s) => s.gestureSidebarHidden);
 
   const collisionPadding = useMemo(() => {

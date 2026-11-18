@@ -26,6 +26,7 @@ import {
 import {
   GIT_REMOTE_COMMIT_PREVIEW_MAX,
   type GitBaseIntegrationCommitPreview,
+  type RepoOperationPin,
 } from "@shared/types/git";
 import type { StagingStatus } from "@shared/types";
 import {
@@ -255,6 +256,38 @@ function GitWorktreeOperationConfirmDialogInner() {
     // over a settled read that found no operation is an approval the surface
     // cannot honour.
     const nothingInProgress = status !== null && freshOperation === null;
+    // What an approval binds the abort to (#17559): the operation this read
+    // found, by identity rather than kind, so one that replaces it while the
+    // dialog sits open, even the same merge started again, is refused rather
+    // than discarded under this approval. Approving is impossible without one:
+    // a failed read, or an operation the read could not identify, leaves
+    // nothing to bind to, and an abort of "whatever is there" is the bug.
+    const pin: RepoOperationPin | null =
+      status && freshOperation && status.repoOperationId
+        ? { operation: freshOperation, operationId: status.repoOperationId }
+        : null;
+    const unidentified = status !== null && freshOperation !== null && pin === null;
+    const notice = loadError ? (
+      <PreviewNotice
+        tone="error"
+        title={`Couldn't read the ${label} in progress`}
+        onRetry={loadPreview}
+        retryTestId="git-abort-operation-retry"
+      >
+        {loadError}
+      </PreviewNotice>
+    ) : unidentified ? (
+      <PreviewNotice
+        tone="error"
+        title={`Couldn't identify the ${label} in progress`}
+        onRetry={loadPreview}
+        retryTestId="git-abort-operation-retry"
+        testId="git-abort-operation-unidentified"
+      >
+        Aborting needs to know which {label} it ends, so another one started meanwhile isn&apos;t
+        aborted by mistake. Retry once the worktree has settled.
+      </PreviewNotice>
+    ) : null;
     return (
       <ConfirmDialog
         isOpen={true}
@@ -265,22 +298,32 @@ function GitWorktreeOperationConfirmDialogInner() {
             ? "This worktree is no longer mid-operation — it finished or was already resolved."
             : status && freshOperation
               ? buildAbortDescription(freshOperation, status)
-              : loadError
-                ? `Couldn't read what this would discard. Aborting still ends the in-progress ${label}.`
-                : `Discards the in-progress ${label}.`
+              : `Discards the in-progress ${label}.`
         }
         confirmLabel={nothingInProgress ? "Close" : `Abort ${label}`}
         cancelLabel="Keep working"
-        variant="destructive"
-        // Held until this request's own read settles: the counts in the
-        // description are the whole reason to confirm, and approving before
-        // they land is approving a blank.
-        confirmDisabled={nothingInProgress || (!isSettled && !loadError)}
+        // A Close that only declines carries no danger to style.
+        variant={nothingInProgress ? "default" : "destructive"}
+        hasPreview={notice !== null}
+        // Held until this request's own read settles and identifies the
+        // operation: the counts in the description are the whole reason to
+        // confirm, and the identity is what the abort is checked against.
+        // With nothing in progress the primary is a Close, which declines.
+        confirmDisabled={!nothingInProgress && pin === null}
         hint={
-          !isSettled && !loadError && showPendingHint ? "Checking what this would discard…" : null
+          notice
+            ? "Retry to check again"
+            : !isSettled && showPendingHint
+              ? "Checking what this would discard…"
+              : null
         }
-        onConfirm={() => resolveConfirmation(!nothingInProgress)}
-      />
+        onConfirm={() => {
+          if (nothingInProgress) resolveConfirmation(false);
+          else if (pin) resolveConfirmation(true, null, pin);
+        }}
+      >
+        {notice && <PreviewFrame>{notice}</PreviewFrame>}
+      </ConfirmDialog>
     );
   }
 

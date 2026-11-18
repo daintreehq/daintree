@@ -438,6 +438,7 @@ export type PtyHostRequest =
   | { type: "get-terminals-for-project"; projectId: string; requestId: string }
   | { type: "get-terminal"; id: string; requestId: string; submissionToken?: string }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }
+  | { type: "reset-terminal-modes"; id: string; requestId: string }
   | { type: "get-serialized-state"; id: string; requestId: string; tailRows?: number }
   | {
       type: "init-buffers";
@@ -474,6 +475,8 @@ export type PtyHostRequest =
       query: string;
       isRegex: boolean;
       requestId: string;
+      /** Scan only these terminals; absent scans every terminal on the shard. */
+      terminalIds?: string[];
     }
   | { type: "set-ipc-data-mirror"; id: string; enabled: boolean }
   | { type: "graceful-kill"; id: string; requestId: string }
@@ -1004,6 +1007,7 @@ export type PtyHostEvent =
   | { type: "terminals-for-project"; requestId: string; terminalIds: string[] }
   | { type: "terminal-info"; requestId: string; terminal: PtyHostTerminalInfo | null }
   | { type: "replay-history-result"; requestId: string; replayed: number }
+  | { type: "reset-terminal-modes-result"; requestId: string; reset: boolean }
   | {
       type: "serialized-state";
       requestId: string;
@@ -1764,6 +1768,13 @@ export interface TerminalReliabilityMetricPayload {
    * at resume).
    */
   perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
+  /**
+   * Used by `pause-duration-gauge`: terminals the host's previous gauge
+   * reported held that are no longer paused, named once. Absence from
+   * `perTerminalHeld` means nothing on its own: each PTY shard reports only
+   * its own terminals, and Main hands each project view only its own entries.
+   */
+  clearedTerminalIds?: string[];
   /**
    * Used by `queue-depth-gauge`: per-terminal queue depth for the live IPC
    * and per-window MessagePort paths. Excludes the FUTURE_SAB path

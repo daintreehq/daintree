@@ -4,6 +4,7 @@ import {
   CLOUD_PROVISIONING_DIMENSIONS,
   cloudChoiceFitsLocation,
   cloudLifetimeIsChosen,
+  cloudMarkNamesWorktree,
   cloudProvisioningArticleNoun,
   cloudProvisioningNoun,
   type CloudCatalog,
@@ -22,13 +23,18 @@ import {
   type CloudProviderId,
   type CloudProvisioningSelection,
   type CloudSshTrust,
+  type CloudWorktreeCleanupOutcome,
+  type CloudWorktreeCleanupRequest,
+  type CloudWorktreeRef,
 } from "../../../shared/types/cloudHosts.js";
 import {
   cloudConnection,
   isLocalHostId,
+  isValidRemoteHostId,
   type HostConnection,
   type HostDescriptor,
   type HostId,
+  type PendingHostPlacement,
 } from "../../../shared/types/remoteHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -39,6 +45,7 @@ import {
   type CloudHostStore,
   type StoredCloudBinding,
   type StoredCloudObservation,
+  type StoredWorktreeCleanup,
 } from "./CloudHostStore.js";
 import { findOnPath } from "../../utils/findOnPath.js";
 import type {
@@ -67,6 +74,8 @@ import {
   type ProviderResource,
   type ProviderSshAccess,
 } from "./provider.js";
+import { lifetimeRenewalDue, stopUnderWay } from "./lifetimeRenewal.js";
+import type { CloudMachineKeys } from "./CloudMachineKeys.js";
 
 /** How often a machine is asked about while Daintree changes it. */
 const TRANSITION_POLL_MS = 3_000;
@@ -78,6 +87,8 @@ const START_DEADLINE_MS = 10 * 60_000;
 const STOP_DEADLINE_MS = 15 * 60_000;
 /** An observation this fresh is good enough to decide whether a dial can go ahead. */
 const DIAL_OBSERVATION_MS = 15_000;
+/** The same for a provider that sleeps idle machines, where a stale "running" can be a sleeper. */
+const SLEEPER_DIAL_OBSERVATION_MS = 2_000;
 /** SSH access is resolved again after this long, or after any start. */
 const ACCESS_TTL_MS = 10 * 60_000;
 const MAX_NAME_LENGTH = 64;
@@ -89,9 +100,13 @@ function nameOf(provider: CloudProvider): string {
   return provider.info(process.platform).name;
 }
 
-/** The provider can't vouch for a machine's host key, so the person confirms it. */
+/**
+ * A machine's host key may come to the person for confirmation: always, or
+ * whenever the provider's API didn't vouch for the first one.
+ */
 function confirmsHostKeys(provider: CloudProvider): boolean {
-  return provider.info(process.platform).capabilities.sshTrust === "confirm-on-first-connect";
+  const trust = provider.info(process.platform).capabilities.sshTrust;
+  return trust === "confirm-on-first-connect" || trust === "api-or-confirm";
 }
 
 /** A presented key nobody has confirmed, as the person reviews it. */
@@ -132,19 +147,25 @@ function startOptions(
  * "rate-limited") stay until that operation succeeds.
  */
 const INSPECTION_ERRORS: ReadonlySet<CloudHostErrorCode> = new Set(["not-found"]);
-/** A lifetime is renewed once this little of it is left (or half of it, for a short one). */
-const RENEW_MARGIN_MS = 30 * 60_000;
 /** After a failed renewal, the next try waits this long. */
 const RENEW_RETRY_MS = 2 * 60_000;
 
 const LABEL_MARKER = "daintree";
-/** Failures that are the provider refusing the request: nothing was created. */
+/**
+ * Failures that are the provider refusing the request: nothing was created.
+ * From a create, `ssh-authorization` is a provider that couldn't take
+ * Daintree's key ahead of the machine, so it never asked for one, and
+ * `unsupported` is a request the provider rejected as invalid.
+ */
 const DEFINITE_REFUSALS = new Set<CloudHostError["code"]>([
   "credential-invalid",
   "permission",
   "billing",
   "rate-limited",
   "capacity",
+  "ssh-authorization",
+  "unsupported",
+  "refused",
 ]);
 const LABEL_BINDING = "daintree-binding";
 
@@ -154,7 +175,11 @@ export interface CloudHostLifecycleDeps {
   files: CloudSshFiles;
   clientDir: string;
   hosts: {
-    add(name: string, connection: HostConnection): HostDescriptor;
+    add(
+      name: string,
+      connection: HostConnection,
+      pendingPlacement?: PendingHostPlacement
+    ): HostDescriptor;
     get(hostId: HostId): HostDescriptor | null;
     list(): HostDescriptor[];
     /** Removes the host from this device as Settings → Remove host does. */
@@ -171,10 +196,27 @@ export interface CloudHostLifecycleDeps {
    * Daintree's own observations; passive polling never counts as use.
    */
   activity?(hostId: HostId): { connected: boolean; busy: boolean; shown: boolean } | null;
+  /**
+   * The host's machine was seen running where the last look saw it otherwise,
+   * or with a different reported stop time: it may have restarted, so what was
+   * last found about starting Daintree there is worth checking again. Called
+   * before the change reaches any view, ahead of the dials it prompts.
+   */
+  onMachineStarted?(hostId: HostId): void;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Where a tunnel's command is on this device's PATH; null when it isn't there. */
   findCommand?: (command: string) => Promise<string | null>;
+  /** The keys machines renew and stop themselves with (#17361); absent where nothing issues them. */
+  machineKeys?: Pick<CloudMachineKeys, "problemFor" | "tick" | "revokePending">;
+  /**
+   * Whether a worktree on this device is gone: true once its root reads as
+   * missing, false while it is there, null when that couldn't be told (a hung
+   * mount, a permission error). Only ever asked about a worktree on this device.
+   */
+  worktreeGone?(worktreePath: string): Promise<boolean | null>;
+  /** A worktree on this device may have been removed: a hint only, checked with `worktreeGone`. */
+  onWorktreeRemoved?(listener: (worktreeId: string) => void): () => void;
 }
 
 const PATH_LOOKUP_MS = 5_000;
@@ -240,6 +282,14 @@ function checkedAccess(
   }
   // The person's confirmation supplies the key; the API's is never taken for it.
   if (trust === "confirm-on-first-connect") return { hostKey: null };
+  // The API's key, when it names one, can only stand in for a first confirmation.
+  if (trust === "api-or-confirm") {
+    if (resolved.hostKey === null || resolved.hostKey === undefined) return { hostKey: null };
+    const vouched = normalizeHostKey(resolved.hostKey);
+    return vouched === null
+      ? { problem: `${providerName} returned a host key Daintree can't read` }
+      : { hostKey: vouched };
+  }
   const hostKey = normalizeHostKey(resolved.hostKey);
   return hostKey === null
     ? { problem: `${providerName} didn't say which host key the machine has` }
@@ -355,8 +405,27 @@ function observationOf(resource: ProviderResource, at: number): StoredCloudObser
     stop: resource.stop ? { status: resource.stop.status, error: resource.stop.error } : null,
     lastSnapshotAt: resource.lastSnapshotAt,
     dataExpired: resource.dataExpired,
+    asleep: resource.machine === "stopped" && resource.asleep === true,
+    idleSleep: resource.idleSleep
+      ? { enabled: resource.idleSleep.enabled, idleSeconds: resource.idleSleep.idleSeconds }
+      : null,
     observedAt: at,
   };
+}
+
+/**
+ * The lifetime this machine has: its provider's model, narrowed by what the
+ * provider reported for this machine where it sleeps machines on idle. An
+ * imported machine may have sleeping turned off, or another idle time.
+ */
+function machineLifetime(
+  model: CloudLifetimeModel | null,
+  observation: StoredCloudObservation | null
+): CloudLifetimeModel | null {
+  const reported = observation?.idleSleep;
+  if (model?.kind !== "idle-sleep" || !reported) return model;
+  if (!reported.enabled) return { kind: "none" };
+  return { kind: "idle-sleep", idleSeconds: reported.idleSeconds ?? model.idleSeconds };
 }
 
 /** A mark given by main code, checked as strictly as one read back from disk. */
@@ -365,6 +434,38 @@ function checkedCreatedFor(raw: CloudHostCreatedFor): CloudHostCreatedFor {
   const mark = readCreatedFor(local ? { ...raw, hostId: null } : raw);
   if (!mark) throw invalid("The worktree this machine is for is missing its project or path.");
   return mark;
+}
+
+/** A worktree as the renderer names it, checked before it is compared with any mark. */
+function checkedWorktreeRef(raw: unknown): CloudWorktreeRef {
+  const value = raw as Record<string, unknown> | null;
+  const projectId = typeof value?.projectId === "string" ? value.projectId.trim() : "";
+  const worktreeId = typeof value?.worktreeId === "string" ? value.worktreeId.trim() : "";
+  // Missing is not "this device": only null or "local" says so.
+  const rawHostId = value?.hostId;
+  const hostId =
+    rawHostId === null || (typeof rawHostId === "string" && isLocalHostId(rawHostId))
+      ? null
+      : typeof rawHostId === "string" && isValidRemoteHostId(rawHostId)
+        ? rawHostId
+        : undefined;
+  if (!projectId || !worktreeId || hostId === undefined) {
+    throw invalid("The worktree being deleted is missing its project or path.");
+  }
+  return { hostId, projectId, worktreeId };
+}
+
+/** The view's id for one worktree delete, or null when it named none. */
+function checkedMutationId(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 128) {
+    throw invalid("The worktree delete this belongs to isn't named properly.");
+  }
+  return raw;
+}
+
+function sameWorktree(a: CloudWorktreeRef, b: CloudWorktreeRef): boolean {
+  return a.hostId === b.hostId && a.projectId === b.projectId && a.worktreeId === b.worktreeId;
 }
 
 function machineOf(binding: StoredCloudBinding): CloudMachineState {
@@ -404,7 +505,20 @@ export class CloudHostLifecycle {
   private readonly reconciling = new Set<string>();
   /** Lookups a provider change overtook: a failure may be the old provider's, not the machine's. */
   private readonly reconcileOvertaken = new Set<string>();
+  /** Worktree cleanups carrying out now, which every caller joins. */
+  private readonly cleanupRuns = new Map<string, Promise<CloudWorktreeCleanupOutcome | null>>();
+  /** Keeps chosen in Settings, by binding and delete: that delete's replay never arms it again. */
+  private readonly keptForDelete = new Set<string>();
+  private stopWatchingWorktrees: (() => void) | null = null;
   private renewingAll = false;
+  /**
+   * Every request whose answer becomes an observation takes a ticket when it
+   * is sent; an answer is written only if no request sent after it has been
+   * written already. A poll or refresh that a start or stop overtook arrives
+   * late, and its wall-clock arrival time says nothing about how old it is.
+   */
+  private lastTicket = 0;
+  private readonly observedTicket = new Map<string, number>();
   private stopWatchingHosts: (() => void) | null = null;
   private disposed = false;
 
@@ -422,6 +536,7 @@ export class CloudHostLifecycle {
   providersChanged(): void {
     if (this.disposed) return;
     for (const bindingId of this.reconciling) this.reconcileOvertaken.add(bindingId);
+    this.resumeDueCleanups();
     if (this.awaitingProvider.size === 0) return;
     void this.reconcileUnfinishedCreates(new Set(this.awaitingProvider));
   }
@@ -432,10 +547,17 @@ export class CloudHostLifecycle {
     void this.dropOrphanBindings();
     this.pollTimer = setInterval(() => void this.pollDue(), 5_000);
     this.pollTimer.unref?.();
-    this.keeperTimer = setInterval(() => void this.renewDue(), KEEPER_INTERVAL_MS);
+    this.keeperTimer = setInterval(() => {
+      void this.renewDue();
+      void this.deps.machineKeys?.tick();
+    }, KEEPER_INTERVAL_MS);
     this.keeperTimer.unref?.();
     this.markInterruptedCreates();
     void this.reconcileUnfinishedCreates();
+    this.stopWatchingWorktrees =
+      this.deps.onWorktreeRemoved?.((worktreeId) => void this.worktreeRemoved(worktreeId)) ?? null;
+    this.resumeDueCleanups();
+    void this.reconcileWaitingCleanups();
   }
 
   /**
@@ -462,6 +584,7 @@ export class CloudHostLifecycle {
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.keeperTimer) clearInterval(this.keeperTimer);
     this.stopWatchingHosts?.();
+    this.stopWatchingWorktrees?.();
     for (const operation of this.operations.values()) operation.controller.abort();
   }
 
@@ -506,6 +629,17 @@ export class CloudHostLifecycle {
           machineName: observation?.name ?? binding.creation?.name ?? null,
           ownership: binding.ownership,
           createdFor: binding.createdFor,
+          worktreeCleanup: binding.worktreeCleanup
+            ? {
+                choice: binding.worktreeCleanup.choice,
+                phase:
+                  binding.worktreeCleanup.phase === "due"
+                    ? ("running" as const)
+                    : binding.worktreeCleanup.phase,
+                worktreeHostId: binding.worktreeCleanup.worktree.hostId,
+                error: binding.worktreeCleanup.error,
+              }
+            : null,
           provisioning: binding.provisioning === "unreadable" ? null : binding.provisioning,
           machine: machineOf(binding),
           rawState: observation?.rawState ?? null,
@@ -513,7 +647,7 @@ export class CloudHostLifecycle {
           vcpu: observation?.vcpu ?? null,
           memoryGB: observation?.memoryGB ?? null,
           hourlyDollars: this.deps.accounts.cachedHourly(binding.accountId, machineType),
-          lifetime: lifetimeFor(binding.providerId),
+          lifetime: machineLifetime(lifetimeFor(binding.providerId), observation),
           autoStopAt: observation?.autoStopAt ?? null,
           lifetimeSeconds: binding.lifetimeSeconds,
           stoppedAt: observation?.stoppedAt ?? null,
@@ -549,6 +683,8 @@ export class CloudHostLifecycle {
           keptRunningAt: this.renewals.get(binding.id)?.ok
             ? this.renewals.get(binding.id)!.at
             : null,
+          selfStopProblem: this.deps.machineKeys?.problemFor(binding.id) ?? null,
+          asleep: machineOf(binding) === "stopped" && observation?.asleep === true,
         };
       });
   }
@@ -585,11 +721,13 @@ export class CloudHostLifecycle {
    * `createdFor` marks the machine as made for a worktree, in that first write
    * so the mark holds through the create and any restart. It is a parameter of
    * its own, never read off the request: Settings → Hosts sends the request
-   * over IPC and must never mark a machine.
+   * over IPC and must never mark a machine. `pendingPlacement` is the worktree
+   * waiting to open on the new host, written with the host itself.
    */
   async create(
     request: CloudHostCreateRequest,
-    createdFor: CloudHostCreatedFor | null = null
+    createdFor: CloudHostCreatedFor | null = null,
+    pendingPlacement?: PendingHostPlacement
   ): Promise<{ hostId: HostId }> {
     if (!request || typeof request !== "object") throw invalid("Missing machine details.");
     const mark = createdFor === null ? null : checkedCreatedFor(createdFor);
@@ -630,6 +768,7 @@ export class CloudHostLifecycle {
       resourceId: null,
       ownership: "created-by-daintree",
       createdFor: mark,
+      worktreeCleanup: null,
       provisioning: picks,
       creation: {
         operationId: crypto.randomUUID(),
@@ -650,7 +789,7 @@ export class CloudHostLifecycle {
     this.deps.store.putBinding(binding);
     let descriptor: HostDescriptor;
     try {
-      descriptor = this.deps.hosts.add(name, cloudConnection(bindingId));
+      descriptor = this.deps.hosts.add(name, cloudConnection(bindingId), pendingPlacement);
     } catch (error) {
       this.deps.store.removeBinding(bindingId);
       throw error;
@@ -685,6 +824,12 @@ export class CloudHostLifecycle {
         this.bindCreated(bindingId, found);
         await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
         return;
+      }
+      // Without an idempotency key a second send could be a second machine: only ever look again.
+      if (provider.createReplay === "lookup-only") {
+        const message = `${nameOf(provider)} didn't confirm the machine, and it isn't in the account. Retry looks for it again; if it doesn't show up in your ${nameOf(provider)} account either, remove the host and add it again.`;
+        this.recordError(bindingId, { code: "outcome-unknown", message, at: this.now() });
+        throw invalid(message);
       }
     }
     // Asked only of the provider registered now, and only for what it still takes: a limit
@@ -743,6 +888,8 @@ export class CloudHostLifecycle {
         throw new AppError({ code: "UNSUPPORTED", message: reason, userMessage: reason });
       }
     }
+    // Cancelled while the credentials or the key were read: nothing is marked as sent.
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
     binding = this.deps.store.updateBinding(bindingId, (current) => ({
@@ -771,19 +918,26 @@ export class CloudHostLifecycle {
       // Only the provider's own refusal proves nothing was made; anything else (lost answer,
       // cancellation, an unreadable reply, a create still being minted) may have.
       const refused = !signal.aborted && DEFINITE_REFUSALS.has(described.code);
+      // Turning down a retry says nothing of an earlier send, whose machine may still exist.
+      const earlier = refused && creation.sentAt !== null;
       this.recordError(bindingId, {
         ...described,
-        code: refused ? described.code : "outcome-unknown",
-        message: refused
-          ? described.message
-          : `${nameOf(provider)} didn't confirm the machine. Retry looks for it before creating another.`,
+        code: refused && !earlier ? described.code : "outcome-unknown",
+        message: earlier
+          ? `${described.message} An earlier request may still have made the machine: Retry and removal look for it first.`
+          : refused
+            ? described.message
+            : provider.createReplay === "lookup-only"
+              ? `${nameOf(provider)} didn't confirm the machine. Retry looks for it, and never asks for another.`
+              : `${nameOf(provider)} didn't confirm the machine. Retry looks for it before creating another.`,
       });
       if (refused) {
+        const sentAt = earlier ? creation.sentAt : null;
         // Nothing was made: a retry needs a fresh key, or the provider replays this refusal.
         this.deps.store.updateBinding(bindingId, (current) => ({
           ...current,
           creation: current.creation
-            ? { ...current.creation, idempotencyKey: crypto.randomUUID(), sentAt: null }
+            ? { ...current.creation, idempotencyKey: crypto.randomUUID(), sentAt }
             : null,
         }));
       }
@@ -849,12 +1003,26 @@ export class CloudHostLifecycle {
     provider: CloudProvider,
     credentials: ProviderCredentials
   ): Promise<ProviderResource | null> {
-    const found = await provider.list(credentials, { label: `${LABEL_BINDING}=${bindingId}` });
-    return (
-      found.find(
-        (candidate) =>
-          candidate.labels[LABEL_BINDING] === bindingId && candidate.machine !== "deleted"
-      ) ?? null
+    // Where the create was sent: a provider whose machines live per location looks there only.
+    const picks = this.deps.store.binding(bindingId)?.provisioning;
+    const location = picks && picks !== "unreadable" ? (picks.location?.id ?? null) : null;
+    const found = await provider.list(credentials, {
+      label: `${LABEL_BINDING}=${bindingId}`,
+      ...(location ? { location } : {}),
+    });
+    const matches = found.filter(
+      (candidate) =>
+        candidate.labels[LABEL_BINDING] === bindingId && candidate.machine !== "deleted"
+    );
+    // A copy made from the machine (a fork) can carry its labels; the create came first.
+    const createdAt = (candidate: ProviderResource) => {
+      const at = candidate.createdAt ? Date.parse(candidate.createdAt) : Number.NaN;
+      return Number.isFinite(at) ? at : Number.POSITIVE_INFINITY;
+    };
+    return matches.reduce<ProviderResource | null>(
+      (earliest, candidate) =>
+        earliest === null || createdAt(candidate) < createdAt(earliest) ? candidate : earliest,
+      null
     );
   }
 
@@ -905,7 +1073,10 @@ export class CloudHostLifecycle {
         } else {
           this.recordError(binding.id, {
             code: "outcome-unknown",
-            message: `Setup didn't finish: ${nameOf(provider)} has no machine for this host yet. Retry to create it.`,
+            message:
+              provider.createReplay === "lookup-only"
+                ? `Setup didn't finish: ${nameOf(provider)} hasn't shown a machine for this host yet. Retry looks for it again; if it doesn't show up in your ${nameOf(provider)} account either, remove the host and add it again.`
+                : `Setup didn't finish: ${nameOf(provider)} has no machine for this host yet. Retry to create it.`,
             at: this.now(),
           });
         }
@@ -952,6 +1123,7 @@ export class CloudHostLifecycle {
       resourceId: null,
       ownership: "imported",
       createdFor: null,
+      worktreeCleanup: null,
       provisioning: null,
       creation: null,
       lifetimeSeconds: null,
@@ -1021,8 +1193,12 @@ export class CloudHostLifecycle {
       if (binding.creation) return this.retryCreate(hostId);
       throw invalid("This host has no machine yet.");
     }
-    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }));
-    await this.operate(binding.id, "starting", (signal) => this.runStart(binding.id, signal));
+    await this.operate(
+      binding.id,
+      "starting",
+      (signal) => this.runStart(binding.id, signal),
+      () => this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }))
+    );
   }
 
   private async runStart(bindingId: string, signal: AbortSignal): Promise<void> {
@@ -1030,7 +1206,11 @@ export class CloudHostLifecycle {
     if (!binding?.resourceId) return;
     const { provider, credentials } = await this.context(binding, signal);
     this.stage(bindingId, "Checking the machine");
-    let resource = await this.inspectInto(bindingId, provider, credentials);
+    let resource: ProviderResource | null;
+    // A read overtaken by a newer one is asked again: a start acts on the newest word.
+    while (!(resource = await this.inspectInto(bindingId, provider, credentials))) {
+      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    }
     if (resource.dataExpired) {
       const error: CloudHostError = {
         code: "data-expired",
@@ -1040,24 +1220,27 @@ export class CloudHostLifecycle {
       this.recordError(bindingId, error);
       throw new AppError({ code: "NOT_FOUND", message: error.message, userMessage: error.message });
     }
+    let startable = resource.machine === "stopped" || resource.machine === "error";
     if (resource.machine === "stopping") {
-      resource = await this.waitFor(
+      await this.waitFor(
         bindingId,
         "stopped",
         STOP_DEADLINE_MS,
         signal,
         "Waiting for the last stop to finish"
       );
+      startable = true;
     }
-    if (resource.machine === "stopped" || resource.machine === "error") {
+    if (startable) {
       this.stage(bindingId, "Starting the machine");
       try {
+        const ticket = this.ticket();
         const started = await provider.start(
           credentials,
           binding.resourceId!,
           startOptions(lifetimeModelOf(provider), binding.lifetimeSeconds)
         );
-        if (started) this.observe(bindingId, started);
+        if (started) this.observe(bindingId, started, ticket);
       } catch (error) {
         this.recordError(bindingId, provider.describeError(error));
         throw this.deps.accounts.asAppError(provider, error);
@@ -1088,20 +1271,31 @@ export class CloudHostLifecycle {
       running.controller.abort();
       await running.promise.catch(() => {});
     }
-    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
-    await this.settleRenewal(binding.id);
-    await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
-    await this.operate(binding.id, "stopping", (signal) => this.runStop(binding.id, signal));
+    // The stop holds the machine before it waits on anything, so a Start meanwhile is refused.
+    await this.operate(
+      binding.id,
+      "stopping",
+      async (signal) => {
+        await this.settleRenewal(binding.id);
+        await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
+        if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+        await this.runStop(binding.id, signal);
+      },
+      () => this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }))
+    );
   }
 
   private async runStop(bindingId: string, signal: AbortSignal): Promise<void> {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) return;
     const { provider, credentials } = await this.context(binding, signal);
+    // A delete or shutdown that took over meanwhile: the provider never hears of this stop.
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     this.stage(bindingId, "Saving the disk and stopping");
     try {
+      const ticket = this.ticket();
       const stopping = await provider.stop(credentials, binding.resourceId);
-      if (stopping) this.observe(bindingId, stopping);
+      if (stopping) this.observe(bindingId, stopping, ticket);
     } catch (error) {
       this.recordError(bindingId, provider.describeError(error));
       throw this.deps.accounts.asAppError(provider, error);
@@ -1158,25 +1352,549 @@ export class CloudHostLifecycle {
     if (resourceId && confirmResourceId !== resourceId && confirmed.resourceId !== null) {
       throw invalid("The machine to delete changed since you confirmed. Check it and try again.");
     }
-    if (resourceId) {
-      await this.deps.hosts.disconnect(confirmed.hostId).catch(() => {});
-      await this.operate(binding.id, "deleting", async (signal) => {
-        const { provider, credentials } = await this.context(binding, signal);
-        // The provider may have been replaced while the operation waited.
-        this.requireDeletion(binding.providerId);
-        this.stage(binding.id, "Deleting the machine");
-        try {
-          await provider.delete(credentials, resourceId);
-        } catch (error) {
-          const described = provider.describeError(error);
-          if (described.code !== "not-found") {
-            this.recordError(binding.id, described);
-            throw this.deps.accounts.asAppError(provider, error);
-          }
+    if (resourceId) await this.sendDelete(binding, confirmed.hostId, resourceId);
+    await this.deps.hosts.forget(confirmed.hostId);
+  }
+
+  /** Lets go of the link and deletes this exact machine; one already gone counts as deleted. */
+  private async sendDelete(
+    binding: StoredCloudBinding,
+    hostId: HostId,
+    resourceId: string
+  ): Promise<void> {
+    await this.deps.hosts.disconnect(hostId).catch(() => {});
+    // A Stop or Start that claimed the machine while this waited gives way too.
+    await this.operateOver(binding.id, "deleting", async (signal) => {
+      // The binding may have gone, or found another machine, while the link was let go.
+      const current = this.deps.store.binding(binding.id);
+      if (!current || current.resourceId !== resourceId) {
+        throw invalid("The machine to delete changed since you confirmed. Check it and try again.");
+      }
+      const { provider, credentials } = await this.context(current, signal);
+      // The provider may have left or been replaced while its credentials were read.
+      if (!this.stillRegistered(current.providerId, provider)) {
+        const message = `${nameOf(provider)} changed while the machine was being deleted. Try again.`;
+        throw new AppError({ code: "UNSUPPORTED", message, userMessage: message });
+      }
+      this.requireDeletion(current.providerId);
+      this.stage(binding.id, "Deleting the machine");
+      try {
+        await provider.delete(credentials, resourceId);
+      } catch (error) {
+        const described = provider.describeError(error);
+        if (described.code !== "not-found") {
+          this.recordError(binding.id, described);
+          throw this.deps.accounts.asAppError(provider, error);
         }
+      }
+    });
+  }
+
+  /** Ends a start or create under way so a stop or delete asked for now goes ahead. */
+  private async supersedeRunning(bindingId: string, kinds: readonly CloudOperationKind[]) {
+    const running = this.operations.get(bindingId);
+    if (!running || !kinds.includes(running.kind)) return;
+    running.controller.abort();
+    await running.promise.catch(() => {});
+  }
+
+  // --- With a worktree's delete -------------------------------------------
+
+  /**
+   * Writes down what the person chose for the machines made for a worktree,
+   * before that worktree's delete is sent: nothing is done to them until the
+   * worktree is gone. Each machine must carry this worktree's mark and be the
+   * one the person confirmed; any other is refused, so an unmarked machine is
+   * never touched. A machine of this worktree left out of the list is kept, and
+   * a choice an earlier attempt wrote for it is dropped. Each write is a new
+   * attempt, so an answer about an earlier one never changes it.
+   */
+  prepareWorktreeCleanup(worktree: unknown, machines: unknown, mutationId?: unknown): void {
+    const ref = checkedWorktreeRef(worktree);
+    const mutation = checkedMutationId(mutationId);
+    if (!Array.isArray(machines)) throw invalid("Choose what happens to each machine.");
+    const planned = new Map<string, StoredWorktreeCleanup>();
+    for (const raw of machines as Array<Partial<CloudWorktreeCleanupRequest> | null>) {
+      const choice = raw?.choice === "stop" || raw?.choice === "delete" ? raw.choice : null;
+      if (!choice) throw invalid("Choose what happens to each machine.");
+      const binding = this.requireBindingForHost(raw?.hostId);
+      if (
+        binding.ownership !== "created-by-daintree" ||
+        !cloudMarkNamesWorktree(binding.createdFor, ref)
+      ) {
+        throw invalid(
+          "That machine wasn't created for this worktree, so Daintree leaves it alone."
+        );
+      }
+      if (!binding.resourceId || raw?.resourceId !== binding.resourceId) {
+        throw invalid("The machine changed since you confirmed. Check it and try again.");
+      }
+      // Refused while its provider isn't registered, before anything is written.
+      this.deps.accounts.provider(binding.providerId);
+      if (choice === "delete") this.requireDeletion(binding.providerId);
+      if (planned.has(binding.id)) throw invalid("Choose once for each machine.");
+      if (mutation && this.keptForDelete.has(`${binding.id}\u0000${mutation}`)) continue;
+      const current = binding.worktreeCleanup;
+      if (
+        this.cleanupRuns.has(binding.id) &&
+        (current?.choice !== choice || current.resourceId !== binding.resourceId)
+      ) {
+        throw invalid("The machine's stop or delete is under way. Wait for it to finish.");
+      }
+      planned.set(binding.id, {
+        attemptId: crypto.randomUUID(),
+        mutationId: mutation,
+        choice,
+        resourceId: binding.resourceId,
+        worktree: ref,
+        phase: "waiting",
+        error: null,
+        requestedAt: this.now(),
       });
     }
-    await this.deps.hosts.forget(confirmed.hostId);
+    for (const binding of this.deps.store.bindings()) {
+      const current = binding.worktreeCleanup;
+      const next = planned.get(binding.id);
+      if (next) {
+        // A retried delete asks again: one already carrying out, or failed, stays as it is.
+        const same =
+          current !== null &&
+          (current.phase === "due" || current.phase === "failed") &&
+          current.choice === next.choice &&
+          current.resourceId === next.resourceId;
+        if (!same) {
+          this.deps.store.updateBinding(binding.id, (b) => ({ ...b, worktreeCleanup: next }));
+        }
+      } else if (
+        current !== null &&
+        (current.phase === "waiting" || current.phase === "unconfirmed") &&
+        sameWorktree(current.worktree, ref)
+      ) {
+        this.deps.store.updateBinding(binding.id, (b) => ({ ...b, worktreeCleanup: null }));
+      }
+    }
+  }
+
+  /**
+   * An attempt at the worktree's delete ended, as its view heard it: `deleted`
+   * true when the host that owns the worktree said it went, false when it
+   * refused, null when the answer was lost. The machines' stops and deletes
+   * run once the worktree is known to be gone, and this resolves when they're
+   * done, with how each ended. A worktree on this device is looked at, never
+   * taken on report. One still there after a refusal leaves its machines as
+   * they are, and a later delete asks again; anything short of a refusal
+   * leaves the choice waiting for the worktree to go.
+   */
+  async settleWorktreeCleanup(
+    worktree: unknown,
+    deleted: unknown,
+    mutationId?: unknown
+  ): Promise<CloudWorktreeCleanupOutcome[]> {
+    const ref = checkedWorktreeRef(worktree);
+    const mutation = checkedMutationId(mutationId);
+    const reported = deleted === true ? true : deleted === false ? false : null;
+    // Only the choices that delete came with: a late answer never settles a later delete's.
+    const targets = new Map(
+      [...this.cleanupsFor(ref)].filter(([, cleanup]) => cleanup.mutationId === mutation)
+    );
+    if (targets.size === 0) return [];
+    const waiting = new Map([...targets].filter(([, cleanup]) => cleanup.phase === "waiting"));
+    if (waiting.size > 0) {
+      const gone = await this.worktreeIsGone(ref, reported);
+      if (gone === true) {
+        for (const [bindingId, cleanup] of waiting) {
+          void this.carryOutCleanup(bindingId, ["waiting"], cleanup.attemptId);
+        }
+      } else if (gone === false && reported === false) {
+        // Only a refusal drops it: a delete whose answer was lost may still be removing it.
+        for (const [bindingId, cleanup] of waiting) {
+          this.disarmCleanup(bindingId, cleanup.attemptId);
+        }
+      }
+    }
+    const outcomes = await Promise.all(
+      [...targets].map(([bindingId, cleanup]) => this.outcomeOf(bindingId, cleanup.attemptId))
+    );
+    return outcomes.filter((outcome): outcome is CloudWorktreeCleanupOutcome => outcome !== null);
+  }
+
+  /**
+   * A person's Retry of a stop or delete that failed, or of the look at a
+   * worktree on this device that couldn't tell whether it's gone. A choice
+   * Daintree never heard back about for a worktree on another host isn't
+   * retried: nothing here can tell whether that worktree still exists.
+   */
+  async retryWorktreeCleanup(hostId: unknown): Promise<void> {
+    const binding = this.requireBindingForHost(hostId);
+    const cleanup = binding.worktreeCleanup;
+    if (!cleanup) throw invalid("There's nothing left to do for this machine.");
+    if (cleanup.phase === "unconfirmed") {
+      throw invalid(
+        "Daintree can't tell whether its worktree was deleted, so it leaves the machine as it is. Stop or remove it here if the worktree is gone."
+      );
+    }
+    let from: ReadonlyArray<StoredWorktreeCleanup["phase"]> = ["due", "failed"];
+    if (cleanup.phase === "waiting") {
+      if (cleanup.worktree.hostId !== null) {
+        throw invalid("Its worktree's host hasn't said yet whether the worktree was deleted.");
+      }
+      // A look, never a verdict on the delete: one still running may yet remove it.
+      const gone = await this.worktreeIsGone(cleanup.worktree, null);
+      if (gone === false) {
+        throw invalid(
+          "Its worktree is still there, so the machine is left as it is until the worktree is deleted."
+        );
+      }
+      if (gone === null) {
+        throw invalid("Daintree couldn't tell whether the worktree is still there. Try again.");
+      }
+      from = ["waiting"];
+    }
+    const outcome = await this.carryOutCleanup(binding.id, from, cleanup.attemptId);
+    // Moved on while it looked (the removal was heard and its stop or delete failed): say so.
+    const after = this.deps.store.binding(binding.id)?.worktreeCleanup;
+    if (outcome === null && after?.attemptId === cleanup.attemptId && after.phase === "failed") {
+      const message = after.error?.message ?? "It didn't finish.";
+      throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
+    }
+    if (outcome?.error) {
+      throw new AppError({
+        code: "OUTCOME_UNKNOWN",
+        message: outcome.error,
+        userMessage: outcome.error,
+      });
+    }
+  }
+
+  /** A person's Keep: the machine stays as it is, and its stop or delete is dropped. */
+  dismissWorktreeCleanup(hostId: unknown): void {
+    const binding = this.requireBindingForHost(hostId);
+    if (this.cleanupRuns.has(binding.id)) {
+      throw invalid("The machine's stop or delete is under way. Wait for it to finish.");
+    }
+    const mutation = binding.worktreeCleanup?.mutationId;
+    if (mutation) this.keptForDelete.add(`${binding.id}\u0000${mutation}`);
+    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, worktreeCleanup: null }));
+  }
+
+  /** Each machine's choice for this worktree, by binding, as it stands now. */
+  private cleanupsFor(ref: CloudWorktreeRef): Map<string, StoredWorktreeCleanup> {
+    const found = new Map<string, StoredWorktreeCleanup>();
+    for (const binding of this.deps.store.bindings()) {
+      const cleanup = binding.worktreeCleanup;
+      if (cleanup && binding.hostId && sameWorktree(cleanup.worktree, ref)) {
+        found.set(binding.id, cleanup);
+      }
+    }
+    return found;
+  }
+
+  /** How this attempt's choice ended: joined while it runs, its failure once failed; null otherwise. */
+  private async outcomeOf(
+    bindingId: string,
+    attemptId: string
+  ): Promise<CloudWorktreeCleanupOutcome | null> {
+    const running = this.cleanupRuns.get(bindingId);
+    if (running) return running;
+    const binding = this.deps.store.binding(bindingId);
+    const cleanup = binding?.worktreeCleanup;
+    if (!binding?.hostId || cleanup?.attemptId !== attemptId) return null;
+    if (cleanup.phase === "due") return this.carryOutCleanup(bindingId, ["due"], attemptId);
+    if (cleanup.phase !== "failed") return null;
+    return {
+      hostId: binding.hostId,
+      machineName: binding.observation?.name ?? cleanup.resourceId,
+      choice: cleanup.choice,
+      error: cleanup.error?.message ?? "It didn't finish.",
+    };
+  }
+
+  /**
+   * Whether the worktree is gone: one on this device is looked at, and only a
+   * missing root counts; one on another host is taken from that host's answer
+   * to the delete. Null when nothing can tell.
+   */
+  private async worktreeIsGone(
+    ref: CloudWorktreeRef,
+    reported: boolean | null
+  ): Promise<boolean | null> {
+    if (ref.hostId !== null) return reported;
+    if (!this.deps.worktreeGone) return null;
+    return this.deps.worktreeGone(ref.worktreeId).catch(() => null);
+  }
+
+  /** Drops a choice still waiting from this attempt: the delete it came with didn't happen. */
+  private disarmCleanup(bindingId: string, attemptId: string): void {
+    this.deps.store.updateBinding(bindingId, (current) =>
+      current.worktreeCleanup?.attemptId === attemptId &&
+      current.worktreeCleanup.phase === "waiting"
+        ? { ...current, worktreeCleanup: null }
+        : current
+    );
+  }
+
+  /** A worktree on this device may have gone: its machines' choices run once its root is missing. */
+  private async worktreeRemoved(worktreeId: string): Promise<void> {
+    const found = new Map<string, StoredWorktreeCleanup>();
+    for (const binding of this.deps.store.bindings()) {
+      const cleanup = binding.worktreeCleanup;
+      if (
+        cleanup?.phase === "waiting" &&
+        cleanup.worktree.hostId === null &&
+        cleanup.worktree.worktreeId === worktreeId
+      ) {
+        found.set(binding.id, cleanup);
+      }
+    }
+    if (found.size === 0) return;
+    const ref = [...found.values()][0]!.worktree;
+    if ((await this.worktreeIsGone(ref, null)) !== true || this.disposed) return;
+    for (const [bindingId, cleanup] of found) {
+      void this.carryOutCleanup(bindingId, ["waiting"], cleanup.attemptId);
+    }
+  }
+
+  /** Stops and deletes that were under way when Daintree last quit, and any a provider held up. */
+  private resumeDueCleanups(): void {
+    if (this.disposed) return;
+    for (const binding of this.deps.store.bindings()) {
+      const cleanup = binding.worktreeCleanup;
+      if (cleanup?.phase !== "due" || this.cleanupRuns.has(binding.id)) continue;
+      if (!binding.hostId || !this.deps.hosts.get(binding.hostId)) continue;
+      if (this.deps.accounts.providerUnavailable(binding.providerId)) continue;
+      void this.carryOutCleanup(binding.id, ["due"], cleanup.attemptId);
+    }
+  }
+
+  /**
+   * Choices still waiting when Daintree last quit: whatever delete they came
+   * with ended with that run. A worktree on this device that's gone has its
+   * machines' choices carried out, and one still there drops them. One on
+   * another host can't be looked at from here, so the choice is left as
+   * unconfirmed, saying why, for the person to settle.
+   */
+  private async reconcileWaitingCleanups(): Promise<void> {
+    const byWorktree = new Map<
+      string,
+      { ref: CloudWorktreeRef; cleanups: Array<[string, StoredWorktreeCleanup]> }
+    >();
+    for (const binding of this.deps.store.bindings()) {
+      const cleanup = binding.worktreeCleanup;
+      if (cleanup?.phase !== "waiting" || !binding.hostId) continue;
+      if (!this.deps.hosts.get(binding.hostId)) continue;
+      const key = JSON.stringify([
+        cleanup.worktree.hostId,
+        cleanup.worktree.projectId,
+        cleanup.worktree.worktreeId,
+      ]);
+      const entry = byWorktree.get(key) ?? { ref: cleanup.worktree, cleanups: [] };
+      entry.cleanups.push([binding.id, cleanup]);
+      byWorktree.set(key, entry);
+    }
+    for (const { ref, cleanups } of byWorktree.values()) {
+      if (ref.hostId !== null) {
+        for (const [bindingId, cleanup] of cleanups) {
+          this.deps.store.updateBinding(bindingId, (current) =>
+            current.worktreeCleanup?.attemptId === cleanup.attemptId &&
+            current.worktreeCleanup.phase === "waiting"
+              ? {
+                  ...current,
+                  worktreeCleanup: {
+                    ...current.worktreeCleanup,
+                    phase: "unconfirmed",
+                    error: {
+                      code: "outcome-unknown",
+                      message:
+                        "Daintree quit before it heard whether the worktree was deleted, so the machine was left as it was.",
+                      at: this.now(),
+                    },
+                  },
+                }
+              : current
+          );
+        }
+        continue;
+      }
+      const gone = await this.worktreeIsGone(ref, null);
+      if (this.disposed) return;
+      for (const [bindingId, cleanup] of cleanups) {
+        if (gone === false) this.disarmCleanup(bindingId, cleanup.attemptId);
+        else if (gone === true)
+          void this.carryOutCleanup(bindingId, ["waiting"], cleanup.attemptId);
+      }
+    }
+  }
+
+  /**
+   * Runs a machine's stop or delete once, joined by every caller while it
+   * runs. Only a choice still in one of `from`, from the same attempt, is
+   * started: an answer about an earlier attempt, or a second look that lands
+   * after a failure, never runs it again.
+   */
+  private carryOutCleanup(
+    bindingId: string,
+    from: ReadonlyArray<StoredWorktreeCleanup["phase"]>,
+    attemptId: string
+  ): Promise<CloudWorktreeCleanupOutcome | null> {
+    const running = this.cleanupRuns.get(bindingId);
+    if (running) return running;
+    const cleanup = this.deps.store.binding(bindingId)?.worktreeCleanup;
+    if (!cleanup || cleanup.attemptId !== attemptId || !from.includes(cleanup.phase)) {
+      return Promise.resolve(null);
+    }
+    const run = this.runCleanup(bindingId).finally(() => {
+      if (this.cleanupRuns.get(bindingId) === run) this.cleanupRuns.delete(bindingId);
+    });
+    this.cleanupRuns.set(bindingId, run);
+    return run;
+  }
+
+  /**
+   * Carries out the stop or delete, written down as due before anything is
+   * sent, so a restart partway runs it again: a delete of a machine already
+   * gone counts as done, and a stop finds the machine stopped or stopping. A
+   * failure is kept with the choice for Retry, never retried by itself. A
+   * shutdown partway leaves it due, and so does a provider that isn't there.
+   */
+  private async runCleanup(bindingId: string): Promise<CloudWorktreeCleanupOutcome | null> {
+    const binding = this.deps.store.updateBinding(bindingId, (current) =>
+      current.worktreeCleanup
+        ? {
+            ...current,
+            worktreeCleanup: { ...current.worktreeCleanup, phase: "due", error: null },
+          }
+        : current
+    );
+    const cleanup = binding?.worktreeCleanup;
+    if (!binding || !cleanup || !binding.hostId) return null;
+    const hostId = binding.hostId;
+    const outcome = (error: string | null): CloudWorktreeCleanupOutcome => ({
+      hostId,
+      machineName: binding.observation?.name ?? cleanup.resourceId,
+      choice: cleanup.choice,
+      error,
+    });
+    const unavailable = this.deps.accounts.providerUnavailable(binding.providerId);
+    if (unavailable) {
+      // Left due, saying why: it runs once its provider is back.
+      this.setCleanupError(bindingId, cleanup.attemptId, "due", {
+        code: "unsupported",
+        message: unavailable,
+        at: this.now(),
+      });
+      return outcome(unavailable);
+    }
+    const startedAt = this.now();
+    try {
+      if (cleanup.choice === "delete") {
+        await this.supersedeRunning(bindingId, ["creating", "starting", "stopping"]);
+        await this.sendDelete(binding, hostId, cleanup.resourceId);
+        await this.deps.hosts.forget(hostId);
+      } else {
+        await this.stopForCleanup(binding, hostId);
+      }
+      this.deps.store.updateBinding(bindingId, (current) =>
+        current.worktreeCleanup?.attemptId === cleanup.attemptId
+          ? { ...current, worktreeCleanup: null }
+          : current
+      );
+      return outcome(null);
+    } catch (error) {
+      if (this.disposed) return outcome("Daintree quit before it finished.");
+      // Its provider left partway: nothing was settled, so it waits for the provider like a start would.
+      const left = this.deps.accounts.providerUnavailable(binding.providerId);
+      if (left) {
+        this.setCleanupError(bindingId, cleanup.attemptId, "due", {
+          code: "unsupported",
+          message: left,
+          at: this.now(),
+        });
+        return outcome(left);
+      }
+      const recorded = this.deps.store.binding(bindingId)?.lastError;
+      const thrown =
+        error instanceof AppError && error.userMessage
+          ? error.userMessage
+          : formatErrorMessage(error, "The provider didn't answer.");
+      const failure: CloudHostError = {
+        code: recorded && recorded.at >= startedAt ? recorded.code : "failed",
+        message: thrown,
+        at: this.now(),
+      };
+      this.setCleanupError(bindingId, cleanup.attemptId, "failed", failure);
+      return outcome(failure.message);
+    }
+  }
+
+  private setCleanupError(
+    bindingId: string,
+    attemptId: string,
+    phase: "due" | "failed",
+    error: CloudHostError
+  ): void {
+    this.deps.store.updateBinding(bindingId, (current) =>
+      current.worktreeCleanup?.attemptId === attemptId
+        ? { ...current, worktreeCleanup: { ...current.worktreeCleanup, phase, error } }
+        : current
+    );
+  }
+
+  /**
+   * A stop that finds the machine as a restart may have left it. A start or
+   * create under way is ended first, as a person's Stop ends it, and the look
+   * and the stop are one operation, so nothing starts it again in between. A
+   * machine its provider reports stopped or deleted needs nothing more.
+   */
+  private async stopForCleanup(binding: StoredCloudBinding, hostId: HostId): Promise<void> {
+    await this.supersedeRunning(binding.id, ["creating", "starting"]);
+    this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
+    await this.settleRenewal(binding.id);
+    await this.deps.hosts.disconnect(hostId).catch(() => {});
+    await this.operate(binding.id, "stopping", async (signal) => {
+      const { provider, credentials } = await this.context(binding, signal);
+      this.stage(binding.id, "Checking the machine");
+      let resource: ProviderResource | null;
+      try {
+        // A read overtaken by a newer one is asked again: the stop acts on the newest word.
+        while (!(resource = await this.inspectInto(binding.id, provider, credentials))) {
+          if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+        }
+      } catch (error) {
+        throw this.deps.accounts.asAppError(provider, error);
+      }
+      if (resource.machine === "stopped" || resource.machine === "deleted") return;
+      if (resource.machine === "stopping") {
+        await this.waitFor(
+          binding.id,
+          "stopped",
+          STOP_DEADLINE_MS,
+          signal,
+          "Saving the disk and stopping"
+        );
+        return;
+      }
+      await this.runStop(binding.id, signal);
+    });
+  }
+
+  /**
+   * Runs `work` as the machine's operation once every other one on it is
+   * aborted and finished, including any that claimed it while the last wound
+   * down. It claims the machine in the same turn as its last look, so a caller
+   * queued behind the aborted operation can't get in first.
+   */
+  private async operateOver(
+    bindingId: string,
+    kind: CloudOperationKind,
+    work: (signal: AbortSignal) => Promise<void>
+  ): Promise<void> {
+    let running = this.operations.get(bindingId);
+    while (running && running.kind !== kind) {
+      running.controller.abort();
+      await running.promise.catch(() => {});
+      running = this.operations.get(bindingId);
+    }
+    return this.operate(bindingId, kind, work);
   }
 
   /**
@@ -1266,6 +1984,7 @@ export class CloudHostLifecycle {
       throw invalid(`${nameOf(provider)} doesn't take a lifetime for its machines.`);
     }
     let resource: ProviderResource;
+    const ticket = this.ticket();
     try {
       resource = await provider.renewLifetime(credentials, binding.resourceId, lifetimeSeconds);
     } catch (error) {
@@ -1279,7 +1998,7 @@ export class CloudHostLifecycle {
       throw invalid(`${nameOf(owner)} changed while this was being saved. Try again.`);
     }
     keep();
-    this.observe(binding.id, resource);
+    this.observe(binding.id, resource, ticket);
   }
 
   // --- SSH access ----------------------------------------------------------
@@ -1338,10 +2057,15 @@ export class CloudHostLifecycle {
   }
 
   private async resolveAccess(bindingId: string): Promise<CloudSshRoute> {
-    let binding = this.deps.store.binding(bindingId);
-    if (!binding) {
-      throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
-    }
+    // Read again past each await: a removal there must not have its access resolved after all.
+    const current = (): StoredCloudBinding => {
+      const found = this.deps.store.binding(bindingId);
+      if (!found) {
+        throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
+      }
+      return found;
+    };
+    let binding = current();
     if (!binding.resourceId) {
       throw new UnusableConnectionError(
         "The cloud machine hasn't been created yet",
@@ -1358,9 +2082,16 @@ export class CloudHostLifecycle {
           : "The cloud account can't be used";
       throw new UnusableConnectionError(said, said);
     }
+    // A start may have seen the machine running meanwhile: a dial left to finish
+    // across it must not be refused on the stop it read first (#17546).
+    binding = current();
     const { provider, credentials } = context;
-    const fresh =
-      binding.observation && this.now() - binding.observation.observedAt < DIAL_OBSERVATION_MS;
+    // A machine that sleeps by itself may have since a recent look, and a dial would wake it.
+    const freshFor =
+      lifetimeModelOf(provider).kind === "idle-sleep"
+        ? SLEEPER_DIAL_OBSERVATION_MS
+        : DIAL_OBSERVATION_MS;
+    const fresh = binding.observation && this.now() - binding.observation.observedAt < freshFor;
     if (!fresh) {
       try {
         await this.inspectInto(bindingId, provider, credentials);
@@ -1374,7 +2105,7 @@ export class CloudHostLifecycle {
         }
         throw new UnusableConnectionError(described.message, described.message);
       }
-      binding = this.deps.store.binding(bindingId)!;
+      binding = current();
     }
     const machine = machineOf(binding);
     if (machine === "starting") {
@@ -1382,11 +2113,13 @@ export class CloudHostLifecycle {
     }
     if (machine !== "running") {
       const said =
-        machine === "stopped" || machine === "stopping"
-          ? "The cloud machine is stopped. Start it to connect."
-          : machine === "deleted"
-            ? "The cloud machine was deleted."
-            : "The cloud machine isn't running.";
+        machine === "stopped" && binding.observation?.asleep
+          ? "The cloud machine is asleep. Start it to wake it and connect."
+          : machine === "stopped" || machine === "stopping"
+            ? "The cloud machine is stopped. Start it to connect."
+            : machine === "deleted"
+              ? "The cloud machine was deleted."
+              : "The cloud machine isn't running.";
       throw new UnusableConnectionError(said, said);
     }
     const confirmed = confirmsHostKeys(provider);
@@ -1449,9 +2182,9 @@ export class CloudHostLifecycle {
     const record: CloudSshAccessRecord = {
       user: resolved.user,
       endpoint: resolved.endpoint,
-      // Whatever the API said about the key, only the person's confirmation vouches for it.
+      // Whatever the API said about the key, it never replaces a key already trusted.
       hostKey: confirmed
-        ? await this.confirmedHostKey(bindingId, resolved.endpoint)
+        ? await this.confirmedHostKey(bindingId, resolved.endpoint, checked.hostKey)
         : checked.hostKey,
       tunnel: policy.tunnel,
     };
@@ -1481,12 +2214,18 @@ export class CloudHostLifecycle {
   }
 
   /**
-   * The key to pin for a provider that can't vouch for one: the person's
-   * trusted key, as long as the machine still presents it. A first key, or
-   * one unlike the trusted key, is kept for the person to review and the dial
-   * is refused; nothing here ever trusts a key by itself.
+   * The key to pin for a provider that can't always vouch for one: the
+   * trusted key, as long as the machine still presents it. With no key trusted
+   * yet, a key the provider's authenticated API vouched for (`vouched`, only
+   * under `api-or-confirm`) is trusted when the machine presents exactly it.
+   * Otherwise a first key, or one unlike the trusted key, is kept for the
+   * person to review and the dial is refused.
    */
-  private async confirmedHostKey(bindingId: string, endpoint: SshEndpoint): Promise<string> {
+  private async confirmedHostKey(
+    bindingId: string,
+    endpoint: SshEndpoint,
+    vouched: string | null
+  ): Promise<string> {
     const scan = async (types?: string): Promise<string[]> => {
       try {
         return await this.deps.files.scanHostKeys(endpoint, { types });
@@ -1495,6 +2234,20 @@ export class CloudHostLifecycle {
         throw new UnusableConnectionError(said, said);
       }
     };
+    // A first key on offer that the API now contradicts is withdrawn before anything is scanned.
+    const before = this.deps.store.binding(bindingId);
+    if (
+      vouched &&
+      !before?.trustedHostKey &&
+      before?.offeredHostKey &&
+      before.offeredHostKey.key !== vouched
+    ) {
+      this.deps.store.updateBinding(bindingId, (current) =>
+        current.offeredHostKey && current.offeredHostKey.key !== vouched
+          ? { ...current, offeredHostKey: null }
+          : current
+      );
+    }
     let scanned = await scan();
     const trustedBefore = this.deps.store.binding(bindingId)?.trustedHostKey?.key ?? null;
     if (trustedBefore && !scanned.includes(trustedBefore)) {
@@ -1502,6 +2255,10 @@ export class CloudHostLifecycle {
       // answer: the trusted key's absence is checked on its own before it counts.
       const again = await scan(keyscanTypeOf(trustedBefore));
       if (again.includes(trustedBefore)) scanned = [...scanned, trustedBefore];
+    } else if (!trustedBefore && vouched && scanned.length > 0 && !scanned.includes(vouched)) {
+      // The same for the vouched key: its algorithm's connection may be the one that dropped.
+      const again = await scan(keyscanTypeOf(vouched));
+      if (again.includes(vouched)) scanned = [...scanned, vouched];
     }
     // Read after the scan: the person may have trusted a key while it ran.
     const binding = this.deps.store.binding(bindingId);
@@ -1517,6 +2274,35 @@ export class CloudHostLifecycle {
         }));
       }
       return trusted;
+    }
+    if (!trusted && vouched && scanned.includes(vouched)) {
+      this.deps.store.updateBinding(bindingId, (current) =>
+        current.trustedHostKey
+          ? current
+          : {
+              ...current,
+              trustedHostKey: { key: vouched, at: this.now() },
+              offeredHostKey: null,
+            }
+      );
+      // The person may have trusted another key in the moment since it was read.
+      const settled = this.deps.store.binding(bindingId)?.trustedHostKey?.key ?? null;
+      if (settled === vouched) return vouched;
+      throw new TransportError("The trusted host key changed while it was pinned", null);
+    }
+    if (!trusted && vouched && scanned.length > 0) {
+      // Two authenticated answers disagree about the machine: neither is offered to trust,
+      // and nor is a key it presented before.
+      if (this.deps.store.binding(bindingId)?.offeredHostKey) {
+        this.deps.store.updateBinding(bindingId, (current) => ({
+          ...current,
+          offeredHostKey: null,
+        }));
+      }
+      const said =
+        "The machine presented a host key that isn't the one its provider reports for it, so Daintree won't connect to it. Delete the machine if you can't explain the difference.";
+      this.recordError(bindingId, { code: "ssh-authorization", message: said, at: this.now() });
+      throw new UnusableConnectionError(said, said);
     }
     const candidate = scanned[0];
     if (!candidate) {
@@ -1671,7 +2457,11 @@ export class CloudHostLifecycle {
     const timing = sshKeyTiming(provider);
     const problem = sshKeyContractProblem(provider, timing);
     if (problem) throw new Error(`${nameOf(provider)} ${problem}`);
-    if (timing === "at-create") return provider.sshAccess!(credentials, binding.resourceId!);
+    // A machine Daintree didn't create never took the key; a provider that can put it there does.
+    const keyedAtCreate =
+      timing === "at-create" &&
+      (binding.ownership !== "imported" || typeof provider.authorizeSsh !== "function");
+    if (keyedAtCreate) return provider.sshAccess!(credentials, binding.resourceId!);
     const publicKey = await this.deps.files.publicKey(binding.accountId);
     return provider.authorizeSsh!(credentials, binding.resourceId!, publicKey);
   }
@@ -1693,10 +2483,16 @@ export class CloudHostLifecycle {
 
   // --- Operations and observation ----------------------------------------
 
+  /**
+   * Runs `work` as the machine's one operation, or joins the same kind under
+   * way. `accepted` runs only when a new operation is admitted, before any of
+   * its work: a refused or joining caller changes nothing it records.
+   */
   private operate(
     bindingId: string,
     kind: CloudOperationKind,
-    work: (signal: AbortSignal) => Promise<void>
+    work: (signal: AbortSignal) => Promise<void>,
+    accepted?: () => void
   ): Promise<void> {
     const running = this.operations.get(bindingId);
     if (running) {
@@ -1709,6 +2505,7 @@ export class CloudHostLifecycle {
     }
     if (this.disposed)
       return Promise.reject(new AppError({ code: "CANCELLED", message: "Stopping" }));
+    accepted?.();
     const controller = new AbortController();
     const operation = {
       id: crypto.randomUUID(),
@@ -1748,8 +2545,25 @@ export class CloudHostLifecycle {
     this.deps.store.updateBinding(bindingId, (current) => ({ ...current, lastError: error }));
   }
 
-  private observe(bindingId: string, resource: ProviderResource): void {
-    this.deps.store.updateBinding(bindingId, (current) => {
+  private ticket(): number {
+    return ++this.lastTicket;
+  }
+
+  /** Whether a newer request's answer was written while the one with this ticket was out. */
+  private overtaken(bindingId: string, ticket: number): boolean {
+    return ticket <= (this.observedTicket.get(bindingId) ?? 0);
+  }
+
+  /** Writes the answer to the request sent with this ticket, unless a newer one was written; false then. */
+  private observe(
+    bindingId: string,
+    resource: ProviderResource,
+    ticket: number,
+    extra?: (binding: StoredCloudBinding) => StoredCloudBinding
+  ): boolean {
+    if (this.overtaken(bindingId, ticket)) return false;
+    let started = false;
+    const written = this.deps.store.updateBinding(bindingId, (current) => {
       const before = current.observation;
       // Any stop, or a start seen from outside, may bring a new address or
       // host key: access is resolved again for the next dial.
@@ -1758,45 +2572,66 @@ export class CloudHostLifecycle {
         (before !== null && before.machine !== "running") ||
         (before?.stoppedAt ?? null) !== resource.stoppedAt;
       if (restarted) this.renewals.delete(bindingId);
-      return {
+      started = before !== null && restarted && resource.machine === "running";
+      const next: StoredCloudBinding = {
         ...current,
         access: restarted ? null : current.access,
         observation: observationOf(resource, this.now()),
       };
+      return extra ? extra(next) : next;
     });
+    // A binding forgotten while the request was out keeps no mark behind.
+    if (!written) return false;
+    this.observedTicket.set(bindingId, ticket);
+    // Whoever's read shows the deadline moved, or the run ending, settles an earlier failure to move it.
+    if (this.renewalSettled(bindingId)) this.clearRenewalError(bindingId);
+    if (started && written.hostId) this.deps.onMachineStarted?.(written.hostId);
+    return true;
   }
 
+  /** Writes a not-found answer to the request sent with this ticket, unless a newer one was written. */
+  private observeMissing(bindingId: string, described: CloudHostError, ticket: number): void {
+    if (this.overtaken(bindingId, ticket)) return;
+    // Not proof of deletion (a scope or key change looks the same): say what was seen.
+    const written = this.deps.store.updateBinding(bindingId, (current) => ({
+      ...current,
+      observation: current.observation
+        ? { ...current.observation, machine: "unknown", observedAt: this.now() }
+        : null,
+      lastError: described,
+    }));
+    if (written) this.observedTicket.set(bindingId, ticket);
+  }
+
+  /**
+   * Reads the machine into its binding. Null when a request sent after this
+   * one was answered first: the binding already holds the newer word, and this
+   * answer, or failure to get one, is left out.
+   */
   private async inspectInto(
     bindingId: string,
     provider: CloudProvider,
     credentials: ProviderCredentials
-  ): Promise<ProviderResource> {
+  ): Promise<ProviderResource | null> {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) throw new Error("No machine");
+    const ticket = this.ticket();
+    let resource: ProviderResource;
     try {
-      const resource = await provider.inspect(credentials, binding.resourceId);
-      this.observe(bindingId, resource);
-      // An answer supersedes an earlier failure to get one; a refused start or stop stays.
-      this.deps.store.updateBinding(bindingId, (current) =>
-        current.lastError && INSPECTION_ERRORS.has(current.lastError.code)
-          ? { ...current, lastError: null }
-          : current
-      );
-      return resource;
+      resource = await provider.inspect(credentials, binding.resourceId);
     } catch (error) {
+      if (this.overtaken(bindingId, ticket)) return null;
       const described = provider.describeError(error);
-      if (described.code === "not-found") {
-        // Not proof of deletion (a scope or key change looks the same): say what was seen.
-        this.deps.store.updateBinding(bindingId, (current) => ({
-          ...current,
-          observation: current.observation
-            ? { ...current.observation, machine: "unknown", observedAt: this.now() }
-            : null,
-          lastError: described,
-        }));
-      }
+      if (described.code === "not-found") this.observeMissing(bindingId, described, ticket);
       throw error;
     }
+    // An answer supersedes an earlier failure to get one; a refused start or stop stays.
+    const written = this.observe(bindingId, resource, ticket, (current) =>
+      current.lastError && INSPECTION_ERRORS.has(current.lastError.code)
+        ? { ...current, lastError: null }
+        : current
+    );
+    return written ? resource : null;
   }
 
   private async waitFor(
@@ -1805,7 +2640,7 @@ export class CloudHostLifecycle {
     deadlineMs: number,
     signal: AbortSignal,
     stage: string
-  ): Promise<ProviderResource> {
+  ): Promise<void> {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) throw new Error("No machine");
     const { provider, credentials } = await this.context(binding, signal);
@@ -1814,19 +2649,26 @@ export class CloudHostLifecycle {
     for (;;) {
       if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
       let resource: ProviderResource | null = null;
+      const ticket = this.ticket();
       try {
-        resource = await provider.inspect({ ...credentials, signal }, binding.resourceId);
-        this.observe(bindingId, resource);
+        const answer = await provider.inspect({ ...credentials, signal }, binding.resourceId);
+        if (this.observe(bindingId, answer, ticket)) resource = answer;
       } catch (error) {
         if (signal.aborted) throw error;
         const described = provider.describeError(error);
-        if (described.code !== "provider-unreachable") {
-          this.recordError(bindingId, described);
+        if (described.code !== "provider-unreachable" && !this.overtaken(bindingId, ticket)) {
+          if (described.code === "not-found") this.observeMissing(bindingId, described, ticket);
+          else this.recordError(bindingId, described);
           throw this.deps.accounts.asAppError(provider, error);
         }
       }
+      // Overtaken by a newer read: its word stands for this round.
+      if (!resource && this.overtaken(bindingId, ticket)) {
+        const current = this.deps.store.binding(bindingId);
+        if (current && machineOf(current) === target) return;
+      }
       if (resource) {
-        if (resource.machine === target) return resource;
+        if (resource.machine === target) return;
         if (resource.machine === "error" || resource.machine === "deleted") {
           const message =
             resource.error ??
@@ -1892,6 +2734,8 @@ export class CloudHostLifecycle {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId || !binding.hostId || binding.lifetimeSeconds === null) return false;
     if (binding.intent === "stop" || this.operations.has(binding.id)) return false;
+    // A stop under way, the machine's own or anyone's, isn't undone by renewing.
+    if (stopUnderWay(binding.observation?.stop)) return false;
     if (this.deps.accounts.providerUnavailable(binding.providerId)) return false;
     // Only a deadline the provider can move: a fixed limit, an idle sleep or none has nothing to renew.
     if (!canRenewLifetime(this.deps.accounts.provider(binding.providerId))) return false;
@@ -1901,8 +2745,7 @@ export class CloudHostLifecycle {
     const deadline = Date.parse(binding.observation?.autoStopAt ?? "");
     if (!Number.isFinite(deadline)) return false;
     const now = this.now();
-    const margin = Math.min(RENEW_MARGIN_MS, (binding.lifetimeSeconds * 1000) / 2);
-    if (deadline - now > margin) return false;
+    if (!lifetimeRenewalDue(now, deadline, binding.lifetimeSeconds)) return false;
     const last = this.renewals.get(binding.id);
     return !(last && !last.ok && now - last.at < RENEW_RETRY_MS);
   }
@@ -1914,13 +2757,31 @@ export class CloudHostLifecycle {
     if (this.deps.accounts.providerUnavailable(binding.providerId)) return;
     const provider = this.deps.accounts.provider(binding.providerId);
     if (!canRenewLifetime(provider)) return;
+    let credentials: ProviderCredentials;
     try {
-      const { credentials } = await this.context(binding);
-      // A stop, a start or a new lifetime while the key was read: that wins. So
-      // does the provider leaving, or another registering in its place.
+      ({ credentials } = await this.context(binding));
+      // What the provider says now, not what was last seen: the machine's own
+      // keeper may have moved the deadline, or begun stopping it (#17361).
+      // A read that fails isn't a failed renewal: nothing was sent, and its
+      // own error (a machine not found) stays as the read recorded it.
       if (!this.renewalDue(bindingId) || !this.stillRegistered(binding.providerId, provider)) {
         return;
       }
+      await this.inspectInto(bindingId, provider, credentials);
+    } catch {
+      if (!this.disposed) this.renewals.set(bindingId, { at: this.now(), ok: false });
+      return;
+    }
+    // A stop, a start or a new lifetime meanwhile wins. So does the provider
+    // leaving, another registering in its place, or this run ending.
+    if (this.disposed || !this.stillRegistered(binding.providerId, provider)) return;
+    if (!this.renewalDue(bindingId)) {
+      // Moved, or stopped, by someone else: an earlier failure to move it is no longer news.
+      if (this.renewalSettled(bindingId)) this.clearRenewalError(bindingId);
+      return;
+    }
+    try {
+      const ticket = this.ticket();
       const renewed = await provider.renewLifetime(
         credentials,
         binding.resourceId!,
@@ -1930,23 +2791,73 @@ export class CloudHostLifecycle {
       if (!this.stillRegistered(binding.providerId, provider)) return;
       const current = this.deps.store.binding(bindingId);
       if (!current || current.intent === "stop" || this.operations.has(bindingId)) return;
-      this.observe(bindingId, renewed);
+      this.observe(bindingId, renewed, ticket);
       this.renewals.set(bindingId, { at: this.now(), ok: true });
       // A renewal that failed earlier and now went through is no longer news.
-      this.deps.store.updateBinding(bindingId, (latest) =>
-        latest.lastError?.code === "lifetime-renewal" ? { ...latest, lastError: null } : latest
-      );
+      this.clearRenewalError(bindingId);
       this.deps.changed();
     } catch (error) {
       if (this.disposed || this.deps.store.binding(bindingId)?.intent === "stop") return;
       if (!this.stillRegistered(binding.providerId, provider)) return;
       this.renewals.set(bindingId, { at: this.now(), ok: false });
+      // Refused because the machine had begun stopping by itself, or someone
+      // else moved the deadline meanwhile: that is no failure to report.
+      if (await this.settledMeanwhile(bindingId, provider, credentials)) return;
       const described = provider.describeError(error);
       this.recordError(bindingId, {
         code: "lifetime-renewal",
         message: `Couldn't keep the machine running past its lifetime: ${described.message} It stops by itself at the deadline unless this succeeds.`,
         at: described.at,
       });
+    }
+  }
+
+  /**
+   * The provider last said the run is ending or over, or its deadline is well
+   * off: positive evidence only, never a state it couldn't read.
+   */
+  private renewalSettled(bindingId: string): boolean {
+    const binding = this.deps.store.binding(bindingId);
+    const observation = binding?.observation;
+    if (!binding || !observation) return false;
+    const machine = machineOf(binding);
+    if (
+      machine === "stopping" ||
+      machine === "stopped" ||
+      machine === "deleted" ||
+      stopUnderWay(observation.stop)
+    ) {
+      return true;
+    }
+    if (machine !== "running") return false;
+    const deadline = Date.parse(observation.autoStopAt ?? "");
+    return (
+      binding.lifetimeSeconds !== null &&
+      Number.isFinite(deadline) &&
+      !lifetimeRenewalDue(this.now(), deadline, binding.lifetimeSeconds)
+    );
+  }
+
+  private clearRenewalError(bindingId: string): void {
+    const binding = this.deps.store.binding(bindingId);
+    if (binding?.lastError?.code !== "lifetime-renewal") return;
+    this.deps.store.updateBinding(bindingId, (latest) =>
+      latest.lastError?.code === "lifetime-renewal" ? { ...latest, lastError: null } : latest
+    );
+    this.deps.changed();
+  }
+
+  /** After a failed renewal: whether the provider now says the run is ending, or its deadline moved well off. */
+  private async settledMeanwhile(
+    bindingId: string,
+    provider: CloudProvider,
+    credentials: ProviderCredentials
+  ): Promise<boolean> {
+    try {
+      await this.inspectInto(bindingId, provider, credentials);
+      return this.renewalSettled(bindingId);
+    } catch {
+      return false;
     }
   }
 
@@ -2006,8 +2917,11 @@ export class CloudHostLifecycle {
         this.now() - binding.createdAt > 60_000;
       if (!stranded && (binding.hostId === null || listed.has(binding.hostId))) continue;
       this.operations.get(binding.id)?.controller.abort();
+      // Its machine's own key goes with it, at the provider (#17361).
       this.deps.store.removeBinding(binding.id);
       this.renewals.delete(binding.id);
+      this.observedTicket.delete(binding.id);
+      void this.deps.machineKeys?.revokePending();
       await this.deps.files.forget(this.deps.clientDir, binding.id).catch(() => {});
     }
   }

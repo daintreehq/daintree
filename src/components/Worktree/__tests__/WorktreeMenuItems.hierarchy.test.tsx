@@ -1195,6 +1195,7 @@ describe("Git submenu — recovery rows", () => {
     ["MERGING", "merge"],
     ["CHERRY_PICKING", "cherry-pick"],
     ["REVERTING", "revert"],
+    ["APPLYING_MAILBOX", "patch apply"],
   ] as const)("replaces the start rows for %s", (repoState, label) => {
     // A worktree mid-operation has exactly one useful next move, and it is not
     // "start another rebase" — the handler refuses that anyway.
@@ -1204,20 +1205,25 @@ describe("Git submenu — recovery rows", () => {
     const rows = gitRowLabels(container);
     // Fetch survives: it writes only remote-tracking refs, so it is safe and
     // useful mid-operation. Only the start rows are replaced.
-    expect(rows).toEqual(["Fetch", "Fetch and prune", `Continue ${label}`, `Abort ${label}…`]);
+    expect(rows).toEqual([
+      "Fetch",
+      "Fetch and prune",
+      `Continue ${label} in Review Hub`,
+      `Abort ${label}…`,
+    ]);
     expect(rows.some((r) => r.includes("Rebase onto develop"))).toBe(false);
   });
 
-  it("dispatches continue without an operation argument", () => {
+  it("continues in Review Hub, never straight from a row that names only the kind", () => {
+    // The row's label comes from the last poll and identifies no operation, so
+    // continuing from here could advance one that replaced it (#17559).
     const { container } = renderWorktreeMenu({
       worktree: integrable({ repoState: "REBASING" } as Partial<WorktreeState>),
     });
     gitRow(container, "Continue").click();
-    expect(dispatch).toHaveBeenCalledWith(
-      "git.continueRepositoryOperation",
-      { worktreeId: "wt-1" },
-      { source: "menu" }
-    );
+    expect(dispatch.mock.calls).toEqual([
+      ["worktree.openReviewHub", { worktreeId: "wt-1" }, { source: "menu" }],
+    ]);
   });
 
   it("passes the in-progress operation to abort, so the confirm can name it", () => {

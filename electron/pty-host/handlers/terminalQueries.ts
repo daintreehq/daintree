@@ -94,6 +94,14 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
       });
     },
 
+    "reset-terminal-modes": (msg) => {
+      sendEvent({
+        type: "reset-terminal-modes-result",
+        requestId: msg.requestId,
+        reset: ptyManager.resetTerminalModes(msg.id),
+      });
+    },
+
     "replay-history": (msg) => {
       const replayed = ptyManager.replayHistory(msg.id, msg.maxLines);
       sendEvent({
@@ -149,7 +157,17 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
           return;
         }
       }
-      for (const t of ptyManager.getAll()) {
+      // Only an omitted scope scans the whole shard; a malformed one scans nothing.
+      const terminals =
+        msg.terminalIds === undefined
+          ? ptyManager.getAll()
+          : Array.isArray(msg.terminalIds)
+            ? msg.terminalIds.map((id: unknown) =>
+                typeof id === "string" ? ptyManager.getTerminal(id) : undefined
+              )
+            : [];
+      for (const t of terminals) {
+        if (!t) continue;
         const buffer = t.semanticBuffer;
         if (!buffer || buffer.length === 0) continue;
         for (let i = buffer.length - 1; i >= 0; i--) {

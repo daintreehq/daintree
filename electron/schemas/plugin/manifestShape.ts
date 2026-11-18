@@ -37,6 +37,8 @@ import {
   FileEditorContributionSchema,
   ForgeProviderContributionSchema,
   WorktreeDeleteNotesContributionSchema,
+  CLOUD_PROVIDER_CONTRIBUTION_MAX,
+  CloudProviderContributionSchema,
 } from "./providers.js";
 import { DatabaseContributionSchema } from "./databases.js";
 import {
@@ -107,6 +109,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   // One check per plugin: the confirmation shows one attributed answer (or one
   // "didn't answer") per plugin, never a partial answer.
   worktreeDeleteNotes: 1,
+  cloudProviders: CLOUD_PROVIDER_CONTRIBUTION_MAX,
   fileEditors: 10,
   agents: 50,
   processTools: 100,
@@ -382,6 +385,10 @@ export function buildPluginManifestObjectSchema() {
             .array(WorktreeDeleteNotesContributionSchema)
             .max(MANIFEST_CONTRIBUTION_CAPS.worktreeDeleteNotes)
             .default([]),
+          cloudProviders: z
+            .array(CloudProviderContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.cloudProviders)
+            .default([]),
           fileEditors: z
             .array(FileEditorContributionSchema)
             .max(MANIFEST_CONTRIBUTION_CAPS.fileEditors)
@@ -470,6 +477,7 @@ export function buildPluginManifestObjectSchema() {
           elementPickerProviders: [],
           fileDecorationProviders: [],
           worktreeDeleteNotes: [],
+          cloudProviders: [],
           fileEditors: [],
           agents: [],
           processTools: [],

@@ -13,8 +13,16 @@
  * Playwright attributes beforeAll/afterAll (where the app launch usually
  * happens) to no test, so these figures are lower bounds on file cost.
  *
+ * An input may also be an earlier summary, whose spec rows are carried over as
+ * recorded, and `--drop <spec file>` (repeatable) leaves a spec file out. Both
+ * together retire a deleted spec from the baseline and recompute the project
+ * totals without a fresh run:
+ *
+ *   node scripts/ci/e2e-durations.mjs --drop e2e/x.spec.ts \
+ *     --out scripts/baselines/e2e-durations.json scripts/baselines/e2e-durations.json
+ *
  * Usage:
- *   node scripts/ci/e2e-durations.mjs [--platform <name>] [--out <file>] <report.json>...
+ *   node scripts/ci/e2e-durations.mjs [--platform <name>] [--out <file>] [--drop <spec>]... <report.json>...
  *
  * The platform comes from `config.metadata.platform` in each report when set,
  * else from `--platform`, else it is null.
@@ -100,25 +108,44 @@ const byKey = (a, b) =>
   cmp(a.project, b.project) ||
   cmp(a.file ?? "", b.file ?? "");
 
+/** An earlier output of this script rather than a Playwright report. */
+export function isSummary(report) {
+  return Array.isArray(report?.specs) && !Array.isArray(report?.suites);
+}
+
 /**
- * Summarise one or more parsed Playwright JSON reports.
+ * Summarise one or more parsed Playwright JSON reports, or earlier summaries.
  * `reports` is an array of `{ report, platform? }` where `platform` is the
- * fallback used when the report's metadata does not name one.
+ * fallback used when the report's metadata does not name one. Spec files named
+ * in `drop` are left out.
  */
-export function summarizeReports(reports) {
+export function summarizeReports(reports, { drop = [] } = {}) {
+  const dropped = new Set(drop);
   const specs = new Map();
+  // Keyed by the row it writes, so a file-less suite and its own summary row
+  // (written with file "") land on one row whichever input comes first.
+  const entryFor = (platform, project, file) => {
+    const key = JSON.stringify([platform, project, file ?? ""]);
+    let entry = specs.get(key);
+    if (!entry) {
+      entry = { platform, project, file: file ?? "", ...emptyBucket() };
+      specs.set(key, entry);
+    }
+    return entry;
+  };
 
   for (const { report, platform: fallback = null } of reports) {
+    if (isSummary(report)) {
+      for (const row of report.specs) {
+        if (dropped.has(row.file)) continue;
+        mergeBucket(entryFor(row.platform ?? null, row.project ?? "", row.file), row);
+      }
+      continue;
+    }
     const platform = reportPlatform(report, fallback);
     walkSuites(report?.suites, null, (file, test) => {
-      const project = test.projectName ?? "";
-      const key = JSON.stringify([platform, project, file]);
-      let entry = specs.get(key);
-      if (!entry) {
-        entry = { platform, project, file: file ?? "", ...emptyBucket() };
-        specs.set(key, entry);
-      }
-      addTest(entry, test);
+      if (dropped.has(file)) return;
+      addTest(entryFor(platform, test.projectName ?? "", file), test);
     });
   }
 
@@ -146,13 +173,14 @@ export function summarizeReports(reports) {
 }
 
 export function parseArgs(argv) {
-  const args = { platform: null, out: null, inputs: [] };
+  const args = { platform: null, out: null, drop: [], inputs: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--platform" || arg === "--out") {
+    if (arg === "--platform" || arg === "--out" || arg === "--drop") {
       const value = argv[++i];
       if (!value || value.startsWith("--")) throw new Error(`${arg} needs a value`);
-      args[arg.slice(2)] = value;
+      if (arg === "--drop") args.drop.push(value);
+      else args[arg.slice(2)] = value;
     } else if (arg.startsWith("--")) {
       throw new Error(`Unknown option: ${arg}`);
     } else {
@@ -176,7 +204,7 @@ function main() {
   }
   if (args.inputs.length === 0) {
     fail(
-      "Usage: e2e-durations.mjs [--platform <name>] [--out <file>] <playwright-results.json>..."
+      "Usage: e2e-durations.mjs [--platform <name>] [--out <file>] [--drop <spec>]... <playwright-results.json | summary.json>..."
     );
   }
 
@@ -189,7 +217,7 @@ function main() {
     }
   }
 
-  const json = JSON.stringify(summarizeReports(reports), null, 2) + "\n";
+  const json = JSON.stringify(summarizeReports(reports, { drop: args.drop }), null, 2) + "\n";
   if (args.out) {
     writeFileSync(args.out, json, "utf8");
     console.error(`[e2e-durations] Wrote ${args.out}`);

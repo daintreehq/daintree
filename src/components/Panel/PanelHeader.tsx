@@ -25,6 +25,7 @@ import {
   Plus,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Settings,
   Trash2,
@@ -161,6 +162,7 @@ import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { ActionId } from "@shared/types/actions";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { terminalScreenEnded } from "@/utils/terminalLiveScreen";
 
 /**
  * The window controls keep `icon-xs`'s 24px target but draw a 14px glyph, the
@@ -422,6 +424,7 @@ function PanelHeaderComponent({
     return panel && isPtyPanel(panel) ? (panel.isInputLocked ?? false) : false;
   });
   const hasPty = panelKindHasPty(kind);
+  const screenEnded = usePanelStore((state) => terminalScreenEnded(state.panelsById[id]));
   // A primitive, so the header re-renders on a visibility or empty/non-empty
   // change and never on a keystroke into the notes. "empty" is an open
   // scratchpad with no notes yet, which earns no header toggle.
@@ -1785,6 +1788,22 @@ function PanelHeaderComponent({
                     >
                       <RefreshCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Redraw
+                    </DropdownMenuItem>
+                  )}
+                  {hasPty && !screenEnded && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        // Run once the menu has handed focus back: with an
+                        // agent running, the action stages a confirm.
+                        pendingMenuDispatchRef.current = {
+                          actionId: "terminal.resetModes",
+                          args: { terminalId: id },
+                        };
+                      }}
+                      data-testid="panel-reset-modes"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Reset terminal modes
                     </DropdownMenuItem>
                   )}
 

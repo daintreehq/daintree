@@ -43,7 +43,18 @@ export interface BulkRunFacts {
   retryingStep: number;
   /** Unsettled items the user sent back through Retry failed. */
   retriedUnsettled: number;
+  /** Unsettled items with no worktree yet: what can still move the created count. */
+  toCreate: number;
+  /** Unsettled items whose worktree exists, queued retries included: setup still to run. */
+  settingUp: number;
 }
+
+/**
+ * What a batch is doing right now. "setting-up" is the tail where nothing is
+ * left to create, so the created count has stopped moving while work goes on;
+ * a failed creation counts as settled, so it never holds a batch out of it.
+ */
+export type BulkRunActivity = "creating" | "setting-up" | "cancelling" | null;
 
 export function bulkRunFacts(run: Pick<BulkWorktreeRunSnapshot, "items">): BulkRunFacts {
   const facts: BulkRunFacts = {
@@ -59,6 +70,8 @@ export function bulkRunFacts(run: Pick<BulkWorktreeRunSnapshot, "items">): BulkR
     queued: 0,
     retryingStep: 0,
     retriedUnsettled: 0,
+    toCreate: 0,
+    settingUp: 0,
   };
   for (const item of run.items) {
     if (item.worktreeId) facts.created++;
@@ -79,11 +92,15 @@ export function bulkRunFacts(run: Pick<BulkWorktreeRunSnapshot, "items">): BulkR
       case "pending":
         facts.queued++;
         if ((item.retried ?? 0) > 0) facts.retriedUnsettled++;
+        if (item.worktreeId) facts.settingUp++;
+        else facts.toCreate++;
         break;
       default:
         facts.inProgress++;
         if (item.attempt > 1) facts.retryingStep++;
         if ((item.retried ?? 0) > 0) facts.retriedUnsettled++;
+        if (item.worktreeId) facts.settingUp++;
+        else facts.toCreate++;
     }
   }
   return facts;
@@ -93,6 +110,7 @@ export interface BulkRunSummary {
   tone: BulkRunTone;
   /** The batch's state in a few words: the popover title and the chip's label. */
   title: string;
+  activity: BulkRunActivity;
   facts: BulkRunFacts;
   /** The counts in words, for the line under the bar. */
   detail: string;
@@ -117,6 +135,16 @@ export function summarizeBulkRun(run: BulkWorktreeRunSnapshot): BulkRunSummary {
   // parts that stand on their own add up to the total.
   const setupFailed = facts.failed - facts.notCreated;
   const settled = run.phase === "done" || run.phase === "cancelled";
+  const activity: BulkRunActivity =
+    run.phase === "cancelling"
+      ? "cancelling"
+      : run.phase !== "running"
+        ? null
+        : facts.toCreate > 0
+          ? "creating"
+          : facts.settingUp > 0
+            ? "setting-up"
+            : null;
   const nested: string[] = [];
   if (settled && setupFailed > 0) {
     nested.push(`${setupFailed} with setup ${pluralNoun(setupFailed, "failure")}`);
@@ -125,6 +153,9 @@ export function summarizeBulkRun(run: BulkWorktreeRunSnapshot): BulkRunSummary {
   const createdNote = nested.length > 0 ? ` (${nested.join(", ")})` : "";
   const parts = [`${facts.created} of ${facts.total} created${createdNote}`];
   if (run.phase === "running") {
+    // Once nothing is left to create the created count has stopped moving, so
+    // say what still is rather than letting "10 of 10 created" read as done.
+    if (activity === "setting-up") parts.push(`${facts.settingUp} setting up`);
     if (facts.retryingStep > 0) parts.push(`${facts.retryingStep} retrying`);
     if (facts.failed > 0) parts.push(`${facts.failed} failed`);
   } else if (run.phase === "cancelling") {
@@ -156,6 +187,7 @@ export function summarizeBulkRun(run: BulkWorktreeRunSnapshot): BulkRunSummary {
   const summary = (tone: BulkRunTone, title: string): BulkRunSummary => ({
     tone,
     title,
+    activity,
     facts,
     detail,
     sharedFailure,
@@ -167,20 +199,31 @@ export function summarizeBulkRun(run: BulkWorktreeRunSnapshot): BulkRunSummary {
     if (unsettled > 0 && facts.retriedUnsettled === unsettled) {
       return summary("live", `Retrying ${unsettled} failed`);
     }
-    if (facts.created === facts.total && facts.inProgress > 0) {
-      return summary("live", "Finishing setup");
-    }
+    if (activity === "setting-up") return summary("live", "Finishing setup");
     return summary("live", "Creating worktrees");
   }
   if (run.phase === "cancelling") return summary("live", "Cancelling…");
 
   const attention = bulkRunNeedingAttention(facts);
-  if (attention > 0 && facts.created === 0) return summary("error", "Couldn't create worktrees");
+  if (attention > 0 && facts.created === 0) {
+    return summary("error", `Couldn't create ${pluralize(attention, "worktree")}`);
+  }
   if (attention > 0) {
-    return summary("warning", `${attention} of ${facts.total} ${attentionVerb(facts)}`);
+    // A mix says each outcome; "3 of 20 failed" would call an interruption a failure.
+    return facts.failed > 0 && facts.interrupted > 0
+      ? summary("warning", outcomeCounts(facts.failed, facts.interrupted))
+      : summary("warning", `${attention} of ${facts.total} ${attentionVerb(facts)}`);
   }
   if (run.phase === "cancelled") return summary("neutral", "Creation cancelled");
   return summary("success", `${pluralize(facts.created, "worktree")} created`);
+}
+
+/** "3 failed", "1 interrupted", or "2 failed, 1 interrupted". */
+function outcomeCounts(failed: number, interrupted: number): string {
+  const parts: string[] = [];
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (interrupted > 0) parts.push(`${interrupted} interrupted`);
+  return parts.join(", ");
 }
 
 /** "failed", or "interrupted" when the view running it went away and nothing failed outright. */
@@ -345,10 +388,21 @@ export function nextBulkRunRetireAt(
 export interface BulkRunChip {
   tone: BulkRunTone;
   label: string;
-  /** "9/20": worktrees created out of the batches counting. Only while something is live. */
+  /**
+   * "9/20": worktrees created out of the batches counting, while something is
+   * live. Once nothing is left to create it says what is left to set up
+   * instead ("4 left"), since a count that has stopped would read as done.
+   */
   count: string | null;
   created: number;
   total: number;
+  /**
+   * Whether `created / total` can be drawn as a gauge: one batch, still
+   * creating. A second batch joining changes the denominator, which would pull
+   * the fill backwards; in the setup tail or a cancel the fill can no longer
+   * move, so it would sit there looking stuck. The count carries those alone.
+   */
+  gauge: boolean;
   /** Items that failed or were cut short, in any shown batch, while another is live. */
   attention: number;
   /** The whole state as one sentence, for the trigger's accessible name. */
@@ -378,41 +432,68 @@ export function summarizeBulkRunChip(
     const episode = liveEpisode(runs);
     let created = 0;
     let total = 0;
+    let episodeBatches = 0;
     runs.forEach((run, index) => {
       if (!episode.has(run.runId)) return;
+      episodeBatches++;
       created += summaries[index]!.facts.created;
       total += summaries[index]!.facts.total;
     });
-    const label =
-      live.length === 1
-        ? live[0]!.title
-        : live.every((s) => s.title === "Cancelling…")
+    // Once nothing can be created the created count has stopped, so the tail
+    // counts what is still running instead: setup, and a cancel's in-flight items.
+    const cancelling = live.filter((s) => s.activity === "cancelling").length;
+    const tail = !live.some((s) => s.activity === "creating") && cancelling < live.length;
+    const left = live.reduce(
+      (sum, s) => sum + (s.activity === "cancelling" ? s.facts.inProgress : s.facts.settingUp),
+      0
+    );
+    // Batches in different states share a label for what the episode as a
+    // whole is doing: creating while anything still can, else the tail.
+    const label = live.every((s) => s.title === live[0]!.title)
+      ? live[0]!.title
+      : live.some((s) => s.activity === "creating")
+        ? "Creating worktrees"
+        : live.every((s) => s.activity === "cancelling")
           ? "Cancelling…"
-          : "Creating worktrees";
-    const attentionNote = attention > 0 ? `, ${attention} failed` : "";
+          : "Finishing setup";
+    const tailNote = tail ? `, ${left} still ${cancelling > 0 ? "finishing" : "setting up"}` : "";
+    const cancelNote =
+      cancelling > 0 && cancelling < live.length
+        ? `, ${pluralize(cancelling, "batch", "batches")} cancelling`
+        : "";
     return {
       tone: "live",
       label,
-      count: `${created}/${total}`,
+      count: tail ? `${left} left` : `${created}/${total}`,
       created,
       total,
+      gauge: episodeBatches === 1 && live[0]!.activity === "creating",
       attention,
-      ariaLabel: `${label}${where}, ${created} of ${total} created${batches}${attentionNote}`,
+      ariaLabel: `${label}${where}, ${created} of ${total} created${tailNote}${cancelNote}${batches}${attentionNote(summaries)}`,
     };
   }
 
   const waiting = summaries.filter((s) => s.tone === "warning" || s.tone === "error");
   if (waiting.length > 0) {
     const allFailed = waiting.every((s) => s.tone === "error");
-    const verb = waiting.some((s) => s.facts.failed > 0) ? "failed" : "interrupted";
-    const label = allFailed ? "Couldn't create worktrees" : `Worktrees · ${attention} ${verb}`;
-    const spoken = allFailed ? label : `${pluralize(attention, "worktree")} ${verb}`;
+    let failed = 0;
+    let interrupted = 0;
+    for (const s of waiting) {
+      failed += s.facts.failed;
+      interrupted += s.facts.interrupted;
+    }
+    const label = allFailed
+      ? `Couldn't create ${pluralize(attention, "worktree")}`
+      : `Worktrees · ${outcomeCounts(failed, interrupted)}`;
+    // Spoken as shown, so the visible words work as a voice command.
+    const spoken = label.replace(" · ", ", ");
     return {
       tone: allFailed ? "error" : "warning",
       label,
       count: null,
       created: 0,
       total: 0,
+      gauge: false,
       attention: 0,
       ariaLabel: `${spoken}${where}${batches}`,
     };
@@ -425,9 +506,22 @@ export function summarizeBulkRunChip(
     count: null,
     created: 0,
     total: 0,
+    gauge: false,
     attention: 0,
     ariaLabel: `${latest.title}${where}${batches}`,
   };
+}
+
+/** ", 2 failed, 1 interrupted": what wants attention, each outcome named. */
+function attentionNote(summaries: readonly BulkRunSummary[]): string {
+  let failed = 0;
+  let interrupted = 0;
+  for (const s of summaries) {
+    failed += s.facts.failed;
+    interrupted += s.facts.interrupted;
+  }
+  const counts = outcomeCounts(failed, interrupted);
+  return counts ? `, ${counts}` : "";
 }
 
 /** The batch the popover opens on: what wants attention, else the newest live one, else the newest. */

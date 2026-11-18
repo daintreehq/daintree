@@ -78,6 +78,33 @@ describe("scanStagedFilesForConflictMarkers (real git)", () => {
     git(["commit", "-qm", "init"]);
   });
 
+  it.each([6, 7, 8, 13, 20])(
+    "accepts a Markdown Setext heading with a %i-character underline",
+    async (width) => {
+      write("CHANGELOG.md", `Release notes\n${"=".repeat(width)}\n\n- first\n`);
+      git(["add", "CHANGELOG.md"]);
+
+      await expect(scan()).resolves.toBeUndefined();
+    }
+  );
+
+  it("accepts an unrelated edit to a file that already holds a seven-character underline", async () => {
+    write("CHANGELOG.md", "Release notes\n=======\n\n- first\n");
+    git(["add", "CHANGELOG.md"]);
+    git(["commit", "-qm", "changelog"]);
+    write("CHANGELOG.md", "Release notes\n=======\n\n- first\n- second\n");
+    git(["add", "CHANGELOG.md"]);
+
+    await expect(scan()).resolves.toBeUndefined();
+  });
+
+  it("accepts a lone seven-equals line used as a plain text separator", async () => {
+    write("notes.txt", "above\n=======\nbelow\n");
+    git(["add", "notes.txt"]);
+
+    await expect(scan()).resolves.toBeUndefined();
+  });
+
   it("accepts a staged submodule addition", async () => {
     stageGitlink("module", SUBMODULE_SHA_A);
     write(".gitmodules", '[submodule "module"]\n\tpath = module\n\turl = ../module\n');
@@ -177,10 +204,42 @@ describe("scanStagedFilesForConflictMarkers (real git)", () => {
   });
 
   it("finds a marker in an executable file", async () => {
-    write("run.sh", "#!/bin/sh\n=======\n");
+    write("run.sh", "#!/bin/sh\n>>>>>>> topic\n");
     git(["add", "run.sh"]);
     git(["update-index", "--chmod=+x", "run.sh"]);
-    await expect(scan()).rejects.toThrow(/conflict markers found in run\.sh/);
+    await expect(scan()).rejects.toThrow(/conflict markers found in run\.sh \(line 2\)/);
+  });
+
+  it("still rejects a full conflict region after a heading underline, naming the opener's line", async () => {
+    write(
+      "CHANGELOG.md",
+      "Release notes\n=============\n\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\n"
+    );
+    git(["add", "CHANGELOG.md"]);
+
+    await expect(scan()).rejects.toThrow(/conflict markers found in CHANGELOG\.md \(line 4\)/);
+  });
+
+  it("rejects the eight-wide markers git writes for a rename/rename conflict", async () => {
+    // What `git merge` leaves in both destinations when each side renames the
+    // file differently and edits the same lines.
+    write(
+      "b.txt",
+      "line3\n<<<<<<<< HEAD:b.txt\nOURS4\n========\nTHEIRS4\n>>>>>>>> theirs:c.txt\nline5\n"
+    );
+    git(["add", "b.txt"]);
+
+    await expect(scan()).rejects.toThrow(/conflict markers found in b\.txt \(line 2\)/);
+  });
+
+  it("finds a diff3 base marker in a CRLF file stored byte for byte", async () => {
+    // `-text` keeps git from normalising the CRs away, whatever the user's
+    // global attributes or autocrlf say.
+    write(".git/info/attributes", "crlf.txt -text\n");
+    write("crlf.txt", "one\r\n||||||| base\r\ntwo\r\n");
+    git(["add", "crlf.txt"]);
+
+    await expect(scan()).rejects.toThrow(/conflict markers found in crlf\.txt \(line 2\)/);
   });
 
   it("scans the first commit of an unborn branch", async () => {

@@ -135,6 +135,8 @@ const HOST_NOTIFY_METHODS = {
   unregisterService: true,
   registerWorktreeDeleteNotesProvider: true,
   unregisterWorktreeDeleteNotesProvider: true,
+  registerCloudProvider: true,
+  unregisterCloudProvider: true,
   "mcp.registerTools": true,
   "mcp.unregisterTools": true,
   "logger.info": true,

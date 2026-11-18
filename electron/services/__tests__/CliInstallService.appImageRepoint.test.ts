@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const home = vi.hoisted(() => ({ dir: "" }));
@@ -176,6 +177,73 @@ describe("CliInstallService — following a moved AppImage", () => {
     }
   );
 
+  /** Runs `generate` while the packaged script is readable, as from a running image. */
+  async function withPackagedScript<T>(generate: () => T | Promise<T>): Promise<T> {
+    const resources = path.join(root, "resources");
+    fs.mkdirSync(resources, { recursive: true });
+    fs.copyFileSync(
+      fileURLToPath(new URL("../../../scripts/daintree-cli.sh", import.meta.url)),
+      path.join(resources, "daintree-cli.sh")
+    );
+    const descriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", { value: resources, configurable: true });
+    try {
+      return await generate();
+    } finally {
+      if (descriptor) Object.defineProperty(process, "resourcesPath", descriptor);
+      else delete (process as { resourcesPath?: string }).resourcesPath;
+      fs.rmSync(resources, { recursive: true });
+    }
+  }
+
+  // The image's resources are unmounted whenever the app isn't running, so the
+  // wrapper has to carry the packaged script's client rather than point at it.
+  it.skipIf(process.platform === "win32")(
+    "carries the packaged script's call client, which runs without the image",
+    async () => {
+      const service = await load();
+      const content = await withPackagedScript(() =>
+        service.generateAppImageWrapper("/nonexistent/Daintree.AppImage", "1.2.3")
+      );
+      const wrapper = path.join(root, "daintree-cli.sh");
+      fs.writeFileSync(wrapper, content, { mode: 0o755 });
+      const run = (args: string[]) => {
+        const env = { ...process.env };
+        delete env.DAINTREE_MCP_URL;
+        delete env.DAINTREE_MCP_TOKEN;
+        return spawnSync("bash", [wrapper, ...args], { encoding: "utf8", env, timeout: 10_000 });
+      };
+
+      expect(run(["--help"]).stdout).toContain("daintree call <tool>");
+      const help = run(["call", "--help"]);
+      expect(help.status).toBe(0);
+      expect(help.stdout).toContain("Usage: daintree call <tool>");
+      const outsidePane = run(["call", "terminal.list"]);
+      expect(outsidePane.status).toBe(4);
+      expect(outsidePane.stderr).toContain("DAINTREE_MCP_URL");
+      // The launch line and the version stamp still read back as before.
+      expect(service.appImageOfWrapper(content)).toBe("/nonexistent/Daintree.AppImage");
+      expect(run(["--version"]).stdout.trim()).toBe("daintree 1.2.3");
+    }
+  );
+
+  it("keeps the installed call client when a repoint can't read the packaged script", async () => {
+    const oldImage = path.join(root, "Daintree-1.2.0.AppImage");
+    const newImage = path.join(root, "Daintree-1.3.0.AppImage");
+    const service = await installedFor(oldImage);
+    const withClient = await withPackagedScript(() => service.generateAppImageWrapper(oldImage));
+    fs.writeFileSync(wrapperPath, withClient, { mode: 0o755 });
+    fs.rmSync(oldImage);
+    fs.writeFileSync(newImage, "new image");
+
+    expect(service.repointAppImageWrapper(newImage)).toBe(true);
+
+    const wrapper = fs.readFileSync(wrapperPath, "utf8");
+    expect(service.appImageOfWrapper(wrapper)).toBe(newImage);
+    expect(wrapper).toContain('daintree_call "$@"');
+    expect(wrapper).toContain("# <<< daintree call <<<");
+  });
+
   it.skipIf(process.platform === "win32")(
     "sends one absolute folder when CDPATH is exported",
     async () => {
@@ -206,6 +274,105 @@ describe("CliInstallService — following a moved AppImage", () => {
         }
         expect(raw.split("\0").filter(Boolean)).toEqual([`--cli-path=${fs.realpathSync(project)}`]);
       }
+    }
+  );
+
+  // `daintree first second` used to open "first" and drop the rest, exiting 0. A
+  // stub AppImage records its argv to a file of its own per invocation, so a
+  // launch (or a refusal to launch) is observed rather than inferred from the
+  // script text.
+  async function stubbedWrapper() {
+    const service = await load();
+    const image = path.join(root, "Daintree.AppImage");
+    fs.writeFileSync(
+      image,
+      `#!/usr/bin/env bash\nprintf '%s\\0' "$@" > "$DAINTREE_TEST_RECORD"\n`,
+      { mode: 0o755 }
+    );
+    const wrapper = path.join(root, "daintree-cli.sh");
+    fs.writeFileSync(wrapper, service.generateAppImageWrapper(image, "1.2.3"), { mode: 0o755 });
+    let runs = 0;
+    return (args: string[], cwd?: string) => {
+      const record = path.join(root, `argv-${runs++}`);
+      const result = spawnSync("bash", [wrapper, ...args], {
+        encoding: "utf8",
+        cwd,
+        env: { ...process.env, DAINTREE_TEST_RECORD: record },
+        // The backgrounded stub holds stderr open, so a stalled one would block
+        // here before recordedArgv's own deadline starts.
+        timeout: 10_000,
+      });
+      if (result.error) throw result.error;
+      return { status: result.status, stderr: result.stderr, record };
+    };
+  }
+
+  // The launch is backgrounded and the stub's redirect creates the file before it
+  // writes, so wait for the trailing NUL.
+  async function recordedArgv(record: string): Promise<string[]> {
+    const deadline = Date.now() + 5000;
+    let raw = "";
+    while (Date.now() < deadline && !raw.endsWith("\0")) {
+      raw = fs.existsSync(record) ? fs.readFileSync(record, "utf8") : "";
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return raw.split("\0").filter(Boolean);
+  }
+
+  it.skipIf(process.platform === "win32")(
+    "refuses extra operands without launching, while one folder still opens",
+    async () => {
+      const run = await stubbedWrapper();
+      const first = path.join(root, "first folder");
+      const second = path.join(root, "second");
+      fs.mkdirSync(first);
+      fs.mkdirSync(second);
+
+      const refused = run([first, second]);
+      expect(refused.status).toBe(2);
+      expect(refused.stderr).toContain("expected one directory, got 2 arguments");
+      expect(refused.stderr).toContain("Usage: daintree [directory]");
+
+      // The control: this stub and wrapper do record a launch, so the refused
+      // run's missing record means it never started the app.
+      const accepted = run([first]);
+      expect(accepted.status).toBe(0);
+      expect(await recordedArgv(accepted.record)).toEqual([`--cli-path=${fs.realpathSync(first)}`]);
+      expect(fs.existsSync(refused.record)).toBe(false);
+    }
+  );
+
+  // With a missing first operand the cause is the operand count; "not a
+  // directory" (exit 1) would send the user to the wrong problem.
+  it.skipIf(process.platform === "win32")(
+    "counts operands before checking that the first one exists",
+    async () => {
+      const run = await stubbedWrapper();
+      const first = path.join(root, "first");
+      const second = path.join(root, "second");
+      fs.mkdirSync(first);
+      fs.mkdirSync(second);
+
+      const refused = run([path.join(root, "no-such-dir"), first, second]);
+      expect(refused.status).toBe(2);
+      expect(refused.stderr).toContain("got 3 arguments");
+      expect(refused.stderr).not.toContain("is not a directory");
+      expect(fs.existsSync(refused.record)).toBe(false);
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "opens the current directory when no operand is given",
+    async () => {
+      const run = await stubbedWrapper();
+      const project = path.join(root, "project");
+      fs.mkdirSync(project);
+
+      const accepted = run([], project);
+      expect(accepted.status).toBe(0);
+      expect(await recordedArgv(accepted.record)).toEqual([
+        `--cli-path=${fs.realpathSync(project)}`,
+      ]);
     }
   );
 

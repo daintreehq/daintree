@@ -157,6 +157,27 @@ describe("useReviewHubKeyboard with no diff open", () => {
   });
 });
 
+describe("useReviewHubKeyboard key repeat", () => {
+  it("toggles staging and viewed once per physical press, and keeps arrow repeat", () => {
+    const spies = makeSpies();
+    const { list } = renderWithCursor(spies);
+
+    press(list, " ");
+    press(list, " ", { repeat: true });
+    press(list, " ", { repeat: true });
+    expect(spies.handleToggleUnstaged).toHaveBeenCalledTimes(1);
+
+    press(list, "v");
+    press(list, "v", { repeat: true });
+    expect(spies.handleViewedChange).toHaveBeenCalledTimes(1);
+
+    press(list, "ArrowDown", { repeat: true });
+    expect(list.getAttribute("data-focused-index")).toBe("1");
+    press(list, " ");
+    expect(spies.handleToggleUnstaged).toHaveBeenCalledTimes(2);
+  });
+});
+
 // The diff layers over the hub, and the hub's capture listener still hears
 // every key pressed inside it. Whichever tab opened it, an open diff has to
 // read as the overlay it is.

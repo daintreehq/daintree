@@ -136,7 +136,7 @@ export function setupWebviewCSP(): void {
     // Browser panels load arbitrary remote sites — overlaying our CSP would
     // intersect with theirs and break most of the web. Sandbox, deny-all
     // permissions, and navigation guards remain in place.
-    if (partitionType === "unknown" || partitionType === "portal" || partitionType === "browser") {
+    if (partitionType === "unknown" || partitionType === "browser") {
       return;
     }
 
@@ -181,7 +181,7 @@ export function setupWebviewCSP(): void {
   // Configure static partitions:
   // - persist:daintree: trusted Daintree renderer shell (strict app CSP)
   // Browser hosts arbitrary remote sites (skipped by classifyPartition guard above
-  // to avoid intersecting with site CSPs), portal/unknown are excluded, and
+  // to avoid intersecting with site CSPs), unknown is excluded, and
   // dev-preview partitions are wired dynamically via will-attach-webview below.
   applyCSP("persist:daintree");
 

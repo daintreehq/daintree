@@ -273,7 +273,7 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
   return cachedPluginService;
 }
 import {
-  listAgentSessions,
+  listAgentSessionsOrThrow,
   clearAgentSessions,
   pruneAgentSessions,
   readSessionHistorySync,
@@ -322,6 +322,7 @@ import {
   isDecisionsUpdateTerminalId,
 } from "../../../../shared/config/terminalScreenPersistence.js";
 import { parseRelayRemovalCommand } from "../../../../shared/config/relayRemoval.js";
+import { buildMcpServerUrl } from "../../../../shared/config/mcpClientConfigs.js";
 import {
   noteRelayRemovalLaunch,
   spoilRelayRemovalLaunch,
@@ -1291,8 +1292,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
                   : {}),
               });
               // Every format's hook for the orchestration bearer, whether or
-              // not the agent reads it from here.
-              spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
+              // not the agent reads it from here. The endpoint rides with it so
+              // a script the agent runs (`daintree call`, a git hook) can reach
+              // the control surface as this pane, and only where the bearer is.
+              spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, {
+                DAINTREE_MCP_TOKEN: prepared.token,
+                DAINTREE_MCP_URL: buildMcpServerUrl(launchPort),
+              });
             }
           }
         }
@@ -1835,7 +1841,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
-    return listAgentSessions(
+    return listAgentSessionsOrThrow(
       payload?.worktreeId,
       app.getPath("userData"),
       getAgentSessionRetentionDays(),

@@ -8,6 +8,7 @@ import type {
   PluginProtocolAuthority,
   ViewContribution,
   PluginHostBinding,
+  PluginManifest,
 } from "../../../shared/types/plugin.js";
 import type { PluginContributionBroadcaster } from "./PluginContributionBroadcaster.js";
 import {
@@ -58,7 +59,11 @@ import {
   unregisterPluginLayouts,
 } from "../../../shared/config/pluginLayoutRegistry.js";
 import { isPluginIconId } from "../../../shared/config/pluginIconIds.js";
-import { SEARCH_PROVIDER_DEFAULT_ICON_ID } from "../../../shared/config/pluginSearchProviders.js";
+import {
+  FILE_SEARCH_KEYWORD,
+  FILE_SEARCH_KEYWORD_HOLDER,
+  SEARCH_PROVIDER_DEFAULT_ICON_ID,
+} from "../../../shared/config/pluginSearchProviders.js";
 import {
   registerSearchProviders,
   unregisterSearchProviders,
@@ -78,6 +83,11 @@ import {
   retiredKeybindingScopeMessage,
 } from "../../../shared/config/pluginKeybindingScopes.js";
 import {
+  ACTION_ID_CONTRIBUTIONS,
+  isRetiredBuiltInActionId,
+  retiredActionIdMessage,
+} from "../../../shared/config/retiredActionIds.js";
+import {
   registerPluginContextMenuItem,
   unregisterPluginContextMenuItems,
 } from "../pluginContextMenuRegistry.js";
@@ -87,6 +97,7 @@ import {
 } from "../WhenClauseService.js";
 import {
   registerForgeProviders,
+  setForgeProviderSettingMatch,
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
 } from "../forgeProviderRegistry.js";
@@ -96,6 +107,10 @@ import {
   unregisterFileDecorationProviders,
 } from "../fileDecorationRegistry.js";
 import { unregisterWorktreeDeleteNotesBinding } from "./worktreeDeleteNotesRegistry.js";
+import {
+  publishPluginCloudProviders,
+  withdrawPluginCloudProviders,
+} from "./pluginCloudProviders.js";
 import {
   registerWorktreeSetupSteps,
   unregisterWorktreeSetupStepHandlers,
@@ -248,6 +263,15 @@ export interface PluginContributionRegistrarDeps {
   pluginDataDir: (pluginId: string) => string;
   publishProjectSurfaces: (projectIds: Iterable<string>) => void;
   themesChanged: (pluginId: string, change: PluginThemeChange) => void;
+  /**
+   * The stored user-scope value of one of the plugin's declared settings, or
+   * its declared default. Read for a forge provider's `matchesSettingRef`.
+   */
+  readUserSetting: (
+    pluginId: string,
+    key: string,
+    manifest: Readonly<PluginManifest>
+  ) => Promise<unknown>;
 }
 
 /**
@@ -257,7 +281,62 @@ export interface PluginContributionRegistrarDeps {
  * two load phases — stays with `PluginService`, which calls in at each step.
  */
 export class PluginContributionRegistrar {
+  /** Latest refresh per plugin, so a slow read can't land after a newer one. */
+  private readonly forgeSettingMatchReads = new Map<string, number>();
+
   constructor(private readonly deps: PluginContributionRegistrarDeps) {}
+
+  /**
+   * Each forge provider's `matchesSettingRef` hostname, by contribution id. A
+   * setting that can't be read routes nothing extra rather than failing the
+   * load: the provider still matches its manifest hostnames.
+   */
+  private async readForgeSettingMatches(
+    pluginId: string,
+    manifest: Readonly<PluginManifest>
+  ): Promise<Map<string, string | null>> {
+    const result = new Map<string, string | null>();
+    await Promise.all(
+      manifest.contributes.forgeProviders.map(async (contribution) => {
+        const key = contribution.matchesSettingRef;
+        if (!key) return;
+        let value: unknown;
+        try {
+          value = await this.deps.readUserSetting(pluginId, key, manifest);
+        } catch {
+          value = undefined;
+        }
+        result.set(contribution.id, typeof value === "string" ? value : null);
+      })
+    );
+    return result;
+  }
+
+  /**
+   * Re-read the settings behind a loaded plugin's setting-backed forge
+   * hostnames after one of its settings changed. Free for a plugin whose forge
+   * providers declare none.
+   */
+  async refreshForgeSettingMatches(pluginId: string): Promise<void> {
+    const plugin = this.deps.getLoadedPlugin(pluginId);
+    if (!plugin) return;
+    if (!plugin.manifest.contributes.forgeProviders.some((c) => c.matchesSettingRef)) return;
+    const read = (this.forgeSettingMatchReads.get(pluginId) ?? 0) + 1;
+    this.forgeSettingMatchReads.set(pluginId, read);
+    const matches = await this.readForgeSettingMatches(pluginId, plugin.manifest);
+    if (this.forgeSettingMatchReads.get(pluginId) !== read) return;
+    if (!this.deps.isCurrent(pluginId, plugin)) return;
+    let changed = false;
+    for (const [contributionId, hostname] of matches) {
+      if (setForgeProviderSettingMatch(pluginId, contributionId, hostname)) changed = true;
+    }
+    if (!changed) return;
+    // Same wake-up as a fresh registration: a workspace whose PR polling found
+    // no provider for its remote re-resolves against the new hostname, and the
+    // renderer drops the provider resolutions it cached for open projects.
+    this.deps.getWorkspaceClient()?.notifyForgeProviderRegistryUpdated();
+    this.deps.broadcaster.broadcastProvenanceChanged();
+  }
 
   /**
    * The registrations that may await (custom icons, skills, themes) and those
@@ -332,6 +411,11 @@ export class PluginContributionRegistrar {
       pluginDeclaresConnections(manifest);
 
     for (const btn of manifest.contributes.toolbarButtons) {
+      // A retired built-in action never runs: a button with nothing else to
+      // offer is dropped, one with a popover or menu keeps those without it,
+      // and the post-commit log below says why.
+      const retiredAction = isRetiredBuiltInActionId(btn.actionId, ownPrefix);
+      if (retiredAction && btn.popover === undefined && !btn.menu?.length) continue;
       // Canonical `{pluginId}.{id}` form (#9281) — matches `registerPluginAction`
       // and `panelKindRegistry`. The legacy `plugin.{pluginId}.{id}` form lived
       // here alone and is migrated renderer-side by `toolbarPreferencesStore`'s
@@ -375,7 +459,7 @@ export class PluginContributionRegistrar {
           ...base,
           popover: { viewId: btn.popover.viewId, panelKindId },
         });
-      } else if (btn.actionId !== undefined) {
+      } else if (btn.actionId !== undefined && !retiredAction) {
         registerToolbarButton({ ...base, actionId: qualifyActionId(btn.actionId) });
       } else if (base.menu !== undefined) {
         registerToolbarButton(base);
@@ -443,6 +527,7 @@ export class PluginContributionRegistrar {
     }
 
     for (const menuItem of manifest.contributes.menuItems) {
+      if (isRetiredBuiltInActionId(menuItem.actionId, ownPrefix)) continue;
       trackPluginExpression(pluginId, menuItem.when);
       registerPluginMenuItem(pluginId, {
         ...menuItem,
@@ -455,6 +540,7 @@ export class PluginContributionRegistrar {
       // scope would fire the key where its author never bound it. It is
       // dropped whole; the post-commit log below says why it is missing.
       if (isRetiredPluginKeybindingScope(keybinding.scope)) continue;
+      if (isRetiredBuiltInActionId(keybinding.actionId, ownPrefix)) continue;
       trackPluginExpression(pluginId, keybinding.when);
       registerPluginKeybinding(pluginId, {
         ...keybinding,
@@ -466,6 +552,7 @@ export class PluginContributionRegistrar {
     }
 
     for (const ctxMenu of manifest.contributes.contextMenus) {
+      if (isRetiredBuiltInActionId(ctxMenu.actionId, ownPrefix)) continue;
       trackPluginExpression(pluginId, ctxMenu.when);
       registerPluginContextMenuItem(pluginId, {
         ...ctxMenu,
@@ -483,8 +570,14 @@ export class PluginContributionRegistrar {
     // keeps idle plugins from holding live subprocesses they never use.
 
     if (manifest.contributes.forgeProviders.length > 0) {
+      // Read before registering, so a remote on a setting-named host routes
+      // from the first lookup, before the (lazy) plugin has ever activated.
+      const settingMatches = manifest.contributes.forgeProviders.some((c) => c.matchesSettingRef)
+        ? await this.readForgeSettingMatches(pluginId, manifest)
+        : undefined;
       registerForgeProviders(pluginId, manifest.contributes.forgeProviders, {
         builtin: plugin.isBuiltin,
+        settingMatches,
       });
       // Wake workspace-hosts whose PR polling paused on a "no provider
       // matches" resolution so they re-evaluate against the new descriptor
@@ -754,6 +847,13 @@ export class PluginContributionRegistrar {
       }
       this.deps.themesChanged(pluginId, "registered");
     }
+    // After the commit: the cloud runtime registers each provider as soon as
+    // it's published, and its first call must find the plugin to activate. A
+    // project instance never declares one (the manifest refuses it).
+    const cloudProviders = manifest.contributes.cloudProviders ?? [];
+    if (cloudProviders.length > 0 && !isProject) {
+      publishPluginCloudProviders(pluginId, cloudProviders);
+    }
     // An installed plugin activates in the worker, whose
     // `host.registerForgeProvider` resolves without binding anything, so its
     // providers are listed as unavailable. Logged after the commit because the
@@ -776,6 +876,19 @@ export class PluginContributionRegistrar {
           "warn",
           retiredKeybindingScopeMessage(index, keybinding.combo, keybinding.scope)
         );
+      }
+    }
+    for (const contribution of ACTION_ID_CONTRIBUTIONS) {
+      const entries: readonly { actionId?: string }[] = manifest.contributes[contribution];
+      for (const [index, entry] of entries.entries()) {
+        if (entry.actionId !== undefined && isRetiredBuiltInActionId(entry.actionId, ownPrefix)) {
+          this.deps.recordPluginLog(
+            plugin,
+            pluginId,
+            "warn",
+            retiredActionIdMessage(contribution, index, entry.actionId)
+          );
+        }
       }
     }
 
@@ -860,7 +973,8 @@ export class PluginContributionRegistrar {
           key: `${pluginId}.${provider.id}`,
           pluginId,
           providerId: provider.id,
-          pluginName: manifest.displayName ?? manifest.name,
+          // Never blank: Settings names the plugin that holds a keyword by it.
+          pluginName: manifest.displayName?.trim() || manifest.name,
           title: provider.title,
           keyword: provider.keyword,
           iconId: resolveIconId(provider.iconId ?? SEARCH_PROVIDER_DEFAULT_ICON_ID),
@@ -873,16 +987,28 @@ export class PluginContributionRegistrar {
           ...(runDeclarative ? { runDeclarative } : {}),
         });
       }
+      for (const provider of registered) {
+        if (provider.keyword !== FILE_SEARCH_KEYWORD) continue;
+        this.deps.recordPluginLog(
+          plugin,
+          pluginId,
+          "warn",
+          `Search provider "${provider.providerId}" keyword "${provider.keyword}" is ${FILE_SEARCH_KEYWORD_HOLDER}'s own file search, so the quick switcher refuses it. Choose a different keyword.`
+        );
+      }
       // Reported to the refused provider's own plugin, which may be another one
       // whose keyword this plugin's reload just took back.
       for (const { provider, takenBy } of registerSearchProviders(pluginId, registered)) {
+        // Daintree holds this keyword whichever plugin came first, and each
+        // claimant was told so above.
+        if (provider.keyword === FILE_SEARCH_KEYWORD) continue;
         const refused = this.deps.getLoadedPlugin(provider.pluginId);
         if (!refused) continue;
         this.deps.recordPluginLog(
           refused,
           provider.pluginId,
           "warn",
-          `Search provider "${provider.providerId}" keyword "${provider.keyword}" is already taken by ${takenBy.pluginName}, so the quick switcher refuses it wherever both plugins are on. Choose a different keyword.`
+          `Search provider "${provider.providerId}" shares keyword "${provider.keyword}" with ${takenBy.pluginName}, whose provider comes first, so the quick switcher leaves this one out wherever ${takenBy.pluginName}'s is shown too. Choose a different keyword.`
         );
       }
     }
@@ -1295,7 +1421,11 @@ export class PluginContributionRegistrar {
     runUnloadStep(pluginId, "unregisterElementPickerProviders", () =>
       unregisterElementPickerProviders(pluginId)
     );
-    runUnloadStep(pluginId, "unregisterForgeProviders", () => unregisterForgeProviders(pluginId));
+    runUnloadStep(pluginId, "unregisterForgeProviders", () => {
+      // A setting read still in flight belongs to the instance going away.
+      this.forgeSettingMatchReads.delete(pluginId);
+      unregisterForgeProviders(pluginId);
+    });
     runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>
       unregisterForgeProviderImpls(pluginId)
     );
@@ -1328,6 +1458,9 @@ export class PluginContributionRegistrar {
     );
     runUnloadStep(pluginId, "unregisterWorktreeDeleteNotesBinding", () =>
       unregisterWorktreeDeleteNotesBinding(pluginId)
+    );
+    runUnloadStep(pluginId, "withdrawPluginCloudProviders", () =>
+      withdrawPluginCloudProviders(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
     runUnloadStep(pluginId, "unregisterPluginThemes", () => {

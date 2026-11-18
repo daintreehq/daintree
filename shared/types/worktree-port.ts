@@ -162,7 +162,11 @@ export interface WorktreePortProtocol {
   };
   "has-resource-config": {
     payload: { rootPath: string };
-    result: { hasConfig: boolean };
+    /**
+     * `environmentKeys`: the environments the host resolves a worktree's mode
+     * against from its settings files, in its own order. Absent from an older host.
+     */
+    result: { hasConfig: boolean; environmentKeys?: string[] };
   };
   // On-demand FRESH git-status read for a single worktree. Forces the monitor
   // to re-run `git status` (bypassing the adaptive-poll cache) and returns the

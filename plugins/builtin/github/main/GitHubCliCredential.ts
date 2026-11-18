@@ -11,10 +11,10 @@ import { raceAbort } from "../../../../electron/utils/raceAbort.js";
 import { resolveExecutableForSpawn } from "../../../../electron/utils/windowsExecutable.js";
 import { findMissingGitHubScopes } from "../shared/credentialScopes.js";
 import { validateGitHubToken } from "./GitHubToken.js";
+import { GITHUB_COM_HOST } from "./GitHubHost.js";
 
 export const GH_TOKEN_TIMEOUT_MS = 3_000;
 const GH_TOKEN_MAX_BUFFER_BYTES = 8 * 1024;
-const GH_HOSTNAME = "github.com";
 const GH_SOURCE = "gh";
 
 // gh prints any of these in preference to its stored login, so leaving one in
@@ -106,8 +106,11 @@ async function refreshShellPath(): Promise<void> {
   }
 }
 
-/** Read the token gh holds for github.com. Never throws. */
-export async function readGhToken(signal?: AbortSignal): Promise<GhTokenRead> {
+/** Read the token gh holds for `host` (github.com unless named). Never throws. */
+export async function readGhToken(
+  signal?: AbortSignal,
+  host: string = GITHUB_COM_HOST
+): Promise<GhTokenRead> {
   if (signal?.aborted) return unavailable("cancelled");
   // The refresh is shared and can't take a signal; stop waiting on abort.
   await raceAbort(refreshShellPath(), signal, undefined);
@@ -142,7 +145,7 @@ export async function readGhToken(signal?: AbortSignal): Promise<GhTokenRead> {
     try {
       execFile(
         gh,
-        ["auth", "token", "--hostname", GH_HOSTNAME],
+        ["auth", "token", "--hostname", host],
         {
           env,
           encoding: "utf8",
@@ -165,8 +168,11 @@ export async function readGhToken(signal?: AbortSignal): Promise<GhTokenRead> {
   });
 }
 
-async function readAndValidateGhToken(signal?: AbortSignal): Promise<ValidatedGhToken> {
-  const read = await readGhToken(signal);
+async function readAndValidateGhToken(
+  signal?: AbortSignal,
+  host: string = GITHUB_COM_HOST
+): Promise<ValidatedGhToken> {
+  const read = await readGhToken(signal, host);
   if (read.unavailable) return read;
 
   let validation: Awaited<ReturnType<typeof validateGitHubToken>> | null;
@@ -176,7 +182,7 @@ async function readAndValidateGhToken(signal?: AbortSignal): Promise<ValidatedGh
     // breaker. The race covers a validation still queued behind other
     // GitHub requests, which the signal can't reach until it dispatches.
     validation = await raceAbort(
-      validateGitHubToken(read.token, { signal, detached: true }),
+      validateGitHubToken(read.token, { signal, detached: true, host }),
       signal,
       null
     );
@@ -195,10 +201,11 @@ async function readAndValidateGhToken(signal?: AbortSignal): Promise<ValidatedGh
   };
 }
 
-async function previewGhCredential(
-  signal?: AbortSignal
+export async function previewGhCredential(
+  signal?: AbortSignal,
+  host: string = GITHUB_COM_HOST
 ): Promise<CredentialImportPreview | CredentialImportUnavailable> {
-  const result = await readAndValidateGhToken(signal);
+  const result = await readAndValidateGhToken(signal, host);
   if (result.unavailable) return result;
   // The token goes out of scope here; preview returns identity only.
   return {
@@ -209,11 +216,12 @@ async function previewGhCredential(
   };
 }
 
-async function commitGhCredential(
+export async function commitGhCredential(
   expected: CredentialImportExpected,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  host: string = GITHUB_COM_HOST
 ): Promise<CredentialImportCandidate | CredentialImportUnavailable> {
-  const result = await readAndValidateGhToken(signal);
+  const result = await readAndValidateGhToken(signal, host);
   if (result.unavailable) return result;
   // GitHub logins are case-insensitive. A different account means `gh auth
   // switch` ran after the preview, so the user never confirmed this one.
@@ -231,7 +239,9 @@ async function commitGhCredential(
   };
 }
 
+// The host's import flow is github.com's; an Enterprise Server host imports
+// through the GitHub settings tab, which names its host.
 export const credentialImportCapability: CredentialImportCapability = {
-  preview: previewGhCredential,
-  commit: commitGhCredential,
+  preview: (signal) => previewGhCredential(signal),
+  commit: (expected, signal) => commitGhCredential(expected, signal),
 };

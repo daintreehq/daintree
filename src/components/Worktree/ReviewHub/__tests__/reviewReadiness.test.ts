@@ -17,6 +17,7 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   pushDestination: { remote: "origin", branch: "feature/test" },
   pullSource: { remote: "origin", branch: "feature/test" },
   repoState: "DIRTY",
+  repoOperationId: null,
   rebaseStep: null,
   rebaseTotalSteps: null,
   rebaseSequence: null,
@@ -133,15 +134,34 @@ describe("deriveReviewReadiness", () => {
       }
     });
 
-    it("labels merge, cherry-pick, and revert operations", () => {
+    it("labels merge, cherry-pick, revert, and git am operations", () => {
       for (const [repoState, label] of [
         ["MERGING", "Merge in progress"],
         ["CHERRY_PICKING", "Cherry-pick in progress"],
         ["REVERTING", "Revert in progress"],
+        ["APPLYING_MAILBOX", "Patch apply in progress"],
       ] as const) {
         const summary = derive({ status: makeStatus({ repoState }) });
         expect(summary.blockers[0]!.label).toBe(label);
       }
+    });
+
+    it("blocks commit and push while a git am session is halted, with no rebase step", () => {
+      const summary = derive({
+        status: makeStatus({
+          repoState: "APPLYING_MAILBOX",
+          staged: [{ path: "a.ts", status: "modified", insertions: 1, deletions: 0 }],
+          rebaseStep: 2,
+          rebaseTotalSteps: 3,
+        }),
+        aheadCount: 1,
+        behindCount: 0,
+      });
+      expect(summary.level).toBe("blocked");
+      expect(summary.commitReady).toBe(false);
+      expect(summary.pushReady).toBe(false);
+      expect(itemIds(summary.blockers)).toContain("operation-in-progress");
+      expect(summary.blockers[0]!.detail).toBeUndefined();
     });
 
     it("blocks on detached HEAD", () => {

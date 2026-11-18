@@ -21,7 +21,9 @@ import {
   ESCALATION_DELAY_OPTIONS,
   NOTIFICATION_COPY,
   SoundPickerRow,
+  SoundVolumeRow,
   previewNotificationSound,
+  useCustomNotificationSounds,
   type SoundFileKey,
 } from "./notificationSettingsShared";
 
@@ -38,6 +40,7 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   workingPulseEnabled: false,
   workingPulseSoundFile: "pulse.wav",
   uiFeedbackSoundEnabled: false,
+  soundVolume: 1,
   flashEnabled: false,
   quietHoursEnabled: false,
   quietHoursStartMin: 22 * 60,
@@ -135,6 +138,7 @@ const SAVE_GROUP_BY_KEY: Record<keyof NotificationSettings, SaveGroup> = {
   workingPulseEnabled: "sound",
   workingPulseSoundFile: "sound",
   uiFeedbackSoundEnabled: "sound",
+  soundVolume: "sound",
   quietHoursEnabled: "quiet",
   quietHoursStartMin: "quiet",
   quietHoursEndMin: "quiet",
@@ -222,6 +226,7 @@ export function NotificationSettingsTab() {
   const confirmedRevisionRef = useRef(new Map<string, number>());
   // The revision of the newest edit per key that failed and hasn't been superseded.
   const failedRevisionRef = useRef(new Map<string, number>());
+  const customSounds = useCustomNotificationSounds();
 
   useEffect(() => {
     setLoadState("loading");
@@ -360,9 +365,16 @@ export function NotificationSettingsTab() {
         update(patch);
       }}
       onPreview={previewNotificationSound}
+      customSounds={customSounds.sounds}
+      customSoundsLoaded={customSounds.loaded}
+      onImportFile={customSounds.importFile}
+      onOpen={customSounds.refresh}
       {...reset(key)}
     />
   );
+
+  // Absent on installs from before the setting existed, which play at full volume.
+  const soundVolume = settings.soundVolume ?? 1;
 
   const scheduleModified =
     !unavailable &&
@@ -472,6 +484,12 @@ export function NotificationSettingsTab() {
                 : undefined
             }
           >
+            <SoundVolumeRow
+              value={soundVolume}
+              onCommit={(v) => update({ soundVolume: v })}
+              isModified={!unavailable && soundVolume !== DEFAULT_SETTINGS.soundVolume}
+              onReset={() => update({ soundVolume: DEFAULT_SETTINGS.soundVolume })}
+            />
             {soundRow("completedSoundFile")}
             {soundRow("waitingSoundFile")}
             {soundRow("escalationSoundFile")}

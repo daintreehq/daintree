@@ -30,8 +30,8 @@ export function projectLinkTitleProblem(title: string): string | null {
 /**
  * The address a project link saves for `url`, or why it can't be one. The
  * Assistant may add `https` anywhere and `http` only for `localhost` or
- * `127.0.0.1`. A link added by hand may be any web address, as the Portal's
- * own custom links may. Neither may carry a username or password, which would
+ * `127.0.0.1`. A link added by hand may be any web address, as a person's own
+ * global links may. Neither may carry a username or password, which would
  * be stored in plain settings.
  */
 export function parseProjectLinkUrl(

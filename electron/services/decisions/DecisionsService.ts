@@ -10,11 +10,17 @@ import type {
 import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
+  DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
   DecisionQuestionListItem,
   DecisionQuestionReference,
+  SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
@@ -55,6 +61,7 @@ import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import { projectDecisionQuestions } from "./questionList.js";
 import type { QuestionNotifications } from "./questionNotifications.js";
+import type { DesktopPresenceOptions } from "./desktopPresence.js";
 import {
   RelayConnection,
   type QuestionSource,
@@ -82,6 +89,12 @@ export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
  */
 export type DecisionsRole = "owner" | "host";
 
+/** A Remote Host lifetime's own questions (#17230), named by the host id they carry. */
+export interface HostServedQuestions {
+  hostId: string;
+  questions: readonly DecisionQuestionListItem[];
+}
+
 /** What the service runs a relay connection with; tests hand in their own. */
 export interface DecisionsRelayConnection {
   start(): void;
@@ -97,7 +110,15 @@ export interface DecisionsRelayConnection {
   observeQuestions?(rows: readonly QuestionRow[]): void;
   /** The terminal snapshots switch may have turned (#16230). */
   snapshotsChanged?(): void;
+  /** Whether presence may be reported may have changed (#17240). */
+  presenceChanged?(): void;
 }
+
+/**
+ * What reporting the person's presence needs from main (#17240): whether it
+ * may be reported now. Only an owner's lifetime reports it.
+ */
+export type DecisionsPresenceDeps = Omit<DesktopPresenceOptions, "report">;
 
 /** What delivery needs from main, apart from this machine's host id, which the service reads from its settings. */
 export type DecisionsDeliveryDeps = Omit<AnswerDeliveryDeps, "hostId">;
@@ -155,10 +176,17 @@ export interface DecisionsServiceOptions {
   /** Tells the fleet which panes have answers needing a person (`runAnswerAttentionSource`). */
   publishAnswerAttention?: AnswerAttentionPublisher;
   /**
-   * Every question this computer asked, after each write (#17229); an empty
-   * list once the lifetime ends. Only an owner's lifetime lists any.
+   * Every question this computer asked, after each write (#17229), with
+   * `listing` true; an empty list with `listing` false once the lifetime ends
+   * or its store closes. Only an owner's lifetime lists any.
    */
-  publishQuestions?: (questions: readonly DecisionQuestionListItem[]) => void;
+  publishQuestions?: (questions: readonly DecisionQuestionListItem[], listing: boolean) => void;
+  /**
+   * A Remote Host lifetime's own questions, after each write (#17230), named
+   * by its host id, for its owner's Shell to list; null once the lifetime
+   * ends or its store closes.
+   */
+  publishHostQuestions?: (list: HostServedQuestions | null) => void;
   /**
    * Starts raising a desktop notification for each question asked (#17232),
    * reading and keeping what it has raised in `store`, once an owner's store
@@ -196,6 +224,8 @@ export interface DecisionsServiceOptions {
   delivery?: DecisionsDeliveryDeps;
   /** Publishes the asking panes' snapshots while they're on (#16230); without it none are. */
   snapshots?: DecisionsSnapshotDeps;
+  /** Tells the relay while the person is at this computer, for an owner (#17240); without it nothing does. */
+  presence?: DecisionsPresenceDeps;
   /** The setup check's diagnostic terminals (#16024), whose own image their questions attach. */
   diagnostics?: SetupDiagnostics;
   /** The decision model's history and CLIs (#16026): the library's unless a test says otherwise. */
@@ -245,13 +275,18 @@ export class DecisionsService {
   /** Local data is being deleted (#16025): no key store or rotation is made until it finishes. */
   private erasing = false;
   private readonly panes: PaneDecisionStates;
-  private readonly publishQuestions: (questions: readonly DecisionQuestionListItem[]) => void;
+  private readonly publishQuestions: (
+    questions: readonly DecisionQuestionListItem[],
+    listing: boolean
+  ) => void;
+  private readonly publishHostQuestions: (list: HostServedQuestions | null) => void;
   private readonly notifyQuestions: ((store: MetaStore) => QuestionNotifications) | null;
   private readonly connect: DecisionsConnectionFactory;
   private readonly onRelayRevoked: (relay: RelayBinding, role: DecisionsRole) => void;
   private readonly onDevicesChanged: () => void;
   private readonly delivery: DecisionsDeliveryDeps | null;
   private readonly snapshots: DecisionsSnapshotDeps | null;
+  private readonly presence: DecisionsPresenceDeps | null;
   private connection: DecisionsRelayConnection | null = null;
   private connectionKey: string | null = null;
   /**
@@ -339,6 +374,7 @@ export class DecisionsService {
       options.publishAnswerAttention
     );
     this.publishQuestions = options.publishQuestions ?? (() => {});
+    this.publishHostQuestions = options.publishHostQuestions ?? (() => {});
     this.notifyQuestions = options.notifyQuestions ?? null;
     this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
     this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
@@ -352,6 +388,7 @@ export class DecisionsService {
     this.openQuestions = options.openQuestions ?? null;
     this.delivery = options.delivery ?? null;
     this.snapshots = options.snapshots ?? null;
+    this.presence = options.presence ?? null;
     this.diagnostics = options.diagnostics ?? null;
     this.modelOptions = options.model;
     this.onModelChanged = options.onModelChanged ?? (() => {});
@@ -646,6 +683,53 @@ export class DecisionsService {
   }
 
   /**
+   * The person's decline from Daintree's own view (#17239): signed with this
+   * computer's key when it is the owner's, as their answer is.
+   */
+  declineQuestion(payload: DeclineDecisionQuestionPayload): Promise<DecisionQuestionDeclineResult> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "refused", reason: "not-owner" });
+    return questions.declineForPerson(payload, this.settings?.hostId ?? null);
+  }
+
+  /** Where a person's decline stands, by the id it was submitted with (#17239). */
+  getDeclineResult(declineId: string): Promise<DecisionDeclineResultRead> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "not-found" });
+    return questions.declineResultForPerson(declineId);
+  }
+
+  /**
+   * The person's follow-up from Daintree's own view (#17238): signed with
+   * this computer's key when it is the owner's, never a Remote Host's, as
+   * their answer is; not running while no route serves questions.
+   */
+  sendFollowUp(payload: SendDecisionFollowUpPayload): Promise<DecisionQuestionFollowUpResult> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "refused", reason: "not-owner" });
+    return questions.followUpForPerson(payload, this.settings?.hostId ?? null);
+  }
+
+  /** Where a person's follow-up stands, by the id it was submitted with (#17238). */
+  getFollowUpResult(messageId: string): Promise<DecisionFollowUpResultRead> {
+    const questions = this.questions;
+    if (this.disposed || this.state === "off" || questions === null) {
+      return Promise.resolve({ result: "not-running" });
+    }
+    if (this.role !== "owner") return Promise.resolve({ result: "not-found" });
+    return questions.followUpResultForPerson(messageId);
+  }
+
+  /**
    * The store's question rows, all of them, after a write commits: each
    * pane's state becomes what they show, and the panes that changed are
    * pushed. Ignored while stopped, so nothing is pushed while Decisions is off.
@@ -658,20 +742,38 @@ export class DecisionsService {
 
   /**
    * Every question row, handled answers included, as this computer's list of
-   * questions (#17229). Only an owner's lifetime lists any: a Remote Host's
-   * questions are its owner's to show.
+   * questions (#17229). Only an owner's lifetime lists any here: a Remote
+   * Host's questions are its owner's to show, so its lifetime hands them to
+   * its owner's Shell instead (#17230).
    */
   private listQuestions(rows: readonly QuestionRow[], handled: HandledAnswers): void {
-    if (this.disposed || this.state === "off" || this.role !== "owner") return;
-    this.sendQuestions(projectDecisionQuestions(rows, handled, this.settings?.hostId ?? null));
+    if (this.disposed || this.state === "off") return;
+    const hostId = this.settings?.hostId ?? null;
+    const questions = projectDecisionQuestions(rows, handled, hostId);
+    if (this.role === "owner") this.sendQuestions(questions, true);
+    else this.sendHostQuestions(hostId === null ? null : { hostId, questions });
+  }
+
+  /** Nothing is listed while no store is read: the lifetime ended, or its store closed. */
+  private unlistQuestions(): void {
+    this.sendQuestions([], false);
+    this.sendHostQuestions(null);
   }
 
   /** The list is best effort, like pane chrome: a failed push must never unwind the write that caused it. */
-  private sendQuestions(questions: readonly DecisionQuestionListItem[]): void {
+  private sendQuestions(questions: readonly DecisionQuestionListItem[], listing: boolean): void {
     try {
-      this.publishQuestions(questions);
+      this.publishQuestions(questions, listing);
     } catch (err) {
       console.warn("[Decisions] A question list update failed:", err);
+    }
+  }
+
+  private sendHostQuestions(list: HostServedQuestions | null): void {
+    try {
+      this.publishHostQuestions(list);
+    } catch (err) {
+      console.warn("[Decisions] A Host question list update failed:", err);
     }
   }
 
@@ -683,6 +785,15 @@ export class DecisionsService {
   snapshotsChanged(): void {
     if (this.disposed) return;
     this.connection?.snapshotsChanged?.();
+  }
+
+  /**
+   * Whether presence may be reported may have changed (#17240): the switch,
+   * or desktop notifications. Out of turn, like `snapshotsChanged`.
+   */
+  presenceChanged(): void {
+    if (this.disposed) return;
+    this.connection?.presenceChanged?.();
   }
 
   /**
@@ -751,7 +862,7 @@ export class DecisionsService {
       } catch (error) {
         this.storeFailed = true;
         // With no store there is nothing to list until the next start opens one.
-        this.sendQuestions([]);
+        this.unlistQuestions();
         logWarn("[Decisions] The local store didn't reopen after it stopped writing", {
           reason,
           error: error instanceof Error ? error.name : "error",
@@ -870,7 +981,7 @@ export class DecisionsService {
         // Every row is gone, so no pane has anything outstanding, and nothing is listed.
         if (outcome.result !== "failed") {
           this.panes.clear(true);
-          this.sendQuestions([]);
+          this.unlistQuestions();
         }
         if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
           try {
@@ -881,6 +992,8 @@ export class DecisionsService {
           } catch (err) {
             // The next start tries again; the deletion stands either way.
             this.storeFailed = true;
+            // With no store there is nothing to list until the next start opens one.
+            this.unlistQuestions();
             console.warn("[Decisions] The store didn't reopen after deleting data:", err);
           }
         }
@@ -989,7 +1102,7 @@ export class DecisionsService {
       await store?.close();
     } finally {
       this.panes.clear(clearViews && !this.disposed && this.state !== "off");
-      this.sendQuestions([]);
+      this.unlistQuestions();
       // A rotation that is saving its key finishes before the keys close.
       await rotations?.close();
       await keyStore?.close();
@@ -1072,6 +1185,8 @@ export class DecisionsService {
         : {}),
       ...(this.attachments ? { attachments: this.attachments } : {}),
       ...(this.phoneImages ? { phoneImages: this.phoneImages } : {}),
+      // A Host is never at its owner's desk: only the owner says whether the person is here.
+      ...(role === "owner" && this.presence ? { presence: this.presence } : {}),
       onStatus: (status) => {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks.

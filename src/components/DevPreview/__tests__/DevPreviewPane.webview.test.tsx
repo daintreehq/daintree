@@ -271,8 +271,6 @@ vi.mock("@/store", () => ({
   usePanelStore: usePanelStoreMock,
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: useProjectStoreMock,
 }));
@@ -331,6 +329,7 @@ vi.mock("@/hooks/useFindInPage", () => ({
     query: "",
     activeMatch: 0,
     matchCount: 0,
+    isPending: false,
     inputRef: { current: null },
     isComposingRef: { current: false },
     open: vi.fn(),

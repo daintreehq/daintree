@@ -307,6 +307,15 @@ export interface PrChecksSummary {
 
 const BROKE = new Set([CONCLUSIONS.failure.visual, CONCLUSIONS.timed_out.visual]);
 
+/**
+ * A check that is running, or that failed or timed out: the ones whose page
+ * the links launcher offers (#17253). Queued, stopped and settled checks stay
+ * in Review Hub, where the whole list is.
+ */
+export function isFailingOrRunningCheck(row: Pick<PrCheckRow, "outcome">): boolean {
+  return row.outcome === RUNNING || BROKE.has(row.outcome);
+}
+
 /** The order counts are read in: live work before quiet outcomes, passes before skips. */
 const DETAIL_ORDER = [
   RUNNING.label,

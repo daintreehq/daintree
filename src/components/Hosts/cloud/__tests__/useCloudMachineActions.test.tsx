@@ -32,6 +32,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     machineName: "build",
     ownership: "created-by-daintree",
     createdFor: null,
+    worktreeCleanup: null,
     provisioning: null,
     machine: "running",
     rawState: "ready",
@@ -53,6 +54,7 @@ function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     hostKeyFingerprint: null,
     hostKeyReview: null,
     keptRunningAt: null,
+    asleep: false,
     ...overrides,
   };
 }
@@ -87,16 +89,25 @@ describe("useCloudMachineActions confirms by what the provider declares (#17346)
     show(status(), BOAT_PROVIDER);
     act(() => actions!.requestStop("build", "build"));
     expect(dialogText()).toContain(
-      "Terminals, agents and anything else running on it end, and billing for the machine stops. Files in its home folder are kept for at least 14 days while it's stopped, and may be deleted after that; /tmp, caches and memory aren't."
+      "Terminals, agents and anything else running on it end, and billing for its compute stops. Files in its home folder are kept for at least 14 days while it's stopped, and may be deleted after that; /tmp, caches and memory aren't."
     );
   });
 
   it("never says a stop ends billing where the stopped machine still bills", () => {
     show(status(), provider({ stoppedComputeBilled: true, deletion: true }));
     act(() => actions!.requestStop("build", "build"));
-    expect(dialogText()).not.toContain("billing for the machine stops");
+    expect(dialogText()).not.toContain("billing for its compute stops");
     expect(dialogText()).toContain(
       "Terminals, agents and anything else running on it end. Acme keeps billing a stopped machine for compute until it's deleted. To stop paying for it, remove the host and delete its machine. Files on its disk are kept for when you start it again; caches and memory aren't."
+    );
+  });
+
+  it("says a stopped machine bills only for its disk where the provider declares it", () => {
+    show(status(), provider({ stoppedComputeBilled: false, stoppedStorageBilled: true }));
+    act(() => actions!.requestStop("build", "build"));
+    expect(dialogText()).not.toContain("billing for the machine stops");
+    expect(dialogText()).toContain(
+      "Terminals, agents and anything else running on it end. Acme bills only for its disk while it's stopped. Files on its disk are kept for when you start it again; caches and memory aren't."
     );
   });
 
@@ -119,6 +130,41 @@ describe("useCloudMachineActions confirms by what the provider declares (#17346)
     expect(dialogText()).not.toContain("Starting it bills");
     expect(dialogText()).toContain(
       "build's machine is stopped. It bills Personal about $0.036 an hour while it runs. Acme keeps billing a stopped machine for compute until it's deleted."
+    );
+  });
+});
+
+describe("useCloudMachineActions for a machine that sleeps when idle (#17347)", () => {
+  const sleeper = provider({
+    name: "Agent 37",
+    stoppedComputeBilled: false,
+    stoppedStorageBilled: true,
+    lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+  });
+
+  it("says Stop cuts the bill to the disk, never that it ends it", () => {
+    show(status({ lifetime: sleeper.capabilities.lifetime }), sleeper);
+    act(() => actions!.requestStop("build", "build"));
+    expect(dialogText()).not.toContain("billing for the machine stops");
+    expect(dialogText()).toContain(
+      "Terminals, agents and anything else running on it end. Agent 37 bills only for its disk while it's stopped or asleep."
+    );
+  });
+
+  it("asks to start an asleep machine in its own words, with when it sleeps again", () => {
+    show(
+      status({
+        machine: "stopped",
+        asleep: true,
+        rawState: "sleeping",
+        lifetime: sleeper.capabilities.lifetime,
+        lifetimeSeconds: null,
+      }),
+      sleeper
+    );
+    act(() => actions!.confirmStart({ hostId: "build", name: "build" }));
+    expect(dialogText()).toContain(
+      "build's machine is asleep. It bills Personal about $0.036 an hour while it runs. Agent 37 bills only for its disk while it's stopped or asleep. It sleeps by itself after 15 minutes without activity."
     );
   });
 });

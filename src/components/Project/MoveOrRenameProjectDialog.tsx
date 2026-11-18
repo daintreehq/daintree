@@ -11,7 +11,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { basename, dirname, join, normalize } from "@shared/utils/path";
-import { validateFolderName } from "@shared/utils/folderName";
+import { validateHostFolderName } from "@/utils/validateHostFolderName";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { AgentContinuitySummary, RelocationPreview } from "@shared/types/projectRelocation";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -152,7 +152,7 @@ function MoveOrRenameProjectDialogInner({
   const displayNameChanged = trimmedName !== "" && trimmedName !== pending.name;
 
   const trimmedFolder = folderName.trim();
-  const folderNameError = isReattach || !trimmedFolder ? null : validateFolderName(folderName);
+  const folderNameError = isReattach || !trimmedFolder ? null : validateHostFolderName(folderName);
   const destinationPath = isReattach
     ? reattachPath
     : parentPath && trimmedFolder && !folderNameError

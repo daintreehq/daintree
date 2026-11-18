@@ -12,6 +12,8 @@ import path from "node:path";
 const h = vi.hoisted(() => {
   interface Fault {
     code: string;
+    // Real fs errors name the path in their message; a fault can say so too.
+    message?: string;
   }
   const armed: {
     read: Fault | null;
@@ -28,7 +30,8 @@ const h = vi.hoisted(() => {
   const touches: string[] = [];
   const isJournalPath = (p: unknown): boolean =>
     typeof p === "string" && p.endsWith("agent-session-history.json");
-  const makeError = (code: string): Error => Object.assign(new Error(code), { code });
+  const makeError = (code: string, message: string = code): Error =>
+    Object.assign(new Error(message), { code });
   const touch = (call: string, p: unknown): void => {
     if (isJournalPath(p)) touches.push(call);
   };
@@ -36,7 +39,7 @@ const h = vi.hoisted(() => {
     const fault = armed.read;
     if (!fault || !isJournalPath(p)) return null;
     armed.read = null; // one-shot: the next call to the same path succeeds
-    return makeError(fault.code);
+    return makeError(fault.code, fault.message);
   };
   // One-shot: a journal write that lands on disk and then throws, the way a
   // failed parent-directory sync does after its rename.
@@ -115,6 +118,7 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
     resilientAtomicWriteFile: async (
       ...args: Parameters<typeof actual.resilientAtomicWriteFile>
     ) => {
+      h.touch("write", args[0]);
       // One-shot: holds the next journal write before it touches the disk.
       const hold = h.armed.writeHold;
       if (hold && String(args[0]).endsWith("agent-session-history.json")) {
@@ -137,6 +141,7 @@ import {
   readSessionHistory,
   readSessionHistorySync,
   listAgentSessions,
+  listAgentSessionsOrThrow,
   getSessionHistoryPath,
   resetSessionHistoryCacheForTesting,
   type AgentSessionRecord,
@@ -210,6 +215,83 @@ describe("agentSessionHistory — transient read faults (adversarial)", () => {
 
     // Fault cleared: the file was never touched, so the next read returns it.
     expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["a"]);
+  });
+
+  // #17483 — the resume UI reads through the strict list so an unreadable
+  // journal shows its error state and Retry instead of "nothing closed".
+  it.each(["EACCES", "EIO", "EMFILE"])(
+    "strict list throws on a transient %s, leaves the journal intact, then recovers",
+    async (code) => {
+      const now = Date.now();
+      await seedJournal([
+        { ...rec("a", "wt-1", "p1"), savedAt: now },
+        { ...rec("b", "wt-2", "p2"), savedAt: now - 1000 },
+      ]);
+      const before = await rawOnDisk();
+      h.touches.length = 0;
+      h.armed.read = { code };
+
+      expect(() => listAgentSessionsOrThrow(undefined, userDataDir)).toThrow(
+        /session history couldn't be read/
+      );
+      expect(await rawOnDisk()).toBe(before);
+      expect(await quarantineSidecars()).toEqual([]);
+
+      // The failure was never cached: the retry reads the file and scopes it.
+      expect(listAgentSessionsOrThrow(undefined, userDataDir).map((r) => r.sessionId)).toEqual([
+        "a",
+        "b",
+      ]);
+      expect(
+        listAgentSessionsOrThrow(undefined, userDataDir, undefined, "p2").map((r) => r.sessionId)
+      ).toEqual(["b"]);
+      expect(await rawOnDisk()).toBe(before);
+      // Neither the failed read nor the retry wrote the journal, even byte-for-byte.
+      expect(h.touches.filter((call) => call === "write")).toEqual([]);
+    }
+  );
+
+  it("strict list keeps the filesystem error as its cause and names no path", async () => {
+    await seedJournal([rec("a", "wt-1")]);
+    const journalPath = getSessionHistoryPath(userDataDir)!;
+    h.armed.read = {
+      code: "EACCES",
+      message: `EACCES: permission denied, open '${journalPath}'`,
+    };
+
+    let thrown: unknown;
+    try {
+      listAgentSessionsOrThrow(undefined, userDataDir);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const cause = (thrown as Error).cause as Error & { code?: string };
+    expect(cause.code).toBe("EACCES");
+    expect(cause.message).toContain(journalPath);
+    expect((thrown as Error).message).not.toContain(userDataDir);
+  });
+
+  it("strict list reads an absent journal as an ordinary empty list", () => {
+    expect(listAgentSessionsOrThrow(undefined, userDataDir)).toEqual([]);
+  });
+
+  it("strict list reads a quarantined corrupt journal as empty, and throws when the quarantine fails", async () => {
+    await fsp.writeFile(getSessionHistoryPath(userDataDir)!, "corrupt bytes");
+    h.armed.renameFault = "EACCES";
+
+    expect(() => listAgentSessionsOrThrow(undefined, userDataDir)).toThrow(
+      /session history couldn't be read/
+    );
+    expect(await rawOnDisk()).toBe("corrupt bytes");
+    expect(await quarantineSidecars()).toEqual([]);
+
+    // Rename works again: the corrupt file is moved aside and the list is empty.
+    expect(listAgentSessionsOrThrow(undefined, userDataDir)).toEqual([]);
+    const sidecars = await quarantineSidecars();
+    expect(sidecars).toHaveLength(1);
+    expect(await fsp.readFile(path.join(userDataDir, sidecars[0]!), "utf8")).toBe("corrupt bytes");
+    await expect(fsp.access(getSessionHistoryPath(userDataDir)!)).rejects.toThrow();
   });
 
   it("persistAgentSession aborts on an unreadable journal, preserving existing records", async () => {

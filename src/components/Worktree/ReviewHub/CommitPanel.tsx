@@ -11,7 +11,11 @@ import {
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import type { GitPushCommitPreview, GitPushDestination } from "@shared/types/git";
+import type {
+  GitPushCommitPreview,
+  GitPushDestination,
+  GitStagedSnapshot,
+} from "@shared/types/git";
 import { cn } from "@/lib/utils";
 import { GitCommit, ArrowUpFromLine, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -31,7 +35,7 @@ import { PathTail } from "@/components/ui/PathTail";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { isCommitShortcut, type CommitShortcutHandler } from "./commitShortcut";
-import type { CommitPushTarget } from "./reviewHubUtils";
+import { readGitErrorFields, type CommitPushTarget } from "./reviewHubUtils";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
@@ -155,6 +159,8 @@ interface CommitPanelProps {
   /**
    * The staged paths themselves. The push confirm is a D2 preview, and a count
    * alone is not one: it lists what the commit about to be pushed contains.
+   * Shown only until the confirm's own snapshot of the index lands, which is
+   * what it lists and holds the commit to from then on (#17563).
    */
   stagedPaths?: readonly string[];
   /**
@@ -196,7 +202,21 @@ interface CommitPanelProps {
    */
   onCommit: (message: string) => Promise<void>;
   /** `target` is what the push is pinned to once the commit lands (#16790). */
-  onCommitAndPush: (message: string, target: CommitPushTarget) => Promise<void>;
+  onCommitAndPush: (
+    message: string,
+    target: CommitPushTarget
+  ) => Promise<"withheld" | undefined | void>;
+  /**
+   * The branch has no commit yet, so git names no destination for its push
+   * and this panel has nothing to preview it against (#17588). Commit & push
+   * then goes to `onCommitThenReviewPush` instead of the confirm here.
+   */
+  isUnbornBranch?: boolean;
+  /**
+   * Makes the commit, then reviews its push in the standalone push confirm,
+   * which reads the destination git resolves once the branch exists.
+   */
+  onCommitThenReviewPush: (message: string) => Promise<void>;
   onFocusBlocker?: (blocker: "conflicts" | "staged-files") => void;
   isPushing: boolean;
   pushProgress: Map<string, PushProgressEvent>;
@@ -236,6 +256,8 @@ export function CommitPanel({
   onRestoreCommitSeed,
   onCommit,
   onCommitAndPush,
+  isUnbornBranch = false,
+  onCommitThenReviewPush,
   onFocusBlocker,
   isPushing,
   pushProgress,
@@ -274,9 +296,16 @@ export function CommitPanel({
   // for every other push preview. The push can't be approved until it lands
   // (#15557): on a branch with no tracking ref the read waits on the network,
   // and a click inside that window published commits the confirm never listed.
+  // The same read snapshots what is staged on that tip (#17563): the files the
+  // confirm lists, and the identity the commit is held to, so a restage while
+  // it is open can't be committed and pushed under an unchanged file list.
   const [outgoing, setOutgoing] = useState<
-    | { key: string; status: "ready"; preview: GitPushCommitPreview }
-    | { key: string; status: "error"; changedTo?: GitPushDestination }
+    | {
+        key: string;
+        status: "ready";
+        preview: GitPushCommitPreview & { staged: GitStagedSnapshot };
+      }
+    | { key: string; status: "error"; changedTo?: GitPushDestination; stagedUnread?: true }
     | null
   >(null);
   // Bumped by every opening and every Retry, so no answer outlives the request
@@ -303,7 +332,9 @@ export function CommitPanel({
     // Inside the chain so a failure to even start the read lands in `catch`.
     Promise.resolve()
       .then(() =>
-        window.electron.git.listPushCommits(worktreePath, currentBranch, PREVIEW_COMMIT_LIMIT)
+        window.electron.git.listPushCommits(worktreePath, currentBranch, PREVIEW_COMMIT_LIMIT, {
+          includeStaged: true,
+        })
       )
       .then((preview) => {
         if (cancelled) return;
@@ -317,7 +348,14 @@ export function CommitPanel({
           reportDestinationChanged();
           return;
         }
-        setOutgoing({ key: outgoingKey, status: "ready", preview });
+        // A host that predates the snapshot answers without one. With nothing
+        // to hold the commit to, the confirm can't stand for what it commits.
+        const { staged } = preview;
+        if (!staged) {
+          setOutgoing({ key: outgoingKey, status: "error", stagedUnread: true });
+          return;
+        }
+        setOutgoing({ key: outgoingKey, status: "ready", preview: { ...preview, staged } });
       })
       .catch(() => {
         if (!cancelled) setOutgoing({ key: outgoingKey, status: "error" });
@@ -337,6 +375,7 @@ export function CommitPanel({
     outgoingRange?.commits.map((c) => ({ hash: c.hash, message: c.message, author: c.author })) ??
     [];
   const canConfirmPush = outgoingRange !== null;
+  const confirmPaths = outgoingRange?.staged.paths ?? stagedPaths;
   const retryOutgoing = useCallback(() => setOutgoingAttempt((n) => n + 1), []);
 
   // Doherty-gated: a range read that lands within 400ms shows no interim line.
@@ -466,17 +505,23 @@ export function CommitPanel({
     }
   }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit]);
 
+  // Resolves to "review-stale" when what the confirm showed moved under it, so
+  // its approval never ran: main refused the commit, or the commit landed with
+  // other contents and its push was held back.
   const handleCommitAndPush = useCallback(
-    async (message: string, target: CommitPushTarget) => {
-      if (!canCommit || actionsBusy) return;
-      if (actionInFlightRef.current) return;
+    async (message: string, target: CommitPushTarget): Promise<"review-stale" | undefined> => {
+      if (!canCommit || actionsBusy) return undefined;
+      if (actionInFlightRef.current) return undefined;
       actionInFlightRef.current = true;
       setPendingCount(stagedCount);
       setPendingAction("commit-push");
       try {
-        await onCommitAndPush(message, target);
-      } catch {
+        return (await onCommitAndPush(message, target)) === "withheld" ? "review-stale" : undefined;
+      } catch (err) {
         // Error is handled by the parent via setActionError
+        return readGitErrorFields(err).gitReason === "commit-review-stale"
+          ? "review-stale"
+          : undefined;
       } finally {
         setPendingAction(null);
         actionInFlightRef.current = false;
@@ -485,12 +530,35 @@ export function CommitPanel({
     [canCommit, actionsBusy, stagedCount, onCommitAndPush]
   );
 
+  const handleCommitThenReviewPush = useCallback(async () => {
+    if (!canCommit || actionsBusy) return;
+    if (actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    setPendingCount(stagedCount);
+    setPendingAction("commit-push");
+    try {
+      await onCommitThenReviewPush(commitMessage);
+    } catch {
+      // Error is handled by the parent via setActionError
+    } finally {
+      setPendingAction(null);
+      actionInFlightRef.current = false;
+    }
+  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommitThenReviewPush]);
+
   const handlePrimaryClick = useCallback(() => {
     if (isBlocked) {
       focusBlocker();
       return;
     }
     if (actionsBusy) return;
+    if (hasRemote && isUnbornBranch) {
+      // Nothing here can preview this push: git names no destination for a
+      // branch with no commit (#17588). The opt-out does not skip that review
+      // either, since no destination was ever on screen to opt out of.
+      void handleCommitThenReviewPush();
+      return;
+    }
     if (hasRemote) {
       // D2 confirmation: every remote push is a shared-state mutation. Show
       // the commit message + target branch preview unless the user has opted
@@ -509,12 +577,12 @@ export function CommitPanel({
         setPushConfirmOpen(true);
         return;
       }
-      // Nothing was previewed, so there is no tip to hold the commit to; the
-      // push is still pinned to the commit itself.
+      // Nothing was previewed, so there is no tip or staged snapshot to hold
+      // the commit to; the push is still pinned to the commit itself.
       void handleCommitAndPush(commitMessage, {
         branch: currentBranch,
         destination: pushDestination,
-        reviewedHeadOid: null,
+        reviewed: null,
       });
     } else {
       void handleCommit();
@@ -523,6 +591,8 @@ export function CommitPanel({
     isBlocked,
     actionsBusy,
     hasRemote,
+    isUnbornBranch,
+    handleCommitThenReviewPush,
     pushDestination,
     currentBranch,
     skipPushConfirm,
@@ -535,20 +605,28 @@ export function CommitPanel({
 
   const handleConfirmPush = useCallback(() => {
     if (outgoingRange === null || !currentBranch) return;
-    // The opt-out is persisted on confirm regardless of whether the
-    // subsequent push succeeds — the user expressed a preference about the
-    // confirm dialog, which is orthogonal to network/rejection failure.
     // A protected branch never records an opt-out: the box is not offered there.
-    onSetSkipPushConfirm(isProtected ? skipPushConfirm : dontAskChecked);
+    const skipNextConfirm = isProtected ? skipPushConfirm : dontAskChecked;
     setPushConfirmOpen(false);
     setDontAskChecked(false);
     // What the dialog previewed is what gets pushed, even if a history recall
-    // landed in the composer behind it while it was open: its message, and the
-    // tip and destination its outgoing list was measured from.
+    // landed in the composer behind it while it was open: its message, the tip
+    // and destination its outgoing list was measured from, and the staged
+    // changes it listed.
     void handleCommitAndPush(pushConfirmMessage, {
       branch: currentBranch,
       destination: outgoingRange.destination,
-      reviewedHeadOid: outgoingRange.headOid,
+      reviewed: { headOid: outgoingRange.headOid, stagedIdentity: outgoingRange.staged.identity },
+    }).then((outcome) => {
+      // The opt-out stands however the push goes — a preference about the
+      // confirm, orthogonal to network or rejection failures — except when
+      // what was confirmed moved under it and nothing it approved ran
+      // (#17563). That outcome asks for a fresh review, so confirms stay on:
+      // an opt-out left standing would answer the next click with a commit and
+      // push nobody reviewed, including one recorded before a missing
+      // destination or a protected branch forced this confirm open: the
+      // worktree may be on another branch by now.
+      onSetSkipPushConfirm(outcome === "review-stale" ? false : skipNextConfirm);
     });
   }, [
     currentBranch,
@@ -756,6 +834,12 @@ export function CommitPanel({
     });
   } else if (isVerifying) {
     statusContent = "Checking staged changes…";
+  } else if (hasRemote && isUnbornBranch) {
+    // Not the missing-destination warning below: nothing is misconfigured, the
+    // branch just has no commit for git to name a destination by yet.
+    const firstCommitLine = `${stagedSummary} · first commit · review the push next`;
+    statusContent = firstCommitLine;
+    statusTooltip = firstCommitLine;
   } else if (hasRemote) {
     // A push with nowhere to go will be refused, so it carries the warning mark
     // the other blockers on this line do.
@@ -784,7 +868,9 @@ export function CommitPanel({
     : pushDestination === null
       ? "Set a destination to continue"
       : outgoingResult?.status === "error"
-        ? "Retry the preview to continue"
+        ? outgoingResult.stagedUnread
+          ? "Update Daintree on the host to continue"
+          : "Retry the preview to continue"
         : null;
   const outgoingDescription = outgoingRange ? describeOutgoingRange(outgoingRange) : null;
   const retryOutgoingButton = (
@@ -1007,10 +1093,10 @@ export function CommitPanel({
           >
             {pushConfirmMessage}
           </pre>
-          {stagedPaths.length > 0 && (
+          {confirmPaths.length > 0 && (
             <div className="flex flex-col gap-1">
               <p className="text-xs text-text-secondary">
-                {pluralize(stagedPaths.length, "file")} in this commit
+                {pluralize(confirmPaths.length, "file")} in this commit
               </p>
               {/* Focusable because it scrolls and holds nothing else that can
                   take focus (WCAG 2.1.1). */}
@@ -1024,8 +1110,10 @@ export function CommitPanel({
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
-                {stagedPaths.map((path) => (
-                  <PushConfirmPath key={path} path={path} />
+                {/* By position: two names git stores as different bytes can
+                    decode to the same text. */}
+                {confirmPaths.map((path, index) => (
+                  <PushConfirmPath key={`${index}:${path}`} path={path} />
                 ))}
               </ul>
             </div>
@@ -1089,7 +1177,15 @@ export function CommitPanel({
               action={retryOutgoingButton}
               data-testid="commit-panel-push-confirm-unpushed-error"
             >
-              {outgoingResult.changedTo ? (
+              {outgoingResult.stagedUnread ? (
+                // Main in this build always answers with the snapshot, so an
+                // answer without one comes from a host on an older build.
+                <p>
+                  The host running this worktree didn&apos;t report what&apos;s staged, so this
+                  commit can&apos;t be checked before it&apos;s pushed. Update Daintree there, then
+                  retry.
+                </p>
+              ) : outgoingResult.changedTo ? (
                 <p>
                   Git now resolves this push to{" "}
                   <span className="font-mono text-text-primary">

@@ -188,6 +188,18 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
           notifyTerminalConfigChanged("memoryLeakAutoRestartThresholdMb");
         }
       ),
+      // Thrown, not dropped: the Settings switch turns on only once this
+      // saved, so a refused value must reach it as a failure.
+      setOsc52ClipboardEnabled: op(
+        TERMINAL_CONFIG_METHOD_CHANNELS.setOsc52ClipboardEnabled,
+        async (enabled: boolean) => {
+          if (typeof enabled !== "boolean") {
+            throw new Error(`Invalid terminal osc52ClipboardEnabled: ${String(enabled)}`);
+          }
+          store.set("terminalConfig.osc52ClipboardEnabled", enabled);
+          notifyTerminalConfigChanged("osc52ClipboardEnabled");
+        }
+      ),
       setCachedProjectViews: op(
         TERMINAL_CONFIG_METHOD_CHANNELS.setCachedProjectViews,
         async (cachedProjectViews: number) => {

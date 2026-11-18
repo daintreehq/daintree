@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import type {
   AnswerDecisionQuestionPayload,
@@ -69,6 +69,7 @@ function question(
     askedAt: "2026-11-02T10:00:00.000Z",
     expiresAt: null,
     status: "open",
+    closedReason: null,
     deliveryStatus: "relay-queued",
     attachments: [],
     thread: [],
@@ -190,7 +191,10 @@ afterEach(() => {
 describe("answering a question from the view (#17102)", () => {
   it("offers a choice question's options, and sends the chosen one after reading it again", async () => {
     await openOn("q1");
-    expect(screen.queryByRole("textbox")).toBeNull();
+    // A choice question's answer takes no words; the box below the thread is a follow-up's (#17238).
+    expect(
+      within(screen.getByTestId("decision-answer-composer")).queryByRole("textbox")
+    ).toBeNull();
     // The options are offered in the composer, not listed a second time.
     expect(screen.getAllByText("Ship it")).toHaveLength(1);
     expect(send().getAttribute("aria-disabled")).toBe("true");
@@ -683,22 +687,22 @@ describe("answering a question from the view (#17102)", () => {
     expect(answerQuestion).toHaveBeenCalledOnce();
   });
 
-  it("offers no withdrawal while Send reads the question again", async () => {
+  it("offers no dismissal while Send reads the question again", async () => {
     await openOn("q1");
     fireEvent.click(option("Ship it"));
     getQuestionContent.mockImplementation(() => new Promise(() => {}));
-    expect(screen.queryByTestId("decision-question-cancel")).not.toBeNull();
+    expect(screen.queryByTestId("decision-question-dismiss")).not.toBeNull();
     await act(async () => fireEvent.click(send()));
-    expect(screen.queryByTestId("decision-question-cancel")).toBeNull();
+    expect(screen.queryByTestId("decision-question-dismiss")).toBeNull();
   });
 
-  it("offers no withdrawal while an answer from here is on its way", async () => {
+  it("offers no dismissal while an answer from here is on its way", async () => {
     answerQuestion.mockImplementation(() => new Promise(() => {}));
     await openOn("q1");
-    expect(screen.queryByTestId("decision-question-cancel")).not.toBeNull();
+    expect(screen.queryByTestId("decision-question-dismiss")).not.toBeNull();
     fireEvent.click(option("Ship it"));
     await act(async () => fireEvent.click(send()));
-    await waitFor(() => expect(screen.queryByTestId("decision-question-cancel")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("decision-question-dismiss")).toBeNull());
     expect(status()).toMatch(/Sending/);
   });
 });

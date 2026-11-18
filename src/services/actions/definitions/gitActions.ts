@@ -35,7 +35,7 @@ const BaseBranchSchema = z
   .describe("The base branch to integrate, as named on the worktree's snapshot.");
 
 const RepoOperationStateSchema = z
-  .enum(["MERGING", "REBASING", "CHERRY_PICKING", "REVERTING"])
+  .enum(["MERGING", "REBASING", "CHERRY_PICKING", "REVERTING", "APPLYING_MAILBOX"])
   .optional()
   .describe("Which operation is in progress, used only to label the confirm while it loads.");
 
@@ -509,13 +509,14 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.abortRepositoryOperation", () => ({
     id: "git.abortRepositoryOperation",
     title: "Abort Git operation",
-    description: "Abort the merge, rebase, cherry-pick, or revert this worktree is halted on",
+    description:
+      "Abort the merge, rebase, cherry-pick, revert, or git am this worktree is halted on",
     category: "git",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Discards staged conflict resolutions and any commits already replayed, returning the worktree to its pre-operation state.",
+      "Discards staged conflict resolutions and any commits already replayed or patches applied, returning the worktree to its pre-operation state.",
     argsSchema: withWorktreeLocation({ operation: RepoOperationStateSchema }, { legacy: ["cwd"] }),
     run: (args: unknown, ctx: ActionContext) =>
       runGitAction("git.abortRepositoryOperation", args, ctx),
@@ -524,7 +525,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.continueRepositoryOperation", () => ({
     id: "git.continueRepositoryOperation",
     title: "Continue Git operation",
-    description: "Continue the merge, rebase, cherry-pick, or revert this worktree is halted on",
+    description:
+      "Continue the merge, rebase, cherry-pick, revert, or git am this worktree is halted on",
     category: "git",
     kind: "command",
     danger: "safe",

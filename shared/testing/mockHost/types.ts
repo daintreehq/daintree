@@ -87,6 +87,10 @@ import type {
   PluginPanelActivity,
   SettingDefinition,
 } from "../../types/plugin.js";
+import type {
+  CloudProviderDescriptor,
+  CloudProviderImpl,
+} from "../../types/pluginCloudProvider.js";
 
 export interface RegisteredActionRecord {
   descriptor: PluginActionContribution;
@@ -258,6 +262,11 @@ export interface RegisteredWorktreeDeleteNotesProviderRecord {
   impl: WorktreeDeleteNotesProviderImpl;
 }
 
+export interface RegisteredCloudProviderRecord {
+  descriptor: CloudProviderDescriptor;
+  impl: CloudProviderImpl;
+}
+
 /**
  * A roster bound through `host.mcp.registerTools`. `tools` is the plugin's own
  * roster, `execute` functions included, so a test can call a tool directly with
@@ -412,6 +421,8 @@ export interface MockHostState {
   readonly serviceCalls: ReadonlyArray<ServiceCallRecord>;
   /** Live `host.registerWorktreeDeleteNotesProvider` bindings, one per id. */
   readonly registeredWorktreeDeleteNotesProviders: ReadonlyArray<RegisteredWorktreeDeleteNotesProviderRecord>;
+  /** Live `host.registerCloudProvider` bindings, one per id. */
+  readonly registeredCloudProviders: ReadonlyArray<RegisteredCloudProviderRecord>;
   /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
   readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;

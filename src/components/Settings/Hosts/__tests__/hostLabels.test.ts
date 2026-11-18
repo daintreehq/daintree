@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { HostRestartImpact } from "@shared/types/ipc/remoteHosts";
+import type { HostConnectionState } from "@shared/types/remoteHosts";
 import {
   canWaitForIdle,
   connectionLabel,
   defaultHostName,
+  isLoginRefused,
   localNameSuggestion,
   removeHostOutcome,
   restartConfirmLabel,
@@ -107,6 +109,40 @@ describe("connectionLabel", () => {
       })
     ).toBe(
       "Unreachable · never seen · not retrying until you connect · greg@studio: Permission denied (publickey)."
+    );
+  });
+
+  it("leads with an unusable connection's own words, and says them once", () => {
+    const unusable = (message: string, detail: string | null) =>
+      connectionLabel({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail,
+        stoppedRetrying: true,
+        blocker: { kind: "unusable", message },
+      });
+    expect(unusable("WSL isn't available on this PC", null)).toBe(
+      "WSL isn't available on this PC · never seen · not retrying until you connect"
+    );
+    expect(unusable("WSL isn't available on this PC", "spawn wsl.exe ENOENT")).toBe(
+      "WSL isn't available on this PC · never seen · not retrying until you connect · spawn wsl.exe ENOENT"
+    );
+    expect(unusable("The cloud machine was deleted", " The cloud machine was deleted.\n")).toBe(
+      "The cloud machine was deleted · never seen · not retrying until you connect"
+    );
+  });
+
+  it("names the WSL distribution it couldn't find", () => {
+    expect(
+      connectionLabel({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "There is no distribution with the supplied name.",
+        stoppedRetrying: true,
+        blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+      })
+    ).toBe(
+      "WSL couldn't find Ubuntu-24.04 · never seen · not retrying until you connect · There is no distribution with the supplied name."
     );
   });
 });
@@ -232,8 +268,32 @@ describe("sshRefusalAdvice", () => {
   });
 
   it("stays quiet for other failures", () => {
+    // A command on the host saying it, after a login, isn't ssh's refusal.
+    expect(sshRefusalAdvice("Permission denied (restricted command)")).toBeNull();
     expect(sshRefusalAdvice(null)).toBeNull();
     expect(sshRefusalAdvice("ssh: connect to host studio port 22: Connection refused")).toBeNull();
+  });
+});
+
+describe("isLoginRefused", () => {
+  const parked = (detail: string | null, stoppedRetrying = true): HostConnectionState =>
+    stoppedRetrying
+      ? { status: "unreachable", lastSeenAt: null, detail, stoppedRetrying: true }
+      : { status: "unreachable", lastSeenAt: null, detail };
+
+  it("is a link parked on a refused login", () => {
+    expect(isLoginRefused(parked("greg@studio: Permission denied (publickey)."))).toBe(true);
+  });
+
+  it("isn't a host key, a link still retrying, or one that never reached the login", () => {
+    expect(isLoginRefused(parked("Host key verification failed."))).toBe(false);
+    expect(isLoginRefused(parked("greg@studio: Permission denied (publickey).", false))).toBe(
+      false
+    );
+    expect(isLoginRefused(parked("ssh: connect to host studio port 22: Connection refused"))).toBe(
+      false
+    );
+    expect(isLoginRefused({ status: "disconnected" })).toBe(false);
   });
 });
 

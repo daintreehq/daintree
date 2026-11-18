@@ -1,0 +1,84 @@
+/**
+ * Why Daintree stopped typing in an answer or a follow-up, in plain words:
+ * the list of answers needing attention (#16020) and a stalled answer's
+ * desktop notification (#17235) say the same. Both are read away from the
+ * terminal that asked, so it is named rather than "this terminal".
+ */
+
+/** What of a question needs a person: its answer, the follow-ups after it (#16231), or both. */
+export type DeliverySubject =
+  "answer" | "follow-up" | "follow-ups" | "answer and follow-up" | "answer and follow-ups";
+
+export function deliverySubject(answer: boolean, followUps: number): DeliverySubject {
+  if (followUps === 0) return "answer";
+  const held = followUps === 1 ? "follow-up" : "follow-ups";
+  return answer ? `answer and ${held}` : held;
+}
+
+/**
+ * The library's codes for a delivery that stopped, in words. A code not here
+ * still shows the item; only the explanation is left out.
+ */
+const REASONS: Record<string, string> = {
+  relaunched: "The terminal that asked was relaunched after the question was asked.",
+  pane_gone: "The terminal that asked was closed.",
+  generation_mismatch: "The terminal that asked was restarted after the question was asked.",
+  session_mismatch: "A different agent session is running in the terminal that asked.",
+  resume_wrong_worktree: "The resumed agent opened in a different worktree.",
+  inject_rejected: "The terminal refused the answer.",
+  unavailable_unknown_reason: "The terminal refused the answer.",
+  answer_unreadable: "The answer couldn't be decrypted on this computer.",
+  message_unreadable: "The follow-up couldn't be decrypted on this computer.",
+  no_target: "Nothing matches the terminal that asked.",
+  target_mismatch: "Nothing matches the terminal that asked.",
+  choice_required: "The answer doesn't fit what the question allows.",
+  text_not_allowed: "The answer doesn't fit what the question allows.",
+  too_many_choices: "The answer doesn't fit what the question allows.",
+  unknown_option: "The answer doesn't fit what the question allows.",
+  proxy_forbidden: "The question needs a person's answer, not a proxy's.",
+  inject_ambiguous: "Typing it in was interrupted, so it isn't typed again on its own.",
+  inject_threw: "Typing it in was interrupted, so it isn't typed again on its own.",
+  crash_unreconciled: "Daintree stopped while typing it in, so it isn't typed again on its own.",
+  delivered_without_proof: "Typing it in wasn't confirmed, so it isn't typed again on its own.",
+  invalid_inject_result: "Typing it in wasn't confirmed, so it isn't typed again on its own.",
+  resume_unsupported_agent: "This agent can't be resumed to type it in.",
+  resume_other_host: "It was asked on another host.",
+  resume_host_unreachable: "The terminal's host couldn't be reached to resume the agent.",
+  resume_host_unreadable: "The terminal's host couldn't be read to resume the agent.",
+  resume_no_session: "No agent session was recorded to resume.",
+  resume_no_worktree: "No worktree was recorded to resume the agent in.",
+  resume_worktree_gone: "The worktree that asked is gone.",
+  resume_other_worktree: "The agent's session is open in another worktree.",
+  resume_unknown_project: "The project that asked isn't open here.",
+  resume_panel_limit: "There was no room for another terminal to resume the agent.",
+  resume_missing_cli: "The agent's command isn't installed, so it couldn't be resumed.",
+  resume_spawn_failed: "The resumed agent didn't start.",
+  resume_timeout: "The resumed agent didn't reach its prompt in time.",
+  resume_exited: "The resumed agent exited before the answer was typed in.",
+  resume_closed: "The resumed terminal was closed before the answer was typed in.",
+  resume_no_bearer: "The resumed terminal couldn't be matched to the question.",
+  resume_target_changed: "The terminal changed while the agent was resuming.",
+  resume_ended: "The terminal resumed for it was closed again.",
+  resume_failed: "Resuming the agent failed.",
+};
+
+/**
+ * A code's words for `subject`, or null for a code with none. A follow-up's
+ * own code says what stopped the follow-up, so with no answer needing a
+ * person its words name the follow-up.
+ */
+export function deliveryReasonText(
+  code: string,
+  subject: DeliverySubject = "answer"
+): string | null {
+  // Codes are only shaped like identifiers, so `constructor` must not reach Object's.
+  if (!Object.hasOwn(REASONS, code)) return null;
+  const text = REASONS[code]!;
+  if (subject === "follow-up") return text.replace("the answer", "the follow-up");
+  if (subject === "follow-ups") {
+    return text
+      .replace("the answer was", "the follow-ups were")
+      .replace("the answer", "the follow-ups");
+  }
+  return text;
+}

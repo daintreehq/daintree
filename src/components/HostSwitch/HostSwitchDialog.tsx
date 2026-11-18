@@ -466,13 +466,27 @@ export function HostSwitchDialog({
     if (flowEnded(request.id)) return;
     if (onComplete) onComplete();
     else onClose();
+    const onLanding = request.onLanding;
+    const landing = onLanding && {
+      onLanded: () => onLanding({ landed: true, worktreeOpened: result.worktreePath !== null }),
+      onStayed: () => onLanding({ landed: false }),
+    };
     if (note) {
       void switchToHost(result.hostId, newWindow, result.projectId, {
         focusIntent: { intent: "placement-note", note },
+        ...landing,
       });
       return;
     }
-    void switchToHost(result.hostId, newWindow, result.projectId);
+    if (landing) {
+      // Lands on that worktree even in a window that already shows the project.
+      void switchToHost(result.hostId, newWindow, result.projectId, {
+        ...landing,
+        ...(result.worktreePath !== null
+          ? { focusIntent: { intent: "focus-worktree", worktreeId: result.worktreePath } }
+          : {}),
+      });
+    } else void switchToHost(result.hostId, newWindow, result.projectId);
   };
 
   /** The new-worktree dialog's worktree, created in the project now open on the host. */

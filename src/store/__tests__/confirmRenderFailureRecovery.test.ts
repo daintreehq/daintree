@@ -203,7 +203,7 @@ describe.each([
         .requestConfirmation({ kind: "merge-base", cwd: "/repo", baseBranch: "main" }),
     seq: () => useGitWorktreeOperationConfirmStore.getState().requestSeq,
     decline: declineFailedGitWorktreeOperationConfirmation,
-    declined: { confirmed: false, pinned: null },
+    declined: { confirmed: false, pinned: null, operation: null },
   },
   {
     name: "recipe conflict",

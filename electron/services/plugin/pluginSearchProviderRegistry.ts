@@ -184,18 +184,22 @@ export function getAllSearchProviders(): RegisteredSearchProvider[] {
 
 /**
  * Which provider owns each keyword among `visible` — the providers one project
- * can see. The earliest registered wins; every other provider with the same
- * keyword maps to the one that took it.
+ * can see. The earliest registered provider the user hasn't switched off wins;
+ * a switched-off one claims nothing, so hiding the owner hands its keyword to
+ * the next and showing it again takes it back. Every other provider with the
+ * same keyword maps to the one that took it, a switched-off one included when
+ * the owner registered first and so would still refuse it if it were shown.
  */
 export function searchKeywordRefusals(
-  visible: readonly RegisteredSearchProvider[]
+  visible: readonly RegisteredSearchProvider[],
+  hidden: ReadonlySet<string>
 ): Map<string, RegisteredSearchProvider> {
   const ownerByKeyword = new Map<string, RegisteredSearchProvider>();
   const takenBy = new Map<string, RegisteredSearchProvider>();
   for (const provider of [...visible].sort(byFirstSeen)) {
     const owner = ownerByKeyword.get(provider.keyword);
     if (owner) takenBy.set(provider.key, owner);
-    else ownerByKeyword.set(provider.keyword, provider);
+    else if (!hidden.has(provider.key)) ownerByKeyword.set(provider.keyword, provider);
   }
   return takenBy;
 }

@@ -15,7 +15,7 @@ import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { recipeContextFromWorktree, type RecipeContext } from "@/utils/recipeVariables";
 import { missingRecipeVariables } from "@/utils/recipeAgentStep";
-import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import { isRecipeChangedSinceShownError, recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { getAgentConfig } from "@/config/agents";
 import { recipePanelStepName } from "@/components/Terminal/utils/recipeUtils";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
@@ -65,6 +65,20 @@ function isRecipeThatRan(recipe: TerminalRecipe | undefined, ran: RanRecipe): bo
   );
 }
 
+/** A confirmed run the store refused because the recipe changed under the dialog (#17447). */
+export interface ChangedRecipeRefusal {
+  /** The row that was run; review resolves it to whatever that row launches now. */
+  recipeId: string;
+  /** As the confirm named it. */
+  recipeName: string;
+  /**
+   * What the row resolves to now: a recipe the editor can open, a plugin's
+   * recipe (its plugin owns the content, so there is no editor to offer), or
+   * nothing, once it is deleted or its plugin unloaded.
+   */
+  current: "editable" | "plugin" | "missing";
+}
+
 export interface UseRecipeRunnerResult {
   recipes: TerminalRecipe[];
   sections: RecipeSections;
@@ -83,6 +97,7 @@ export interface UseRecipeRunnerResult {
    * shadowed or deleted: its failed indices would now name other steps.
    */
   canRetryFailed: boolean;
+  changedRecipe: ChangedRecipeRefusal | null;
   /** A plugin recipe's own variables the last run launched empty: no plugin supplied them. */
   unresolvedVars: string[];
   isRetryingFailed: boolean;
@@ -106,6 +121,8 @@ export interface UseRecipeRunnerResult {
   handleRetryFailed: () => void;
   dismissSpawnFailures: () => void;
   dismissUnresolvedVars: () => void;
+  reviewChangedRecipe: () => void;
+  dismissChangedRecipe: () => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
   getFlatRecipes: () => TerminalRecipe[];
 }
@@ -144,6 +161,10 @@ export function useRecipeRunner({
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [spawnFailureSummary, setSpawnFailureSummary] = useState<SpawnFailureSummary | null>(null);
   const [unresolvedVars, setUnresolvedVars] = useState<string[]>([]);
+  const [changedRecipeRun, setChangedRecipeRun] = useState<{
+    recipeId: string;
+    recipeName: string;
+  } | null>(null);
   const [isRetryingFailed, setIsRetryingFailed] = useState(false);
   // Kept after the confirm closes, so its title still names the recipe through
   // the exit: by then a deleted recipe has already left the store.
@@ -239,6 +260,7 @@ export function useRecipeRunner({
   useEffect(() => {
     setSpawnFailureSummary(null);
     setUnresolvedVars([]);
+    setChangedRecipeRun(null);
     // Drop any in-flight delete confirmation — a pending recipe id belongs to
     // the previous worktree's filtered list; confirming it after the switch
     // would delete a recipe out of its original context.
@@ -310,6 +332,23 @@ export function useRecipeRunner({
     []
   );
 
+  // Resolved from the subscribed list rather than `getRecipeById`, so the
+  // banner follows the store: a recipe deleted after the refusal loses its
+  // Review action instead of opening a blank draft.
+  const changedRecipe = useMemo((): ChangedRecipeRefusal | null => {
+    if (!changedRecipeRun) return null;
+    const row = allRecipes.find((r) => r.id === changedRecipeRun.recipeId);
+    // The store resolves through `inRepoRecipes`, which never holds a plugin's.
+    const winner = row?.shadowedBy
+      ? allRecipes.find((w) => w.name === row.name && isInRepoRecipeId(w) && !isPluginRecipe(w))
+      : undefined;
+    const resolved = winner ?? row;
+    return {
+      ...changedRecipeRun,
+      current: !resolved ? "missing" : isPluginRecipe(resolved) ? "plugin" : "editable",
+    };
+  }, [changedRecipeRun, allRecipes]);
+
   // Holds a run whose prompts would send built-in variables blank until the
   // user decides (#15022). With nothing missing, `proceed` runs synchronously,
   // so a recipe with every value launches exactly as it always has.
@@ -367,6 +406,7 @@ export function useRecipeRunner({
         // the user's current intent and the old retry button must not target a
         // recipe that's no longer relevant. Backing out of the confirm keeps it.
         setSpawnFailureSummary(null);
+        setChangedRecipeRun(null);
         // A plugin's own variables only get values when the plugin runs the
         // recipe, so started from here they launch empty without asking.
         setUnresolvedVars(missing.plugin);
@@ -386,6 +426,16 @@ export function useRecipeRunner({
               setSpawnFailureSummary(summarizeFailures(recipeId, recipe, results));
             }
           } catch (error) {
+            // The confirm approved one recipe and the store now holds another,
+            // or none, so it refused before starting anything: say so, since
+            // the panes the user just agreed to never appear.
+            if (isRecipeChangedSinceShownError(error)) {
+              if (runGenerationRef.current === runId) {
+                setUnresolvedVars([]);
+                setChangedRecipeRun({ recipeId, recipeName: recipe.name });
+              }
+              return;
+            }
             // The store throws synchronously when the recipe was deleted between
             // the local lookup and the store call. Don't let this become an
             // unhandled rejection (Electron 41 crashes utility processes on
@@ -497,6 +547,18 @@ export function useRecipeRunner({
     },
     [activeWorktreeId]
   );
+
+  // The banner stays while the editor is open, so closing it hands focus back
+  // to Review; the next run clears it. The editor opens a blank draft for an
+  // id it can't find, and a plugin's recipe isn't the canvas's to edit.
+  const reviewChangedRecipe = useCallback(() => {
+    if (changedRecipe?.current !== "editable") return;
+    handleEdit(changedRecipe.recipeId);
+  }, [changedRecipe, handleEdit]);
+
+  const dismissChangedRecipe = useCallback(() => {
+    setChangedRecipeRun(null);
+  }, []);
 
   const handleDuplicate = useCallback(
     (recipeId: string) => {
@@ -714,6 +776,7 @@ export function useRecipeRunner({
     suggestions,
     spawnFailureSummary,
     canRetryFailed,
+    changedRecipe,
     unresolvedVars,
     isRetryingFailed,
     handleRun,
@@ -734,6 +797,8 @@ export function useRecipeRunner({
     handleRetryFailed,
     dismissSpawnFailures,
     dismissUnresolvedVars,
+    reviewChangedRecipe,
+    dismissChangedRecipe,
     handleKeyDown,
     getFlatRecipes,
   };

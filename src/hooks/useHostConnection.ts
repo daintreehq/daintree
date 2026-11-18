@@ -159,6 +159,10 @@ export interface ResyncFromHostOptions {
  */
 export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
+  safeFireAndForget(
+    import("@/store/panelStatusBuffer").then(({ dropAllHeldDurations }) => dropAllHeldDurations()),
+    { context: "Dropping held pause durations after missed host events" }
+  );
   if (options.freshSession) {
     resyncProjectStateOwed = true;
     // The host forgot which plugin views this one shows; without them it would
@@ -1540,6 +1544,18 @@ export function reconnectHost(): void {
   if (hostId === null) return;
   safeFireAndForget(window.electron.remoteHosts.connect({ hostId, restart: true }), {
     context: "Reconnecting to the window's host",
+  });
+}
+
+/**
+ * Dial the window's host now, leaving a dial already under way to finish:
+ * what a machine coming up asks for, from every window showing it, never a
+ * person's Retry (#17546). Nothing once the view has moved to another host.
+ */
+export function nudgeHostReconnect(hostId: HostId): void {
+  if (useHostConnectionStore.getState().hostId !== hostId) return;
+  safeFireAndForget(window.electron.remoteHosts.connect({ hostId }), {
+    context: "Dialling the window's host",
   });
 }
 

@@ -43,7 +43,18 @@ export type DecisionQuestionCancelResult =
   | { result: "cancelling" }
   | { result: "refused"; reason: DecisionQuestionCancelRefusal }
   | { result: "off" }
-  | { result: "not-running" };
+  | { result: "not-running" }
+  | DecisionQuestionHostNotConnected;
+
+/**
+ * The question is a Remote Host's (#17230) and this computer had no link to
+ * that Host, so nothing was read or done there. For a cancel, also a link
+ * that went or timed out before the Host answered: it may or may not have
+ * been withdrawn.
+ */
+export interface DecisionQuestionHostNotConnected {
+  result: "host-not-connected";
+}
 
 export type DecisionQuestionCancelRefusal = "answered" | "expired" | "publish-failed" | "not-found";
 
@@ -114,6 +125,16 @@ export interface DecisionThreadExpiry {
 }
 
 /**
+ * The person declined to answer, from their phone or tablet (#17234). It
+ * carries no answer and authorises nothing.
+ */
+export interface DecisionThreadDecline {
+  type: "declined";
+  entryId: string;
+  sentAt: string;
+}
+
+/**
  * A follow-up message on the question's thread, from the person or the
  * agent. A follow-up never answers the question. `deliveryStatus` is how far
  * a person's message has got into the pane; null for the agent's own.
@@ -125,14 +146,32 @@ export interface DecisionThreadMessage {
   text: string | null;
   images: DecisionThreadImage[];
   expectsReply: boolean;
+  /**
+   * A person's message written on their computer (#17238), signed by the
+   * owner desktop; false for a phone's or tablet's, and for the agent's own.
+   * Absent from a Remote Host from before it, which reads as a phone's.
+   */
+  onComputer?: boolean;
   sentAt: string;
   deliveryStatus:
     "received" | "terminal-delivered" | "needs-attention" | "delivery-uncertain" | null;
+  /**
+   * A person's message that will never be typed in: its question was
+   * withdrawn, or the person handled it, so it stays in the thread only.
+   * Absent from a Remote Host from before #17238.
+   */
+  deliveryStopped?: boolean;
   unreadable: boolean;
 }
 
 export type DecisionThreadEntry =
-  DecisionThreadAnswer | DecisionThreadExpiry | DecisionThreadMessage;
+  DecisionThreadAnswer | DecisionThreadExpiry | DecisionThreadDecline | DecisionThreadMessage;
+
+/**
+ * Why a closed question has no answer: `declined` by the person from their
+ * phone or tablet, `withdrawn` (cancelled from the desktop), or `expired`.
+ */
+export type DecisionQuestionClosedReason = "declined" | "withdrawn" | "expired";
 
 /** A question with its content opened, in memory, for the desktop to show. Never stored. */
 export interface DecisionQuestionContent {
@@ -159,9 +198,11 @@ export interface DecisionQuestionContent {
   /** ISO 8601 as recorded; null when the question never expires. */
   expiresAt: string | null;
   status: DecisionQuestionStatus;
+  /** Why a `cancelled` or `expired` question has no answer; null otherwise. */
+  closedReason: DecisionQuestionClosedReason | null;
   deliveryStatus: DecisionDeliveryStatus;
   attachments: DecisionQuestionAttachment[];
-  /** Answers, expiry and follow-ups, in the order the relay recorded them. */
+  /** Answers, expiry, a decline and follow-ups, in the order the relay recorded them. */
   thread: DecisionThreadEntry[];
 }
 
@@ -176,13 +217,18 @@ export type DecisionQuestionContentResult =
   | { result: "off" }
   | { result: "not-running" }
   | { result: "not-found" }
-  | { result: "unreadable" };
+  | { result: "unreadable" }
+  | DecisionQuestionHostNotConnected;
 
-/** One question's opening line, or why there is none. */
+/**
+ * One question's opening line, or why there is none: `host-not-connected`
+ * for a Remote Host's question while this computer has no link to the Host.
+ */
 export type DecisionQuestionSummary =
   | { questionId: string; result: "read"; line: string | null }
   | { questionId: string; result: "not-found" }
-  | { questionId: string; result: "unreadable" };
+  | { questionId: string; result: "unreadable" }
+  | { questionId: string; result: "host-not-connected" };
 
 /** The opening lines of a pane's questions, in the order they were asked for, each id once. */
 export type DecisionQuestionSummariesResult =
@@ -241,7 +287,8 @@ type DecisionQuestionImageRead<Read> =
   | { result: "off" }
   | { result: "not-running" }
   | { result: "not-found" }
-  | { result: "unreadable" };
+  | { result: "unreadable" }
+  | DecisionQuestionHostNotConnected;
 
 /** One part of an image, as one read over IPC answers. */
 export type DecisionQuestionImagePartResult = DecisionQuestionImageRead<{
@@ -277,7 +324,7 @@ export interface DecisionQuestionReference {
  * - `needs-attention`: an answer or a person's follow-up that delivery stopped
  *   on, as the list of answers needing attention shows it;
  * - `settled`: answered and typed in or marked handled, withdrawn, expired,
- *   or declined (reserved: nothing records a decline yet).
+ *   or declined by the person from their phone or tablet.
  */
 export type DecisionQuestionStanding =
   | { kind: "waiting"; reason: "open" | "reply" }
@@ -312,11 +359,51 @@ export interface DecisionQuestionListItem {
    */
   settledAt: string | null;
   standing: DecisionQuestionStanding;
+  /**
+   * The agent's follow-up asking the person for a reply they haven't given
+   * yet, by message id (#17235): what brings an answered question back to
+   * Needs you on the phone. Null otherwise.
+   */
+  replyRequest: string | null;
+  /** What delivery stopped on while it needs a person (#17235); null otherwise. */
+  stall: DecisionQuestionStall | null;
+  /**
+   * The enrolled Remote Host that asked (#17230), by the id and name this
+   * computer's host list gives it, and whether this computer has a link to it
+   * now; absent for this computer's own questions. A Host that isn't
+   * connected keeps the questions it last reported, as it last reported them.
+   */
+  remoteHost?: DecisionQuestionRemoteHost;
 }
 
 /**
- * Every question this computer's Decisions holds, oldest first. Empty while
- * Decisions is off or its store is closed. `revision` only rises, so a read
+ * An answer, or follow-ups after it, that delivery stopped on and a person
+ * hasn't dealt with, as the list of answers needing attention shows it. Ids
+ * and the library's code only.
+ */
+export interface DecisionQuestionStall {
+  /** The answer's revision while it needs a person; null while only follow-ups do. */
+  answerRevision: number | null;
+  /** The person's follow-ups delivery stopped on, by message id, in thread order. */
+  followUpIds: string[];
+  /**
+   * The library's code for why (`pane_gone`, `resume_timeout`, …), the
+   * answer's while it needs a person, else the first follow-up's;
+   * `unspecified` when none was recorded.
+   */
+  reason: string;
+}
+
+export interface DecisionQuestionRemoteHost {
+  hostId: string;
+  name: string;
+  connected: boolean;
+}
+
+/**
+ * Every question this computer's Decisions holds, and those its enrolled
+ * Remote Hosts last reported (#17230), oldest first. Empty while Decisions is
+ * off or its store is closed. `revision` only rises, so a read
  * and a push can be ordered.
  */
 export interface DecisionQuestionList {
@@ -327,6 +414,16 @@ export interface DecisionQuestionList {
 /** Open one question in the window's question view: a click on its desktop notification (#17232). */
 export interface DecisionsOpenQuestionRequest {
   reference: DecisionQuestionReference;
+  /** The follow-up in its thread to open at (#17235); absent to open at the top. */
+  messageId?: string;
+}
+
+/**
+ * Open the list of answers needing attention: a click on a stalled answer's
+ * desktop notification (#17235), starting at the pane that asked.
+ */
+export interface DecisionsOpenAttentionRequest {
+  terminalId: string;
 }
 
 /** One question read by its reference, from any window (#17229). */
@@ -426,12 +523,149 @@ export interface GetDecisionAnswerResultPayload {
 }
 
 /**
+ * The person's follow-up on a question's thread, written in Daintree's own
+ * view on the owner computer, which signs it (#17238). The question is named
+ * by the reference its content was read with; a follow-up goes to an open or
+ * answered question alike and never answers it or changes its answer.
+ * `messageId` is minted by the view for this message, and sent again with the
+ * same text when a submission's result is lost, so a retry is the same
+ * message and never a second one.
+ */
+export interface SendDecisionFollowUpPayload {
+  reference: DecisionQuestionReference;
+  messageId: string;
+  text: string;
+}
+
+/**
+ * Where a person's follow-up stands, as the Decisions library reports it:
+ * - `queued`: committed here and not settled yet (the relay is out of reach,
+ *   or it waits its turn behind the question's unsent create or the person's
+ *   earlier answer or follow-up); it keeps being sent, and
+ *   `getFollowUpResult` reads its outcome;
+ * - `sent`: the relay took it, and it is typed into the asking terminal as
+ *   a phone's follow-up would be, marked as sent from the computer;
+ * - `closed`: the question expired, was cancelled or declined, or the relay
+ *   holds no such question;
+ * - `unsupported`: the relay, or the computer that asked (a Remote Host),
+ *   doesn't take follow-ups sent from a computer yet and needs updating;
+ * - `rejected`: any other refusal, with the relay's code (`invalid_state`
+ *   for a thread at its message limit).
+ */
+export type DecisionFollowUpOutcome =
+  | { status: "queued" }
+  | { status: "sent" }
+  | { status: "closed"; reason: "expired" | "cancelled" | "not-found" }
+  | { status: "unsupported"; by: "relay" | "asking-desktop" }
+  | { status: "rejected"; code: string };
+
+/**
+ * Why a follow-up wasn't taken here at all, before anything was signed:
+ * `not-found`, the reference names no question this computer can follow up;
+ * `not-owner`, this computer is a Remote Host, whose key never signs the
+ * person's message; `invalid`, the text breaks the protocol's bounds or the
+ * message id was used for another message, as `detail` says.
+ */
+export type DecisionFollowUpRefusal =
+  | { result: "refused"; reason: "not-found" | "not-owner" }
+  | { result: "refused"; reason: "invalid"; detail: string };
+
+/**
+ * A person's follow-up, submitted. `off` and `not-running` as for a read: off
+ * here, or no relay connection runs to sign with.
+ */
+export type DecisionQuestionFollowUpResult =
+  | { result: "submitted"; messageId: string; outcome: DecisionFollowUpOutcome }
+  | DecisionFollowUpRefusal
+  | { result: "off" }
+  | { result: "not-running" };
+
+/** Where a submitted follow-up stands, by the id it was submitted with. */
+export interface GetDecisionFollowUpResultPayload {
+  messageId: string;
+}
+
+/**
+ * A submitted follow-up's standing. `not-found`: no follow-up was ever
+ * committed here under that id, or a crash kept it from being queued: submit
+ * it again with the same id.
+ */
+export type DecisionFollowUpResultRead =
+  | { result: "read"; questionId: string; outcome: DecisionFollowUpOutcome }
+  | { result: "not-found" }
+  | { result: "off" }
+  | { result: "not-running" };
+
+/**
  * A submitted answer's standing. `not-found`: no answer was ever committed
  * here under that id, or a crash kept it from being queued: submit it again
  * with the same id.
  */
 export type DecisionAnswerResultRead =
   | { result: "read"; questionId: string; expectedRevision: number; outcome: DecisionAnswerOutcome }
+  | { result: "not-found" }
+  | { result: "off" }
+  | { result: "not-running" };
+
+/**
+ * The person declining a question in Daintree's own view on the owner
+ * computer, which signs it as their decline, as a phone's Dismiss would be
+ * (#17239). Named and minted as an answer is: the reference its content was
+ * read with, the revision the person read, and an id that makes a retry the
+ * same decline.
+ */
+export interface DeclineDecisionQuestionPayload {
+  reference: DecisionQuestionReference;
+  declineId: string;
+  expectedRevision: number;
+}
+
+/**
+ * Where a person's decline stands, as the Decisions library reports it:
+ * `queued` (committed here and still being sent), `declined` (the relay took
+ * it: the asking computer tells a listening agent, and phones show it
+ * declined on this computer), and otherwise as for an answer. `unsupported`:
+ * the relay, or the computer that asked, doesn't take a decline made on a
+ * computer yet, and the question can only be withdrawn.
+ */
+export type DecisionDeclineOutcome =
+  | { status: "queued" }
+  | { status: "declined" }
+  | { status: "already-answered" }
+  | { status: "changed" }
+  | { status: "closed"; reason: "expired" | "cancelled" | "not-found" }
+  | { status: "unsupported"; by: "relay" | "asking-desktop" }
+  | { status: "rejected"; code: string };
+
+/**
+ * Why a decline wasn't taken here at all, before anything was signed:
+ * `not-found` and `not-owner` as for an answer; `invalid`, the decline id was
+ * already used for another question or revision, as `detail` says.
+ */
+export type DecisionDeclineRefusal =
+  | { result: "refused"; reason: "not-found" | "not-owner" }
+  | { result: "refused"; reason: "invalid"; detail: string };
+
+/** A person's decline, submitted. `off` and `not-running` as for an answer. */
+export type DecisionQuestionDeclineResult =
+  | { result: "submitted"; declineId: string; outcome: DecisionDeclineOutcome }
+  | DecisionDeclineRefusal
+  | { result: "off" }
+  | { result: "not-running" };
+
+/** Where a submitted decline stands, by the id it was submitted with. */
+export interface GetDecisionDeclineResultPayload {
+  declineId: string;
+}
+
+/** A submitted decline's standing; `not-found` as for an answer's. */
+export type DecisionDeclineResultRead =
+  | {
+      result: "read";
+      questionId: string;
+      expectedRevision: number;
+      outcome: DecisionDeclineOutcome;
+    }
   | { result: "not-found" }
   | { result: "off" }
   | { result: "not-running" };

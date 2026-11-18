@@ -721,6 +721,7 @@ export class PtyClient extends EventEmitter {
         this.recovery.cleanupOrphanedPtysForShard(shard, fallbackCrashType);
         shard.broker.clear(new BrokerError("HOST_EXITED", "Pty host exited"));
         shard.shouldResyncProjectContext = true;
+        this.clearPauseDurationsOfShard(shard);
         // The crashed shard's throttle/memory-warning holds are gone with the
         // process; recompute the aggregate so a sibling-free release isn't
         // stuck behind a dead shard's stale hold. Only for the shard that
@@ -873,6 +874,10 @@ export class PtyClient extends EventEmitter {
   private buildRouterDeps(shard: PtyShard): PtyEventRouterDeps {
     return {
       isDisposed: () => this.isDisposed || shard.retired,
+      isForeignTerminal: (id) => {
+        const owner = this.terminalOwners.get(id);
+        return owner !== undefined && owner !== shard.key;
+      },
       broker: shard.broker,
       emitter: new ShardEventEmitter((event, args) => this.emitFromShard(shard, event, args)),
       state: {
@@ -1057,6 +1062,34 @@ export class PtyClient extends EventEmitter {
    * the release edge if the aggregate flipped — a retired/crashed shard must
    * not pin "throttled"/"memory warning" on forever.
    */
+  /**
+   * A host's pause-duration gauge names a terminal as cleared only on the tick
+   * after its hold ends, and the host that exited can't say it any more: its
+   * replacement starts with nothing held. Clear every live terminal it owned,
+   * on its own route, so no pane keeps a duration from the dead host (#17575).
+   * That includes one whose kill was still waiting for an exit the dead host
+   * will never send; one already exited (a preserved entry) had its duration
+   * cleared on exit.
+   */
+  private clearPauseDurationsOfShard(shard: PtyShard): void {
+    const owned: string[] = [];
+    for (const [id, owner] of this.terminalOwners) {
+      if (owner !== shard.key) continue;
+      if (this.pendingSpawns.has(id) || this.pendingKillCount.has(id)) owned.push(id);
+    }
+    if (owned.length === 0) return;
+    this.handleShardEvent(shard, {
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: Date.now(),
+        perTerminalHeld: [],
+        clearedTerminalIds: owned,
+      },
+    });
+  }
+
   private dropShardSignals(shardKey: string): void {
     this.signalAggregator.dropShard(shardKey);
     this.memoryPauseTracker.dropShard(shardKey);
@@ -1863,7 +1896,7 @@ export class PtyClient extends EventEmitter {
     }
   }
 
-  private groupByOwnerShard(ids: string[]): Map<PtyShard, string[]> {
+  private groupByOwnerShard(ids: readonly string[]): Map<PtyShard, string[]> {
     const groups = new Map<PtyShard, string[]>();
     for (const id of ids) {
       const shard = this.shardForTerminal(id);
@@ -2925,31 +2958,76 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
-   * Scan every terminal's semantic buffer for `query` and return one
-   * ANSI-stripped snippet per matching terminal, across all shards. Substring
-   * (case-insensitive) unless `isRegex` is true. Returns an empty array on
-   * regex compile error or IPC failure — UI never throws on bad input.
+   * Scan semantic buffers for `query` and return one ANSI-stripped snippet per
+   * matching terminal. Substring (case-insensitive) unless `isRegex` is true.
+   * With `terminalIds`, only those terminals' owning shards are asked, each for
+   * its own ids; without, every terminal on every shard is scanned. Never
+   * rejects: a regex compile error yields no matches, and a shard that fails,
+   * times out, or is mid-restart keeps the other shards' matches but marks the
+   * answer incomplete, so its silence never reads as "nothing matched".
    */
   async searchSemanticBuffersAsync(
     query: string,
-    isRegex: boolean
-  ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]> {
-    const results = await Promise.all(
-      this.fanOutShards().map((shard) => {
-        const promise = sendPtyHostRpc<
-          import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]
-        >(shard, "semantic-search", (requestId) => ({
-          type: "search-semantic-buffers",
-          query,
-          isRegex,
-          requestId,
-        }));
-        return promise.catch(
-          () => [] as import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]
-        );
-      })
+    isRegex: boolean,
+    terminalIds?: readonly string[]
+  ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchResult> {
+    const reachable = this.fanOutShards();
+    let targets: Array<[PtyShard, string[] | undefined]>;
+    let unreachable: number;
+    if (terminalIds === undefined) {
+      targets = reachable.map((shard) => [shard, undefined]);
+      unreachable = Math.max(
+        0,
+        [...this.shards.values()].filter((shard) => !shard.retired).length - reachable.length
+      );
+    } else {
+      // A scoped search needs only the shards that own its terminals.
+      const owners = [...this.groupByOwnerShard(terminalIds)];
+      targets = owners.filter(([shard]) => reachable.includes(shard));
+      unreachable = owners.length - targets.length;
+    }
+    // With nothing ready, `fanOutShards` still hands back the default shard, and
+    // a host that hasn't announced ready can answer before its terminals are
+    // replayed, so its answer can't vouch for a complete search.
+    const allLive = targets.every(
+      ([shard]) => !shard.retired && shard.lifecycle.isInitialized && shard.lifecycle.child !== null
     );
-    return results.flat();
+    const results = await Promise.all(
+      targets.map(([shard, ids]) =>
+        sendPtyHostRpc<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]>(
+          shard,
+          "semantic-search",
+          (requestId) => ({
+            type: "search-semantic-buffers",
+            query,
+            isRegex,
+            requestId,
+            ...(ids ? { terminalIds: ids } : {}),
+          })
+        ).then(
+          (matches) => ({ matches, ok: true }),
+          () => ({
+            matches: [] as import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[],
+            ok: false,
+          })
+        )
+      )
+    );
+    return {
+      matches: results.flatMap((r) => r.matches),
+      complete: unreachable === 0 && allLive && results.every((r) => r.ok),
+    };
+  }
+
+  /** Whether the host wrote the mode reset; false for a terminal it can't reach. */
+  async resetTerminalModesAsync(id: string): Promise<boolean> {
+    const shard = this.shardForTerminal(id);
+    const promise = sendPtyHostRpc<boolean>(shard, `reset-modes-${id}`, (requestId) => ({
+      type: "reset-terminal-modes",
+      id,
+      requestId,
+    }));
+    return promise.catch(() => false);
   }
 
   /** Replay terminal history */

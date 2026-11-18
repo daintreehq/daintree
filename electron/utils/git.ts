@@ -149,24 +149,30 @@ export interface DiffStat {
   deletions: number | null;
 }
 
-// Budget for pathspec characters per `git diff` spawn. Windows caps the whole
+// Budget for pathspec characters per git spawn. Windows caps the whole
 // command line at 32,767 chars, and the hardened `-c` config plus the binary
 // path take a few KB of that.
-const NUMSTAT_ARGV_CHAR_BUDGET = 16_000;
+const PATHSPEC_ARGV_CHAR_BUDGET = 16_000;
 
-function batchPathsForArgv(paths: string[]): string[][] {
+/** Split `paths` into runs whose pathspec arguments fit one git command line. */
+export function batchPathsForArgv(paths: readonly string[]): string[][] {
+  return batchPathGroupsForArgv(paths.map((path) => [path]));
+}
+
+/** Split `groups` into runs that fit one git command line, never splitting a group. */
+export function batchPathGroupsForArgv(groups: readonly (readonly string[])[]): string[][] {
   const batches: string[][] = [];
   let current: string[] = [];
   let chars = 0;
-  for (const path of paths) {
-    // +3: separating space plus quotes Windows may add around the argument.
-    const cost = path.length + 3;
-    if (current.length > 0 && chars + cost > NUMSTAT_ARGV_CHAR_BUDGET) {
+  for (const group of groups) {
+    // +3 a path: separating space plus quotes Windows may add around the argument.
+    const cost = group.reduce((sum, path) => sum + path.length + 3, 0);
+    if (current.length > 0 && chars + cost > PATHSPEC_ARGV_CHAR_BUDGET) {
       batches.push(current);
       current = [];
       chars = 0;
     }
-    current.push(path);
+    current.push(...group);
     chars += cost;
   }
   if (current.length > 0) batches.push(current);
@@ -269,7 +275,8 @@ export function invalidateStagingDiffStatCache(cwd: string): void {
  * Resolve per-file line stats for staging-view paths. Issues a single
  * `git diff --numstat -z` call per mode (staged vs unstaged), keyed by
  * repo-relative path, and caches the resulting map for ~5s keyed by cwd and
- * head OID. Empty `paths` returns an empty map without spawning git.
+ * head OID (empty on an unborn branch, where `--cached` diffs the index against
+ * the empty tree). Empty `paths` returns an empty map without spawning git.
  *
  * Binary files surface as `{ insertions: null, deletions: null }`, from
  * numstat's `-\t-` placeholders. Errors are swallowed and yield an empty
@@ -283,7 +290,6 @@ export async function getPerFileDiffStats(
   mode: DiffStatMode
 ): Promise<Map<string, DiffStat>> {
   if (paths.length === 0) return new Map();
-  if (mode === "staged" && !headOid) return new Map();
 
   const cacheKey = makeStagingCacheKey(cwd, headOid, mode);
   const cached = STAGING_DIFF_STAT_CACHE.get(cacheKey);

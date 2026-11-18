@@ -10,7 +10,6 @@ import {
   comboToAccelerator,
   getEffectiveMenuCombo,
   findActionForInput,
-  findPortalPageAction,
   findTerminalCycleAction,
   getMenuAccelerator,
   isAcceleratorClaimedByKeybinding,
@@ -137,62 +136,75 @@ describe("isAcceleratorClaimedByKeybinding", () => {
   it("leaves an unbound key free", () => {
     expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+Shift+F12")).toBe(false);
   });
+
+  it("leaves a key free that only a retired action's saved override holds", () => {
+    storeMock.get.mockReturnValue({ "panel.togglePortal": ["Cmd+Alt+Shift+F12"] });
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+Shift+F12")).toBe(false);
+    storeMock.get.mockReturnValue({ "fleet.armAll": ["Cmd+Alt+Shift+F12"] });
+    expect(isAcceleratorClaimedByKeybinding("CommandOrControl+Alt+Shift+F12")).toBe(true);
+  });
 });
 
 describe("findActionForInput", () => {
-  const PORTAL = ["portal.closeTab", "portal.newTab", "portal.nextTab", "portal.prevTab"];
+  const PREVIEW = ["devPreview.reloadPreview"];
 
-  it("resolves the portal's default tab keys on macOS", () => {
+  it("resolves a scoped default on macOS", () => {
     setProcessPlatform("darwin");
-    expect(findActionForInput(input({ key: "w", meta: true }), PORTAL, "portal")).toBe(
-      "portal.closeTab"
+    expect(findActionForInput(input({ key: "r", meta: true }), PREVIEW, "dev-preview")).toBe(
+      "devPreview.reloadPreview"
     );
-    expect(findActionForInput(input({ key: "t", meta: true }), PORTAL, "portal")).toBe(
-      "portal.newTab"
-    );
-    expect(findActionForInput(input({ key: "Tab", control: true }), PORTAL, "portal")).toBe(
-      "portal.nextTab"
-    );
-    expect(
-      findActionForInput(input({ key: "Tab", control: true, shift: true }), PORTAL, "portal")
-    ).toBe("portal.prevTab");
+  });
+
+  it("resolves a default only in its own scope", () => {
+    setProcessPlatform("darwin");
+    expect(findActionForInput(input({ key: "r", meta: true }), PREVIEW, "global")).toBeUndefined();
   });
 
   it("ignores other keys and key-ups", () => {
     setProcessPlatform("darwin");
-    expect(findActionForInput(input({ key: "r", meta: true }), PORTAL, "portal")).toBeUndefined();
     expect(
-      findActionForInput(input({ type: "keyUp", key: "w", meta: true }), PORTAL, "portal")
+      findActionForInput(input({ key: "w", meta: true }), PREVIEW, "dev-preview")
+    ).toBeUndefined();
+    expect(
+      findActionForInput(input({ type: "keyUp", key: "r", meta: true }), PREVIEW, "dev-preview")
     ).toBeUndefined();
   });
 
   it("honours a rebind, and the old key stops matching", () => {
     setProcessPlatform("darwin");
-    storeMock.get.mockReturnValue({ "portal.closeTab": ["Cmd+Shift+W"] });
-    expect(findActionForInput(input({ key: "w", meta: true }), PORTAL, "portal")).toBeUndefined();
-    expect(findActionForInput(input({ key: "w", meta: true, shift: true }), PORTAL, "portal")).toBe(
-      "portal.closeTab"
-    );
+    storeMock.get.mockReturnValue({ "devPreview.reloadPreview": ["Cmd+Shift+R"] });
+    expect(
+      findActionForInput(input({ key: "r", meta: true }), PREVIEW, "dev-preview")
+    ).toBeUndefined();
+    expect(
+      findActionForInput(input({ key: "r", meta: true, shift: true }), PREVIEW, "dev-preview")
+    ).toBe("devPreview.reloadPreview");
   });
 
   it("uses Ctrl for the primary modifier off the Mac", () => {
     setProcessPlatform("linux");
-    expect(findActionForInput(input({ key: "w", control: true }), PORTAL, "portal")).toBe(
-      "portal.closeTab"
+    expect(findActionForInput(input({ key: "r", control: true }), PREVIEW, "dev-preview")).toBe(
+      "devPreview.reloadPreview"
     );
   });
 });
 
 describe("findTerminalCycleAction", () => {
-  it("takes Ctrl+Tab and names the portal tab key it also is", () => {
+  it("takes Ctrl+Tab and Ctrl+Shift+Tab as the terminal cycle", () => {
     setProcessPlatform("darwin");
     expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toEqual({
       actionId: "terminal.focusNext",
-      portalActionId: "portal.nextTab",
     });
     expect(findTerminalCycleAction(input({ key: "Tab", control: true, shift: true }))).toEqual({
       actionId: "terminal.focusPrevious",
-      portalActionId: "portal.prevTab",
+    });
+  });
+
+  it("names no retired portal action a saved rebind still puts on the same key", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockReturnValue({ "portal.nextTab": ["Ctrl+Tab"] });
+    expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toEqual({
+      actionId: "terminal.focusNext",
     });
   });
 
@@ -201,29 +213,6 @@ describe("findTerminalCycleAction", () => {
     storeMock.get.mockReturnValue({ "terminal.focusNext": ["Ctrl+V"] });
     expect(findTerminalCycleAction(input({ key: "v", control: true }))).toBeUndefined();
     expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toBeUndefined();
-  });
-
-  it("omits the portal action once the portal's tab key moves elsewhere", () => {
-    setProcessPlatform("darwin");
-    storeMock.get.mockReturnValue({ "portal.nextTab": ["Ctrl+Alt+Tab"] });
-    expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toEqual({
-      actionId: "terminal.focusNext",
-    });
-  });
-});
-
-describe("findPortalPageAction", () => {
-  const PORTAL = ["portal.closeTab", "portal.newTab", "portal.nextTab", "portal.prevTab"];
-
-  it("ignores a portal rebind to a key the page types with", () => {
-    setProcessPlatform("darwin");
-    storeMock.get.mockReturnValue({ "portal.closeTab": ["Backspace"] });
-    expect(findPortalPageAction(input({ key: "Backspace" }), PORTAL)).toBeUndefined();
-  });
-
-  it("takes the default Cmd+W", () => {
-    setProcessPlatform("darwin");
-    expect(findPortalPageAction(input({ key: "w", meta: true }), PORTAL)).toBe("portal.closeTab");
   });
 });
 

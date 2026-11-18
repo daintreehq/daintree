@@ -290,6 +290,11 @@ export const BUILT_IN_ACTION_IDS = [
   "canopy.toggle",
   "canopy.openWindow",
   "canopy.markAllRead",
+
+  // -- decisionsActions --
+  "decisions.openInbox",
+  "decisions.openNextQuestion",
+
   "project.getAll",
   "project.getCurrent",
   "project.add",
@@ -465,6 +470,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.restartOnPresetOwned",
   "terminal.startHeld",
   "terminal.redraw",
+  "terminal.resetModes",
   "terminal.forceResume",
   "terminal.toggleInputLock",
   "terminal.setWhenDone",
@@ -553,44 +559,13 @@ export const BUILT_IN_ACTION_IDS = [
   // -- navActions --
   "nav.toggleFocusMode",
   "nav.quickSwitcher",
+  "nav.quickOpenFile",
   "nav.showProjectHome",
   "nav.showProjectSplit",
   "nav.showGrid",
 
   // -- findActions --
   "find.inFocusedPanel",
-
-  // -- portalActions --
-  "portal.toggle",
-  "portal.closeTab",
-  "portal.nextTab",
-  "portal.prevTab",
-  "portal.newTab",
-  "portal.closeAllTabs",
-  "portal.activateTab",
-  "portal.openLaunchpad",
-  "portal.openUrl",
-  "portal.goBack",
-  "portal.goForward",
-  "portal.reload",
-  "portal.copyUrl",
-  "portal.openExternal",
-  "portal.duplicateTab",
-  "portal.reloadTab",
-  "portal.copyTabUrl",
-  "portal.openTabExternal",
-  "portal.closeOthers",
-  "portal.closeToRight",
-  "portal.resetWidth",
-  "portal.width.set",
-  "portal.setDefaultNewTab",
-  "portal.links.add",
-  "portal.links.remove",
-  "portal.links.update",
-  "portal.links.toggle",
-  "portal.links.reorder",
-  "portal.tabs.reorder",
-  "portal.listTabs",
 
   // -- helpActions --
   "help.gettingStarted.show",

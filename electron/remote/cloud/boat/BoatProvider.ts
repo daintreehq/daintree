@@ -1,26 +1,55 @@
 import type {
   CloudAccountCheckResult,
+  CloudCredentialValues,
   CloudHostError,
   CloudMachineType,
   CloudProviderInfo,
 } from "../../../../shared/types/cloudHosts.js";
-import type {
-  CloudProvider,
-  ProviderCatalog,
-  ProviderCreateRequest,
-  ProviderCredentials,
-  ProviderResource,
-  ProviderSshAccess,
+import {
+  CLOUD_HOSTS_UNSUPPORTED_ON_WINDOWS,
+  UnusableMachineKeyError,
+  type CloudProvider,
+  type IssuedMachineKey,
+  type MachineKeyIssuer,
+  type ProviderCatalog,
+  type ProviderCreateRequest,
+  type ProviderCredentials,
+  type ProviderResource,
+  type ProviderSshAccess,
 } from "../provider.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isSafeSshUser, normalizeHostKey, parseSshEndpoint } from "../sshEndpoint.js";
 import { BoatApiError, BoatClient, type BoatRequestContext } from "./BoatClient.js";
-import type { BoatLimits, BoatSandbox } from "./boatSchemas.js";
+import {
+  boatApiKeyScopeSchema,
+  type BoatActionResponse,
+  type BoatApiKey,
+  type BoatLimits,
+  type BoatSandbox,
+} from "./boatSchemas.js";
 import { BOAT_SIZE_MULTIPLIERS, BOAT_SIZE_SPECS, boatMachineState } from "./boatState.js";
 
 const SIZE_ORDER = ["small", "default", "large", "xlarge"];
 const MAX_SCOPE_PROBES = 12;
+const MAX_KEY_LENGTH = 4096;
+
+function invalidKey(message: string): AppError {
+  return new AppError({ code: "VALIDATION", message, userMessage: message });
+}
+
+/** Boat's API key from an entered set: one line of printable ASCII, the only shape Boat issues. */
+export function boatApiKey(values: Readonly<CloudCredentialValues>): string {
+  const key = values.apiKey;
+  if (typeof key !== "string" || key.length === 0) throw invalidKey("Paste an API key.");
+  if (/PRIVATE KEY/.test(key)) throw invalidKey("That's a private key, not an API key.");
+  if (key.length > MAX_KEY_LENGTH || !/^[\x21-\x7e]+$/.test(key)) {
+    throw invalidKey(
+      "That doesn't look like an API key: it should be one line of letters, digits and symbols."
+    );
+  }
+  return key;
+}
 
 function stopStatus(
   status: string
@@ -63,6 +92,20 @@ export function boatResource(sandbox: BoatSandbox): ProviderResource {
   };
 }
 
+/** The machine as a stop's answer reports it, with the stop it started; null when it named none. */
+export function boatStopResource(response: BoatActionResponse): ProviderResource | null {
+  if (!response.sandbox) return null;
+  const resource = boatResource(response.sandbox);
+  if (!resource.stop && response.operation) {
+    resource.stop = {
+      id: response.operation.id,
+      status: stopStatus(response.operation.status),
+      error: response.operation.error ?? null,
+    };
+  }
+  return resource;
+}
+
 /** The hourly list price for a size, from the account's own rate when Boat reports one. */
 function hourlyFor(type: string, limits: BoatLimits): number | null {
   const rate = limits.overagePrices?.vmHourDollars;
@@ -80,10 +123,94 @@ function tightestStarts(limits: BoatLimits): number | null {
   return remaining.length > 0 ? Math.min(...remaining) : null;
 }
 
+/**
+ * What a machine's own key may do (#17361): read its sandbox, move its
+ * lifetime (a sandbox write) and stop it normally. Never resume, delete,
+ * exec or anything on the account.
+ */
+export const BOAT_MACHINE_KEY_ACTIONS: readonly string[] = [
+  "sandbox.read",
+  "sandbox.update",
+  "sandbox.stop",
+];
+
+/**
+ * Whether Boat's answer shows the key reaches exactly this machine, with
+ * exactly the actions asked for and no environment: positive evidence, since
+ * Boat grants by sandbox or by environment, and a key that can't renew or stop
+ * would leave the machine looking kept when it isn't.
+ */
+function scopedToMachine(key: BoatApiKey, resourceId: string): boolean {
+  const parsed = boatApiKeyScopeSchema.safeParse(key.scope);
+  const scope = parsed.success ? parsed.data : null;
+  if (!scope?.actions || !Array.isArray(scope.sandboxes)) return false;
+  const actions = new Set(scope.actions);
+  if (
+    actions.size !== BOAT_MACHINE_KEY_ACTIONS.length ||
+    !BOAT_MACHINE_KEY_ACTIONS.every((action) => actions.has(action))
+  ) {
+    return false;
+  }
+  if (scope.sandboxes.length !== 1 || scope.sandboxes[0] !== resourceId) return false;
+  return (
+    scope.environments === undefined ||
+    (Array.isArray(scope.environments) && scope.environments.length === 0)
+  );
+}
+
+class BoatMachineKeys implements MachineKeyIssuer {
+  constructor(
+    private readonly clientFor: (apiUrl: string) => BoatClient,
+    private readonly ctx: (credentials: ProviderCredentials) => BoatRequestContext
+  ) {}
+
+  async issue(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    request: { name: string; ttlDays: number }
+  ): Promise<IssuedMachineKey> {
+    const client = this.clientFor(credentials.apiUrl);
+    const created = await client.createScopedKey(this.ctx(credentials), {
+      name: request.name,
+      ttl: `${request.ttlDays}d`,
+      actions: [...BOAT_MACHINE_KEY_ACTIONS],
+      sandboxIds: [resourceId],
+    });
+    const said = created.apiKey.expiresAt;
+    const expiresAt = typeof said === "string" ? Date.parse(said) : Number.NaN;
+    if (!Number.isFinite(expiresAt) || !scopedToMachine(created.apiKey, resourceId)) {
+      // Never handed to the machine; revoked by its id like any other key nothing should hold.
+      throw new UnusableMachineKeyError(
+        created.apiKey.id,
+        Number.isFinite(expiresAt) ? expiresAt : null,
+        "Boat issued a key other than the one asked for, so it wasn't used."
+      );
+    }
+    return { keyId: created.apiKey.id, secret: created.secret, expiresAt };
+  }
+
+  async revoke(credentials: ProviderCredentials, keyId: string): Promise<void> {
+    try {
+      await this.clientFor(credentials.apiUrl).revokeKey(this.ctx(credentials), keyId);
+    } catch (error) {
+      if (error instanceof BoatApiError && error.kind === "not-found") return;
+      throw error;
+    }
+  }
+
+  async findByName(credentials: ProviderCredentials, name: string): Promise<string[]> {
+    const keys = await this.clientFor(credentials.apiUrl).listKeys(this.ctx(credentials));
+    return keys.filter((key) => key.name === name).map((key) => key.id);
+  }
+}
+
 export class BoatProvider implements CloudProvider {
   readonly id = "boat" as const;
+  readonly machineKeys: MachineKeyIssuer;
 
-  constructor(private readonly clientFor: (apiUrl: string) => BoatClient) {}
+  constructor(private readonly clientFor: (apiUrl: string) => BoatClient) {
+    this.machineKeys = new BoatMachineKeys(clientFor, (credentials) => this.ctx(credentials));
+  }
 
   info(platform: NodeJS.Platform): CloudProviderInfo {
     return {
@@ -110,6 +237,7 @@ export class BoatProvider implements CloudProvider {
           retentionDays: 14,
           saveRetryBilled: false,
           stoppedComputeBilled: false,
+          stoppedStorageBilled: false,
         },
         typicalStartSeconds: 60,
         lifetime: { kind: "renewable" },
@@ -124,22 +252,23 @@ export class BoatProvider implements CloudProvider {
         },
         deletion: true,
       },
-      unsupportedReason:
-        platform === "win32"
-          ? "Cloud hosts need Daintree for macOS or Linux. Daintree for Windows reaches hosts through WSL only."
-          : null,
+      unsupportedReason: platform === "win32" ? CLOUD_HOSTS_UNSUPPORTED_ON_WINDOWS : null,
     };
   }
 
   private ctx(credentials: ProviderCredentials): BoatRequestContext {
-    return { apiKey: credentials.apiKey, org: credentials.scopeId, signal: credentials.signal };
+    const apiKey = credentials.values.apiKey;
+    // Never sent without one: an empty bearer would only come back as Boat's refusal.
+    if (!apiKey) throw new BoatApiError("unauthorized", "No API key", null, null, null);
+    return { apiKey, org: credentials.scopeId, signal: credentials.signal };
   }
 
-  async checkKey(
-    apiKey: string,
+  async checkCredentials(
+    values: Readonly<CloudCredentialValues>,
     apiUrl: string,
     signal?: AbortSignal
   ): Promise<CloudAccountCheckResult> {
+    const apiKey = boatApiKey(values);
     const client = this.clientFor(apiUrl);
     const me = await client.me({ apiKey, org: "", signal });
     let orgs: Awaited<ReturnType<BoatClient["orgs"]>> = [];
@@ -280,20 +409,9 @@ export class BoatProvider implements CloudProvider {
     credentials: ProviderCredentials,
     resourceId: string
   ): Promise<ProviderResource | null> {
-    const response = await this.clientFor(credentials.apiUrl).stopSandbox(
-      this.ctx(credentials),
-      resourceId
+    return boatStopResource(
+      await this.clientFor(credentials.apiUrl).stopSandbox(this.ctx(credentials), resourceId)
     );
-    if (!response.sandbox) return null;
-    const resource = boatResource(response.sandbox);
-    if (!resource.stop && response.operation) {
-      resource.stop = {
-        id: response.operation.id,
-        status: stopStatus(response.operation.status),
-        error: response.operation.error ?? null,
-      };
-    }
-    return resource;
   }
 
   async renewLifetime(
@@ -361,6 +479,14 @@ export class BoatProvider implements CloudProvider {
       };
     }
     const said = error.message;
+    // A refusal while Boat rolls its keys out: nothing was made, and it passes.
+    if (error.code === "scoped_api_key_creation_disabled") {
+      return {
+        code: "unsupported",
+        message: "Boat isn't issuing API keys right now. Daintree asks again later.",
+        at,
+      };
+    }
     switch (error.kind) {
       case "unauthorized":
         return {

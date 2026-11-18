@@ -15,7 +15,6 @@ const RAW_ARIA_PRESSED: Record<string, string> = {
   // their pressed look.
   "src/components/Layout/Toolbar.tsx": "toolbar armed chip",
   "src/components/Layout/ToolbarAssistantButton.tsx": "toolbar armed chip",
-  "src/components/Layout/ToolbarPortalButton.tsx": "toolbar armed chip",
   // A promoted plugin button a plugin made a toggle (#13785).
   "src/components/Layout/PluginTrayButton.tsx": "toolbar armed chip",
   // Checkable rows in the sources popover: a check glyph carries the state,

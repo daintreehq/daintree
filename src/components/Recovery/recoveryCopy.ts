@@ -2,6 +2,7 @@ import type { CrashType } from "@shared/types/pty-host";
 import type { PanelSuspectReason } from "@shared/types/ipc/crashRecovery";
 import { pluralize } from "@/lib/pluralize";
 import type { HostBannerVariant } from "@/store/hostConnectionStore";
+import type { HostConnectionBlocker } from "@shared/types/remoteHosts";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatCountdown } from "@/utils/formatCountdown";
 import { sshRefusalLine } from "@shared/utils/sshRefusal";
@@ -120,7 +121,9 @@ export function getHostConnectionBannerCopy(
   /** What ssh said when it couldn't log in, for `access-denied`. */
   detail: string | null = null,
   /** Which side runs the older build, for `version-mismatch`; null when the builds have no order. */
-  olderSide: "host" | "local" | null = null
+  olderSide: "host" | "local" | null = null,
+  /** What stopped the retries, for `wsl-distro-missing` and `connection-unavailable`. */
+  blocker: HostConnectionBlocker | null = null
 ): RecoveryBannerCopy & { contextLine?: string } {
   const seen = lastSeenAt === null ? "" : ` · last seen ${formatRelativeTime(lastSeenAt, now)}`;
   switch (variant) {
@@ -160,6 +163,24 @@ export function getHostConnectionBannerCopy(
         ...(said ? { contextLine: `ssh: ${said}` } : {}),
       };
     }
+    case "wsl-distro-missing": {
+      // wsl.exe's own answer: no distribution by the name this host was saved with.
+      const distro = blocker?.kind === "wsl-distro-missing" ? blocker.distro : hostName;
+      return {
+        title: `WSL couldn't find ${wslMissingSubject(distro, hostName)}`,
+        description:
+          "Automatic retries have stopped. Restore it under that name in WSL, then retry.",
+      };
+    }
+    case "connection-unavailable": {
+      const said = blocker?.kind === "unusable" ? asSentence(blocker.message) : "";
+      return {
+        title: `Couldn't connect to ${hostName}`,
+        description: said
+          ? `${said} Automatic retries have stopped.`
+          : "Automatic retries have stopped. Terminals are read-only until it connects.",
+      };
+    }
     case "version-mismatch":
       if (olderSide === "host") {
         return {
@@ -188,6 +209,18 @@ export function getHostConnectionBannerCopy(
         description: "The connection dropped before it answered. Confirming what happened.",
       };
   }
+}
+
+/** A transport's message as a sentence (some end with a full stop, some don't); "" when it has none. */
+export function asSentence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/** The missing distribution, and the host it belongs to when that has a name of its own. */
+export function wslMissingSubject(distro: string, hostName: string): string {
+  return distro === hostName ? distro : `${distro} for ${hostName}`;
 }
 
 /**

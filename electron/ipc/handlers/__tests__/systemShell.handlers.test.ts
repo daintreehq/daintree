@@ -462,6 +462,22 @@ describe("system:open-in-editor containment", () => {
     });
   });
 
+  it("hands the editor's fallback back to the renderer", async () => {
+    const fallback = { outcome: "needs-terminal", editorName: "Neovim", command: "nvim" };
+    openFileMock.mockImplementationOnce(
+      () => Promise.resolve(fallback) as unknown as Promise<void>
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);
+
+    await expect(
+      handler(fakeEvent, { path: path.join(PROJECT_ROOT, "src", "app.ts") })
+    ).resolves.toEqual(fallback);
+    // A launch with nothing to report still answers nothing.
+    await expect(
+      handler(fakeEvent, { path: path.join(PROJECT_ROOT, "src", "app.ts") })
+    ).resolves.toBeUndefined();
+  });
+
   it("propagates a launch failure to the renderer", async () => {
     openFileMock.mockRejectedValueOnce(new Error("no editor"));
     const handler = getHandler(CHANNELS.SYSTEM_OPEN_IN_EDITOR);

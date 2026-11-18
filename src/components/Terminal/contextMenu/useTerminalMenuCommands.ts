@@ -251,6 +251,15 @@ export function useTerminalMenuCommands({
             { source: sourceRef.current }
           );
           break;
+        case "reset-modes":
+          // Deferred like the plugin rows: with an agent running, the action
+          // stages a confirm, which must record the pane as where focus returns.
+          deferMenuDispatch({
+            actionId: "terminal.resetModes",
+            args: { terminalId },
+            source: sourceRef.current,
+          });
+          break;
         case "restart":
           if (terminalHasRunningAgentSession(terminal)) {
             setDestructiveConfirm({

@@ -2,6 +2,7 @@ import {
   DecisionsBridge,
   DeliveryEngine,
   isUndeliveredMessage,
+  messageSentOn,
   openAnswerContent,
   openMessageContent,
   openQuestionContent,
@@ -871,6 +872,7 @@ export class AnswerDelivery {
       const shown = text === null ? "" : sanitizeAnswerText(text, PREVIEW_TEXT_CHARS);
       previews.push({
         messageId: message.message_id,
+        onComputer: messageSentOn(message) === "computer",
         status: message.delivery!.status as DecisionsFollowUpPreview["status"],
         reason: reasonOf(message.delivery!.error_code),
         text: shown === "" ? null : shown,

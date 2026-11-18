@@ -57,6 +57,7 @@ export const CHANNELS = {
   TERMINAL_LOCATE: "terminal:locate",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
+  TERMINAL_RESET_MODES: "terminal:reset-modes",
   TERMINAL_GET_HOST_MEMORY_PAUSE: "terminal:get-host-memory-pause",
   TERMINAL_REQUEST_WORKER_INGEST_PORT: "terminal:request-worker-ingest-port",
   TERMINAL_RELEASE_WORKER_INGEST_PORT: "terminal:release-worker-ingest-port",
@@ -259,6 +260,14 @@ export const CHANNELS = {
   PROJECT_SAVE_SETTINGS: "project:save-settings",
   PROJECT_ADD_BROWSER_ALLOWED_HOST: "project:add-browser-allowed-host",
   PROJECT_LINKS_CHANGE: "project-links:change",
+  PROJECT_LINKS_GET_DECLARED: "project-links:get-declared",
+  // The merged-worktree rule (#17321): its switch, its dry run, and the
+  // removals it made for this machine's views to put in their inbox.
+  MERGED_WORKTREE_CLEANUP_PREVIEW: "merged-worktree-cleanup:preview",
+  MERGED_WORKTREE_CLEANUP_SET_ENABLED: "merged-worktree-cleanup:set-enabled",
+  MERGED_WORKTREE_CLEANUP_TAKE_RECEIPTS: "merged-worktree-cleanup:take-receipts",
+  MERGED_WORKTREE_CLEANUP_ACK_RECEIPTS: "merged-worktree-cleanup:ack-receipts",
+  MERGED_WORKTREE_CLEANUP_RECEIPTS_READY: "merged-worktree-cleanup:receipts-ready",
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",
@@ -412,6 +421,7 @@ export const CHANNELS = {
   TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION: "terminal-config:set-memory-leak-detection",
   TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART: "terminal-config:set-memory-leak-auto-restart",
   TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS: "terminal-config:set-cached-project-views",
+  TERMINAL_CONFIG_SET_OSC52_CLIPBOARD_ENABLED: "terminal-config:set-osc52-clipboard-enabled",
   TERMINAL_CONFIG_DEVICE_CHANGED: "terminal-config:device-changed",
   TERMINAL_CONFIG_HOST_CHANGED: "terminal-config:host-changed",
 
@@ -452,21 +462,6 @@ export const CHANNELS = {
   GIT_SCAN_CONFLICT_MARKERS: "git:scan-conflict-markers",
   GIT_CHECKOUT_OURS_THEIRS: "git:checkout-ours-theirs",
   GIT_MARK_SAFE_DIRECTORY: "git:mark-safe-directory",
-
-  PORTAL_CREATE: "portal:create",
-  PORTAL_SHOW: "portal:show",
-  PORTAL_HIDE: "portal:hide",
-  PORTAL_RESIZE: "portal:resize",
-  PORTAL_CLOSE_TAB: "portal:close-tab",
-  PORTAL_NAVIGATE: "portal:navigate",
-  PORTAL_GO_BACK: "portal:go-back",
-  PORTAL_GO_FORWARD: "portal:go-forward",
-  PORTAL_RELOAD: "portal:reload",
-  PORTAL_NAV_EVENT: "portal:nav-event",
-  PORTAL_FOCUS: "portal:focus",
-  PORTAL_BLUR: "portal:blur",
-  PORTAL_TAB_EVICTED: "portal:tab-evicted",
-  PORTAL_TABS_EVICTED: "portal:tabs-evicted",
 
   SESSION_RESTORE_GET_CONFIG: "session-restore:get-config",
   SESSION_RESTORE_UPDATE_CONFIG: "session-restore:update-config",
@@ -557,6 +552,9 @@ export const CHANNELS = {
 
   SOUND_TRIGGER: "sound:trigger",
   SOUND_GET_DIR: "sound:get-dir",
+  NOTIFICATION_SOUNDS_LIST: "notification-sounds:list",
+  NOTIFICATION_SOUNDS_IMPORT: "notification-sounds:import",
+  NOTIFICATION_SOUNDS_GET_CUSTOM_DIR: "notification-sounds:get-custom-dir",
 
   NOTIFICATION_UPDATE: "notification:update",
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",
@@ -956,6 +954,7 @@ export const CHANNELS = {
   VOICE_DICTIONARY_REMOVE: "voice-dictionary:remove",
   VOICE_DICTIONARY_UPDATE: "voice-dictionary:update",
   VOICE_DICTIONARY_ACCEPT_SUGGESTION: "voice-dictionary:accept-suggestion",
+  VOICE_DICTIONARY_IMPORT_TERMS: "voice-dictionary:import-terms",
   VOICE_DICTIONARY_DISMISS_SUGGESTION: "voice-dictionary:dismiss-suggestion",
   VOICE_DICTIONARY_RECORD_SUGGESTIONS: "voice-dictionary:record-suggestions",
   VOICE_DICTIONARY_GET_PROJECT: "voice-dictionary:get-project",
@@ -1120,6 +1119,7 @@ export const CHANNELS = {
   FORGE_GET_PR: "forge:get-pr",
   FORGE_GET_CI_STATUS: "forge:get-ci-status",
   FORGE_GET_CHECKS: "forge:get-checks",
+  FORGE_GET_DEPLOYMENTS: "forge:get-deployments",
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
   FORGE_GET_CURRENT_USER: "forge:get-current-user",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
@@ -1612,6 +1612,11 @@ export const CHANNELS = {
   DECISIONS_CANCEL_QUESTION_BY_REFERENCE: "decisions:cancel-question-by-reference",
   DECISIONS_ANSWER_QUESTION: "decisions:answer-question",
   DECISIONS_GET_ANSWER_RESULT: "decisions:get-answer-result",
+  // The person's decline, signed by this computer's owner key (#17239).
+  DECISIONS_DECLINE_QUESTION: "decisions:decline-question",
+  DECISIONS_GET_DECLINE_RESULT: "decisions:get-decline-result",
+  DECISIONS_SEND_FOLLOW_UP: "decisions:send-follow-up",
+  DECISIONS_GET_FOLLOW_UP_RESULT: "decisions:get-follow-up-result",
   DECISIONS_SET_ENABLED: "decisions:set-enabled",
   // A relay URL's unsigned health and protocol check (#16005), from main.
   DECISIONS_CHECK_RELAY: "decisions:check-relay",
@@ -1649,6 +1654,7 @@ export const CHANNELS = {
   DECISIONS_SET_AGENT_ASK_HUMAN: "decisions:set-agent-ask-human",
   // Whether the phone may show the asking pane's title, state and last lines (#16228).
   DECISIONS_SET_TERMINAL_SNAPSHOTS: "decisions:set-terminal-snapshots",
+  DECISIONS_SET_HOLD_PHONE_PUSHES: "decisions:set-hold-phone-pushes",
   // Which terminals a view's hybrid input holds a draft for, which an answer waits behind (#16282).
   DECISIONS_REPORT_COMPOSER_DRAFTS: "decisions:report-composer-drafts",
   // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).
@@ -1764,7 +1770,11 @@ export const CHANNELS = {
   REMOTE_HOSTS_RESET_PLUGIN_VIEW_CONSENT: "remote-hosts:reset-plugin-view-consent",
   REMOTE_HOSTS_PREPARE_PLUGIN_VIEW: "remote-hosts:prepare-plugin-view",
   REMOTE_HOSTS_CHECK_AGENT_FORWARDING: "remote-hosts:check-agent-forwarding",
+  REMOTE_HOSTS_START_SSH_SIGN_IN: "remote-hosts:start-ssh-sign-in",
+  REMOTE_HOSTS_ANSWER_SSH_SIGN_IN: "remote-hosts:answer-ssh-sign-in",
+  REMOTE_HOSTS_CANCEL_SSH_SIGN_IN: "remote-hosts:cancel-ssh-sign-in",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
+  REMOTE_HOSTS_SSH_SIGN_IN_EVENT: "remote-hosts:ssh-sign-in-event",
   CLOUD_HOSTS_GET_SNAPSHOT: "cloud-hosts:get-snapshot",
   CLOUD_HOSTS_CHECK_ACCOUNT_KEY: "cloud-hosts:check-account-key",
   CLOUD_HOSTS_ADD_ACCOUNT: "cloud-hosts:add-account",
@@ -1775,6 +1785,7 @@ export const CHANNELS = {
   CLOUD_HOSTS_GET_CATALOG: "cloud-hosts:get-catalog",
   CLOUD_HOSTS_LIST_RESOURCES: "cloud-hosts:list-resources",
   CLOUD_HOSTS_CREATE_HOST: "cloud-hosts:create-host",
+  CLOUD_HOSTS_CREATE_HOST_FOR_WORKTREE: "cloud-hosts:create-host-for-worktree",
   CLOUD_HOSTS_IMPORT_HOST: "cloud-hosts:import-host",
   CLOUD_HOSTS_START_HOST: "cloud-hosts:start-host",
   CLOUD_HOSTS_STOP_HOST: "cloud-hosts:stop-host",
@@ -1783,6 +1794,10 @@ export const CHANNELS = {
   CLOUD_HOSTS_DELETE_MACHINE: "cloud-hosts:delete-machine",
   CLOUD_HOSTS_SET_LIFETIME: "cloud-hosts:set-lifetime",
   CLOUD_HOSTS_TRUST_HOST_KEY: "cloud-hosts:trust-host-key",
+  CLOUD_HOSTS_PREPARE_WORKTREE_CLEANUP: "cloud-hosts:prepare-worktree-cleanup",
+  CLOUD_HOSTS_SETTLE_WORKTREE_CLEANUP: "cloud-hosts:settle-worktree-cleanup",
+  CLOUD_HOSTS_RETRY_WORKTREE_CLEANUP: "cloud-hosts:retry-worktree-cleanup",
+  CLOUD_HOSTS_DISMISS_WORKTREE_CLEANUP: "cloud-hosts:dismiss-worktree-cleanup",
 
   // Remote Hosts: hostMode (shell).
   HOST_MODE_GET_STATUS: "host-mode:get-status",
