@@ -360,7 +360,11 @@ function LinksLauncherPopoverContent({
   const devSessions = useAllDevSessions();
   const pullRequest = useLinksLauncherPullRequest();
   const checks = useLauncherPullRequestChecks(pullRequest, seq);
-  const deploymentTarget = useLinksLauncherDeploymentTarget(pullRequest);
+  // Asked of the pull request the list shows: once the forge says it is gone,
+  // the branch it was opened from may still be deployed.
+  const deploymentTarget = useLinksLauncherDeploymentTarget(
+    showsPullRequest(pullRequest, checks) ? pullRequest : null
+  );
   const deployments = useLauncherDeployments(deploymentTarget, seq);
   const close = useLinksLauncherStore((s) => s.close);
   const contentRef = useRef<HTMLDivElement>(null);

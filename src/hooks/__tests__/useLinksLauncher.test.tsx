@@ -679,6 +679,24 @@ describe("useLinksLauncherDeploymentTarget", () => {
     }
   });
 
+  it("asks under whichever forge the project resolved to", () => {
+    h.worktrees = new Map([["wt-1", worktree("wt-1", {}, { providerId: "github.github" })]]);
+    h.activeWorktreeId = "wt-1";
+    h.codeProviderId = "gitlab.gitlab";
+    const { result } = renderHook(() => useTarget());
+    expect(result.current).toMatchObject({ providerId: "gitlab.gitlab", kind: "branch" });
+  });
+
+  it("passes the branch on exactly as git names it", () => {
+    // A no-break space is a legal start to a branch name, and trimming it
+    // would ask about another branch.
+    const branch = `${String.fromCharCode(0xa0)}main`;
+    h.worktrees = new Map([["wt-1", worktree("wt-1", { branch }, null)]]);
+    h.activeWorktreeId = "wt-1";
+    const { result } = renderHook(() => useTarget());
+    expect(result.current).toMatchObject({ kind: "branch", branch });
+  });
+
   it("asks while the host has yet to read the remotes", () => {
     h.worktrees = new Map([["wt-1", worktree("wt-1", { hasRemote: undefined }, null)]]);
     h.activeWorktreeId = "wt-1";

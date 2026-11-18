@@ -213,8 +213,8 @@ export type LauncherDeploymentTarget = {
 /**
  * Where to ask the forge about the active worktree's deployments, or `null`
  * when there is nowhere to ask: no code forge, no remote, a detached HEAD, or
- * a selection this view doesn't hold. Pass the launcher's pull request, so the
- * two never disagree about which one the worktree has.
+ * a selection this view doesn't hold. Pass the pull request the launcher
+ * shows, so the two never disagree about which one the worktree has.
  */
 export function useLinksLauncherDeploymentTarget(
   pullRequest: LauncherPullRequest | null
@@ -225,8 +225,9 @@ export function useLinksLauncherDeploymentTarget(
     useShallow((state) => {
       const worktree = activeWorktreeId ? state.worktrees.get(activeWorktreeId) : undefined;
       if (!worktree || worktree.hasRemote === false) return null;
-      const name = copyableBranchName(worktree)?.trim();
-      if (!name) return null;
+      const name = copyableBranchName(worktree);
+      // Passed on as git has it: a branch can begin with a space-like character.
+      if (name === null || !name.trim()) return null;
       return {
         worktreeId: worktree.id,
         worktreePath: worktree.path,

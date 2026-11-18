@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
     Promise.resolve({ deployments: [] })
   ),
   openInPanel: false,
+  expectHandoff: vi.fn(),
 }));
 
 vi.mock("@/clients/forgeClient", () => ({
@@ -22,6 +23,10 @@ vi.mock("@/clients/forgeClient", () => ({
 }));
 vi.mock("@/services/openLinkUrl", () => ({
   opensInPanel: () => h.openInPanel,
+}));
+vi.mock("@/components/ui/overlay-focus-restore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/overlay-focus-restore")>()),
+  useOverlayFocusRestore: () => ({ expectHandoff: h.expectHandoff }),
 }));
 
 const {
@@ -70,6 +75,7 @@ beforeEach(() => {
   h.getDeployments.mockReset();
   h.getDeployments.mockImplementation(() => Promise.resolve({ deployments: [] }));
   h.openInPanel = false;
+  h.expectHandoff.mockClear();
 });
 
 afterEach(() => {
@@ -121,7 +127,9 @@ describe("latestLauncherDeployments", () => {
           environment: state,
           state,
           createdAt: 10 - index,
-          ...(state === "failure" ? { url: "https://failed.example.dev/" } : {}),
+          ...(state === "failure" || state === "inactive"
+            ? { url: `https://${state}.example.dev/` }
+            : {}),
         })
       )
     );
@@ -129,8 +137,8 @@ describe("latestLauncherDeployments", () => {
       ["pending", "Pending", undefined],
       ["in_progress", "Deploying", undefined],
       ["success", "Deployed", undefined],
-      ["failure", "Failed", "https://failed.example.dev/"],
-      ["inactive", "Inactive", undefined],
+      ["failure", "Failed", "https://failure.example.dev/"],
+      ["inactive", "Inactive", "https://inactive.example.dev/"],
       ["unknown", "Unknown state", undefined],
     ]);
   });
@@ -148,12 +156,15 @@ describe("latestLauncherDeployments", () => {
     ]);
   });
 
-  it("keeps the row but drops an address that isn't an ordinary web address", () => {
+  it("keeps the row but drops an address the renderer won't open", () => {
+    // Main passes it (an ordinary https address); it is past the renderer's length cap.
+    const long = `https://preview.example.dev/${"a".repeat(2_100)}`;
     const rows = latestLauncherDeployments([
-      deployment({ url: "https://user:secret@preview.example.dev/" }),
+      deployment({ environment: "Preview", state: "failure", url: long }),
     ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.url).toBeUndefined();
+    expect(rows.map((row) => [row.environment, row.state.label, row.url])).toEqual([
+      ["Preview", "Failed", undefined],
+    ]);
   });
 });
 
@@ -237,6 +248,49 @@ describe("useLauncherDeployments", () => {
     expect(h.getDeployments).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps a late failure for the target before off the new one", async () => {
+    let rejectFirst!: (error: unknown) => void;
+    h.getDeployments.mockImplementationOnce(
+      () => new Promise<DeploymentsAnswer>((_, reject) => (rejectFirst = reject))
+    );
+    h.getDeployments.mockImplementationOnce(() =>
+      Promise.resolve({ deployments: [deployment({ url: "https://signup.example.dev/" })] })
+    );
+    let target: LauncherDeploymentTarget = PR_TARGET;
+    const { result, rerender } = renderHook(() => useLauncherDeployments(target, 7));
+    await settle();
+    target = BRANCH_TARGET;
+    rerender();
+    await settle();
+    await act(async () => {
+      rejectFirst(new Error("rate limited"));
+    });
+    expect(result.current.kind === "loaded" && result.current.rows.map((row) => row.url)).toEqual([
+      "https://signup.example.dev/",
+    ]);
+  });
+
+  it("waits for a fresh read when a target comes back within one opening", async () => {
+    h.getDeployments.mockResolvedValueOnce({
+      deployments: [deployment({ url: "https://first-read.example.dev/" })],
+    });
+    h.getDeployments.mockResolvedValueOnce({ deployments: [] });
+    h.getDeployments.mockImplementationOnce(() => new Promise(() => {}));
+    let target: LauncherDeploymentTarget = PR_TARGET;
+    const { result, rerender } = renderHook(() => useLauncherDeployments(target, 7));
+    await settle();
+    expect(result.current.kind).toBe("loaded");
+
+    target = BRANCH_TARGET;
+    rerender();
+    await settle();
+    target = PR_TARGET;
+    rerender();
+    await settle();
+    expect(h.getDeployments).toHaveBeenCalledTimes(3);
+    expect(result.current).toEqual({ kind: "loading" });
+  });
+
   it("reads again when the same number comes from another repository", async () => {
     let target: LauncherDeploymentTarget = PR_TARGET;
     const { rerender } = renderHook(() => useLauncherDeployments(target, 7));
@@ -266,8 +320,6 @@ describe("LinksLauncherDeployments", () => {
 
   it("opens an environment's address, and reads one without an address as plain text", () => {
     const onOpen = vi.fn();
-    // Even a local address goes to the system browser, so nothing waits for a panel.
-    h.openInPanel = true;
     const rows = latestLauncherDeployments([
       deployment({ environment: "Preview", url: "https://app-git-login.example.dev/?x=1" }),
       deployment({ environment: "Storybook", state: "in_progress" }),
@@ -288,11 +340,33 @@ describe("LinksLauncherDeployments", () => {
     expect(document.getElementById(button.getAttribute("aria-describedby")!)?.textContent).toBe(
       "Deployed · app-git-login.example.dev"
     );
-    expect(storybook!.querySelector("button")).toBeNull();
+    expect(storybook!.querySelector("button, a, [role], [tabindex]")).toBeNull();
+    expect(storybook!.getAttribute("role")).toBeNull();
+    expect(storybook!.getAttribute("tabindex")).toBeNull();
     expect(storybook!.textContent).toBe("StorybookDeploying");
 
     fireEvent.click(button);
     expect(onOpen).toHaveBeenCalledWith("https://app-git-login.example.dev/?x=1");
+  });
+
+  it("never hands focus off to a panel, even for a local address", () => {
+    const onOpen = vi.fn();
+    h.openInPanel = true;
+    const rows = latestLauncherDeployments([
+      deployment({ environment: "Local", url: "http://localhost:4000/" }),
+    ]);
+    const { container } = render(
+      <LinksLauncherDeployments
+        worktreeLabel="feature/login"
+        deployments={{ kind: "loaded", rows }}
+        showSkeleton={false}
+        sectionId="s"
+        onOpen={onOpen}
+      />
+    );
+    fireEvent.click(container.querySelector("button")!);
+    expect(onOpen).toHaveBeenCalledWith("http://localhost:4000/");
+    expect(h.expectHandoff).not.toHaveBeenCalled();
   });
 
   it("shows no heading for an answer with nothing deployed", () => {
@@ -305,7 +379,9 @@ describe("LinksLauncherDeployments", () => {
         onOpen={() => {}}
       />
     );
-    expect(container.querySelector("section")).toBeNull();
+    expect(container.querySelector("h2")).toBeNull();
+    expect(container.querySelector("li")).toBeNull();
+    expect(container.querySelector("[aria-labelledby]")).toBeNull();
   });
 
   it("announces a failed read in a region mounted before it lands", () => {
@@ -323,6 +399,9 @@ describe("LinksLauncherDeployments", () => {
     rerender(<LinksLauncherDeployments {...props} deployments={{ kind: "error" }} />);
     expect(region?.isConnected).toBe(true);
     expect(region?.textContent).toBe("Couldn't load deployments");
-    expect(screen.getByRole("heading").textContent).toBe("Deployments feature/login");
+    // Inside the section it belongs to, for whoever comes back to the region.
+    expect(
+      screen.getByRole("region", { name: "Deployments feature/login" }).contains(region!)
+    ).toBe(true);
   });
 });

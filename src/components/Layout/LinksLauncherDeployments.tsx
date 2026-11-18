@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, CircleDashed, CircleHelp, CircleMinus, LoaderCircle, X } from "lucide-react";
+import { CircleDashed, CircleHelp, CircleMinus, LoaderCircle, type LucideIcon } from "lucide-react";
 import type { DeploymentState, DeploymentTarget } from "@shared/types/forge";
 import type { ForgeDeployment } from "@shared/types/ipc/forge";
 import { linkHost } from "@shared/utils/projectLinks";
@@ -9,6 +9,7 @@ import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { safeDetailsUrl, sanitizeCheckSource } from "@/components/Worktree/ReviewHub/prChecks";
 import type { LauncherDeploymentTarget } from "@/hooks/useLinksLauncher";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { LinksLauncherRow } from "./LinksLauncherRow";
 
@@ -26,7 +27,7 @@ const LOADING: LauncherDeployments = { kind: "loading" };
 const ERROR: LauncherDeployments = { kind: "error" };
 
 export interface DeploymentStateVisual {
-  Icon: typeof Check;
+  Icon: LucideIcon;
   toneClass: string;
   /** Painted beside the environment and read into the row's description. */
   label: string;
@@ -34,15 +35,16 @@ export interface DeploymentStateVisual {
 
 /**
  * Every state keeps its glyph, since shape is all that survives forced
- * colours. A live deployment reads like a running check beside it, and a
- * failure like a failed one. A successful one stays neutral: on a list opened
- * again and again, "Deployed" is the ordinary case, not a result to celebrate.
+ * colours. A live deployment reads like a running check beside it. A finished
+ * or failed one wears its severity's glyph, but a successful one keeps neutral
+ * ink: on a list opened again and again, "Deployed" is the ordinary case, not
+ * a result to celebrate.
  */
 const STATE_VISUAL: Record<DeploymentState, DeploymentStateVisual> = {
   pending: { Icon: CircleDashed, toneClass: "text-text-secondary", label: "Pending" },
   in_progress: { Icon: LoaderCircle, toneClass: "text-status-warning", label: "Deploying" },
-  success: { Icon: Check, toneClass: "text-text-secondary", label: "Deployed" },
-  failure: { Icon: X, toneClass: "text-status-error", label: "Failed" },
+  success: { Icon: SEVERITY_GLYPH.success, toneClass: "text-text-secondary", label: "Deployed" },
+  failure: { Icon: SEVERITY_GLYPH.error, toneClass: "text-status-error", label: "Failed" },
   inactive: { Icon: CircleMinus, toneClass: "text-text-secondary", label: "Inactive" },
   unknown: { Icon: CircleHelp, toneClass: "text-text-secondary", label: "Unknown state" },
 };
@@ -191,57 +193,61 @@ export function LinksLauncherDeployments({
   const headingId = `${sectionId}-heading`;
   const rows = deployments.kind === "loaded" && !showSkeleton ? deployments.rows : [];
   const failed = deployments.kind === "error" && !showSkeleton;
+  const shown = showsDeployments(deployments, showSkeleton);
   return (
-    <>
-      {showsDeployments(deployments, showSkeleton) && (
-        <section aria-labelledby={headingId}>
-          <h2 id={headingId} className="flex min-w-0 items-baseline gap-2 px-3 pt-1.5 pb-1">
-            <span className={cn(LIST_LABEL_CLASS, "shrink-0")}>{DEPLOYMENTS_HEADING}</span>{" "}
-            <span className="min-w-0 truncate text-xs text-text-secondary">{worktreeLabel}</span>
-          </h2>
-          {rows.length > 0 && (
-            <ul className="flex flex-col">
-              {rows.map((row, index) => (
-                <LinksLauncherRow
-                  key={row.environment}
-                  rowId={`${sectionId}-${index}`}
-                  icon={
-                    <row.state.Icon
-                      className={cn("h-4 w-4 shrink-0", row.state.toneClass)}
-                      aria-hidden="true"
-                    />
-                  }
-                  title={row.name}
-                  detail={
-                    row.url === undefined ? (
-                      row.state.label
-                    ) : (
-                      <FactRun facts={[row.state.label, linkHost(row.url)]} />
-                    )
-                  }
-                  url={row.url}
-                  external
-                  onOpen={onOpen}
-                />
-              ))}
-            </ul>
-          )}
-          {showSkeleton && (
-            <Skeleton label="Loading deployments" className="flex flex-col gap-3 px-3 pt-1.5 pb-3">
-              <div className="flex items-center gap-2.5">
-                <SkeletonBone immediate className="h-4 w-4 rounded-full" />
-                <SkeletonBone immediate className="h-2.5 w-2/3" />
-              </div>
-            </Skeleton>
-          )}
-        </section>
+    // Mounted while there is a target, so a failure landing later is announced
+    // from inside the section; out of the list's flow until there is
+    // something to show, so an empty answer leaves no gap.
+    <section
+      aria-labelledby={shown ? headingId : undefined}
+      className={shown ? undefined : "sr-only"}
+    >
+      {shown && (
+        <h2 id={headingId} className="flex min-w-0 items-baseline gap-2 px-3 pt-1.5 pb-1">
+          <span className={cn(LIST_LABEL_CLASS, "shrink-0")}>{DEPLOYMENTS_HEADING}</span>{" "}
+          <span className="min-w-0 truncate text-xs text-text-secondary">{worktreeLabel}</span>
+        </h2>
       )}
-      {/* Mounted while there is a target, so a failure landing later is announced. */}
+      {rows.length > 0 && (
+        <ul className="flex flex-col">
+          {rows.map((row, index) => (
+            <LinksLauncherRow
+              key={row.environment}
+              rowId={`${sectionId}-${index}`}
+              icon={
+                <row.state.Icon
+                  className={cn("h-4 w-4 shrink-0", row.state.toneClass)}
+                  aria-hidden="true"
+                />
+              }
+              title={row.name}
+              detail={
+                row.url === undefined ? (
+                  row.state.label
+                ) : (
+                  <FactRun facts={[row.state.label, linkHost(row.url)]} />
+                )
+              }
+              url={row.url}
+              external
+              onOpen={onOpen}
+            />
+          ))}
+        </ul>
+      )}
+      {showSkeleton && (
+        <Skeleton label="Loading deployments" className="flex flex-col gap-3 px-3 pt-1.5 pb-3">
+          <div className="flex items-center gap-2.5">
+            <SkeletonBone immediate className="h-4 w-4 rounded-full" />
+            <SkeletonBone immediate className="h-2.5 w-2/3" />
+          </div>
+        </Skeleton>
+      )}
       <div role="status" aria-live="polite">
         {failed && (
           <p className="px-3 pb-2 text-xs text-text-secondary">Couldn't load deployments</p>
         )}
       </div>
-    </>
+    </section>
   );
 }
