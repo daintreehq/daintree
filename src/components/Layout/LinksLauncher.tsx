@@ -9,6 +9,7 @@ import {
 import { Globe, ServerCog } from "lucide-react";
 import { GitPullRequest, Link, ListChecks } from "@/components/icons";
 import type { DeclaredProjectLink, DeclaredProjectLinkSource } from "@shared/types";
+import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { linkHost } from "@shared/utils/projectLinks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { opensInPanel, openLinkUrl, openUrlExternally } from "@/services/openLinkUrl";
+import { openDevServer, openDevServerExternally } from "@/services/openDevServer";
 import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { useLinksLauncherStore } from "@/store/linksLauncherStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -223,6 +225,8 @@ export function LinksLauncherList({
   devSessions,
   onOpen,
   onOpenExternal,
+  onOpenDevServer,
+  onOpenDevServerExternally,
   onManage,
 }: {
   links: LinksLauncherLinks;
@@ -234,6 +238,10 @@ export function LinksLauncherList({
   onOpen: (url: string) => void;
   /** Opens in the system browser, whatever the address. */
   onOpenExternal: (url: string) => void;
+  /** Opens a running dev server in its own preview, else the system browser. */
+  onOpenDevServer: (session: DevPreviewSessionState) => void;
+  /** Opens a dev server's address in the system browser, through the host on a Remote Host. */
+  onOpenDevServerExternally: (url: string) => void;
   onManage: () => void;
 }) {
   const baseId = useId();
@@ -333,7 +341,12 @@ export function LinksLauncherList({
           onOpen={onOpenExternal}
         />
       )}
-      <LinksLauncherDevServers snapshot={devSessions} sectionId={`${baseId}-dev-servers`} />
+      <LinksLauncherDevServers
+        snapshot={devSessions}
+        sectionId={`${baseId}-dev-servers`}
+        onOpen={onOpenDevServer}
+        onOpenExternal={onOpenDevServerExternally}
+      />
     </div>
   );
 }
@@ -416,6 +429,18 @@ function LinksLauncherPopoverContent({
         onOpenExternal={(url) => {
           close(seq ?? undefined);
           openUrlExternally(url, LOG_PREFIX);
+        }}
+        onOpenDevServer={(session) => {
+          close(seq ?? undefined);
+          openDevServer(session).catch((error: unknown) =>
+            logError(`${LOG_PREFIX} Failed to open the dev server`, error)
+          );
+        }}
+        onOpenDevServerExternally={(url) => {
+          close(seq ?? undefined);
+          openDevServerExternally(url).catch((error: unknown) =>
+            logError(`${LOG_PREFIX} Failed to open the dev server`, error)
+          );
         }}
         onManage={() => {
           close(seq ?? undefined);
