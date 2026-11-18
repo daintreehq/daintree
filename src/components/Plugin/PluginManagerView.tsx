@@ -71,7 +71,11 @@ import {
   describePluginInstallSource,
 } from "@shared/utils/pluginInstallSource";
 import { PluginCatalog } from "./PluginCatalog";
-import { PluginCommunityBrowse } from "./PluginCommunityBrowse";
+import {
+  PluginCommunityBrowse,
+  catalogName,
+  type InstalledListingState,
+} from "./PluginCommunityBrowse";
 import { Store } from "@/components/icons";
 import { PluginIconTile } from "./pluginIcons";
 import { pluginSignalFor } from "./pluginStatus";
@@ -436,8 +440,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   const showingBrowse = browsing && selectedPlugin === null && selectedProjectPlugin === null;
   // Installed copies by id, for Browse's markers. Project plugins are a
   // project's own folder, not installs, so they never mark a listing.
-  const installedVersions = useMemo(
-    () => new Map(pm.plugins.map((p) => [p.manifest.name, p.manifest.version])),
+  // A catalog install also says which catalog (#17434), so a listing from
+  // another one offers to replace it rather than claim it.
+  const installedListings = useMemo(
+    () =>
+      new Map<string, InstalledListingState>(
+        pm.plugins.map((p) => [
+          p.manifest.name,
+          {
+            version: p.manifest.version,
+            catalog: p.catalog
+              ? p.catalog.sourceUrl === undefined
+                ? {}
+                : { sourceUrl: p.catalog.sourceUrl }
+              : null,
+          },
+        ])
+      ),
     [pm.plugins]
   );
 
@@ -1304,7 +1323,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         >
           {showingBrowse ? (
             <PluginCommunityBrowse
-              installedVersions={installedVersions}
+              installed={installedListings}
               installDisabled={pm.isInstalling || pm.urlReview !== null}
               onInstall={pm.previewCatalogListing}
               onViewInstalled={(pluginId) => {
@@ -1621,6 +1640,16 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                         kind: "catalog",
                         repoLabel: describeCatalogRepo(pm.urlReview.catalog.repo),
                         installedOnDisk: pm.urlReview.installedOnDisk,
+                        ...(pm.urlReview.catalog.sourceUrl === undefined
+                          ? {}
+                          : { catalogLabel: catalogName(pm.urlReview.catalog.sourceUrl) }),
+                        ...(pm.urlReview.replacesCatalog === undefined
+                          ? {}
+                          : {
+                              replacesCatalogLabel: catalogName(
+                                pm.urlReview.replacesCatalog.sourceUrl
+                              ),
+                            }),
                       },
               }
         }

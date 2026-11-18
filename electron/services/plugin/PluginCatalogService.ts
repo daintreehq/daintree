@@ -1,10 +1,12 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import * as semver from "semver";
 
 import {
   PLUGIN_CATALOG_URL,
   PLUGIN_CATALOG_CACHE_FILENAME,
+  PLUGIN_CATALOG_SOURCE_CACHE_DIR,
   PLUGIN_CATALOG_BROWSE_TTL_MS,
   PLUGIN_CATALOG_FETCH_TIMEOUT_MS,
   PLUGIN_CATALOG_MAX_BYTES,
@@ -16,6 +18,11 @@ import type {
 } from "../../../shared/types/plugin.js";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { createLogger } from "../../utils/logger.js";
+import {
+  createManualRedirectFetch,
+  type ManualRedirectFetch,
+} from "../../utils/netManualRedirectFetch.js";
+import { fetchWithPrivateHostGuard } from "../../utils/pluginDownloadPolicy.js";
 import {
   parsePluginCatalog,
   type PluginCatalog,
@@ -92,10 +99,24 @@ export interface PluginCatalogUpdateSource {
 type CatalogFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 export interface PluginCatalogDeps {
-  /** Defaults to `userData/plugin-catalog.json`; `null` disables the disk cache. */
+  /**
+   * The catalog the person added that this client reads (#17434), as its
+   * canonical URL; absent for Daintree's own.
+   */
+  sourceUrl?: string;
+  /**
+   * Defaults to `userData/plugin-catalog.json` for Daintree's own catalog and
+   * `userData/plugin-catalogs/<sha256 of the URL>.json` for an added one;
+   * `null` disables the disk cache.
+   */
   cachePath?: string | null;
-  /** Defaults to Electron's `net.fetch`. */
+  /** Daintree's own catalog only. Defaults to Electron's `net.fetch`. */
   fetchImpl?: CatalogFetch;
+  /**
+   * An added catalog only: the fetch each guarded hop makes. Defaults to a
+   * manual-redirect fetch on Electron's `net.request`.
+   */
+  manualFetch?: ManualRedirectFetch;
   now?: () => number;
 }
 
@@ -114,12 +135,15 @@ type RemoteOutcome =
 
 interface DiskPayload {
   fetchedAt: number;
+  /** An added catalog's URL, checked on read so a cache file can't stand in for another. */
+  sourceUrl?: string;
   catalog: unknown;
 }
 
 /**
- * Fetches, validates and caches the community plugin catalog (#16777,
- * `docs/plugins/catalog.md`). Nothing happens until a caller asks: the
+ * Fetches, validates and caches one plugin catalog (#16777,
+ * `docs/plugins/catalog.md`): Daintree's own, or one the person added
+ * (#17434), held to the same schema. Nothing happens until a caller asks: the
  * constructor does no I/O, and the disk cache is read on the first request.
  * Concurrent callers share one fetch, but each gets the answer its own mode
  * allows, so a browse caller never decides what an install caller may use.
@@ -130,11 +154,38 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
   private inFlight: Promise<RemoteOutcome> | null = null;
   /** Writes run in order, so an older catalog never lands over a newer one. */
   private diskWrites: Promise<void> = Promise.resolve();
+  private pendingWrites = 0;
+  private activeReads = 0;
+  private batchHolds = 0;
   private cachePath: Promise<string | null> | null = null;
 
   constructor(private readonly deps: PluginCatalogDeps = {}) {}
 
+  /**
+   * Nothing is being read, fetched or written. Only an idle client is let go
+   * (#17434), so a client built again for the same catalog never runs beside
+   * one whose write could still land over its newer copy.
+   */
+  isIdle(): boolean {
+    return (
+      this.activeReads === 0 &&
+      this.inFlight === null &&
+      this.pendingWrites === 0 &&
+      this.batchHolds === 0
+    );
+  }
+
   async getCatalog(mode: PluginCatalogMode): Promise<PluginCatalogResult> {
+    this.activeReads += 1;
+    try {
+      return await this.readCatalog(mode);
+    } finally {
+      this.activeReads -= 1;
+      this.settledSome();
+    }
+  }
+
+  private async readCatalog(mode: PluginCatalogMode): Promise<PluginCatalogResult> {
     await this.loadDiskOnce();
     const cached = this.snapshot;
     if (mode === "browse" && cached && this.isFresh(cached)) {
@@ -178,6 +229,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
     const result = await this.getCatalog("browse");
     if (result.status !== "available") return { status: "unavailable", failure: result.failure };
     const listings: PluginCatalogListing[] = [];
+    const { sourceUrl } = this.deps;
     for (const releases of releasesById(result.catalog.entries).values()) {
       const newest = newestRelease(releases);
       if (!newest) continue;
@@ -186,6 +238,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
         version: newest.version,
         repo: newest.repo,
         capabilities: [...newest.capabilities],
+        ...(sourceUrl === undefined ? {} : { sourceUrl }),
       });
     }
     listings.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -217,18 +270,39 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
    */
   openUpdateBatch(): PluginCatalogUpdateSource {
     let read: Promise<IndexedCatalog | PluginCatalogBlocked> | null = null;
+    // Held from opening until its one read settles, so the client can't be
+    // let go in between and rebuilt beside the one this batch reads (#17434).
+    this.batchHolds += 1;
+    let held = true;
+    const release = () => {
+      if (!held) return;
+      held = false;
+      this.batchHolds -= 1;
+      this.settledSome();
+    };
     return {
       lookupUpdate: async (id, installedVersion) => {
-        read ??= this.getCatalog("install").then((result) =>
-          result.status === "available"
-            ? { byId: releasesById(result.catalog.entries), fetchedAt: result.fetchedAt }
-            : result
-        );
+        read ??= this.getCatalog("install")
+          .then((result): IndexedCatalog | PluginCatalogBlocked =>
+            result.status === "available"
+              ? { byId: releasesById(result.catalog.entries), fetchedAt: result.fetchedAt }
+              : result
+          )
+          .finally(release);
         const catalog = await read;
         if ("status" in catalog) return catalog;
         return updateFor(catalog.byId.get(id) ?? [], installedVersion, catalog.fetchedAt);
       },
     };
+  }
+
+  /**
+   * An added catalog's client that has gone idle may leave the clients or the
+   * cache folder past their limit (a burst of busy clients, a write after the
+   * last sweep), so it asks for one coalesced settle (#17434).
+   */
+  private settledSome(): void {
+    if (this.deps.sourceUrl !== undefined && this.isIdle()) scheduleSettle();
   }
 
   /** A clock that went backwards must not make an old catalog look fresh. */
@@ -265,7 +339,13 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
           // release disappears rather than lingering from an older copy.
           this.snapshot = outcome.snapshot;
           const snapshot = outcome.snapshot;
-          this.diskWrites = this.diskWrites.then(() => this.writeDisk(snapshot));
+          this.pendingWrites += 1;
+          this.diskWrites = this.diskWrites
+            .then(() => this.writeDisk(snapshot))
+            .finally(() => {
+              this.pendingWrites -= 1;
+              this.settledSome();
+            });
         }
         return outcome;
       })
@@ -278,16 +358,15 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
   }
 
   private async fetchRemote(): Promise<RemoteOutcome> {
-    const fetchImpl = this.deps.fetchImpl ?? (await loadNetFetch());
-    if (!fetchImpl) return { ok: false, failure: "unreachable" };
-
-    const response = await fetchImpl(PLUGIN_CATALOG_URL, {
+    const init: RequestInit = {
       // Covers the body read as well as the headers.
       signal: AbortSignal.timeout(PLUGIN_CATALOG_FETCH_TIMEOUT_MS),
       cache: "no-store",
       credentials: "omit",
       headers: { Accept: "application/json" },
-    });
+    };
+    const response = await this.request(init);
+    if (!response) return { ok: false, failure: "unreachable" };
     if (response.status === 404) {
       await discardBody(response);
       logger.debug("Catalog not published");
@@ -319,6 +398,28 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
     return { ok: true, snapshot: { catalog: parsed.catalog, fetchedAt: this.now() } };
   }
 
+  /**
+   * Daintree's own catalog is a constant on its own CDN. An added one is a URL
+   * the person typed, so it is held to what a URL install is (#17434): every
+   * redirect hop is checked for https and a public host, by name and by what
+   * the name resolves to, before anything connects.
+   */
+  private async request(init: RequestInit): Promise<Response | null> {
+    const { sourceUrl } = this.deps;
+    if (sourceUrl === undefined) {
+      const fetchImpl = this.deps.fetchImpl ?? (await loadNetFetch());
+      return fetchImpl ? fetchImpl(PLUGIN_CATALOG_URL, init) : null;
+    }
+    const manualFetch = this.deps.manualFetch ?? (await loadManualFetch());
+    if (!manualFetch) return null;
+    const guarded = await fetchWithPrivateHostGuard(manualFetch, sourceUrl, init);
+    if (!guarded.ok) {
+      logger.warn("Added catalog fetch refused", { reason: guarded.reason });
+      return null;
+    }
+    return guarded.response;
+  }
+
   /** The cache is revalidated on every read: a local file is no trust root. */
   private async readDisk(): Promise<CatalogSnapshot | null> {
     const cachePath = await this.resolveCachePath();
@@ -333,6 +434,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
       return null;
     }
     if (typeof payload?.fetchedAt !== "number" || !Number.isFinite(payload.fetchedAt)) return null;
+    if (payload.sourceUrl !== this.deps.sourceUrl) return null;
     const parsed = parsePluginCatalog(payload.catalog);
     if (!parsed.ok) {
       logger.warn("Catalog cache rejected", { error: parsed.error });
@@ -345,7 +447,12 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
   private async writeDisk(snapshot: CatalogSnapshot): Promise<void> {
     const cachePath = await this.resolveCachePath();
     if (!cachePath) return;
-    const payload: DiskPayload = { fetchedAt: snapshot.fetchedAt, catalog: snapshot.catalog };
+    const { sourceUrl } = this.deps;
+    const payload: DiskPayload = {
+      fetchedAt: snapshot.fetchedAt,
+      ...(sourceUrl === undefined ? {} : { sourceUrl }),
+      catalog: snapshot.catalog,
+    };
     try {
       await fs.mkdir(path.dirname(cachePath), { recursive: true });
       await resilientAtomicWriteFile(cachePath, JSON.stringify(payload));
@@ -357,12 +464,12 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
   private resolveCachePath(): Promise<string | null> {
     this.cachePath ??= (async () => {
       if (this.deps.cachePath !== undefined) return this.deps.cachePath;
-      try {
-        const { app } = await import("electron");
-        return path.join(app.getPath("userData"), PLUGIN_CATALOG_CACHE_FILENAME);
-      } catch {
-        return null;
-      }
+      const userData = await loadUserDataPath();
+      if (userData === null) return null;
+      const { sourceUrl } = this.deps;
+      return sourceUrl === undefined
+        ? path.join(userData, PLUGIN_CATALOG_CACHE_FILENAME)
+        : path.join(userData, PLUGIN_CATALOG_SOURCE_CACHE_DIR, sourceCacheFileName(sourceUrl));
     })();
     return this.cachePath;
   }
@@ -428,11 +535,118 @@ function releasesById(entries: readonly PluginCatalogEntry[]): Map<string, Plugi
 }
 
 let sharedService: PluginCatalogService | null = null;
+/** Added catalogs' clients, least recently used first. */
+const addedSourceServices = new Map<string, PluginCatalogService>();
 
-/** The process-wide service, built by its first caller rather than at startup. */
-export function getPluginCatalogService(): PluginCatalogService {
-  sharedService ??= new PluginCatalogService();
-  return sharedService;
+/**
+ * How many added catalogs' clients and cache files are kept. A host serves
+ * whatever list each attached machine sends, so this bounds what every
+ * catalog anyone ever browsed there can hold (#17434), without one machine's
+ * Browse dropping another's.
+ */
+export const PLUGIN_CATALOG_SOURCES_KEPT = 16;
+
+/** Let go of the least recently used idle clients past the limit, never `keep`. */
+function trimAddedSourceServices(keep?: string): void {
+  for (const [url, candidate] of addedSourceServices) {
+    if (addedSourceServices.size <= PLUGIN_CATALOG_SOURCES_KEPT) break;
+    if (url !== keep && candidate.isIdle()) addedSourceServices.delete(url);
+  }
+}
+
+/**
+ * The process-wide client for one catalog, built by its first caller rather
+ * than at startup: Daintree's own when `sourceUrl` is omitted, otherwise the
+ * added catalog at that canonical URL (#17434). Callers pass a URL already
+ * through `pluginCatalogSourceUrl`, so one catalog never gets two clients.
+ * Past {@link PLUGIN_CATALOG_SOURCES_KEPT} added catalogs, the least recently
+ * used idle one is let go; its cache file stays until
+ * {@link settlePluginCatalogSources} sweeps the folder, so a client built
+ * again for it still finds it. An install from a dropped catalog still checks
+ * it for updates, since those reads always fetch afresh.
+ */
+export function getPluginCatalogService(sourceUrl?: string): PluginCatalogService {
+  if (sourceUrl === undefined) {
+    sharedService ??= new PluginCatalogService();
+    return sharedService;
+  }
+  let service = addedSourceServices.get(sourceUrl);
+  if (service) {
+    addedSourceServices.delete(sourceUrl);
+  } else {
+    service = new PluginCatalogService({ sourceUrl });
+  }
+  addedSourceServices.set(sourceUrl, service);
+  trimAddedSourceServices(sourceUrl);
+  return service;
+}
+
+/**
+ * After a Browse has read its catalogs: let go of idle clients past the limit
+ * (ones busy while it read are idle now), then bound the cache folder to
+ * {@link PLUGIN_CATALOG_SOURCES_KEPT} files, dropping the oldest that no live
+ * client holds. Files outlive the process, so catalogs browsed in earlier runs
+ * and never since would otherwise stay on disk for good. Liveness is checked
+ * again right before each file goes, so a client built meanwhile keeps its own.
+ */
+export async function settlePluginCatalogSources(cacheDir?: string | null): Promise<void> {
+  trimAddedSourceServices();
+  const dir =
+    cacheDir === undefined
+      ? await loadUserDataPath().then((userData) =>
+          userData === null ? null : path.join(userData, PLUGIN_CATALOG_SOURCE_CACHE_DIR)
+        )
+      : cacheDir;
+  if (dir === null) return;
+  let names: string[];
+  try {
+    names = (await fs.readdir(dir)).filter((name) => name.endsWith(".json"));
+  } catch {
+    return;
+  }
+  if (names.length <= PLUGIN_CATALOG_SOURCES_KEPT) return;
+  const liveNames = () => new Set([...addedSourceServices.keys()].map(sourceCacheFileName));
+  const live = liveNames();
+  const dated = await Promise.all(
+    names
+      .filter((name) => !live.has(name))
+      .map(async (name) => {
+        const stat = await fs.stat(path.join(dir, name)).catch(() => null);
+        return { name, mtime: stat?.mtimeMs ?? 0 };
+      })
+  );
+  dated.sort((a, b) => b.mtime - a.mtime);
+  const room = Math.max(0, PLUGIN_CATALOG_SOURCES_KEPT - live.size);
+  const stillLive = liveNames();
+  await Promise.all(
+    dated
+      .slice(room)
+      .filter(({ name }) => !stillLive.has(name))
+      .map(({ name }) => fs.rm(path.join(dir, name), { force: true }).catch(() => {}))
+  );
+}
+
+let settleScheduled = false;
+
+/** One settle after a burst of added-catalog activity, never one per client. */
+function scheduleSettle(): void {
+  if (settleScheduled) return;
+  settleScheduled = true;
+  const timer = setTimeout(() => {
+    settleScheduled = false;
+    void settlePluginCatalogSources().catch(() => {});
+  }, 0);
+  timer.unref?.();
+}
+
+/** Test seam: forget every added catalog's client. */
+export function resetPluginCatalogSourceServicesForTest(): void {
+  addedSourceServices.clear();
+}
+
+/** One file per catalog URL, named so no URL can reach outside the folder. */
+function sourceCacheFileName(sourceUrl: string): string {
+  return `${createHash("sha256").update(sourceUrl).digest("hex")}.json`;
 }
 
 /**
@@ -483,6 +697,25 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+}
+
+async function loadUserDataPath(): Promise<string | null> {
+  try {
+    const { app } = await import("electron");
+    return app.getPath("userData");
+  } catch {
+    return null;
+  }
+}
+
+async function loadManualFetch(): Promise<ManualRedirectFetch | null> {
+  try {
+    const { net } = await import("electron");
+    if (typeof net?.request !== "function") return null;
+    return createManualRedirectFetch((options) => net.request(options));
+  } catch {
+    return null;
+  }
 }
 
 async function loadNetFetch(): Promise<CatalogFetch | null> {

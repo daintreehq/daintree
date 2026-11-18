@@ -3308,8 +3308,8 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
   };
   "plugin:browse-catalog": {
-    args: [];
-    result: import("../plugin.js").PluginCatalogBrowseResult;
+    args: [request?: import("../plugin.js").PluginCatalogBrowseRequest | undefined];
+    result: import("../plugin.js").PluginCatalogsBrowseResult;
   };
   "plugin:cancel-install": {
     args: [jobId: string];
@@ -3318,6 +3318,18 @@ export interface GeneratedIpcInvokeMap {
   "plugin:capture-panel": {
     args: [rect: import("../pluginPanelCapture.js").PluginPanelCaptureRect];
     result: import("../pluginPanelCapture.js").PluginPanelCaptureResult;
+  };
+  "plugin:catalog-sources-add": {
+    args: [url: string];
+    result: import("../plugin.js").PluginCatalogSourceAddResult;
+  };
+  "plugin:catalog-sources-get": {
+    args: [];
+    result: import("../plugin.js").PluginCatalogSources;
+  };
+  "plugin:catalog-sources-remove": {
+    args: [url: string];
+    result: import("../plugin.js").PluginCatalogSources;
   };
   "plugin:check-for-update": {
     args: [pluginId: string];

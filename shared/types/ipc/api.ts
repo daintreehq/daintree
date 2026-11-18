@@ -2864,6 +2864,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
     /**
+     * Subscribe to "this machine's added plugin catalogs changed" (#17434), from
+     * any window. Carries no data: re-read through `getCatalogSources` or
+     * `browseCatalog`. Returns a cleanup.
+     */
+    onCatalogSourcesChanged(callback: (payload: Record<string, never>) => void): () => void;
+    /**
      * Subscribe to "a plugin's stored settings changed", from the settings form
      * or the plugin's own `host.settings.set`. Carries only the plugin instance
      * key; re-read what depends on it. Returns a cleanup.

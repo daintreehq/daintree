@@ -40,6 +40,7 @@ export const SECTION_SETTINGS = {
   worktreeSidebar: ["storage:daintree-worktree-filters*"],
   toolbarLayout: ["storage:daintree-toolbar-preferences"],
   pluginSilences: ["pluginNotificationSilences"],
+  pluginCatalogs: ["pluginCatalogSources"],
   hardwareAcceleration: ["gpu"],
   logging: ["logLevelOverrides"],
   developerTools: ["appState.developerMode"],

@@ -1359,6 +1359,9 @@ export interface GeneratedElectronAPI {
     activateStagedProjectPlugin(
       ...args: IpcInvokeMap["plugin:project-activate-staged"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-activate-staged"]["result"]>;
+    addCatalogSource(
+      ...args: IpcInvokeMap["plugin:catalog-sources-add"]["args"]
+    ): Promise<IpcInvokeMap["plugin:catalog-sources-add"]["result"]>;
     advanceProjectLayoutSeed(
       ...args: IpcInvokeMap["plugin:project-layout-seed-advance"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-layout-seed-advance"]["result"]>;
@@ -1431,6 +1434,9 @@ export interface GeneratedElectronAPI {
     getBackgroundUpdateCheckSettings(
       ...args: IpcInvokeMap["plugin:bg-update-check-settings-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:bg-update-check-settings-get"]["result"]>;
+    getCatalogSources(
+      ...args: IpcInvokeMap["plugin:catalog-sources-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:catalog-sources-get"]["result"]>;
     getContextProviders(
       ...args: IpcInvokeMap["plugin:context-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:context-providers-get"]["result"]>;
@@ -1590,6 +1596,9 @@ export interface GeneratedElectronAPI {
     reloadProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-reload"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-reload"]["result"]>;
+    removeCatalogSource(
+      ...args: IpcInvokeMap["plugin:catalog-sources-remove"]["args"]
+    ): Promise<IpcInvokeMap["plugin:catalog-sources-remove"]["result"]>;
     reportPanelInventory(
       ...args: IpcInvokeMap["plugin:report-panel-inventory"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-inventory"]["result"]>;

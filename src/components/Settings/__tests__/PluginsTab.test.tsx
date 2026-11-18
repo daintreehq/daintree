@@ -73,6 +73,9 @@ beforeEach(() => {
       onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
       getBackgroundUpdateCheckSettings: vi.fn().mockResolvedValue({ enabled: false }),
       setBackgroundUpdateCheckSettings: vi.fn().mockResolvedValue({ enabled: true }),
+      // The tab also holds the catalogs section (#17434), tested on its own.
+      getCatalogSources: vi.fn().mockResolvedValue({ sources: [] }),
+      onCatalogSourcesChanged: vi.fn().mockReturnValue(() => {}),
     },
   } as unknown as typeof window.electron;
 });

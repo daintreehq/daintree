@@ -831,7 +831,13 @@ export const CHANNEL_LOCALITY = {
   "plugin:actions-register": "host",
   "plugin:actions-unregister": "host",
   "plugin:activate-for-view": "host",
-  "plugin:browse-catalog": "host",
+  // Browse and catalog installs run on the host, but which catalogs the person
+  // trusts is this machine's setting (#17434): the split sends its list along
+  // and checks a named catalog against it before the host fetches anything.
+  "plugin:browse-catalog": "hybrid",
+  "plugin:catalog-sources-add": "shell",
+  "plugin:catalog-sources-get": "shell",
+  "plugin:catalog-sources-remove": "shell",
   "plugin:capture-panel": "shell",
   "plugin:agents-get": "host",
   "plugin:bg-update-check-latest": "host",
@@ -857,7 +863,7 @@ export const CHANNEL_LOCALITY = {
   "plugin:get-diagnostics-snapshot": "host",
   "plugin:icons-get": "host",
   "plugin:install": "host",
-  "plugin:install-from-catalog": "host",
+  "plugin:install-from-catalog": "hybrid",
   "plugin:install-from-file": "hybrid",
   "plugin:install-from-path": "hybrid",
   "plugin:install-from-url": "host",
@@ -869,7 +875,7 @@ export const CHANNEL_LOCALITY = {
   "plugin:perf-snapshots-get": "host",
   "plugin:perf-snapshots-subscribe": "hybrid",
   "plugin:perf-snapshots-unsubscribe": "hybrid",
-  "plugin:preview-from-catalog": "host",
+  "plugin:preview-from-catalog": "hybrid",
   "plugin:preview-from-url": "host",
   "plugin:report-focused-panel": "hybrid",
   "plugin:project-presence-changed": "host",
@@ -1555,6 +1561,8 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "plugin:project-surfaces-changed": "host",
   "plugin:project-trust-prompt": "host",
   "plugin:provenance-changed": "host",
+  // The added catalogs are this machine's person's own (#17434).
+  "plugin:catalog-sources-changed": "shell",
   "plugin:recipes-changed": "host",
   "plugin:runtime-status-changed": "host",
   "plugin:toolbar-badges-changed": "host",

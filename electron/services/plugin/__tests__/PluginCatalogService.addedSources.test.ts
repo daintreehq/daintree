@@ -1,0 +1,291 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as fs from "node:fs/promises";
+import { createHash } from "node:crypto";
+
+// Every hop's name is resolved before it connects; answer public unless a test says otherwise.
+vi.mock("node:dns/promises", () => {
+  const lookup = vi.fn();
+  return { default: { lookup }, lookup };
+});
+
+const electronMock = vi.hoisted(() => ({
+  state: { userData: "" },
+  fetch: vi.fn<(url: string, init: RequestInit) => Promise<Response>>(),
+}));
+
+vi.mock("electron", () => ({
+  app: { getPath: () => electronMock.state.userData },
+  net: { fetch: electronMock.fetch },
+}));
+
+vi.mock("../../../utils/logger.js", () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+
+import dns from "node:dns/promises";
+import {
+  PLUGIN_CATALOG_SOURCES_KEPT,
+  PluginCatalogService,
+  getPluginCatalogService,
+  resetPluginCatalogSourceServicesForTest,
+  settlePluginCatalogSources,
+} from "../PluginCatalogService.js";
+import { createManualRedirectFetch } from "../../../utils/netManualRedirectFetch.js";
+import {
+  FakeElectronNet,
+  type FakeRoute,
+} from "../../../utils/__tests__/helpers/fakeElectronNet.js";
+import { PLUGIN_CATALOG_SOURCE_CACHE_DIR } from "../../../../shared/config/pluginCatalog.js";
+import { VALID_CATALOG, catalogEntry } from "./pluginCatalogFixtures.js";
+
+const SOURCE = "https://plugins.example.org/catalog.json";
+const OTHER = "https://plugins.example.org/other.json";
+const T0 = 1_800_000_000_000;
+
+const mockLookup = dns.lookup as unknown as ReturnType<typeof vi.fn>;
+
+function resolveAllTo(...addresses: string[]) {
+  mockLookup.mockImplementation(async () => addresses.map((address) => ({ address, family: 4 })));
+}
+
+function json(body: unknown): FakeRoute {
+  return {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
+function cacheFile(dir: string, sourceUrl: string): string {
+  const name = `${createHash("sha256").update(sourceUrl).digest("hex")}.json`;
+  return path.join(dir, PLUGIN_CATALOG_SOURCE_CACHE_DIR, name);
+}
+
+describe("PluginCatalogService for a catalog the person added (#17434)", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-catalog-added-"));
+    electronMock.state.userData = tmpDir;
+    mockLookup.mockReset();
+    resolveAllTo("140.82.112.3");
+    electronMock.fetch.mockReset();
+  });
+
+  afterEach(async () => {
+    resetPluginCatalogSourceServicesForTest();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function service(net: FakeElectronNet, sourceUrl = SOURCE) {
+    return new PluginCatalogService({
+      sourceUrl,
+      manualFetch: createManualRedirectFetch(net.request),
+      now: () => T0,
+    });
+  }
+
+  it("reads its own URL through the guarded fetch, never Daintree's", async () => {
+    const net = new FakeElectronNet({ [SOURCE]: json(VALID_CATALOG) });
+    const result = await service(net).browse();
+
+    expect(result.status).toBe("available");
+    expect(net.connected).toEqual([SOURCE]);
+    expect(electronMock.fetch).not.toHaveBeenCalled();
+    // The listing names the catalog that listed it; the catalog itself can't.
+    if (result.status !== "available") throw new Error("unreachable");
+    expect(result.listings.length).toBeGreaterThan(0);
+    expect(result.listings.every((listing) => listing.sourceUrl === SOURCE)).toBe(true);
+  });
+
+  it("keeps its cache apart from Daintree's and from every other catalog", async () => {
+    await service(new FakeElectronNet({ [SOURCE]: json(VALID_CATALOG) })).browse();
+
+    const persisted = JSON.parse(await fs.readFile(cacheFile(tmpDir, SOURCE), "utf-8"));
+    expect(persisted.sourceUrl).toBe(SOURCE);
+    await expect(fs.access(path.join(tmpDir, "plugin-catalog.json"))).rejects.toThrow();
+
+    // A cache file can't stand in for another catalog: copied under OTHER's
+    // name, it names SOURCE and is ignored, so an offline OTHER has nothing.
+    await fs.copyFile(cacheFile(tmpDir, SOURCE), cacheFile(tmpDir, OTHER));
+    const offline = new FakeElectronNet({ [OTHER]: { error: "net::ERR_INTERNET_DISCONNECTED" } });
+    expect(await service(offline, OTHER).browse()).toEqual({
+      status: "unavailable",
+      failure: "unreachable",
+    });
+  });
+
+  it("answers a browse from its own cache once it can't be refreshed", async () => {
+    await service(new FakeElectronNet({ [SOURCE]: json(VALID_CATALOG) })).browse();
+    const offline = new FakeElectronNet({ [SOURCE]: { error: "net::ERR_TIMED_OUT" } });
+    const later = new PluginCatalogService({
+      sourceUrl: SOURCE,
+      manualFetch: createManualRedirectFetch(offline.request),
+      now: () => T0 + 60 * 60 * 1000,
+    });
+    const result = await later.browse();
+    expect(result).toMatchObject({ status: "available", stale: true, failure: "unreachable" });
+  });
+
+  it.each([
+    ["a loopback address", "https://127.0.0.1/catalog.json"],
+    ["a private network", "https://10.0.0.8/catalog.json"],
+    ["plain http", "http://plugins.example.org/catalog.json"],
+    ["a URL with credentials", "https://user:pass@plugins.example.org/catalog.json"],
+  ])("refuses a redirect to %s without connecting to it", async (_, target) => {
+    const net = new FakeElectronNet({
+      [SOURCE]: { redirect: target },
+      [target]: json(VALID_CATALOG),
+    });
+    const lookup = await service(net).lookup("daintreehq.continue-session");
+
+    expect(lookup).toEqual({ status: "unavailable", failure: "unreachable" });
+    expect(net.connected).toEqual([SOURCE]);
+  });
+
+  it("refuses a public name that resolves to a private address before connecting", async () => {
+    resolveAllTo("192.168.1.20");
+    const net = new FakeElectronNet({ [SOURCE]: json(VALID_CATALOG) });
+    expect(await service(net).browse()).toEqual({ status: "unavailable", failure: "unreachable" });
+    expect(net.connected).toEqual([]);
+  });
+
+  it("follows a redirect to another public https host", async () => {
+    const moved = "https://cdn.example.net/catalog.json";
+    const net = new FakeElectronNet({
+      [SOURCE]: { redirect: moved },
+      [moved]: json({ entries: [catalogEntry()] }),
+    });
+    const lookup = await service(net).lookup("daintreehq.continue-session", "0.1.1");
+    expect(lookup.status).toBe("listed");
+    expect(net.connected).toEqual([SOURCE, moved]);
+  });
+
+  it("gives each catalog one shared client, apart from Daintree's own", () => {
+    const own = getPluginCatalogService();
+    const added = getPluginCatalogService(SOURCE);
+    expect(getPluginCatalogService(SOURCE)).toBe(added);
+    expect(added).not.toBe(own);
+    expect(getPluginCatalogService(OTHER)).not.toBe(added);
+  });
+
+  it("keeps the most recently used idle catalogs, and leaves a dropped one's cache for its next client", async () => {
+    const urls = Array.from(
+      { length: PLUGIN_CATALOG_SOURCES_KEPT + 1 },
+      (_, i) => `https://c${i}.example.com/catalog.json`
+    );
+    const dir = path.join(tmpDir, PLUGIN_CATALOG_SOURCE_CACHE_DIR);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(cacheFile(tmpDir, urls[0]!), "{}");
+    await fs.writeFile(cacheFile(tmpDir, urls[1]!), "{}");
+    const first = getPluginCatalogService(urls[0]);
+    const second = getPluginCatalogService(urls[1]);
+    for (const url of urls.slice(2, -1)) getPluginCatalogService(url);
+    // Using the first again leaves the second least recently used.
+    expect(getPluginCatalogService(urls[0])).toBe(first);
+
+    getPluginCatalogService(urls[urls.length - 1]);
+
+    expect(getPluginCatalogService(urls[0])).toBe(first);
+    expect(getPluginCatalogService(urls[1])).not.toBe(second);
+    // Only the folder sweep removes files, so the client built again finds its own.
+    expect((await fs.readdir(dir)).sort()).toEqual(
+      [cacheFile(tmpDir, urls[0]!), cacheFile(tmpDir, urls[1]!)].map((f) => path.basename(f)).sort()
+    );
+  });
+
+  it("never drops a catalog that is still reading, so no two clients write one cache", async () => {
+    const busy = getPluginCatalogService(SOURCE);
+    const reading = busy.getCatalog("browse");
+    expect(busy.isIdle()).toBe(false);
+    for (let i = 0; i < PLUGIN_CATALOG_SOURCES_KEPT; i++) {
+      getPluginCatalogService(`https://c${i}.example.com/catalog.json`);
+    }
+    expect(getPluginCatalogService(SOURCE)).toBe(busy);
+    await reading;
+    expect(busy.isIdle()).toBe(true);
+  });
+
+  it("bounds the cache folder, keeping live catalogs' files and the newest others", async () => {
+    const dir = path.join(tmpDir, PLUGIN_CATALOG_SOURCE_CACHE_DIR);
+    await fs.mkdir(dir, { recursive: true });
+    const old = Array.from(
+      { length: PLUGIN_CATALOG_SOURCES_KEPT + 3 },
+      (_, i) => `https://old${i}.example.com/catalog.json`
+    );
+    for (const [i, url] of old.entries()) {
+      const file = cacheFile(tmpDir, url);
+      await fs.writeFile(file, "{}");
+      const at = new Date(T0 + i * 1000);
+      await fs.utimes(file, at, at);
+    }
+    await fs.writeFile(cacheFile(tmpDir, SOURCE), "{}");
+    await fs.utimes(cacheFile(tmpDir, SOURCE), new Date(T0 - 10_000), new Date(T0 - 10_000));
+    getPluginCatalogService(SOURCE);
+
+    await settlePluginCatalogSources();
+
+    const left = new Set(await fs.readdir(dir));
+    expect(left.size).toBe(PLUGIN_CATALOG_SOURCES_KEPT);
+    // The live catalog's file stays however old it is; the oldest others go.
+    expect(left.has(path.basename(cacheFile(tmpDir, SOURCE)))).toBe(true);
+    expect(left.has(path.basename(cacheFile(tmpDir, old[0]!)))).toBe(false);
+    expect(left.has(path.basename(cacheFile(tmpDir, old[old.length - 1]!)))).toBe(true);
+  });
+
+  it("lets go of clients past the limit once reads that kept them busy have settled", async () => {
+    const urls = Array.from(
+      { length: PLUGIN_CATALOG_SOURCES_KEPT + 2 },
+      (_, i) => `https://busy${i}.example.com/catalog.json`
+    );
+    const clients = urls.map((url) => getPluginCatalogService(url));
+    const reads = clients.map((client) => client.getCatalog("browse"));
+    await Promise.all(reads);
+
+    await settlePluginCatalogSources(null);
+
+    // The two least recently used went; the rest are the same clients. The
+    // kept ones are checked first, since asking for a dropped one builds it again.
+    const kept = urls.slice(2).every((url, i) => getPluginCatalogService(url) === clients[i + 2]);
+    expect(kept).toBe(true);
+    expect(getPluginCatalogService(urls[0])).not.toBe(clients[0]);
+  });
+
+  it("holds a background pass's client from opening its batch until its read lands", async () => {
+    const held = getPluginCatalogService(SOURCE);
+    const batch = held.openUpdateBatch();
+    expect(held.isIdle()).toBe(false);
+    for (let i = 0; i < PLUGIN_CATALOG_SOURCES_KEPT; i++) {
+      getPluginCatalogService(`https://c${i}.example.com/catalog.json`);
+    }
+    expect(getPluginCatalogService(SOURCE)).toBe(held);
+    await batch.lookupUpdate("daintreehq.continue-session", "0.1.1");
+    expect(held.isIdle()).toBe(true);
+  });
+
+  it("sweeps the cache folder on its own once an added catalog's activity settles", async () => {
+    const dir = path.join(tmpDir, PLUGIN_CATALOG_SOURCE_CACHE_DIR);
+    await fs.mkdir(dir, { recursive: true });
+    for (let i = 0; i < PLUGIN_CATALOG_SOURCES_KEPT + 2; i++) {
+      const file = cacheFile(tmpDir, `https://old${i}.example.com/catalog.json`);
+      await fs.writeFile(file, "{}");
+      // Written in earlier runs, before the fetch below writes its own.
+      const at = new Date(Date.now() - (100 - i) * 1000);
+      await fs.utimes(file, at, at);
+    }
+    const net = new FakeElectronNet({ [SOURCE]: json(VALID_CATALOG) });
+    await new PluginCatalogService({
+      sourceUrl: SOURCE,
+      manualFetch: createManualRedirectFetch(net.request),
+      now: () => T0,
+    }).browse();
+
+    // An update check or preview writes a cache without a Browse to sweep after it.
+    await vi.waitFor(async () =>
+      expect((await fs.readdir(dir)).length).toBeLessThanOrEqual(PLUGIN_CATALOG_SOURCES_KEPT)
+    );
+    expect(await fs.readdir(dir)).toContain(path.basename(cacheFile(tmpDir, SOURCE)));
+  });
+});

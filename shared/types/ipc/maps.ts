@@ -2556,6 +2556,10 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // This machine's list of added plugin catalogs changed (#17434), from any
+  // window. Signal-only: Browse and the settings page re-read it.
+  "plugin:catalog-sources-changed": Record<string, never>;
+
   // A plugin's stored settings changed, from the settings form or the plugin's
   // own `host.settings.set` (main → renderer). Signal-only: receivers re-read
   // what they derive from it. Project-scoped for a project-local instance.
@@ -2792,6 +2796,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:actions-running-changed"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // This machine's added plugin catalogs changed (global broadcast)
+  | "plugin:catalog-sources-changed"
   // Plugin stored settings changed (global broadcast for an app-global
   // instance, project-scoped send for a project one)
   | "plugin:settings-changed"
