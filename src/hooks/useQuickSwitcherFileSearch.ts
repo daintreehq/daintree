@@ -89,7 +89,7 @@ export function useQuickSwitcherFileSearch(): UseQuickSwitcherFileSearchReturn {
             .search({ cwd: rootPath, query, limit: FILE_SEARCH_LIMIT, filesOnly: true })
             .then(
               // Uncapped here: the switcher drops working-tree deletions first,
-              // then shows at most FILE_RESULT_CAP.
+              // then keeps at most FILE_RESULT_CAP.
               ({ files }) =>
                 settle(
                   files.filter((file) => !file.endsWith("/")),

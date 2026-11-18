@@ -331,11 +331,12 @@ describe("useQuickSwitcher file scope", () => {
   });
 
   it("relates changes to the worktree itself when the snapshot names no root", async () => {
-    seedWorktrees(
-      [],
-      [],
-      worktree("wt-1", "/repo", [change("src/b.ts", 200), change("/repo/src/c.ts", 100)], undefined)
-    );
+    const bare = worktree("wt-1", "/repo", [
+      change("src/b.ts", 200),
+      change("/repo/src/c.ts", 100),
+    ]);
+    delete (bare.worktreeChanges as { rootPath?: string }).rootPath;
+    seedWorktrees([], [], bare);
     const { result } = await openFiles();
     expect(paths(result.current.results)).toEqual(["src/b.ts", "src/c.ts"]);
   });
@@ -464,6 +465,35 @@ describe("useQuickSwitcher file scope", () => {
     for (const pending of searches.slice(1)) {
       await act(async () => pending.resolve({ files: ["q.ts"] }));
     }
+    expect(openFileMock).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing from a handler drawn in an earlier opening, and leaves its waiting Enter", async () => {
+    const { result } = await openFiles();
+    await act(async () => searches[0]!.resolve({ files: ["a.ts"] }));
+    const oldSelect = result.current.selectItem;
+    const oldRow = result.current.results[0]!;
+
+    act(() => usePaletteStore.getState().openQuickSwitcher({ kind: "files" }));
+    await settle();
+    act(() => result.current.confirmSelection(false));
+    act(() => oldSelect(oldRow));
+    await act(async () => searches[1]!.resolve({ files: ["b.ts"] }));
+    expect(openFileMock.mock.calls).toEqual([["/repo/b.ts", false]]);
+  });
+
+  it("opens nothing for a row git has since reported deleted", async () => {
+    const { result, rerender } = await openFiles();
+    await act(async () => searches[0]!.resolve({ files: ["x.ts"] }));
+    act(() => result.current.setQuery("src"));
+    await settle(150);
+    await act(async () => searches[1]!.resolve({ files: ["src/a.ts", "src/b.ts"] }));
+    const rowA = result.current.results[0]!;
+
+    seedWorktrees([change("/repo/src/a.ts", 900, "deleted")]);
+    rerender();
+    expect(paths(result.current.results)).toEqual(["src/b.ts"]);
+    act(() => result.current.selectItem(rowA));
     expect(openFileMock).not.toHaveBeenCalled();
   });
 

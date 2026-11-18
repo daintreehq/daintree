@@ -319,12 +319,15 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   const fileSearch = useQuickSwitcherFileSearch();
   const { answer: fileAnswer, request: fileRequest } = fileSearch.state;
   // A file deleted in the working tree stays in the index until the deletion
-  // is staged; it has nothing left to open.
+  // is staged; it has nothing left to open. Capped only after that, and here
+  // rather than by the palette: the host stops at its own limit, so a count of
+  // the rest would understate what typing more would narrow.
   const searchedItems = useMemo(() => {
     if (!fileAnswer || fileAnswer.rootPath !== fileRoot) return EMPTY_ITEMS;
     const { deleted } = changedFiles;
     const items = fileAnswer.paths
       .filter((path) => !deleted.has(path))
+      .slice(0, FILE_RESULT_CAP)
       .map((path) => fileItem(fileAnswer.rootPath, path, false));
     return items.length > 0 ? items : EMPTY_ITEMS;
   }, [fileAnswer, fileRoot, changedFiles]);
