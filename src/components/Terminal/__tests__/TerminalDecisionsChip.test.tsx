@@ -843,6 +843,37 @@ describe("TerminalDecisionsChip", () => {
       expect(cancelQuestion).not.toHaveBeenCalled();
     });
 
+    it("never shows a withdrawal's refusal under the Dismiss it gives way to", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(
+        paneState({ openQuestions: [{ ...paneState().openQuestions[0]!, status: "queued" }] })
+      );
+      getQuestionContent.mockResolvedValue({
+        result: "read",
+        question: q42Content({ status: "queued" }),
+      });
+      declinedOnce({ status: "closed", reason: "not-found" });
+      cancelQuestion.mockResolvedValue({ result: "refused", reason: "not-found" });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await askToDismiss();
+      await screen.findByRole("alertdialog");
+      await confirm("Dismiss question");
+      await waitFor(() =>
+        expect(dialogButton("Withdraw question").hasAttribute("aria-disabled")).toBe(false)
+      );
+      await confirm("Withdraw question");
+      expect(screen.getByRole("alertdialog").textContent).toContain(
+        "q-42 is no longer one of this terminal's questions."
+      );
+
+      // Sent meanwhile: Dismiss again, free of the withdrawal's refusal.
+      act(() => paneListeners[0]!(paneState({ revision: 2 })));
+      const dialog = screen.getByRole("alertdialog");
+      expect(dialog.textContent).toContain("Dismiss question q-42?");
+      expect(dialog.textContent).not.toContain("no longer one of this terminal's questions");
+      expect(dialogButton("Dismiss question").hasAttribute("aria-disabled")).toBe(false);
+    });
+
     it("offers withdrawing when this computer doesn't sign for the person, as on a Remote Host", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       declineQuestion.mockResolvedValueOnce({ result: "refused", reason: "not-owner" });

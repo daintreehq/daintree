@@ -80,7 +80,7 @@ function isUnsettled(phase: DeclinePhase): boolean {
 
 function setPhase(key: string, claim: Claim, phase: DeclinePhase): void {
   updateClaimed(key, claim, (decline) => ({ ...decline, phase }));
-  if (isUnsettled(phase)) watchUnsettled(key, claim);
+  if (isQueued(phase)) watchQueued(key, claim);
 }
 
 /** Whether a new dismissal may start: no answer or dismissal from here under way or taken. */
@@ -185,47 +185,71 @@ async function followOnce(key: string, claim: Claim, retry: boolean): Promise<vo
   if ((await submitOnce(key, claim)) === "lost") setPhase(key, claim, { kind: "lost" });
 }
 
-function follow(key: string, claim: Claim, retry: boolean): Promise<void> {
-  return exclusive(key, claim, () => followOnce(key, claim, retry));
+async function follow(key: string, claim: Claim, retry: boolean): Promise<void> {
+  const joined = running.has(lockOf(key, claim));
+  await exclusive(key, claim, () => followOnce(key, claim, retry));
+  // A Retry that joined a read already under way, which may not resend, still gets its own.
+  if (joined && retry && claimed(key, claim)?.phase.kind === "lost") {
+    await exclusive(key, claim, () => followOnce(key, claim, true));
+  }
 }
 
-/** Unsettled dismissals read again on a timer, by question and id. */
-const watching = new Set<string>();
+/** Dismissals main has queued, read again on a timer: its next read, and the wait before it. */
+const watching = new Map<
+  string,
+  { timer: ReturnType<typeof setTimeout> | undefined; wait: number }
+>();
 
 /**
- * Reads a queued dismissal's standing again every few seconds until it
- * settles, the record moves on to another dismissal, or Decisions is cleared,
- * so the chip and the view both learn when the relay takes it or why not,
- * however long the relay stays out of reach. One whose standing main couldn't
- * give is read the same way, less often each time, up to a minute: it keeps
- * its id, so reading it again never declines anything twice.
+ * Reads a dismissal main has queued again every few seconds until it settles,
+ * the record moves on to another dismissal, or Decisions is cleared, so the
+ * chip and the view both learn when the relay takes it or why not, however
+ * long the relay stays out of reach. A read main can't answer leaves it
+ * `lost`, and it's read less often each time, up to a minute: main holds it,
+ * under its id, so reading it again never declines anything twice. One main
+ * never acknowledged isn't followed: Retry reads it.
  */
-function watchUnsettled(key: string, claim: Claim): void {
+function watchQueued(key: string, claim: Claim): void {
   const lock = lockOf(key, claim);
-  if (watching.has(lock)) return;
-  watching.add(lock);
-  let wait = QUEUED_DECLINE_READ_MS;
-  const next = () => {
-    const decline = claimed(key, claim);
-    if (decline === null || !isUnsettled(decline.phase)) {
-      watching.delete(lock);
-      return;
+  const existing = watching.get(lock);
+  if (existing !== undefined) {
+    // Queued again after reads main couldn't answer: back to the queued pace.
+    if (existing.wait > QUEUED_DECLINE_READ_MS && existing.timer !== undefined) {
+      clearTimeout(existing.timer);
+      existing.wait = QUEUED_DECLINE_READ_MS;
+      scheduleRead(key, claim);
     }
-    wait =
-      decline.phase.kind === "lost"
-        ? Math.min(wait * 2, LOST_DECLINE_READ_MAX_MS)
-        : QUEUED_DECLINE_READ_MS;
-    setTimeout(() => {
-      // Settled meanwhile by a Retry or another surface: nothing more to read.
-      const now = claimed(key, claim);
-      if (now === null || !isUnsettled(now.phase)) {
-        watching.delete(lock);
-        return;
-      }
-      void follow(key, claim, false).finally(next);
-    }, wait);
+    return;
+  }
+  watching.set(lock, { timer: undefined, wait: QUEUED_DECLINE_READ_MS });
+  scheduleRead(key, claim);
+}
+
+function scheduleRead(key: string, claim: Claim): void {
+  const lock = lockOf(key, claim);
+  const entry = watching.get(lock);
+  if (entry === undefined) return;
+  const stillUnsettled = () => {
+    const decline = claimed(key, claim);
+    if (decline !== null && isUnsettled(decline.phase)) return decline;
+    watching.delete(lock);
+    return null;
   };
-  next();
+  entry.timer = setTimeout(() => {
+    entry.timer = undefined;
+    // Settled meanwhile by a Retry or another surface: nothing more to read.
+    if (stillUnsettled() === null) return;
+    void follow(key, claim, false).finally(() => {
+      const decline = stillUnsettled();
+      // Gone, or already scheduled again by its return to queued.
+      if (decline === null || entry.timer !== undefined) return;
+      entry.wait =
+        decline.phase.kind === "lost"
+          ? Math.min(entry.wait * 2, LOST_DECLINE_READ_MAX_MS)
+          : QUEUED_DECLINE_READ_MS;
+      scheduleRead(key, claim);
+    });
+  }, entry.wait);
 }
 
 /**

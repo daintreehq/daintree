@@ -221,6 +221,40 @@ describe("dismissing a question from this computer (#17239)", () => {
     expect(declineQuestion).toHaveBeenCalledOnce();
   });
 
+  it("never reads on its own one main didn't acknowledge, leaving it to Retry", async () => {
+    vi.useFakeTimers();
+    declineQuestion.mockRejectedValue(new Error("main didn't answer"));
+    await dismissQuestion(TARGET, null);
+    expect(readAnswerRecord(KEY).decline?.phase).toEqual({ kind: "lost" });
+    const reads = getDeclineResult.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(QUEUED_DECLINE_READ_MS * 30);
+    expect(getDeclineResult).toHaveBeenCalledTimes(reads);
+  });
+
+  it("gives a Retry that joins a read already under way its own resend", async () => {
+    declineQuestion.mockRejectedValue(new Error("main didn't answer"));
+    await dismissQuestion(TARGET, null);
+    expect(declineQuestion).toHaveBeenCalledTimes(2);
+    let answer!: (read: DecisionDeclineResultRead) => void;
+    getDeclineResult.mockImplementationOnce(
+      () => new Promise<DecisionDeclineResultRead>((resolve) => (answer = resolve))
+    );
+    declineQuestion.mockImplementation(submitted({ status: "declined" }));
+
+    // A read on its own, which may not resend, is under way when the person presses Retry.
+    const background = followDecline(KEY);
+    const retry = followDecline(KEY, true);
+    answer({ result: "not-found" });
+    await Promise.all([background, retry]);
+
+    expect(declineQuestion).toHaveBeenCalledTimes(3);
+    expect(readAnswerRecord(KEY).decline?.phase).toEqual({
+      kind: "settled",
+      outcome: { status: "declined" },
+    });
+  });
+
   it("stops reading a queued one once Decisions is turned off", async () => {
     vi.useFakeTimers();
     declineQuestion.mockImplementation(submitted({ status: "queued" }));

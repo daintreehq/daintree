@@ -128,7 +128,8 @@ export function DecisionCancelDialog({
       : null;
   const mode: DecisionCancelMode =
     (current?.mode ?? openingMode) === "withdraw" && reason !== null ? "withdraw" : "dismiss";
-  const reported = current?.problem ?? null;
+  // A problem belongs to the step that met it: a withdrawal's never shows under a Dismiss.
+  const reported = current !== null && current.mode === mode ? current.problem : null;
   // A refusal stands; a call that failed gives way once the question has stopped waiting.
   const gone =
     target !== null && isOpen && !pending && !waiting ? noLongerWaiting(target, mode) : null;
@@ -183,21 +184,25 @@ export function DecisionCancelDialog({
       close();
     };
     setBusyFor(subject);
-    report({ mode: step, fallback: because, problem: null });
     // Chained rather than try/finally, which the React Compiler can't compile.
-    await (step === "dismiss" ? dismiss() : withdraw()).catch((error: unknown) => {
-      const verb = step === "dismiss" ? "dismiss" : "withdraw";
-      report({
-        mode: step,
-        fallback: because,
-        problem: {
-          severity: "error",
-          message: formatErrorMessage(error, `Couldn't ${verb} ${subject.label}`),
-          retry: true,
-        },
-      });
-    });
-    setBusyFor((locked) => (locked === subject ? null : locked));
+    await Promise.resolve()
+      .then(() => {
+        report({ mode: step, fallback: because, problem: null });
+        return step === "dismiss" ? dismiss() : withdraw();
+      })
+      .catch((error: unknown) => {
+        const verb = step === "dismiss" ? "dismiss" : "withdraw";
+        report({
+          mode: step,
+          fallback: because,
+          problem: {
+            severity: "error",
+            message: formatErrorMessage(error, `Couldn't ${verb} ${subject.label}`),
+            retry: true,
+          },
+        });
+      })
+      .finally(() => setBusyFor((locked) => (locked === subject ? null : locked)));
   };
 
   const closed = problem !== null && !problem.retry;
