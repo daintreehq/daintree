@@ -114,6 +114,7 @@ import {
   TerminalSelectionMenuItems,
   TerminalSessionMenuItems,
 } from "./contextMenu/TerminalMenuItems";
+import { terminalScreenEnded } from "@/utils/terminalLiveScreen";
 
 // Loaded on first use: every pane and session row mounts this menu, and the
 // dialog pulls in Pilot's row and band modules that nothing else here needs.
@@ -952,6 +953,7 @@ function TerminalContextMenuBody({
             terminalId={terminalId}
             terminalPty={terminalPty}
             hasPty={hasPty}
+            canResetModes={hasPty && !terminalScreenEnded(terminal)}
             isPaused={isPaused}
             isInputLocked={terminal.isInputLocked}
             isVoiceLockedHere={isVoiceLockedHere}

@@ -24,6 +24,7 @@ type Internals = {
     headlessTerminal?: HeadlessTerminal;
     pendingHeadlessWrites?: number;
     isExited?: boolean;
+    wasKilled?: boolean;
     preservedSnapshot?: unknown;
   };
 };
@@ -93,6 +94,17 @@ afterEach(() => {
   for (const terminal of live.splice(0)) terminal.dispose();
 });
 
+type AnalysisInternals = { analysis: { feedModeReset: (data: string) => boolean } };
+
+function spyMirrorFeed(terminal: TerminalProcess, order?: string[]) {
+  const analysis = (terminal as unknown as AnalysisInternals).analysis;
+  const original = analysis.feedModeReset.bind(analysis);
+  return vi.spyOn(analysis, "feedModeReset").mockImplementation((data) => {
+    order?.push("mirror");
+    return original(data);
+  });
+}
+
 describe("TerminalProcess.resetTerminalModes (#17328)", () => {
   it("sends the pane and the mirror the reset after the output before it, and the process nothing", async () => {
     const { terminal, output, emitted, ptyWrite, mirror } = createHarness();
@@ -116,29 +128,59 @@ describe("TerminalProcess.resetTerminalModes (#17328)", () => {
     expect(terminal.isBracketedPasteMode()).toBe(false);
   });
 
+  it("hands the mirror the reset before the pane, so a snapshot fenced at the pane's offset includes it", () => {
+    const order: string[] = [];
+    const { terminal, emitted } = createHarness();
+    spyMirrorFeed(terminal, order);
+    const emittedBefore = emitted.length;
+    const originalPush = emitted.push.bind(emitted);
+    emitted.push = (...items) => {
+      order.push("pane");
+      return originalPush(...items);
+    };
+
+    terminal.resetTerminalModes();
+
+    expect(order).toEqual(["mirror", "pane"]);
+    expect(emitted.length).toBe(emittedBefore + 1);
+  });
+
+  it("sends the pane nothing when the mirror can't take the reset in order", () => {
+    const { terminal, emitted } = createHarness();
+    const feed = spyMirrorFeed(terminal);
+    feed.mockReturnValue(false);
+
+    expect(terminal.resetTerminalModes()).toBe(false);
+    expect(emitted).toEqual([]);
+  });
+
   it("leaves output that follows the reset in charge of the modes", async () => {
     const { terminal, output, mirror } = createHarness();
     output("\x1b[?2004h");
     terminal.resetTerminalModes();
+    await mirrorSettled(terminal);
+    expect(mirror.modes.bracketedPasteMode).toBe(false);
+
     output("\x1b[?2004h");
 
     await mirrorSettled(terminal);
     expect(mirror.modes.bracketedPasteMode).toBe(true);
   });
 
-  it("refuses an exited pane", () => {
+  it.each([
+    ["an exited pane", (info: Internals["terminalInfo"]) => (info.isExited = true)],
+    ["a killed pane", (info: Internals["terminalInfo"]) => (info.wasKilled = true)],
+    [
+      "a pane showing the snapshot it kept at exit",
+      (info: Internals["terminalInfo"]) => (info.preservedSnapshot = { data: "kept" }),
+    ],
+  ])("refuses %s, touching neither the mirror nor the pane", (_name, mark) => {
     const { terminal, emitted } = createHarness();
-    (terminal as unknown as Internals).terminalInfo.isExited = true;
+    const feed = spyMirrorFeed(terminal);
+    mark((terminal as unknown as Internals).terminalInfo);
 
     expect(terminal.resetTerminalModes()).toBe(false);
-    expect(emitted).toEqual([]);
-  });
-
-  it("leaves a preserved exit snapshot as it was captured", () => {
-    const { terminal, emitted } = createHarness();
-    (terminal as unknown as Internals).terminalInfo.preservedSnapshot = { data: "kept" };
-
-    expect(terminal.resetTerminalModes()).toBe(false);
+    expect(feed).not.toHaveBeenCalled();
     expect(emitted).toEqual([]);
   });
 });

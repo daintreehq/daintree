@@ -995,10 +995,12 @@ describe("PanelHeader", () => {
       // must return focus to this panel rather than to the dying menu item.
       expect(mockDispatch).not.toHaveBeenCalled();
       act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+      expect(mockDispatch).not.toHaveBeenCalled();
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
 
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
       expect(mockDispatch).toHaveBeenCalledWith(
         "terminal.resetModes",
         { terminalId: "test-panel" },
@@ -1009,6 +1011,17 @@ describe("PanelHeader", () => {
     it("isn't offered on a panel without a terminal", () => {
       mockHasPty = false;
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      expect(screen.queryByTestId("panel-reset-modes")).toBeNull();
+    });
+
+    it("isn't offered once the terminal's process has exited, beside a Redraw that still is", () => {
+      mockHasPty = true;
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: { "test-panel": { id: "test-panel", kind: "terminal", exitCode: 1 } },
+      };
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      expect(screen.getByTestId("panel-redraw")).toBeTruthy();
       expect(screen.queryByTestId("panel-reset-modes")).toBeNull();
     });
   });

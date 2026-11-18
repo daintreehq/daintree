@@ -935,14 +935,32 @@ describe("WorkerAnalysisBackend feed accounting", () => {
     });
 
     it("writes nothing when the hold can't reach the worker first", () => {
-      const { backend, control, delivered } = stubBackend();
+      const { backend, control, posted } = stubBackend();
       holdOutput(backend, "HELD");
 
       control.sendSucceeds = false;
       expect(backend.feedModeReset(RESET)).toBe(false);
       control.sendSucceeds = true;
 
-      expect(delivered.some((m) => m.type === "prelude")).toBe(false);
+      // Not even attempted: a reset posted past an undelivered hold would parse
+      // ahead of output the pane has already shown.
+      expect(posted.some((m) => m.type === "prelude")).toBe(false);
+    });
+
+    it("refuses, and keeps reporting the program's paste mode, when the reset itself can't be posted", () => {
+      const { backend, control } = stubBackend();
+      backend.handleWorkerEvent({
+        type: "viewport",
+        terminalId: "t1",
+        lines: [],
+        cursorLine: null,
+        bracketedPasteMode: true,
+      });
+
+      control.sendSucceeds = false;
+      expect(backend.feedModeReset(RESET)).toBe(false);
+
+      expect(backend.isBracketedPasteMode()).toBe(true);
     });
 
     it("stops reporting bracketed paste as soon as the reset is accepted", () => {

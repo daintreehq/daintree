@@ -162,6 +162,7 @@ import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { ActionId } from "@shared/types/actions";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { terminalScreenEnded } from "@/utils/terminalLiveScreen";
 
 /**
  * The window controls keep `icon-xs`'s 24px target but draw a 14px glyph, the
@@ -423,6 +424,7 @@ function PanelHeaderComponent({
     return panel && isPtyPanel(panel) ? (panel.isInputLocked ?? false) : false;
   });
   const hasPty = panelKindHasPty(kind);
+  const screenEnded = usePanelStore((state) => terminalScreenEnded(state.panelsById[id]));
   // A primitive, so the header re-renders on a visibility or empty/non-empty
   // change and never on a keystroke into the notes. "empty" is an open
   // scratchpad with no notes yet, which earns no header toggle.
@@ -1788,7 +1790,7 @@ function PanelHeaderComponent({
                       Redraw
                     </DropdownMenuItem>
                   )}
-                  {hasPty && (
+                  {hasPty && !screenEnded && (
                     <DropdownMenuItem
                       onSelect={() => {
                         // Run once the menu has handed focus back: with an

@@ -1774,15 +1774,28 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     fireEvent.click(screen.getByText("Reset terminal modes"));
     expect(dispatch).not.toHaveBeenCalled();
     act(() => menuCloseHook.current?.(new Event("closeAutoFocus", { cancelable: true })));
+    // Not inside the close either: the primitive restores focus first.
+    expect(dispatch).not.toHaveBeenCalled();
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
+    expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith(
       "terminal.resetModes",
       { terminalId: "panel-1" },
-      expect.anything()
+      { source: "user" }
     );
+  });
+
+  it.each([
+    ["has exited", { exitCode: 0 }],
+    ["is held for recovery", { restoreRecovery: { reason: "held" } }],
+  ])("offers no mode reset on a pane that %s", (_name, ended) => {
+    renderMenu({ ...terminal, ...ended });
+
+    expect(level(submenu(menuTree(), "Session"))).toContain("Redraw");
+    expect(screen.queryByText("Reset terminal modes")).toBeNull();
   });
 
   it("puts a paused session's Force resume beside Restart, not inside Session", () => {

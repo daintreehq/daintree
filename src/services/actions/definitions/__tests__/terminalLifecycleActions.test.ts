@@ -93,6 +93,7 @@ import type { TerminalPendingDestructiveActionSnapshot } from "@/store/terminalP
 import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { ConfirmationStagedError } from "@/services/actions/confirmationStaged";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 // The service mock never evaluates the real module, so nothing registers it;
@@ -458,6 +459,7 @@ describe("terminal.closeAll result contract (#11805)", () => {
 
 type AgentPanel = {
   id: string;
+  title?: string;
   kind?: string;
   location: "grid" | "dock" | "trash" | "background";
   excludeFromPersistence?: boolean;
@@ -1308,61 +1310,128 @@ describe("terminal.resetModes (#17328)", () => {
     expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
   });
 
-  it("asks first while an agent is detected in the pane, even an idle one", async () => {
+  it("asks first about the named pane's agent, even an idle one, whatever has focus", async () => {
     setRichPanelState({
-      focusedId: "p1",
-      panels: [{ id: "p1", location: "grid", detectedAgentId: "claude", agentState: "idle" }],
+      focusedId: "shell",
+      panels: [
+        { id: "shell", location: "grid" },
+        {
+          id: "agent",
+          location: "grid",
+          title: "Claude",
+          detectedAgentId: "claude",
+          agentState: "idle",
+        },
+      ],
     });
     const run = setupActions();
 
-    await expect(run("terminal.resetModes", { terminalId: "p1" })).rejects.toThrow(
-      /needs confirmation/
-    );
+    await expect(
+      run("terminal.resetModes", { terminalId: "agent" }, { dispatchSource: "keybinding" })
+    ).rejects.toBeInstanceOf(ConfirmationStagedError);
 
     expect(terminalClientMock.resetModes).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
       kind: "resetModes",
+      dispatchSource: "keybinding",
       targetCount: 1,
       runningAgentCount: 1,
-      terminalId: "p1",
+      terminalId: "agent",
+      terminalTitle: "Claude",
     });
+
+    await run("terminal.resetModes", { terminalId: "agent", confirmed: true });
+
+    expect(terminalClientMock.resetModes).toHaveBeenCalledTimes(1);
+    expect(terminalClientMock.resetModes).toHaveBeenCalledWith("agent");
   });
 
-  it("resets an agent's pane once confirmed, clearing the staged confirm", async () => {
+  it("asks about a pane still wired to the agent it launched, before detection names it", async () => {
+    setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", launchAgentId: "codex", agentState: "idle" }],
+    });
+    const run = setupActions();
+
+    await expect(run("terminal.resetModes", { terminalId: "p1" })).rejects.toBeInstanceOf(
+      ConfirmationStagedError
+    );
+    expect(terminalClientMock.resetModes).not.toHaveBeenCalled();
+  });
+
+  it("clears only its own staged confirm once it runs", async () => {
     setRichPanelState({
       focusedId: "p1",
       panels: [{ id: "p1", location: "grid", detectedAgentId: "claude" }],
     });
+    const run = setupActions();
+    const restartPending = {
+      kind: "restart" as const,
+      targetCount: 1,
+      runningAgentCount: 1,
+      terminalId: "other",
+    };
+    pendingDestructiveStoreMock.state.request(restartPending);
+
+    await run("terminal.resetModes", { terminalId: "p1", confirmed: true });
+    expect(pendingDestructiveStoreMock.state.pending).toEqual(restartPending);
+
     pendingDestructiveStoreMock.state.request({
       kind: "resetModes",
       targetCount: 1,
       runningAgentCount: 1,
       terminalId: "p1",
     });
-    const run = setupActions();
-
     await run("terminal.resetModes", { terminalId: "p1", confirmed: true });
-
-    expect(terminalClientMock.resetModes).toHaveBeenCalledWith("p1");
     expect(pendingDestructiveStoreMock.state.pending).toBeNull();
   });
 
   it("falls back to the focused panel when no terminal is named", async () => {
-    setRichPanelState({ focusedId: "p1", panels: [{ id: "p1", location: "grid" }] });
+    setRichPanelState({
+      focusedId: "p2",
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", location: "grid" },
+      ],
+    });
     const run = setupActions();
 
     await run("terminal.resetModes", undefined);
 
-    expect(terminalClientMock.resetModes).toHaveBeenCalledWith("p1");
+    expect(terminalClientMock.resetModes).toHaveBeenCalledWith("p2");
   });
 
-  it("fails rather than reporting success when the host has no live screen to reset", async () => {
+  it.each([
+    ["no terminal is named or focused", null, [] as AgentPanel[]],
+    ["the named terminal isn't in this project", "elsewhere", [] as AgentPanel[]],
+    [
+      "the pane is held for recovery",
+      "p1",
+      [{ id: "p1", location: "grid", restoreRecovery: { reason: "held" } }] as AgentPanel[],
+    ],
+    [
+      "the panel has no terminal",
+      "p1",
+      [{ id: "p1", kind: "browser", location: "grid" }] as AgentPanel[],
+    ],
+  ])("refuses without asking the host when %s", async (_name, terminalId, panels) => {
+    setRichPanelState({ focusedId: null, panels });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.resetModes", terminalId === null ? undefined : { terminalId })
+    ).rejects.toBeInstanceOf(UnactionableTargetError);
+    expect(terminalClientMock.resetModes).not.toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  it("fails rather than reporting success when the host doesn't confirm the reset", async () => {
     setRichPanelState({ focusedId: "p1", panels: [{ id: "p1", location: "grid" }] });
     terminalClientMock.resetModes.mockResolvedValueOnce(false);
     const run = setupActions();
 
-    await expect(run("terminal.resetModes", { terminalId: "p1" })).rejects.toBeInstanceOf(
-      UnactionableTargetError
+    await expect(run("terminal.resetModes", { terminalId: "p1" })).rejects.toThrow(
+      /Couldn't reset the modes of terminal 'p1'/
     );
   });
 });

@@ -11,8 +11,8 @@ class ResizeObserverStub implements ResizeObserver {
 globalThis.ResizeObserver ??= ResizeObserverStub;
 
 // Typed explicitly so asserting on `toHaveBeenCalledWith` needs no cast.
-const dispatch = vi.fn<(id: string, args: unknown, opts: unknown) => Promise<void>>(() =>
-  Promise.resolve()
+const dispatch = vi.fn<(id: string, args: unknown, opts: unknown) => Promise<{ ok: boolean }>>(() =>
+  Promise.resolve({ ok: true })
 );
 
 vi.mock("@/services/ActionService", () => ({
@@ -31,6 +31,7 @@ import {
   type TerminalPendingDestructiveActionSnapshot,
 } from "@/store/terminalPendingDestructiveActionStore";
 import { TRASH_TTL_SECONDS } from "@/components/Layout/trashCountdown";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { TerminalDestructiveActionConfirmDialog } from "../TerminalDestructiveActionConfirmDialog";
 
 beforeEach(() => {
@@ -553,15 +554,21 @@ describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#1732
     targetCount: 1,
     runningAgentCount: 1,
     terminalId: "t1",
-    terminalTitle: "Claude · auth",
+    terminalTitle: "Build agent",
   };
 
-  it("names the pane and what the running agent loses", () => {
+  const announced = () => useAnnouncerStore.getState().polite?.msg ?? null;
+
+  beforeEach(() => {
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  it("names the pane, and what an agent still in it would lose", () => {
     const { title, described } = open(RESET);
 
-    expect(title).toContain("'Claude · auth'");
-    expect(described).toMatch(/^An agent is still running/);
-    expect(described).toMatch(/bracketed paste/);
+    expect(title).toContain("'Build agent'");
+    expect(described).toMatch(/loses bracketed paste/);
+    expect(described).toMatch(/multi-line paste can arrive as separate lines/);
   });
 
   it("points at Redraw outside the accessible description", () => {
@@ -571,7 +578,7 @@ describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#1732
     expect(described).not.toMatch(/Redraw/);
   });
 
-  it("resets the named terminal on confirm", () => {
+  it("resets the named terminal on confirm, and says so once the host has", async () => {
     open(RESET);
 
     fireEvent.click(screen.getByRole("button", { name: "Reset terminal modes" }));
@@ -581,6 +588,19 @@ describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#1732
       { terminalId: "t1", confirmed: true },
       { source: "user" }
     );
+    await vi.waitFor(() => expect(announced()).toBe("Terminal modes reset"));
+  });
+
+  it("announces nothing when the reset didn't happen", async () => {
+    dispatch.mockResolvedValueOnce({ ok: false });
+    open(RESET);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset terminal modes" }));
+
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(announced()).toBeNull();
+    expect(useTerminalPendingDestructiveActionStore.getState().pending).toBeNull();
   });
 
   it("dispatches nothing when the snapshot lost its terminal", () => {

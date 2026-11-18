@@ -53,3 +53,11 @@ export const StartHeldArgsSchema = z.object({
     .enum(["resume", "fresh"])
     .describe("resume reopens the conversation its hold recorded, if any; fresh starts a new one."),
 });
+
+export const ResetModesArgsSchema = z.object({
+  terminalId: z.string().optional(),
+  confirmed: z
+    .boolean()
+    .optional()
+    .describe("Confirms resetting a terminal an agent is still running in."),
+});

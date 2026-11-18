@@ -20,6 +20,7 @@ import {
 } from "@shared/types/agentSessionFile";
 import {
   KeepConversationArgSchema,
+  ResetModesArgsSchema,
   RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
@@ -533,6 +534,7 @@ export function registerTerminalLifecycleActions(
     title: "Reset terminal modes",
     description:
       "Turn off the mouse, paste and keyboard modes a crashed program left on. The process keeps running and scrollback stays.",
+    paletteDescription: "Turn off stuck mouse and keyboard modes without restarting the process",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -546,13 +548,7 @@ export function registerTerminalLifecycleActions(
       isReady: (ctx) => !!ctx.focusedTerminalId,
       reason: "Focus a terminal to reset its modes",
     },
-    argsSchema: z.object({
-      terminalId: z.string().optional(),
-      confirmed: z
-        .boolean()
-        .optional()
-        .describe("Confirms resetting a terminal an agent is still running in."),
-    }),
+    argsSchema: ResetModesArgsSchema,
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.resetModes", args, ctx),
   }));
