@@ -232,20 +232,32 @@ function currentDriver(
   return latest;
 }
 
+/** Which projects, at which roots, a worktree count covers; order and status aside. */
+function membershipKey(projects: ReadonlyArray<{ id: string; path: string }>): string {
+  return projects
+    .map((project) => JSON.stringify([project.id, project.path]))
+    .sort()
+    .join("\n");
+}
+
 /** The sources a real host samples from. Slow reads are cached so the 5 s tick stays cheap. */
 export function createHostSampleSources(now: () => number = Date.now): HostSampleSources {
-  let worktrees: { count: number; at: number } | null = null;
+  let worktrees: { key: string; count: number; at: number } | null = null;
   let clis: { list: Array<{ agentId: string; version: string | null }>; at: number } | null = null;
   const forges = createForgeObserver(now);
   const platform: HostSampleSources["platform"] =
     process.platform === "darwin" ? "darwin" : process.platform === "win32" ? "win32" : "linux";
 
   async function projectsSample(open: ProjectInventory) {
-    if (!worktrees || now() - worktrees.at > WORKTREE_COUNT_TTL_MS) {
+    if (open.length === 0) return { projectCount: 0, worktreeCount: 0 };
+    // A count answers only for the projects it covered (#17813): a close, a
+    // swap or a moved root since then would mix two inventories.
+    const key = membershipKey(open);
+    if (!worktrees || worktrees.key !== key || now() - worktrees.at > WORKTREE_COUNT_TTL_MS) {
       const count = await countWorktrees(open);
       // An incomplete count is unknown, and isn't cached: the next sample asks again.
       if (count === null) return { projectCount: open.length, worktreeCount: null };
-      worktrees = { count, at: now() };
+      worktrees = { key, count, at: now() };
     }
     return { projectCount: open.length, worktreeCount: worktrees.count };
   }
