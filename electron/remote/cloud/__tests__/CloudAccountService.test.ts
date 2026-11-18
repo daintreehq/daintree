@@ -290,17 +290,17 @@ describe("CloudAccountService", () => {
     const { accounts, vault } = service({ beforeAccountRemoved: settle });
     const summary = await accounts.addAccount({
       providerId: "boat",
-      apiKey: "boat_live_x",
+      credentials: { apiKey: "boat_live_x" },
       scopeId: "personal",
     });
     await expect(accounts.removeAccount(summary.id)).rejects.toThrow("couldn't revoke yet");
     expect(settle).toHaveBeenCalledWith(summary.id);
     expect(accounts.summaries().map((a) => a.id)).toEqual([summary.id]);
-    expect(await vault.get(summary.id)).toBe("boat_live_x");
+    expect(await vault.get(summary.id)).toEqual({ apiKey: "boat_live_x" });
 
     // Revoked first, while the key is still there to do it.
     settle.mockImplementationOnce(async () => {
-      expect(await vault.get(summary.id)).toBe("boat_live_x");
+      expect(await vault.get(summary.id)).toEqual({ apiKey: "boat_live_x" });
     });
     await accounts.removeAccount(summary.id);
     expect(accounts.summaries()).toEqual([]);

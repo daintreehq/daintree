@@ -480,7 +480,7 @@ describe("BoatProvider", () => {
 
 describe("machine keys (#17361)", () => {
   const credentials = {
-    apiKey: ctx.apiKey,
+    values: { apiKey: ctx.apiKey },
     scopeId: "personal",
     apiUrl: "https://boat.test/api/v1",
   };

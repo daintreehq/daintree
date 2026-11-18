@@ -42,6 +42,7 @@ function setup() {
     scope: { kind: "personal", id: "personal", name: "Personal" },
     apiUrl: "https://boat.test/api/v1",
     keyHint: "abcd",
+    credentialRevision: null,
     addedAt: 0,
     validation: { status: "unknown", checkedAt: null, detail: null },
     lastProvisioning: null,
@@ -89,7 +90,7 @@ function setup() {
     machineKeys,
   } as unknown as CloudProvider;
   const credentials = {
-    apiKey: "boat_live_account",
+    values: { apiKey: "boat_live_account" },
     scopeId: "personal",
     apiUrl: "https://boat.test/api/v1",
   };
