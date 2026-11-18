@@ -187,16 +187,28 @@ export class CloudHosts {
     this.changed();
   }
 
-  checkAccountCredentials(providerId: unknown, values: unknown): Promise<CloudAccountCheckResult> {
-    return this.deps.accounts.checkCredentials(providerId, values);
+  checkAccountCredentials(
+    providerId: unknown,
+    values: unknown,
+    consent?: unknown
+  ): Promise<CloudAccountCheckResult> {
+    return this.deps.accounts.checkCredentials(providerId, values, consent);
   }
 
   addAccount(request: CloudAccountAddRequest): Promise<CloudAccountSummary> {
     return this.deps.accounts.addAccount(request);
   }
 
-  replaceAccountCredentials(accountId: unknown, values: unknown): Promise<CloudAccountSummary> {
-    return this.deps.accounts.replaceCredentials(accountId, values);
+  replaceAccountCredentials(
+    accountId: unknown,
+    values: unknown,
+    consent?: unknown
+  ): Promise<CloudAccountSummary> {
+    return this.deps.accounts.replaceCredentials(accountId, values, consent);
+  }
+
+  allowAccountProvider(accountId: unknown, consent: unknown): CloudAccountSummary {
+    return this.deps.accounts.allowAccountProvider(accountId, consent);
   }
 
   renameAccount(accountId: unknown, displayName: unknown): CloudAccountSummary {

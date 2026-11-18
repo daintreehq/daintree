@@ -57,15 +57,6 @@ export function pluginCloudProviderId(
   return namespace?.kind === "plugin" && namespace.pluginId === pluginId ? id : null;
 }
 
-/**
- * Whether a new account may be connected for this provider. Only Daintree's
- * own providers for now: a plugin's provider gets an account only once the
- * person has agreed to hand that plugin credentials (#17352).
- */
-export function canConnectCloudAccount(providerId: CloudProviderId): boolean {
-  return cloudProviderNamespace(providerId)?.kind === "built-in";
-}
-
 export { isValidCloudBindingId } from "./remoteHosts.js";
 
 /**
@@ -228,6 +219,30 @@ export interface CloudProviderInfo {
   capabilities: CloudProviderCapabilities;
   /** Null when this platform's Shell can use the provider; otherwise why not. */
   unsupportedReason: string | null;
+  /** Present for a plugin's provider: the plugin behind it, and whether the person has agreed to it. */
+  plugin?: CloudProviderPluginConsent;
+}
+
+/**
+ * Who stands behind a plugin's cloud provider (#17352). The plugin receives
+ * the credentials entered, chooses the machines Daintree connects to and
+ * vouches for their identity, and creates machines that bill the person's
+ * own account, so it gets an account only once the person has agreed.
+ */
+export interface CloudProviderPluginConsent {
+  pluginId: string;
+  /** The plugin's display name, or its id when it has none. */
+  pluginName: string;
+  /**
+   * What the person agrees to: every cloud provider the plugin declares now.
+   * Sent back as `consent` with a check, connect, replace or review of an
+   * account, so agreement to one version of the plugin never answers for another.
+   */
+  fingerprint: string;
+  /** The person has agreed to exactly these declarations; false asks before any credentials go to it. */
+  granted: boolean;
+  /** The names of the providers one agreement covers. */
+  providerNames: string[];
 }
 
 /**
@@ -701,6 +716,8 @@ export interface CloudAccountAddRequest {
   credentials: CloudCredentialValues;
   scopeId: string;
   displayName?: string;
+  /** For a plugin's provider: `CloudProviderPluginConsent.fingerprint` as shown to the person. */
+  consent?: string;
 }
 
 export interface CloudHostsSnapshot {

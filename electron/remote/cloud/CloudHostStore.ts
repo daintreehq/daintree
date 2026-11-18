@@ -179,11 +179,25 @@ export interface StoredMachineKey {
   createdAt: number;
 }
 
+/**
+ * The person agreed to hand a plugin's cloud providers credentials (#17352),
+ * for the declarations they had then. One per plugin; it outlives an update
+ * that leaves the declarations as they were, and goes when the plugin is
+ * uninstalled.
+ */
+export interface StoredProviderConsent {
+  pluginId: string;
+  /** `PluginCloudProviderDeclaration.consentFingerprint` as agreed to. */
+  fingerprint: string;
+  approvedAt: number;
+}
+
 export interface CloudHostsValue {
   version: 1;
   accounts: StoredCloudAccount[];
   bindings: StoredCloudBinding[];
   machineKeys?: StoredMachineKey[];
+  providerConsents?: StoredProviderConsent[];
 }
 
 export interface CloudHostsStoreBackend {
@@ -514,6 +528,16 @@ function readMachineKey(raw: unknown): StoredMachineKey | null {
   };
 }
 
+function readProviderConsent(raw: unknown): StoredProviderConsent | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object") return null;
+  const pluginId = nonEmpty(value.pluginId);
+  const fingerprint = nonEmpty(value.fingerprint);
+  // Consent that doesn't read is no consent: the plugin asks again.
+  if (!pluginId || !fingerprint) return null;
+  return { pluginId, fingerprint, approvedAt: num(value.approvedAt) ?? 0 };
+}
+
 /**
  * Reads tolerate anything a hand edit or another build left; a record that
  * doesn't read is skipped here but kept on disk, through every write, so a
@@ -524,6 +548,7 @@ interface RawCloudHosts {
   accounts: unknown[];
   bindings: unknown[];
   machineKeys: unknown[];
+  providerConsents: unknown[];
 }
 
 export class CloudHostStore {
@@ -533,11 +558,13 @@ export class CloudHostStore {
 
   private raw(): RawCloudHosts {
     const value = this.backend.get("cloudHosts") as
-      { accounts?: unknown; bindings?: unknown; machineKeys?: unknown } | undefined;
+      | { accounts?: unknown; bindings?: unknown; machineKeys?: unknown; providerConsents?: unknown }
+      | undefined;
     return {
       accounts: Array.isArray(value?.accounts) ? value.accounts : [],
       bindings: Array.isArray(value?.bindings) ? value.bindings : [],
       machineKeys: Array.isArray(value?.machineKeys) ? value.machineKeys : [],
+      providerConsents: Array.isArray(value?.providerConsents) ? value.providerConsents : [],
     };
   }
 
@@ -565,13 +592,42 @@ export class CloudHostStore {
     return this.bindings().find((binding) => binding.hostId === hostId) ?? null;
   }
 
-  putAccount(account: StoredCloudAccount): void {
+  /** Writes the account and, in the same write, the consent it was connected under. */
+  putAccount(account: StoredCloudAccount, consent?: StoredProviderConsent): void {
     this.mutate((raw) => {
       const index = raw.accounts.findIndex(
         (entry) => (entry as { id?: unknown })?.id === account.id
       );
       if (index >= 0) raw.accounts[index] = account;
       else raw.accounts.push(account);
+      if (consent) putConsent(raw, consent);
+    });
+  }
+
+  /** The consent kept for a plugin's cloud providers, or null when there is none that reads. */
+  providerConsent(pluginId: string): StoredProviderConsent | null {
+    for (const entry of this.raw().providerConsents) {
+      const consent = readProviderConsent(entry);
+      if (consent?.pluginId === pluginId) return consent;
+    }
+    return null;
+  }
+
+  putProviderConsent(consent: StoredProviderConsent): void {
+    this.mutate((raw) => putConsent(raw, consent));
+  }
+
+  /** Forgets a plugin's consent; writes nothing when there was none. */
+  removeProviderConsent(pluginId: string): void {
+    const raw = this.raw();
+    const kept = raw.providerConsents.filter(
+      (entry) => (entry as { pluginId?: unknown } | null)?.pluginId !== pluginId
+    );
+    if (kept.length === raw.providerConsents.length) return;
+    this.mutate((next) => {
+      next.providerConsents = next.providerConsents.filter(
+        (entry) => (entry as { pluginId?: unknown } | null)?.pluginId !== pluginId
+      );
     });
   }
 
@@ -665,6 +721,10 @@ export class CloudHostStore {
       accounts: raw.accounts as StoredCloudAccount[],
       bindings: raw.bindings as StoredCloudBinding[],
       machineKeys: raw.machineKeys as StoredMachineKey[],
+      // Left out until there is one, so a store with none reads as it did before.
+      ...(raw.providerConsents.length > 0
+        ? { providerConsents: raw.providerConsents as StoredProviderConsent[] }
+        : {}),
     });
     for (const listener of [...this.listeners]) {
       try {
@@ -674,4 +734,14 @@ export class CloudHostStore {
       }
     }
   }
+}
+
+/** One consent per plugin: a newer one takes the place of whatever was kept for it. */
+function putConsent(raw: RawCloudHosts, consent: StoredProviderConsent): void {
+  raw.providerConsents = [
+    ...raw.providerConsents.filter(
+      (entry) => (entry as { pluginId?: unknown } | null)?.pluginId !== consent.pluginId
+    ),
+    consent,
+  ];
 }

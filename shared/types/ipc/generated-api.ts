@@ -331,6 +331,9 @@ export interface GeneratedElectronAPI {
     addAccount(
       ...args: IpcInvokeMap["cloud-hosts:add-account"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:add-account"]["result"]>;
+    allowAccountProvider(
+      ...args: IpcInvokeMap["cloud-hosts:allow-account-provider"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:allow-account-provider"]["result"]>;
     checkAccountKey(
       ...args: IpcInvokeMap["cloud-hosts:check-account-key"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:check-account-key"]["result"]>;

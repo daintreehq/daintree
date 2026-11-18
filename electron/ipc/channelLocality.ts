@@ -1093,6 +1093,7 @@ export const CHANNEL_LOCALITY = {
   "recovery:reload-app": "shell",
   "recovery:reset-and-reload": "shell",
   "cloud-hosts:add-account": "shell",
+  "cloud-hosts:allow-account-provider": "shell",
   "cloud-hosts:check-account-key": "shell",
   "cloud-hosts:create-host": "shell",
   "cloud-hosts:create-host-for-worktree": "shell",
