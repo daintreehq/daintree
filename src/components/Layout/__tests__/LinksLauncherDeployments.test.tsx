@@ -274,8 +274,9 @@ describe("useLauncherDeployments", () => {
     h.getDeployments.mockResolvedValueOnce({
       deployments: [deployment({ url: "https://first-read.example.dev/" })],
     });
-    h.getDeployments.mockResolvedValueOnce({ deployments: [] });
-    h.getDeployments.mockImplementationOnce(() => new Promise(() => {}));
+    // The branch never answers, so nothing replaces the first read's result
+    // before the pull request comes back.
+    h.getDeployments.mockImplementation(() => new Promise(() => {}));
     let target: LauncherDeploymentTarget = PR_TARGET;
     const { result, rerender } = renderHook(() => useLauncherDeployments(target, 7));
     await settle();
@@ -286,6 +287,7 @@ describe("useLauncherDeployments", () => {
     await settle();
     target = PR_TARGET;
     rerender();
+    expect(result.current).toEqual({ kind: "loading" });
     await settle();
     expect(h.getDeployments).toHaveBeenCalledTimes(3);
     expect(result.current).toEqual({ kind: "loading" });

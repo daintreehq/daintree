@@ -168,7 +168,7 @@ const {
   LinksLauncherOverflowItems,
   closeLinksLauncherForHiddenButton,
 } = await import("../LinksLauncher");
-const { useLinksLauncherStore } = await import("@/store/linksLauncherStore");
+const { openLinksLauncher, useLinksLauncherStore } = await import("@/store/linksLauncherStore");
 const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } =
   await import("@/components/ui/dropdown-menu");
 
@@ -1315,10 +1315,12 @@ describe("the active worktree's deployments in the launcher", () => {
     h.branchTarget = BRANCH_DEPLOYMENTS;
     h.getDeployments.mockResolvedValue({ deployments: DEPLOYMENTS });
     render(<LinksLauncherDetachedHost />);
+    // The palette's route: with no toolbar button on screen it opens detached.
     await act(async () => {
-      useLinksLauncherStore.getState().open("detached");
+      openLinksLauncher();
     });
     await flush();
+    expect(useLinksLauncherStore.getState().opening?.origin).toBe("detached");
     expect(h.getDeployments).toHaveBeenCalledTimes(1);
     expect(headings()).toEqual(["Deployments feature/signup"]);
     expect(deploymentRows()).toEqual([
@@ -1344,7 +1346,8 @@ describe("the active worktree's deployments in the launcher", () => {
     );
     const cta = () => screen.queryByRole("button", { name: "Add a project link" });
     const skeleton = () => screen.queryByRole("status", { name: "Loading deployments" });
-    for (const answer of [{ kind: "loaded", rows: [] }, { kind: "error" }] as const) {
+    const answers: LauncherDeployments[] = [{ kind: "loaded", rows: [] }, { kind: "error" }];
+    for (const answer of answers) {
       const { rerender, unmount } = render(list({ kind: "loading" }));
       expect(cta()).toBeNull();
       act(() => vi.advanceTimersByTime(200));
