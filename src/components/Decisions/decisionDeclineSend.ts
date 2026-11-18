@@ -73,9 +73,17 @@ function isQueued(phase: DeclinePhase): boolean {
   return phase.kind === "settled" && phase.outcome.status === "queued";
 }
 
-/** Waiting on main to say where it stands: queued there, or its standing couldn't be read. */
+/**
+ * Waiting on main to say where it stands: queued there, its standing couldn't
+ * be read, or a Retry is reading or sending it now, whose read a follower joins.
+ */
 function isUnsettled(phase: DeclinePhase): boolean {
-  return isQueued(phase) || phase.kind === "lost";
+  return (
+    isQueued(phase) ||
+    phase.kind === "lost" ||
+    phase.kind === "checking" ||
+    phase.kind === "sending"
+  );
 }
 
 function setPhase(key: string, claim: Claim, phase: DeclinePhase): void {
