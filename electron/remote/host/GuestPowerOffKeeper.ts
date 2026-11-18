@@ -153,7 +153,9 @@ export class GuestPowerOffKeeper {
       this.deferred = null;
       // Finished even if Host mode is shutting down: a later start in this boot must not find it.
       return this.enqueue(async () => {
-        await this.removeSaved();
+        // A saved permission for another machine (a restore still reading it) isn't this one's.
+        const saved = await this.deps.system.loadArm();
+        if (!saved || sameGuestPowerOffTarget(saved.target, target)) await this.removeSaved();
         return this.status();
       });
     }
@@ -251,6 +253,7 @@ export class GuestPowerOffKeeper {
     }
     this.armed = target;
     this.restoring = null;
+    this.deferred = null;
     this.armProblem = null;
     this.ensureTimer();
     return this.status();

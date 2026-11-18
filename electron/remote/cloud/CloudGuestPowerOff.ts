@@ -144,8 +144,11 @@ export class CloudGuestPowerOff {
 
   private setProblem(bindingId: string, message: string): void {
     const before = this.problems.get(bindingId);
-    this.problems.set(bindingId, message);
-    if (before !== message) this.deps.changed();
+    // A take-back the host hasn't confirmed lasting stays said, whatever else is.
+    const warning = this.unconfirmed.get(bindingId);
+    const shown = warning ? `${message} ${warning}` : message;
+    this.problems.set(bindingId, shown);
+    if (before !== shown) this.deps.changed();
   }
 
   private clearProblem(bindingId: string): void {
@@ -180,10 +183,7 @@ export class CloudGuestPowerOff {
     if (!this.reaches(hostId, bindingId, resourceId, session)) return;
     this.checkedAt.set(bindingId, this.now());
     if (!check.eligible) {
-      const said = () => {
-        const unconfirmed = this.unconfirmed.get(bindingId);
-        return `${CANT} ${check.problem}${unconfirmed ? ` ${unconfirmed}` : ""}`;
-      };
+      const said = () => `${CANT} ${check.problem}`;
       this.setProblem(bindingId, said());
       // Given before, perhaps by another device: no longer safe, so taken back. A take-back that
       // may not have arrived, or that the host couldn't make last, is sent again soon, and the
