@@ -774,6 +774,7 @@ export const createRestartActions = (
                 bypassArgs: effectiveEntry.dangerousArgs,
                 pluginBypassArgHistory: runtimeForEnv.pluginBypassArgHistory,
                 userArgs: userPermissionArgs(effectiveEntry, runtimeForEnv.settings.preset?.args),
+                carriedArgs: callerLaunchFlags,
               }),
               effectiveAgentId
             ),

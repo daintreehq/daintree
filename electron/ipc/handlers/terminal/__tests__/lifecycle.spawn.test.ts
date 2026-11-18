@@ -2149,6 +2149,28 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(ptyClient.spawn.mock.calls[0][1].command).toBe("claude");
   });
 
+  it("strips Codex's Auto flag from a fresh assistant launch too", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "full" : false));
+    mockGetBypassPermissions.mockImplementation(() => false);
+    mockGetCodexLaunchArgs.mockImplementation(() => []);
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "codex --approve-for-me --search",
+        launchAgentId: "codex",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+    expect(ptyClient.spawn.mock.calls[0][1].command).not.toContain("--approve-for-me");
+    expect(ptyClient.spawn.mock.calls[0][1].command).toContain("--search");
+  });
+
   it("keeps the Auto args on an ordinary agent launch", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);

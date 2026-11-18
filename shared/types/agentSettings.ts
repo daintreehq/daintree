@@ -672,9 +672,15 @@ export interface ReconcilePermissionFlagsOptions {
   pluginBypassArgHistory?: readonly (readonly string[])[];
   /**
    * The user's own args today ({@link userPermissionArgs}). When they carry
-   * the agent's Auto group, every copy in the snapshot is theirs and stays.
+   * the agent's Auto group, the snapshot's copy is theirs and stays.
    */
   userArgs?: readonly string[];
+  /**
+   * Args the launch carries outside the snapshot (the caller's verbatim tail,
+   * #13046). An Auto group among them is the launch's one copy, so none is
+   * added to the snapshot.
+   */
+  carriedArgs?: readonly string[];
 }
 
 /**
@@ -700,8 +706,11 @@ export interface ReconcilePermissionFlagsOptions {
  *
  * An Auto group the user's own args carry is theirs, as a fresh launch would
  * carry it whatever the level: it is never stripped, and at Auto it stands in
- * for Daintree's copy. Any copy is enough at Auto, so none is added beside it
- * (Codex rejects `--approve-for-me` given twice).
+ * for Daintree's copy. A launch carries at most one copy (Codex rejects
+ * `--approve-for-me` given twice), so later copies go, and none is added when
+ * the snapshot or the caller's tail already has one. The Auto group is matched
+ * before the bypass groups, so a custom bypass that spells it is still one
+ * group, read the same way on every pass.
  */
 export function reconcilePermissionFlags(
   flags: readonly string[],
@@ -723,7 +732,10 @@ export function reconcilePermissionFlags(
   const keepAuto =
     level === "auto" ||
     (autoArgs.length > 0 && findTokenSequence(options.userArgs ?? [], autoArgs) !== -1);
-  const autoPresent = level === "auto" && flags.some((_, index) => autoAt(index));
+  // A copy in the caller's tail is the launch's one copy, so the snapshot keeps none.
+  const carried =
+    autoArgs.length > 0 && findTokenSequence(options.carriedArgs ?? [], autoArgs) !== -1;
+  const autoPresent = level === "auto" && (carried || flags.some((_, index) => autoAt(index)));
 
   // The level's args replace the first stripped group in place, preserving flag
   // order so a snapshot that already carries them is left untouched.
@@ -735,20 +747,27 @@ export function reconcilePermissionFlags(
         : [];
   const reconciled: string[] = [];
   let inserted = false;
+  let autoKept = false;
   const fillSlot = () => {
     if (inserted) return;
     reconciled.push(...wanted);
     inserted = true;
   };
   for (let index = 0; index < flags.length;) {
+    if (autoAt(index)) {
+      if (keepAuto && !autoKept && !carried) {
+        reconciled.push(...autoArgs);
+        autoKept = true;
+      } else if (!keepAuto) {
+        fillSlot();
+      }
+      index += autoArgs.length;
+      continue;
+    }
     const bypassLength = bypassLengthAt(index);
     if (bypassLength > 0) {
       fillSlot();
       index += bypassLength;
-    } else if (autoAt(index)) {
-      if (keepAuto) reconciled.push(...autoArgs);
-      else fillSlot();
-      index += autoArgs.length;
     } else {
       reconciled.push(flags[index] as string);
       index += 1;
@@ -794,11 +813,11 @@ export interface GenerateAgentFlagsOptions {
    */
   globalSkipPermissions?: boolean;
   /**
-   * Args the command already carries ahead of these flags (a preset's or a
-   * recipe's). An Auto group among them, or among the custom flags, is left as
+   * Args the command carries beside these flags (a preset's, a recipe's, the
+   * caller's). An Auto group among them, or among the custom flags, is left as
    * the only copy: Codex rejects `--approve-for-me` given twice.
    */
-  precedingArgs?: readonly string[];
+  carriedArgs?: readonly string[];
 }
 
 export function generateAgentFlags(
@@ -813,7 +832,7 @@ export function generateAgentFlags(
   const alreadyCarried =
     level === "auto" &&
     (findTokenSequence(customFlags, permissionArgs) !== -1 ||
-      findTokenSequence(options?.precedingArgs ?? [], permissionArgs) !== -1);
+      findTokenSequence(options?.carriedArgs ?? [], permissionArgs) !== -1);
   if (!alreadyCarried) flags.push(...permissionArgs);
   flags.push(...customFlags);
 
@@ -877,6 +896,11 @@ export interface GenerateAgentCommandOptions {
   /** Global skip-permissions override (#10432); forwarded to {@link generateAgentFlags}. */
   globalSkipPermissions?: boolean;
   /**
+   * The caller's verbatim flags (#13046), appended after this command by the
+   * launch plan. Read only so an Auto group they carry isn't doubled.
+   */
+  callerArgs?: readonly string[];
+  /**
    * Session id to ASSIGN to this launch, for agents declaring
    * `resume.assignSessionIdArgs` (#11782). Mint it with
    * {@link mintAssignedSessionId} and persist the same value on the panel, so
@@ -918,7 +942,11 @@ export function generateAgentCommand(
   const flags = generateAgentFlags(entry, agentId, {
     clipboardDirectory: options?.clipboardDirectory,
     globalSkipPermissions: options?.globalSkipPermissions,
-    precedingArgs: [...(options?.presetArgs ?? []), ...parseLaunchArgs(options?.recipeArgs)],
+    carriedArgs: [
+      ...(options?.presetArgs ?? []),
+      ...parseLaunchArgs(options?.recipeArgs),
+      ...(options?.callerArgs ?? []),
+    ],
   });
   const parts: string[] = [baseCommand];
   let registryArgsEnd = parts.length;
@@ -1059,6 +1087,8 @@ export function buildAgentLaunchFlags(
     presetArgs?: string[];
     recipeArgs?: string;
     globalSkipPermissions?: boolean;
+    /** As {@link GenerateAgentCommandOptions.callerArgs}. */
+    callerArgs?: readonly string[];
   }
 ): string[] {
   const agentConfig = getEffectiveAgentConfig(agentId);
@@ -1098,7 +1128,7 @@ export function buildAgentLaunchFlags(
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
   const settingsFlags = generateAgentFlags(entry, agentId, {
     globalSkipPermissions: options?.globalSkipPermissions,
-    precedingArgs: [...(options?.presetArgs ?? []), ...recipeArgs],
+    carriedArgs: [...(options?.presetArgs ?? []), ...recipeArgs, ...(options?.callerArgs ?? [])],
   });
   flags.push(...settingsFlags);
 
@@ -1488,6 +1518,44 @@ export function stripAssignedSessionIdArgs(command: string, agentId: string | un
     }
   }
   return command;
+}
+
+/**
+ * Removes the agent's declared Auto args (#17435) from a launch command: the
+ * option and its value as separate words or fused as `--option=value`, and a
+ * lone flag with any `=value` after it. Works on shell words like
+ * {@link stripAssignedSessionIdArgs}, so a prompt that mentions the flag is
+ * one quoted word and stays. A command with a quote left open is returned
+ * as it is, since its words can't be told apart.
+ */
+export function stripPermissionAutoArgs(command: string, agentId: string | undefined): string {
+  const [option, ...values] = getPermissionAutoArgs(agentId);
+  if (!command || option === undefined) return command;
+  const { words, unterminated } = scanShellWords(command);
+  if (unterminated) return command;
+  const plain = words.map(unquoteShellWord);
+  const fused = values.length === 1 ? `${option}=${values[0]}` : undefined;
+  const lengthAt = (at: number): number => {
+    const word = plain[at] ?? "";
+    if (values.length === 0) return word === option || word.startsWith(`${option}=`) ? 1 : 0;
+    if (word === fused) return 1;
+    return [option, ...values].every((arg, offset) => plain[at + offset] === arg)
+      ? values.length + 1
+      : 0;
+  };
+  const kept: string[] = [];
+  let stripped = false;
+  for (let at = 0; at < words.length;) {
+    const length = lengthAt(at);
+    if (length > 0) {
+      stripped = true;
+      at += length;
+    } else {
+      kept.push(words[at] as string);
+      at += 1;
+    }
+  }
+  return stripped ? kept.join(" ") : command;
 }
 
 /**

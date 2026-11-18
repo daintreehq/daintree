@@ -335,9 +335,16 @@ describe("permission bypass", () => {
         to: "Fast: Auto",
       }),
     ]);
-    await service.apply({ permissionBypass: { agents: { claude: { dangerousMode: "auto" } } } });
+    await service.apply({
+      permissionBypass: {
+        agents: { claude: { dangerousMode: "auto", presets: { fast: { dangerousMode: "auto" } } } },
+      },
+    });
     expect(agents().claude.dangerousMode).toBe("auto");
     expect(agents().claude.dangerousEnabled).toBe(false);
+    expect(agents().claude.customPresets).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "fast", dangerousMode: "auto" })])
+    );
   });
 
   it("reads a legacy enabled flag as the mode it means, so it can't sit under a host veto", async () => {

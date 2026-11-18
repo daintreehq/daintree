@@ -183,19 +183,34 @@ describe("ScheduleEditor: permission prompts on an unattended run (#17435)", () 
     );
   }
 
+  const callout = () => document.querySelector<HTMLElement>('[data-callout="warning"]');
+
   it("suggests Auto ahead of Skip all when the agent launches on its own defaults", () => {
     renderEditor(bare());
-    const warning = screen.getByText(PROMPTS_WARNING).closest("[role]") ?? document.body;
-    const text = warning.textContent ?? "";
-    expect(text).toContain("Auto");
-    expect(text.indexOf("Auto")).toBeLessThan(text.indexOf("Skip all"));
+    const text = callout()?.textContent ?? "";
+    expect(text).toContain(PROMPTS_WARNING);
+    expect(text.indexOf("set to Auto")).toBeGreaterThan(-1);
+    expect(text.indexOf("set to Auto")).toBeLessThan(text.indexOf("Skip all"));
   });
 
-  it("shows no warning once the agent's own setting is Auto", () => {
+  it("reads the chosen preset over the agent's own Skip all", () => {
     useAgentSettingsStore.setState({
-      settings: { agents: { claude: { dangerousMode: "auto" } } } as unknown as AgentSettings,
+      settings: {
+        agents: {
+          claude: {
+            dangerousMode: "on",
+            customPresets: [
+              { id: "user-auto", name: "Reviewed", dangerousMode: "auto" },
+              { id: "user-plain", name: "Plain", dangerousMode: "off" },
+            ],
+          },
+        },
+      } as unknown as AgentSettings,
     } as never);
-    renderEditor(bare());
-    expect(screen.queryByText(PROMPTS_WARNING)).toBeNull();
+    renderEditor(withPreset("user-auto"));
+    expect(callout()).toBeNull();
+    cleanup();
+    renderEditor(withPreset("user-plain"));
+    expect(callout()?.textContent).toContain(PROMPTS_WARNING);
   });
 });

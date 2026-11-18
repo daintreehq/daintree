@@ -177,9 +177,26 @@ describe("presetBypassLabel — Auto (#17435)", () => {
     );
   });
 
-  it("says an Auto the agent can't honour leaves it asking", () => {
-    expect(
-      presetBypassLabel({ dangerousMode: "auto", permissionLevel: "cli-default" }, "Gemini")
-    ).toBe("Asked: the preset asks for an Auto mode Gemini doesn't have");
+  it("names the CLI default, not a promise to ask, when Daintree adds no flag", () => {
+    for (const label of [
+      presetBypassLabel({ dangerousMode: "auto", permissionLevel: "cli-default" }, "Gemini"),
+      presetBypassLabel({ dangerousMode: "off", permissionLevel: "cli-default" }, "Claude"),
+      presetBypassLabel({ dangerousMode: "inherit", permissionLevel: "cli-default" }, "Claude"),
+    ]) {
+      expect(label.startsWith("CLI default: ")).toBe(true);
+    }
+  });
+
+  it("shows a fallback's Auto in the dialog itself", () => {
+    act(() => {
+      void ask("preset-auto", {
+        ...summary,
+        fallbacks: [{ ...summary.fallbacks[0]!, dangerousMode: "auto", permissionLevel: "auto" }],
+      });
+    });
+    render(<PluginCapabilityConfirmDialog />);
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Auto: the preset turns on Claude's Auto mode"
+    );
   });
 });

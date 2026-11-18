@@ -79,7 +79,7 @@ describe("BehavioralControls — skip permissions control", () => {
     expect(region.querySelector("svg.lucide-shield-off")).toBeNull();
 
     rerender(<BehavioralControls {...makeProps({ dangerousMode: "off" })} />);
-    expect(within(region).queryByText("added to the command")).toBeNull();
+    expect(region.querySelector("code")).toBeNull();
   });
 
   it("surfaces the inherited resolved level inline on the Inherit option and updates with the parent", () => {
@@ -120,7 +120,9 @@ describe("BehavioralControls — skip permissions control", () => {
     );
     const region = container.querySelector("#agents-skip-permissions");
     if (!(region instanceof HTMLElement)) throw new Error("skip-permissions region not found");
-    expect(region.textContent).toContain("This agent has no Auto mode");
+    expect(region.textContent).toContain(
+      "This agent has no Auto mode, so it launches with its CLI default"
+    );
   });
 
   it("shows the inherit provenance hint only while Default is selected", () => {

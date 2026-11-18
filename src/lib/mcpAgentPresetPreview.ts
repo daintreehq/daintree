@@ -13,6 +13,7 @@
 
 import { pluralize } from "@/lib/pluralize";
 import { EXPLICIT_MODE_LABELS } from "@/lib/permissionLabels";
+import { resolveDangerousMode } from "@shared/types/agentSettings";
 import type { AgentPresetMutation } from "@/services/actions/definitions/agentPresetMutation";
 import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
 import type { AgentPreset } from "@shared/config/agentRegistry";
@@ -70,14 +71,11 @@ const PRESET_FIELDS: readonly PresetField[] = [
   },
   {
     label: "Permission prompts",
+    // Read the way a launch reads it, so a legacy `dangerousEnabled: false`
+    // shows as the agent's setting it defers to, not as an explicit choice.
     read: (p) => {
-      if (p.dangerousMode === "on" || p.dangerousMode === "off" || p.dangerousMode === "auto") {
-        return EXPLICIT_MODE_LABELS[p.dangerousMode];
-      }
-      if (p.dangerousMode === undefined && typeof p.dangerousEnabled === "boolean") {
-        return p.dangerousEnabled ? EXPLICIT_MODE_LABELS.on : EXPLICIT_MODE_LABELS.off;
-      }
-      return undefined;
+      const mode = resolveDangerousMode(p);
+      return mode === "inherit" ? undefined : EXPLICIT_MODE_LABELS[mode];
     },
     unset: "the agent's setting",
   },

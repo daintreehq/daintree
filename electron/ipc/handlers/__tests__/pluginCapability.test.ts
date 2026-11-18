@@ -257,7 +257,7 @@ describe("pluginCapability consent bridge — routing (#11708)", () => {
       source: "custom" as const,
       args: ["--model", "glm"],
       dangerousMode: "on" as const,
-      permissionLevel: "skip",
+      permissionLevel: "skip" as const,
       envNames: ["TOKEN"],
       fallbacks: [],
       fallbackOnRateLimit: false,

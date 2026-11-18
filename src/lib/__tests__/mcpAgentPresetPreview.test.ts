@@ -132,6 +132,14 @@ describe("formatAgentPresetPreviewLines", () => {
     expect(cleared).toContain("Permission prompts: Auto → the agent's setting");
   });
 
+  it("reads a legacy disabled flag as the agent's setting it defers to", () => {
+    const legacy = { id: "user-work", name: "Work", dangerousEnabled: false } as AgentPreset;
+    const text = formatAgentPresetPreviewLines(
+      update(legacy, { id: "user-work", name: "Work", dangerousMode: "off" })
+    ).join("\n");
+    expect(text).toContain("Permission prompts: the agent's setting → CLI default");
+  });
+
   it("shows the usage-limit settings changing apart from each other", () => {
     const text = formatAgentPresetPreviewLines(
       update(

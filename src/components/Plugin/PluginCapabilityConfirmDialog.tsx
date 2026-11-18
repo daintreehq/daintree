@@ -252,16 +252,18 @@ export function presetBypassLabel(
   preset: Pick<PluginPresetLaunchSummary, "dangerousMode" | "permissionLevel">,
   agentName: string
 ): string {
+  // The CLI default is named as such, not as "asked": Daintree adds no flag
+  // then, and the CLI's own settings decide whether it asks.
   if (preset.dangerousMode === "on") return "Skipped: the preset turns bypass on";
-  if (preset.dangerousMode === "off") return "Asked: the preset turns bypass off";
+  if (preset.dangerousMode === "off") return "CLI default: the preset adds no permission flag";
   if (preset.dangerousMode === "auto") {
     return preset.permissionLevel === "auto"
       ? `Auto: the preset turns on ${agentName}'s Auto mode`
-      : `Asked: the preset asks for an Auto mode ${agentName} doesn't have`;
+      : `CLI default: ${agentName} has no Auto mode for the preset to turn on`;
   }
   if (preset.permissionLevel === "skip") return `Skipped: from ${agentName}'s settings`;
   if (preset.permissionLevel === "auto") return `Auto: from ${agentName}'s settings`;
-  return `Asked: from ${agentName}'s settings`;
+  return `CLI default: from ${agentName}'s settings`;
 }
 
 type DetailRow = { label: string; value: string; mono?: boolean };

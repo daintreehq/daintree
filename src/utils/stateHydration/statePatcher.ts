@@ -838,6 +838,7 @@ export function buildArgsForRespawn(
             bypassArgs: effectiveEntry.dangerousArgs,
             pluginBypassArgHistory: getPluginBypassArgHistory(agentSettings, agentId),
             userArgs: userPermissionArgs(effectiveEntry, preset?.args),
+            carriedArgs: callerLaunchFlags,
           }),
           agentId
         ),

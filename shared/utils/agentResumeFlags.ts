@@ -8,6 +8,8 @@ import {
   userPermissionArgs,
   type AgentSettings,
 } from "../types/agentSettings.js";
+import type { AgentPreset } from "../config/agentRegistry.js";
+import { applyPresetBehaviorOverrides } from "./agentPresets.js";
 import { splitCallerLaunchFlags } from "./callerLaunchFlags.js";
 
 /**
@@ -28,9 +30,11 @@ export function reconcileResumeLaunchFlagsWith(
     /** The caller's verbatim tail (#13046), re-appended untouched after reconcile. */
     callerLaunchFlags?: string[];
   },
-  settings: AgentSettings | null | undefined
+  settings: AgentSettings | null | undefined,
+  /** The preset the session launched on, when it is known and still exists. */
+  preset?: AgentPreset
 ): string[] {
-  const entry = settings?.agents?.[session.agentId] ?? {};
+  const entry = applyPresetBehaviorOverrides(settings?.agents?.[session.agentId] ?? {}, preset);
   const permissionLevel = resolveEffectivePermissionLevel(
     entry,
     session.agentId,
@@ -47,7 +51,8 @@ export function reconcileResumeLaunchFlagsWith(
       reconcilePermissionFlags(base, session.agentId, permissionLevel, {
         bypassArgs: entry.dangerousArgs,
         pluginBypassArgHistory: getPluginBypassArgHistory(settings, session.agentId),
-        userArgs: userPermissionArgs(entry),
+        userArgs: userPermissionArgs(entry, preset?.args),
+        carriedArgs: caller,
       }),
       session.agentId
     ),

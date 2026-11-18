@@ -179,6 +179,15 @@ describe("useScheduleLaunchOptions", () => {
     expect(result.current.stopsAtPrompts).not.toBeNull();
   });
 
+  it("counts Skip all on an agent with no bypass flag as stopping, since it adds none", () => {
+    useAgentSettingsStore.setState({
+      settings: { agents: { opencode: { dangerousMode: "on" } } },
+    } as never);
+    expect(
+      renderHook(() => useScheduleLaunchOptions("opencode", null)).result.current.stopsAtPrompts
+    ).toBe(true);
+  });
+
   it("counts an Auto launch as not stopping, and an Auto the agent can't honour as stopping (#17435)", () => {
     useAgentSettingsStore.setState({
       settings: {

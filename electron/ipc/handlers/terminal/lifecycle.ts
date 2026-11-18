@@ -53,10 +53,9 @@ import {
   normalizeTerminalGridDimension,
   type TerminalKillOptions,
 } from "../../../../shared/types/terminal.js";
-import { stripCommandArgs } from "./stripCommandArgs.js";
 import {
   DEFAULT_DANGEROUS_ARGS,
-  getPermissionAutoArgs,
+  stripPermissionAutoArgs,
   relaunchResumeAsAssignedSession,
   supportsExactSessionCapture,
   supportsSessionIdAssignment,
@@ -906,7 +905,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // the declared Auto args never survive on an assistant launch, fresh or
     // restarted, as its bypass flag never survives on its own.
     if (typeof launchAgentId === "string" && (isHelpLaunch || isBoundHelpTerminal(id))) {
-      safeCommand = stripCommandArgs(safeCommand, getPermissionAutoArgs(launchAgentId));
+      safeCommand = stripPermissionAutoArgs(safeCommand, launchAgentId);
     }
 
     if (isHelpLaunch && launchAgentId) {

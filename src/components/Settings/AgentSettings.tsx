@@ -504,7 +504,7 @@ export function AgentSettings({
             <SettingsSwitchCard
               id="agents-skip-permissions"
               title="Skip permission prompts"
-              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it unless its own setting overrides it, and turns off Codex's sandbox too (Codex's Auto setting keeps it). The assistant follows it for Daintree's own confirmations unless they're set to always ask or never ask."
+              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it unless its own setting overrides it. Codex's default bypass flag turns off its sandbox too; Codex's Auto setting keeps it. The assistant follows it for Daintree's own confirmations unless they're set to always ask or never ask."
               isEnabled={settings?.globalSkipPermissions ?? false}
               onChange={() => {
                 void (async () => {

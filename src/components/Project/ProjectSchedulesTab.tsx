@@ -87,6 +87,7 @@ function sessionRecordFor(run: ScheduledRun, schedule: Schedule): AgentSessionRe
     savedAt: run.settlement.state === "settled" ? run.settlement.settledAt : run.createdAt,
     agentLaunchFlags: resume.agentLaunchFlags,
     ...(resume.agentModelId ? { agentModelId: resume.agentModelId } : {}),
+    ...(resume.agentPresetId ? { agentPresetId: resume.agentPresetId } : {}),
     cwd: resume.cwd,
     scheduledRun: { scheduleId: run.scheduleId, runId: run.id },
   };

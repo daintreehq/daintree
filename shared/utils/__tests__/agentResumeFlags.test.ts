@@ -46,13 +46,16 @@ describe("reconcileResumeLaunchFlagsWith", () => {
   it("swaps a captured bypass flag for the Auto args an agent's Auto setting asks for (#17435)", () => {
     expect(
       reconcileResumeLaunchFlagsWith(
-        { agentId: "codex", agentLaunchFlags: ["--dangerously-bypass-approvals-and-sandbox"] },
+        {
+          agentId: "codex",
+          agentLaunchFlags: ["--no-alt-screen", "--dangerously-bypass-approvals-and-sandbox"],
+        },
         settings({
           globalSkipPermissions: true,
           agents: { codex: { dangerousMode: "auto" } },
         })
       )
-    ).toEqual(expect.arrayContaining(["--approve-for-me"]));
+    ).toEqual(["--no-alt-screen", "--approve-for-me", "-c", "tui.whimsy=false"]);
     expect(
       reconcileResumeLaunchFlagsWith(
         { agentId: "claude", agentLaunchFlags: ["--permission-mode", "auto", "--model", "opus"] },
@@ -64,10 +67,44 @@ describe("reconcileResumeLaunchFlagsWith", () => {
   it("keeps Auto args the agent's own custom flags carry when the setting is off", () => {
     expect(
       reconcileResumeLaunchFlagsWith(
-        { agentId: "codex", agentLaunchFlags: ["--approve-for-me"] },
+        { agentId: "codex", agentLaunchFlags: ["--no-alt-screen", "--approve-for-me"] },
         settings({ agents: { codex: { dangerousMode: "off", customFlags: "--approve-for-me" } } })
       )
-    ).toEqual(expect.arrayContaining(["--approve-for-me"]));
+    ).toEqual(["--no-alt-screen", "--approve-for-me", "-c", "tui.whimsy=false"]);
+  });
+
+  it("resumes on the session's own preset, so its Auto beats the agent's Skip all", () => {
+    const flags = ["--no-alt-screen", "--approve-for-me"];
+    const all = settings({ agents: { codex: { dangerousMode: "on" } } });
+    expect(
+      reconcileResumeLaunchFlagsWith({ agentId: "codex", agentLaunchFlags: flags }, all, {
+        id: "reviewed",
+        name: "Reviewed",
+        dangerousMode: "auto",
+      })
+    ).toEqual([...flags, "-c", "tui.whimsy=false"]);
+    // With no preset to read, the agent's own Skip all wins, as before.
+    expect(
+      reconcileResumeLaunchFlagsWith({ agentId: "codex", agentLaunchFlags: flags }, all)
+    ).toEqual([
+      "--no-alt-screen",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "-c",
+      "tui.whimsy=false",
+    ]);
+  });
+
+  it("adds no Auto copy beside one the caller's tail carries", () => {
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        {
+          agentId: "codex",
+          agentLaunchFlags: ["--no-alt-screen", "--approve-for-me"],
+          callerLaunchFlags: ["--approve-for-me"],
+        },
+        settings({ agents: { codex: { dangerousMode: "auto" } } })
+      )
+    ).toEqual(["--no-alt-screen", "-c", "tui.whimsy=false", "--approve-for-me"]);
   });
 
   it("keeps the caller's verbatim tail, even a flag reconcile would drop, once and last", () => {

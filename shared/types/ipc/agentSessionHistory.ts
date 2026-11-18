@@ -56,6 +56,12 @@ export interface AgentSessionRecord {
   savedAt: number;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  /**
+   * The preset the session launched on, where the record knows it: a scheduled
+   * run's resume does (#17435). A resume reconciles against it, so a preset's
+   * own permission mode isn't replaced by the agent's.
+   */
+  agentPresetId?: string;
   /** Working directory the terminal was running in at capture time. */
   cwd?: string;
   /** Git branch checked out in `cwd` at capture time, for resume sanity checks. */
