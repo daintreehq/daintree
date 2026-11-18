@@ -209,3 +209,24 @@ describe("pendingCommandStart", () => {
     }
   );
 });
+
+describe("commands closing a passage in another script (#17338)", () => {
+  it("reads a send after full-width punctuation, and keeps a full-width question literal", () => {
+    expect(extractSendCommand("修复登录错误。send it。")).toEqual({
+      text: "修复登录错误",
+      send: true,
+    });
+    expect(extractSendCommand("テストを直して、send it")).toEqual({
+      text: "テストを直して",
+      send: true,
+    });
+    expect(extractSendCommand("どこで send it？")).toEqual({
+      text: "どこで send it？",
+      send: false,
+    });
+  });
+
+  it("reads a break command closed by a full-width full stop", () => {
+    expect(applyDictationCommands("修复登录错误，new paragraph。")).toBe("修复登录错误，\n\n");
+  });
+});
