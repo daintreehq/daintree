@@ -1,8 +1,15 @@
 import { useCallback, useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { ProjectLink } from "@shared/types";
+import type { NormalizedPRState } from "@shared/types/forge";
 import type { DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
+import { safeDetailsUrl } from "@/components/Worktree/ReviewHub/prChecks";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { getWorktreeBranchLabel } from "@/lib/worktreeHeadline";
 import { acquireAllDevSessions, useAllDevSessionsStore } from "@/store/allDevSessionsStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useGlobalLinksStore, type GlobalLink } from "@/store/globalLinksStore";
 import { refreshCachedProjectLinks, useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useLinksLauncherStore } from "@/store/linksLauncherStore";
@@ -37,6 +44,60 @@ export function useLinksLauncherLinks(): LinksLauncherLinks {
 
 export function hasLauncherLinks({ projectLinks, globalLinks }: LinksLauncherLinks): boolean {
   return projectLinks.length > 0 || globalLinks.length > 0;
+}
+
+/** The active worktree's pull request, as the forge reported it (#17253). */
+export interface LauncherPullRequest {
+  worktreeId: string;
+  worktreePath: string;
+  /** The worktree's branch, or its name where it has none to show. */
+  worktreeLabel: string;
+  providerId: string;
+  number: number;
+  /** Validated as an ordinary http(s) address. */
+  url: string;
+  title: string | undefined;
+  state: NormalizedPRState;
+}
+
+/**
+ * The pull request of this view's active worktree, or `null` when there is
+ * none to show. Only a provider-attributed record counts, and only while that
+ * provider is still this project's code forge and the worktree still has a
+ * remote: a worktree keeps its last record through a forge or its remote
+ * being removed, and a PR seeded before any provider resolved carries no
+ * attribution at all. A selection naming a worktree this
+ * view doesn't hold (a restored id, another project's) shows nothing.
+ */
+export function useLinksLauncherPullRequest(): LauncherPullRequest | null {
+  const codeProviderId = useResolvedForgeProvider(useViewProjectId()).providerId;
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const pullRequest = useWorktreeStore(
+    useShallow((state): LauncherPullRequest | null => {
+      const worktree = activeWorktreeId ? state.worktrees.get(activeWorktreeId) : undefined;
+      const linked = worktree?.linked;
+      const pr = linked?.pr;
+      // A worktree whose remotes are gone keeps its last record; there is no
+      // repository left to read it from.
+      if (!worktree || !linked || !pr || worktree.hasRemote === false) return null;
+      const url = safeDetailsUrl(pr.url);
+      const number = pr.ref.number;
+      if (!url || !Number.isSafeInteger(number) || number <= 0) return null;
+      return {
+        worktreeId: worktree.id,
+        worktreePath: worktree.path,
+        worktreeLabel: getWorktreeBranchLabel(worktree),
+        // The pull request's own provider: an issue detected by another forge
+        // rebuilds `linked` under its id and carries the old pull request over.
+        providerId: pr.ref.providerId,
+        number,
+        url,
+        title: pr.title?.trim() || undefined,
+        state: pr.state,
+      };
+    })
+  );
+  return pullRequest !== null && pullRequest.providerId === codeProviderId ? pullRequest : null;
 }
 
 /**

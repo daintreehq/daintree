@@ -112,7 +112,8 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
   "links-launcher": {
     label: "Links",
     icon: Link,
-    description: "This project's links, your own, and dev servers across worktrees",
+    description:
+      "This project's links, your own, the active worktree's pull request, and dev servers across worktrees",
   },
   canopy: {
     label: "Canopy",
