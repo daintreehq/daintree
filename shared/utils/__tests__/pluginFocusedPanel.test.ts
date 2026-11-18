@@ -6,6 +6,7 @@ import {
   pluginFocusedPanelEquals,
   toPluginFocusedPanel,
   toPluginFocusedPanelKind,
+  type ReportedPluginFocusedPanelKind,
 } from "../pluginFocusedPanel.js";
 
 describe("PluginFocusedPanelKind", () => {
@@ -13,6 +14,14 @@ describe("PluginFocusedPanelKind", () => {
     expectTypeOf<
       Exclude<PluginFocusedPanelKind, "plugin" | "portal">
     >().toEqualTypeOf<BuiltInPanelKind>();
+  });
+
+  it("keeps the deprecated portal kind so compiled plugins comparing against it still build", () => {
+    expectTypeOf<"portal">().toExtend<PluginFocusedPanelKind>();
+    expectTypeOf<ReportedPluginFocusedPanelKind>().toEqualTypeOf<
+      Exclude<PluginFocusedPanelKind, "portal">
+    >();
+    expectTypeOf(toPluginFocusedPanelKind).returns.toEqualTypeOf<ReportedPluginFocusedPanelKind | null>();
   });
 });
 
@@ -28,7 +37,7 @@ describe("toPluginFocusedPanelKind", () => {
     }
   );
 
-  it.each([[null], [undefined], [""], [42]])("reads %s as no kind", (kind) => {
+  it.each([[null], [undefined], [""], [42], ["portal"]])("reads %s as no kind", (kind) => {
     expect(toPluginFocusedPanelKind(kind)).toBeNull();
   });
 });
@@ -52,8 +61,8 @@ describe("toPluginFocusedPanel", () => {
     expect(toPluginFocusedPanel({ kind: "terminal", agent: "yes" }).agent).toBe(false);
   });
 
-  it("never gives the Portal a worktree", () => {
-    expect(toPluginFocusedPanel({ kind: "portal", worktreeId: "wt-1" }).worktreeId).toBeNull();
+  it("reads a retired portal report as no focused panel", () => {
+    expect(toPluginFocusedPanel({ kind: "portal", worktreeId: "wt-1" })).toBe(NO_FOCUSED_PANEL);
   });
 
   it("drops the worktree and agent flag when there is no kind", () => {

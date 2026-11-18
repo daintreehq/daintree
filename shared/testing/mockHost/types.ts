@@ -863,7 +863,8 @@ export interface CreateMockHostOptions {
   /**
    * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
    * focused panel (`kind: null`). For a project plugin it is taken to be inside
-   * its own project; `"portal"` reads as `kind: null`, as in production.
+   * its own project. The deprecated `"portal"` reads as `kind: null`, as in
+   * production.
    */
   focusedPanel?: PluginFocusedPanel;
   /**

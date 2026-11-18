@@ -22,15 +22,20 @@ const BUILT_IN_KINDS: Record<BuiltInPanelKind, true> = {
 };
 const BUILT_IN_KIND_SET: ReadonlySet<string> = new Set(Object.keys(BUILT_IN_KINDS));
 
+/** The kinds the host can still report: every {@link PluginFocusedPanelKind} but the retired `"portal"`. */
+export type ReportedPluginFocusedPanelKind = Exclude<PluginFocusedPanelKind, "portal">;
+
 /**
  * Collapse any panel kind to what a plugin may see: a built-in kind as-is,
- * `"portal"` as-is, and every other string to `"plugin"`. A plugin kind is
- * `{manifestId}.{kindId}` or `project:{projectId}/…`, so passing it through
- * would name another plugin and the project.
+ * and every other string to `"plugin"`. A plugin kind is `{manifestId}.{kindId}`
+ * or `project:{projectId}/…`, so passing it through would name another plugin
+ * and the project. The retired `"portal"` reads as no kind: nothing here
+ * reports it any more, but a remote Shell on an older build can still relay
+ * one, and it was never a plugin's panel.
  */
-export function toPluginFocusedPanelKind(kind: unknown): PluginFocusedPanelKind | null {
-  if (typeof kind !== "string" || kind.length === 0) return null;
-  if (kind === "portal" || BUILT_IN_KIND_SET.has(kind)) return kind as PluginFocusedPanelKind;
+export function toPluginFocusedPanelKind(kind: unknown): ReportedPluginFocusedPanelKind | null {
+  if (typeof kind !== "string" || kind.length === 0 || kind === "portal") return null;
+  if (BUILT_IN_KIND_SET.has(kind)) return kind as ReportedPluginFocusedPanelKind;
   return "plugin";
 }
 
@@ -49,9 +54,7 @@ export function toPluginFocusedPanel(value: unknown): PluginFocusedPanel {
     // Agent-ness is a terminal state, so no other kind can carry it.
     agent: focusKind === "terminal" && raw.agent === true,
     worktreeId:
-      focusKind !== "portal" && typeof raw.worktreeId === "string" && raw.worktreeId.length > 0
-        ? raw.worktreeId
-        : null,
+      typeof raw.worktreeId === "string" && raw.worktreeId.length > 0 ? raw.worktreeId : null,
   });
 }
 

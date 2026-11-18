@@ -641,7 +641,7 @@ describe("focused panel", () => {
       expect(seen.at(-1)).toStrictEqual({ kind: "plugin", agent: false, worktreeId: "w" });
     });
 
-    it("reports the Portal with no worktree", async () => {
+    it("never delivers the retired portal kind", async () => {
       const h = makeHarness();
       const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
       const seen: PluginFocusedPanel[] = [];
@@ -649,7 +649,8 @@ describe("focused panel", () => {
       tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "terminal", worktreeId: "w" });
       tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "portal", worktreeId: "w" });
 
-      expect(seen.at(-1)).toEqual({ kind: "portal", agent: false, worktreeId: null });
+      expect(seen.at(-1)).toEqual({ kind: null, agent: false, worktreeId: null });
+      expect(seen.map((f) => f.kind)).not.toContain("portal");
     });
 
     it("shows a project plugin focus in its own project only", async () => {
@@ -661,7 +662,7 @@ describe("focused panel", () => {
       tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "file", worktreeId: "w" });
       tracker.report(VIEW + 1, WINDOW, OTHER_PROJECT_ID, { kind: "diff", worktreeId: "x" });
       tracker.removeSender(VIEW + 1);
-      tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "portal" });
+      tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: null });
 
       expect(seen.map((f) => f.kind)).toEqual([null, "file", null, "file", null]);
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FocusedPanelTracker } from "../FocusedPanelTracker.js";
+import { FocusedPanelTracker, NO_FOCUSED_PANEL_STATE } from "../FocusedPanelTracker.js";
 
 const W1 = 1;
 const W2 = 2;
@@ -88,15 +88,13 @@ describe("FocusedPanelTracker", () => {
     expect(tracker.getCurrent().workspaceId).toBe("p1");
   });
 
-  it("never attributes Portal focus to a project, even from the dock's chrome", () => {
+  it("reads a retired portal report as no focused panel", () => {
     const tracker = new FocusedPanelTracker();
     tracker.setFocusedWindow(W1);
+    tracker.report(10, W1, "p1", { kind: "terminal" });
     tracker.report(10, W1, "p1", { kind: "portal" });
 
-    expect(tracker.getCurrent()).toEqual({
-      panel: { kind: "portal", agent: false, worktreeId: null },
-      workspaceId: null,
-    });
+    expect(tracker.getCurrent()).toBe(NO_FOCUSED_PANEL_STATE);
   });
 
   it("forgets a destroyed view and a closed window", () => {
@@ -161,14 +159,13 @@ describe("FocusedPanelTracker", () => {
       expect(kindOf(tracker)).toBe("diff");
     });
 
-    it("never attributes a remote screen's portal report to its project", () => {
+    it("reads an older remote screen's portal report as no focused panel", () => {
       const tracker = new FocusedPanelTracker();
+      tracker.setFocusedWindow(W1);
+      tracker.report(10, W1, "p1", { kind: "diff" });
       tracker.reportRemote(-1, "pa", { kind: "portal", worktreeId: "w" }, true);
 
-      expect(tracker.getCurrent()).toEqual({
-        panel: { kind: "portal", agent: false, worktreeId: null },
-        workspaceId: null,
-      });
+      expect(tracker.getCurrent()).toBe(NO_FOCUSED_PANEL_STATE);
     });
 
     it("falls back to a focused remote screen once the newer local window closes", () => {

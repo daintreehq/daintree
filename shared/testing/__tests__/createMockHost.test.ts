@@ -2194,7 +2194,7 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(received).toHaveLength(2);
     });
 
-    it("onDidChangeFocusedPanel hides the Portal from a project plugin and survives a throw", async () => {
+    it("onDidChangeFocusedPanel reads the retired portal kind as no panel and survives a throw", async () => {
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       const host = createMockHost({
         pluginId: `project__${"a".repeat(64)}__acme.board`,

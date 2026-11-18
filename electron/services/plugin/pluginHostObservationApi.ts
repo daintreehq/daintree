@@ -1044,8 +1044,8 @@ export function buildObservationHostApi(
       }
       const tracker = getFocusedPanelTracker();
       // A project plugin sees focus inside its own project only; focus anywhere
-      // else, the Portal included, reads as no focused panel rather than as a
-      // fact about another project.
+      // else reads as no focused panel rather than as a fact about another
+      // project.
       const project = (state: FocusedPanelState): PluginFocusedPanel =>
         boundProjectId === null || state.workspaceId === boundProjectId
           ? state.panel
