@@ -86,13 +86,12 @@ export class CloudGuestPowerOff {
       if (!session?.isOpen) continue;
       const retryAt = this.retryAt.get(binding.id);
       const checked = this.checkedAt.get(binding.id);
-      if (
-        (retryAt !== undefined && retryAt <= now) ||
-        checked === undefined ||
-        now - checked >= CHECK_EVERY_MS
-      ) {
-        await this.arm(binding.hostId, session);
-      }
+      // A pause after a failure holds however long ago the last check was.
+      const due =
+        retryAt !== undefined
+          ? retryAt <= now
+          : checked === undefined || now - checked >= CHECK_EVERY_MS;
+      if (due) await this.arm(binding.hostId, session);
     }
   }
 
@@ -165,6 +164,7 @@ export class CloudGuestPowerOff {
     try {
       credentials = await this.deps.accounts.credentials(account);
     } catch (error) {
+      if (!this.reaches(hostId, bindingId, resourceId, session)) return;
       const said =
         error instanceof AppError && error.userMessage ? error.userMessage : String(error);
       this.checkedAt.set(bindingId, this.now());
@@ -179,9 +179,15 @@ export class CloudGuestPowerOff {
     this.checkedAt.set(bindingId, this.now());
     if (!check.eligible) {
       this.setProblem(bindingId, `${CANT} ${check.problem}`);
-      // Given before, perhaps by another device: no longer safe, so taken back.
+      // Given before, perhaps by another device: no longer safe, so taken back. A take-back that
+      // may not have arrived is sent again soon, not in half an hour.
       if (check.target) {
-        await this.send(session, check.target, false).catch(() => {});
+        try {
+          await this.send(session, check.target, false);
+        } catch (error) {
+          if (errorCode(error) !== "UNSUPPORTED")
+            this.retryAt.set(bindingId, this.now() + RETRY_MS);
+        }
       }
       return;
     }
@@ -189,6 +195,7 @@ export class CloudGuestPowerOff {
     try {
       status = await this.send(session, check.target, true);
     } catch (error) {
+      if (!this.reaches(hostId, bindingId, resourceId, session)) return;
       if (errorCode(error) === "UNSUPPORTED") {
         this.setProblem(
           bindingId,

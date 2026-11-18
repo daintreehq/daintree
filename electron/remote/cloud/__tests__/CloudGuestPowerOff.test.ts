@@ -60,7 +60,7 @@ function setup(options: { guest?: boolean } = {}) {
     accountId: ACCOUNT,
     providerId: "aws",
     resourceId: RESOURCE,
-    ownership: "created",
+    ownership: "created-by-daintree",
     createdFor: null,
     worktreeCleanup: null,
     provisioning: null,
@@ -176,7 +176,10 @@ describe("CloudGuestPowerOff (#17362)", () => {
   it("checks a linked machine at its provider, then tells its host only which machine it is", async () => {
     const env = setup();
     await env.guest.arm(HOST, env.session);
-    expect(env.check).toHaveBeenCalledWith(expect.anything(), RESOURCE);
+    expect(env.check).toHaveBeenCalledWith(
+      await env.accounts.credentials.mock.results[0]!.value,
+      RESOURCE
+    );
     expect(env.sent).toEqual([{ target: TARGET, enabled: true }]);
     expect(JSON.stringify(env.sent)).not.toContain(SECRET);
     expect(JSON.stringify(env.sent)).not.toContain("AKIA");
@@ -231,15 +234,71 @@ describe("CloudGuestPowerOff (#17362)", () => {
     expect(env.guest.problemFor(BINDING)).toBeNull();
   });
 
-  it("changes nothing when the provider can't be asked, and tries again later", async () => {
+  it("changes nothing when the provider can't be asked, and tries again after a pause", async () => {
+    const env = setup();
+    await env.guest.arm(HOST, env.session);
+    env.check.mockRejectedValueOnce(new Error("network"));
+    env.clock.now += 31 * MINUTE;
+    await env.guest.tick();
+    expect(env.check).toHaveBeenCalledTimes(2);
+    expect(env.keeper.status()).toEqual({ armed: true, problem: null });
+    expect(env.guest.problemFor(BINDING)).toBeNull();
+    // The pause holds although the last good check is long past.
+    env.clock.now += 4 * MINUTE;
+    await env.guest.tick();
+    expect(env.check).toHaveBeenCalledTimes(2);
+    env.clock.now += 2 * MINUTE;
+    await env.guest.tick();
+    expect(env.check).toHaveBeenCalledTimes(3);
+  });
+
+  it("pauses after a first check that fails, rather than asking every pass", async () => {
     const env = setup();
     env.check.mockRejectedValueOnce(new Error("network"));
     await env.guest.arm(HOST, env.session);
-    expect(env.sent).toEqual([]);
-    expect(env.guest.problemFor(BINDING)).toBeNull();
+    env.clock.now += MINUTE;
+    await env.guest.tick();
+    expect(env.check).toHaveBeenCalledTimes(1);
+    env.clock.now += 5 * MINUTE;
+    await env.guest.tick();
+    expect(env.check).toHaveBeenCalledTimes(2);
+    expect(env.sent).toEqual([{ target: TARGET, enabled: true }]);
+  });
+
+  it("sends a take-back again soon when it may not have arrived", async () => {
+    const env = setup();
+    await env.guest.arm(HOST, env.session);
+    env.check.mockResolvedValue({ eligible: false, target: TARGET, problem: "Not EBS." });
+    env.call.mockImplementationOnce(async () => {
+      throw new Error("timed out");
+    });
+    env.clock.now += 31 * MINUTE;
+    await env.guest.tick();
+    expect(env.keeper.status().armed).toBe(true);
     env.clock.now += 6 * MINUTE;
     await env.guest.tick();
-    expect(env.sent).toEqual([{ target: TARGET, enabled: true }]);
+    expect(env.sent.at(-1)).toEqual({ target: TARGET, enabled: false });
+    expect(env.keeper.status().armed).toBe(false);
+  });
+
+  it("never shows a replaced link's late refusal", async () => {
+    const env = setup();
+    const first = env.session;
+    let refuse: (() => void) | null = null;
+    env.call.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuse = () => reject(new AppError({ code: "UNSUPPORTED", message: "old" }));
+        })
+    );
+    const armed = env.guest.arm(HOST, first);
+    await vi.waitFor(() => expect(refuse).not.toBeNull());
+    const second = env.newSession();
+    refuse!();
+    await armed;
+    expect(env.guest.problemFor(BINDING)).toBeNull();
+    await env.guest.arm(HOST, second);
+    expect(env.keeper.status().armed).toBe(true);
   });
 
   it("sends nothing over a link replaced while the provider was asked", async () => {

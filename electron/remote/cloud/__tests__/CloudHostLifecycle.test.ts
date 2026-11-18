@@ -2476,11 +2476,16 @@ describe("CloudHostLifecycle guest power-off (#17362)", () => {
   it("shows why a machine can't power itself off once idle, and checks linked machines on its keeper pass", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
+      let problem: string | null = "Needs a password to power off.";
+      let env: Awaited<ReturnType<typeof setup>> | null = null;
       const guestPowerOff = {
-        problemFor: vi.fn((): string | null => "Needs a password to power off."),
+        // Only for the binding it's asked about.
+        problemFor: vi.fn((bindingId: string): string | null =>
+          bindingId === env?.store.bindings()[0]?.id ? problem : null
+        ),
         tick: vi.fn(async () => {}),
       };
-      const env = await setup({ machine: "running" }, { guestPowerOff });
+      env = await setup({ machine: "running" }, { guestPowerOff });
       env.lifecycle.start();
       await env.lifecycle.importMachine({
         accountId: env.store.accounts()[0]!.id,
@@ -2488,10 +2493,11 @@ describe("CloudHostLifecycle guest power-off (#17362)", () => {
         name: "build",
       });
       expect(env.lifecycle.statuses()[0]!.selfStopProblem).toBe("Needs a password to power off.");
-      guestPowerOff.problemFor.mockReturnValue(null);
+      problem = null;
       expect(env.lifecycle.statuses()[0]!.selfStopProblem).toBeNull();
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(guestPowerOff.tick).toHaveBeenCalled();
+      const before = guestPowerOff.tick.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      expect(guestPowerOff.tick.mock.calls.length - before).toBe(2);
       env.lifecycle.dispose();
     } finally {
       vi.useRealTimers();

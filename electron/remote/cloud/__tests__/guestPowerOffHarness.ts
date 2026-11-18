@@ -22,7 +22,9 @@ export function cloudMachineHost(options: {
   const clock = { wall: Date.parse("2026-11-18T09:00:00Z"), mono: 1_000 };
   let busy = false;
   const powerOffs: string[][] = [];
-  const files = new Map<string, string>([["/proc/sys/kernel/random/boot_id", "boot-1\n"]]);
+  const files = new Map<string, string>([
+    ["/proc/sys/kernel/random/boot_id", "6f1a2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b\n"],
+  ]);
   const run: CommandRun = async (file, args) => {
     if (file !== "/usr/bin/sudo") return { code: 127, stderr: "not found" };
     if (args.includes("-l")) return { code: 0, stderr: "" };
@@ -53,14 +55,25 @@ export function cloudMachineHost(options: {
     idleAfterMinutes: () => IDLE_MINUTES,
     clock: () => ({ ...clock }),
   });
-  const keeper = new GuestPowerOffKeeper({
-    idle: tracker,
-    system,
-    now: () => clock.wall,
-    tickMs: 24 * 60 * MINUTE,
-  });
+  const makeKeeper = () =>
+    new GuestPowerOffKeeper({
+      idle: tracker,
+      system,
+      now: () => clock.wall,
+      tickMs: 24 * 60 * MINUTE,
+    });
+  let keeper = makeKeeper();
   return {
-    keeper,
+    get keeper() {
+      return keeper;
+    },
+    files,
+    /** Host mode starting again in the same boot, with no Shell: only what it saved remains. */
+    async restart() {
+      keeper.dispose();
+      keeper = makeKeeper();
+      await keeper.restore();
+    },
     tracker,
     powerOffs,
     setBusy(next: boolean) {

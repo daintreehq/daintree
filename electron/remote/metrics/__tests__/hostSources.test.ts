@@ -314,6 +314,10 @@ describe("createHostSampleSources", () => {
       observation: () => observation,
     } as never);
     let armed = false;
+    // Both keepers run on every host; Boat's holds no key here.
+    const offKeeper = registerRemoteService("machineKeeper", {
+      stopsWhenIdle: () => false,
+    } as never);
     const offGuest = registerRemoteService("guestPowerOff", {
       stopsWhenIdle: () => armed,
     } as never);
@@ -324,6 +328,7 @@ describe("createHostSampleSources", () => {
       expect(sources.idle?.()).toEqual({ ...observation, stopsWhenIdle: true });
     } finally {
       offGuest();
+      offKeeper();
       offIdle();
     }
   });

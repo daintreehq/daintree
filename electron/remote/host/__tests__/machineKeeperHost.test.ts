@@ -20,7 +20,7 @@ vi.mock("../../cloud/boat/boatMachineDriver.js", () => ({
 
 import { BOAT_PRODUCTION_API_URL } from "../../cloud/boat/BoatClient.js";
 import { GUEST_POWER_OFF_METHOD, MachineKeeperLinkMethod } from "../../cloud/machineKeeperLink.js";
-import type { GuestPowerOffSystem } from "../guestPowerOffSystem.js";
+import type { GuestPowerOffSystem, StoredGuestPowerOff } from "../guestPowerOffSystem.js";
 import type { LinkSession } from "../../link/session.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../runtime.js";
 import { installMachineKeeperHost } from "../machineKeeperHost.js";
@@ -120,36 +120,73 @@ describe("installMachineKeeperHost (#17361)", () => {
   });
 
   it("takes the power-off permission for an EC2 or Compute Engine machine, and nothing else, over the link", async () => {
-    const system = {
-      unsupported: () => null,
-      verifyIdentity: vi.fn(async () => ({ ok: true as const })),
-      probePowerOff: async () => null,
-      powerOff: vi.fn(async () => ({ kind: "accepted" as const })),
-      bootId: async () => "boot-1",
-      loadArm: async () => null,
-      saveArm: async () => {},
-    } satisfies GuestPowerOffSystem;
+    const system = guestSystem();
     const host = linkedHost(system);
-    const target = {
+    const aws = {
       provider: "aws",
       accountId: "123456789012",
       region: "eu-west-1",
       instanceId: "i-0abc0000000000001",
     };
-    await expect(host.call(GUEST_POWER_OFF_METHOD, { target, enabled: true })).resolves.toEqual({
-      armed: true,
-      problem: null,
-    });
+    const gce = {
+      provider: "gce",
+      project: "daintree-build",
+      zone: "us-central1-a",
+      instanceId: "9007199254740993123",
+    };
+    for (const target of [aws, gce]) {
+      await expect(host.call(GUEST_POWER_OFF_METHOD, { target, enabled: true })).resolves.toEqual({
+        armed: true,
+        problem: null,
+      });
+      await expect(host.call(GUEST_POWER_OFF_METHOD, { target, enabled: false })).resolves.toEqual({
+        armed: false,
+        problem: null,
+      });
+    }
     // Anything that could carry a credential, or a machine named loosely, is turned away by the schema.
     for (const bad of [
-      { target, enabled: true, secret: "x" },
-      { target: { ...target, accessKeyId: "AKIA" }, enabled: true },
-      { target: { ...target, instanceId: "i-../../etc" }, enabled: true },
-      { target: { ...target, provider: "boat" }, enabled: true },
+      { target: aws, enabled: true, secret: "x" },
+      { target: { ...aws, accessKeyId: "AKIA" }, enabled: true },
+      { target: { ...aws, instanceId: "i-../../etc" }, enabled: true },
+      { target: { ...gce, instanceId: "12ab" }, enabled: true },
+      { target: { ...gce, serviceAccountKey: "{}" }, enabled: true },
+      { target: { ...aws, provider: "boat" }, enabled: true },
     ]) {
       await expect(host.call(GUEST_POWER_OFF_METHOD, bad)).rejects.toThrow("VALIDATION");
     }
-    expect(system.verifyIdentity).toHaveBeenCalledTimes(1);
+    expect(system.verifyIdentity).toHaveBeenCalledTimes(2);
+    host.dispose();
+  });
+
+  it("takes back up, with no Shell, a permission saved earlier in this boot", async () => {
+    const target = {
+      provider: "aws" as const,
+      accountId: "123456789012",
+      region: "eu-west-1",
+      instanceId: "i-0abc0000000000001",
+    };
+    const system = guestSystem({ bootId: "boot-a", target });
+    const host = linkedHost(system);
+    await vi.waitFor(() =>
+      expect(system.verifyIdentity).toHaveBeenCalledWith(target, expect.anything())
+    );
+    await expect(host.call(GUEST_POWER_OFF_METHOD, { target, enabled: false })).resolves.toEqual({
+      armed: false,
+      problem: null,
+    });
     host.dispose();
   });
 });
+
+function guestSystem(saved: StoredGuestPowerOff | null = null) {
+  return {
+    unsupported: () => null,
+    verifyIdentity: vi.fn(async () => ({ ok: true as const })),
+    probePowerOff: async () => null,
+    preparePowerOff: vi.fn(async () => async () => ({ kind: "accepted" as const })),
+    bootId: async () => saved?.bootId ?? "boot-a",
+    loadArm: async () => saved,
+    saveArm: async () => {},
+  } satisfies GuestPowerOffSystem;
+}

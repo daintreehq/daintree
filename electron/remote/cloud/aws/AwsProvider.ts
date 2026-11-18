@@ -176,6 +176,9 @@ export function ec2Resource(region: string, instance: Ec2Instance): ProviderReso
   const spec = ec2InstanceType(instance.instanceType);
   const machine = ec2MachineState(instance.state);
   const reason = instance.stateReason;
+  const shutDownByItself =
+    instance.stateReasonCode === "Client.InstanceInitiatedShutdown" ||
+    /^Client\.InstanceInitiatedShutdown/.test(reason ?? "");
   return {
     resourceId: ec2ResourceId(region, instance.instanceId),
     name: instance.tags.Name || instance.instanceId,
@@ -200,10 +203,7 @@ export function ec2Resource(region: string, instance: Ec2Instance): ProviderReso
       reason &&
       machine !== "running" &&
       !/^Client\.UserInitiated/.test(reason) &&
-      !(
-        (machine === "stopping" || machine === "stopped") &&
-        /^Client\.InstanceInitiatedShutdown/.test(reason)
-      )
+      !((machine === "stopping" || machine === "stopped") && shutDownByItself)
         ? reason
         : null,
   };
@@ -998,6 +998,15 @@ export class AwsProvider implements CloudProvider {
     if (instance.instanceLifecycle) {
       return no(
         `It's a ${instance.instanceLifecycle} instance, so powering it off may not stop it normally.`
+      );
+    }
+    if ("aws:autoscaling:groupName" in instance.tags) {
+      return no("It belongs to an Auto Scaling group, which may replace it once it stops.");
+    }
+    // The types Daintree offers have no instance-store disks, whose data no stop keeps.
+    if (!ec2InstanceType(instance.instanceType)) {
+      return no(
+        `Daintree can't tell whether a ${instance.instanceType ?? "machine of this"} type has local disks a stop would erase.`
       );
     }
     let behavior: string | null;

@@ -1,4 +1,7 @@
 // @vitest-environment node
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { GuestPowerOffTarget } from "../../cloud/machineKeeperLink.js";
 import {
@@ -32,7 +35,12 @@ const ok = (body: string, headers: MetadataResponse["headers"] = {}): MetadataRe
 
 function ec2Metadata(document: Record<string, unknown>): MetadataFetch {
   return async (request) => {
-    if (request.method === "PUT") return ok("token-1");
+    if (request.method === "PUT") {
+      // IMDSv2 turns away a token request that doesn't say how long it should last.
+      return request.headers["X-aws-ec2-metadata-token-ttl-seconds"]
+        ? ok("token-1")
+        : { status: 400, headers: {}, body: "" };
+    }
     if (request.headers["X-aws-ec2-metadata-token"] !== "token-1") {
       return { status: 401, headers: {}, body: "" };
     }
@@ -106,13 +114,15 @@ describe("verifyCloudIdentity (#17362)", () => {
   });
 
   it("can't tell when the metadata server doesn't answer as EC2's would", async () => {
-    const noToken: MetadataFetch = async () => ({ status: 404, headers: {}, body: "" });
+    const noToken: MetadataFetch = async () => ({ status: 404, headers: {}, body: "token-1" });
+    const emptyToken: MetadataFetch = async (request) =>
+      request.method === "PUT" ? ok("") : ok(JSON.stringify(AWS));
     const garbled: MetadataFetch = async (request) =>
       request.method === "PUT" ? ok("token-1") : ok("not json");
     const unreachable: MetadataFetch = async () => {
       throw new Error("EHOSTUNREACH");
     };
-    for (const fetch of [noToken, garbled, unreachable]) {
+    for (const fetch of [noToken, emptyToken, garbled, unreachable]) {
       await expect(verifyCloudIdentity(fetch, AWS, signal)).resolves.toMatchObject({
         ok: false,
         definite: false,
@@ -156,7 +166,14 @@ describe("createGuestPowerOffSystem (#17362)", () => {
   it("asks sudo whether it may power off without running it, then powers off without a shell or password", async () => {
     const { system: machine, run } = system();
     await expect(machine.probePowerOff(signal)).resolves.toBeNull();
-    await expect(machine.powerOff(signal)).resolves.toEqual({ kind: "accepted" });
+    const launch = await machine.preparePowerOff();
+    if (typeof launch === "string") throw new Error(launch);
+    // Readying it ran nothing.
+    expect(run).toHaveBeenCalledTimes(1);
+    const outcome = launch(signal);
+    // Started the moment it was called, before anything else could run.
+    expect(run).toHaveBeenCalledTimes(2);
+    await expect(outcome).resolves.toEqual({ kind: "accepted" });
     expect(run.mock.calls.map(([file, args]) => [file, ...args])).toEqual([
       ["/usr/bin/sudo", "-n", "-l", "/bin/systemctl", "poweroff"],
       ["/usr/bin/sudo", "-n", "/bin/systemctl", "poweroff"],
@@ -164,16 +181,43 @@ describe("createGuestPowerOffSystem (#17362)", () => {
   });
 
   it("says why when sudo wants a password, and tells a refusal from a cut-off command", async () => {
+    const launchWith = async (machine: ReturnType<typeof system>["system"]) => {
+      const launch = await machine.preparePowerOff();
+      if (typeof launch === "string") throw new Error(launch);
+      return launch(signal);
+    };
     const refused = system({
       run: async () => ({ code: 1, stderr: "sudo: a password is required\n" }),
     });
     await expect(refused.system.probePowerOff(signal)).resolves.toMatch(/without a password/);
-    await expect(refused.system.powerOff(signal)).resolves.toEqual({
+    await expect(launchWith(refused.system)).resolves.toEqual({
       kind: "refused",
       problem: "This machine refused to power itself off: sudo: a password is required",
     });
     const cutOff = system({ run: async () => ({ code: null, stderr: "" }) });
-    await expect(cutOff.system.powerOff(signal)).resolves.toEqual({ kind: "unknown" });
+    await expect(launchWith(cutOff.system)).resolves.toEqual({ kind: "unknown" });
+    const missing = system({
+      run: async () => {
+        throw new Error("ENOENT");
+      },
+    });
+    await expect(launchWith(missing.system)).resolves.toMatchObject({ kind: "refused" });
+  });
+
+  it("writes the saved permission readable by its owner only", async () => {
+    if (process.platform === "win32") return;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "guest-power-off-"));
+    try {
+      const file = path.join(dir, "guest-power-off.json");
+      const machine = createGuestPowerOffSystem({ armFile: file, platform: "linux" });
+      await machine.saveArm({ bootId: "6f1a2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b", target: GCE });
+      expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+      await expect(machine.loadArm()).resolves.toMatchObject({ target: GCE });
+      await machine.saveArm(null);
+      await expect(fs.access(file)).rejects.toThrow();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("keeps an arm for this boot only, and reads back nothing it didn't write", async () => {
@@ -197,16 +241,27 @@ describe("createGuestPowerOffSystem (#17362)", () => {
 });
 
 describe("runCommand", () => {
+  const node = process.execPath;
+
   it("reports the exit code and what the program said, with no shell between", async () => {
     await expect(
-      runCommand("/bin/sh", ["-c", "echo refused >&2; exit 3"], signal)
+      runCommand(node, ["-e", "process.stderr.write('refused\\n'); process.exit(3)"], signal)
     ).resolves.toEqual({ code: 3, stderr: "refused\n" });
   });
 
-  it("says nothing is known of a command cut off before it answered", async () => {
+  it("says nothing is known of a command cut off after it started", async () => {
     const controller = new AbortController();
-    const running = runCommand("/bin/sh", ["-c", "sleep 5"], controller.signal);
+    const running = runCommand(node, ["-e", "setTimeout(() => {}, 5000)"], controller.signal);
     controller.abort();
     await expect(running).resolves.toMatchObject({ code: null });
+  });
+
+  it("starts nothing once its signal has fired, and refuses a program that can't start", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(runCommand(node, ["-e", "0"], controller.signal)).rejects.toThrow(/Cancelled/);
+    await expect(
+      runCommand(path.join(os.tmpdir(), "no-such-program-daintree"), [], signal)
+    ).rejects.toThrow();
   });
 });

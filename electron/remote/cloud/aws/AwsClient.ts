@@ -204,6 +204,8 @@ export interface Ec2Instance {
   /** pending, running, shutting-down, terminated, stopping or stopped. */
   state: string;
   stateReason: string | null;
+  /** The reason's code alone, such as `Client.InstanceInitiatedShutdown`. */
+  stateReasonCode?: string | null;
   stateTransitionReason: string | null;
   instanceType: string | null;
   architecture: string | null;
@@ -289,6 +291,7 @@ function parseInstance(item: XmlNode): Ec2Instance | null {
     instanceId,
     state,
     stateReason: xmlText(xmlChild(item, "stateReason"), "message"),
+    stateReasonCode: xmlText(xmlChild(item, "stateReason"), "code"),
     stateTransitionReason: xmlText(item, "reason"),
     instanceType: xmlText(item, "instanceType"),
     architecture: xmlText(item, "architecture"),

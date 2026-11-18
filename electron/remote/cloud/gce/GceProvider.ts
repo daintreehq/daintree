@@ -538,6 +538,13 @@ export class GceProvider implements CloudProvider {
     if (idString(found.id) !== instance) {
       return { eligible: false, target, problem: "Compute Engine described another VM." };
     }
+    if (found.metadata?.items?.some((item) => item.key === "created-by")) {
+      return {
+        eligible: false,
+        target,
+        problem: "It belongs to a managed instance group, which may replace it once it stops.",
+      };
+    }
     const disks = found.disks ?? [];
     if (disks.length === 0 || disks.some((disk) => disk.type !== "PERSISTENT")) {
       return {

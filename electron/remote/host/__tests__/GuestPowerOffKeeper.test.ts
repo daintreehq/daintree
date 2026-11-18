@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GuestPowerOffTarget } from "../../cloud/machineKeeperLink.js";
+import type { HostWorkReading } from "../HostIdleTracker.js";
 import { HostIdleTracker } from "../HostIdleTracker.js";
 import { GuestPowerOffKeeper } from "../GuestPowerOffKeeper.js";
 import type {
@@ -12,6 +13,7 @@ import type {
 
 const MINUTE = 60_000;
 const IDLE = 30 * MINUTE;
+const BOOT = "6f1a2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
 
 const TARGET: GuestPowerOffTarget = {
   provider: "aws",
@@ -21,29 +23,56 @@ const TARGET: GuestPowerOffTarget = {
 };
 const OTHER: GuestPowerOffTarget = { ...TARGET, instanceId: "i-0abc0000000000002" };
 
-function harness(options: { stored?: StoredGuestPowerOff | null; bootId?: string } = {}) {
+/** A promise and the means to settle it, for holding a step open. */
+function gate<T = void>() {
+  let release!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+function harness(options: { stored?: StoredGuestPowerOff | null; bootId?: string | null } = {}) {
   const clock = { wall: Date.parse("2026-11-18T09:00:00Z"), mono: 1_000 };
   let busy = false;
-  let readHook: (() => void) | null = null;
-  const identity = { result: { ok: true } as IdentityCheck };
+  /** Replaces the next idle read, to hold it open or have it see something else. */
+  let nextRead: (() => Promise<HostWorkReading>) | null = null;
+  const identity = { result: { ok: true } as IdentityCheck, hold: null as Promise<void> | null };
   const probe = { problem: null as string | null };
   const outcomes: PowerOffOutcome[] = [];
   let stored = options.stored ?? null;
+  const saveFailures: Error[] = [];
+  const launch = vi.fn(async () => outcomes.shift() ?? ({ kind: "accepted" } as PowerOffOutcome));
+  const prepare = { hold: null as Promise<void> | null, problem: null as string | null };
   const system = {
     unsupported: vi.fn(() => null as string | null),
-    verifyIdentity: vi.fn(async (_target: GuestPowerOffTarget) => identity.result),
+    verifyIdentity: vi.fn(async (_target: GuestPowerOffTarget) => {
+      if (identity.hold) await identity.hold;
+      return identity.result;
+    }),
     probePowerOff: vi.fn(async () => probe.problem),
-    powerOff: vi.fn(async () => outcomes.shift() ?? ({ kind: "accepted" } as PowerOffOutcome)),
-    bootId: vi.fn(async () => options.bootId ?? "boot-1"),
+    preparePowerOff: vi.fn(async () => {
+      if (prepare.hold) await prepare.hold;
+      return prepare.problem ?? launch;
+    }),
+    bootId: vi.fn(async () => (options.bootId === undefined ? BOOT : options.bootId)),
     loadArm: vi.fn(async () => stored),
     saveArm: vi.fn(async (arm: StoredGuestPowerOff | null) => {
+      const failure = saveFailures.shift();
+      if (failure) throw failure;
       stored = arm;
     }),
   } satisfies GuestPowerOffSystem;
   const tracker = new HostIdleTracker({
-    read: async () => {
-      readHook?.();
-      return { agents: { active: busy ? 1 : 0, unreadable: 0 }, shellViews: false };
+    read: () => {
+      const read = nextRead;
+      nextRead = null;
+      return read
+        ? read()
+        : Promise.resolve({
+            agents: { active: busy ? 1 : 0, unreadable: 0 },
+            shellViews: false,
+          });
     },
     idleAfterMinutes: () => IDLE / MINUTE,
     clock: () => ({ ...clock }),
@@ -58,15 +87,18 @@ function harness(options: { stored?: StoredGuestPowerOff | null; bootId?: string
     keeper,
     tracker,
     system,
+    launch,
     identity,
     probe,
+    prepare,
     outcomes,
+    saveFailures,
     stored: () => stored,
     setBusy(next: boolean) {
       busy = next;
     },
-    onRead(hook: (() => void) | null) {
-      readHook = hook;
+    holdNextRead(read: () => Promise<HostWorkReading>) {
+      nextRead = read;
     },
     advance(ms: number) {
       clock.wall += ms;
@@ -98,11 +130,15 @@ afterEach(() => {
   current = null;
 });
 
+const IDLE_READING: HostWorkReading = { agents: { active: 0, unreadable: 0 }, shellViews: false };
+const BUSY_READING: HostWorkReading = { agents: { active: 1, unreadable: 0 }, shellViews: false };
+
 describe("GuestPowerOffKeeper (#17362)", () => {
   it("does nothing until it's given a machine", async () => {
     const h = make();
     await h.idleOut();
-    expect(h.system.powerOff).not.toHaveBeenCalled();
+    expect(h.system.preparePowerOff).not.toHaveBeenCalled();
+    expect(h.launch).not.toHaveBeenCalled();
     expect(h.keeper.stopsWhenIdle()).toBe(false);
   });
 
@@ -112,58 +148,127 @@ describe("GuestPowerOffKeeper (#17362)", () => {
       armed: true,
       problem: null,
     });
-    expect(h.stored()).toEqual({ bootId: "boot-1", target: TARGET });
+    expect(h.stored()).toEqual({ bootId: BOOT, target: TARGET });
     expect(h.keeper.stopsWhenIdle()).toBe(true);
-    await h.idleOut();
+    await h.pass(0);
+    await h.pass(IDLE - MINUTE);
+    expect(h.launch).not.toHaveBeenCalled();
+    await h.pass(2 * MINUTE);
     await h.pass(MINUTE);
-    expect(h.system.powerOff).toHaveBeenCalledTimes(1);
+    expect(h.launch).toHaveBeenCalledTimes(1);
   });
 
-  it("holds off when work starts during the last read before powering off", async () => {
+  it("looks again with a read of its own, not one already under way, before powering off", async () => {
     const h = make();
     await h.keeper.set({ target: TARGET, enabled: true });
     await h.pass(0);
     h.advance(IDLE + MINUTE);
-    // The keeper's own fresh read is the one that finds work.
-    h.onRead(() => h.setBusy(true));
-    await h.keeper.tick();
-    expect(h.system.powerOff).not.toHaveBeenCalled();
+    // A read that started before the work began, and ends after it, still says idle.
+    const older = gate<HostWorkReading>();
+    h.holdNextRead(() => older.promise);
+    const checking = h.tracker.check();
+    const ticking = h.keeper.tick();
+    // The keeper's own read is the one that finds the work.
+    h.holdNextRead(async () => BUSY_READING);
+    older.release(IDLE_READING);
+    await checking;
+    await ticking;
+    expect(h.launch).not.toHaveBeenCalled();
     expect(h.tracker.observation().busy).toBe(true);
   });
 
-  it("never sends a second power-off for one whose answer was lost, until it has had time to happen", async () => {
+  it("never launches for a permission taken back, or replaced, during its last look", async () => {
+    for (const change of ["revoke", "replace"] as const) {
+      const h = make();
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.pass(0);
+      h.advance(IDLE + MINUTE);
+      const read = gate<HostWorkReading>();
+      h.holdNextRead(() => read.promise);
+      const ticking = h.keeper.tick();
+      await vi.waitFor(() => expect(h.system.preparePowerOff).toHaveBeenCalled());
+      await (change === "revoke"
+        ? h.keeper.set({ target: TARGET, enabled: false })
+        : h.keeper.set({ target: OTHER, enabled: true }));
+      read.release(IDLE_READING);
+      await ticking;
+      expect(h.launch).not.toHaveBeenCalled();
+      h.keeper.dispose();
+      h.tracker.dispose();
+    }
+  });
+
+  it("drops the permission the moment a take-back arrives, even behind a grant still being checked", async () => {
+    const h = make();
+    await h.keeper.set({ target: TARGET, enabled: true });
+    await h.pass(0);
+    h.advance(IDLE + MINUTE);
+    // A repeat grant held in its metadata check, then the take-back.
+    const verify = gate();
+    h.identity.hold = verify.promise;
+    const regrant = h.keeper.set({ target: TARGET, enabled: true });
+    const revoke = h.keeper.set({ target: TARGET, enabled: false });
+    expect(h.keeper.status().armed).toBe(false);
+    await h.keeper.tick();
+    expect(h.launch).not.toHaveBeenCalled();
+    h.identity.hold = null;
+    verify.release();
+    // The older grant, finishing its check after the take-back, doesn't bring it back.
+    await expect(regrant).resolves.toMatchObject({ armed: false });
+    await expect(revoke).resolves.toMatchObject({ armed: false });
+    expect(h.stored()).toBeNull();
+    await h.pass(IDLE);
+    expect(h.launch).not.toHaveBeenCalled();
+  });
+
+  it("never sends a second power-off while one whose answer was lost may still happen", async () => {
     const h = make();
     h.outcomes.push({ kind: "unknown" });
     await h.keeper.set({ target: TARGET, enabled: true });
     await h.idleOut();
-    expect(h.system.powerOff).toHaveBeenCalledTimes(1);
-    await h.pass(MINUTE);
-    await h.pass(MINUTE);
-    expect(h.system.powerOff).toHaveBeenCalledTimes(1);
-    // Still running long after: it didn't happen, so it counts as use and a full idle time comes first.
-    await h.pass(5 * MINUTE);
+    expect(h.launch).toHaveBeenCalledTimes(1);
+    // Taken back and given again meanwhile: the machine may still be going down.
+    await h.keeper.set({ target: TARGET, enabled: false });
+    await h.keeper.set({ target: TARGET, enabled: true });
+    await h.pass(4 * MINUTE + 50_000);
+    expect(h.launch).toHaveBeenCalledTimes(1);
+    expect(h.keeper.status().problem).toBeNull();
+    // Still running once it should have happened: it counts as use, and a full idle time comes first.
+    await h.pass(20_000);
     expect(h.keeper.status().problem).toMatch(/kept running/);
     expect(h.keeper.stopsWhenIdle()).toBe(false);
     await h.pass(IDLE - 2 * MINUTE);
-    expect(h.system.powerOff).toHaveBeenCalledTimes(1);
+    expect(h.launch).toHaveBeenCalledTimes(1);
     await h.pass(IDLE + MINUTE);
-    expect(h.system.powerOff).toHaveBeenCalledTimes(2);
+    expect(h.launch).toHaveBeenCalledTimes(2);
   });
 
-  it("says why a refused power-off didn't happen, keeps it through a repeated permission, and tries again later", async () => {
+  it("says why a refused power-off didn't happen, keeps it through a repeated permission, and waits before trying again", async () => {
     const h = make();
     h.outcomes.push({ kind: "refused", problem: "This machine refused to power itself off." });
     await h.keeper.set({ target: TARGET, enabled: true });
     await h.idleOut();
-    expect(h.system.powerOff).toHaveBeenCalledTimes(1);
+    expect(h.launch).toHaveBeenCalledTimes(1);
     await expect(h.keeper.set({ target: TARGET, enabled: true })).resolves.toEqual({
       armed: true,
       problem: "This machine refused to power itself off.",
     });
     expect(h.keeper.stopsWhenIdle()).toBe(false);
-    await h.pass(10 * MINUTE);
-    expect(h.system.powerOff).toHaveBeenCalledTimes(2);
+    await h.pass(30_000);
+    expect(h.launch).toHaveBeenCalledTimes(1);
+    await h.pass(2 * MINUTE);
+    expect(h.launch).toHaveBeenCalledTimes(2);
     expect(h.keeper.status()).toEqual({ armed: true, problem: null });
+  });
+
+  it("says why it can't power off when the OS has no way to, and waits before looking again", async () => {
+    const h = make();
+    h.prepare.problem = "This machine has no systemctl to power itself off with.";
+    await h.keeper.set({ target: TARGET, enabled: true });
+    await h.idleOut();
+    expect(h.keeper.status().problem).toMatch(/systemctl/);
+    await h.pass(30_000);
+    expect(h.system.preparePowerOff).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a machine its metadata doesn't name, or a login sudo won't let power off", async () => {
@@ -181,7 +286,26 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     });
     expect(h.stored()).toBeNull();
     await h.idleOut();
-    expect(h.system.powerOff).not.toHaveBeenCalled();
+    expect(h.launch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a permission it holds when its metadata can't be read for a repeat, and drops it when it names another machine", async () => {
+    const h = make();
+    await h.keeper.set({ target: TARGET, enabled: true });
+    h.identity.result = { ok: false, definite: false, problem: "unreadable" };
+    await expect(h.keeper.set({ target: TARGET, enabled: true })).resolves.toEqual({
+      armed: true,
+      problem: null,
+    });
+    expect(h.keeper.stopsWhenIdle()).toBe(true);
+    h.identity.result = { ok: false, definite: true, problem: "another machine" };
+    await expect(h.keeper.set({ target: TARGET, enabled: true })).resolves.toEqual({
+      armed: false,
+      problem: "another machine",
+    });
+    expect(h.stored()).toBeNull();
+    await h.idleOut();
+    expect(h.launch).not.toHaveBeenCalled();
   });
 
   it("gives the permission up when taken back for its machine, and ignores one taken back for another", async () => {
@@ -190,37 +314,41 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     await expect(h.keeper.set({ target: OTHER, enabled: false })).resolves.toMatchObject({
       armed: true,
     });
+    expect(h.stored()).toEqual({ bootId: BOOT, target: TARGET });
     await expect(h.keeper.set({ target: TARGET, enabled: false })).resolves.toMatchObject({
       armed: false,
     });
     expect(h.stored()).toBeNull();
     await h.idleOut();
-    expect(h.system.powerOff).not.toHaveBeenCalled();
+    expect(h.launch).not.toHaveBeenCalled();
   });
 
-  it("drops a machine it held once its metadata names another", async () => {
+  it("keeps trying to remove a saved permission it couldn't, and says so meanwhile", async () => {
     const h = make();
     await h.keeper.set({ target: TARGET, enabled: true });
-    h.identity.result = { ok: false, definite: true, problem: "another machine" };
-    await expect(h.keeper.set({ target: TARGET, enabled: true })).resolves.toEqual({
+    h.saveFailures.push(new Error("EROFS"));
+    await expect(h.keeper.set({ target: TARGET, enabled: false })).resolves.toEqual({
       armed: false,
-      problem: "another machine",
+      problem: expect.stringContaining("couldn't remove"),
     });
-    await h.idleOut();
-    expect(h.system.powerOff).not.toHaveBeenCalled();
+    expect(h.stored()).not.toBeNull();
+    await h.pass(MINUTE);
+    expect(h.stored()).toBeNull();
+    expect(h.keeper.status()).toEqual({ armed: false, problem: null });
   });
 
   it("takes back up a permission from this boot after a restart, checked against the machine again", async () => {
-    const h = make({ stored: { bootId: "boot-1", target: TARGET } });
+    const h = make({ stored: { bootId: BOOT, target: TARGET } });
     await h.keeper.restore();
     expect(h.system.verifyIdentity).toHaveBeenCalledWith(TARGET, expect.anything());
+    expect(h.system.probePowerOff).toHaveBeenCalled();
     expect(h.keeper.status()).toEqual({ armed: true, problem: null });
     await h.idleOut();
-    expect(h.system.powerOff).toHaveBeenCalledTimes(1);
+    expect(h.launch).toHaveBeenCalledTimes(1);
   });
 
   it("forgets a permission from another boot without asking anything of the machine", async () => {
-    const h = make({ stored: { bootId: "boot-0", target: TARGET }, bootId: "boot-1" });
+    const h = make({ stored: { bootId: "0f1a2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b", target: TARGET } });
     await h.keeper.restore();
     expect(h.system.verifyIdentity).not.toHaveBeenCalled();
     expect(h.system.probePowerOff).not.toHaveBeenCalled();
@@ -228,22 +356,54 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     expect(h.keeper.status().armed).toBe(false);
   });
 
-  it("checks a restored permission again later when the metadata can't be read yet", async () => {
-    const h = make({ stored: { bootId: "boot-1", target: TARGET } });
+  it("keeps a saved permission it can't place in a boot, without acting on it", async () => {
+    const h = make({ stored: { bootId: BOOT, target: TARGET }, bootId: null });
+    await h.keeper.restore();
+    expect(h.stored()).not.toBeNull();
+    expect(h.keeper.status().armed).toBe(false);
+    await h.idleOut();
+    expect(h.launch).not.toHaveBeenCalled();
+  });
+
+  it("checks a restored permission again later while its machine or sudo can't answer yet", async () => {
+    const h = make({ stored: { bootId: BOOT, target: TARGET } });
     h.identity.result = { ok: false, definite: false, problem: "unreadable" };
     await h.keeper.restore();
     expect(h.keeper.status().armed).toBe(false);
     h.identity.result = { ok: true };
+    h.probe.problem = "sudo not ready";
+    await h.pass(30_000);
+    expect(h.system.verifyIdentity).toHaveBeenCalledTimes(1);
     await h.pass(3 * MINUTE);
-    expect(h.keeper.status().armed).toBe(true);
+    expect(h.keeper.status().armed).toBe(false);
+    expect(h.stored()).not.toBeNull();
+    h.probe.problem = null;
+    await h.pass(10 * MINUTE);
+    expect(h.keeper.status()).toEqual({ armed: true, problem: null });
   });
 
-  it("never acts after it's disposed", async () => {
+  it("drops a restored permission for a machine its metadata says it isn't", async () => {
+    const h = make({ stored: { bootId: BOOT, target: TARGET } });
+    h.identity.result = { ok: false, definite: true, problem: "another machine" };
+    await h.keeper.restore();
+    expect(h.stored()).toBeNull();
+    await h.idleOut();
+    expect(h.launch).not.toHaveBeenCalled();
+  });
+
+  it("never acts after it's disposed, even mid-step", async () => {
     const h = make();
     await h.keeper.set({ target: TARGET, enabled: true });
+    await h.pass(0);
+    h.advance(IDLE + MINUTE);
+    const prepared = gate();
+    h.prepare.hold = prepared.promise;
+    const ticking = h.keeper.tick();
+    await vi.waitFor(() => expect(h.system.preparePowerOff).toHaveBeenCalled());
     h.keeper.dispose();
-    await h.idleOut();
-    expect(h.system.powerOff).not.toHaveBeenCalled();
+    prepared.release();
+    await ticking;
+    expect(h.launch).not.toHaveBeenCalled();
     await expect(h.keeper.set({ target: TARGET, enabled: true })).rejects.toMatchObject({
       code: "UNSUPPORTED",
     });

@@ -48,6 +48,8 @@ export type PowerOffOutcome =
   /** It may have been taken: the command was cut off before it answered. */
   | { kind: "unknown" };
 
+export type PowerOffLauncher = (signal: AbortSignal) => Promise<PowerOffOutcome>;
+
 /** An arm kept for this boot of the machine, so a host restart with no Shell attached still stops it. */
 export interface StoredGuestPowerOff {
   bootId: string;
@@ -61,7 +63,12 @@ export interface GuestPowerOffSystem {
   verifyIdentity(target: GuestPowerOffTarget, signal: AbortSignal): Promise<IdentityCheck>;
   /** Why the OS won't let this login power off without a password; null when it will. Changes nothing. */
   probePowerOff(signal: AbortSignal): Promise<string | null>;
-  powerOff(signal: AbortSignal): Promise<PowerOffOutcome>;
+  /**
+   * Readies the power-off without doing it: a launcher that starts it the
+   * moment it is called, before it yields, so nothing can come between a last
+   * look at the host and the launch; or why it can't be done.
+   */
+  preparePowerOff(): Promise<PowerOffLauncher | string>;
   /** This kernel boot's id; null when it can't be read. */
   bootId(): Promise<string | null>;
   loadArm(): Promise<StoredGuestPowerOff | null>;
@@ -117,24 +124,38 @@ export const metadataFetch: MetadataFetch = (request, signal) =>
           }
           chunks.push(chunk);
         });
-        res.on("end", () =>
+        res.on("end", () => {
+          clearTimeout(deadline);
           resolve({
             status: res.statusCode ?? 0,
             headers: res.headers,
             body: Buffer.concat(chunks).toString("utf8"),
-          })
-        );
+          });
+        });
         res.on("error", reject);
       }
     );
+    // The whole exchange, not just a quiet socket: a server trickling bytes can't hold the caller.
+    const deadline = setTimeout(
+      () => req.destroy(new MetadataUnreadable("Metadata server timed out")),
+      METADATA_TIMEOUT_MS
+    );
     req.on("timeout", () => req.destroy(new MetadataUnreadable("Metadata server timed out")));
-    req.on("error", reject);
+    req.on("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
     req.end();
   });
 
 /** Runs a fixed program with no shell, no stdin and a minimal environment; resolves once it has exited. */
 export const runCommand: CommandRun = (file, args, signal) =>
   new Promise((resolve, reject) => {
+    // Node would still start a program whose signal had already fired.
+    if (signal.aborted) {
+      reject(new Error("Cancelled before it started"));
+      return;
+    }
     const child = spawn(file, [...args], {
       stdio: ["ignore", "ignore", "pipe"],
       env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LC_ALL: "C" },
@@ -147,9 +168,13 @@ export const runCommand: CommandRun = (file, args, signal) =>
       if (stderr.length < MAX_STDERR_BYTES) stderr += chunk.toString("utf8");
     });
     child.once("error", (error) => {
-      // Killed by the timeout or the signal: whatever it started may still go ahead.
-      if ((error as NodeJS.ErrnoException).code === "ABORT_ERR") resolve({ code: null, stderr });
-      else reject(error);
+      // Once it was started, losing hold of it (a cancel, a kill that failed) says nothing of
+      // whether it went ahead; only a program that never started is a refusal.
+      if (child.pid !== undefined || (error as NodeJS.ErrnoException).code === "ABORT_ERR") {
+        resolve({ code: null, stderr });
+      } else {
+        reject(error);
+      }
     });
     child.once("close", (code) => resolve({ code, stderr: stderr.slice(0, MAX_STDERR_BYTES) }));
   });
@@ -300,26 +325,32 @@ export function createGuestPowerOffSystem(
       }
       return "The login Daintree runs as on this machine can't power it off without a password, so it can't stop itself when idle.";
     },
-    async powerOff(signal) {
+    async preparePowerOff() {
       const program = await systemctl();
-      if (!program) {
-        return {
-          kind: "refused",
-          problem: "This machine has no systemctl to power itself off with.",
-        };
-      }
-      let result: { code: number | null; stderr: string };
-      try {
-        result = await run(SUDO, ["-n", program, "poweroff"], signal);
-      } catch {
-        return { kind: "refused", problem: "This machine couldn't run sudo to power itself off." };
-      }
-      if (result.code === 0) return { kind: "accepted" };
-      if (result.code === null) return { kind: "unknown" };
-      const said = result.stderr.trim().split("\n")[0]?.slice(0, 200);
-      return {
-        kind: "refused",
-        problem: `This machine refused to power itself off${said ? `: ${said}` : "."}`,
+      if (!program) return "This machine has no systemctl to power itself off with.";
+      return (signal) => {
+        // Started here, synchronously: the caller's last look is the last thing before it.
+        let running: Promise<{ code: number | null; stderr: string }>;
+        try {
+          running = run(SUDO, ["-n", program, "poweroff"], signal);
+        } catch {
+          running = Promise.reject(new Error("Couldn't start sudo"));
+        }
+        return running.then(
+          (result): PowerOffOutcome => {
+            if (result.code === 0) return { kind: "accepted" };
+            if (result.code === null) return { kind: "unknown" };
+            const said = result.stderr.trim().split("\n")[0]?.slice(0, 200);
+            return {
+              kind: "refused",
+              problem: `This machine refused to power itself off${said ? `: ${said}` : "."}`,
+            };
+          },
+          (): PowerOffOutcome => ({
+            kind: "refused",
+            problem: "This machine couldn't run sudo to power itself off.",
+          })
+        );
       };
     },
     async bootId() {

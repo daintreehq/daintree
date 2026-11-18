@@ -150,6 +150,7 @@ function fakeGoogle(
       },
     ],
     disks: instance.body.disks.map((disk) => ({ type: disk.type, boot: disk.boot })),
+    metadata: instance.body.metadata,
   });
   const operation = (
     zone: string,
@@ -1482,16 +1483,41 @@ describe("a Compute Engine VM stopping itself once idle (#17362)", () => {
     host.dispose();
   });
 
-  it("never lets a VM with a disk a stop doesn't keep power itself off", async () => {
+  it("lets a VM with only persistent disks power itself off, and no other", async () => {
     const google = fakeGoogle();
     const resource = await google.provider.create(google.credentials(), NO_LIMIT);
-    google.instances.get(BIG_ID)!.body.disks.push({ type: "SCRATCH" });
+    const target = { provider: "gce", project: PROJECT, zone: "us-central1-a", instanceId: BIG_ID };
+    const check = () =>
+      google.provider.checkGuestPowerOff(google.credentials(), resource.resourceId);
+    const body = google.instances.get(BIG_ID)!.body;
+    body.disks.push({ type: "PERSISTENT" });
+    await expect(check()).resolves.toEqual({ eligible: true, target });
+    body.disks.push({ type: "SCRATCH" });
+    await expect(check()).resolves.toEqual({
+      eligible: false,
+      target,
+      problem: expect.stringContaining("local SSD"),
+    });
+    // Disks it can't see are disks it can't vouch for.
+    body.disks = [];
+    await expect(check()).resolves.toMatchObject({ eligible: false, target });
+  });
+
+  it("never lets a VM a managed instance group may replace power itself off", async () => {
+    const google = fakeGoogle();
+    const resource = await google.provider.create(google.credentials(), NO_LIMIT);
+    google.instances
+      .get(BIG_ID)!
+      .body.metadata.items.push({
+        key: "created-by",
+        value: "projects/1/zones/z/instanceGroupManagers/g",
+      });
     await expect(
       google.provider.checkGuestPowerOff(google.credentials(), resource.resourceId)
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       eligible: false,
-      target: { provider: "gce", instanceId: BIG_ID },
-      problem: expect.stringContaining("local SSD"),
+      target: { provider: "gce", project: PROJECT, zone: "us-central1-a", instanceId: BIG_ID },
+      problem: expect.stringContaining("managed instance group"),
     });
   });
 
@@ -1502,12 +1528,17 @@ describe("a Compute Engine VM stopping itself once idle (#17362)", () => {
       metadata: google.metadataFor(BIG_ID),
       powerOff: () => google.guestPowerOff(BIG_ID),
     });
-    await expect(
-      host.keeper.set({
-        target: { provider: "gce", project: PROJECT, zone: "us-central1-b", instanceId: BIG_ID },
-        enabled: true,
-      })
-    ).resolves.toEqual({ armed: false, problem: expect.stringContaining("another machine") });
+    const here = { provider: "gce" as const, project: PROJECT, zone: "us-central1-a" };
+    for (const other of [
+      { ...here, instanceId: "9007199254740993999" },
+      { ...here, zone: "us-central1-b", instanceId: BIG_ID },
+      { ...here, project: OTHER_PROJECT, instanceId: BIG_ID },
+    ]) {
+      await expect(host.keeper.set({ target: other, enabled: true })).resolves.toEqual({
+        armed: false,
+        problem: expect.stringContaining("another machine"),
+      });
+    }
     await host.pass(0);
     await host.pass(2 * IDLE_MINUTES * MINUTE);
     expect(host.powerOffs).toEqual([]);
