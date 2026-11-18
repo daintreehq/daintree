@@ -92,10 +92,13 @@ export const decisionsClient = {
   /**
    * Decisions' status from now on: subscribes before reading, and keeps
    * whichever carries the higher revision, so a read that lands after a push
-   * can't roll it back. A read that fails calls nothing. The returned
-   * function stops it, read included.
+   * can't roll it back. A read that fails calls `onReadFailed`, and only while
+   * no status has arrived. The returned function stops it, read included.
    */
-  watchStatus: (onStatus: (status: DecisionsStatus) => void): (() => void) => {
+  watchStatus: (
+    onStatus: (status: DecisionsStatus) => void,
+    onReadFailed?: () => void
+  ): (() => void) => {
     let latest = -1;
     let stopped = false;
     const accept = (status: DecisionsStatus) => {
@@ -106,7 +109,9 @@ export const decisionsClient = {
       onStatus(status);
     };
     const off = window.electron.events.on("decisions:status-changed", accept);
-    window.electron.decisions.getStatus().then(accept, () => {});
+    window.electron.decisions.getStatus().then(accept, () => {
+      if (!stopped && latest === -1) onReadFailed?.();
+    });
     return () => {
       stopped = true;
       off();
@@ -209,10 +214,14 @@ export const decisionsClient = {
   /**
    * That list from now on: subscribes before reading, and keeps whichever
    * carries the higher revision, so a read that lands after a push can't roll
-   * it back. A read that fails calls nothing. The returned function stops it,
+   * it back. A read that fails calls `onReadFailed`, and only while no list has
+   * arrived; a later push still delivers one. The returned function stops it,
    * read included.
    */
-  watchQuestions: (onList: (list: DecisionQuestionList) => void): (() => void) => {
+  watchQuestions: (
+    onList: (list: DecisionQuestionList) => void,
+    onReadFailed?: () => void
+  ): (() => void) => {
     let latest = -1;
     let stopped = false;
     const accept = (list: DecisionQuestionList) => {
@@ -221,7 +230,9 @@ export const decisionsClient = {
       onList(list);
     };
     const off = window.electron.events.on("decisions:questions-changed", accept);
-    window.electron.decisions.listQuestions().then(accept, () => {});
+    window.electron.decisions.listQuestions().then(accept, () => {
+      if (!stopped && latest === -1) onReadFailed?.();
+    });
     return () => {
       stopped = true;
       off();

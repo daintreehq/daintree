@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { pluralize } from "@/lib/pluralize";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import {
   useDecisionsAttentionCount,
   type DecisionsAttentionCount,
@@ -56,20 +58,24 @@ interface DecisionsQuestionsSectionProps {
   locked: boolean;
   /** A status main answered a change with, or null to read it again. */
   onChanged: (next: DecisionsStatus | null) => void;
+  /** Closes Settings first, so the inbox and the terminal it leads to aren't behind it. */
+  onClose?: SettingsTabClose;
 }
 
 /**
  * Questions: how long one waits when its agent sets no expiry (#16122), as
  * the library applies the saved choice, whether the phone may show the pane
  * that asked one (#16228), and the answers that couldn't be typed in on
- * their own (#16020). The description follows what main has saved, not a
- * choice still being saved. Snapshots ask before every turn on.
+ * their own (#16020), and the inbox of every question (#17231). The
+ * description follows what main has saved, not a choice still being saved.
+ * Snapshots ask before every turn on.
  */
 export function DecisionsQuestionsSection({
   policy: read,
   status,
   locked,
   onChanged,
+  onClose,
 }: DecisionsQuestionsSectionProps) {
   const { policy, loadError, reload, pendingExpiry, expirySaveFailure, setDefaultQuestionExpiry } =
     read;
@@ -81,6 +87,17 @@ export function DecisionsQuestionsSection({
   const attention = useDecisionsAttentionCount();
   const openAttention = useDecisionsAttentionStore((state) => state.open);
   const noneToReview = attention.state === "counted" && attention.count === 0;
+  const openInbox = useDecisionsInboxStore((state) => state.open);
+  const showInbox = () => {
+    if (onClose === undefined) {
+      openInbox();
+      return;
+    }
+    // Settings goes first; reopened before it had gone, nothing opens.
+    void onClose((closed) => {
+      if (closed) openInbox();
+    }).catch(() => {});
+  };
   return (
     <SettingsSection title="Questions" id="decisions-questions">
       <SettingsGroup>
@@ -121,6 +138,22 @@ export function DecisionsQuestionsSection({
             if (!snapshotsLocked) void snapshots.set({ enabled: false });
           }}
           resetAriaLabel="Turn off terminal snapshots"
+        />
+        <SettingsRow
+          id="decisions-questions-inbox"
+          label="Inbox"
+          description="Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided"
+          control={({ descriptionId }) => (
+            <Button
+              variant="outline"
+              size="sm"
+              aria-describedby={descriptionId}
+              onClick={showInbox}
+              data-testid="decisions-inbox-open"
+            >
+              Open inbox
+            </Button>
+          )}
         />
         <SettingsRow
           id="decisions-questions-attention"

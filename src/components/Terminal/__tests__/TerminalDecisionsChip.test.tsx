@@ -49,6 +49,7 @@ import {
   type OverlayFocusRestore,
 } from "@/components/ui/overlay-focus-restore";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import type {
@@ -391,6 +392,46 @@ describe("TerminalDecisionsChip", () => {
       expect(screen.queryByTestId("popover-content")).toBeNull();
     } finally {
       useDecisionsAttentionStore.setState({ open: original });
+    }
+  });
+
+  it("opens the inbox at this pane from the footer, handing it focus, with nothing needing attention (#17231)", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(paneState());
+    const calls: string[] = [];
+    const policy = makePolicy(() => calls.push("handoff"));
+    const original = useDecisionsInboxStore.getState().open;
+    useDecisionsInboxStore.setState({
+      open: (options) => calls.push(`open ${options?.terminalId ?? "none"}`),
+    });
+    try {
+      render(
+        <OverlayFocusRestoreContext.Provider value={policy}>
+          <TerminalDecisionsChip terminalId="t1" />
+        </OverlayFocusRestoreContext.Provider>
+      );
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      expect(screen.queryByTestId("terminal-decisions-review")).toBeNull();
+      fireEvent.click(await screen.findByTestId("terminal-decisions-inbox"));
+
+      expect(calls).toEqual(["handoff", "open t1"]);
+      expect(screen.queryByTestId("popover-content")).toBeNull();
+    } finally {
+      useDecisionsInboxStore.setState({ open: original });
+    }
+  });
+
+  it("offers no inbox in a Remote Host's window, whose questions this computer doesn't list", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(paneState());
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    try {
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      await screen.findByTestId("popover-content");
+      expect(screen.queryByTestId("terminal-decisions-inbox")).toBeNull();
+    } finally {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
     }
   });
 

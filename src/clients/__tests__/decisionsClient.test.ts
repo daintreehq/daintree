@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PaneDecisionState } from "@shared/types/decisions";
+import type { DecisionsStatus, PaneDecisionState } from "@shared/types/decisions";
 import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
@@ -311,6 +311,60 @@ describe("decisionsClient.getQuestionImage", () => {
   });
 });
 
+describe("decisionsClient.watchStatus read failure (#17231)", () => {
+  let rejectStatus: (err: Error) => void;
+  let pushStatus: (status: DecisionsStatus) => void;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    typedGlobal.window = {
+      electron: {
+        decisions: {
+          getStatus: vi.fn(
+            () => new Promise<DecisionsStatus>((_resolve, reject) => (rejectStatus = reject))
+          ),
+        },
+        events: {
+          on: vi.fn((name: string, callback: (status: DecisionsStatus) => void) => {
+            if (name === "decisions:status-changed") pushStatus = callback;
+            return () => {};
+          }),
+        },
+      },
+    };
+    ({ decisionsClient } = await import("../decisionsClient"));
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("says a failed read only while no status has arrived, and never once stopped", async () => {
+    const failed = vi.fn();
+    decisionsClient.watchStatus(() => {}, failed);
+    rejectStatus(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(failed).toHaveBeenCalledOnce();
+
+    const late = vi.fn();
+    decisionsClient.watchStatus(() => {}, late);
+    pushStatus({ state: "connected", revision: 1 });
+    rejectStatus(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(late).not.toHaveBeenCalled();
+
+    const stoppedFirst = vi.fn();
+    const stop = decisionsClient.watchStatus(() => {}, stoppedFirst);
+    stop();
+    rejectStatus(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stoppedFirst).not.toHaveBeenCalled();
+  });
+});
+
 describe("decisionsClient.watchQuestions (#17229)", () => {
   let pushList: (list: DecisionQuestionList) => void;
   let listQuestions: ReturnType<typeof vi.fn>;
@@ -379,6 +433,31 @@ describe("decisionsClient.watchQuestions (#17229)", () => {
     await Promise.resolve();
     pushList(list(2));
     expect(seen).toEqual([0, 20]);
+  });
+
+  it("says a failed read only while no list has arrived (#17231)", async () => {
+    const failed = vi.fn();
+    decisionsClient.watchQuestions(() => {}, failed);
+    rejectList(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(failed).toHaveBeenCalledOnce();
+
+    const late = vi.fn();
+    decisionsClient.watchQuestions(() => {}, late);
+    pushList(list(1));
+    rejectList(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(late).not.toHaveBeenCalled();
+
+    const stoppedFirst = vi.fn();
+    const stop = decisionsClient.watchQuestions(() => {}, stoppedFirst);
+    stop();
+    rejectList(new Error("gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stoppedFirst).not.toHaveBeenCalled();
   });
 
   it("stops listening, and ignores a read still in flight, once stopped", async () => {
