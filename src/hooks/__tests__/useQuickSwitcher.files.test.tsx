@@ -58,7 +58,12 @@ function change(path: string, mtimeMs: number, status: FileChangeDetail["status"
   return { path, status, insertions: 1, deletions: 0, mtimeMs };
 }
 
-function worktree(id: string, path: string, changes: FileChangeDetail[], changesRoot = path) {
+function worktree(
+  id: string,
+  path: string,
+  changes: FileChangeDetail[],
+  changesRoot: string | undefined = path
+) {
   return {
     id,
     path,
@@ -321,6 +326,31 @@ describe("useQuickSwitcher file scope", () => {
       "/tmp/repo/src/a.ts",
     ]);
     expect(searchMock).not.toHaveBeenCalled();
+    act(() => result.current.selectItem(result.current.results[0]!));
+    expect(openFileMock).toHaveBeenCalledWith("/tmp/repo/src/a.ts", false);
+  });
+
+  it("relates changes to the worktree itself when the snapshot names no root", async () => {
+    seedWorktrees(
+      [],
+      [],
+      worktree("wt-1", "/repo", [change("src/b.ts", 200), change("/repo/src/c.ts", 100)], undefined)
+    );
+    const { result } = await openFiles();
+    expect(paths(result.current.results)).toEqual(["src/b.ts", "src/c.ts"]);
+  });
+
+  it("finds a live hit ranked behind a full page of working-tree deletions", async () => {
+    const gone = Array.from({ length: 50 }, (_, i) => `src/gone-${i}.ts`);
+    seedWorktrees([
+      ...gone.map((path) => change(`/repo/${path}`, 900, "deleted")),
+      change("/repo/src/other.ts", 100),
+    ]);
+    const { result } = await openFiles();
+    act(() => result.current.setQuery("src"));
+    await settle(150);
+    await act(async () => searches[0]!.resolve({ files: [...gone, "src/live.ts"] }));
+    expect(paths(result.current.results)).toEqual(["src/live.ts"]);
   });
 
   it("leaves a file deleted in the working tree out of what the index still lists", async () => {
@@ -414,6 +444,24 @@ describe("useQuickSwitcher file scope", () => {
     rerender();
     await settle(150);
     for (const pending of searches.slice(2)) {
+      await act(async () => pending.resolve({ files: ["q.ts"] }));
+    }
+    expect(openFileMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a waiting Enter dropped when the worktree changes and changes back", async () => {
+    seedWorktrees([], [worktree("wt-2", "/repo-feature", [])], worktree("wt-1", "/repo", []));
+    const { result, rerender } = await openFiles();
+    await act(async () => searches[0]!.resolve({ files: ["a.ts"] }));
+
+    act(() => result.current.setQuery("q"));
+    act(() => result.current.confirmSelection(false));
+    selection.activeWorktreeId = "wt-2";
+    rerender();
+    selection.activeWorktreeId = "wt-1";
+    rerender();
+    await settle(150);
+    for (const pending of searches.slice(1)) {
       await act(async () => pending.resolve({ files: ["q.ts"] }));
     }
     expect(openFileMock).not.toHaveBeenCalled();

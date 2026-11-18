@@ -55,6 +55,7 @@ describe("openQuickSwitcherFile", () => {
     expect(toast.type).toBe("error");
     expect(toast.message).toContain("a.ts");
     toast.action.onClick();
+    expect(dispatchMock).toHaveBeenCalledTimes(2);
     expect(dispatchMock).toHaveBeenLastCalledWith(
       "file.openInEditor",
       { path: "/repo/src/a.ts" },

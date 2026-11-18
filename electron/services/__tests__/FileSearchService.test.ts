@@ -210,15 +210,32 @@ describe("FileSearchService", () => {
       ]);
     });
 
+    it("fills an empty query's page with files past more than a page of folders", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      const listing = Array.from(
+        { length: 120 },
+        (_, i) => `d${String(i).padStart(3, "0")}/a-much-longer-file-name.ts`
+      );
+      gitRepo(dir, `${listing.join("\0")}\0`);
+      const service = await createService();
+
+      const page = await service.search({ cwd: dir, query: "", limit: 5, filesOnly: true });
+      expect(page).toEqual(listing.slice(0, 5));
+    });
+
     it("leaves folders out of a typed search, and the next search still finds them", async () => {
       const dir = makeTempDir();
       tempDirs.push(dir);
       gitRepo(dir, "docs/docs-index.md\0docs/guide/docs-guide.md\0");
       const service = await createService();
 
-      const files = await service.search({ cwd: dir, query: "doc", limit: 10, filesOnly: true });
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.filter((file) => file.endsWith("/"))).toEqual([]);
+      // A folder would take the one slot without filesOnly.
+      expect(await service.search({ cwd: dir, query: "doc", limit: 1 })).toEqual(["docs/"]);
+      service.invalidate(dir);
+      const files = await service.search({ cwd: dir, query: "doc", limit: 1, filesOnly: true });
+      expect(files).toHaveLength(1);
+      expect(files[0]?.endsWith("/")).toBe(false);
       // "docs" narrows from the files-only search's candidates.
       const all = await service.search({ cwd: dir, query: "docs", limit: 10 });
       expect(all).toContain("docs/");

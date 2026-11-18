@@ -487,8 +487,8 @@ describe("QuickSwitcher file scope", () => {
     expect(exitScope).toHaveBeenCalledTimes(1);
   });
 
-  it("asks for a worktree, typed or not, when none is shown", () => {
-    renderScoped({ query: "readme", fileScope: { worktreeName: null, failed: false } });
+  it.each(["", "readme"])("asks for a worktree when none is shown (query %j)", (query) => {
+    renderScoped({ query, fileScope: { worktreeName: null, failed: false } });
     expect(screen.getByText("Select a worktree to search its files")).toBeTruthy();
   });
 

@@ -608,9 +608,12 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
           changedItems.some((item) => item.file?.relativePath === file.relativePath)
         );
       }
-      return fileAnswerIsLive && fileAnswer!.paths.includes(file.relativePath);
+      return (
+        fileAnswerIsLive &&
+        searchedItems.some((item) => item.file?.relativePath === file.relativePath)
+      );
     },
-    [inFileScope, fileRoot, fileQuery, changedItems, fileAnswerIsLive, fileAnswer]
+    [inFileScope, fileRoot, fileQuery, changedItems, fileAnswerIsLive, searchedItems]
   );
 
   // Enter before the file search has answered what the field says waits for
@@ -626,18 +629,19 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
   const selectItem = useCallback(
     (item: QuickSwitcherItem, modified = false) => {
       if (item.file) {
-        // A pick of its own replaces a waiting Enter, and the store is read
-        // live: a handler from the render before a close must not open a
-        // second file after the waiting Enter already opened one.
-        queuedFileEnterRef.current = null;
+        // The store is read live: a handler from a render before a close, or
+        // from an earlier opening, must not open a file, nor touch this
+        // opening's waiting Enter. A pick of its own replaces that Enter.
         const live = usePaletteStore.getState();
         if (
           live.activePaletteId !== "quick-switcher" ||
-          live.quickSwitcherScope?.kind !== "files" ||
-          !isLiveFile(item.file)
+          live.openRequestId !== opening ||
+          live.quickSwitcherScope?.kind !== "files"
         ) {
           return;
         }
+        queuedFileEnterRef.current = null;
+        if (!isLiveFile(item.file)) return;
       }
       // A plugin row opens only while it still answers what the field says:
       // with deferred filtering the list can trail the input by a render, and
@@ -685,6 +689,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     },
     [
       isLiveFile,
+      opening,
       selectWorktree,
       close,
       restoreBackgroundTerminal,
