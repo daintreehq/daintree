@@ -784,7 +784,10 @@ describe("replaceRing trim", () => {
 
     replaceRing(db, stmts, "mcpAuditLog", rows(null, null, null, null, null), 4);
     expect(trimRun).toHaveBeenCalledTimes(1);
-    expect(ringIds("mcpAuditLog")).toHaveLength(4);
+    const kept = db
+      .prepare("SELECT record FROM audit_rings WHERE ring = ? ORDER BY id ASC")
+      .all("mcpAuditLog") as { record: string }[];
+    expect(kept.map((r) => (JSON.parse(r.record) as { i: number }).i)).toEqual([1, 2, 3, 4]);
   });
 
   it("leaves other rings untouched whichever way the replacement trims", () => {
