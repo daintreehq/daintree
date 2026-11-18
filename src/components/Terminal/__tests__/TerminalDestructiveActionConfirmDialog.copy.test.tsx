@@ -21,9 +21,17 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
-vi.mock("@/lib/accessibility", () => ({
-  closeAndAnnounce: (clear: () => void) => clear(),
-}));
+// Forwards to the real announcer, so an announcement made at click time shows
+// up where the timing tests look for one.
+vi.mock("@/lib/accessibility", async () => {
+  const { useAnnouncerStore } = await import("@/store/accessibilityAnnouncerStore");
+  return {
+    closeAndAnnounce: (clear: () => void, message: string) => {
+      clear();
+      useAnnouncerStore.getState().announce(message);
+    },
+  };
+});
 
 import {
   useTerminalPendingDestructiveActionStore,
@@ -593,7 +601,9 @@ describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#1732
       { source: "user" }
     );
     expect(useTerminalPendingDestructiveActionStore.getState().pending).toBeNull();
-    await Promise.resolve();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    // Microtasks and a timer turn pass with the host still answering.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(announced()).toBeNull();
 
     settle({ ok: true });
@@ -607,7 +617,7 @@ describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#1732
     fireEvent.click(screen.getByRole("button", { name: "Reset terminal modes" }));
 
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(announced()).toBeNull();
     expect(useTerminalPendingDestructiveActionStore.getState().pending).toBeNull();
   });

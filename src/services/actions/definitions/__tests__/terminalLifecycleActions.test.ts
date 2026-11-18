@@ -1365,10 +1365,11 @@ describe("terminal.resetModes (#17328)", () => {
   // shell it left behind is the one stuck in the agent's modes.
   it("resets a shell its agent crashed back to at once, without asking", async () => {
     setRichPanelState({
-      focusedId: "p1",
+      focusedId: "other",
       panels: [
+        { id: "other", location: "grid" },
         {
-          id: "p1",
+          id: "crashed",
           location: "grid",
           launchAgentId: "claude",
           everDetectedAgent: true,
@@ -1378,10 +1379,11 @@ describe("terminal.resetModes (#17328)", () => {
     });
     const run = setupActions();
 
-    await run("terminal.resetModes", { terminalId: "p1" });
+    await run("terminal.resetModes", { terminalId: "crashed" });
 
     expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
     expect(terminalClientMock.resetModes).toHaveBeenCalledTimes(1);
+    expect(terminalClientMock.resetModes).toHaveBeenCalledWith("crashed");
   });
 
   it("clears only its own staged confirm once it runs", async () => {

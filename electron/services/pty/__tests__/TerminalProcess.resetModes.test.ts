@@ -87,7 +87,7 @@ function createHarness(): Harness {
 /** Resolves once the mirror has parsed every write queued so far. */
 function mirrorSettled(terminal: TerminalProcess): Promise<void> {
   const info = (terminal as unknown as Internals).terminalInfo;
-  return vi.waitFor(() => expect(info.pendingHeadlessWrites ?? 0).toBe(0), { timeout: 2000 });
+  return vi.waitFor(() => expect(info.pendingHeadlessWrites ?? 0).toBe(0), { timeout: 10_000 });
 }
 
 afterEach(() => {
@@ -165,6 +165,18 @@ describe("TerminalProcess.resetTerminalModes (#17328)", () => {
 
     await mirrorSettled(terminal);
     expect(mirror.modes.bracketedPasteMode).toBe(true);
+  });
+
+  it("parses behind output the mirror scheduler is still holding", async () => {
+    const { terminal, output, mirror } = createHarness();
+    // Over the scheduler's 128K in-flight cap, so this output is queued in
+    // slices rather than fed at once; the modes it sets come last.
+    output("x".repeat(200_000) + "\x1b[?1000h\x1b[?2004h");
+    terminal.resetTerminalModes();
+
+    await mirrorSettled(terminal);
+    expect(mirror.modes.mouseTrackingMode).toBe("none");
+    expect(mirror.modes.bracketedPasteMode).toBe(false);
   });
 
   it("keeps a mode set right after the reset, queued behind it in the mirror", async () => {
