@@ -218,6 +218,13 @@
       "when": 1794355200000,
       "tag": "0030_decisions_missing_session_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1794441600000,
+      "tag": "0031_decisions_deleted_events_index",
+      "breakpoints": true
     }
   ]
 }

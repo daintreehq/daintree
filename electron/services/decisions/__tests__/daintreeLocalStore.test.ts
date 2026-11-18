@@ -1458,6 +1458,64 @@ describe("DaintreeLocalStore relay deletions (#16233)", () => {
     expect(heard).toEqual([]);
     expect(await store.deletedQuestionIds()).toEqual(new Set());
   });
+
+  it("reads applied deletions through an index of them alone, however long the event history (#17791)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const created = sqlite.prepare(
+      `INSERT INTO decisions_inbound_events
+         (seq, event_id, event_type, json, received_at, processed_at)
+       VALUES (?, ?, 'decision.created', '{}', 1, 2)`
+    );
+    sqlite.transaction(() => {
+      for (let seq = 1; seq <= 500; seq++) created.run(seq, `c${seq}`);
+    })();
+    const prepare = vi.spyOn(sqlite, "prepare");
+
+    const empty = await store.deletedQuestionIds();
+    const read = prepare.mock.calls
+      .map(([sql]) => sql)
+      .find((sql) => sql.includes("'decision.deleted'"));
+    prepare.mockRestore();
+    expect(empty).toEqual(new Set());
+    expect(read).toBeDefined();
+    const usesIndex = /USING (COVERING )?INDEX decisions_inbound_events_deleted_idx\b/;
+    const plan = () =>
+      (sqlite.prepare(`EXPLAIN QUERY PLAN ${read}`).all() as { detail: string }[])
+        .map((step) => step.detail)
+        .join("\n");
+    expect(plan()).toMatch(usesIndex);
+
+    // A few deletions, one applied, one refused and one unreadable, still read
+    // through it and still name only the question actually withdrawn.
+    await store.commitNewQuestion(row("q1", 1, { local_status: "open" }), item("o1", "q1"));
+    await store.commitNewQuestion(
+      row("q2", 2, { local_status: "cancelled", history_only: true }),
+      item("o2", "q2")
+    );
+    await store.insertEvent(deletion(501, "q1"));
+    await store.insertEvent(deletion(502, "q2"));
+    await store.insertEvent({ ...deletion(503, null), json: "not json" });
+    await store.updateQuestion("q1", { local_status: "cancelled", remote_event_seq: 501 });
+    for (const seq of [501, 502, 503]) await store.markEventProcessed(seq, 5);
+    // Neither an unprocessed deletion nor another processed kind of event belongs in it.
+    await store.insertEvent(deletion(504, "q-pending"));
+    await store.insertEvent({
+      ...deletion(505, "q1"),
+      event_type: "decision.answered",
+      json: JSON.stringify({ seq: 505, event_type: "decision.answered", question_id: "q1" }),
+    });
+    await store.markEventProcessed(505, 5);
+    expect(await store.deletedQuestionIds()).toEqual(new Set(["q1"]));
+    expect(plan()).toMatch(usesIndex);
+    // The same once `PRAGMA optimize` has gathered statistics, which also
+    // count the index's rows: the three processed deletions alone.
+    sqlite.exec("ANALYZE");
+    expect(plan()).toMatch(usesIndex);
+    const stat = sqlite
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'decisions_inbound_events_deleted_idx'")
+      .get() as { stat: string } | undefined;
+    expect(stat?.stat.split(" ")[0]).toBe("3");
+  });
 });
 
 /**
