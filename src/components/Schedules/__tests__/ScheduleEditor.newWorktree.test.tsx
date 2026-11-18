@@ -33,7 +33,7 @@ vi.mock("../useScheduleLaunchOptions", () => ({
 }));
 
 import { ScheduleEditor, type EditorLeaveState } from "../ScheduleEditor";
-import { scheduleWorktreeLabel } from "../scheduleWords";
+import { scheduleWorktreeLabel, unlistedWorktreeLabel } from "../scheduleWords";
 
 const NOW = Date.UTC(2027, 0, 4, 8);
 const BRANCHES = [
@@ -55,15 +55,20 @@ function existing(launch: Partial<Schedule["launch"]> = {}): Schedule {
   return { ...schedule, launch: { ...schedule.launch, ...launch } };
 }
 
-function renderEditor(schedule: Schedule) {
-  render(
+const MAIN_ONLY = [{ id: null, label: "Main checkout" }];
+const WITH_FEATURE = [...MAIN_ONLY, { id: "/wt", label: "feature" }];
+
+function editorElement(
+  schedule: Schedule,
+  worktrees = WITH_FEATURE,
+  worktreeIds: ReadonlySet<string> | null = new Set(["/repo", "/wt"])
+) {
+  return (
     <ScheduleEditor
       schedule={schedule}
       defaultAgentId="claude"
-      worktrees={[
-        { id: null, label: "Main checkout" },
-        { id: "/wt", label: "feature" },
-      ]}
+      worktrees={worktrees}
+      worktreeIds={worktreeIds}
       now={NOW}
       osJobContext={null}
       leaveStateRef={createRef<EditorLeaveState | null>()}
@@ -74,6 +79,10 @@ function renderEditor(schedule: Schedule) {
       projectSwitches={null}
     />
   );
+}
+
+function renderEditor(...args: Parameters<typeof editorElement>) {
+  return render(editorElement(...args));
 }
 
 async function chooseWorktree(name: string) {
@@ -315,23 +324,106 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
   });
 });
 
+describe("ScheduleEditor: a fixed worktree the choices don't list (#17467)", () => {
+  const worktreeTrigger = () => screen.getByRole("combobox", { name: "Worktree" });
+
+  it("keeps the target unconfirmed, and saves it unchanged, while the worktrees are unknown", async () => {
+    renderEditor(existing({ worktreeId: "/other" }), MAIN_ONLY, null);
+
+    expect(worktreeTrigger().textContent).toContain("Worktree unconfirmed");
+    expect(screen.queryByText("Missing worktree")).toBeNull();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Renamed" },
+    });
+    await save();
+
+    expect(clientMock.update).toHaveBeenCalledWith(
+      "s1",
+      expect.anything(),
+      expect.objectContaining({
+        launch: expect.objectContaining({ worktreeId: "/other", newWorktree: null }),
+      })
+    );
+  });
+
+  it("calls a target missing once the worktrees are known without it", () => {
+    renderEditor(existing({ worktreeId: "/other" }), MAIN_ONLY, new Set(["/repo"]));
+
+    expect(worktreeTrigger().textContent).toContain("Missing worktree");
+    expect(screen.queryByText("Worktree unconfirmed")).toBeNull();
+  });
+
+  it("names the worktree in the open draft when it arrives", () => {
+    const schedule = existing({ worktreeId: "/wt" });
+    const view = renderEditor(schedule, MAIN_ONLY, null);
+    expect(worktreeTrigger().textContent).toContain("Worktree unconfirmed");
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Renamed" },
+    });
+
+    view.rerender(editorElement(schedule, WITH_FEATURE, new Set(["/repo", "/wt"])));
+
+    expect(worktreeTrigger().textContent).toContain("feature");
+    expect(screen.queryByText("Worktree unconfirmed")).toBeNull();
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe(
+      "Renamed"
+    );
+  });
+});
+
+describe("unlistedWorktreeLabel", () => {
+  it("leaves an id unconfirmed until the worktrees are known", () => {
+    expect(unlistedWorktreeLabel("/gone", null)).toBe("Worktree unconfirmed");
+  });
+
+  it("calls an id missing only against a known list that lacks it", () => {
+    expect(unlistedWorktreeLabel("/gone", new Set(["/repo", "/wt"]))).toBe("Missing worktree");
+  });
+
+  it("reads a known id that has no choice of its own as the main checkout", () => {
+    expect(unlistedWorktreeLabel("/repo", new Set(["/repo", "/wt"]))).toBe("Main checkout");
+  });
+});
+
 describe("scheduleWorktreeLabel", () => {
   const labels = new Map([["/wt", "feature"]]);
+  const known = new Set(["/repo", "/wt"]);
 
   it("names the base of a new-worktree schedule, never its main checkout", () => {
     expect(
       scheduleWorktreeLabel(
         { worktreeId: null, newWorktree: { baseBranch: "origin/develop", fromRemote: true } },
-        labels
+        labels,
+        null
       )
     ).toBe("New worktree from origin/develop");
   });
 
-  it("reads fixed targets as before", () => {
-    expect(scheduleWorktreeLabel({ worktreeId: null, newWorktree: null }, labels)).toBeNull();
-    expect(scheduleWorktreeLabel({ worktreeId: "/wt", newWorktree: null }, labels)).toBe("feature");
-    expect(scheduleWorktreeLabel({ worktreeId: "/gone", newWorktree: null }, labels)).toBe(
+  it("reads fixed targets against a known list", () => {
+    expect(
+      scheduleWorktreeLabel({ worktreeId: null, newWorktree: null }, labels, known)
+    ).toBeNull();
+    expect(scheduleWorktreeLabel({ worktreeId: "/wt", newWorktree: null }, labels, known)).toBe(
+      "feature"
+    );
+    expect(scheduleWorktreeLabel({ worktreeId: "/gone", newWorktree: null }, labels, known)).toBe(
       "Missing worktree"
+    );
+  });
+
+  it("keeps a target unconfirmed while the worktrees are unknown", () => {
+    expect(scheduleWorktreeLabel({ worktreeId: "/gone", newWorktree: null }, new Map(), null)).toBe(
+      "Worktree unconfirmed"
+    );
+    expect(
+      scheduleWorktreeLabel({ worktreeId: null, newWorktree: null }, new Map(), null)
+    ).toBeNull();
+  });
+
+  it("keeps a name it already has through a reconnect", () => {
+    expect(scheduleWorktreeLabel({ worktreeId: "/wt", newWorktree: null }, labels, null)).toBe(
+      "feature"
     );
   });
 });

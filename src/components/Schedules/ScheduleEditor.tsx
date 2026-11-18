@@ -57,6 +57,7 @@ import {
   MISSED_RUN_OPTIONS,
   OVERLAP_CONSEQUENCE,
   OVERLAP_OPTIONS,
+  unlistedWorktreeLabel,
 } from "./scheduleWords";
 import { formatNextRunRelative, formatRunInstant } from "./runTime";
 
@@ -261,6 +262,8 @@ interface ScheduleEditorProps {
   /** A new schedule opened from a starter: its name, cadence and prompt fill the draft. */
   starter?: ScheduleStarter | null;
   worktrees: readonly WorktreeChoice[];
+  /** The project's worktree ids once known, null until then: a target missing from `worktrees` is only called missing against a known list. */
+  worktreeIds: ReadonlySet<string> | null;
   now: number;
   /** What main judges "Run when Daintree isn't running" by; null until it has answered. */
   osJobContext: ScheduleOsJobContext | null;
@@ -310,6 +313,7 @@ export function ScheduleEditor({
   defaultAgentId,
   starter = null,
   worktrees,
+  worktreeIds,
   now,
   osJobContext,
   projectSwitches,
@@ -455,7 +459,10 @@ export function ScheduleEditor({
     { value: NEW_WORKTREE_VALUE, label: "New worktree for each run" },
   ];
   if (draft.worktreeId !== null && !worktrees.some((choice) => choice.id === draft.worktreeId)) {
-    worktreeOptions.push({ value: draft.worktreeId, label: "Missing worktree" });
+    worktreeOptions.push({
+      value: draft.worktreeId,
+      label: unlistedWorktreeLabel(draft.worktreeId, worktreeIds),
+    });
   }
 
   const agentName = getEffectiveAgentConfig(draft.agentId)?.name ?? "This agent";

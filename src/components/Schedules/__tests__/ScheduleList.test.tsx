@@ -49,6 +49,7 @@ function List({ state }: { state: ProjectSchedulesState }) {
       state={state}
       now={NOW}
       worktreeLabels={new Map()}
+      worktreeIds={new Set()}
       pendingEnabled={new Set()}
       enabledError={null}
       pendingRunNow={new Set()}
