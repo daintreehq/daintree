@@ -29,7 +29,7 @@ import { logError } from "@/utils/logger";
 export interface LinksLauncherLinks {
   /** This view's project's links, never another project's (#17091). */
   projectLinks: readonly ProjectLink[];
-  /** The links this view's project's package.json declares (#17252). */
+  /** The links this view's project's manifests declare (#17252, #17254). */
   declaredLinks: readonly DeclaredProjectLink[];
   /** The person's global links that are switched on, in their order. */
   globalLinks: readonly GlobalLink[];
@@ -69,21 +69,25 @@ export function hasLauncherLinks({
 }
 
 /**
- * How often an observable view re-reads its package.json links when nothing
- * else has said the file changed: a folder with no worktree watcher behind
- * it, or an edit the watcher folded into git status it already reported.
+ * How often an observable view re-reads its declared links when nothing else
+ * has said a manifest changed: a folder with no worktree watcher behind it,
+ * or an edit the watcher folded into git status it already reported.
  */
 const DECLARED_LINKS_POLL_MS = 20_000;
-const MANIFEST_NAME = "package.json";
+/**
+ * Stands for every manifest the links are read from: they all sit in the
+ * project's root folder, and a change is matched to a file by its folder.
+ */
+const ROOT_MANIFEST = "package.json";
 
 /**
- * Keeps the view's package.json links following the file (#17252). Reads them
- * when the project lands, on every opening, when the watcher on the worktree
- * at the project's root says something in the root folder moved, and on a
- * slow poll, all only while the view can be seen: the poll's ticker samples
- * as soon as a hidden view comes back, which covers whatever it skipped. The
- * read itself happens on the machine that holds the project, so a Remote
- * Host's project shows its own file.
+ * Keeps the view's declared links following its manifests (#17252, #17254).
+ * Reads them when the project lands, on every opening, when the watcher on the
+ * worktree at the project's root says something in the root folder moved, and
+ * on a slow poll, all only while the view can be seen: the poll's ticker
+ * samples as soon as a hidden view comes back, which covers whatever it
+ * skipped. The read itself happens on the machine that holds the project, so
+ * a Remote Host's project shows its own files.
  */
 function useDeclaredProjectLinksRefresh(viewProjectId: string | null, refreshSeq: number): void {
   const projectPath = useViewProjectPath();
@@ -116,7 +120,7 @@ function useDeclaredProjectLinksRefresh(viewProjectId: string | null, refreshSeq
   const manifestChanges = useFileChangeCount(
     tick,
     rootWorktreeId === null ? undefined : { tick, gitTick, changedDirs },
-    rootWorktreeId === null ? null : MANIFEST_NAME,
+    rootWorktreeId === null ? null : ROOT_MANIFEST,
     true
   );
   const refresh = useCallback(() => {

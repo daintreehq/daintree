@@ -7,11 +7,11 @@ import { logDebug } from "@/utils/logger";
 interface DeclaredProjectLinksState {
   /** The project `links` were last read for; a reader shows them only for that one. */
   projectId: string | null;
-  /** What that project's package.json declared at the last read that came back. */
+  /** What that project's manifests declared at the last read that came back. */
   links: readonly DeclaredProjectLink[];
 }
 
-/** The links this view's project declares in its package.json (#17252); never persisted. */
+/** The links this view's project declares in its manifests (#17252, #17254); never persisted. */
 export const useDeclaredProjectLinksStore = create<DeclaredProjectLinksState>(() => ({
   projectId: null,
   links: [],
@@ -24,7 +24,7 @@ function sameLinks(a: readonly DeclaredProjectLink[], b: readonly DeclaredProjec
       const other = b[i];
       return (
         other !== undefined &&
-        link.field === other.field &&
+        link.source === other.source &&
         link.title === other.title &&
         link.url === other.url
       );
@@ -66,7 +66,7 @@ export async function refreshDeclaredProjectLinks(projectId: string): Promise<vo
       try {
         links = await projectClient.getDeclaredLinks(projectId);
       } catch (error) {
-        logDebug("Couldn't read the project's package.json links", {
+        logDebug("Couldn't read the project's declared links", {
           error: formatErrorMessage(error, "unknown error"),
         });
         if (held !== null && !read.again && current === read) {

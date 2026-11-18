@@ -28,7 +28,7 @@ function getDeclared(...args: unknown[]): Promise<unknown> {
   return fn({ sender: {} } as Electron.IpcMainInvokeEvent, ...args);
 }
 
-const HOMEPAGE = { field: "homepage", title: "Homepage", url: "https://widget.example.dev/" };
+const HOMEPAGE = { source: "package.json", title: "Homepage", url: "https://widget.example.dev/" };
 
 describe("project-links:get-declared (#17252)", () => {
   let cleanup: () => void;
@@ -58,6 +58,17 @@ describe("project-links:get-declared (#17252)", () => {
     expect(result).toEqual([HOMEPAGE]);
   });
 
+  it("passes every manifest's links through, each with its source (#17254)", async () => {
+    const declared = [
+      HOMEPAGE,
+      { source: "pyproject.toml", title: "Documentation", url: "https://docs.example.dev/" },
+      { source: "Cargo.toml", title: "Repository", url: "https://github.com/acme/widget" },
+      { source: "catalog-info.yaml", title: "Dashboard", url: "https://grafana.example.dev/" },
+    ];
+    readMock.mockResolvedValue(structuredClone(declared));
+    projectStoreMock.getProjectById.mockImplementation((id) => PROJECTS[id] ?? null);
+    await expect(getDeclared({ projectId: "p1" })).resolves.toEqual(declared);
+  });
   it("declares nothing for a project this machine doesn't hold", async () => {
     projectStoreMock.getProjectById.mockImplementation((id) => PROJECTS[id] ?? null);
     const result = await getDeclared({ projectId: "gone" });

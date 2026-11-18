@@ -111,7 +111,7 @@ const { useDeclaredProjectLinksStore, _resetDeclaredProjectLinksForTests } =
   await import("@/store/declaredProjectLinksStore");
 
 const HOMEPAGE: DeclaredProjectLink = {
-  field: "homepage",
+  source: "package.json",
   title: "Homepage",
   url: "https://widget.example.dev/",
 };

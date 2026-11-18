@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Globe, ServerCog } from "lucide-react";
 import { GitPullRequest, Link, ListChecks } from "@/components/icons";
+import type { DeclaredProjectLink, DeclaredProjectLinkSource } from "@shared/types";
 import { linkHost } from "@shared/utils/projectLinks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -67,10 +68,36 @@ export const LINKS_LAUNCHER_BUTTON_ID = "links-launcher" as const;
 const LINKS_ACTION_ID = "links.open" as const;
 const LINKS_LABEL = "Links";
 export const PROJECT_LINKS_HEADING = "Project links";
-export const DECLARED_LINKS_HEADING = "From package.json";
-/** Read after a declared row's host, so the row says where it came from. */
-const DECLARED_NOTE = ", declared in the project's package.json";
 export const GLOBAL_LINKS_HEADING = "Your links";
+
+interface DeclaredLinkGroup {
+  source: DeclaredProjectLinkSource;
+  links: readonly DeclaredProjectLink[];
+}
+
+/**
+ * The declared links, one group per manifest, in the order Main lists the
+ * manifests. A manifest this build doesn't know (a newer Remote Host's) still
+ * shows, under its own file name.
+ */
+function declaredLinkGroups(links: readonly DeclaredProjectLink[]): DeclaredLinkGroup[] {
+  const groups = new Map<DeclaredProjectLinkSource, DeclaredProjectLink[]>();
+  for (const link of links) {
+    const group = groups.get(link.source);
+    if (group) group.push(link);
+    else groups.set(link.source, [link]);
+  }
+  return Array.from(groups, ([source, own]) => ({ source, links: own }));
+}
+
+function declaredLinksHeading(source: DeclaredProjectLinkSource): string {
+  return `From ${source}`;
+}
+
+/** Read after a declared row's host, so the row says where it came from. */
+function DeclaredNote({ source }: { source: DeclaredProjectLinkSource }) {
+  return <span className="sr-only">, declared in the project&apos;s {source}</span>;
+}
 
 /** Marks the launcher's content, so a close can tell whether focus was inside it. */
 const CONTENT_ATTR = "data-links-launcher";
@@ -106,12 +133,12 @@ interface LinkRowProps {
   title: string;
   url: string;
   addedByAssistant: boolean;
-  /** Declared by the project's package.json rather than saved by anyone. */
-  declared?: boolean;
+  /** The manifest that declares the link, for one nobody saved. */
+  declaredIn?: DeclaredProjectLinkSource;
   onOpen: (url: string) => void;
 }
 
-function LinkRow({ rowId, title, url, addedByAssistant, declared = false, onOpen }: LinkRowProps) {
+function LinkRow({ rowId, title, url, addedByAssistant, declaredIn, onOpen }: LinkRowProps) {
   return (
     <LinksLauncherRow
       rowId={rowId}
@@ -121,7 +148,7 @@ function LinkRow({ rowId, title, url, addedByAssistant, declared = false, onOpen
         <>
           {linkHost(url)}
           {addedByAssistant && <span className="sr-only">, added by the Assistant</span>}
-          {declared && <span className="sr-only">{DECLARED_NOTE}</span>}
+          {declaredIn !== undefined && <DeclaredNote source={declaredIn} />}
         </>
       }
       trailing={
@@ -167,8 +194,8 @@ function openProjectLinkSettings(): void {
 
 /**
  * The launcher's list: this project's saved links, then the ones its
- * package.json declares, then the person's own, then the active worktree's
- * pull request, then the dev servers across every worktree.
+ * manifests declare, one section per file, then the person's own, then the
+ * active worktree's pull request, then the dev servers across every worktree.
  */
 export function LinksLauncherList({
   links,
@@ -192,7 +219,7 @@ export function LinksLauncherList({
     return (
       <div className="flex flex-col items-start gap-2 p-3">
         <p className="text-xs text-text-secondary">
-          Links you or the Assistant save for this project, links in its package.json, and dev
+          Links you or the Assistant save for this project, links declared in its manifests, and dev
           servers running in any worktree show here.
         </p>
         <Button type="button" variant="outline" size="sm" onClick={onManage}>
@@ -217,21 +244,25 @@ export function LinksLauncherList({
           ))}
         </LinkSection>
       )}
-      {declaredLinks.length > 0 && (
-        <LinkSection heading={DECLARED_LINKS_HEADING} sectionId={`${baseId}-declared`}>
-          {declaredLinks.map((link) => (
+      {declaredLinkGroups(declaredLinks).map((group, groupIndex) => (
+        <LinkSection
+          key={group.source}
+          heading={declaredLinksHeading(group.source)}
+          sectionId={`${baseId}-declared-${groupIndex}`}
+        >
+          {group.links.map((link, index) => (
             <LinkRow
-              key={link.field}
-              rowId={`${baseId}-declared-${link.field}`}
+              key={link.url}
+              rowId={`${baseId}-declared-${groupIndex}-${index}`}
               title={link.title}
               url={link.url}
               addedByAssistant={false}
-              declared
+              declaredIn={group.source}
               onOpen={onOpen}
             />
           ))}
         </LinkSection>
-      )}
+      ))}
       {globalLinks.length > 0 && (
         <LinkSection heading={GLOBAL_LINKS_HEADING} sectionId={`${baseId}-global`}>
           {globalLinks.map((link) => (
@@ -509,21 +540,21 @@ export function LinksLauncherOverflowItems({ side }: { side: "left" | "right" })
           ))}
         </DropdownMenuGroup>
       )}
-      {declaredLinks.length > 0 && (
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>{DECLARED_LINKS_HEADING}</DropdownMenuLabel>
-          {declaredLinks.map((link) => (
-            <DropdownMenuItem key={`declared-${link.field}`} onClick={() => select(link.url)}>
+      {declaredLinkGroups(declaredLinks).map((group) => (
+        <DropdownMenuGroup key={`declared-${group.source}`}>
+          <DropdownMenuLabel>{declaredLinksHeading(group.source)}</DropdownMenuLabel>
+          {group.links.map((link) => (
+            <DropdownMenuItem key={`declared-${link.url}`} onClick={() => select(link.url)}>
               <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               <span className="min-w-0 flex-1 truncate">{link.title}</span>
               <DropdownMenuMeta aria-hidden={false}>
                 {linkHost(link.url)}
-                <span className="sr-only">{DECLARED_NOTE}</span>
+                <DeclaredNote source={group.source} />
               </DropdownMenuMeta>
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>
-      )}
+      ))}
       {globalLinks.length > 0 && (
         <DropdownMenuGroup>
           <DropdownMenuLabel>{GLOBAL_LINKS_HEADING}</DropdownMenuLabel>

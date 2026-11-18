@@ -25,12 +25,12 @@ const {
 } = await import("../declaredProjectLinksStore");
 
 const HOMEPAGE: DeclaredProjectLink = {
-  field: "homepage",
+  source: "package.json",
   title: "Homepage",
   url: "https://widget.example.dev/",
 };
 const REPOSITORY: DeclaredProjectLink = {
-  field: "repository",
+  source: "package.json",
   title: "Repository",
   url: "https://github.com/acme/widget",
 };
@@ -146,6 +146,29 @@ describe("refreshDeclaredProjectLinks (#17252)", () => {
     h.pending[1]!.resolve([moved]);
     await second;
     expect(useDeclaredProjectLinksStore.getState().links).toEqual([moved]);
+  });
+
+  it("shows a link the file renamed, at the same address (#17254)", async () => {
+    const first = refreshDeclaredProjectLinks("p1");
+    h.pending[0]!.resolve([HOMEPAGE]);
+    await first;
+    const renamed: DeclaredProjectLink = { ...HOMEPAGE, title: "Website" };
+    const second = refreshDeclaredProjectLinks("p1");
+    h.pending[1]!.resolve([renamed]);
+    await second;
+    expect(useDeclaredProjectLinksStore.getState().links).toEqual([renamed]);
+  });
+
+  it("shows a link that now comes from another manifest (#17254)", async () => {
+    const first = refreshDeclaredProjectLinks("p1");
+    h.pending[0]!.resolve([HOMEPAGE]);
+    await first;
+    // package.json dropped its homepage, and pyproject.toml names the same one.
+    const fromPyproject: DeclaredProjectLink = { ...HOMEPAGE, source: "pyproject.toml" };
+    const second = refreshDeclaredProjectLinks("p1");
+    h.pending[1]!.resolve([fromPyproject]);
+    await second;
+    expect(useDeclaredProjectLinksStore.getState().links).toEqual([fromPyproject]);
   });
 
   it("holds the list through an empty read while a newer read is queued behind it", async () => {
