@@ -40,8 +40,10 @@ interface FixtureOptions {
   jsonResponse?: boolean;
   /** Opens a session for initialize, then sends a reply body that never completes. */
   brokenInitialize?: boolean;
-  /** Opens a session for initialize, then drops the connection after the headers. */
+  /** Opens a session for initialize, then closes the connection partway through the body. */
   droppedInitialize?: boolean;
+  /** Refuses initialize with a 401 whose body is cut short. */
+  truncatedRefusal?: boolean;
   /** Refuses initialize the way Daintree refuses a handshake: HTTP 400 and a JSON-RPC error. */
   refusedHandshake?: boolean;
   /** Answers tools/call with this body as an SSE stream instead of running a tool. */
@@ -180,10 +182,22 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
       res.writeHead(404, { "Content-Type": "text/plain" }).end("Not found");
       return;
     }
+    // Fewer bytes than the declared length, then the end of the connection once
+    // they are on the wire: curl has the headers and fails the transfer.
+    const cutShort = (status: number, headers: Record<string, string>) => {
+      res.writeHead(status, {
+        "Content-Type": "application/json",
+        "Content-Length": "100",
+        ...headers,
+      });
+      res.write('{"jsonrpc":', () => res.socket?.end());
+    };
     if (options.droppedInitialize && rpc?.method === "initialize") {
-      res.writeHead(200, { "Content-Type": "text/event-stream", "Mcp-Session-Id": "dropped" });
-      res.flushHeaders();
-      res.socket?.destroy();
+      cutShort(200, { "Mcp-Session-Id": "dropped" });
+      return;
+    }
+    if (options.truncatedRefusal && rpc?.method === "initialize") {
+      cutShort(401, {});
       return;
     }
     if (options.refusedHandshake && rpc?.method === "initialize") {
@@ -264,7 +278,11 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
   let tmpDir: string;
   const children = new Set<ChildProcess>();
 
-  function start(args: string[], env: Record<string, string | undefined> = {}, stdin?: string) {
+  function start(
+    args: string[],
+    env: Record<string, string | undefined> = {},
+    stdin?: string | null
+  ) {
     const child = spawn("bash", [SCRIPT, "call", ...args], {
       env: {
         PATH: process.env.PATH,
@@ -276,7 +294,8 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       } as NodeJS.ProcessEnv,
     });
     children.add(child);
-    child.stdin.end(stdin ?? "");
+    // null leaves stdin open, as a terminal would.
+    if (stdin !== null) child.stdin.end(stdin ?? "");
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
@@ -487,6 +506,16 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(run.status).toBe(2);
   });
 
+  it("reports a usage error without waiting on stdin for --args -", async () => {
+    const { child, done } = start(["fixture.echo", "--args", "-", "--bogus"], {}, null);
+    // stdin stays open: a client that read it first would never get to the error.
+    child.stdin.write("{");
+    const run = await done;
+
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain("unknown option");
+  });
+
   it.each([
     [{ DAINTREE_MCP_URL: undefined }, "not set"],
     [{ DAINTREE_MCP_TOKEN: undefined }, "not set"],
@@ -541,6 +570,16 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       ["DELETE", "half-open"],
     ]);
     expect(fs.readdirSync(tmpDir)).toEqual([]);
+  });
+
+  it("exits 4 for a 401 even when its body is cut short", async () => {
+    await fixture.close();
+    fixture = await startFixture({ truncatedRefusal: true });
+
+    const run = await call(["fixture.echo"]);
+
+    expect(run.status).toBe(4);
+    expect(run.stderr).toContain("401");
   });
 
   it("closes a session whose initialize connection dropped after its headers", async () => {
@@ -599,8 +638,9 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
         { jsonrpc: "2.0", id: 2, result: text("yes") }
       ),
       0,
+      "yes\n",
     ],
-  ])("reads a reply with %s", async (_name, reply, status) => {
+  ])("reads a reply with %s", async (_name, reply, status, stdout?: string) => {
     await fixture.close();
     fixture = await startFixture({
       callReply: reply.startsWith("{") ? `event: message\ndata: ${reply}\n\n` : reply,
@@ -609,6 +649,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     const run = await call(["fixture.echo"]);
 
     expect(run.status).toBe(status);
+    if (stdout !== undefined) expect(run.stdout).toBe(stdout);
   });
 
   it("exits 3 when the connection drops without an answer", async () => {

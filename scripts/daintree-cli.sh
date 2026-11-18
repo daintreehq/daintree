@@ -111,8 +111,10 @@ Examples:
 USAGE
 }
 
+# The diagnostic is written from a subshell: a closed stderr would otherwise
+# kill this shell with SIGPIPE before it exits with the status asked for.
 daintree_call_fail() {
-  echo "daintree call: $2" >&2 || true
+  (echo "daintree call: $2" >&2) || true
   exit "$1"
 }
 
@@ -212,7 +214,7 @@ daintree_call_refused() {
 }
 
 daintree_call() {
-  local tool="" args_json="" args_given=0 pairs="" keys=" " as_json=0 arg key value
+  local tool="" args_json="" args_given=0 args_stdin=0 pairs="" keys=" " as_json=0 arg key value
   LC_ALL=C
   export LC_ALL
 
@@ -252,10 +254,7 @@ daintree_call() {
         else
           args_json=${1#--args=}
         fi
-        if [[ $args_json == - ]]; then
-          # Bash drops NUL bytes silently; as \001 the validator refuses them.
-          args_json=$(tr '\000' '\001') || daintree_call_fail 2 "--args - couldn't read stdin"
-        fi
+        [[ $args_json != - ]] || args_stdin=1
         [[ -n $args_json ]] || daintree_call_fail 2 "--args needs a JSON object"
         ;;
       -*) daintree_call_fail 2 "unknown option '$1' (see daintree call --help)" ;;
@@ -270,6 +269,11 @@ daintree_call() {
   [[ -n $tool ]] || daintree_call_fail 2 "missing the tool to call (see daintree call --help)"
   if [[ $args_given -eq 1 && -n $pairs ]]; then
     daintree_call_fail 2 "use --arg or --args, not both"
+  fi
+  if [[ $args_stdin -eq 1 ]]; then
+    # Bash drops NUL bytes silently; as \001 the validator refuses them.
+    args_json=$(tr '\000' '\001') || daintree_call_fail 2 "--args - couldn't read stdin"
+    [[ -n $args_json ]] || daintree_call_fail 2 "--args - read no JSON object from stdin"
   fi
 
   local awk_program
@@ -467,7 +471,8 @@ END {
   if (mode == "refusal") {
     body = ""
     for (i = 1; i <= nl; i++) body = body (i > 1 ? "\n" : "") lines[i]
-    if (!parse(body) || T["$"] != "object" || T["$" SUBSEP "error"] != "object") exit 12
+    if (!parse(body) || T["$"] != "object" || sval("$" SUBSEP "jsonrpc") != "2.0") exit 12
+    if (T["$" SUBSEP "error"] != "object" || T["$" SUBSEP "error" SUBSEP "message"] != "string") exit 12
     rpcerror()
     exit 11
   }
@@ -494,7 +499,7 @@ END {
   rs = "$" SUBSEP "result"
   failed = T[rs SUBSEP "isError"] == "true"
   if (mode == "init") {
-    version = sval(rs SUBSEP "protocolVersion")
+    version = T[rs SUBSEP "protocolVersion"] == "string" ? raw(rs SUBSEP "protocolVersion") : ""
     if (version !~ /^[0-9A-Za-z.-]+$/) exit 12
     print version
     exit 0
@@ -571,7 +576,6 @@ AWK
     fi
     daintree_call_fail 3 "Daintree refused the session (HTTP ${DTC_STATUS:-none}): $(daintree_call_reply_excerpt)"
   fi
-  [[ -n $DTC_SESSION ]] || daintree_call_fail 3 "Daintree opened no session"
   local version
   rc=0
   version=$(awk -v mode=init -v want=1 "$awk_program" < "$DTC_TMP/reply" 2> "$DTC_TMP/init-error") || rc=$?
@@ -581,6 +585,7 @@ AWK
   if [[ $rc -ne 0 || -z $version ]]; then
     daintree_call_fail 3 "Daintree's reply to initialize wasn't understood"
   fi
+  [[ -n $DTC_SESSION ]] || daintree_call_fail 3 "Daintree opened no session"
   DTC_VERSION=$version
 
   printf '%s' '{"jsonrpc":"2.0","method":"notifications/initialized"}' > "$DTC_TMP/initialized" ||
