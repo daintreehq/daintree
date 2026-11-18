@@ -25,12 +25,12 @@ const {
 } = await import("../declaredProjectLinksStore");
 
 const HOMEPAGE: DeclaredProjectLink = {
-  field: "homepage",
+  source: "package.json",
   title: "Homepage",
   url: "https://widget.example.dev/",
 };
 const REPOSITORY: DeclaredProjectLink = {
-  field: "repository",
+  source: "package.json",
   title: "Repository",
   url: "https://github.com/acme/widget",
 };

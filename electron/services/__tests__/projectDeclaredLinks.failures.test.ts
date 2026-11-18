@@ -35,9 +35,30 @@ function freshRoot(): string {
   return `/repos/project-${++nextRoot}`;
 }
 
+/** A file's handle that reads `text`, as an open manifest would. */
+function textHandle(text: string) {
+  const bytes = Buffer.from(text);
+  let offset = 0;
+  return {
+    stat: async () => ({ isFile: () => true, size: bytes.length }),
+    read: async (buffer: Buffer, at: number, length: number) => {
+      const bytesRead = bytes.copy(buffer, at, offset, Math.min(bytes.length, offset + length));
+      offset += bytesRead;
+      return { bytesRead };
+    },
+    close: vi.fn(() => Promise.resolve()),
+  };
+}
+
+// Only package.json stands at the root unless a test says otherwise.
+const OTHER_MANIFEST = /[\\/](pyproject\.toml|Cargo\.toml|catalog-info\.yaml)$/;
+
 beforeEach(() => {
   fsMock.realpath.mockReset();
-  fsMock.realpath.mockImplementation(async (path) => path);
+  fsMock.realpath.mockImplementation(async (path) => {
+    if (OTHER_MANIFEST.test(path)) throw errno("ENOENT");
+    return path;
+  });
   fsMock.open.mockReset();
   fsMock.stat.mockReset();
   fsMock.stat.mockResolvedValue({ isFile: () => true });
@@ -116,12 +137,33 @@ describe("readDeclaredProjectLinks when the disk misbehaves (#17252)", () => {
   it.each(["ENOENT", "ENOTDIR", "EACCES"])(
     "declares nothing on %s, which settles that there is nothing to read",
     async (code) => {
+      const root = freshRoot();
       fsMock.realpath.mockImplementation(async (path) => {
-        if (path.endsWith("package.json")) throw errno(code);
+        if (path !== root) throw errno(code);
         return path;
       });
-      await expect(readDeclaredProjectLinks(freshRoot())).resolves.toEqual([]);
+      await expect(readDeclaredProjectLinks(root)).resolves.toEqual([]);
+      expect(fsMock.realpath).toHaveBeenCalledTimes(5);
       expect(fsMock.open).not.toHaveBeenCalled();
     }
   );
+
+  it("rejects when a later manifest fails in a way that may pass, rather than dropping its links (#17254)", async () => {
+    const packageJson = textHandle(JSON.stringify({ homepage: "https://widget.example.dev" }));
+    fsMock.realpath.mockImplementation(async (path) => {
+      if (/[\\/](Cargo\.toml|catalog-info\.yaml)$/.test(path)) throw errno("ENOENT");
+      return path;
+    });
+    fsMock.open.mockImplementation(async (path) => {
+      if (path.endsWith("package.json")) return packageJson;
+      throw errno("EIO");
+    });
+
+    await expect(readDeclaredProjectLinks(freshRoot())).rejects.toMatchObject({ code: "EIO" });
+    expect(fsMock.open.mock.calls.map(([path]) => path.split(/[\\/]/).pop())).toEqual([
+      "package.json",
+      "pyproject.toml",
+    ]);
+    expect(packageJson.close).toHaveBeenCalledOnce();
+  });
 });

@@ -1,8 +1,17 @@
 import { constants as fsConstants } from "node:fs";
 import { open, realpath, stat, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
-import type { DeclaredProjectLink } from "../../shared/types/projectLinks.js";
-import { declaredLinksFromPackageJson } from "../../shared/utils/declaredProjectLinks.js";
+import type {
+  DeclaredProjectLink,
+  DeclaredProjectLinkSource,
+} from "../../shared/types/projectLinks.js";
+import {
+  declaredLinksFromBackstageCatalog,
+  declaredLinksFromCargoToml,
+  declaredLinksFromPackageJson,
+  declaredLinksFromPyproject,
+  mergeDeclaredLinks,
+} from "../../shared/utils/declaredProjectLinks.js";
 import { readBoundedFromHandle } from "../utils/boundedRead.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import { projectIo } from "./projectIoGate.js";
@@ -34,10 +43,10 @@ function isWithin(root: string, path: string): boolean {
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
-function errorCode(error: unknown): string | undefined {
-  if (error === null || typeof error !== "object") return undefined;
+function isSettled(error: unknown): boolean {
+  if (error === null || typeof error !== "object") return false;
   const { code } = error as { code?: unknown };
-  return typeof code === "string" ? code : undefined;
+  return typeof code === "string" && SETTLED_CODES.has(code);
 }
 
 /**
@@ -52,27 +61,61 @@ function closeLater(handle: Promise<FileHandle> | FileHandle): void {
   );
 }
 
+// Most YAML never uses an alias, and the reader only looks up a few keys.
+const MAX_YAML_ALIASES = 100;
+
+type LinksFromText = (text: string) => DeclaredProjectLink[];
+
 /**
- * The links the package.json at the project's root declares (#17252). Read
- * from disk on every call and never written: a missing, unreadable, oversized
- * or malformed file declares nothing. A manifest linked from outside the root
- * is refused, anything but a regular file declares nothing, and the open is
- * non-blocking so a FIFO swapped in after the check can't hold it. A failure
- * that may pass (a stalled or busy disk, a full descriptor table) rejects
- * instead, so the caller keeps what it last showed and asks again later
- * rather than emptying the list.
+ * Each manifest, in the order the launcher lists them, with what turns its
+ * text into links. The TOML and YAML parsers load the first time a project
+ * has such a file, so Main's startup never pays for them.
  */
-export async function readDeclaredProjectLinks(
-  projectRoot: string
-): Promise<DeclaredProjectLink[]> {
-  const io = <T>(request: () => Promise<T>): Promise<T> => projectIo.run(projectRoot, request);
+const MANIFESTS: readonly (readonly [DeclaredProjectLinkSource, () => Promise<LinksFromText>])[] = [
+  ["package.json", async () => (text) => declaredLinksFromPackageJson(JSON.parse(text))],
+  [
+    "pyproject.toml",
+    async () => {
+      const { parse } = await import("smol-toml");
+      return (text) => declaredLinksFromPyproject(parse(text));
+    },
+  ],
+  [
+    "Cargo.toml",
+    async () => {
+      const { parse } = await import("smol-toml");
+      return (text) => declaredLinksFromCargoToml(parse(text));
+    },
+  ],
+  [
+    "catalog-info.yaml",
+    async () => {
+      const { loadAll } = await import("js-yaml");
+      return (text) =>
+        declaredLinksFromBackstageCatalog(loadAll(text, { maxAliases: MAX_YAML_ALIASES }));
+    },
+  ],
+];
+
+type ProjectIo = <T>(request: () => Promise<T>) => Promise<T>;
+
+/**
+ * The text of the manifest `name` at the project's root, or null when it
+ * declares nothing: missing, unreadable, oversized, linked from outside the
+ * root, or anything but a regular file. The open is non-blocking so a FIFO
+ * swapped in after the check can't hold it. A failure that may pass rejects.
+ */
+async function readManifestText(
+  realRoot: string,
+  name: DeclaredProjectLinkSource,
+  io: ProjectIo
+): Promise<string | null> {
   try {
-    const realRoot = await io(() => realpath(projectRoot));
-    const manifestPath = await io(() => realpath(join(realRoot, "package.json")));
-    if (!isWithin(realRoot, manifestPath)) return [];
+    const manifestPath = await io(() => realpath(join(realRoot, name)));
+    if (!isWithin(realRoot, manifestPath)) return null;
     // Settles a socket, FIFO or folder at the path before an open that some
     // of them refuse with errors that say nothing about what stands there.
-    if (!(await io(() => stat(manifestPath))).isFile()) return [];
+    if (!(await io(() => stat(manifestPath))).isFile()) return null;
     let opening: Promise<FileHandle> | undefined;
     let handle: FileHandle;
     try {
@@ -90,18 +133,49 @@ export async function readDeclaredProjectLinks(
     }
     try {
       const info = await io(() => handle.stat());
-      if (!info.isFile()) return [];
+      if (!info.isFile()) return null;
       // One worker at a time: the bounded read's calls run one after another.
       const bytes = await io(() => readBoundedFromHandle(handle, info.size, MAX_MANIFEST_BYTES));
-      if (bytes === null) return [];
-      return declaredLinksFromPackageJson(JSON.parse(stripUtf8Bom(decoder.decode(bytes))));
+      return bytes === null ? null : stripUtf8Bom(decoder.decode(bytes));
     } finally {
       closeLater(handle);
     }
   } catch (error) {
-    if (error instanceof SyntaxError) return [];
-    const code = errorCode(error);
-    if (code !== undefined && SETTLED_CODES.has(code)) return [];
+    if (isSettled(error)) return null;
     throw error;
   }
+}
+
+/**
+ * The links the manifests at the project's root declare: package.json
+ * (#17252), then pyproject.toml, Cargo.toml and a Backstage catalog-info.yaml
+ * (#17254). Read from disk on every call and never written. A file that is
+ * missing, unreadable, oversized or malformed declares nothing, and the others
+ * still count. A failure that may pass (a stalled or busy disk, a full
+ * descriptor table) rejects the whole read instead, so the caller keeps what
+ * it last showed and asks again later rather than dropping a file's links.
+ */
+export async function readDeclaredProjectLinks(
+  projectRoot: string
+): Promise<DeclaredProjectLink[]> {
+  const io: ProjectIo = (request) => projectIo.run(projectRoot, request);
+  let realRoot: string;
+  try {
+    realRoot = await io(() => realpath(projectRoot));
+  } catch (error) {
+    if (isSettled(error)) return [];
+    throw error;
+  }
+  const lists: DeclaredProjectLink[][] = [];
+  for (const [name, loadParser] of MANIFESTS) {
+    const text = await readManifestText(realRoot, name, io);
+    if (text === null) continue;
+    const linksFrom = await loadParser();
+    try {
+      lists.push(linksFrom(text));
+    } catch {
+      // A file that doesn't parse declares nothing.
+    }
+  }
+  return mergeDeclaredLinks(lists);
 }

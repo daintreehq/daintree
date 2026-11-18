@@ -28,7 +28,7 @@ function getDeclared(...args: unknown[]): Promise<unknown> {
   return fn({ sender: {} } as Electron.IpcMainInvokeEvent, ...args);
 }
 
-const HOMEPAGE = { field: "homepage", title: "Homepage", url: "https://widget.example.dev/" };
+const HOMEPAGE = { source: "package.json", title: "Homepage", url: "https://widget.example.dev/" };
 
 describe("project-links:get-declared (#17252)", () => {
   let cleanup: () => void;

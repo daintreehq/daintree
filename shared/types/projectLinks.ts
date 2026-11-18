@@ -11,15 +11,16 @@ export interface ProjectLink {
   addedByAssistant?: true;
 }
 
-/** A package.json field that names one of the project's addresses (#17252). */
-export type DeclaredProjectLinkField = "homepage" | "repository" | "bugs";
+/** A manifest at the project's root that can name the project's addresses (#17252, #17254). */
+export type DeclaredProjectLinkSource =
+  "package.json" | "pyproject.toml" | "Cargo.toml" | "catalog-info.yaml";
 
 /**
- * A link the project's own package.json declares. Read from the file each
+ * A link one of the project's own manifests declares. Read from the file each
  * time and never saved, so it can't be edited or removed from Daintree.
  */
 export interface DeclaredProjectLink {
-  field: DeclaredProjectLinkField;
+  source: DeclaredProjectLinkSource;
   title: string;
   url: string;
 }
