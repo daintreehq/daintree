@@ -118,7 +118,7 @@ describe("projectStore.sleepProject", () => {
       idle.resolve();
       await pending;
 
-      expect(projectClientMock.sleepProject).toHaveBeenCalledWith("proj-1");
+      expect(projectClientMock.sleepProject).toHaveBeenCalledWith("proj-1", undefined);
     });
 
     it("stops further saves only after main has written the ids back", async () => {
@@ -175,6 +175,15 @@ describe("projectStore.sleepProject", () => {
       expect(panelPersistenceMock.whenIdle).not.toHaveBeenCalled();
       expect(panelPersistenceMock.cancel).not.toHaveBeenCalled();
       expect(useProjectStore.getState().currentProject).toEqual(other);
+    });
+
+    it("passes on what the user's request saw of its agents (#17886)", async () => {
+      setCurrentProject({ id: "proj-2", name: "Two", path: "/repo/two" });
+      const options = { workingAtRequest: [{ terminalId: "t1", at: 10 }] };
+
+      await useProjectStore.getState().sleepProject("proj-1", options);
+
+      expect(projectClientMock.sleepProject).toHaveBeenCalledWith("proj-1", options);
     });
   });
 
@@ -286,7 +295,7 @@ describe("projectStore.sleepProject", () => {
       restore.resolve();
       await restoring;
       await sleeping;
-      expect(projectClientMock.sleepProject).toHaveBeenCalledWith("proj-1");
+      expect(projectClientMock.sleepProject).toHaveBeenCalledWith("proj-1", undefined);
     });
   });
 });
