@@ -1,10 +1,10 @@
 import * as fs from "fs/promises";
+import type { Dir } from "fs";
 import * as path from "path";
 import { createStrictExitGit } from "../utils/hardenedGit.js";
 import { Cache } from "../utils/cache.js";
 import { logWarn } from "../utils/logger.js";
 import { isPathInside } from "../../shared/utils/path.js";
-import type { Dirent } from "fs";
 
 interface FileListCacheEntry {
   files: string[];
@@ -123,6 +123,12 @@ const MAX_RESULTS_DEFAULT = 50;
 const MAX_RESULTS_LIMIT = 100;
 const MAX_QUERY_LENGTH = 256;
 const MAX_FALLBACK_FILES = 20_000;
+// Raw entries a directory handle reads per call. The walker pulls them one at a
+// time and stops at the cap, so a directory far wider than the remaining budget
+// costs at most one batch of surplus reads rather than every entry it holds.
+// Larger than Node's default of 32 because every batch is a threadpool round
+// trip, and a capped walk of one wide directory is hundreds of them.
+const FALLBACK_READ_BATCH = 128;
 
 // Names hard-skipped by the fallback walker only. Git mode honours .gitignore via
 // --exclude-standard, so these are unnecessary there. Includes a few well-known
@@ -387,31 +393,39 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
     const dir = queue.pop();
     if (!dir) break;
 
-    let entries: Array<Dirent>;
+    let handle: Dir;
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
+      handle = await fs.opendir(dir, { bufferSize: FALLBACK_READ_BATCH });
     } catch {
       continue;
     }
 
-    for (const entry of entries) {
-      if (FALLBACK_SKIP_NAMES.has(entry.name)) continue;
-      const absolute = path.join(dir, entry.name);
-      const relative = path.relative(cwd, absolute);
-      // APFS stores filenames as NFD on macOS; normalise to match the NFC paths
-      // git produces via core.precomposeunicode.
-      const relativePosix = toPosixPath(relative).normalize("NFC");
+    // Iterating the handle closes it when the loop ends, whether by exhaustion,
+    // the cap `break` or a read error, so nothing here closes it again. Entries
+    // are on disk order, not the name order `readdir` sorts into: only a capped
+    // walk can tell, and it keeps whichever entries the filesystem lists first.
+    try {
+      for await (const entry of handle) {
+        if (FALLBACK_SKIP_NAMES.has(entry.name)) continue;
+        const absolute = path.join(dir, entry.name);
+        const relative = path.relative(cwd, absolute);
+        // APFS stores filenames as NFD on macOS; normalise to match the NFC paths
+        // git produces via core.precomposeunicode.
+        const relativePosix = toPosixPath(relative).normalize("NFC");
 
-      if (entry.isDirectory()) {
-        results.push(`${relativePosix}/`);
-        queue.push(absolute);
+        if (entry.isDirectory()) {
+          results.push(`${relativePosix}/`);
+          queue.push(absolute);
+          if (results.length >= MAX_FALLBACK_FILES) break;
+          continue;
+        }
+
+        if (!entry.isFile()) continue;
+        results.push(relativePosix);
         if (results.length >= MAX_FALLBACK_FILES) break;
-        continue;
       }
-
-      if (!entry.isFile()) continue;
-      results.push(relativePosix);
-      if (results.length >= MAX_FALLBACK_FILES) break;
+    } catch {
+      // A read that fails part-way keeps the entries already taken from it.
     }
   }
 
