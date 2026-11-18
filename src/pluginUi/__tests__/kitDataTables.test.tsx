@@ -9,10 +9,16 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(() => Promise.resolve()) },
 }));
+// Passed through, and counted: a drag must not build a row index per move.
+vi.mock("@/components/PluginKit/kitTreeModel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/PluginKit/kitTreeModel")>();
+  return { ...actual, indexTreeRows: vi.fn(actual.indexTreeRows) };
+});
 
 import * as kit from "@daintreehq/plugin-ui";
 import "@/components/PluginKit/PluginKit";
 import { usesRichDataTable } from "@/components/PluginKit/PluginKitDataTables";
+import { indexTreeRows } from "@/components/PluginKit/kitTreeModel";
 import {
   formatNumeric,
   readNumericFormat,
@@ -950,7 +956,278 @@ describe("TreeView", () => {
       expect.objectContaining({ id: "data", parentId: null, index: 0 })
     );
   });
+
+  it("drags across levels and resolves the drop on release against the rows as they are then", async () => {
+    let allow = true;
+    const canDrop = vi.fn(() => allow);
+    const onMove = vi.fn();
+    const nodes = SERVICES.filter((service) => !service.lazy);
+    const props = { "aria-label": "Drag", defaultExpanded: ["edge"], onMove, canDrop };
+    const { rerender } = render(
+      inViewport(createElement(kit.TreeView<Service>, { ...props, nodes }))
+    );
+    const drag = treeDrag();
+    try {
+      drag.lift("s:waf");
+      // Before CDN, its sibling: up one place within Edge.
+      drag.point("s:cdn", 2);
+      expect(drag.mark()).toBe("s:cdn before");
+      // More moves on the same row and band each reach the handler, and
+      // build no row index: the marker doesn't change, so nothing renders.
+      const builds = vi.mocked(indexTreeRows).mock.calls.length;
+      const asked = canDrop.mock.calls.length;
+      drag.point("s:cdn", 3);
+      drag.point("s:cdn", 4);
+      drag.point("s:cdn", 3);
+      expect(canDrop).toHaveBeenCalledTimes(asked + 3);
+      expect(vi.mocked(indexTreeRows).mock.calls.length).toBe(builds);
+      // The same band refused, then allowed again, takes its mark away and back.
+      allow = false;
+      drag.point("s:cdn", 5);
+      expect(drag.mark()).toBeNull();
+      allow = true;
+      drag.point("s:cdn", 4);
+      expect(drag.mark()).toBe("s:cdn before");
+      // Into Edge's middle puts it back where it was, so no mark.
+      drag.point("s:edge", 13);
+      expect(drag.mark()).toBeNull();
+      drag.point("s:data", 20);
+      expect(drag.mark()).toBe("s:data after");
+      // A root lands above and Edge's children swap while the pointer holds
+      // still over Data: the release counts both.
+      const [edge, ...rest] = nodes;
+      rerender(
+        inViewport(
+          createElement(kit.TreeView<Service>, {
+            ...props,
+            nodes: [
+              { id: "auth", label: "Auth" },
+              { ...edge!, children: [...edge!.children!].reverse() },
+              ...rest,
+            ],
+          })
+        )
+      );
+      expect(drag.mark()).toBe("s:data after");
+      expect(onMove).not.toHaveBeenCalled();
+      drag.drop();
+      expect(onMove).toHaveBeenCalledTimes(1);
+      expect(onMove).toHaveBeenLastCalledWith({
+        id: "waf",
+        parentId: null,
+        index: 3,
+        fromParentId: "edge",
+        fromIndex: 0,
+      });
+    } finally {
+      await drag.end();
+    }
+  });
+
+  it("drops only where it marked, and only while the pointer is still there", async () => {
+    let allow = true;
+    const onMove = vi.fn();
+    const props = {
+      "aria-label": "Guarded drag",
+      nodes: SERVICES.filter((service) => !service.lazy),
+      defaultExpanded: ["edge"],
+      canDrop: () => allow,
+    };
+    const { rerender } = render(
+      inViewport(createElement(kit.TreeView<Service>, { ...props, onMove }))
+    );
+    const drag = treeDrag();
+    try {
+      // The rows move under a still pointer: CDN is under it at release now.
+      drag.lift("s:waf");
+      drag.point("s:data", 20);
+      expect(drag.mark()).toBe("s:data after");
+      drag.hold("s:cdn");
+      drag.drop();
+      await drag.settle();
+      // The pointer leaves the tree after a marked hover.
+      drag.lift("s:waf");
+      drag.point("s:data", 20);
+      drag.point("", 30);
+      expect(drag.mark()).toBeNull();
+      drag.drop();
+      await drag.settle();
+      // Refused where it last hovered, so no mark, then allowed by release.
+      allow = false;
+      drag.lift("s:waf");
+      drag.point("s:data", 20);
+      expect(drag.mark()).toBeNull();
+      allow = true;
+      rerender(
+        inViewport(createElement(kit.TreeView<Service>, { ...props, onMove, canDrop: () => allow }))
+      );
+      drag.drop();
+      await drag.settle();
+      expect(onMove).not.toHaveBeenCalled();
+      // onMove goes away mid-drag: dnd-kit's sensor still releases into the
+      // last render's handler, which must drop nothing.
+      drag.lift("s:waf");
+      drag.point("s:data", 20);
+      expect(drag.mark()).toBe("s:data after");
+      rerender(inViewport(createElement(kit.TreeView<Service>, props)));
+      drag.drop();
+      expect(onMove).not.toHaveBeenCalled();
+    } finally {
+      await drag.end();
+    }
+  });
+
+  it("appends a drop into an expanded parent after its drawn children", async () => {
+    const onMove = vi.fn();
+    const [edge, , data] = SERVICES;
+    render(
+      inViewport(
+        createElement(kit.TreeView<Service>, {
+          "aria-label": "Drawn",
+          // The repeated id is drawn once, so Edge shows two children of three.
+          nodes: [
+            { ...edge!, children: [...edge!.children!, { id: "cdn", label: "CDN copy" }] },
+            data!,
+          ],
+          defaultExpanded: ["edge"],
+          onMove,
+        })
+      )
+    );
+    const drag = treeDrag();
+    try {
+      drag.lift("s:data");
+      drag.point("s:edge", 13);
+      expect(drag.mark()).toBe("s:edge inside");
+      drag.drop();
+      expect(onMove).toHaveBeenLastCalledWith({
+        id: "data",
+        parentId: "edge",
+        index: 2,
+        fromParentId: null,
+        fromIndex: 1,
+      });
+    } finally {
+      await drag.end();
+    }
+  });
+
+  it("appends a drop into a lazy parent after the children that load while it hovers", async () => {
+    let resolve: (nodes: Service[]) => void = () => {};
+    const onMove = vi.fn();
+    const getChildren = vi.fn((node: Service) =>
+      node.lazy
+        ? new Promise<Service[]>((done) => {
+            resolve = done;
+          })
+        : node.children
+    );
+    render(
+      inViewport(
+        createElement(kit.TreeView<Service>, {
+          "aria-label": "Lazy drag",
+          nodes: SERVICES,
+          getChildren,
+          hasChildren: (node) => node.lazy === true || (node.children?.length ?? 0) > 0,
+          onMove,
+        })
+      )
+    );
+    const lazyLoads = () => getChildren.mock.calls.filter(([node]) => node.lazy).length;
+    const drag = treeDrag();
+    try {
+      drag.lift("s:data");
+      expect(lazyLoads()).toBe(0);
+      drag.point("s:core", 13);
+      expect(drag.mark()).toBe("s:core inside");
+      expect(lazyLoads()).toBe(1);
+      await act(async () => {
+        resolve([
+          { id: "queue", label: "Queue" },
+          { id: "cache", label: "Cache" },
+        ]);
+        await Promise.resolve();
+      });
+      expect(onMove).not.toHaveBeenCalled();
+      drag.drop();
+      expect(onMove).toHaveBeenCalledTimes(1);
+      expect(onMove).toHaveBeenLastCalledWith({
+        id: "data",
+        parentId: "core",
+        index: 2,
+        fromParentId: null,
+        fromIndex: 2,
+      });
+    } finally {
+      await drag.end();
+    }
+  });
 });
+
+// A pointer drag over the tree. Every row sits 24px tall at the top of the
+// viewport, so the pointer's y picks the band on whichever row it is over;
+// an empty `over` is off the tree.
+function treeDrag() {
+  let over = "";
+  let x = 10;
+  const rowAt = (path: string) => {
+    const found = document.querySelector(`[data-tree-path="${path}"]`);
+    if (!(found instanceof HTMLElement)) throw new Error(`no row ${path}`);
+    return found;
+  };
+  Object.defineProperty(document, "elementsFromPoint", {
+    configurable: true,
+    value: () => (over === "" ? [] : [rowAt(over)]),
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+    DOMRect.fromRect({ x: 0, y: 0, width: 200, height: 24 })
+  );
+  // Each point steps x too, so dnd-kit always sees the translate change.
+  const moveTo = (clientY: number) =>
+    act(() => {
+      x += 1;
+      fireEvent.mouseMove(document, { clientX: x, clientY });
+    });
+  const release = () =>
+    act(() => {
+      fireEvent.mouseUp(document);
+    });
+  // dnd-kit swallows clicks, and keeps its document listeners, for 50ms after a drop.
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+  return {
+    lift(path: string) {
+      x = 10;
+      fireEvent.mouseDown(rowAt(path), { button: 0, clientX: x, clientY: 12 });
+      moveTo(1);
+    },
+    point(path: string, clientY: number) {
+      over = path;
+      moveTo(clientY);
+    },
+    // A different row under the pointer without the pointer moving.
+    hold(path: string) {
+      over = path;
+    },
+    mark() {
+      const mark = document.querySelector("[data-tree-drop]");
+      if (!mark) return null;
+      const row = mark.closest("[data-tree-path]")?.getAttribute("data-tree-path");
+      return `${row} ${mark.getAttribute("data-tree-drop")}`;
+    },
+    drop: release,
+    settle,
+    // Ends a drag an assertion stopped midway, so its listeners don't
+    // swallow the next test's clicks.
+    async end() {
+      try {
+        release();
+      } finally {
+        Reflect.deleteProperty(document, "elementsFromPoint");
+      }
+      await settle();
+    },
+  };
+}
 
 describe("ObjectInspector", () => {
   const response = {

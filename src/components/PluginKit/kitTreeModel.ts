@@ -235,19 +235,39 @@ export function dropPositionAt(offsetY: number, height: number, canNest: boolean
   return "inside";
 }
 
-function rowById(rows: readonly TreeViewRow[]): Map<TreeId, TreeRow> {
-  const map = new Map<TreeId, TreeRow>();
-  for (const row of rows) if (row.kind === "node") map.set(row.id, row);
-  return map;
+/**
+ * The drawn rows looked up by id, by path and by parent. Built once per row
+ * model and handed to every lookup, because a drag resolves on each pointer
+ * move and a fresh index per call is a full pass over every row.
+ */
+export interface TreeIndex {
+  byId: ReadonlyMap<TreeId, TreeRow>;
+  byPath: ReadonlyMap<string, TreeViewRow>;
+  /** Each parent's drawn children in order, so a child's `index` is its slot here; `null` keys the roots. */
+  children: ReadonlyMap<TreeId | null, readonly TreeRow[]>;
+}
+
+export function indexTreeRows(rows: readonly TreeViewRow[]): TreeIndex {
+  const byId = new Map<TreeId, TreeRow>();
+  const byPath = new Map<string, TreeViewRow>();
+  const children = new Map<TreeId | null, TreeRow[]>();
+  for (const row of rows) {
+    byPath.set(row.path, row);
+    if (row.kind !== "node") continue;
+    byId.set(row.id, row);
+    const siblings = children.get(row.parentId);
+    if (siblings) siblings.push(row);
+    else children.set(row.parentId, [row]);
+  }
+  return { byId, byPath, children };
 }
 
 /** Whether `id` is `ancestor` or sits anywhere below it. */
-export function isWithin(rows: readonly TreeViewRow[], id: TreeId, ancestor: TreeId): boolean {
-  const byId = rowById(rows);
+export function isWithin(tree: TreeIndex, id: TreeId, ancestor: TreeId): boolean {
   let current: TreeId | null = id;
   for (let guard = 0; current !== null && guard <= MAX_TREE_DEPTH; guard += 1) {
     if (current === ancestor) return true;
-    current = byId.get(current)?.parentId ?? null;
+    current = tree.byId.get(current)?.parentId ?? null;
   }
   return false;
 }
@@ -258,17 +278,16 @@ export function isWithin(rows: readonly TreeViewRow[], id: TreeId, ancestor: Tre
  * target has now, for a drop inside it, which appends.
  */
 export function resolveDrop(
-  rows: readonly TreeViewRow[],
+  tree: TreeIndex,
   dragId: TreeId,
   targetId: TreeId,
   position: DropPosition,
   childCount: number
 ): TreeMoveResult | null {
-  const byId = rowById(rows);
-  const dragged = byId.get(dragId);
-  const target = byId.get(targetId);
+  const dragged = tree.byId.get(dragId);
+  const target = tree.byId.get(targetId);
   if (!dragged || !target) return null;
-  if (isWithin(rows, targetId, dragId)) return null;
+  if (isWithin(tree, targetId, dragId)) return null;
   const from = { fromParentId: dragged.parentId, fromIndex: dragged.index };
   let parentId: TreeId | null;
   let index: number;
@@ -289,19 +308,14 @@ export function resolveDrop(
 
 /** The move an Alt+arrow asks of the node at `id`, or null where it cannot go. */
 export function resolveKeyMove(
-  rows: readonly TreeViewRow[],
+  tree: TreeIndex,
   id: TreeId,
   key: "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight",
   childCount: (id: TreeId) => number
 ): TreeMoveResult | null {
-  const byId = rowById(rows);
-  const row = byId.get(id);
+  const row = tree.byId.get(id);
   if (!row) return null;
   const from = { fromParentId: row.parentId, fromIndex: row.index };
-  const siblings = rows.filter(
-    (candidate): candidate is TreeRow =>
-      candidate.kind === "node" && candidate.parentId === row.parentId
-  );
   switch (key) {
     case "ArrowUp":
       return row.index > 0 ? { id, parentId: row.parentId, index: row.index - 1, ...from } : null;
@@ -311,12 +325,12 @@ export function resolveKeyMove(
         : null;
     case "ArrowLeft": {
       if (row.parentId === null) return null;
-      const parent = byId.get(row.parentId);
+      const parent = tree.byId.get(row.parentId);
       if (!parent) return null;
       return { id, parentId: parent.parentId, index: parent.index + 1, ...from };
     }
     case "ArrowRight": {
-      const above = siblings.find((candidate) => candidate.index === row.index - 1);
+      const above = tree.children.get(row.parentId)?.[row.index - 1];
       if (!above) return null;
       return { id, parentId: above.id, index: childCount(above.id), ...from };
     }
@@ -324,12 +338,11 @@ export function resolveKeyMove(
 }
 
 /** The rows from the root down to `id`'s parent. */
-export function ancestorsOf(rows: readonly TreeViewRow[], id: TreeId): TreeRow[] {
-  const byId = rowById(rows);
+export function ancestorsOf(tree: TreeIndex, id: TreeId): TreeRow[] {
   const chain: TreeRow[] = [];
-  let current = byId.get(id)?.parentId ?? null;
+  let current = tree.byId.get(id)?.parentId ?? null;
   for (let guard = 0; current !== null && guard <= MAX_TREE_DEPTH; guard += 1) {
-    const row = byId.get(current);
+    const row = tree.byId.get(current);
     if (!row) break;
     chain.unshift(row);
     current = row.parentId;
