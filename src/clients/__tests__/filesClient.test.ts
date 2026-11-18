@@ -45,6 +45,13 @@ describe("filesClient.search caching", () => {
     expect(mockSearch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a files-only answer apart from the same query with folders", async () => {
+    await filesClient.search({ cwd: "/project", query: "index", limit: 50 });
+    await filesClient.search({ cwd: "/project", query: "index", limit: 50, filesOnly: true });
+    expect(mockSearch).toHaveBeenCalledTimes(2);
+    expect(mockSearch.mock.calls[1]?.[0]).toMatchObject({ filesOnly: true });
+  });
+
   it("re-fetches after TTL expires", async () => {
     const payload = { cwd: "/project", query: "index", limit: 50 };
 

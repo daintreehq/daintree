@@ -553,6 +553,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- navActions --
   "nav.toggleFocusMode",
   "nav.quickSwitcher",
+  "nav.quickOpenFile",
   "nav.showProjectHome",
   "nav.showProjectSplit",
   "nav.showGrid",

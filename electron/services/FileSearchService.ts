@@ -11,6 +11,8 @@ interface FileListCacheEntry {
   normalizedFiles: string[];
   basenameStarts: Int32Array;
   shortestFiles?: string[];
+  /** `shortestFiles` without directory entries, for a files-only empty query. */
+  shortestOnlyFiles?: string[];
   lastSearchQuery?: string;
   lastSearchCandidates?: number[];
 }
@@ -230,7 +232,14 @@ function buildScoringInputs(files: string[]): {
  * The empty-query ranking, cut at the largest page any caller can ask for, so
  * every limit is a prefix of one cached list rather than of its own selection.
  */
-function shortestFilesFor(entry: FileListCacheEntry): string[] {
+function shortestFilesFor(entry: FileListCacheEntry, filesOnly: boolean): string[] {
+  if (filesOnly) {
+    entry.shortestOnlyFiles ??= selectShortestFiles(
+      entry.files.filter((file) => !file.endsWith("/")),
+      MAX_RESULTS_LIMIT
+    );
+    return entry.shortestOnlyFiles;
+  }
   entry.shortestFiles ??= selectShortestFiles(entry.files, MAX_RESULTS_LIMIT);
   return entry.shortestFiles;
 }
@@ -311,13 +320,18 @@ function findWorstIdx(best: ScoredMatch[]): number {
   return worstIdx;
 }
 
-function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number): string[] {
+function pickTopMatches(
+  entry: FileListCacheEntry,
+  query: string,
+  limit: number,
+  filesOnly = false
+): string[] {
   const queryLower = normalizeQuery(query).toLowerCase();
   const normalizedQuery = queryLower.endsWith("/") ? queryLower.slice(0, -1) : queryLower;
   const effectiveLimit = clampInt(limit, 1, MAX_RESULTS_LIMIT, MAX_RESULTS_DEFAULT);
 
   if (normalizedQuery.length === 0) {
-    return shortestFilesFor(entry).slice(0, effectiveLimit);
+    return shortestFilesFor(entry, filesOnly).slice(0, effectiveLimit);
   }
 
   const best: ScoredMatch[] = [];
@@ -340,7 +354,10 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
       entry.basenameStarts[fileIdx]
     );
     if (score === null) continue;
+    // Recorded before the files-only skip: the next query narrows from this
+    // list whatever it asks for, and must still find the directories.
     matchingCandidates.push(fileIdx);
+    if (filesOnly && file.endsWith("/")) continue;
 
     const match = { file, score };
     if (best.length < effectiveLimit) {
@@ -544,14 +561,19 @@ export class FileSearchService {
     }
   }
 
-  async search(payload: { cwd: string; query: string; limit?: number }): Promise<string[]> {
+  async search(payload: {
+    cwd: string;
+    query: string;
+    limit?: number;
+    filesOnly?: boolean;
+  }): Promise<string[]> {
     try {
       const resolvedCwd = path.resolve(payload.cwd);
       const limit = clampInt(payload.limit, 1, MAX_RESULTS_LIMIT, MAX_RESULTS_DEFAULT);
 
       const entry = await this.getFiles(resolvedCwd);
 
-      return pickTopMatches(entry, payload.query, limit);
+      return pickTopMatches(entry, payload.query, limit, payload.filesOnly === true);
     } catch {
       return [];
     }

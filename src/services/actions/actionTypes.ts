@@ -8,6 +8,7 @@ import type {
 import type { SettingsNavTarget } from "@/components/Settings";
 import type { AddPanelOptions } from "@/store";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
+import type { QuickSwitcherScope } from "@/store/paletteStore";
 
 type AddTerminalOptions = AddPanelOptions;
 
@@ -71,7 +72,8 @@ export interface ActionCallbacks {
   onOpenProjectSwitcherPalette: () => void;
   onConfirmCloseActiveProject: (projectId: string) => void;
   onOpenActionPalette: () => void;
-  onOpenQuickSwitcher: () => void;
+  /** Open the quick switcher; scoped, e.g. to the active worktree's files, when `scope` is given. */
+  onOpenQuickSwitcher: (scope?: QuickSwitcherScope) => void;
   onOpenShortcuts: () => void;
   onLaunchAgent: (
     agentId: string,

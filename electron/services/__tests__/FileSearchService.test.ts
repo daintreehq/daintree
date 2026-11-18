@@ -195,6 +195,53 @@ describe("FileSearchService", () => {
     expect(result).toEqual(["a.ts", "src/", "README.md"]);
   });
 
+  describe("files only", () => {
+    it("fills the limit with files when short folder names would crowd them out", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "a/x/deep-file.ts\0b/y/deep-file.ts\0top-level-file.ts\0");
+      const service = await createService();
+
+      expect(await service.search({ cwd: dir, query: "", limit: 3 })).toEqual(["a/", "b/", "a/x/"]);
+      expect(await service.search({ cwd: dir, query: "", limit: 3, filesOnly: true })).toEqual([
+        "a/x/deep-file.ts",
+        "b/y/deep-file.ts",
+        "top-level-file.ts",
+      ]);
+    });
+
+    it("fills an empty query's page with files past more than a page of folders", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      const listing = Array.from(
+        { length: 120 },
+        (_, i) => `d${String(i).padStart(3, "0")}/a-much-longer-file-name.ts`
+      );
+      gitRepo(dir, `${listing.join("\0")}\0`);
+      const service = await createService();
+
+      const page = await service.search({ cwd: dir, query: "", limit: 5, filesOnly: true });
+      expect(page).toEqual(listing.slice(0, 5));
+    });
+
+    it("leaves folders out of a typed search, and the next search still finds them", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "docs/docs-index.md\0docs/guide/docs-guide.md\0");
+      const service = await createService();
+
+      // A folder would take the one slot without filesOnly.
+      expect(await service.search({ cwd: dir, query: "doc", limit: 1 })).toEqual(["docs/"]);
+      service.invalidate(dir);
+      const files = await service.search({ cwd: dir, query: "doc", limit: 1, filesOnly: true });
+      expect(files).toHaveLength(1);
+      expect(files[0]?.endsWith("/")).toBe(false);
+      // "docs" narrows from the files-only search's candidates.
+      const all = await service.search({ cwd: dir, query: "docs", limit: 10 });
+      expect(all).toContain("docs/");
+    });
+  });
+
   describe("empty-query ranking", () => {
     const collator = new Intl.Collator();
 

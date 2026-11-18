@@ -63,10 +63,14 @@ import { QuickSwitcher } from "./QuickSwitcher";
 import type { PluginSearchProviderInfo } from "@shared/types/plugin";
 
 const NO_SCOPE = {
+  isFiltering: false,
   scopedProvider: null,
   keywordProvider: null,
   scopedStatus: "idle" as const,
   enterScope: () => {},
+  fileScope: null,
+  isFileKeyword: false,
+  enterFileScope: () => {},
   exitScope: () => {},
 };
 
@@ -372,5 +376,124 @@ describe("QuickSwitcher plugin search scope", () => {
     expect(option.textContent).toContain("from Notes");
     expect(option.querySelector('[data-testid="kind-icon-notebook"]')).not.toBeNull();
     expect(screen.getByText("to open")).toBeTruthy();
+  });
+});
+
+function fileRow(relativePath: string, changed: boolean): QuickSwitcherItemData {
+  const slash = relativePath.lastIndexOf("/");
+  return {
+    id: `file:${relativePath}`,
+    type: "file",
+    title: relativePath.slice(slash + 1),
+    subtitle: slash > 0 ? relativePath.slice(0, slash) : undefined,
+    file: { rootPath: "/repo", relativePath, absolutePath: `/repo/${relativePath}`, changed },
+  };
+}
+
+describe("QuickSwitcher file scope", () => {
+  it("scopes to files when Tab is pressed on the files keyword", () => {
+    const enterFileScope = vi.fn();
+    const enterScope = vi.fn();
+    renderScoped({
+      query: "files",
+      results: [terminalItem],
+      totalResults: 1,
+      isFileKeyword: true,
+      enterFileScope,
+      enterScope,
+    });
+    expect(screen.getByText("to search files")).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" });
+    expect(enterFileScope).toHaveBeenCalledTimes(1);
+    expect(enterScope).not.toHaveBeenCalled();
+  });
+
+  it("names the worktree once on the chip and lists changed files under their own band", () => {
+    renderScoped({
+      fileScope: { worktreeName: "feature-x", failed: false },
+      results: [fileRow("src/deep/new.ts", true), fileRow("README.md", true)],
+      totalResults: 2,
+    });
+    expect(screen.getByText("Files in feature-x")).toBeTruthy();
+    const options = within(screen.getByRole("listbox")).getAllByRole("option");
+    expect(options[0]?.textContent).toBe("Changed files");
+    // Read whole, a row's name says its full path in order.
+    expect(options.slice(1).map((el) => el.getAttribute("aria-label"))).toEqual([
+      "src/deep/new.ts",
+      "README.md",
+    ]);
+    expect(options[1]?.textContent).toContain("src/deep");
+    expect(screen.getByText("to open file")).toBeTruthy();
+    expect(screen.getByText("to open in editor")).toBeTruthy();
+  });
+
+  it("opens in the editor with the platform modifier, from Enter and from a click", () => {
+    const confirmSelection = vi.fn();
+    const selectItem = vi.fn();
+    const row = fileRow("src/bar.ts", false);
+    renderScoped({
+      query: "bar",
+      fileScope: { worktreeName: "main", failed: false },
+      results: [row],
+      totalResults: 1,
+      confirmSelection,
+      selectItem,
+    });
+    // jsdom is not a Mac, so the modifier is Ctrl.
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", ctrlKey: true });
+    expect(confirmSelection).toHaveBeenLastCalledWith(true);
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    expect(confirmSelection).toHaveBeenLastCalledWith(false);
+    fireEvent.click(screen.getByRole("option", { name: "src/bar.ts" }), { ctrlKey: true });
+    expect(selectItem).toHaveBeenLastCalledWith(row, true);
+    fireEvent.click(screen.getByRole("option", { name: "src/bar.ts" }));
+    expect(selectItem).toHaveBeenLastCalledWith(row, false);
+  });
+
+  it("keeps Backspace for editing while the field has text, even at its start", () => {
+    const exitScope = vi.fn();
+    const { rerender } = renderScoped({
+      query: "bar",
+      fileScope: { worktreeName: "main", failed: false },
+      exitScope,
+    });
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    input.setSelectionRange(0, 0);
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(exitScope).not.toHaveBeenCalled();
+
+    rerender(
+      <QuickSwitcher
+        isOpen
+        query=""
+        results={[]}
+        totalResults={0}
+        selectedIndex={0}
+        isLoading={false}
+        matchesById={new Map()}
+        close={() => {}}
+        setQuery={() => {}}
+        setSelectedIndex={() => {}}
+        selectPrevious={() => {}}
+        selectNext={() => {}}
+        selectItem={() => {}}
+        confirmSelection={() => {}}
+        {...NO_SCOPE}
+        fileScope={{ worktreeName: "main", failed: false }}
+        exitScope={exitScope}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Backspace" });
+    expect(exitScope).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["", "readme"])("asks for a worktree when none is shown (query %j)", (query) => {
+    renderScoped({ query, fileScope: { worktreeName: null, failed: false } });
+    expect(screen.getByText("Select a worktree to search its files")).toBeTruthy();
+  });
+
+  it("says the search failed rather than that nothing matched", () => {
+    renderScoped({ query: "bar", fileScope: { worktreeName: "main", failed: true } });
+    expect(screen.getByText("Couldn't search files right now")).toBeTruthy();
   });
 });
