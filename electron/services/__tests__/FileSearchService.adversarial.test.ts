@@ -68,9 +68,13 @@ function writeFile(filePath: string): void {
   fs.writeFileSync(filePath, "x", "utf8");
 }
 
-// `broken` is an entry whose type probe throws a non-errno error: a bug in the
-// walker's own loop rather than a failing disk.
+// `broken` is an entry whose type probe throws, carrying a string `code` the way
+// Node's own argument errors do: a bug in the walker's loop, not a failing read.
 type FakeEntry = { name: string; kind: "file" | "dir" | "broken" };
+
+function brokenEntryError(): Error {
+  return Object.assign(new TypeError("entry type unreadable"), { code: "ERR_INVALID_ARG_TYPE" });
+}
 
 interface FakeDirTally {
   /** Entries handed to the walker, which is all a lazy handle ever produces. */
@@ -83,7 +87,7 @@ interface FakeDirTally {
 // so `pulled` is exactly the number of directory entries the walk consumed.
 function createFakeDir(
   entries: Iterable<FakeEntry>,
-  options: { failAfter?: number } = {}
+  options: { failAfter?: number; failWith?: Error } = {}
 ): { dir: unknown; tally: FakeDirTally } {
   const tally: FakeDirTally = { pulled: 0, closed: 0 };
   const dir = {
@@ -91,17 +95,17 @@ function createFakeDir(
       try {
         for (const entry of entries) {
           if (options.failAfter !== undefined && tally.pulled >= options.failAfter) {
-            throw Object.assign(new Error("read failed"), { code: "EIO" });
+            throw options.failWith ?? Object.assign(new Error("read failed"), { code: "EIO" });
           }
           tally.pulled++;
           yield {
             name: entry.name,
             isFile: () => {
-              if (entry.kind === "broken") throw new TypeError("entry type unreadable");
+              if (entry.kind === "broken") throw brokenEntryError();
               return entry.kind === "file";
             },
             isDirectory: () => {
-              if (entry.kind === "broken") throw new TypeError("entry type unreadable");
+              if (entry.kind === "broken") throw brokenEntryError();
               return entry.kind === "dir";
             },
           };
@@ -315,35 +319,43 @@ describe("FileSearchService adversarial", () => {
     );
   });
 
-  it("keeps what a failing directory read already produced and carries on", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
-    tempDirs.push(dir);
-    createStrictExitGitMock.mockReturnValue(createGitClient());
+  // The second is what a wrapped filesystem layer (Electron's asar support, for
+  // one) throws from inside a read: no errno code, still the disk's failure.
+  it.each([
+    ["an errno error", Object.assign(new Error("read failed"), { code: "EIO" })],
+    ["an error without a code", new Error("Invalid package")],
+  ])(
+    "keeps what a directory read already produced when it fails with %s, and carries on",
+    async (_label, failure) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
+      tempDirs.push(dir);
+      createStrictExitGitMock.mockReturnValue(createGitClient());
 
-    const root = createFakeDir(
-      [
-        { name: "kept.txt", kind: "file" },
-        { name: "sub", kind: "dir" },
-        { name: "lost.txt", kind: "file" },
-      ],
-      { failAfter: 2 }
-    );
-    const sub = createFakeDir([{ name: "inner.txt", kind: "file" }]);
-    stubOpendir(
-      new Map<string, unknown>([
-        [dir, root.dir],
-        [path.join(dir, "sub"), sub.dir],
-      ])
-    );
+      const root = createFakeDir(
+        [
+          { name: "kept.txt", kind: "file" },
+          { name: "sub", kind: "dir" },
+          { name: "lost.txt", kind: "file" },
+        ],
+        { failAfter: 2, failWith: failure }
+      );
+      const sub = createFakeDir([{ name: "inner.txt", kind: "file" }]);
+      stubOpendir(
+        new Map<string, unknown>([
+          [dir, root.dir],
+          [path.join(dir, "sub"), sub.dir],
+        ])
+      );
 
-    const service = await createService();
-    const result = await service.search({ cwd: dir, query: "", limit: 10 });
+      const service = await createService();
+      const result = await service.search({ cwd: dir, query: "", limit: 10 });
 
-    expect([...result].sort()).toEqual(["kept.txt", "sub/", "sub/inner.txt"]);
-    expect(root.tally).toEqual({ pulled: 2, closed: 1 });
-    expect(sub.tally).toEqual({ pulled: 1, closed: 1 });
-    expect(logWarnMock).not.toHaveBeenCalled();
-  });
+      expect([...result].sort()).toEqual(["kept.txt", "sub/", "sub/inner.txt"]);
+      expect(root.tally).toEqual({ pulled: 2, closed: 1 });
+      expect(sub.tally).toEqual({ pulled: 1, closed: 1 });
+      expect(logWarnMock).not.toHaveBeenCalled();
+    }
+  );
 
   it("serves and caches no partial index when the walk's own loop throws", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));

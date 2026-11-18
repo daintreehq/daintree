@@ -1,5 +1,5 @@
 import * as fs from "fs/promises";
-import type { Dir } from "fs";
+import type { Dir, Dirent } from "fs";
 import * as path from "path";
 import { createStrictExitGit } from "../utils/hardenedGit.js";
 import { Cache } from "../utils/cache.js";
@@ -400,12 +400,26 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
       continue;
     }
 
-    // Iterating the handle closes it when the loop ends, whether by exhaustion,
-    // the cap `break` or a read error, so nothing here closes it again. Entries
-    // are on disk order, not the name order `readdir` sorts into: only a capped
-    // walk can tell, and it keeps whichever entries the filesystem lists first.
+    // The handle's iterator closes the handle when it finishes or is returned, so
+    // nothing here calls `close`. Entries are on disk order, not the name order
+    // `readdir` sorts into: only a capped walk can tell, and it keeps whichever
+    // entries the filesystem lists first.
+    const entries = handle[Symbol.asyncIterator]();
     try {
-      for await (const entry of handle) {
+      while (true) {
+        let step: IteratorResult<Dirent>;
+        try {
+          step = await entries.next();
+        } catch {
+          // A read that fails part-way, whatever the error, keeps the entries
+          // already taken from it. Only the read is guarded: an error thrown by
+          // the body below is a bug here, and rejects instead of caching a
+          // silently partial index.
+          break;
+        }
+        if (step.done) break;
+        const entry = step.value;
+
         if (FALLBACK_SKIP_NAMES.has(entry.name)) continue;
         const absolute = path.join(dir, entry.name);
         const relative = path.relative(cwd, absolute);
@@ -424,11 +438,15 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
         results.push(relativePosix);
         if (results.length >= MAX_FALLBACK_FILES) break;
       }
-    } catch (error) {
-      // A read that fails part-way keeps the entries already taken from it.
-      // Only errno errors are the disk's: anything else is a bug in this loop
-      // and must reject rather than cache a silently partial index.
-      if (typeof (error as NodeJS.ErrnoException)?.code !== "string") throw error;
+    } finally {
+      // Closes the handle on the cap break or a throwing body; after exhaustion
+      // or a failed read the iterator has already finished and this does nothing.
+      try {
+        await entries.return?.();
+      } catch {
+        // A close that fails leaves nothing to recover, and must not replace the
+        // error of the body that was already unwinding.
+      }
     }
   }
 
