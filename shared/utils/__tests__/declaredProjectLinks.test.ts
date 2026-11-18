@@ -176,7 +176,7 @@ describe("declaredLinksFromPyproject (#17254)", () => {
     ]);
   });
 
-  it("skips values that aren't http(s) addresses, and labels with nothing to show", () => {
+  it("skips values that aren't http(s) addresses, and names a blank label's link by its host", () => {
     expect(
       declaredLinksFromPyproject({
         project: {
@@ -185,12 +185,15 @@ describe("declaredLinksFromPyproject (#17254)", () => {
             Chat: "irc://irc.libera.chat/widget",
             Funding: 42,
             Changelog: ["https://acme.dev/changes"],
-            "  ": "https://acme.dev/blank",
+            "  ": "https://www.acme.dev/blank",
             Homepage: "https://jo:s3cret@acme.dev",
           },
         },
       })
-    ).toEqual([{ source: "pyproject.toml", title: "Homepage", url: "https://acme.dev/" }]);
+    ).toEqual([
+      { source: "pyproject.toml", title: "acme.dev", url: "https://www.acme.dev/blank" },
+      { source: "pyproject.toml", title: "Homepage", url: "https://acme.dev/" },
+    ]);
   });
 
   it("names a link on one line, within a saved link's name length", () => {
@@ -211,11 +214,15 @@ describe("declaredLinksFromPyproject (#17254)", () => {
       declaredLinksFromPyproject({ project: { urls: { [label]: "https://acme.dev/a" } } })[0]
         ?.title;
     expect(titleOf(`Docs ${"x".repeat(100_000)}`)).toBe(`Docs ${"x".repeat(74)}\u2026`);
-    // Past the part it reads, there is more to the name than it shows.
-    expect(titleOf(`Docs${" ".repeat(316)}Hidden`)).toBe("Docs\u2026");
-    expect(titleOf(`${" ".repeat(400)}Docs`)).toBe("Docs");
+    // All of a label within the part read is named in full.
+    expect(titleOf(`Docs${" ".repeat(313)}End`)).toBe("Docs End");
+    // Past that part, there is more to the name than it shows.
+    expect(titleOf(`Docs${" ".repeat(400)}`)).toBe("Docs\u2026");
     // A pair split where the reading stops leaves nothing of itself behind.
     expect(titleOf(`Docs${" ".repeat(315)}\u{1F600}x`)).toBe("Docs\u2026");
+    // Nothing to show in the part read: the link keeps its place, named by its host.
+    expect(titleOf(`${" ".repeat(400)}Docs`)).toBe("acme.dev");
+    expect(titleOf(`${String.fromCharCode(0x7f)}${" ".repeat(400)}Docs`)).toBe("acme.dev");
   });
 
   it("lists an address two labels share once, under the first", () => {
@@ -304,7 +311,10 @@ describe("declaredLinksFromCargoToml (#17254)", () => {
     expect(
       declaredLinksFromCargoToml({
         package: { homepage: "https://package.acme.dev" },
-        project: { homepage: "https://project.acme.dev" },
+        project: {
+          homepage: "https://project.acme.dev",
+          repository: "https://github.com/acme/project",
+        },
       })
     ).toEqual([{ source: "Cargo.toml", title: "Homepage", url: "https://package.acme.dev/" }]);
   });
@@ -414,7 +424,7 @@ describe("declaredLinksFromBackstageCatalog (#17254)", () => {
     expect(
       declaredLinksFromBackstageCatalog([
         { metadata: { links: [shared, repeat] } },
-        { metadata: { links: [shared] } },
+        { metadata: { links: [repeat, shared] } },
       ])
     ).toEqual([{ source: "catalog-info.yaml", title: "Runbook", url: "https://acme.dev/runbook" }]);
     expect(later).not.toHaveBeenCalled();

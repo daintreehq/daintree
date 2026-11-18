@@ -576,10 +576,12 @@ describe("projectClient.getDeclaredLinks (#17254)", () => {
     const links = [
       { source: "package.json", title: "Homepage", url: "https://widget.example.dev/" },
       { source: "Cargo.toml", title: "Documentation", url: "https://docs.rs/widget" },
+      // A newer host may read a manifest this build doesn't know.
+      { source: "composer.json", title: "Support", url: "https://support.example.dev/" },
     ];
     getDeclaredMock.mockResolvedValue(structuredClone(links));
-    await expect(client.getDeclaredLinks("p1")).resolves.toEqual(links);
-    expect(getDeclaredMock).toHaveBeenCalledWith({ projectId: "p1" });
+    await expect(client.getDeclaredLinks("p2")).resolves.toEqual(links);
+    expect(getDeclaredMock.mock.calls).toEqual([[{ projectId: "p2" }]]);
   });
 
   it("puts the links from a host that names no source under package.json, the one file it read", async () => {

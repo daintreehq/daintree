@@ -381,18 +381,18 @@ describe("links launcher button", () => {
   });
 
   it("shows the links of a manifest this build doesn't know under that file's name (#17254)", async () => {
-    // A newer Remote Host may read a manifest this Shell has never heard of;
+    // A newer Remote Host may read manifests this Shell has never heard of;
     // the answer arrives as plain data, whatever this build's type says.
-    const fromComposer: DeclaredProjectLink = JSON.parse(
-      JSON.stringify({
-        source: "composer.json",
-        title: "Support",
-        url: "https://support.example.dev/",
-      })
-    );
+    const unknown = (source: string, title: string, url: string): DeclaredProjectLink =>
+      JSON.parse(JSON.stringify({ source, title, url }));
     h.links = {
       projectLinks: [],
-      declaredLinks: [fromComposer, CARGO_DOCS, HOMEPAGE],
+      declaredLinks: [
+        unknown("composer.json", "Support", "https://support.example.dev/"),
+        CARGO_DOCS,
+        HOMEPAGE,
+        unknown("mkdocs.yml", "Site", "https://site.example.dev/"),
+      ],
       globalLinks: [],
     };
     render(<LinksLauncherToolbarButton />);
@@ -402,11 +402,20 @@ describe("links launcher button", () => {
     await flush();
 
     // In the order the host listed the files, which is the order it reads them in.
-    expect(headings()).toEqual(["From composer.json", "From Cargo.toml", "From package.json"]);
-    expect(rows().map(describeRow)[0]).toEqual({
-      name: "Support",
-      description: "support.example.dev, declared in the project's composer.json",
-    });
+    expect(headings()).toEqual([
+      "From composer.json",
+      "From Cargo.toml",
+      "From package.json",
+      "From mkdocs.yml",
+    ]);
+    const described = rows().map(describeRow);
+    expect([described[0], described[3]]).toEqual([
+      {
+        name: "Support",
+        description: "support.example.dev, declared in the project's composer.json",
+      },
+      { name: "Site", description: "site.example.dev, declared in the project's mkdocs.yml" },
+    ]);
   });
 
   it("shows a project whose only links are declared ones without the empty state", async () => {

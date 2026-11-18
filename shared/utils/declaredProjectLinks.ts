@@ -98,10 +98,9 @@ const MAX_TITLE_SCAN = MAX_PROJECT_LINK_TITLE_LENGTH * 4;
  */
 function linkTitle(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const text = value.trimStart();
-  const clipped = text.length > MAX_TITLE_SCAN;
+  const clipped = value.length > MAX_TITLE_SCAN;
   let line = "";
-  for (const char of clipped ? text.slice(0, MAX_TITLE_SCAN) : text) {
+  for (const char of clipped ? value.slice(0, MAX_TITLE_SCAN) : value) {
     const code = char.codePointAt(0) ?? 0;
     line += code < 0x20 || (code >= 0x7f && code < 0xa0) ? " " : char;
   }
@@ -112,6 +111,11 @@ function linkTitle(value: unknown): string | null {
   // Never end on half of a surrogate pair.
   if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
   return `${cut.trimEnd()}…`;
+}
+
+/** The name the file gives a link, or its host when that name has nothing to show. */
+function titleOrHost(name: unknown, url: string): string {
+  return linkTitle(name) ?? linkTitle(linkHost(url)) ?? url;
 }
 
 /** An address listed twice is shown once, under the first name it was given. */
@@ -143,7 +147,8 @@ export function declaredLinksFromPackageJson(manifest: unknown): DeclaredProject
 
 /**
  * The links a pyproject.toml lists in `[project.urls]`, from its parsed
- * contents, in the file's order and named by their labels.
+ * contents, in the file's order and named by their labels; a blank label
+ * names the link by its host.
  */
 export function declaredLinksFromPyproject(manifest: unknown): DeclaredProjectLink[] {
   const urls = asRecord(asRecord(asRecord(manifest)?.project)?.urls);
@@ -151,9 +156,8 @@ export function declaredLinksFromPyproject(manifest: unknown): DeclaredProjectLi
   const links: DeclaredProjectLink[] = [];
   for (const [label, value] of Object.entries(urls)) {
     if (typeof value !== "string") continue;
-    const title = linkTitle(label);
     const url = plainUrl(value);
-    if (title !== null && url !== null) links.push({ source: "pyproject.toml", title, url });
+    if (url !== null) links.push({ source: "pyproject.toml", title: titleOrHost(label, url), url });
   }
   return uniqueByUrl(links);
 }
@@ -215,8 +219,7 @@ export function declaredLinksFromBackstageCatalog(
       // A link listed again, often through an alias, is shown once, under its first name.
       if (url === null || seen.has(url)) continue;
       seen.add(url);
-      const title = linkTitle(fields.title) ?? linkTitle(linkHost(url)) ?? url;
-      links.push({ source: "catalog-info.yaml", title, url });
+      links.push({ source: "catalog-info.yaml", title: titleOrHost(fields.title, url), url });
     }
   }
   return links;
