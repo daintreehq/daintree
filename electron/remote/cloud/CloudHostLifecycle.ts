@@ -76,7 +76,7 @@ import {
 } from "./provider.js";
 import { lifetimeRenewalDue, stopUnderWay } from "./lifetimeRenewal.js";
 import type { CloudGuestPowerOff } from "./CloudGuestPowerOff.js";
-import type { CloudMachineKeys } from "./CloudMachineKeys.js";
+import { awaitsRevoke, type CloudMachineKeys } from "./CloudMachineKeys.js";
 
 /** How often a machine is asked about while Daintree changes it. */
 const TRANSITION_POLL_MS = 3_000;
@@ -523,6 +523,7 @@ export class CloudHostLifecycle {
   private lastTicket = 0;
   private readonly observedTicket = new Map<string, number>();
   private stopWatchingHosts: (() => void) | null = null;
+  private stopWatchingStore: (() => void) | null = null;
   private disposed = false;
 
   constructor(private readonly deps: CloudHostLifecycleDeps) {}
@@ -546,22 +547,49 @@ export class CloudHostLifecycle {
 
   /** Begins background observation and reconciles what a previous run left unfinished. */
   start(): void {
+    this.stopWatchingStore = this.deps.store.onChange(() => this.armTimers());
+    this.armTimers();
     this.stopWatchingHosts = this.deps.hosts.onChange(() => void this.dropOrphanBindings());
     void this.dropOrphanBindings();
-    this.pollTimer = setInterval(() => void this.pollDue(), 5_000);
-    this.pollTimer.unref?.();
-    this.keeperTimer = setInterval(() => {
-      void this.renewDue();
-      void this.deps.machineKeys?.tick();
-      void this.deps.guestPowerOff?.tick();
-    }, KEEPER_INTERVAL_MS);
-    this.keeperTimer.unref?.();
     this.markInterruptedCreates();
     void this.reconcileUnfinishedCreates();
     this.stopWatchingWorktrees =
       this.deps.onWorktreeRemoved?.((worktreeId) => void this.worktreeRemoved(worktreeId)) ?? null;
     this.resumeDueCleanups();
     void this.reconcileWaitingCleanups();
+  }
+
+  /**
+   * Each timer runs only while it has work: the poll while a machine is bound
+   * to a host, the keeper too while a key is left to revoke. A device with no
+   * cloud machine wakes for neither (#17795).
+   */
+  private armTimers(): void {
+    if (this.disposed) return;
+    const machines = this.deps.store
+      .bindings()
+      .some((binding) => Boolean(binding.resourceId && binding.hostId));
+    const keeper =
+      machines ||
+      (this.deps.machineKeys !== undefined && this.deps.store.machineKeys().some(awaitsRevoke));
+    if (machines && !this.pollTimer) {
+      this.pollTimer = setInterval(() => void this.pollDue(), 5_000);
+      this.pollTimer.unref?.();
+    } else if (!machines && this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    if (keeper && !this.keeperTimer) {
+      this.keeperTimer = setInterval(() => {
+        void this.renewDue();
+        void this.deps.machineKeys?.tick();
+        void this.deps.guestPowerOff?.tick();
+      }, KEEPER_INTERVAL_MS);
+      this.keeperTimer.unref?.();
+    } else if (!keeper && this.keeperTimer) {
+      clearInterval(this.keeperTimer);
+      this.keeperTimer = null;
+    }
   }
 
   /**
@@ -585,8 +613,11 @@ export class CloudHostLifecycle {
 
   dispose(): void {
     this.disposed = true;
+    this.stopWatchingStore?.();
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.keeperTimer) clearInterval(this.keeperTimer);
+    this.pollTimer = null;
+    this.keeperTimer = null;
     this.stopWatchingHosts?.();
     this.stopWatchingWorktrees?.();
     for (const operation of this.operations.values()) operation.controller.abort();
