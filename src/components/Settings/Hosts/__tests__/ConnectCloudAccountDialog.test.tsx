@@ -154,7 +154,7 @@ describe("ConnectCloudAccountDialog for a plugin's provider", () => {
     expect(terms).toHaveLength(3);
     expect(terms[0]).toMatch(/credentials you enter/);
     // Connecting also resumes any of its accounts already saved here.
-    expect(terms[0]).toMatch(/saved for any of its accounts/);
+    expect(terms[0]).toMatch(/once you connect, those saved for any of its accounts/);
     expect(terms[1]).toMatch(/machines Daintree connects to.*vouches for their identity/);
     expect(terms[2]).toMatch(/bill your own account/);
     // The plugin's other providers are named as covered too.
@@ -256,6 +256,9 @@ describe("ConnectCloudAccountDialog for a plugin's provider", () => {
         provider={fromPlugin(GCE, { fingerprint: "fp-2" })}
         replacing={summary()}
       />
+    );
+    expect(screen.getByTestId("cloud-provider-consent-terms").textContent).toMatch(
+      /once they replace the old ones/
     );
     fireEvent.click(button("Allow and continue"));
     chooseFile("cloud-account-credential-keyFile", new File([KEY_FILE_TEXT], "new-key.json"));

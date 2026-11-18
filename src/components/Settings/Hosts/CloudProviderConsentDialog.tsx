@@ -8,7 +8,7 @@ interface CloudProviderConsentDialogProps {
   provider: CloudProviderInfo;
   plugin: CloudProviderPluginConsent;
   /** Connecting an account, or allowing a plugin whose saved accounts are paused. */
-  purpose: "connect" | "review";
+  purpose: "connect" | "replace" | "review";
   onAllow: () => void;
   busy?: boolean;
   error?: string | null;
@@ -55,7 +55,9 @@ export function CloudProviderConsentDialog({
             <li>
               {purpose === "review"
                 ? "Receives the credentials saved for its accounts on this device"
-                : "Receives the credentials you enter, including when you check them, and once you connect, those saved for any of its accounts on this device"}
+                : purpose === "replace"
+                  ? "Receives the credentials you enter, and once they replace the old ones, those saved for any of its accounts on this device"
+                  : "Receives the credentials you enter, including when you check them, and once you connect, those saved for any of its accounts on this device"}
             </li>
             <li>Chooses the machines Daintree connects to, and vouches for their identity</li>
             <li>Creates machines that bill your own account</li>

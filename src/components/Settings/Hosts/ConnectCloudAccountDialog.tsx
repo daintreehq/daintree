@@ -395,7 +395,7 @@ function ConnectCloudAccountForm({
         onClose={onClose}
         provider={provider}
         plugin={plugin}
-        purpose="connect"
+        purpose={replacing ? "replace" : "connect"}
         onAllow={() => setAgreed(plugin.fingerprint)}
       />
     );
