@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import type { LogEntry } from "@shared/types";
 import { LogsContent } from "../LogsContent";
+import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
 import { useLogsStore } from "@/store";
 
 vi.mock("../../Logs/LogFilters", () => ({
@@ -401,5 +402,48 @@ describe("LogsContent — auto-scroll follows the toggle and the scroll position
     reportBottom(true);
 
     expect(useLogsStore.getState().autoScroll).toBe(false);
+  });
+});
+
+describe("LogsContent — first-read skeleton onset", () => {
+  beforeEach(() => {
+    mockGetAll.mockReset().mockResolvedValue([]);
+    mockGetSources.mockReset().mockResolvedValue([]);
+    useLogsStore.setState({ logs: [], filters: {}, autoScroll: true, expandedIds: new Set() });
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("paints no loading rows when the read settles inside the onset gate", async () => {
+    const { queryByRole } = render(<LogsContent />);
+    expect(queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS - 1);
+    });
+    expect(queryByRole("status")).toBeNull();
+  });
+
+  it("paints the loading rows once a slow read crosses the onset gate", async () => {
+    mockGetAll.mockReturnValue(new Promise(() => {}));
+    const { queryByRole, getByRole } = render(<LogsContent />);
+    expect(queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
+    expect(getByRole("status").getAttribute("aria-label")).toBe("Loading logs");
+  });
+
+  it("keeps captured rows visible and paints no skeleton while a refresh is in flight", async () => {
+    mockGetAll.mockReturnValue(new Promise(() => {}));
+    useLogsStore.setState({ logs: [makeLog("a")] });
+    const { queryByRole, queryByTestId } = render(<LogsContent />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS * 3);
+    });
+    expect(queryByTestId("virtuoso")?.getAttribute("data-count")).toBe("1");
+    expect(queryByRole("status")).toBeNull();
   });
 });
