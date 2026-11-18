@@ -223,6 +223,28 @@ describe("startSleepWait", () => {
     expect(sleepProjectMock).not.toHaveBeenCalled();
   });
 
+  it("holds a project whose hidden assistant the counts report working, whatever the read shows", async () => {
+    useProjectStatsStore.setState({
+      stats: { a: stats({ processCount: 1, assistantState: "working" }) },
+    });
+    terminals = [agent("s1", "a", { detectedAgentId: undefined, agentState: undefined })];
+    await startSleepWait(["a"], { pauseNote: false });
+    await advance(SLEEP_WAIT_DWELL_MS * 3);
+
+    expect(statusOf("a")).toBe("waiting");
+    expect(sleepProjectMock).not.toHaveBeenCalled();
+  });
+
+  it("reads a project with a live assistant but an empty read as unavailable", async () => {
+    useProjectStatsStore.setState({ stats: { a: stats({ assistantState: "idle" }) } });
+    terminals = [];
+    await startSleepWait(["a"], { pauseNote: false });
+    await advance(SLEEP_WAIT_DWELL_MS * 3);
+
+    expect(statusOf("a")).toBe("unavailable");
+    expect(sleepProjectMock).not.toHaveBeenCalled();
+  });
+
   it("sleeps a project whose only process is one the terminal list never shows", async () => {
     // A dev preview counts as a process but isn't a terminal.
     useProjectStatsStore.setState({ stats: { a: stats({ processCount: 1 }) } });
@@ -344,6 +366,17 @@ describe("startSleepWait", () => {
     terminals = [agent("a1", "a", { agentState: "working" }), agent("b1", "b")];
     await startSleepWait(["a", "b"], { pauseNote: false });
     shown = [{ projectId: "a", state: "foreground" }];
+
+    await sleepWaitingNow();
+
+    expect(sleepProjectMock.mock.calls.map(([id]) => id)).toEqual(["b"]);
+  });
+
+  it("still spares a returned project on Sleep now when the terminal list can't be read", async () => {
+    terminals = [agent("a1", "a", { agentState: "working" }), agent("b1", "b")];
+    await startSleepWait(["a", "b"], { pauseNote: false });
+    shown = [{ projectId: "a", state: "foreground" }];
+    getAllMock.mockRejectedValue(new Error("host stalled"));
 
     await sleepWaitingNow();
 

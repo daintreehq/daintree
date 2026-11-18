@@ -106,7 +106,7 @@ function ProjectSleepWaitDialogInner() {
       }
       hint={
         timedOut
-          ? `Not every project has read as settled after ${minutes} minutes. Nothing sleeps until you choose.`
+          ? `The wait has reached ${minutes} minutes. Nothing sleeps until you choose.`
           : undefined
       }
     >

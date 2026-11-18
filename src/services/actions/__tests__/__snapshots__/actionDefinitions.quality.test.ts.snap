@@ -4595,7 +4595,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "project",
     "danger": "confirm",
     "dangerRationale": "Stops the terminals and agent processes of every open project. Layout and sessions are kept for the reopen, but anything still running in them is lost.",
-    "description": "Stop the terminals of every open project, after the user confirms a preview naming each one. The user can choose to sleep at once, or to wait until every agent is observed idle or at its prompt, optionally asking working agents to pause first. Layout, scrollback and agent sessions come back on reopen. Only available to the user.",
+    "description": "Stop the terminals of every open project, after the user confirms a preview naming each one. The user can choose to sleep at once, or to wait until every agent is observed idle or waiting for input, optionally asking working agents to pause first. Layout, scrollback and agent sessions come back on reopen. Only available to the user.",
     "examples": undefined,
     "id": "project.sleepAll",
     "keywords": [

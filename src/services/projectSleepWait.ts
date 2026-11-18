@@ -83,16 +83,17 @@ interface Reading {
   shown: Set<string>;
 }
 
-async function readLive(): Promise<Reading> {
-  const [terminals, presence] = await Promise.all([
-    terminalClient.getAll(),
-    projectPresenceClient.getSnapshot(),
-  ]);
-  const shown = new Set(
+async function readShown(): Promise<Set<string>> {
+  const presence = await projectPresenceClient.getSnapshot();
+  return new Set(
     [...presence.thisWindow, ...presence.otherWindows]
       .filter((entry) => entry.state !== "cached")
       .map((entry) => entry.projectId)
   );
+}
+
+async function readLive(): Promise<Reading> {
+  const [terminals, shown] = await Promise.all([terminalClient.getAll(), readShown()]);
   return { terminals, shown };
 }
 
@@ -168,27 +169,38 @@ function observeProject(
       { terminalId: t.id, title: t.title || "Agent", observation, ...(note ? { note } : {}) },
     ];
   });
-  const signature = own
-    .map(
+  // The pushed counts are read alongside: they come from main's own inventory
+  // and carry the project's hidden assistant, which counts leave out.
+  const stats = useProjectStatsStore.getState().stats[id];
+  const assistantState = stats?.assistantState;
+  const assistantLive = assistantState !== undefined && assistantState !== "exited";
+  const assistantBusy =
+    assistantState === "working" ||
+    assistantState === "directing" ||
+    (assistantState === "waiting" &&
+      actionableWaitingReason(stats?.assistantWaitingReason) !== null);
+  const signature = [
+    ...own.map(
       (t) => `${t.id}:${t.agentState}:${t.waitingReason}:${t.lastStateChange}:${t.agentIncarnation}`
-    )
+    ),
+    `assistant:${assistantState}:${stats?.assistantWaitingReason}:${stats?.assistantStateSince}`,
+  ]
     .sort()
     .join("|");
   // A host shard that didn't answer reads as no terminals, which must not pass
-  // for a quiet project; nor may a working agent the read missed, which the
-  // pushed counts still carry. Agents, not processes: a dev preview counts as
-  // a process but is never in the terminal list.
-  const stats = useProjectStatsStore.getState().stats[id];
+  // for a quiet project when the counts know of agents there. Agents, not
+  // processes: a dev preview counts as a process but is never in the list.
   const countedAgents =
     (stats?.activeAgentCount ?? 0) +
     (stats?.waitingAgentCount ?? 0) +
     (stats?.blockedAgentCount ?? 0);
-  if (countedAgents > 0 && own.length === 0) {
+  if ((countedAgents > 0 || assistantLive) && own.length === 0) {
     return { status: "unavailable", agents, settled: false, signature };
   }
   const settled =
     (stats?.activeAgentCount ?? 0) === 0 &&
     (stats?.blockedAgentCount ?? 0) === 0 &&
+    !assistantBusy &&
     agents.every((a) => !observationBlocksSleep(a.observation));
   return { status: "waiting", agents, settled, signature };
 }
@@ -258,20 +270,36 @@ async function turnVerdict(
   id: string,
   force: boolean
 ): Promise<"sleep" | "left-open" | "gone"> {
+  if (force) return forcedVerdict(run, id);
   let reading: Reading;
   try {
     reading = await readLive();
   } catch {
-    return force ? "sleep" : "left-open";
+    return "left-open";
   }
   const observed = observeProject(run, id, reading);
   if (observed === "left-open" || observed === "gone") return observed;
-  if (force) return "sleep";
   const unchanged =
     observed.status === "waiting" &&
     observed.settled &&
     observed.signature === run.trackers.get(id)!.signature;
   return unchanged ? "sleep" : "left-open";
+}
+
+/**
+ * Sleep now asks nothing of the agents, so only presence is read: a terminal
+ * listing that fails or lags must not cost the check that the user came back.
+ */
+async function forcedVerdict(run: ActiveRun, id: string): Promise<"sleep" | "left-open" | "gone"> {
+  const project = useProjectStore.getState().projects.find((p) => p.id === id);
+  if (!project || project.status === "closed" || project.status === "missing") return "gone";
+  try {
+    const shown = await readShown();
+    if (shown.has(id) && run.trackers.get(id)!.hiddenSeen) return "left-open";
+  } catch {
+    // Unread presence leaves the forced sleep as the user asked for it.
+  }
+  return "sleep";
 }
 
 /** The project this view shows goes last: sleeping it drops the view to the picker. */
