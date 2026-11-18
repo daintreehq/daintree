@@ -296,7 +296,7 @@ describe("useProjectSwitcherPalette shell re-renders", () => {
     }
   });
 
-  it("snapshots current counts when sleep or remove is asked for while closed", async () => {
+  it("snapshots current counts when remove is asked for while closed", async () => {
     mount();
     await act(async () => {});
     await act(async () => {
@@ -304,12 +304,6 @@ describe("useProjectSwitcherPalette shell re-renders", () => {
         .getState()
         .setStats(withEntry(statsFor(1), "project-4", { processCount: 7, activeAgentCount: 3 }));
     });
-
-    await act(async () => {
-      await latest!.sleepProject("project-4");
-    });
-    expect(latest!.sleepConfirmProject?.processCount).toBe(7);
-    expect(latest!.sleepConfirmProject?.activeAgentCount).toBe(3);
 
     await act(async () => {
       await latest!.removeProject("project-4");

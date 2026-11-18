@@ -383,10 +383,9 @@ export interface UseProjectSwitcherPaletteReturn {
   stopProject: (projectId: string) => Promise<void>;
   removeProject: (projectId: string) => Promise<void>;
   /**
-   * Reclaim a background project's resident memory (renderer + PTYs + workspace
-   * host) while keeping it in the list as `closed` for a non-destructive
-   * reopen. Shows a confirm dialog when the project has live processes, runs
-   * silently otherwise. No-op (with a toast) for the active project.
+   * Close the picker and run `project.sleep`, which keeps the project in the
+   * list as `closed` for a non-destructive reopen. Its confirmation, and the
+   * choice to wait for the agents, is the app-level sleep dialog (#17882).
    */
   sleepProject: (projectId: string) => Promise<void>;
   /**
@@ -413,16 +412,6 @@ export interface UseProjectSwitcherPaletteReturn {
   setRemoveConfirmProject: (project: SearchableProject | null) => void;
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
-  /**
-   * Frozen snapshot of the project pending a Sleep confirmation —
-   * captured at menu-select time so the dialog's process/agent counts don't
-   * drift if agents finish while the dialog is open (lesson #8725). Null when
-   * no confirm is pending (D0 path runs without it).
-   */
-  sleepConfirmProject: SearchableProject | null;
-  setSleepConfirmProject: (project: SearchableProject | null) => void;
-  confirmSleep: () => Promise<void>;
-  isSleepingProject: boolean;
   backgroundWaitingCount: number;
   /**
    * Agent totals across every non-active project, uncapped and independent of

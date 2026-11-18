@@ -1,11 +1,26 @@
+import { useId, useState } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Callout } from "@/components/ui/Callout";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  CHOICE_LABEL_INSET,
+  CHOICE_SELECTED,
+  CHOICE_SHELL,
+  CHOICE_UNSELECTED,
+  RadioChoiceGroup,
+  RadioChoiceRow,
+} from "@/components/ui/RadioChoice";
+import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
+import { SLEEP_PAUSE_NOTE } from "@/services/projectSleepWait";
 import {
   useProjectSleepConfirmStore,
+  type SleepChoice,
   type SleepConfirmProject,
+  type SleepConfirmRequest,
 } from "@/store/projectSleepConfirmStore";
+import { ProjectSleepWaitDialog } from "./ProjectSleepWaitDialog";
 
 /** Rounded, because the reading is an estimate and a precise figure would claim otherwise. */
 export function formatEstimatedMemory(memoryMB: number): string {
@@ -95,21 +110,84 @@ function RestartConfirm({
   );
 }
 
-function ProjectSleepConfirmDialogInner() {
-  const pending = useProjectSleepConfirmStore((s) => s.pendingConfirm);
-  const resolveConfirmation = useProjectSleepConfirmStore((s) => s.resolveConfirmation);
-  if (!pending) return null;
-
-  const { projects, kind } = pending.request;
-  if (kind === "restart") {
-    return (
-      <RestartConfirm
-        project={projects[0]!}
-        onConfirm={() => resolveConfirmation(true)}
-        onCancel={() => resolveConfirmation(false)}
+/**
+ * Sleep now, or once every agent is observed settled (#17882). The pause note
+ * is off by default and only means something for the wait, so it sits under
+ * that choice and is disabled with it.
+ */
+function WhenToSleepChoice({
+  when,
+  pauseNote,
+  onWhen,
+  onPauseNote,
+}: {
+  when: SleepChoice["when"];
+  pauseNote: boolean;
+  onWhen: (when: SleepChoice["when"]) => void;
+  onPauseNote: (pauseNote: boolean) => void;
+}) {
+  const noteId = useId();
+  const noteDetailsId = useId();
+  return (
+    <RadioChoiceGroup legend="When to sleep" legendHidden>
+      <RadioChoiceRow
+        name="sleep-when"
+        value="now"
+        checked={when === "now"}
+        onChange={() => onWhen("now")}
+        label="Sleep now"
+        description="Stops every terminal and agent right away, wherever it is"
       />
-    );
-  }
+      <div className={cn(CHOICE_SHELL, when === "idle" ? CHOICE_SELECTED : CHOICE_UNSELECTED)}>
+        <RadioChoiceRow
+          bare
+          name="sleep-when"
+          value="idle"
+          checked={when === "idle"}
+          onChange={() => onWhen("idle")}
+          label="Sleep when agents are idle"
+          description="Waits until every agent is observed idle or waiting for input. An agent waiting on an approval or a question holds it open."
+        />
+        <div className={cn("flex items-start gap-2 px-3 pb-2.5", CHOICE_LABEL_INSET)}>
+          <Checkbox
+            id={noteId}
+            className="mt-0.5 shrink-0"
+            checked={pauseNote}
+            disabled={when !== "idle"}
+            onCheckedChange={(checked) => onPauseNote(checked === true)}
+            aria-describedby={noteDetailsId}
+            data-sleep-pause-note=""
+          />
+          <div className="min-w-0">
+            <label
+              htmlFor={noteId}
+              className={cn(
+                "block text-sm text-text-primary",
+                when === "idle" ? "cursor-pointer" : "cursor-not-allowed"
+              )}
+            >
+              Ask working agents to pause
+            </label>
+            <div id={noteDetailsId} className="text-xs text-text-secondary">
+              Sends “{SLEEP_PAUSE_NOTE}” once to each agent observed working
+            </div>
+          </div>
+        </div>
+      </div>
+    </RadioChoiceGroup>
+  );
+}
+
+function SleepConfirm({
+  request,
+  onChoose,
+}: {
+  request: SleepConfirmRequest;
+  onChoose: (choice: SleepChoice | null) => void;
+}) {
+  const [when, setWhen] = useState<SleepChoice["when"]>("now");
+  const [pauseNote, setPauseNote] = useState(false);
+  const { projects, kind } = request;
   const single = projects.length === 1;
   const terminalCount = projects.reduce((sum, p) => sum + p.terminalCount, 0);
   const activeAgentCount = projects.reduce((sum, p) => sum + p.activeAgentCount, 0);
@@ -120,19 +198,23 @@ function ProjectSleepConfirmDialogInner() {
   );
   const totalMB = readings.reduce((sum, mb) => sum + mb, 0);
   const unmeasured = projects.length - readings.length;
+  const waitForIdle = request.offerWhenIdle === true && when === "idle";
 
   return (
     <ConfirmDialog
       isOpen={true}
-      onClose={() => resolveConfirmation(false)}
+      onClose={() => onChoose(null)}
       title={
         single
           ? `Sleep '${projects[0]!.name}'?`
-          : `Sleep ${pluralize(projects.length, kind === "idle" ? "idle project" : "project")}?`
+          : `Sleep ${pluralize(
+              projects.length,
+              kind === "idle" ? "idle project" : kind === "all" ? "open project" : "project"
+            )}?`
       }
-      confirmLabel={single ? "Sleep project" : "Sleep projects"}
+      confirmLabel={waitForIdle ? "Sleep when idle" : single ? "Sleep project" : "Sleep projects"}
       cancelLabel="Cancel"
-      onConfirm={() => resolveConfirmation(true)}
+      onConfirm={() => onChoose(waitForIdle ? { when: "idle", pauseNote } : { when: "now" })}
       variant="default"
     >
       <div className="space-y-3">
@@ -157,6 +239,14 @@ function ProjectSleepConfirmDialogInner() {
             </div>
           </Callout>
         )}
+        {request.offerWhenIdle && (
+          <WhenToSleepChoice
+            when={when}
+            pauseNote={pauseNote}
+            onWhen={setWhen}
+            onPauseNote={setPauseNote}
+          />
+        )}
         {showMemory && readings.length > 0 && (
           <div data-sleep-memory-total="" className="text-xs text-text-secondary">
             {unmeasured === 0
@@ -179,21 +269,45 @@ function ProjectSleepConfirmDialogInner() {
   );
 }
 
+function ProjectSleepConfirmDialogInner() {
+  const pending = useProjectSleepConfirmStore((s) => s.pendingConfirm);
+  const requestSeq = useProjectSleepConfirmStore((s) => s.requestSeq);
+  const resolveChoice = useProjectSleepConfirmStore((s) => s.resolveChoice);
+  if (!pending) return null;
+
+  const { projects, kind } = pending.request;
+  if (kind === "restart") {
+    return (
+      <RestartConfirm
+        project={projects[0]!}
+        onConfirm={() => resolveChoice({ when: "now" })}
+        onCancel={() => resolveChoice(null)}
+      />
+    );
+  }
+  // Keyed on the request, so a superseding one starts from "now" again.
+  return <SleepConfirm key={requestSeq} request={pending.request} onChoose={resolveChoice} />;
+}
+
 /**
- * Host for the sleep confirmation `project.sleep` and `project.sleepIdle` await.
- * Mounted app-wide: the palette closes on pick and the memory notice clears on
- * recovery, so a dialog owned by either would unmount under the request.
+ * Host for the sleep confirmation `project.sleep` and `project.sleepIdle` await,
+ * and for the wait a "when idle" choice starts. Mounted app-wide: the palette
+ * closes on pick and the memory notice clears on recovery, so a dialog owned by
+ * either would unmount under the request.
  */
 export function ProjectSleepConfirmDialog() {
   const requestSeq = useProjectSleepConfirmStore((s) => s.requestSeq);
   return (
-    <ErrorBoundary
-      variant="component"
-      componentName="ProjectSleepConfirmDialog"
-      resetKeys={[requestSeq]}
-      onError={() => useProjectSleepConfirmStore.getState().resolveConfirmation(false)}
-    >
-      <ProjectSleepConfirmDialogInner />
-    </ErrorBoundary>
+    <>
+      <ErrorBoundary
+        variant="component"
+        componentName="ProjectSleepConfirmDialog"
+        resetKeys={[requestSeq]}
+        onError={() => useProjectSleepConfirmStore.getState().resolveConfirmation(false)}
+      >
+        <ProjectSleepConfirmDialogInner />
+      </ErrorBoundary>
+      <ProjectSleepWaitDialog />
+    </>
   );
 }

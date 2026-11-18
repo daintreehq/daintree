@@ -204,6 +204,7 @@ export type BuiltInKeyAction =
   | "project.sleep"
   | "project.restart"
   | "project.sleepIdle"
+  | "project.sleepAll"
 
   // Remote Hosts (bound only where Remote Hosts is supported)
   | "host.switch"
@@ -412,6 +413,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "project.sleepAll",
   "host.switch",
   "help.shortcuts",
   "help.shortcutsAlt",
