@@ -338,7 +338,7 @@ describe("panelStatusBuffer — no-op frames", () => {
       lastCommand: "ls",
     });
     seedPanel("t1", {
-      flowStatus: "paused",
+      flowStatus: "paused-backpressure",
       flowStatusTimestamp: 5,
       heldDurationMs: 7,
     });
@@ -355,8 +355,8 @@ describe("panelStatusBuffer — no-op frames", () => {
     usePanelStore.setState({ panelsById: proxied });
 
     enqueueActivityUpdate("t0", "h", "working", "interactive", "ls");
-    enqueueFlowStatusUpdate("t1", "paused", 5);
-    enqueueFlowStatusUpdate("t2", "paused", 9);
+    enqueueFlowStatusUpdate("t1", "paused-backpressure", 5);
+    enqueueFlowStatusUpdate("t2", "paused-backpressure", 9);
     enqueueHeldDurationUpdate("t1", 7);
     clearHeldDuration("t0");
     enqueueActivityUpdate("missing", "h", "working", "interactive", "ls");
@@ -379,12 +379,12 @@ describe("panelStatusBuffer — no-op frames", () => {
 
     enqueueActivityUpdate("t0", "a", "working", "interactive", undefined);
     enqueueActivityUpdate("t1", "b", "working", "interactive", undefined);
-    enqueueFlowStatusUpdate("t0", "paused", 5);
+    enqueueFlowStatusUpdate("t0", "paused-backpressure", 5);
     raf.flushAll();
 
     expect(copies).toBe(1);
     expect(getPtyPanel("t0")?.activityHeadline).toBe("a");
-    expect(getPtyPanel("t0")?.flowStatus).toBe("paused");
+    expect(getPtyPanel("t0")?.flowStatus).toBe("paused-backpressure");
     expect(getPtyPanel("t1")?.activityHeadline).toBe("b");
   });
 });
