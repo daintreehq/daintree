@@ -457,17 +457,18 @@ describe("CloudHostStore accounts", () => {
 
   it("drops a kept console link that isn't a public https URL, and a label missing a name", () => {
     const backend = disk();
-    const label = (overrides: Record<string, unknown>) => ({
+    const label = (id: string, overrides: Record<string, unknown>) => ({
       ...account,
+      id,
       providerId: "acme.clouds.ec2",
       pluginProvider: { pluginName: "Acme Clouds", providerName: "EC2", ...overrides },
     });
     backend.write({
       version: 1,
       accounts: [
-        label({ id: "ca_link000001", dashboardUrl: "javascript:alert(1)" }),
-        label({ id: "ca_link000002", dashboardUrl: "https://user:pw@console.example.com" }),
-        label({ id: "ca_link000003", providerName: "  " }),
+        label("ca_link000001", { dashboardUrl: "javascript:alert(1)" }),
+        label("ca_link000002", { dashboardUrl: "https://user:pw@console.example.com" }),
+        label("ca_link000003", { providerName: "  " }),
       ],
       bindings: [],
     });

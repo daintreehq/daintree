@@ -534,10 +534,14 @@ describe("watchPluginCloudProviders", () => {
       dashboardUrl: "https://console.example.com",
     });
     expect(watch.label("boat")).toBeNull();
+    // The registry's listeners hear of each change from inside it, and already read the label as it now is.
+    const heard: Array<string | null> = [];
+    providers.onChange(() => heard.push(watch.label("acme.clouds.ec2")?.providerName ?? null));
     withdrawPluginCloudProviders("acme.clouds");
     expect(watch.label("acme.clouds.ec2")).toBeNull();
     // A plugin published without a display name goes by its id.
     publishPluginCloudProviders("acme.clouds", [contribution({ name: "EC2 v2" })]);
+    expect(heard).toEqual([null, "EC2 v2"]);
     expect(watch.label("acme.clouds.ec2")).toMatchObject({
       pluginName: "acme.clouds",
       providerName: "EC2 v2",

@@ -15,7 +15,6 @@ vi.mock("electron", () => ({ app: undefined, safeStorage: {} }));
 const {
   bindPluginCloudProvider,
   clearPluginCloudProviders,
-  pluginCloudProviderBinding,
   publishPluginCloudProviders,
   setPluginCloudProviderRuntime,
   withdrawPluginCloudProviders,
@@ -154,6 +153,11 @@ function runtime(options: { backend?: { value: unknown }; impl?: Partial<CloudPr
     stop: vi.fn(async () => current),
     rename: vi.fn(),
     delete: vi.fn(),
+    sshAccess: vi.fn(async () => ({
+      user: "ubuntu",
+      endpoint: { host: "203.0.113.9", port: 22 },
+      hostKey: null,
+    })),
     ...options.impl,
   } as unknown as CloudProviderImpl & Record<string, ReturnType<typeof vi.fn>>;
 
@@ -172,7 +176,6 @@ function runtime(options: { backend?: { value: unknown }; impl?: Partial<CloudPr
   const watch = watchPluginCloudProviders({
     providers: registry,
     statusChanged: () => cloudHosts?.changed(),
-    host: { runtime: () => null, binding: pluginCloudProviderBinding },
   });
   const accounts = new CloudAccountService({
     store,
@@ -255,7 +258,11 @@ function runtime(options: { backend?: { value: unknown }; impl?: Partial<CloudPr
   };
 }
 
-/** An account connected while the plugin was on, the way #17352 will connect one, and a host on it. */
+/**
+ * An account kept from an earlier session (connecting one for a plugin's
+ * provider waits on #17352), the plugin loading as Daintree starts, and a host
+ * on the account.
+ */
 async function connectedWithHost(env: ReturnType<typeof runtime>) {
   env.store.putAccount({
     id: ACCOUNT,
@@ -272,6 +279,7 @@ async function connectedWithHost(env: ReturnType<typeof runtime>) {
     pluginProvider: null,
   });
   await env.vault.put(ACCOUNT, CREDENTIALS);
+  env.set("enabled");
   const { hostId } = await env.lifecycle.importMachine({
     accountId: ACCOUNT,
     resourceId: "i-0123456789",
@@ -289,11 +297,8 @@ const LABEL = {
 describe("a plugin's cloud accounts and machines when the plugin goes", () => {
   it("lists them as unavailable while it's off, and brings them back with no new connect", async () => {
     const env = runtime();
-    env.set("enabled");
     const hostId = await connectedWithHost(env);
-    // Whatever registered before the account was there, its next registration names the account's provider.
-    env.set("disabled");
-    env.set("enabled");
+    // Its provider's registration named it on the account, for when the plugin is gone.
     expect(env.store.account(ACCOUNT)?.pluginProvider).toEqual(LABEL);
 
     env.set("disabled");
@@ -335,7 +340,6 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
 
   it("keeps a blocked plugin's machines listed, named and linked, through a restart that never loads it", async () => {
     const env = runtime();
-    env.set("enabled");
     const hostId = await connectedWithHost(env);
     env.set("blocked");
     env.dispose();
@@ -372,7 +376,6 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
 
   it("names a removed plugin's accounts and hosts for its uninstall, and keeps them for a reinstall", async () => {
     const env = runtime();
-    env.set("enabled");
     const hostId = await connectedWithHost(env);
     env.set("uninstalled");
 
@@ -389,7 +392,6 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
 
   it("removes the accounts and their hosts on uninstall when asked, deleting the sealed credentials and touching no machine", async () => {
     const env = runtime();
-    env.set("enabled");
     await connectedWithHost(env);
     const file = path.join(root, "cloud-credentials.json");
     expect(await fs.readFile(file, "utf-8")).toContain(ACCOUNT);
@@ -430,7 +432,7 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
       pluginProvider: null,
     });
     expect(() => env.cloudHosts.requirePluginAccounts(PLUGIN, ["ca_builtin0001"])).toThrow(
-      /doesn't belong/
+      expect.objectContaining({ userMessage: expect.stringContaining("doesn't belong") })
     );
     // An id already gone is nothing to refuse.
     expect(() => env.cloudHosts.requirePluginAccounts(PLUGIN, ["ca_gonegone01"])).not.toThrow();
@@ -441,7 +443,6 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
 
   it("names each account a removal couldn't finish, and still removes the rest", async () => {
     const env = runtime();
-    env.set("enabled");
     await connectedWithHost(env);
     env.store.putAccount({ ...env.store.account(ACCOUNT)!, id: "ca_acmeplugin2", displayName: "Spare" });
     await env.vault.put("ca_acmeplugin2", CREDENTIALS);

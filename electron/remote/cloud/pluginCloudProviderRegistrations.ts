@@ -88,14 +88,17 @@ export function watchPluginCloudProviders(params: {
       const { providerId } = declaration;
       if (registered.has(providerId) || refused.has(providerId) || failing.has(providerId))
         continue;
+      // Recorded first: the registry tells its listeners from inside register(), and they ask for the label.
+      const entry = { declaration, dispose: () => {} };
+      registered.set(providerId, entry);
       try {
-        const dispose = params.providers.register(new PluginCloudProvider(declaration, host), {
+        entry.dispose = params.providers.register(new PluginCloudProvider(declaration, host), {
           owner: { kind: "plugin", pluginId: declaration.pluginId },
           apiUrl: canonicalCloudOrigin(declaration.contribution.apiUrl),
         });
-        registered.set(providerId, { declaration, dispose });
         changed = true;
       } catch (error) {
+        registered.delete(providerId);
         const why = formatErrorMessage(error, "it was refused");
         console.warn(`[CloudHosts] Cloud provider ${providerId} wasn't registered: ${why}`);
         refused.set(providerId, {
