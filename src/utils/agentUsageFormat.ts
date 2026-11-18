@@ -1,8 +1,5 @@
 import type { AgentUsageReadout } from "@shared/types/ipc/agentUsage";
-import {
-  AGENT_USAGE_STALE_AFTER_MS,
-  isAgentUsagePastAttention,
-} from "@shared/utils/agentUsage";
+import { AGENT_USAGE_STALE_AFTER_MS, isAgentUsagePastAttention } from "@shared/utils/agentUsage";
 import { claudeWindowLabel, formatResetClock } from "./agentAccountHeadroom";
 import { windowLabel } from "./codexQuotaFormat";
 import { formatTimeAgo } from "./timeAgo";
@@ -74,7 +71,8 @@ export function describeAgentUsage(
   now: number
 ): AgentUsageLine {
   const { reading, hostName } = readout;
-  const stale = reading.agentId === "codex" && now - reading.observedAt > AGENT_USAGE_STALE_AFTER_MS;
+  const stale =
+    reading.agentId === "codex" && now - reading.observedAt > AGENT_USAGE_STALE_AFTER_MS;
   const reset =
     reading.resetsAt === null ? undefined : `resets ${formatResetClock(reading.resetsAt, now)}`;
   const parts = [

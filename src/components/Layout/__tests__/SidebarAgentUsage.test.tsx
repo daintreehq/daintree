@@ -1,10 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import type {
-  AgentUsageReadout,
-  AgentUsageSnapshot,
-} from "@shared/types/ipc/agentUsage";
+import type { AgentUsageReadout, AgentUsageSnapshot } from "@shared/types/ipc/agentUsage";
 
 const { dispatch } = vi.hoisted(() => ({ dispatch: vi.fn() }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));

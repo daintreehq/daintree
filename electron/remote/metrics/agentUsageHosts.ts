@@ -1,4 +1,8 @@
-import { isLocalHostId, type HostId, type HostMetricsSummary } from "../../../shared/types/remoteHosts.js";
+import {
+  isLocalHostId,
+  type HostId,
+  type HostMetricsSummary,
+} from "../../../shared/types/remoteHosts.js";
 import type { AgentUsageReading } from "../../../shared/types/ipc/agentUsage.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
 import type {
@@ -87,7 +91,8 @@ export function createAgentUsageHostsSource(deps: AgentUsageHostsDeps): RemoteAg
       let offSummaries: (() => void) | null = null;
       // Metrics start with Remote Hosts' first use, before any host can connect.
       const hearSummaries = () => {
-        if (offSummaries === null) offSummaries = deps.metrics()?.onSummary(() => listener()) ?? null;
+        if (offSummaries === null)
+          offSummaries = deps.metrics()?.onSummary(() => listener()) ?? null;
       };
       const changed = () => {
         hearSummaries();

@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import type { HostConnectionState, HostMetricsSummary } from "../../../../shared/types/remoteHosts.js";
+import type {
+  HostConnectionState,
+  HostMetricsSummary,
+} from "../../../../shared/types/remoteHosts.js";
 import type { AgentUsageReading } from "../../../../shared/types/ipc/agentUsage.js";
 import type { LinkSession } from "../../link/session.js";
 import type { SummaryReceipt } from "../summaryReceipt.js";
-import { createAgentUsageHostsSource, onShellClock, type AgentUsageHostsDeps } from "../agentUsageHosts.js";
+import {
+  createAgentUsageHostsSource,
+  onShellClock,
+  type AgentUsageHostsDeps,
+} from "../agentUsageHosts.js";
 
 const codex: AgentUsageReading = {
   agentId: "codex",
@@ -34,7 +41,9 @@ describe("onShellClock", () => {
       { ...codex, observedAt: 9_000_000 + hourAhead, resetsAt: 10_000_000 + hourAhead },
     ]);
     expect(placed[0]).toMatchObject({ observedAt: 9_000_000, resetsAt: 10_000_000 });
-    expect(onShellClock(summary, receipt(9_062_000, 2_000), [{ ...codex, resetsAt: null }])[0]!.resetsAt).toBeNull();
+    expect(
+      onShellClock(summary, receipt(9_062_000, 2_000), [{ ...codex, resetsAt: null }])[0]!.resetsAt
+    ).toBeNull();
   });
 });
 
@@ -81,7 +90,11 @@ function harness() {
         : undefined,
   };
   const report = (hostId: string, agentUsage: AgentUsageReading[] | undefined, current = true) => {
-    const summary = { hostId, sampledAt: 9_100_000, ...(agentUsage ? { agentUsage } : {}) } as HostMetricsSummary;
+    const summary = {
+      hostId,
+      sampledAt: 9_100_000,
+      ...(agentUsage ? { agentUsage } : {}),
+    } as HostMetricsSummary;
     summaries.set(hostId, summary);
     if (current) onCurrentLink.add(summary);
   };
@@ -102,9 +115,7 @@ describe("createAgentUsageHostsSource", () => {
     h.report("vps", [codex]);
     h.report("mini", [codex]);
     const source = createAgentUsageHostsSource(h.deps);
-    expect(source.list()).toEqual([
-      { hostId: "vps", hostName: "Build VPS", readings: [codex] },
-    ]);
+    expect(source.list()).toEqual([{ hostId: "vps", hostName: "Build VPS", readings: [codex] }]);
 
     // A summary from a link that has since closed says nothing about the host now.
     h.report("vps", [codex], false);

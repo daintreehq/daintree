@@ -185,13 +185,20 @@ describe("AgentUsageWatch", () => {
     h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
     h.claudeAccounts.current = [
       claudeAccount("key:/accts/work", [claudeReading({ usedPercent: 12 })]),
-      claudeAccount("key:/accts/other", [claudeReading({ statement: "reached", usedPercent: null })]),
+      claudeAccount("key:/accts/other", [
+        claudeReading({ statement: "reached", usedPercent: null }),
+      ]),
       claudeAccount("key:/accts/work", [claudeReading({ statement: "reached" })], "unknown"),
     ];
     h.watch.acquire();
     await settle();
     expect(h.watch.latest()).toMatchObject([
-      { agentId: "claude", statement: "used", usedPercent: 12, accountNames: ["acct:key:/accts/work"] },
+      {
+        agentId: "claude",
+        statement: "used",
+        usedPercent: 12,
+        accountNames: ["acct:key:/accts/work"],
+      },
     ]);
     h.watch.dispose();
   });

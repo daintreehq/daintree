@@ -124,9 +124,9 @@ describe("mapTerminalInfo", () => {
   it("reports the Codex home the launch env named, so main can tell which account an agent is on", () => {
     // #17318: the sidebar's usage readout reads quota only for homes an agent runs in.
     const ctx = createCtx();
-    expect(mapTerminalInfo(makeTerminal({ codexHome: "/accounts/codex-work" }), ctx).codexHome).toBe(
-      "/accounts/codex-work"
-    );
+    expect(
+      mapTerminalInfo(makeTerminal({ codexHome: "/accounts/codex-work" }), ctx).codexHome
+    ).toBe("/accounts/codex-work");
     expect(mapTerminalInfo(makeTerminal(), ctx).codexHome).toBeUndefined();
   });
 

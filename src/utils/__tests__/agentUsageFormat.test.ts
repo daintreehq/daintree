@@ -57,7 +57,11 @@ describe("describeAgentUsage", () => {
 
   it("names the account and the host a reading is from", () => {
     const line = describeAgentUsage(
-      { ...codex({ accountNames: ["Work"], isDefault: false }), hostId: "vps", hostName: "Build VPS" },
+      {
+        ...codex({ accountNames: ["Work"], isDefault: false }),
+        hostId: "vps",
+        hostName: "Build VPS",
+      },
       "Codex",
       NOW
     );
@@ -78,9 +82,9 @@ describe("describeAgentUsage", () => {
     const stale = describeAgentUsage(codex({ observedAt: NOW - 20 * 60_000 }), "Codex", NOW);
     expect(stale.stale).toBe(true);
     expect(stale.text).toBe("Stale · Codex 82%");
-    expect(
-      describeAgentUsage(claude({ observedAt: NOW - 3_600_000 }), "Claude", NOW).stale
-    ).toBe(false);
+    expect(describeAgentUsage(claude({ observedAt: NOW - 3_600_000 }), "Claude", NOW).stale).toBe(
+      false
+    );
   });
 
   it("words what Claude Code printed as it said it, with how long ago", () => {

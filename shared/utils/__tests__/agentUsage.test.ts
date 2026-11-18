@@ -4,11 +4,7 @@ import type {
   ClaudeAgentUsageReading,
   CodexAgentUsageReading,
 } from "../../types/ipc/agentUsage.js";
-import {
-  compareAgentUsage,
-  isAgentUsagePastAttention,
-  tightestAgentUsage,
-} from "../agentUsage.js";
+import { compareAgentUsage, isAgentUsagePastAttention, tightestAgentUsage } from "../agentUsage.js";
 
 const NOW = 1_800_000_000_000;
 
@@ -48,9 +44,9 @@ describe("isAgentUsagePastAttention", () => {
   });
 
   it("counts Claude Code's approaching and reached messages as past it", () => {
-    expect(
-      isAgentUsagePastAttention(claude({ statement: "approaching", usedPercent: null }))
-    ).toBe(true);
+    expect(isAgentUsagePastAttention(claude({ statement: "approaching", usedPercent: null }))).toBe(
+      true
+    );
     expect(isAgentUsagePastAttention(claude({ statement: "reached", usedPercent: null }))).toBe(
       true
     );
@@ -63,14 +59,17 @@ describe("compareAgentUsage", () => {
     expect(compareAgentUsage(approaching, claude({ usedPercent: 12 }))).toBeGreaterThan(0);
     expect(compareAgentUsage(claude({ usedPercent: 85 }), approaching)).toBeGreaterThan(0);
     expect(
-      compareAgentUsage(claude({ statement: "reached", usedPercent: null }), claude({ usedPercent: 99 }))
+      compareAgentUsage(
+        claude({ statement: "reached", usedPercent: null }),
+        claude({ usedPercent: 99 })
+      )
     ).toBeGreaterThan(0);
   });
 
   it("ranks the higher figure, then a floor above an exact equal figure", () => {
-    expect(compareAgentUsage(codex({ usedPercent: 82 }), codex({ usedPercent: 81 }))).toBeGreaterThan(
-      0
-    );
+    expect(
+      compareAgentUsage(codex({ usedPercent: 82 }), codex({ usedPercent: 81 }))
+    ).toBeGreaterThan(0);
     expect(
       compareAgentUsage(claude({ statement: "over", usedPercent: 90 }), claude({ usedPercent: 90 }))
     ).toBeGreaterThan(0);
