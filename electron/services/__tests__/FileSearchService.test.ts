@@ -618,6 +618,19 @@ describe("FileSearchService", () => {
       expect(page).toEqual(listing.slice(0, 20));
     });
 
+    it("lets a better file displace the earliest-listed of two tied ones last", async () => {
+      // The page fills with two equal files, then a better one arrives: the
+      // later-listed of the pair is the one that ranks lower and must go.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "d1/Profile.ts\0d2/Profile.ts\0d3/ProfilePanel.ts\0");
+      const service = await createService();
+
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "profile panel", limit: 2 })
+      ).resolves.toEqual(["d3/ProfilePanel.ts", "d1/Profile.ts"]);
+    });
+
     it("builds its word index once per listing, on the first lookup that needs it", async () => {
       const dir = makeTempDir();
       tempDirs.push(dir);
@@ -644,22 +657,34 @@ describe("FileSearchService", () => {
       expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
     });
 
-    it("drops its word index with the listing, so a changed tree is indexed afresh", async () => {
-      const dir = makeTempDir();
-      tempDirs.push(dir);
-      gitRepo(dir, "src/UserProfilePanel.tsx\0");
-      const service = await createService();
-      await service.searchNaturalLanguage({ cwd: dir, description: "user profile" });
-      expect(service.peekNaturalLanguageIndex(dir)).toBeDefined();
+    it.each(["invalidate", "invalidateUnder"] as const)(
+      "drops its word index on %s, so a changed tree is indexed afresh",
+      async (drop) => {
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, "src/UserProfilePanel.tsx\0");
+        const service = await createService();
+        await service.searchNaturalLanguage({ cwd: dir, description: "user profile" });
+        const index = service.peekNaturalLanguageIndex(dir);
+        expect(index).toBeDefined();
 
-      service.invalidateUnder(dir);
-      expect(service.peekNaturalLanguageIndex(dir)).toBeUndefined();
+        service[drop](dir);
+        expect(service.peekNaturalLanguageIndex(dir)).toBeUndefined();
 
-      gitClientMock.raw.mockResolvedValue("src/UserProfileView.tsx\0");
-      await expect(
-        service.searchNaturalLanguage({ cwd: dir, description: "user profile" })
-      ).resolves.toEqual(["src/UserProfileView.tsx"]);
-    });
+        // The rename keeps the file in the same listing slot, so only words the
+        // old name alone had can tell a fresh index from a stale one.
+        gitClientMock.raw.mockResolvedValue("src/UserProfileView.tsx\0");
+        await expect(
+          service.searchNaturalLanguage({ cwd: dir, description: "panel" })
+        ).resolves.toEqual([]);
+        await expect(
+          service.searchNaturalLanguage({ cwd: dir, description: "view" })
+        ).resolves.toEqual(["src/UserProfileView.tsx"]);
+        const rebuilt = service.peekNaturalLanguageIndex(dir);
+        expect(rebuilt).toBeDefined();
+        expect(rebuilt).not.toBe(index);
+      }
+    );
 
     it("scores a token once per file however many of its words match it", async () => {
       // `profile` matches both of the first file's words. Counted per matching
@@ -672,6 +697,46 @@ describe("FileSearchService", () => {
       await expect(
         service.searchNaturalLanguage({ cwd: dir, description: "profile profile panel" })
       ).resolves.toEqual(["src/ProfilePanel.ts", "ProfileProfiles.ts"]);
+    });
+
+    it("weights a token by how often the description repeats it", async () => {
+      // At one point a token, the shorter path would win the tie.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "Panel.ts\0src/Profile.ts\0");
+      const service = await createService();
+
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "profile profile panel" })
+      ).resolves.toEqual(["src/Profile.ts", "Panel.ts"]);
+    });
+
+    it("drops only the last extension, and a dotfile's name is its extension", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, ".env\0a.\0a.b.c\0");
+      const service = await createService();
+      const lookup = (description: string) =>
+        service.searchNaturalLanguage({ cwd: dir, description });
+
+      await expect(lookup("env")).resolves.toEqual([]);
+      // `a` alone is a stop word; `_a` splits to the same token.
+      await expect(lookup("_a")).resolves.toEqual(["a.", "a.b.c"]);
+      await expect(lookup("b")).resolves.toEqual(["a.b.c"]);
+      await expect(lookup("c")).resolves.toEqual([]);
+    });
+
+    it("keeps every word of a name longer than the index's first allocation", async () => {
+      // One file sizes the word buffer at sixteen, so the seventeenth word is
+      // only found if the buffer grows.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, `${"Foo".repeat(16)}Zebra.ts\0`);
+      const service = await createService();
+
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "zebra" })
+      ).resolves.toEqual([`${"Foo".repeat(16)}Zebra.ts`]);
     });
 
     describe("against the per-description scan it replaced", () => {
@@ -814,7 +879,9 @@ describe("FileSearchService", () => {
           tempDirs.push(dir);
           gitRepo(dir, `${listing.join("\0")}\0`);
           const service = await createService();
-          const files = await service.listFiles(dir);
+          // The oracle reads the listing itself, so a service that listed
+          // nothing could not agree with it by returning nothing.
+          const files = [...new Set(listing)];
 
           for (let q = 0; q < 15; q++) {
             // One long description per listing: the fillers, then ordinary
@@ -832,6 +899,23 @@ describe("FileSearchService", () => {
             }
           }
         }
+      });
+
+      it("keeps tokens in different groups of thirty-two apart, with their weights", async () => {
+        // Tokens 3 and 35 share a bit position in their groups, 31 is a mask's
+        // sign bit, and the description says token 35 twice.
+        expect([FILLERS[3], FILLERS[31], FILLERS[35]]).toEqual(["qda", "qfb", "qjb"]);
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, "QdaQjb.ts\0Qda.ts\0Qfb.ts\0Qjb.ts\0");
+        const service = await createService();
+
+        await expect(
+          service.searchNaturalLanguage({
+            cwd: dir,
+            description: [...FILLERS, "qjb"].join(" "),
+          })
+        ).resolves.toEqual(["QdaQjb.ts", "Qjb.ts", "Qda.ts", "Qfb.ts"]);
       });
 
       it("splits names into the same words as the regex passes", async () => {
@@ -858,7 +942,7 @@ describe("FileSearchService", () => {
         }
         for (let code = 0; code <= 0xffff; code++) {
           const name = `aB${String.fromCharCode(code)}Cd1e`;
-          if (splitCamelCase(name).join(" ") !== legacySplit(name).join(" ")) {
+          if (JSON.stringify(splitCamelCase(name)) !== JSON.stringify(legacySplit(name))) {
             expect(splitCamelCase(name), `U+${code.toString(16)}`).toEqual(legacySplit(name));
           }
         }

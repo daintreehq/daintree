@@ -618,12 +618,6 @@ function buildNaturalLanguageIndex(files: string[]): NaturalLanguageIndex {
   return { vocabulary, wordStarts, fileWords: fileWords.slice(0, wordCount) };
 }
 
-interface NaturalLanguageMatch {
-  fileIdx: number;
-  /** Description tokens the file's words match, each weighted by how often the description says it. */
-  matched: number;
-}
-
 /**
  * The `limit` best files for a description, best first, in the order a stable
  * sort by score then path length would give them.
@@ -657,29 +651,43 @@ function pickTopNaturalLanguageMatches(
   const distinctTokens = [...tokenWeights.keys()];
   const weights = distinctTokens.map((token) => tokenWeights.get(token)!);
 
-  // Bit `t % 32` of `tokenMasks[wordId * groups + (t >> 5)]` is set when the
-  // word matches distinct token `t`. A file's matched tokens are the OR of its
-  // words' masks, so a token two of its words match (`ProfileProfiles`) still
-  // counts once. Thirty-two tokens to a group keeps the scratch at four bytes a
-  // word per group, however long the description.
-  const groups = Math.ceil(distinctTokens.length / 32);
-  const tokenMasks = new Int32Array(vocabulary.length * groups);
-  for (let wordId = 0; wordId < vocabulary.length; wordId++) {
-    for (let t = 0; t < distinctTokens.length; t++) {
-      if (wordMatchesToken(vocabulary[wordId], distinctTokens[t])) {
-        tokenMasks[wordId * groups + (t >> 5)] |= 1 << (t & 31);
+  const files = entry.files;
+  const matchedOf = new Int32Array(files.length);
+
+  // Tokens are matched thirty-two at a time: bit `t` of `tokenMasks[wordId]` is
+  // set when the word matches the group's token `t`. A file's matched tokens
+  // are the OR of its words' masks, so a token two of its words match
+  // (`ProfileProfiles`) still counts once. One mask array is reused for every
+  // group, so the scratch stays at four bytes a word and a file however long
+  // the description.
+  const tokenMasks = new Int32Array(vocabulary.length);
+  for (let first = 0; first < distinctTokens.length; first += 32) {
+    const groupSize = Math.min(32, distinctTokens.length - first);
+    if (first > 0) tokenMasks.fill(0);
+    for (let wordId = 0; wordId < vocabulary.length; wordId++) {
+      for (let t = 0; t < groupSize; t++) {
+        if (wordMatchesToken(vocabulary[wordId], distinctTokens[first + t])) {
+          tokenMasks[wordId] |= 1 << t;
+        }
+      }
+    }
+    for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+      let bits = 0;
+      const end = wordStarts[fileIdx + 1];
+      for (let i = wordStarts[fileIdx]; i < end; i++) bits |= tokenMasks[fileWords[i]];
+      while (bits !== 0) {
+        const lowest = bits & -bits;
+        matchedOf[fileIdx] += weights[first + 31 - Math.clz32(lowest)];
+        bits ^= lowest;
       }
     }
   }
 
-  const files = entry.files;
-  const rank = (aMatched: number, a: number, bMatched: number, b: number): number =>
-    bMatched - aMatched || files[a].length - files[b].length || a - b;
-  const compare = (a: NaturalLanguageMatch, b: NaturalLanguageMatch): number =>
-    rank(a.matched, a.fileIdx, b.matched, b.fileIdx);
+  const compare = (a: number, b: number): number =>
+    matchedOf[b] - matchedOf[a] || files[a].length - files[b].length || a - b;
 
   // A max-heap of the best files seen so far: its root is the worst of them.
-  const heap: NaturalLanguageMatch[] = [];
+  const heap: number[] = [];
   const siftDown = (): void => {
     let parent = 0;
     while (true) {
@@ -695,22 +703,9 @@ function pickTopNaturalLanguageMatches(
   };
 
   for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
-    const start = wordStarts[fileIdx];
-    const end = wordStarts[fileIdx + 1];
-    let matched = 0;
-    for (let group = 0; group < groups; group++) {
-      let bits = 0;
-      for (let i = start; i < end; i++) bits |= tokenMasks[fileWords[i] * groups + group];
-      while (bits !== 0) {
-        const lowest = bits & -bits;
-        matched += weights[(group << 5) + 31 - Math.clz32(lowest)];
-        bits ^= lowest;
-      }
-    }
-    if (matched === 0) continue;
-
+    if (matchedOf[fileIdx] === 0) continue;
     if (heap.length < limit) {
-      let child = heap.push({ fileIdx, matched }) - 1;
+      let child = heap.push(fileIdx) - 1;
       while (child > 0) {
         const parent = (child - 1) >> 1;
         if (compare(heap[child], heap[parent]) <= 0) break;
@@ -719,12 +714,12 @@ function pickTopNaturalLanguageMatches(
       }
       continue;
     }
-    if (rank(matched, fileIdx, heap[0].matched, heap[0].fileIdx) >= 0) continue;
-    heap[0] = { fileIdx, matched };
+    if (compare(fileIdx, heap[0]) >= 0) continue;
+    heap[0] = fileIdx;
     siftDown();
   }
 
-  return heap.sort(compare).map((match) => files[match.fileIdx]);
+  return heap.sort(compare).map((fileIdx) => files[fileIdx]);
 }
 
 export class FileSearchService {
