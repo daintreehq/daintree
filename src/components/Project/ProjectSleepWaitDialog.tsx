@@ -1,5 +1,6 @@
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { FactRun } from "@/components/ui/FactSeparator";
 import { pluralize } from "@/lib/pluralize";
 import {
   cancelSleepWait,
@@ -40,6 +41,9 @@ const STATUS_LABEL: Record<SleepWaitProjectStatus, string> = {
 };
 
 function AgentRow({ agent }: { agent: SleepWaitAgent }) {
+  const facts = [OBSERVATION_LABEL[agent.observation]];
+  if (agent.note) facts.push(agent.note === "sent" ? "asked to pause" : "pause note refused");
+
   return (
     <li
       className="flex items-baseline justify-between gap-3 text-xs"
@@ -47,9 +51,7 @@ function AgentRow({ agent }: { agent: SleepWaitAgent }) {
     >
       <span className="min-w-0 truncate text-text-primary">{agent.title}</span>
       <span className="shrink-0 text-text-secondary" data-observation={agent.observation}>
-        {OBSERVATION_LABEL[agent.observation]}
-        {agent.note === "sent" && " · asked to pause"}
-        {agent.note === "refused" && " · pause note refused"}
+        <FactRun facts={facts} />
       </span>
     </li>
   );
