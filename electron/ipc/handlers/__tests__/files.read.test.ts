@@ -458,9 +458,12 @@ describe("files:read handler", () => {
     fsMock.stat.mockResolvedValue({ size: 600 * 1024 });
     registerFilesHandlers();
 
+    // The size rides in the allowlisted details, which survive a packaged
+    // build, so the renderer can tell a file a viewer still opens (#17336).
     await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
       name: "AppError",
       code: "FILE_TOO_LARGE",
+      details: { code: "FILE_TOO_LARGE", sizeBytes: 600 * 1024 },
     });
     expect(fsMock.open).not.toHaveBeenCalled();
   });
@@ -778,10 +781,12 @@ describe("files:read handler", () => {
     fsMock.open.mockResolvedValue(handle);
     registerFilesHandlers();
 
-    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
-      name: "AppError",
-      code: "FILE_TOO_LARGE",
-    });
+    const refusal = await getReadHandler()({}, { path: file, rootPath: root }).catch(
+      (error: unknown) => error
+    );
+    expect(refusal).toMatchObject({ name: "AppError", code: "FILE_TOO_LARGE" });
+    // Only that it outgrew the limit is known, not by how much.
+    expect((refusal as { details?: unknown }).details).toBeUndefined();
     expect(read.requested).toBeLessThanOrEqual(limit + 1);
     expect(handle.close).toHaveBeenCalledTimes(1);
   });

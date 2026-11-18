@@ -130,3 +130,63 @@ describe("useFileLoad silent failures", () => {
     expect(result.current.loadState).toBe("loaded");
   });
 });
+
+describe("useFileLoad observed size (#17336)", () => {
+  beforeEach(() => {
+    readMock.mockReset();
+  });
+
+  const tooLarge = (sizeBytes?: number) =>
+    new ClientAppError(
+      "FILE_TOO_LARGE",
+      "too big",
+      undefined,
+      sizeBytes === undefined ? undefined : { code: "FILE_TOO_LARGE", sizeBytes }
+    );
+
+  it("knows the size from a successful read, and keeps it through a refresh", async () => {
+    readMock.mockResolvedValueOnce({ ...read("a,b\n"), byteLength: 4 });
+    const { result } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
+    expect(result.current.observedBytes).toBeNull();
+    await load(result, "explicit");
+    expect(result.current.observedBytes).toBe(4);
+
+    const pending = deferred<ReturnType<typeof read>>();
+    readMock.mockReturnValueOnce(pending.promise);
+    await load(result, "explicit");
+    expect(result.current.loadState).toBe("loading");
+    expect(result.current.observedBytes).toBe(4);
+    await act(async () => pending.resolve(read("é")));
+    expect(result.current.observedBytes).toBe(2);
+  });
+
+  it("takes the size a too-large refusal reports, even when a silent pass keeps the old text", async () => {
+    readMock.mockResolvedValueOnce(read("small"));
+    const { result } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
+    await load(result, "explicit");
+
+    readMock.mockRejectedValueOnce(tooLarge(3_000_000));
+    await load(result, "ambient");
+    expect(result.current.content).toBe("small");
+    expect(result.current.observedBytes).toBe(3_000_000);
+  });
+
+  it("knows no size after a failure that doesn't give one", async () => {
+    readMock.mockResolvedValueOnce(read("small"));
+    const { result } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
+    await load(result, "explicit");
+    readMock.mockRejectedValueOnce(tooLarge());
+    await load(result, "explicit");
+    expect(result.current.loadState).toBe("error");
+    expect(result.current.observedBytes).toBeNull();
+  });
+
+  it("never carries one file's size over to the next", async () => {
+    readMock.mockResolvedValueOnce(read("first"));
+    const { result, rerender } = renderLoad({ filePath: "/a/one.csv", root: "/a" });
+    await load(result, "explicit");
+    expect(result.current.observedBytes).toBe(5);
+    rerender({ filePath: "/a/two.csv", root: "/a" });
+    expect(result.current.observedBytes).toBeNull();
+  });
+});
