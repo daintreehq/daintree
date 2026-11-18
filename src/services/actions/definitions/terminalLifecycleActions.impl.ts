@@ -463,6 +463,39 @@ export const terminalLifecycleActionRuns = {
       });
     }
   },
+  "terminal.resetModes": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
+    const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+    requireExplicitTerminalIdForAgentDispatch("terminal.resetModes", terminalId, ctx);
+    const targetId = terminalId ?? focusedAtDispatch;
+    if (!targetId) return;
+    const terminal = usePanelStore.getState().panelsById[targetId];
+    // A shell a crashed program left behind resets at once; an agent Daintree
+    // still sees running would lose the paste and keyboard modes it relies on,
+    // and context injection refuses a pane without bracketed paste.
+    if (!isConfirmed(args, ctx) && terminal && isPtyPanel(terminal) && terminal.detectedAgentId) {
+      stageConfirmation(
+        {
+          kind: "resetModes",
+          dispatchSource: ctx?.dispatchSource,
+          targetCount: 1,
+          runningAgentCount: 1,
+          terminalId: targetId,
+          terminalTitle: terminal.title,
+        },
+        "Resetting this terminal's modes"
+      );
+    }
+    clearPendingIf("resetModes");
+    if (!(await terminalClient.resetModes(targetId))) {
+      throw new UnactionableTargetError(
+        `Terminal '${targetId}' has no live screen to reset: it has exited or isn't running here.`
+      );
+    }
+  },
   "terminal.rename": async (
     args: unknown,
     ctx: ActionContext,

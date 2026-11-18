@@ -63,6 +63,22 @@ export function buildKillRunningAgentCopy(terminalTitle?: string): DestructiveCo
   };
 }
 
+/**
+ * Asked only while Daintree sees an agent in the pane (#17328): a shell left
+ * behind by a crashed program resets without it. Someone fixing a garbled
+ * agent screen usually wants Redraw, which changes no modes.
+ */
+export function buildResetModesRunningAgentCopy(terminalTitle?: string): DestructiveConfirmCopy {
+  return {
+    title: `Reset terminal modes in ${quoted(terminalTitle, "this terminal")}?`,
+    lead: "An agent is still running in it.",
+    description:
+      "It loses bracketed paste and the other input modes it turned on until it turns them on again, so a multi-line paste can arrive as separate lines and context can't be injected.",
+    note: "To fix a garbled display, use Redraw instead.",
+    confirmLabel: "Reset terminal modes",
+  };
+}
+
 export function buildRestartRunningAgentCopy(terminalTitle?: string): DestructiveConfirmCopy {
   return {
     title: `Restart ${quoted(terminalTitle, "terminal")}?`,
@@ -93,6 +109,8 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       return buildKillRunningAgentCopy(pending.terminalTitle);
     case "restart":
       return buildRestartRunningAgentCopy(pending.terminalTitle);
+    case "resetModes":
+      return buildResetModesRunningAgentCopy(pending.terminalTitle);
     case "killAll": {
       const counted = pluralize(count, "panel");
       return {
@@ -339,6 +357,15 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { source }
         );
         announcement = "Terminal restarted";
+        break;
+      case "resetModes":
+        if (!pending.terminalId) break;
+        void actionService.dispatch(
+          "terminal.resetModes",
+          { terminalId: pending.terminalId, confirmed: true },
+          { source }
+        );
+        announcement = "Terminal modes reset";
         break;
       case "killAll": {
         void actionService.dispatch("terminal.killAll", { confirmed: true }, { source });

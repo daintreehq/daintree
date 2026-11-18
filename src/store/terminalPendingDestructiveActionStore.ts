@@ -17,6 +17,9 @@ import type { ActionSource } from "@shared/types/actions";
 export type TerminalPendingDestructiveActionKind =
   | "kill" // single terminal kill
   | "restart" // single terminal restart
+  // Resetting the input modes of a terminal an agent still runs in (#17328):
+  // nothing ends, but the agent loses bracketed paste until it turns it back on.
+  | "resetModes"
   | "killAll"
   | "restartAll"
   | "worktreeRestartAll"

@@ -25,6 +25,7 @@ import {
   Plus,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Settings,
   Trash2,
@@ -1785,6 +1786,22 @@ function PanelHeaderComponent({
                     >
                       <RefreshCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                       Redraw
+                    </DropdownMenuItem>
+                  )}
+                  {hasPty && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        // Run once the menu has handed focus back: with an
+                        // agent running, the action stages a confirm.
+                        pendingMenuDispatchRef.current = {
+                          actionId: "terminal.resetModes",
+                          args: { terminalId: id },
+                        };
+                      }}
+                      data-testid="panel-reset-modes"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Reset terminal modes
                     </DropdownMenuItem>
                   )}
 

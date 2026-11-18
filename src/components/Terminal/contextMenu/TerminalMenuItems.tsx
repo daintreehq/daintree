@@ -55,6 +55,7 @@ import {
   Radio,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Send,
   SquareTerminal,
@@ -449,6 +450,12 @@ export function TerminalSessionMenuItems({
             <ContextMenuItem onSelect={() => onAction("redraw")}>
               <RefreshCw className={ICON_CLASS} aria-hidden="true" />
               Redraw
+            </ContextMenuItem>
+          )}
+          {hasPty && (
+            <ContextMenuItem onSelect={() => onAction("reset-modes")}>
+              <RotateCcw className={ICON_CLASS} aria-hidden="true" />
+              Reset terminal modes
             </ContextMenuItem>
           )}
           {terminalPty?.launchAgentId && !terminalPty.restoreRecovery && (

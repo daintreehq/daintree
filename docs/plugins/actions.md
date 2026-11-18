@@ -517,6 +517,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
 | `terminal.rename` | Rename panel | safe | `name?`, `terminalId?` |
 | `terminal.reopenLast` | Reopen last closed panel | safe | — |
+| `terminal.resetModes` | Reset terminal modes | confirm | `confirmed?`, `terminalId?` |
 | `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
 | `terminal.restartAll` | Restart all terminals | confirm | `confirmed?` |
 | `terminal.restartOnAccount` | Restart agent on account | confirm | `accountId`, `confirmed?`, `keepConversation?`, `terminalId?` |
