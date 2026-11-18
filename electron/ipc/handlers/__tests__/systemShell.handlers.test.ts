@@ -328,6 +328,7 @@ describe("system:open-in-editor containment", () => {
     const filePath = path.join(PROJECT_ROOT, "src", "app.ts");
     await handler(fakeEvent, { path: filePath, line: 5, col: 2 });
     expect(openFileMock).toHaveBeenCalledWith(filePath, 5, 2, null, false);
+    expect(projectStoreMock.getAllProjects).not.toHaveBeenCalled();
   });
 
   it("rejects an out-of-root file without invoking the editor", async () => {
@@ -514,6 +515,7 @@ describe("system:show-item-in-folder containment", () => {
     const sourcePath = path.join(PROJECT_ROOT, "src", "index.ts");
     await handler(fakeEvent, { path: sourcePath });
     expect(shellMock.showItemInFolder).toHaveBeenCalledWith(sourcePath);
+    expect(projectStoreMock.getAllProjects).not.toHaveBeenCalled();
   });
 
   it("rejects a path outside all roots with OUTSIDE_ROOT", async () => {
