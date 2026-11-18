@@ -60,7 +60,11 @@ export function replaceRing(
       for (const row of rows) {
         stmts.insert.run(ring, row.recordId, row.record, now);
       }
-      if (maxRecords > 0) {
+      // The ring was just cleared, so it holds exactly rows.length rows and the
+      // trim can only matter for an oversized batch. AuditRingStore pre-trims,
+      // but this executor is shared with the worker, so the cap stays enforced
+      // here without scanning every retained row to delete none.
+      if (maxRecords > 0 && rows.length > maxRecords) {
         stmts.trim.run(ring, ring, maxRecords);
       }
       applied = true;
