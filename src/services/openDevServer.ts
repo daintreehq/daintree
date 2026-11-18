@@ -1,5 +1,6 @@
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { isDevPreviewPanel, type PanelInstance } from "@shared/types/panel";
+import { isLoopbackHostname } from "@shared/utils/urlUtils";
 import { focusPanelInItsWorktree } from "@/lib/panelNavigation";
 import { notify } from "@/lib/notify";
 import { isReachable, openUrlExternally } from "@/services/openLinkUrl";
@@ -64,13 +65,19 @@ function devServerRefused(message: string): void {
 }
 
 /**
- * Whether a host's `hostname` would land on this machine when opened here
- * without a forward: names the terminal-link forwarding doesn't treat as
- * loopback, but that a browser here resolves to its own.
+ * Whether a host's `hostname` names that host itself, so opened here it would
+ * land on this machine instead: any loopback or wildcard spelling, and the
+ * `.localhost` names a browser resolves to its own loopback.
  */
-function landsOnThisMachine(hostname: string): boolean {
+function namesTheHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, "");
-  return host === "[::]" || host.endsWith(".localhost");
+  return (
+    isLoopbackHostname(host) ||
+    host === "0.0.0.0" ||
+    host === "[::]" ||
+    host === "localhost" ||
+    host.endsWith(".localhost")
+  );
 }
 
 /**
@@ -85,24 +92,30 @@ export async function openDevServerExternally(url: string): Promise<void> {
     openUrlExternally(url, LOG_PREFIX);
     return;
   }
-  let hostname: string;
+  let parsed: URL;
   try {
-    hostname = new URL(url).hostname;
+    parsed = new URL(url);
   } catch {
     devServerRefused("The dev server's address isn't a valid URL.");
     return;
   }
-  if (parseLoopbackLink(url) === null && landsOnThisMachine(hostname)) {
+  // Read as the system browser would read it, so a spelling the forwarding
+  // doesn't parse (`http:localhost:5824`) can't slip past it unforwarded.
+  const address = parsed.href;
+  // The forward reaches the host's own localhost and nothing else, so any
+  // other spelling of the host itself (127.0.0.2, app.localhost) has no
+  // forward that reaches it, and opened as it is would reach this machine.
+  if (parseLoopbackLink(address) === null && namesTheHost(parsed.hostname)) {
     devServerRefused(
-      `${hostname} on the host can't be forwarded to this machine. Open it from the dev preview instead.`
+      `${parsed.hostname} on the host can't be forwarded to this machine. Open it from the dev preview instead.`
     );
     return;
   }
   try {
-    openUrlExternally(await resolveTerminalLinkForHost(url, hostId), LOG_PREFIX);
+    openUrlExternally(await resolveTerminalLinkForHost(address, hostId), LOG_PREFIX);
   } catch (error) {
     logError(`${LOG_PREFIX} Failed to forward the dev server's port`, error);
-    devServerRefused(hostForwardFailure(url, error));
+    devServerRefused(hostForwardFailure(address, error));
   }
 }
 

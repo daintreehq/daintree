@@ -179,6 +179,8 @@ function DevServerRow({
       }
       title={displayName}
       revealTitle
+      // A running row is about its address; the name gives way to it.
+      keepDetail={url !== undefined}
       detail={
         // The log line rides the status only: on the row it would be inherited
         // by the action buttons, and on the name it would sit over that name's

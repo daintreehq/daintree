@@ -271,8 +271,8 @@ beforeEach(() => {
   h.restart.mockClear();
   h.stop.mockClear();
   h.devServerInView = true;
-  h.openDevServer.mockClear();
-  h.openDevServerExternally.mockClear();
+  h.openDevServer.mockReset().mockResolvedValue(undefined);
+  h.openDevServerExternally.mockReset().mockResolvedValue(undefined);
   h.links = { projectLinks: [STAGING, LOCAL], declaredLinks: [], globalLinks: [DOCS] };
   h.devSessions = { sessions: [], hydrated: true, fetchError: false };
   h.pullRequest = null;
@@ -667,7 +667,9 @@ describe("dev servers in the launcher", () => {
     h.devSessions.sessions = [server];
     const panel = document.createElement("textarea");
     document.body.append(panel);
+    let openingWhenOpened: unknown = "not opened";
     h.openDevServer.mockImplementation(() => {
+      openingWhenOpened = useLinksLauncherStore.getState().opening;
       panel.focus();
       return Promise.resolve();
     });
@@ -685,6 +687,8 @@ describe("dev servers in the launcher", () => {
 
       expect(h.openDevServer).toHaveBeenCalledTimes(1);
       expect(h.openDevServer).toHaveBeenCalledWith(server);
+      // Closed first, so the panel's focus isn't the launcher's to take back.
+      expect(openingWhenOpened).toBeNull();
       expect(h.openLinkUrl).not.toHaveBeenCalled();
       expect(launcher()).toBeNull();
       expect(document.activeElement).toBe(panel);
@@ -706,6 +710,7 @@ describe("dev servers in the launcher", () => {
     });
     await flush();
 
+    expect(h.openDevServerExternally).toHaveBeenCalledTimes(1);
     expect(h.openDevServerExternally).toHaveBeenCalledWith("http://localhost:5824");
     expect(h.openDevServer).not.toHaveBeenCalled();
     expect(h.openUrlExternally).not.toHaveBeenCalled();

@@ -544,7 +544,10 @@ describe("opening a dev server from its row", () => {
     );
     fireEvent.click(here!);
     expect(h.expectHandoff).toHaveBeenCalledTimes(1);
-    expect(h.onOpen).toHaveBeenCalledTimes(2);
+    expect(h.onOpen.mock.calls.map(([s]) => [s.panelId, s.projectId])).toEqual([
+      ["p-away", "project-2"],
+      ["p-here", "project-1"],
+    ]);
   });
 
   it("asks where the server's panel is when the row is pressed, not when it was drawn", () => {
@@ -562,6 +565,7 @@ describe("opening a dev server from its row", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open dev server for feature-foo in external browser" })
     );
+    expect(h.onOpenExternal).toHaveBeenCalledTimes(1);
     expect(h.onOpenExternal).toHaveBeenCalledWith("http://localhost:5824");
     expect(h.onOpen).not.toHaveBeenCalled();
     expect(h.expectHandoff).not.toHaveBeenCalled();
@@ -605,5 +609,6 @@ describe("opening a dev server from its row", () => {
     expect(openableRows()).toHaveLength(0);
     expect(screen.getByLabelText("Stop dev server for feature-foo")).toBe(stopButton);
     expect(document.activeElement).toBe(stopButton);
+    expect(stopButton.getAttribute("aria-disabled")).toBe("true");
   });
 });

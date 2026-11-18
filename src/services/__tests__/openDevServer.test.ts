@@ -84,7 +84,9 @@ function calls(): Array<[string, unknown]> {
 function openedExternally(): unknown[] {
   return dispatch.mock.calls
     .filter(([id]) => id === "system.openExternal")
-    .map(([, args]) => (args as { url: string }).url);
+    .map(([, args]) =>
+      typeof args === "object" && args !== null && "url" in args ? args.url : args
+    );
 }
 
 beforeEach(() => {
@@ -133,7 +135,7 @@ describe("devServerPanelInView", () => {
     expect(devServerPanelInView(server())).toBeUndefined();
   });
 
-  it.each(["trash", "background", "dialog"])("skips a preview in %s", (location) => {
+  it.each(["trash", "background", "dialog", "overlay"])("skips a preview in %s", (location) => {
     withPanels(preview("p1", { location }));
     expect(devServerPanelInView(server())).toBeUndefined();
   });
@@ -144,14 +146,16 @@ describe("devServerPanelInView", () => {
   });
 
   it("skips a panel of another kind under the same id", () => {
-    withPanels({ ...preview("p1"), kind: "browser" });
+    withPanels(preview("p1", { kind: "browser" }));
     expect(devServerPanelInView(server())).toBeUndefined();
   });
 
   it("skips a preview whose worktree this view doesn't show, but keeps a deleted one's", () => {
     withPanels(preview("p1", { worktreeId: "w9" }));
     expect(devServerPanelInView(server())).toBeUndefined();
-    selection.deletedWorktrees = new Set(["w9"]);
+    selection.deletedWorktrees = new Set(["w8"]);
+    expect(devServerPanelInView(server())).toBeUndefined();
+    selection.deletedWorktrees = new Set(["w8", "w9"]);
     expect(devServerPanelInView(server())?.id).toBe("p1");
   });
 });
@@ -166,7 +170,19 @@ describe("openDevServer", () => {
 
   it("switches to another worktree of this project before focusing its preview", async () => {
     withPanels(preview("p1", { worktreeId: "w2" }));
-    await openDevServer(server());
+    let selected!: (result: { ok: boolean }) => void;
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          selected = resolve;
+        })
+    );
+    const opening = openDevServer(server());
+    await Promise.resolve();
+    // Nothing is focused while the switch is still under way.
+    expect(calls()).toEqual([["worktree.select", { worktreeId: "w2" }]]);
+    selected({ ok: true });
+    await opening;
     expect(selection.trackTerminalFocus).toHaveBeenCalledWith("w2", "p1");
     expect(calls()).toEqual([
       ["worktree.select", { worktreeId: "w2" }],
@@ -187,6 +203,10 @@ describe("openDevServer", () => {
     await openDevServer(server());
     expect(setActiveTab).toHaveBeenCalledWith("g1", "p1");
     expect(calls()).toEqual([["panel.focus", { panelId: "p1" }]]);
+    // In front before it takes focus, so the focus lands on a pane on screen.
+    expect(setActiveTab.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatch.mock.invocationCallOrder[0]!
+    );
   });
 
   it("opens another project's server in the system browser", async () => {
@@ -215,7 +235,15 @@ describe("openDevServerExternally", () => {
     remote.hostId = "host-1";
     remote.resolve.mockResolvedValue("http://localhost:61234/");
     await openDevServerExternally("http://localhost:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824", "host-1");
+    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824/", "host-1");
+    expect(openedExternally()).toEqual(["http://localhost:61234/"]);
+  });
+
+  it("forwards an address spelled the way the system browser reads it", async () => {
+    remote.hostId = "host-1";
+    remote.resolve.mockResolvedValue("http://localhost:61234/");
+    await openDevServerExternally("http:localhost:5824");
+    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824/", "host-1");
     expect(openedExternally()).toEqual(["http://localhost:61234/"]);
   });
 
@@ -232,24 +260,30 @@ describe("openDevServerExternally", () => {
   it("forwards a host's wildcard address as its loopback", async () => {
     remote.hostId = "host-1";
     await openDevServerExternally("http://0.0.0.0:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://0.0.0.0:5824", "host-1");
+    expect(remote.resolve).toHaveBeenCalledWith("http://0.0.0.0:5824/", "host-1");
   });
 
-  it.each(["http://app.localhost:5824", "http://[::]:5824"])(
+  it.each(["http://app.localhost:5824", "http://[::]:5824", "http://127.0.0.2:5824"])(
     "never opens the host's %s against this machine",
     async (url) => {
       remote.hostId = "host-1";
       await openDevServerExternally(url);
       expect(remote.resolve).not.toHaveBeenCalled();
       expect(openedExternally()).toEqual([]);
-      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          message: expect.stringContaining("can't be forwarded to this machine"),
+        })
+      );
     }
   );
 
   it("passes a host's private-network address through the host's resolver", async () => {
     remote.hostId = "host-1";
+    remote.resolve.mockImplementation((url) => Promise.resolve(`${url}#resolved`));
     await openDevServerExternally("http://10.0.0.5:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://10.0.0.5:5824", "host-1");
-    expect(openedExternally()).toEqual(["http://10.0.0.5:5824"]);
+    expect(remote.resolve).toHaveBeenCalledWith("http://10.0.0.5:5824/", "host-1");
+    expect(openedExternally()).toEqual(["http://10.0.0.5:5824/#resolved"]);
   });
 });

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { ChoiceCard } from "@/components/ui/card";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { cn } from "@/lib/utils";
 import { opensInPanel } from "@/services/openLinkUrl";
 
 /**
@@ -20,6 +21,7 @@ export function LinksLauncherRow({
   title,
   revealTitle = false,
   detail,
+  keepDetail = false,
   trailing,
   actions,
   url,
@@ -33,6 +35,8 @@ export function LinksLauncherRow({
   /** Show the whole title on hover when it is cut. */
   revealTitle?: boolean;
   detail: ReactNode;
+  /** Keep a short detail whole and cut the title instead, for an address the row is about. */
+  keepDetail?: boolean;
   trailing?: ReactNode;
   actions?: ReactNode;
   url: string | undefined;
@@ -45,7 +49,13 @@ export function LinksLauncherRow({
   const titleId = `${rowId}-title`;
   const detailId = `${rowId}-detail`;
   const titleText = (
-    <span id={titleId} className="min-w-0 shrink-0 max-w-[60%] truncate text-sm text-text-primary">
+    <span
+      id={titleId}
+      className={cn(
+        "min-w-0 truncate text-sm text-text-primary",
+        !keepDetail && "shrink-0 max-w-[60%]"
+      )}
+    >
       {title}
     </span>
   );
@@ -64,7 +74,10 @@ export function LinksLauncherRow({
         )}
         <span
           id={detailId}
-          className="min-w-0 truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150"
+          className={cn(
+            "truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150",
+            keepDetail ? "shrink-0" : "min-w-0"
+          )}
         >
           {detail}
         </span>
