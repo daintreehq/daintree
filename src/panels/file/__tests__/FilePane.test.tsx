@@ -4574,6 +4574,37 @@ describe("FilePane edit mode (#12323)", () => {
     );
   });
 
+  // A file that grows past Source's cap now surfaces the refusal (#17336), but
+  // a standing draft is document state and Rendered keeps previewing it.
+  it("keeps previewing a draft in Rendered when the file grows too large to read", async () => {
+    seedWorktree();
+    useFileDocumentStore.getState().setFileDocument("file-1", {
+      identityKey: "doc",
+      draftText: "# Plan (edited)\n",
+      dirty: true,
+      conflict: false,
+      save: async () => ({ status: "saved" as const }),
+      discard: async () => {},
+    });
+    readMock.mockRejectedValue(
+      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+        code: "FILE_TOO_LARGE",
+        sizeBytes: 600 * 1024,
+      })
+    );
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "rendered",
+    };
+    render(paneElement());
+    await act(async () => {});
+    expect(markdownViewerProps.current?.content).toBe("# Plan (edited)\n");
+    expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
+  });
+
   // #13920: the host refuses a save from a view another screen drives.
   describe("while another screen drives the project", () => {
     const drivenElsewhere = {

@@ -564,6 +564,22 @@ export function FilePane({
     }),
     [changeTick, worktreeChangeTick, gitChangeTick, changedDirs, diffWorktreePath]
   );
+  // Rendered Markdown, the disk text's or a standing draft's.
+  const renderMarkdownDocument = (documentPath: string, text: string) => (
+    <MarkdownImageTrackingContext value={markdownImageTracking}>
+      <MarkdownViewer
+        ref={markdownViewerRef}
+        content={text}
+        filePath={documentPath}
+        rootPath={effectiveRootPath}
+        viewMode="rendered"
+        wrapLines={markdownWrapLines}
+        fontSize={markdownFontSize}
+        cacheBust={String(imageRefreshEpoch)}
+        onRendered={handleHeightHoldRendered}
+      />
+    </MarkdownImageTrackingContext>
+  );
 
   const remoteFile = useRemoteFileContext();
 
@@ -1096,26 +1112,21 @@ export function FilePane({
           )}
 
           {filePath &&
+            previewsDraft &&
+            draftText !== null &&
+            !(loadState === "loaded" && content !== null) &&
+            renderMarkdownDocument(filePath, draftText)}
+
+          {filePath &&
             viewMode !== "diff" &&
             viewMode !== "edit" &&
             !showPluginViewer &&
-            ((loadState === "loaded" && content !== null) || previewsDraft) &&
+            loadState === "loaded" &&
+            content !== null &&
             (viewMode === "rendered" && isMarkdown ? (
-              <MarkdownImageTrackingContext value={markdownImageTracking}>
-                <MarkdownViewer
-                  ref={markdownViewerRef}
-                  // The draft is document state, so Rendered previews it while one
-                  // exists and the disk text otherwise (#12323).
-                  content={draftText ?? content ?? ""}
-                  filePath={filePath}
-                  rootPath={effectiveRootPath}
-                  viewMode="rendered"
-                  wrapLines={markdownWrapLines}
-                  fontSize={markdownFontSize}
-                  cacheBust={String(imageRefreshEpoch)}
-                  onRendered={handleHeightHoldRendered}
-                />
-              </MarkdownImageTrackingContext>
+              // The draft is document state, so Rendered previews it while one
+              // exists and the disk text otherwise (#12323).
+              renderMarkdownDocument(filePath, draftText ?? content)
             ) : viewMode === "rendered" && isHtml ? (
               // Rendered HTML fills the pane in a sandboxed iframe rather than the
               // min-h-full source column; the frame owns its own scrolling.
