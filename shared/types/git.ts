@@ -545,9 +545,9 @@ export interface StagingStatus {
    * {@link RepoOperationPin} so they act on the operation the user saw.
    *
    * `null` when nothing is in progress, and when this read could not identify
-   * the operation (an unreadable sentinel, a `git am` session, or an
-   * operation that changed while the status was being read). A null pin is
-   * refused, so null never authorises anything.
+   * the operation (an unreadable sentinel, or an operation that changed while
+   * the status was being read). A null pin is refused, so null never
+   * authorises anything.
    */
   repoOperationId: string | null;
   /** When `repoState === "REBASING"`, the current step number (1-based). Null otherwise. */

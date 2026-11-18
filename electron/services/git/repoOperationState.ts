@@ -121,8 +121,9 @@ export async function detectRepoOperationState(
  * cherry-pick or revert rewrites `CHERRY_PICK_HEAD`/`REVERT_HEAD` for each
  * commit it stops on, so those are not the operation, only where it is.
  *
- * - A rebase's `orig-head` (both backends). `git am` also uses `rebase-apply/`
- *   but writes no `orig-head`, so an `am` session has no anchor and no pin.
+ * - A rebase's `orig-head` (both backends).
+ * - A `git am` session's `applying`, the marker it writes in `rebase-apply/` as
+ *   it starts. It writes no `orig-head`, and its `next` moves with each patch.
  * - A multi-commit cherry-pick or revert's `sequencer/head`, the HEAD it
  *   started from, which is also what git's own `--abort` rolls back to. A
  *   single-commit one runs without a sequencer and has only its `*_HEAD`.
@@ -140,6 +141,8 @@ async function operationAnchor(gitDir: string, state: RepoState): Promise<string
       return state === "CHERRY_PICKING" ? "CHERRY_PICK_HEAD" : "REVERT_HEAD";
     case "MERGING":
       return "MERGE_HEAD";
+    case "APPLYING_MAILBOX":
+      return "rebase-apply/applying";
     default:
       return null;
   }
@@ -156,8 +159,8 @@ async function operationAnchor(gitDir: string, state: RepoState): Promise<string
  * inode or modification time; nothing during one operation rewrites it.
  *
  * `null` when the operation has no anchor or it cannot be read (it ended
- * mid-read, or an `am` session). Null never matches a pin, so an operation
- * this cannot identify is one no pin can approve.
+ * mid-read). Null never matches a pin, so an operation this cannot identify
+ * is one no pin can approve.
  */
 export async function readRepoOperationId(
   gitDir: string,

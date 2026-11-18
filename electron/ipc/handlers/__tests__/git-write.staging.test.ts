@@ -891,6 +891,10 @@ describe("git-write repository operation handlers on a halted git am (real git)"
     handler(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION)(null, repo) as Promise<void>;
   const abortOperation = () =>
     handler(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION)(null, repo) as Promise<void>;
+  const continueOperationWith = (pin: RepoOperationPin) =>
+    handler(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION)(null, repo, pin) as Promise<void>;
+  const abortOperationWith = (pin: RepoOperationPin) =>
+    handler(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION)(null, repo, pin) as Promise<void>;
   const amMarker = () => path.join(repo, ".git", "rebase-apply", "applying");
 
   /**
@@ -979,6 +983,50 @@ describe("git-write repository operation handlers on a halted git am (real git)"
     expect(fs.existsSync(path.join(repo, ".git", "rebase-apply"))).toBe(false);
     expect(git(repo, "rev-parse", "HEAD").trim()).toBe(tip);
     expect(git(repo, "status", "--porcelain")).toBe("");
+  });
+
+  // Review Hub pins Abort and Continue to the session it shows (#17559), so a
+  // halted am needs an identity of its own, and one a restart changes.
+  it("pins the session it shows, and refuses the pin once the same series restarts", async () => {
+    haltGitAm();
+    const shown = await stagingStatus();
+    expect(shown.repoOperationId).toEqual(expect.any(String));
+    const chosen: RepoOperationPin = {
+      operation: "APPLYING_MAILBOX",
+      operationId: shown.repoOperationId,
+    };
+
+    git(repo, "am", "--abort");
+    // Past the coarse clock some filesystems stamp from, as a real restart is.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const patches = path.join(tmp, "patches");
+    const series = fs
+      .readdirSync(patches)
+      .sort()
+      .map((name) => path.join(patches, name));
+    expect(() =>
+      execFileSync("git", ["am", "-3", ...series], { cwd: repo, env: GIT_ENV, stdio: "ignore" })
+    ).toThrow();
+    // Resolved and staged, so a continue that ran would commit the new session's patch.
+    fs.writeFileSync(path.join(repo, "f.txt"), "resolved\n");
+    git(repo, "add", "f.txt");
+
+    const mark = spawned.length;
+    await expect(abortOperationWith(chosen)).rejects.toMatchObject({
+      reason: "repo-operation-changed",
+    });
+    await expect(continueOperationWith(chosen)).rejects.toMatchObject({
+      reason: "repo-operation-changed",
+    });
+    expect(spawnedSince(mark).map(subcommand)).not.toContain("am");
+    expect(fs.existsSync(amMarker())).toBe(true);
+
+    const current = (await stagingStatus()).repoOperationId;
+    expect(current).toEqual(expect.any(String));
+    expect(current).not.toBe(chosen.operationId);
+    await continueOperationWith({ operation: "APPLYING_MAILBOX", operationId: current });
+    expect(fs.existsSync(path.join(repo, ".git", "rebase-apply"))).toBe(false);
+    expect(git(repo, "log", "-1", "--format=%s").trim()).toBe("topic change");
   });
 });
 

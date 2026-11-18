@@ -532,9 +532,9 @@ export function ConflictPanel({
   const operationLabel = operationKey ? OPERATION_LABEL[operationKey] : "Operation";
   const operationNoun = operationLabel.toLowerCase();
   const shownOperationId = status.repoOperationId;
-  // A halted operation this read couldn't identify (a `git am` session, or one
-  // that changed while the status was read): Main refuses any choice of it, so
-  // neither Abort nor Continue is offered until a read can say which it is.
+  // A halted operation this read couldn't identify (an unreadable sentinel, or
+  // one that changed while the status was read): Main refuses any choice of it,
+  // so neither Abort nor Continue is offered until a read can say which it is.
   const unidentified = operationKey !== null && shownOperationId == null;
 
   // A status read showing a different operation than the open abort confirm

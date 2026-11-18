@@ -83,10 +83,23 @@ describe("readRepoOperationId (#17559)", () => {
     }
   });
 
-  it("can't identify a `git am` session, which shares rebase-apply but has no orig-head", async () => {
+  it("follows a `git am` session by its applying marker, which writes no orig-head", async () => {
     write("rebase-apply/applying", "");
     write("rebase-apply/next", "1\n");
+    // Read as a rebase it has no anchor: only the mailbox state can name it.
     expect(await readRepoOperationId(gitDir, "REBASING")).toBeNull();
+    const first = await readRepoOperationId(gitDir, "APPLYING_MAILBOX");
+    expect(first).toEqual(expect.any(String));
+
+    // Each patch it stops on moves `next`, not the session.
+    write("rebase-apply/next", "2\n");
+    expect(await readRepoOperationId(gitDir, "APPLYING_MAILBOX")).toBe(first);
+
+    // The same series applied again: only the new marker's identity differs.
+    await recreate("rebase-apply/applying", "");
+    const restarted = await readRepoOperationId(gitDir, "APPLYING_MAILBOX");
+    expect(restarted).toEqual(expect.any(String));
+    expect(restarted).not.toBe(first);
   });
 
   it("follows a multi-commit cherry-pick by its sequencer, not the commit it stopped on", async () => {
@@ -135,5 +148,13 @@ describe("readRepoOperationId (#17559)", () => {
     expect(await readCurrentRepoOperationId(gitDir)).toBe(
       await readRepoOperationId(gitDir, "REBASING")
     );
+  });
+
+  it("classifies a `git am` session as its own state, not the rebase it shares a dir with", async () => {
+    write("rebase-apply/applying", "");
+    write("rebase-apply/next", "1\n");
+    const id = await readCurrentRepoOperationId(gitDir);
+    expect(id).toEqual(expect.any(String));
+    expect(id).toBe(await readRepoOperationId(gitDir, "APPLYING_MAILBOX"));
   });
 });
