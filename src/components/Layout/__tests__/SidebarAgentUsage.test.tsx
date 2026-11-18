@@ -62,10 +62,11 @@ function claude(
 }
 
 let pushed: ((snapshot: AgentUsageSnapshot) => void) | null = null;
-const setFollowing = vi.fn();
+const setFollowing =
+  vi.fn<(payload: { following: boolean }) => Promise<AgentUsageSnapshot | null>>();
 
 function installBridge(seed: AgentUsageReadout[] | (() => Promise<AgentUsageSnapshot>)) {
-  setFollowing.mockImplementation(async ({ following }: { following: boolean }) => {
+  setFollowing.mockImplementation(async ({ following }) => {
     if (!following) return null;
     return typeof seed === "function" ? seed() : { readouts: seed, revision: 1 };
   });
@@ -106,7 +107,7 @@ function rows(container: HTMLElement) {
 }
 
 function followCalls() {
-  return setFollowing.mock.calls.map(([payload]) => (payload as { following: boolean }).following);
+  return setFollowing.mock.calls.map(([payload]) => payload.following);
 }
 
 describe("SidebarAgentUsage", () => {
