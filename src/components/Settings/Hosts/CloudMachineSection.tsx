@@ -31,13 +31,13 @@ import {
   CLOUD_LIFETIME_CHOICES,
   CLOUD_PROVISIONING_DIMENSIONS,
   type CloudHostCreatedFor,
-  type CloudHostKeyReview,
 } from "@shared/types/cloudHosts";
 import type { HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsGroup, SettingsRow, SettingsRowActions } from "../SettingsGroup";
 import { SettingsSelect } from "../SettingsSelect";
 import { HostIdleTimeRow } from "./HostIdleTimeRow";
+import { HostKeyReviewDetails } from "./CloudHostKeyReview";
 
 function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
@@ -49,54 +49,6 @@ function errorText(err: unknown, fallback: string): string {
 function createdForLabel(mark: CloudHostCreatedFor): string {
   const where = `${mark.worktreeName} in ${mark.projectName}`;
   return mark.hostName === null ? where : `${where} on ${mark.hostName}`;
-}
-
-/**
- * A host key the machine presented, for the person to compare and trust:
- * once on a first connect, and again, as a warning, whenever it changes.
- */
-function HostKeyReviewDetails({
-  review,
-  providerName,
-}: {
-  review: CloudHostKeyReview;
-  providerName: string;
-}) {
-  const presented = (
-    <span className="select-text break-all font-mono text-2xs">
-      {review.keyType} {review.fingerprint}
-    </span>
-  );
-  if (review.reason === "first-connect") {
-    return (
-      <div className="flex flex-col gap-1.5" data-testid="cloud-host-key-review">
-        <span>
-          {providerName} can&apos;t vouch for this machine&apos;s host key, so Daintree asks you
-          once. Compare it with the fingerprint {providerName} shows for the machine; once trusted,
-          Daintree refuses any other key.
-        </span>
-        {presented}
-      </div>
-    );
-  }
-  return (
-    <div className="flex flex-col gap-1.5" data-testid="cloud-host-key-review">
-      <Callout severity="warning" title="This machine's identity changed">
-        It presents a different host key from the one you trusted
-        {review.previousTrustedAt !== null
-          ? ` on ${new Date(review.previousTrustedAt).toLocaleDateString()}`
-          : ""}
-        , so Daintree won&apos;t connect. Trust the new key only if you expect the change, such as
-        after the machine was rebuilt.
-      </Callout>
-      <span className="select-text break-all font-mono text-2xs">
-        Trusted {review.previousFingerprint}
-      </span>
-      <span className="select-text break-all font-mono text-2xs">
-        Now {review.keyType} {review.fingerprint}
-      </span>
-    </div>
-  );
 }
 
 const LIFETIME_VALUES = CLOUD_LIFETIME_CHOICES.map((hours) =>

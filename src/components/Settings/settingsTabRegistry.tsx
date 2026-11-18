@@ -328,6 +328,8 @@ const HOSTS_TAB = {
     "boat",
     "agent 37",
     "agent37",
+    "digitalocean",
+    "droplet",
   ],
   sections: [
     {
@@ -347,8 +349,12 @@ const HOSTS_TAB = {
         "boat",
         "agent 37",
         "agent37",
+        "digitalocean",
+        "digital ocean",
+        "droplet",
         "cloud",
         "api key",
+        "access token",
         "provider",
         "machine",
         "vm",

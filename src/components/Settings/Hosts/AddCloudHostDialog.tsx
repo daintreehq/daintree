@@ -50,6 +50,14 @@ interface AddCloudHostDialogProps {
 
 type Mode = "create" | "import";
 
+/** One clause stays a bare line; several are sentences, each ended once. */
+function importNote(...parts: Array<string | null>): string {
+  const clauses = parts
+    .filter((part): part is string => !!part)
+    .map((part) => part.replace(/\.$/, ""));
+  return clauses.length > 1 ? `${clauses.join(". ")}.` : (clauses[0] ?? "");
+}
+
 function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
     ? err.userMessage
@@ -529,7 +537,14 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                   {lifetimeModel.kind === "idle-sleep"
                     ? // Each machine's own setting decides whether it sleeps; this one's may be off.
                       `Adding it doesn't start it or change whether ${provider.name} puts it to sleep when idle.`
-                    : `Adding it doesn't start it or change its auto-stop${providerStopSentence(lifetimeModel, provider.name) ? `. ${providerStopSentence(lifetimeModel, provider.name)}` : ""}`}
+                    : importNote(
+                        "Adding it doesn't start it or change its auto-stop",
+                        providerStopSentence(lifetimeModel, provider.name),
+                        // Nothing can hand this device's key to a machine that didn't take it when it was made.
+                        provider.capabilities.provisioning.sshKey === "at-create"
+                          ? `${provider.name} takes an SSH key only when a machine is created, so Daintree connects only to one that already accepts this account's key from this device`
+                          : null
+                      )}
                 </FieldDescription>
               </Field>
             )}

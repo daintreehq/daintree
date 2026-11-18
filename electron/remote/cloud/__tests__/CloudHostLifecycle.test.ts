@@ -381,6 +381,59 @@ describe("CloudHostLifecycle.create", () => {
     });
   });
 
+  it("reads a create the provider turned down as refused, so Retry sends a fresh one", async () => {
+    const turnedDown = new Error("Size is not available in this region.");
+    const { lifecycle, provider, store } = await setup(
+      {},
+      {
+        adapt: (provider) => {
+          const describe = provider.describeError.bind(provider);
+          provider.describeError = (error) =>
+            error === turnedDown
+              ? { code: "refused", message: `Acme turned this down: ${turnedDown.message}`, at: 0 }
+              : describe(error);
+        },
+      }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(turnedDown);
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "refused",
+      message: "Acme turned this down: Size is not available in this region.",
+    });
+    await lifecycle.retryCreate("build");
+    const keys = vi.mocked(provider.create).mock.calls.map(([, request]) => request.idempotencyKey);
+    expect(keys).toHaveLength(2);
+    expect(keys.every((key) => typeof key === "string" && key.length > 0)).toBe(true);
+    expect(keys[1]).not.toBe(keys[0]);
+    // Nothing was made by the refusal, so the retry doesn't go looking for it first.
+    expect(provider.list).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]).toMatchObject({ resourceId: "bx_23456789", lastError: null });
+  });
+
+  it("keeps looking for a lost create's machine when a retry is turned down", async () => {
+    const { lifecycle, provider, store } = await setup();
+    vi.mocked(provider.create)
+      .mockRejectedValueOnce(new BoatApiError("timeout", "slow", null, null, null))
+      .mockRejectedValueOnce(new BoatApiError("payment-required", "limit", 402, null, null));
+    const request = { accountId: store.accounts()[0]!.id, name: "build", machineType: "default" };
+    await lifecycle.create({ ...request, lifetimeHours: 2 });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    const firstSent = store.bindings()[0]?.creation?.sentAt;
+    expect(firstSent).toEqual(expect.any(Number));
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow();
+    // The retry was sent and turned down: that says nothing of the first request's machine.
+    expect(provider.create).toHaveBeenCalledTimes(2);
+    expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+    expect(store.bindings()[0]?.creation?.sentAt).toBe(firstSent);
+  });
+
   it("refuses a size the account can't have before anything is sent", async () => {
     const { lifecycle, provider, store } = await setup();
     await expect(
