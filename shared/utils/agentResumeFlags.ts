@@ -1,10 +1,11 @@
 import {
   getPluginBypassArgHistory,
-  reconcileBypassFlags,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
-  resolveEffectiveBypass,
+  reconcilePermissionFlags,
+  resolveEffectivePermissionLevel,
   resolveKeepDecorations,
+  userPermissionArgs,
   type AgentSettings,
 } from "../types/agentSettings.js";
 import { splitCallerLaunchFlags } from "./callerLaunchFlags.js";
@@ -30,7 +31,7 @@ export function reconcileResumeLaunchFlagsWith(
   settings: AgentSettings | null | undefined
 ): string[] {
   const entry = settings?.agents?.[session.agentId] ?? {};
-  const effectiveBypass = resolveEffectiveBypass(
+  const permissionLevel = resolveEffectivePermissionLevel(
     entry,
     session.agentId,
     settings?.globalSkipPermissions
@@ -43,13 +44,11 @@ export function reconcileResumeLaunchFlagsWith(
   // for a supported agent (each reconcile no-ops for agents without one).
   const reconciled = reconcileDecorationFlags(
     reconcileInlineModeFlag(
-      reconcileBypassFlags(
-        base,
-        session.agentId,
-        effectiveBypass,
-        entry.dangerousArgs as string | undefined,
-        getPluginBypassArgHistory(settings, session.agentId)
-      ),
+      reconcilePermissionFlags(base, session.agentId, permissionLevel, {
+        bypassArgs: entry.dangerousArgs,
+        pluginBypassArgHistory: getPluginBypassArgHistory(settings, session.agentId),
+        userArgs: userPermissionArgs(entry),
+      }),
       session.agentId
     ),
     session.agentId,

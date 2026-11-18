@@ -632,35 +632,9 @@ function bypassGroupAt(
 
 /**
  * Reconciles a persisted `agentLaunchFlags` snapshot against the current
- * effective bypass setting (#10432, the "resume trap").
- *
- * Strips the agent's canonical bypass flag (the resolved `dangerousArgs`, plus
- * the registry default as a fallback so a snapshot captured under a different
- * `dangerousArgs` still gets cleaned) from `flags`, then re-appends it only
- * when `effectiveBypass` is true. This makes every spawn/restart/restore/resume
- * idempotent: flipping the resolved decision off stops carrying a stale bypass
- * flag forward, and flipping it on re-adds it.
- *
- * `effectiveBypass` is the single source of truth — it already encodes the full
- * tri-state decision (preset/agent `"on"`/`"off"` and the support-gated global
- * inherit, via {@link resolveEffectiveBypass}). So this applies uniformly to
- * every agent: its flag is preserved when `effectiveBypass` is true, and an
- * explicit `"off"` veto strips a stale token when it is false. Agents with no
- * canonical token (no default from {@link getDefaultDangerousArgs} and no `dangerousArgs`)
- * fall through the empty-strip-set guard below and are left untouched.
- *
- * Bypass args are matched one option group at a time — an option together with
- * the value that follows it — never token by token: a custom Codex bypass like
- * `-c approval_policy=never` shares its `-c` with every other config override
- * in the list, and stripping that `-c` alone would orphan the value that
- * followed it (#13046). Groups rather than the whole sequence, so a bypass
- * whose other half another reconciler already rewrote is still recognised.
- *
- * @param bypassArgs - The agent's currently-resolved dangerous args (e.g.
- *   `entry.dangerousArgs`); falls back to {@link getDefaultDangerousArgs}.
- * @param pluginBypassArgHistory - Every bypass declaration a plugin has made for
- *   the agent ({@link getPluginBypassArgHistory}), stripped but never re-added,
- *   so a saved flag is recognised while the plugin's own declaration is absent.
+ * effective bypass setting (#10432, the "resume trap"); the boolean form of
+ * {@link reconcilePermissionFlags}, `true` being Skip all and `false` the CLI
+ * default.
  */
 export function reconcileBypassFlags(
   flags: readonly string[],
@@ -669,38 +643,118 @@ export function reconcileBypassFlags(
   bypassArgs?: string,
   pluginBypassArgHistory: readonly (readonly string[])[] = []
 ): string[] {
-  const resolved = resolveDangerousArgs(bypassArgs, agentId);
-  const groups = bypassArgGroups(bypassArgSources(agentId, resolved, pluginBypassArgHistory));
-  if (groups.length === 0) return [...flags];
-  // A standing instruction is free text that can equal a bypass token, and
-  // Codex's shares a `-c` with config-override bypass args (#12431). Stripping
-  // either half would orphan the other — a lone value becomes the first-turn
-  // prompt — so both are left alone.
-  const instruction = systemPromptArgPositions(flags, agentId);
-  const matchLengthAt = (index: number): number =>
-    groups.find((group) => bypassGroupAt(flags, index, group, instruction))?.length ?? 0;
+  return reconcilePermissionFlags(flags, agentId, effectiveBypass ? "skip" : "cli-default", {
+    bypassArgs,
+    pluginBypassArgHistory,
+  });
+}
 
-  // Bypass wanted: replace the first canonical occurrence in place with the
-  // currently-resolved args (preserving flag order so a snapshot that already
-  // carries the right flag is left untouched), drop any duplicates, and append
-  // if the flag was absent. Bypass not wanted: drop every occurrence.
-  const wanted = effectiveBypass && resolved ? resolved.split(/\s+/).filter(Boolean) : undefined;
+/**
+ * The args the user put on a launch themselves, for
+ * {@link reconcilePermissionFlags}: the effective entry's custom flags (a
+ * preset's replace the agent's) and the preset's own args.
+ */
+export function userPermissionArgs(
+  entry: Pick<AgentSettingsEntry, "customFlags">,
+  presetArgs?: readonly string[]
+): string[] {
+  return [...(presetArgs ?? []), ...parseLaunchArgs(entry.customFlags)];
+}
+
+export interface ReconcilePermissionFlagsOptions {
+  /** The agent's currently-resolved dangerous args; falls back to {@link getDefaultDangerousArgs}. */
+  bypassArgs?: string;
+  /**
+   * Every bypass declaration a plugin has made for the agent
+   * ({@link getPluginBypassArgHistory}), stripped but never re-added, so a
+   * saved flag is recognised while the plugin's own declaration is absent.
+   */
+  pluginBypassArgHistory?: readonly (readonly string[])[];
+  /**
+   * The user's own args today ({@link userPermissionArgs}). When they carry
+   * the agent's Auto group, every copy in the snapshot is theirs and stays.
+   */
+  userArgs?: readonly string[];
+}
+
+/**
+ * Reconciles a persisted `agentLaunchFlags` snapshot against the current
+ * permission level (#10432 the "resume trap", #17435).
+ *
+ * The bypass args (the resolved `dangerousArgs`, the registry default — a
+ * snapshot may predate a custom `dangerousArgs` — retired defaults and every
+ * plugin declaration) and the agent's declared Auto args are stripped, then the
+ * args the level wants take the first stripped slot, or go on the end when the
+ * snapshot held none. Every spawn/restart/restore/resume is idempotent: flipping
+ * the level replaces what a snapshot carries instead of stacking on it.
+ *
+ * Args are matched one option group at a time — an option together with the
+ * value that follows it — never token by token: a custom Codex bypass like
+ * `-c approval_policy=never` shares its `-c` with every other config override
+ * in the list, and stripping that `-c` alone would orphan the value that
+ * followed it (#13046). Groups rather than the whole sequence, so a bypass
+ * whose other half another reconciler already rewrote is still recognised. A
+ * standing instruction is free text that can equal a bypass token, and Codex's
+ * shares a `-c` with config-override bypass args (#12431), so neither half of
+ * one ever matches.
+ *
+ * An Auto group the user's own args carry is theirs, as a fresh launch would
+ * carry it whatever the level: it is never stripped, and at Auto it stands in
+ * for Daintree's copy. Any copy is enough at Auto, so none is added beside it
+ * (Codex rejects `--approve-for-me` given twice).
+ */
+export function reconcilePermissionFlags(
+  flags: readonly string[],
+  agentId: string,
+  level: PermissionLevel,
+  options: ReconcilePermissionFlagsOptions = {}
+): string[] {
+  const resolved = resolveDangerousArgs(options.bypassArgs, agentId);
+  const groups = bypassArgGroups(
+    bypassArgSources(agentId, resolved, options.pluginBypassArgHistory ?? [])
+  );
+  const autoArgs = getPermissionAutoArgs(agentId);
+  if (groups.length === 0 && autoArgs.length === 0) return [...flags];
+  const instruction = systemPromptArgPositions(flags, agentId);
+  const bypassLengthAt = (index: number): number =>
+    groups.find((group) => bypassGroupAt(flags, index, group, instruction))?.length ?? 0;
+  const autoAt = (index: number): boolean =>
+    autoArgs.length > 0 && bypassGroupAt(flags, index, autoArgs, instruction);
+  const keepAuto =
+    level === "auto" ||
+    (autoArgs.length > 0 && findTokenSequence(options.userArgs ?? [], autoArgs) !== -1);
+  const autoPresent = level === "auto" && flags.some((_, index) => autoAt(index));
+
+  // The level's args replace the first stripped group in place, preserving flag
+  // order so a snapshot that already carries them is left untouched.
+  const wanted =
+    level === "skip"
+      ? resolved.split(/\s+/).filter(Boolean)
+      : level === "auto" && !autoPresent
+        ? [...autoArgs]
+        : [];
   const reconciled: string[] = [];
   let inserted = false;
+  const fillSlot = () => {
+    if (inserted) return;
+    reconciled.push(...wanted);
+    inserted = true;
+  };
   for (let index = 0; index < flags.length;) {
-    const matched = matchLengthAt(index);
-    if (matched > 0) {
-      if (wanted && !inserted) {
-        reconciled.push(...wanted);
-        inserted = true;
-      }
-      index += matched;
+    const bypassLength = bypassLengthAt(index);
+    if (bypassLength > 0) {
+      fillSlot();
+      index += bypassLength;
+    } else if (autoAt(index)) {
+      if (keepAuto) reconciled.push(...autoArgs);
+      else fillSlot();
+      index += autoArgs.length;
     } else {
       reconciled.push(flags[index] as string);
       index += 1;
     }
   }
-  if (wanted && !inserted) reconciled.push(...wanted);
+  if (!inserted) reconciled.push(...wanted);
   return reconciled;
 }
 

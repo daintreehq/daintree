@@ -55,6 +55,7 @@ import {
 } from "../../../../shared/types/terminal.js";
 import {
   DEFAULT_DANGEROUS_ARGS,
+  getPermissionAutoArgs,
   relaunchResumeAsAssignedSession,
   supportsExactSessionCapture,
   supportsSessionIdAssignment,
@@ -936,6 +937,20 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         if (bypassPermissions && agentAllowsBypass) {
           safeCommand = safeCommand.length > 0 ? `${safeCommand} ${dangerous}` : dangerous;
         }
+      }
+      // The terminal setting's Auto mode (#17435) reaches this command through
+      // the agent's launch flags, but the assistant's permission level is its
+      // own, so the declared Auto args (and their `--option=value` form) never
+      // survive here, as the bypass flag above never survives on its own.
+      const autoArgs = getPermissionAutoArgs(launchAgentId).map((arg) =>
+        arg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      );
+      if (autoArgs.length > 0) {
+        const [option, ...values] = autoArgs;
+        const body =
+          values.length > 0 ? `${option}(?:\\s+|=)${values.join("\\s+")}` : `${option}(?:=\\S*)?`;
+        const autoPattern = new RegExp(`(^|\\s+)${body}(?=\\s|$)`, "g");
+        safeCommand = safeCommand.replace(autoPattern, "").trim();
       }
       // Codex doesn't read project-scoped `.codex/config.toml` from cwd —
       // its only override mechanism is the `-c key=value` CLI flag. The
