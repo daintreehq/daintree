@@ -19,7 +19,7 @@ import {
   type CadenceChoice,
   type CadenceKind,
 } from "./cadenceChoice";
-import { formatNextRunRelative, formatRunParts } from "./runTime";
+import { formatNextRunRelative, formatRunColumn } from "./runTime";
 
 const KIND_OPTIONS: SettingsSelectOption[] = [
   { value: "interval", label: "Every few minutes or hours" },
@@ -268,7 +268,6 @@ function CadencePreview({
   problem: boolean;
 }) {
   const listId = useId();
-  const foreign = timeZone !== machineTimeZone();
   if (problem) {
     return (
       <SettingsRow
@@ -278,6 +277,7 @@ function CadencePreview({
       />
     );
   }
+  const { foreign, rows } = formatRunColumn(runs, timeZone, now);
   return (
     <SettingsRow
       rootAttributes={{ "data-testid": "schedule-cadence-preview" }}
@@ -295,20 +295,17 @@ function CadencePreview({
             aria-labelledby={listId}
             className="grid grid-cols-[auto_auto_1fr] gap-x-3 gap-y-1 tabular-nums"
           >
-            {runs.map((run, index) => {
-              const parts = formatRunParts(run, timeZone, now);
-              return (
-                <li key={run} className="col-span-3 grid grid-cols-subgrid">
-                  <span className="text-text-primary">{parts.day}</span>
-                  <span className="text-text-primary">{parts.time}</span>
-                  {index === 0 && (
-                    <span className="text-text-secondary">
-                      {formatNextRunRelative(run, now, timeZone)}
-                    </span>
-                  )}
-                </li>
-              );
-            })}
+            {rows.map((row, index) => (
+              <li key={row.at} className="col-span-3 grid grid-cols-subgrid">
+                <span className="text-text-primary">{row.day}</span>
+                <span className="text-text-primary">{row.time}</span>
+                {index === 0 && (
+                  <span className="text-text-secondary">
+                    {formatNextRunRelative(row.at, now, timeZone)}
+                  </span>
+                )}
+              </li>
+            ))}
           </ol>
         </div>
       }

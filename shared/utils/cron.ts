@@ -523,11 +523,20 @@ export function validateTimeZone(timeZone: string): TimeZoneValidation {
   }
 }
 
+// The zone is read on every call, since the machine can change zone while the app
+// runs; only the check of a zone already seen is skipped.
+let lastMachineZone: { readonly reported: string | undefined; readonly zone: string } | null = null;
+
 /** The machine's IANA time zone, or UTC when the runtime can't name one. */
 export function machineTimeZone(): string {
   try {
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return zone && validateTimeZone(zone).ok ? zone : "UTC";
+    const reported: string | undefined = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    let known = lastMachineZone;
+    if (known === null || known.reported !== reported) {
+      known = { reported, zone: reported && validateTimeZone(reported).ok ? reported : "UTC" };
+      lastMachineZone = known;
+    }
+    return known.zone;
   } catch {
     return "UTC";
   }
