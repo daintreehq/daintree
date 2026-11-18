@@ -198,11 +198,18 @@ vi.mock("../../utils/openExternal.js", () => ({
   openExternalUrl: vi.fn(),
 }));
 
+const recoveryPageBackupInfoMock = vi.hoisted(() =>
+  vi.fn((): { backupTimestamp: number | null; panelCount: number | null } => ({
+    backupTimestamp: null,
+    panelCount: null,
+  }))
+);
+
 vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: vi.fn(() => ({
     recordCrash: vi.fn(),
     recordRendererGone: vi.fn(),
-    getRecoveryPageBackupInfo: vi.fn(() => ({ backupTimestamp: null, panelCount: null })),
+    getRecoveryPageBackupInfo: recoveryPageBackupInfoMock,
   })),
 }));
 
@@ -1751,6 +1758,26 @@ describe("ProjectViewManager — startup view crash hook (#12954)", () => {
       expect(setup.onViewEvicted).not.toHaveBeenCalled();
       expect(capturedIds()).toEqual([bWc.id]);
       expect(manager.getActiveProjectId()).toBe("proj-a");
+    });
+
+    it("puts the backup timestamp and panel count on a project view's recovery page", async () => {
+      const setup = createManager();
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+      recoveryPageBackupInfoMock.mockReturnValueOnce({
+        backupTimestamp: 1_700_000_000_000,
+        panelCount: 0,
+      });
+
+      for (let i = 0; i < 3; i++) {
+        bWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      }
+      await flushImmediates();
+
+      expect(recoveryPageBackupInfoMock).toHaveBeenCalledTimes(1);
+      const url = new URL(String(bWc.loadURL.mock.calls.at(-1)?.[0]));
+      expect(url.pathname).toBe("/recovery.html");
+      expect(url.searchParams.get("backupTimestamp")).toBe("1700000000000");
+      expect(url.searchParams.get("panelCount")).toBe("0");
     });
   });
 });

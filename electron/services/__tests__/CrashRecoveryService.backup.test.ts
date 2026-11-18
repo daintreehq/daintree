@@ -1350,6 +1350,10 @@ describe("CrashRecoveryService", () => {
         current,
         JSON.stringify({ capturedAt: Date.now(), appState: { terminals: terminals(2) } })
       );
+      fs.writeFileSync(
+        previous,
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: terminals(5) } })
+      );
       const reads = spyBackupReads();
 
       const info = svc.getRecoveryPageBackupInfo();
@@ -1408,6 +1412,26 @@ describe("CrashRecoveryService", () => {
       const info = svc.getRecoveryPageBackupInfo();
 
       expect(info).toEqual({ backupTimestamp: fs.statSync(current).mtimeMs, panelCount: null });
+    });
+
+    it("gates a previous-generation fallback by its capture time, not its mtime", () => {
+      const { current, previous } = backupPaths();
+      const svc = makeService();
+      fs.writeFileSync(current, "{ corrupt");
+      fs.writeFileSync(
+        previous,
+        JSON.stringify({ capturedAt: Date.now() - 5_000, appState: { terminals: terminals(2) } })
+      );
+      svc.initialize();
+      const touched = new Date(Date.now() + 1_000);
+      fs.utimesSync(previous, touched, touched);
+      const reads = spyBackupReads();
+
+      const info = svc.getRecoveryPageBackupInfo();
+
+      expect(info).toEqual({ backupTimestamp: fs.statSync(previous).mtimeMs, panelCount: null });
+      expect(reads(current)).toBe(1);
+      expect(reads(previous)).toBe(1);
     });
 
     it("returns nulls when neither generation is parseable", () => {
