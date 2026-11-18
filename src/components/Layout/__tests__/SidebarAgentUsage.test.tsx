@@ -23,8 +23,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarAgentUsage } from "../SidebarAgentUsage";
 
 const NOW = Date.now();
+/** A reset this close, and a wait well past it but far short of the minute clock. */
+const RESET_IN_MS = 60;
+const PAST_RESET_MS = 150;
 
-function codex(usedPercent: number, overrides: Partial<AgentUsageReadout> = {}): AgentUsageReadout {
+function codex(
+  usedPercent: number,
+  overrides: Partial<AgentUsageReadout> = {},
+  reading: Partial<Extract<AgentUsageReadout["reading"], { agentId: "codex" }>> = {}
+): AgentUsageReadout {
   return {
     hostId: "local",
     hostName: null,
@@ -36,6 +43,7 @@ function codex(usedPercent: number, overrides: Partial<AgentUsageReadout> = {}):
       usedPercent,
       resetsAt: null,
       observedAt: NOW,
+      ...reading,
     },
     ...overrides,
   };
@@ -240,14 +248,11 @@ describe("SidebarAgentUsage", () => {
   });
 
   it("hands over to the next reading at the shown one's reset, not a minute later", async () => {
-    const resetsAt = Date.now() + 60;
-    installBridge([
-      { ...codex(95), reading: { ...codex(95).reading, resetsAt } },
-      { ...codex(70), reading: { ...codex(70).reading, windowDurationMins: 10080 } },
-    ]);
+    const resetsAt = Date.now() + RESET_IN_MS;
+    installBridge([codex(95, {}, { resetsAt }), codex(70, {}, { windowDurationMins: 10080 })]);
     const { container } = await renderUsage();
     expect(rows(container)[0]!.textContent).toMatch(/^Codex 95%/);
-    await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+    await act(() => new Promise((resolve) => setTimeout(resolve, PAST_RESET_MS)));
     expect(rows(container)[0]!.textContent).toBe("Codex 70% · Work");
   });
 });
