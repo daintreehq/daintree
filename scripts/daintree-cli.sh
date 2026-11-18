@@ -612,6 +612,10 @@ AWK
     daintree_call_fail 3 "the call to $tool was sent, but its answer was lost ($(daintree_call_curl_error)); it may have run"
   fi
   if [[ $DTC_STATUS != 200 ]]; then
+    # Refused before it ran (a body over the size limit): a JSON-RPC error says why.
+    if awk -v mode=refusal "$awk_program" < "$DTC_TMP/reply" > /dev/null 2> "$DTC_TMP/refusal"; then :; elif [[ $? -eq 11 ]]; then
+      daintree_call_fail 1 "Daintree refused the call to $tool: $(head -c 300 "$DTC_TMP/refusal" 2> /dev/null || true)"
+    fi
     daintree_call_fail 3 "Daintree didn't answer the call to $tool (HTTP ${DTC_STATUS:-none}): $(daintree_call_reply_excerpt)"
   fi
   rc=0

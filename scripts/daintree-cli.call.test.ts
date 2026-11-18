@@ -211,7 +211,8 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
       return;
     }
     if (options.callReply !== undefined && rpc?.method === "tools/call") {
-      res.writeHead(200, { "Content-Type": "text/event-stream" }).end(options.callReply);
+      const status = options.callReply.startsWith("{") ? 413 : 200;
+      res.writeHead(status, { "Content-Type": "text/event-stream" }).end(options.callReply);
       return;
     }
     if (options.brokenInitialize && rpc?.method === "initialize") {
@@ -452,6 +453,18 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     const reply = fixture.seen[2].response;
     expect(reply.indexOf("notifications/message")).toBeGreaterThan(-1);
     expect(reply.indexOf("notifications/message")).toBeLessThan(reply.indexOf('"result"'));
+  });
+
+  it("exits 1 when Daintree refuses the call before running it", async () => {
+    await fixture.close();
+    fixture = await startFixture({
+      callReply: handshakeRefusal.replace("Start the Assistant again.", "Too large"),
+    });
+
+    const run = await call(["fixture.echo"]);
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain("Too large");
   });
 
   it("exits 1 when Daintree has no such tool", async () => {
