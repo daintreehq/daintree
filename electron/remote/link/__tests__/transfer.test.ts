@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BULK_CHUNK_BYTES, FrameDecoder, Lane, encodeFrame } from "../frames.js";
 import {
   BulkKind,
@@ -267,6 +267,66 @@ describe("bulk transfer", () => {
       expect(Buffer.from(tail).equals(content.subarray(BULK_CHUNK_BYTES))).toBe(true);
     } finally {
       await source.close?.();
+    }
+  });
+
+  /** Counts the reads and closes on `file`'s handles, running `afterRead` after each read. */
+  function watchFileReads(file: string, afterRead: (reads: number) => void = () => {}) {
+    const counts = { opens: 0, reads: 0, closes: 0 };
+    const realOpen = fs.open.bind(fs);
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (args[0] !== file) return handle;
+      counts.opens += 1;
+      const read = handle.read.bind(handle) as (...readArgs: unknown[]) => Promise<unknown>;
+      const close = handle.close.bind(handle);
+      Object.assign(handle, {
+        read: async (...readArgs: unknown[]) => {
+          counts.reads += 1;
+          const result = await read(...readArgs);
+          afterRead(counts.reads);
+          return result;
+        },
+        close: () => {
+          counts.closes += 1;
+          return close();
+        },
+      });
+      return handle;
+    });
+    return { counts, restore: () => spy.mockRestore() };
+  }
+
+  it("stops hashing a file once its signal aborts, issuing no further reads and closing it", async () => {
+    const file = path.join(dir, "cancelled.bin");
+    await fs.writeFile(file, crypto.randomBytes(BULK_CHUNK_BYTES * 3));
+    const controller = new AbortController();
+    const watched = watchFileReads(file, (reads) => {
+      if (reads === 1) controller.abort();
+    });
+    try {
+      await expect(fileTransferSource(file, controller.signal)).rejects.toMatchObject({
+        name: "AbortError",
+      });
+      expect(watched.counts).toEqual({ opens: 1, reads: 1, closes: 1 });
+    } finally {
+      watched.restore();
+    }
+  });
+
+  it("opens nothing for a signal that has already aborted", async () => {
+    const file = path.join(dir, "never.bin");
+    await fs.writeFile(file, crypto.randomBytes(16));
+    const controller = new AbortController();
+    controller.abort();
+    const watched = watchFileReads(file);
+    try {
+      await expect(fileTransferSource(file, controller.signal)).rejects.toMatchObject({
+        name: "AbortError",
+      });
+      expect(watched.counts.opens).toBe(0);
+    } finally {
+      watched.restore();
     }
   });
 

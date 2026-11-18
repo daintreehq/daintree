@@ -127,19 +127,29 @@ export function bytesTransferSource(bytes: Uint8Array): TransferSource {
   };
 }
 
-/** Hash the file up front, then serve reads from one open handle. */
-export async function fileTransferSource(filePath: string): Promise<TransferSource> {
+/**
+ * Hash the file up front, then serve reads from one open handle. Hashing a
+ * large file on a slow drive takes a while, so an abort stops it between
+ * chunks: the read in flight finishes, no other starts, and the handle closes.
+ */
+export async function fileTransferSource(
+  filePath: string,
+  signal?: AbortSignal
+): Promise<TransferSource> {
+  signal?.throwIfAborted();
   const handle = await fs.open(filePath, "r");
   try {
     const { size } = await handle.stat();
     const hash = crypto.createHash("sha256");
     const buf = Buffer.allocUnsafe(BULK_CHUNK_BYTES);
     for (let offset = 0; offset < size;) {
+      signal?.throwIfAborted();
       const { bytesRead } = await handle.read(buf, 0, buf.byteLength, offset);
       if (bytesRead === 0) break;
       hash.update(buf.subarray(0, bytesRead));
       offset += bytesRead;
     }
+    signal?.throwIfAborted();
     return {
       size,
       sha256: hash.digest("hex"),
