@@ -148,6 +148,18 @@ describe("refreshDeclaredProjectLinks (#17252)", () => {
     expect(useDeclaredProjectLinksStore.getState().links).toEqual([moved]);
   });
 
+  it("shows a link that now comes from another manifest (#17254)", async () => {
+    const first = refreshDeclaredProjectLinks("p1");
+    h.pending[0]!.resolve([HOMEPAGE]);
+    await first;
+    // package.json dropped its homepage, and pyproject.toml names the same one.
+    const fromPyproject: DeclaredProjectLink = { ...HOMEPAGE, source: "pyproject.toml" };
+    const second = refreshDeclaredProjectLinks("p1");
+    h.pending[1]!.resolve([fromPyproject]);
+    await second;
+    expect(useDeclaredProjectLinksStore.getState().links).toEqual([fromPyproject]);
+  });
+
   it("holds the list through an empty read while a newer read is queued behind it", async () => {
     const first = refreshDeclaredProjectLinks("p1");
     h.pending[0]!.resolve([HOMEPAGE]);
