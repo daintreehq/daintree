@@ -258,7 +258,15 @@ describe("localSpeechWorker", () => {
 
   it("holds a pause's end of speech until the audio queued behind it shows the speaker went on", async () => {
     await start();
-    script.tokens = [[[0, 1], [1, 3]], [], [], []];
+    script.tokens = [
+      [
+        [0, 1],
+        [1, 3],
+      ],
+      [],
+      [],
+      [],
+    ];
     script.vad[0] = ["start"];
     // Silence ends speech in packet 12; packet 13, already captured, starts it again.
     script.vad[11] = ["end"];
@@ -282,7 +290,13 @@ describe("localSpeechWorker", () => {
 
   it("closes a pause heard in silence without waiting for the next chunk to fill", async () => {
     await start();
-    script.tokens = [[[0, 1], [1, 3]], []];
+    script.tokens = [
+      [
+        [0, 1],
+        [1, 3],
+      ],
+      [],
+    ];
     script.vad[0] = ["start"];
     // Speech end heard in packet 16; only two whole chunks (1,120 ms) are decoded.
     script.vad[15] = ["end"];
@@ -308,8 +322,6 @@ describe("localSpeechWorker", () => {
     send({ type: "finish", session: 1 });
     await vi.waitFor(() => expect(posted.at(-1)).toEqual({ type: "finished", session: 1 }));
     expect(posted.filter((m) => m.type === "session-error")).toEqual([]);
-    expect(segments()).toEqual([
-      expect.objectContaining({ text: "tests", reason: "finish" }),
-    ]);
+    expect(segments()).toEqual([expect.objectContaining({ text: "tests", reason: "finish" })]);
   });
 });

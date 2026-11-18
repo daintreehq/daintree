@@ -231,8 +231,7 @@ function flushOutbox(target: Session): void {
 /** Lets the output go once no captured audio waits behind it, or it has waited too long. */
 function flushIfCaughtUp(target: Session): void {
   const waiting = (queuedAudio.get(target.id) ?? 0) > 0;
-  const tooLong =
-    target.heldSince !== null && performance.now() - target.heldSince >= MAX_HOLD_MS;
+  const tooLong = target.heldSince !== null && performance.now() - target.heldSince >= MAX_HOLD_MS;
   if (!waiting || tooLong) flushOutbox(target);
 }
 

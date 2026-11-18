@@ -163,12 +163,7 @@ export function LocalSpeechModelRow({
         control={({ disabled, descriptionId }) => {
           if (readFailed && !status) {
             return (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={retry}
-                aria-describedby={descriptionId}
-              >
+              <Button size="sm" variant="outline" onClick={retry} aria-describedby={descriptionId}>
                 Retry
               </Button>
             );
