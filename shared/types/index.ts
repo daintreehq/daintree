@@ -196,7 +196,9 @@ export type {
   IssueNotFoundPayload,
   // Project close IPC types
   ProjectCloseResult,
+  ProjectSleepOptions,
   ProjectSleepResult,
+  SleepRequestWorking,
   ProjectStats,
   BulkProjectStatsEntry,
   BulkProjectStats,

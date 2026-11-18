@@ -115,18 +115,23 @@ function currentWakeOutcome(entry: WakeContinueEntry, projectId: string): WakeRo
 }
 
 /**
- * Offer a continue note for the agents a restore just relaunched, replacing
- * any offer an earlier restore of this view made. Nothing is sent until the
- * user asks. A restore with nothing that can take a note (no agent resumed,
- * and none held only until the user starts it) clears the offer.
+ * Offer a continue note for the agents a restore just relaunched that were last
+ * seen working before they were stopped (#17886), replacing any offer an
+ * earlier restore of this view made. One that was idle, waiting or done has
+ * nothing to pick up, so it is left out altogether. Nothing is sent until the
+ * user asks. A restore with nothing that can take a note (no such agent
+ * resumed, and none held only until the user starts it) clears the offer.
  */
 export function publishWakeCandidates(
   projectId: string | null | undefined,
-  candidates: readonly WakeCandidate[]
+  allCandidates: readonly WakeCandidate[]
 ): void {
   const store = useWakeContinueStore.getState();
   const previous = store.offer;
   if (previous) cancelAgentRequests(`${OWNER_PREFIX}${previous.id}:`);
+  const candidates = allCandidates.filter(
+    (candidate) => candidate.lastSeen?.agentState === "working"
+  );
   const offerable = candidates.some(
     (candidate) =>
       candidate.outcome === "resumed" ||

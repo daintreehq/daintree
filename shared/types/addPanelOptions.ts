@@ -278,6 +278,8 @@ export interface AddPanelOptionsBase {
   restoreProvenance?: TerminalRestoreProvenance;
   /** PTY-only. See `PtyPanelData.lastAgentObservation`. */
   lastAgentObservation?: TerminalAgentObservation;
+  /** PTY-only, and only for a pane restore holds. See `PtyPanelData.stopObservation`. */
+  stopObservation?: TerminalAgentObservation;
   /** PTY-only. See `PtyPanelData.launchedByPluginId`. */
   launchedByPluginId?: string;
   /** PTY-only. See `PtyPanelData.holdOnRestart`. */

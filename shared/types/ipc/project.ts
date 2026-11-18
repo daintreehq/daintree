@@ -229,6 +229,24 @@ export interface ProjectCloseResult {
  * host) and leaves the project in the list as `closed` with its layout intact
  * for a non-destructive reopen. Failures throw `AppError`.
  */
+/**
+ * An agent the user's Sleep request found working (#17886), as the renderer
+ * read it from the host's listing when a Sleep that waits for agents to settle
+ * began.
+ */
+export interface SleepRequestWorking {
+  terminalId: string;
+  /** When the working state began, by the host's clock. */
+  at?: number;
+  /** Which run of an agent in the pane it was, so a later one isn't credited with it. */
+  agentIncarnation?: number;
+}
+
+/** What the user's Sleep request saw, for `project:sleep`. */
+export interface ProjectSleepOptions {
+  workingAtRequest?: SleepRequestWorking[];
+}
+
 export interface ProjectSleepResult {
   /** Number of terminals gracefully killed (sessions preserved for restore). */
   terminalsKilled: number;

@@ -222,6 +222,8 @@ export interface TerminalState {
   restoreProvenance?: TerminalRestoreProvenance;
   /** The last agent state the host reported for the pane (#14017). Untrusted until sanitized. */
   lastAgentObservation?: TerminalAgentObservation;
+  /** What was observed when Main last stopped the pane's process (#17886). Untrusted until sanitized. */
+  stopObservation?: TerminalAgentObservation;
   /** The plugin whose `agent.launch` created the pane (#14017). Untrusted until sanitized. */
   launchedByPluginId?: string;
   /** The launching plugin asked restore to hold the pane (#14017). Untrusted until sanitized. */

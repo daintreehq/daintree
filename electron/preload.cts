@@ -1745,7 +1745,10 @@ function buildElectronApi(): ElectronAPI {
       close: (projectId: string, options?: { killTerminals?: boolean }) =>
         _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
 
-      sleepProject: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_SLEEP, projectId),
+      sleepProject: (
+        projectId: string,
+        options?: import("../shared/types/ipc/project.js").ProjectSleepOptions
+      ) => _unwrappingInvoke(CHANNELS.PROJECT_SLEEP, projectId, options),
 
       reopen: (
         projectId: string,

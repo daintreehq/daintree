@@ -149,6 +149,7 @@ import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js
 import type { EventRecord } from "./events.js";
 import type {
   ProjectCloseResult,
+  ProjectSleepOptions,
   ProjectSleepResult,
   ProjectStats,
   ProjectStatusMap,
@@ -845,8 +846,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * host. Keeps the project in the list as `closed` with its layout intact for
      * a non-destructive reopen. Accepts the project that is on screen: that
      * window keeps its view and drops to the no-project state in the renderer.
+     * `options` carries what the user's request saw of its agents (#17886).
      */
-    sleepProject(projectId: string): Promise<ProjectSleepResult>;
+    sleepProject(projectId: string, options?: ProjectSleepOptions): Promise<ProjectSleepResult>;
     /**
      * Reopen a background project, making it the active project.
      * Terminals that were running in the background will be reconnected.
