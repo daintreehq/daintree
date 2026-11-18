@@ -806,8 +806,16 @@ export const SETTINGS_REGISTRY = [
         section: "Sound",
         title: "Notification sound",
         description:
-          "Play a sound when notifications fire. Choose from chime, ping, complete, waiting, error, or pulse sounds.",
-        keywords: ["sound", "audio", "chime", "ping", "notification", "alert", "volume"],
+          "Play a sound when notifications fire. Choose chime, ping, complete, waiting, error, pulse, or your own audio file.",
+        keywords: ["sound", "audio", "chime", "ping", "notification", "alert", "custom", "file"],
+      },
+      {
+        id: "notifications-sound-volume",
+        section: "Sound",
+        title: "Notification volume",
+        description:
+          "How loud notification, working pulse and UI feedback sounds play, on top of the system volume.",
+        keywords: ["volume", "loud", "quiet", "level", "sound", "audio"],
       },
     ],
   } satisfies LazySettingsTabEntry,

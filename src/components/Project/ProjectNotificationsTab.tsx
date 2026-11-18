@@ -11,6 +11,7 @@ import {
   escalationDelayLabel,
   previewNotificationSound,
   soundLabel,
+  useCustomNotificationSounds,
   type SoundFileKey,
 } from "@/components/Settings/notificationSettingsShared";
 import type { NotificationSettings } from "@shared/types/ipc/api";
@@ -32,6 +33,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
   const [globalSettings, setGlobalSettings] = useState<NotificationSettings | null>(null);
   const [globalLoadFailed, setGlobalLoadFailed] = useState(false);
   const [loadNonce, setLoadNonce] = useState(0);
+  const customSounds = useCustomNotificationSounds();
 
   useEffect(() => {
     if (!window.electron?.notification) return;
@@ -143,10 +145,16 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
     return (
       <SoundPickerRow
         label={label}
-        description={describe(key, undefined, soundLabel)}
+        description={describe(key, undefined, (v) =>
+          soundLabel(v, customSounds.sounds, customSounds.loaded)
+        )}
         value={typeof value === "string" ? value : undefined}
         onChange={(v) => setOverride(key, v)}
         onPreview={previewNotificationSound}
+        customSounds={customSounds.sounds}
+        customSoundsLoaded={customSounds.loaded}
+        onImportFile={customSounds.importFile}
+        onOpen={customSounds.refresh}
         disabled={unknownValue(key)}
         isModified={isOverridden(key)}
         onReset={() => clearOverride(key)}

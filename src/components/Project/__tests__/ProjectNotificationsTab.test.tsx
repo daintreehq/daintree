@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NotificationSettings } from "@shared/types";
 import { ProjectNotificationsTab } from "../ProjectNotificationsTab";
 import { NotificationSettingsTab } from "@/components/Settings/NotificationSettingsTab";
+
+const importMock = vi.hoisted(() => ({ importNotificationSound: vi.fn() }));
+vi.mock("@/services/notificationSoundImport", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/notificationSoundImport")>()),
+  importNotificationSound: importMock.importNotificationSound,
+}));
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -84,6 +90,78 @@ describe("ProjectNotificationsTab", () => {
       expect(projectLabels).toContain(label);
       expect(globalLabels).toContain(label);
     }
+    // One level for this device: a project can't override it.
+    expect(globalLabels).toContain("Volume");
+    expect(projectLabels).not.toContain("Volume");
+  });
+
+  describe("an import that finishes later", () => {
+    const IMPORTED = { id: "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f", label: "Door bell" };
+    let finishImport: (sound: typeof IMPORTED) => void;
+
+    beforeEach(() => {
+      importMock.importNotificationSound.mockReset();
+      importMock.importNotificationSound.mockReturnValue(
+        new Promise((resolve) => {
+          finishImport = resolve;
+        })
+      );
+    });
+
+    async function startImport() {
+      const picker = await screen.findByRole("combobox", { name: "Waiting sound" });
+      await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(false));
+      const input = picker.parentElement?.querySelector('input[type="file"]');
+      if (!(input instanceof HTMLInputElement)) throw new Error("file input missing");
+      const file = new File([new Uint8Array(4)], "Door bell.mp3", { type: "audio/mpeg" });
+      await act(async () => {
+        fireEvent.change(input, { target: { files: [file] } });
+      });
+    }
+
+    it("keeps the project edits made while it was importing", async () => {
+      const onChange = vi.fn();
+      const { rerender } = render(<ProjectNotificationsTab overrides={{}} onChange={onChange} />);
+
+      await startImport();
+      rerender(
+        <ProjectNotificationsTab overrides={{ completedEnabled: true }} onChange={onChange} />
+      );
+      await act(async () => finishImport(IMPORTED));
+
+      expect(onChange).toHaveBeenLastCalledWith({
+        completedEnabled: true,
+        waitingSoundFile: IMPORTED.id,
+      });
+    });
+
+    it("changes nothing once the page has closed", async () => {
+      const onChange = vi.fn();
+      const { unmount } = render(<ProjectNotificationsTab overrides={{}} onChange={onChange} />);
+
+      await startImport();
+      unmount();
+      await act(async () => finishImport(IMPORTED));
+
+      expect(onChange).not.toHaveBeenCalled();
+    });
+  });
+
+  it("names an inherited imported sound by its label, and offers this device's imports", async () => {
+    const id = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";
+    getSettings.mockResolvedValue({ ...GLOBAL, waitingSoundFile: id });
+    Reflect.set(window, "electron", {
+      notification: { getSettings, setSettings: vi.fn(), playSound: vi.fn() },
+      notificationSounds: {
+        list: vi.fn().mockResolvedValue([{ id, label: "Door bell", available: true }]),
+      },
+    });
+    render(<ProjectNotificationsTab overrides={{}} onChange={vi.fn()} />);
+
+    expect(await screen.findByText(/Using global default · Door bell/)).toBeTruthy();
+    const picker = screen.getByRole("combobox", { name: "Waiting sound" });
+    expect(picker.textContent).toContain("Door bell");
+    expect(picker.parentElement?.querySelector('input[type="file"]')).toBeTruthy();
   });
 
   it("resetting a row clears only that row's override", async () => {

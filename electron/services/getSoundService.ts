@@ -15,10 +15,11 @@ export async function getSoundService(): Promise<typeof SoundServiceModule.sound
   return (await loadModule()).soundService;
 }
 
+/** The bundled sounds plus this device's playable imports; checked live on every call. */
 export async function getAllowedSoundFiles(): Promise<
-  typeof SoundServiceModule.ALLOWED_SOUND_FILES
+  typeof SoundServiceModule.PLAYABLE_SOUND_FILES
 > {
-  return (await loadModule()).ALLOWED_SOUND_FILES;
+  return (await loadModule()).PLAYABLE_SOUND_FILES;
 }
 
 export async function getSoundFiles(): Promise<typeof SoundServiceModule.SOUND_FILES> {

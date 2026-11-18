@@ -17,6 +17,7 @@ import type { DeviceAnswerSettings } from "../shared/types/ipc/deviceAnswer.js";
 import type { DecisionsSettings } from "../shared/types/decisions.js";
 import type { DecisionsHostRecord } from "../shared/types/decisionsHosts.js";
 import type { EditorConfig } from "../shared/types/editor.js";
+import type { CustomNotificationSound } from "../shared/types/ipc/notificationSounds.js";
 import type { DisplayIdentity } from "../shared/types/displayIdentity.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
@@ -305,6 +306,8 @@ export interface StoreSchema {
    * `electron/services/agentToolbarPins.ts`.
    */
   agentToolbarPins?: Record<string, boolean>;
+  /** Sounds imported on this device, by id; the WAVs live under `<userData>/sounds/custom/`. */
+  customNotificationSounds?: CustomNotificationSound[];
   notificationSettings: {
     enabled: boolean;
     completedEnabled: boolean;
@@ -318,6 +321,7 @@ export interface StoreSchema {
     workingPulseEnabled: boolean;
     workingPulseSoundFile: string;
     uiFeedbackSoundEnabled: boolean;
+    soundVolume?: number;
     flashEnabled: boolean;
     quietHoursEnabled: boolean;
     quietHoursStartMin: number;

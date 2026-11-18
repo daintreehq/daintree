@@ -49,6 +49,20 @@ const mockBroadcastToRenderer = vi.hoisted(() => vi.fn());
 const mockSendToOneVisibleRenderer = vi.hoisted(() => vi.fn());
 const mockBroadcastToVisibleRenderers = vi.hoisted(() => vi.fn());
 const mockGetAllWindows = vi.hoisted(() => vi.fn<() => unknown[]>(() => []));
+const notificationSettings = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+const customSoundsMock = vi.hoisted(() => ({
+  isPlayableCustomSound: vi.fn<(id: string) => boolean>(() => false),
+  resolveCustomSoundPath: vi.fn<(id: string) => string | null>(() => null),
+}));
+
+vi.mock("../../store.js", () => ({
+  store: {
+    get: (key: string) =>
+      key === "notificationSettings" ? notificationSettings.current : undefined,
+  },
+}));
+
+vi.mock("../customNotificationSounds.js", () => customSoundsMock);
 
 vi.mock("fs", () => ({
   default: fsMock,
@@ -113,6 +127,9 @@ describe("SoundService", () => {
     mockGetAllWindows.mockReturnValue([]);
     mockSendToOneVisibleRenderer.mockReset();
     mockSendToOneVisibleRenderer.mockReturnValue(true);
+    notificationSettings.current = {};
+    customSoundsMock.isPlayableCustomSound.mockReturnValue(false);
+    customSoundsMock.resolveCustomSoundPath.mockReturnValue(null);
     Object.defineProperty(process, "resourcesPath", {
       value: "/app/resources",
       writable: true,
@@ -136,6 +153,7 @@ describe("SoundService", () => {
     expect(mockSendToOneVisibleRenderer).toHaveBeenCalledTimes(1);
     expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "error.wav",
+      volume: 1,
     });
     // A visible-only broadcast still reaches every window's shown view (#15682).
     expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
@@ -246,6 +264,7 @@ describe("SoundService", () => {
 
     expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "chime.wav",
+      volume: 1,
     });
   });
 
@@ -285,6 +304,7 @@ describe("SoundService", () => {
     expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "pulse.wav",
       detune: 12,
+      volume: 1,
     });
     expect(mockPlaySound).not.toHaveBeenCalled();
   });
@@ -296,6 +316,7 @@ describe("SoundService", () => {
 
     expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "pulse.wav",
+      volume: 1,
     });
   });
 
@@ -307,18 +328,230 @@ describe("SoundService", () => {
     expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "pulse.wav",
       detune: 0,
+      volume: 1,
     });
   });
 
   it("playPulse falls back to OS process without detune when no renderer", () => {
     mockGetAllWindows.mockReturnValue([]);
+    notificationSettings.current = { soundVolume: 0.6 };
 
     soundService.playPulse("pulse.wav", 12);
 
     expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
     expect(mockSendToOneVisibleRenderer).not.toHaveBeenCalled();
-    expect(mockPlaySound).toHaveBeenCalledWith(expect.stringContaining("pulse.wav"));
-    expect(mockPlaySound.mock.calls[0][1]).toBeUndefined();
+    // The OS player gets the volume setting, but no detune.
+    expect(mockPlaySound).toHaveBeenCalledWith(expect.stringContaining("pulse.wav"), 0.6);
+  });
+
+  // -- Volume setting --
+
+  it("scales the repeat decay by the volume setting", () => {
+    notificationSettings.current = { soundVolume: 0.4 };
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.play("error");
+    vi.advanceTimersByTime(200);
+    soundService.play("ping");
+
+    expect(mockSendToOneVisibleRenderer.mock.calls[0][1]).toEqual({
+      soundFile: "error.wav",
+      volume: 0.4,
+    });
+    expect(mockSendToOneVisibleRenderer.mock.calls[1][1].volume).toBeCloseTo(0.28);
+  });
+
+  it("applies the decay floor before the setting, so a quiet setting goes below it", () => {
+    notificationSettings.current = { soundVolume: 0.5 };
+    for (let i = 0; i < 10; i++) {
+      soundService.play("error");
+      vi.advanceTimersByTime(200);
+    }
+
+    const lastCall = mockPlaySound.mock.calls[mockPlaySound.mock.calls.length - 1];
+    expect(lastCall[1]).toBeCloseTo(0.05);
+  });
+
+  it("plays a completion chord at the setting's level", () => {
+    notificationSettings.current = { soundVolume: 0.3 };
+    soundService.play("complete");
+    vi.advanceTimersByTime(500);
+    soundService.play("complete");
+
+    expect(mockPlaySound.mock.calls[1][1]).toBeCloseTo(0.3);
+  });
+
+  it("previews at the setting's level, so a preview sounds like the notification", () => {
+    notificationSettings.current = { soundVolume: 0.25 };
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.previewFile("waiting.wav");
+
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: "waiting.wav",
+      volume: 0.25,
+    });
+  });
+
+  it.each([
+    ["dampened", () => soundService.play("error")],
+    ["preview", () => soundService.previewFile("error.wav")],
+    ["pulse", () => soundService.playPulse("pulse.wav", 5)],
+  ])("plays nothing at zero volume (%s), even on players with no volume control", (_, play) => {
+    notificationSettings.current = { soundVolume: 0 };
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+    play();
+    mockGetAllWindows.mockReturnValue([]);
+    vi.advanceTimersByTime(500);
+    play();
+
+    expect(mockSendToOneVisibleRenderer).not.toHaveBeenCalled();
+    expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
+  it("reads the setting on every play, and muted plays leave no trace in throttle or decay", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+    notificationSettings.current = { soundVolume: 0 };
+    soundService.playFile("waiting.wav");
+    soundService.play("complete");
+
+    vi.advanceTimersByTime(100);
+    notificationSettings.current = { soundVolume: 0.6 };
+    soundService.playFile("error.wav");
+    vi.advanceTimersByTime(500);
+    soundService.play("complete");
+
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledTimes(2);
+    // Neither the throttle, the decay nor the chord counted the muted plays.
+    expect(mockSendToOneVisibleRenderer.mock.calls[0][1]).toMatchObject({
+      soundFile: "error.wav",
+      volume: 0.6,
+    });
+    expect(mockSendToOneVisibleRenderer.mock.calls[1][1].volume).toBeCloseTo(0.42);
+  });
+
+  it.each([
+    [undefined, 1],
+    ["loud", 1],
+    [Number.NaN, 1],
+    [1.8, 1],
+    [-1, 0],
+  ])("reads a stored volume of %s as %s", (stored, expected) => {
+    notificationSettings.current = { soundVolume: stored };
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.previewFile("chime.wav");
+
+    if (expected === 0) {
+      expect(mockSendToOneVisibleRenderer).not.toHaveBeenCalled();
+    } else {
+      expect(mockSendToOneVisibleRenderer.mock.calls[0][1].volume).toBe(expected);
+    }
+  });
+
+  // -- Imported sounds --
+
+  const CUSTOM_ID = "custom:0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f";
+  const CUSTOM_PATH = "/user-data/sounds/custom/0b7c9a7e-4f1d-4c2a-9e3b-1a2b3c4d5e6f.wav";
+
+  function registerImport(id = CUSTOM_ID, filePath = CUSTOM_PATH) {
+    customSoundsMock.resolveCustomSoundPath.mockImplementation((v) => (v === id ? filePath : null));
+    customSoundsMock.isPlayableCustomSound.mockImplementation((v) => v === id);
+  }
+
+  it("sends a registered import to the renderer by id, with no variant lookup", () => {
+    registerImport();
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+    fsMock.readdirSync.mockClear();
+
+    soundService.playFile(CUSTOM_ID);
+
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: CUSTOM_ID,
+      volume: 1,
+    });
+    expect(fsMock.readdirSync).not.toHaveBeenCalled();
+  });
+
+  it("plays a registered import from its own path when no window is open", () => {
+    registerImport();
+    notificationSettings.current = { soundVolume: 0.5 };
+
+    soundService.previewFile(CUSTOM_ID);
+    vi.advanceTimersByTime(500);
+    soundService.playFile(CUSTOM_ID);
+
+    expect(mockPlaySound).toHaveBeenNthCalledWith(1, CUSTOM_PATH, 0.5);
+    expect(mockPlaySound).toHaveBeenNthCalledWith(2, CUSTOM_PATH, 0.5);
+  });
+
+  it("plays nothing for an import that isn't registered or whose file is gone", () => {
+    customSoundsMock.resolveCustomSoundPath.mockReturnValue(null);
+
+    for (const windows of [[{ id: 1 }], []]) {
+      mockGetAllWindows.mockReturnValue(windows);
+      soundService.playFile(CUSTOM_ID);
+      soundService.previewFile(CUSTOM_ID);
+      soundService.playPulse(CUSTOM_ID);
+      vi.advanceTimersByTime(500);
+    }
+
+    expect(mockSendToOneVisibleRenderer).not.toHaveBeenCalled();
+    expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
+  it("pulses a registered import with its detune and the volume setting", () => {
+    registerImport();
+    notificationSettings.current = { soundVolume: 0.5 };
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.playPulse(CUSTOM_ID, -7);
+
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: CUSTOM_ID,
+      detune: -7,
+      volume: 0.5,
+    });
+  });
+
+  it("keeps an import's OS voice cancellable for its whole length, past the bundled 600 ms", () => {
+    registerImport();
+    const importCancel = vi.fn();
+    mockPlaySound.mockImplementationOnce(() => ({ cancel: importCancel }));
+
+    soundService.playFile(CUSTOM_ID);
+    vi.advanceTimersByTime(700);
+    soundService.play("error");
+    soundService.cancel();
+
+    expect(importCancel).toHaveBeenCalled();
+  });
+
+  it("allows bundled files and playable imports, checked live, and nothing else", async () => {
+    const { PLAYABLE_SOUND_FILES } = await import("../SoundService.js");
+    const unregistered = "custom:11111111-2222-4333-8444-555555555555";
+    registerImport();
+
+    expect(PLAYABLE_SOUND_FILES.has("waiting.wav")).toBe(true);
+    expect(PLAYABLE_SOUND_FILES.has(CUSTOM_ID)).toBe(true);
+    expect(PLAYABLE_SOUND_FILES.has(unregistered)).toBe(false);
+    expect(PLAYABLE_SOUND_FILES.has("../waiting.wav")).toBe(false);
+
+    registerImport(unregistered);
+    expect(PLAYABLE_SOUND_FILES.has(unregistered)).toBe(true);
+    expect(PLAYABLE_SOUND_FILES.has(CUSTOM_ID)).toBe(false);
+  });
+
+  it("drops a file Main doesn't know without taking the next file's turn", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.playFile("../../etc/evil.wav");
+    soundService.previewFile("../../etc/evil.wav");
+    soundService.playPulse("../../etc/evil.wav");
+    soundService.playFile("waiting.wav");
+
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledTimes(1);
+    expect(mockSendToOneVisibleRenderer.mock.calls[0][1].soundFile).toMatch(/^waiting/);
   });
 
   // -- Path resolution --
@@ -375,7 +608,8 @@ describe("SoundService", () => {
     soundService.preview("error");
 
     expect(mockPlaySound).toHaveBeenCalledTimes(2);
-    expect(mockPlaySound.mock.calls[1][1]).toBeUndefined();
+    // No repeat decay: the second play is still at the setting's full level.
+    expect(mockPlaySound.mock.calls[1][1]).toBe(1);
   });
 
   it("previewFile bypasses dampening", () => {

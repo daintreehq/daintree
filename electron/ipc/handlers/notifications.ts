@@ -25,7 +25,7 @@ import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 type AgentNotificationSingleton = typeof AgentNotificationServiceModule.agentNotificationService;
-type AllowedSoundFilesSet = typeof SoundServiceModule.ALLOWED_SOUND_FILES;
+type AllowedSoundFilesSet = typeof SoundServiceModule.PLAYABLE_SOUND_FILES;
 type SoundFilesMap = typeof SoundServiceModule.SOUND_FILES;
 
 let cachedAgentNotificationService: AgentNotificationSingleton | null = null;

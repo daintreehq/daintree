@@ -127,6 +127,7 @@ import { buildReviewMarksPreloadBindings } from "./ipc/handlers/reviewMarks.prel
 import { buildSchedulesPreloadBindings } from "./ipc/handlers/schedules.preload.js";
 import { buildDecisionsPreloadBindings } from "./ipc/handlers/decisions.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
+import { buildNotificationSoundsPreloadBindings } from "./ipc/handlers/notificationSounds.preload.js";
 import { buildFileDocumentPreloadBindings } from "./ipc/handlers/fileDocument.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
@@ -2613,6 +2614,9 @@ function buildElectronApi(): ElectronAPI {
     // Recovery API (used by recovery.html)
     recovery: recoveryApi,
 
+    // Sounds imported on this device for the notification pickers
+    notificationSounds: buildNotificationSoundsPreloadBindings(_unwrappingInvoke),
+
     // Notification API
     notification: {
       updateBadge: (state: { waitingPanelIds: string[]; membershipOnly?: boolean }) =>
@@ -2708,8 +2712,9 @@ function buildElectronApi(): ElectronAPI {
 
     // Sound API (Web Audio playback via main → renderer push)
     sound: {
-      onTrigger: (callback: (payload: { soundFile: string; detune?: number }) => void) =>
-        _typedOn(CHANNELS.SOUND_TRIGGER, callback),
+      onTrigger: (
+        callback: (payload: { soundFile: string; detune?: number; volume?: number }) => void
+      ) => _typedOn(CHANNELS.SOUND_TRIGGER, callback),
       onCancel: (callback: () => void) => _eventBusOn("sound:cancel", () => callback()),
       getSoundDir: (): Promise<string> => _unwrappingInvoke(CHANNELS.SOUND_GET_DIR),
     },

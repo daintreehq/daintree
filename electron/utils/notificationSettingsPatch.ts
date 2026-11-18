@@ -63,6 +63,9 @@ export function sanitizeNotificationSettingsPatch(
   if (typeof s.uiFeedbackSoundEnabled === "boolean") {
     allowed.uiFeedbackSoundEnabled = s.uiFeedbackSoundEnabled;
   }
+  if (typeof s.soundVolume === "number" && Number.isFinite(s.soundVolume)) {
+    allowed.soundVolume = Math.max(0, Math.min(1, s.soundVolume));
+  }
   if (typeof s.flashEnabled === "boolean") {
     allowed.flashEnabled = s.flashEnabled;
   }
