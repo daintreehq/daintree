@@ -202,8 +202,7 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: vi.fn(() => ({
     recordCrash: vi.fn(),
     recordRendererGone: vi.fn(),
-    getLastBackupTimestamp: vi.fn(() => null),
-    getBackupPanelCount: vi.fn(() => null),
+    getRecoveryPageBackupInfo: vi.fn(() => ({ backupTimestamp: null, panelCount: null })),
   })),
 }));
 

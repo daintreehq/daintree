@@ -282,12 +282,11 @@ export function setupViewHandlers(
         if (crashEntry?.projectPath) {
           params.set("project", path.basename(crashEntry.projectPath));
         }
-        const recoverySvc = getCrashRecoveryService();
-        const backupTimestamp = recoverySvc.getLastBackupTimestamp();
+        const { backupTimestamp, panelCount } =
+          getCrashRecoveryService().getRecoveryPageBackupInfo();
         if (backupTimestamp !== null) {
           params.set("backupTimestamp", String(backupTimestamp));
         }
-        const panelCount = recoverySvc.getBackupPanelCount(true);
         if (panelCount !== null) {
           params.set("panelCount", String(panelCount));
         }

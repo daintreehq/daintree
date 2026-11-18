@@ -1322,6 +1322,104 @@ describe("CrashRecoveryService", () => {
       expect(svc.getBackupPanelCount(true)).toBeNull();
     });
   });
+
+  describe("getRecoveryPageBackupInfo", () => {
+    function backupPaths() {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      return {
+        current: path.join(backupDir, "session-state.json"),
+        previous: path.join(backupDir, "session-state.previous.json"),
+      };
+    }
+
+    function spyBackupReads() {
+      const spy = vi.spyOn(fs, "readFileSync");
+      return (filePath: string) => spy.mock.calls.filter(([p]) => p === filePath).length;
+    }
+
+    function terminals(count: number) {
+      return Array.from({ length: count }, (_, i) => ({ id: `t${i}`, kind: "terminal" }));
+    }
+
+    it("reads and parses a valid current generation once for the timestamp and panel count", () => {
+      const { current, previous } = backupPaths();
+      const svc = makeService();
+      svc.initialize();
+      fs.writeFileSync(
+        current,
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: terminals(2) } })
+      );
+      const reads = spyBackupReads();
+
+      const info = svc.getRecoveryPageBackupInfo();
+
+      expect(info).toEqual({ backupTimestamp: fs.statSync(current).mtimeMs, panelCount: 2 });
+      expect(reads(current)).toBe(1);
+      expect(reads(previous)).toBe(0);
+    });
+
+    it("reads each candidate at most once when the current generation is corrupt", () => {
+      const { current, previous } = backupPaths();
+      const svc = makeService();
+      svc.initialize();
+      fs.writeFileSync(current, "{ corrupt");
+      fs.writeFileSync(
+        previous,
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: terminals(1) } })
+      );
+      const reads = spyBackupReads();
+
+      const info = svc.getRecoveryPageBackupInfo();
+
+      expect(info).toEqual({ backupTimestamp: fs.statSync(previous).mtimeMs, panelCount: 1 });
+      expect(reads(current)).toBe(1);
+      expect(reads(previous)).toBe(1);
+    });
+
+    it("keeps the main-crash snapshot's panel count over the disk generation", () => {
+      const { current } = backupPaths();
+      fs.writeFileSync(
+        current,
+        JSON.stringify({ capturedAt: Date.now() - 60_000, appState: { terminals: terminals(3) } })
+      );
+      writeMarker(userData);
+      const svc = makeService();
+      svc.initialize();
+      fs.writeFileSync(
+        current,
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals: terminals(7) } })
+      );
+
+      const info = svc.getRecoveryPageBackupInfo();
+
+      expect(info).toEqual({ backupTimestamp: fs.statSync(current).mtimeMs, panelCount: 3 });
+    });
+
+    it("reports a previous session's backup timestamp without its panel count", () => {
+      const { current } = backupPaths();
+      const svc = makeService();
+      fs.writeFileSync(
+        current,
+        JSON.stringify({ capturedAt: Date.now() - 5_000, appState: { terminals: terminals(2) } })
+      );
+      svc.initialize();
+
+      const info = svc.getRecoveryPageBackupInfo();
+
+      expect(info).toEqual({ backupTimestamp: fs.statSync(current).mtimeMs, panelCount: null });
+    });
+
+    it("returns nulls when neither generation is parseable", () => {
+      const { current, previous } = backupPaths();
+      const svc = makeService();
+      svc.initialize();
+      fs.writeFileSync(current, "{ corrupt");
+      fs.writeFileSync(previous, '{"appState":');
+
+      expect(svc.getRecoveryPageBackupInfo()).toEqual({ backupTimestamp: null, panelCount: null });
+    });
+  });
 });
 
 function writeBackup(userData: string, snapshot: unknown): void {
