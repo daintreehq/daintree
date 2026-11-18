@@ -90,15 +90,15 @@ const targetsByInventory = new WeakMap<readonly WorktreeSnapshot[], ReadonlyMap<
 function targetsOf(states: readonly WorktreeSnapshot[]): ReadonlyMap<string, Target> {
   const cached = targetsByInventory.get(states);
   if (cached) return cached;
-  const nestedIn = indexNestedRoots(states.flatMap((state) => (state.path ? [state.path] : [])));
-  const targets = new Map<string, Target>();
-  const seen = new Set<string>();
-  for (const state of states) {
-    // The first listing of an id wins, as a lookup by id would find it.
-    if (seen.has(state.id)) continue;
-    seen.add(state.id);
-    if (state.path) targets.set(state.id, { root: state.path, exclude: nestedIn(state.path) });
-  }
+  // The host lists each id once; should one repeat, its first listing is the
+  // worktree, as a lookup by id would find it, and the only one indexed.
+  const rootById = new Map<string, string>();
+  for (const state of states) if (!rootById.has(state.id)) rootById.set(state.id, state.path);
+  const measurable = [...rootById].filter(([, root]) => root);
+  const nestedIn = indexNestedRoots(measurable.map(([, root]) => root));
+  const targets = new Map(
+    measurable.map(([id, root]): [string, Target] => [id, { root, exclude: nestedIn(root) }])
+  );
   targetsByInventory.set(states, targets);
   return targets;
 }
@@ -111,7 +111,8 @@ function targetsOf(states: readonly WorktreeSnapshot[]): ReadonlyMap<string, Tar
 async function resolveTarget(
   ctx: IpcContext,
   worktreeId: string,
-  deps: HandlerDependencies
+  deps: HandlerDependencies,
+  signal: AbortSignal
 ): Promise<Target | null> {
   const projectId = ctx.projectId;
   if (projectId === null || !deps.worktreeService) return null;
@@ -119,6 +120,7 @@ async function resolveTarget(
   if (!project) return null;
   try {
     const states = await deps.worktreeService.getAllStatesForProjectAsync(project.path, projectId);
+    if (signal.aborted) return null;
     return targetsOf(states).get(worktreeId) ?? null;
   } catch (error) {
     console.warn("[worktreeDiskUsage] Failed to list worktrees:", error);
@@ -150,7 +152,7 @@ export function buildWorktreeDiskUsageNamespace(deps: HandlerDependencies) {
           // Before the first await, so a cancel sent right behind this request
           // finds the session it belongs to.
           const signal = service.begin(owner, sessionId);
-          const target = await resolveTarget(ctx, worktreeId, deps);
+          const target = await resolveTarget(ctx, worktreeId, deps, signal);
           if (!target || signal.aborted) return UNKNOWN;
           return service.measure(signal, target.root, target.exclude);
         },
