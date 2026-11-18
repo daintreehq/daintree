@@ -216,7 +216,7 @@ async function setup(
   };
   let backendValue: unknown;
   const backend = {
-    get: () => backendValue,
+    get: vi.fn(() => backendValue),
     set: (_key: "cloudHosts", value: CloudHostsValue) => {
       backendValue = JSON.parse(JSON.stringify(value));
     },
@@ -331,6 +331,7 @@ async function setup(
     run,
     restart,
     scan,
+    backend,
   };
 }
 
@@ -2484,6 +2485,7 @@ describe("CloudHostLifecycle guest power-off (#17362)", () => {
           bindingId === env?.store.bindings()[0]?.id ? problem : null
         ),
         tick: vi.fn(async () => {}),
+        forgetRemoved: vi.fn(),
       };
       env = await setup({ machine: "running" }, { guestPowerOff });
       env.lifecycle.start();
@@ -2544,6 +2546,241 @@ describe("CloudHostLifecycle machine keys (#17361)", () => {
     ]);
     expect(machineKeys.revokePending).toHaveBeenCalled();
     env.lifecycle.dispose();
+  });
+});
+
+describe("CloudHostLifecycle background timers (#17795)", () => {
+  const HOUR = 60 * 60_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function quiet() {
+    const machineKeys = {
+      problemFor: vi.fn((): string | null => null),
+      tick: vi.fn(async () => {}),
+      revokePending: vi.fn(async () => {}),
+    };
+    const guestPowerOff = {
+      problemFor: vi.fn((): string | null => null),
+      tick: vi.fn(async () => {}),
+      forgetRemoved: vi.fn(),
+    };
+    const env = await setup({ machine: "running" }, { machineKeys, guestPowerOff });
+    return { ...env, machineKeys, guestPowerOff };
+  }
+
+  function pendingKey(
+    env: Awaited<ReturnType<typeof quiet>>,
+    state: "revoke" | "issuing" | "active"
+  ) {
+    // An issue is recorded before the provider is asked: no key id or expiry yet.
+    const issued = state !== "issuing";
+    env.store.putMachineKey({
+      id: "mk_1",
+      bindingId: env.store.bindings()[0]?.id ?? "gone",
+      accountId: env.account.id,
+      providerId: "boat",
+      resourceId: "bx_23456789",
+      name: "daintree-mk_1",
+      keyId: issued ? "sak_1" : null,
+      expiresAt: issued ? Date.now() + 86_400_000 : null,
+      state,
+      createdAt: Date.now(),
+    });
+  }
+
+  it("reads nothing and wakes for nothing over an hour with no cloud machine", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    await vi.advanceTimersByTimeAsync(0);
+    env.backend.get.mockClear();
+    await vi.advanceTimersByTimeAsync(HOUR);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(env.backend.get).not.toHaveBeenCalled();
+    expect(env.machineKeys.tick).not.toHaveBeenCalled();
+    expect(env.guestPowerOff.tick).not.toHaveBeenCalled();
+    env.lifecycle.dispose();
+  });
+
+  it("starts watching with the first machine and stops once the last one is removed", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    const polls = vi.spyOn(env.lifecycle as unknown as { pollDue(): Promise<void> }, "pollDue");
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    expect(vi.getTimerCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(polls).toHaveBeenCalledTimes(12);
+    expect(env.machineKeys.tick).toHaveBeenCalledTimes(1);
+    expect(env.guestPowerOff.tick).toHaveBeenCalledTimes(1);
+
+    expect(env.guestPowerOff.forgetRemoved).not.toHaveBeenCalled();
+    await env.lifecycle.forgetAccountHosts(env.account.id);
+    expect(env.store.bindings()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    // No keeper pass comes to forget what was found about the machine.
+    expect(env.guestPowerOff.forgetRemoved).toHaveBeenCalledWith([]);
+    env.backend.get.mockClear();
+    await vi.advanceTimersByTimeAsync(HOUR);
+    expect(env.backend.get).not.toHaveBeenCalled();
+    expect(polls).toHaveBeenCalledTimes(12);
+    expect(env.machineKeys.tick).toHaveBeenCalledTimes(1);
+    env.lifecycle.dispose();
+  });
+
+  it("keeps each pass on schedule while the store is written to", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const polls = vi.spyOn(env.lifecycle as unknown as { pollDue(): Promise<void> }, "pollDue");
+    const bindingId = env.store.bindings()[0]!.id;
+    // Every 2 seconds, more often than either pass: one restarted by a write would never come.
+    for (let second = 0; second < 120; second += 2) {
+      env.store.updateBinding(bindingId, (binding) => ({ ...binding }));
+      await vi.advanceTimersByTimeAsync(2_000);
+    }
+    expect(polls).toHaveBeenCalledTimes(24);
+    expect(env.machineKeys.tick).toHaveBeenCalledTimes(2);
+    env.lifecycle.dispose();
+  });
+
+  it("watches only a binding with both its machine and its host", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const { id, hostId, resourceId } = env.store.bindings()[0]!;
+    env.store.updateBinding(id, (binding) => ({ ...binding, hostId: null }));
+    expect(vi.getTimerCount()).toBe(0);
+    // What was found about the machine goes; the binding that stays is kept.
+    expect(env.guestPowerOff.forgetRemoved).toHaveBeenCalledWith([
+      expect.objectContaining({ id, hostId: null }),
+    ]);
+    env.store.updateBinding(id, (binding) => ({ ...binding, hostId, resourceId: null }));
+    expect(vi.getTimerCount()).toBe(0);
+    env.store.updateBinding(id, (binding) => ({ ...binding, resourceId }));
+    expect(vi.getTimerCount()).toBe(2);
+    env.lifecycle.dispose();
+  });
+
+  it("starts the keeper alone when a key is marked for revoking, not for one in use", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    pendingKey(env, "active");
+    expect(vi.getTimerCount()).toBe(0);
+    env.store.updateMachineKey("mk_1", (key) => ({ ...key, state: "revoke" }));
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.machineKeys.tick).toHaveBeenCalledTimes(1);
+    env.lifecycle.dispose();
+  });
+
+  it("picks up a key left to revoke that a hand edit restored, once settings reload", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    pendingKey(env, "revoke");
+    const edited = env.backend.get();
+    env.store.removeMachineKey("mk_1");
+    expect(vi.getTimerCount()).toBe(0);
+    env.backend.set("cloudHosts", edited as CloudHostsValue);
+    expect(vi.getTimerCount()).toBe(0);
+    env.store.reloaded();
+    expect(vi.getTimerCount()).toBe(1);
+    env.lifecycle.dispose();
+  });
+
+  it("keeps the keeper for a removed machine's key until it is revoked, without polling", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    pendingKey(env, "active");
+    await env.lifecycle.forgetAccountHosts(env.account.id);
+    expect(env.store.machineKeys()).toEqual([
+      expect.objectContaining({ id: "mk_1", state: "revoke" }),
+    ]);
+    expect(vi.getTimerCount()).toBe(1);
+    env.machineKeys.tick.mockClear();
+    env.backend.get.mockClear();
+    await vi.advanceTimersByTimeAsync(HOUR);
+    // Every keeper pass, and not one poll: each of those reads the bindings.
+    expect(env.machineKeys.tick).toHaveBeenCalledTimes(60);
+    expect(env.backend.get).not.toHaveBeenCalled();
+
+    env.store.removeMachineKey("mk_1");
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(HOUR);
+    expect(env.machineKeys.tick).toHaveBeenCalledTimes(60);
+    env.lifecycle.dispose();
+  });
+
+  it.each(["revoke", "issuing"] as const)(
+    "keeps the keeper for a %s key a previous run left, with no machine left",
+    async (state) => {
+      const env = await quiet();
+      pendingKey(env, state);
+      const next = env.restart(env.lifecycle);
+      expect(vi.getTimerCount()).toBe(1);
+      // An issue left behind becomes the keeper's to look for once it is old enough, with no write to say so.
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+      expect(env.machineKeys.tick).toHaveBeenCalledTimes(11);
+      next.lifecycle.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  );
+
+  it("leaves a pending key to the keys service, and runs no keeper without one", async () => {
+    const env = await setup({ machine: "running" });
+    env.store.putMachineKey({
+      id: "mk_1",
+      bindingId: "gone",
+      accountId: env.account.id,
+      providerId: "boat",
+      resourceId: "bx_23456789",
+      name: "daintree-mk_1",
+      keyId: "sak_1",
+      expiresAt: Date.now() + 86_400_000,
+      state: "revoke",
+      createdAt: Date.now(),
+    });
+    env.lifecycle.start();
+    expect(vi.getTimerCount()).toBe(0);
+    env.lifecycle.dispose();
+  });
+
+  it("clears its timers on dispose and arms nothing after", async () => {
+    const env = await quiet();
+    const listeners = (env.store as unknown as { listeners: Set<unknown> }).listeners;
+    env.lifecycle.start();
+    expect(listeners.size).toBe(1);
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    env.lifecycle.dispose();
+    expect(listeners.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    pendingKey(env, "revoke");
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

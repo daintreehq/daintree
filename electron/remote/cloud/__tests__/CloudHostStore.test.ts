@@ -641,6 +641,22 @@ describe("CloudHostStore machine keys (#17361)", () => {
     ]);
   });
 
+  it("tells its listeners when settings were read from disk again, with nothing written", () => {
+    const backend = disk();
+    const store = new CloudHostStore(backend);
+    let changes = 0;
+    store.onChange(() => (changes += 1));
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [],
+      machineKeys: [key({ state: "revoke" })],
+    });
+    store.reloaded();
+    expect(changes).toBe(1);
+    expect(store.machineKeys().map((entry) => entry.state)).toEqual(["revoke"]);
+  });
+
   it("skips a record that doesn't read, and keeps it on disk", () => {
     const backend = disk();
     backend.write({

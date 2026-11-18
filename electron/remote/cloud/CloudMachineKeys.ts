@@ -64,6 +64,11 @@ function expiryOf(key: StoredMachineKey): number {
     : key.createdAt + MACHINE_KEY_TTL_DAYS * DAY_MS;
 }
 
+/** A record a revoke pass may still have work for: one marked for revoking, or an issue that may have been left behind. */
+export function awaitsRevoke(key: StoredMachineKey): boolean {
+  return key.state === "revoke" || key.state === "issuing";
+}
+
 function errorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null || !("code" in error)) return null;
   return typeof error.code === "string" ? error.code : null;

@@ -397,4 +397,34 @@ describe("CloudGuestPowerOff (#17362)", () => {
     await env.guest.tick();
     expect(env.guest.problemFor(BINDING)).toBeNull();
   });
+
+  it("forgets a removed binding's reason when asked, with no tick to come", async () => {
+    const env = setup();
+    env.check.mockResolvedValue({ eligible: false, target: TARGET, problem: "Not EBS." });
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.problemFor(BINDING)).not.toBeNull();
+    env.guest.forgetRemoved();
+    expect(env.guest.problemFor(BINDING)).not.toBeNull();
+    env.store.removeBinding(BINDING);
+    env.guest.forgetRemoved();
+    expect(env.guest.problemFor(BINDING)).toBeNull();
+  });
+
+  it("keeps no retry for an arm that failed after its binding was removed", async () => {
+    const env = setup();
+    let fail: (() => void) | null = null;
+    env.check.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = () => reject(new Error("provider unreachable"));
+        })
+    );
+    const armed = env.guest.arm(HOST, env.session);
+    await vi.waitFor(() => expect(fail).not.toBeNull());
+    env.store.removeBinding(BINDING);
+    fail!();
+    await armed;
+    const retryAt = (env.guest as unknown as { retryAt: Map<string, number> }).retryAt;
+    expect(retryAt.has(BINDING)).toBe(false);
+  });
 });

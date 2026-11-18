@@ -766,6 +766,11 @@ export class CloudHostStore {
     return () => this.listeners.delete(listener);
   }
 
+  /** Settings were read from disk again: what a listener keeps from them may have changed outside the app. */
+  reloaded(): void {
+    this.notify();
+  }
+
   private mutate(change: (raw: RawCloudHosts) => void): void {
     const raw = this.raw();
     change(raw);
@@ -779,6 +784,10 @@ export class CloudHostStore {
         ? { providerConsents: raw.providerConsents as StoredProviderConsent[] }
         : {}),
     });
+    this.notify();
+  }
+
+  private notify(): void {
     for (const listener of [...this.listeners]) {
       try {
         listener();
