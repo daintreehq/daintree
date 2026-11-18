@@ -9,11 +9,12 @@ import {
   Link2,
   RefreshCw,
 } from "lucide-react";
-import type {
-  HostDirectoryEntry,
-  HostDirectoryListing,
-  HostPickRequest,
-  HostPickerRoots,
+import {
+  HOST_HOME_PATH,
+  type HostDirectoryEntry,
+  type HostDirectoryListing,
+  type HostPickRequest,
+  type HostPickerRoots,
 } from "@shared/types/ipc/hostFiles";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -56,7 +57,7 @@ import {
   splitFileName,
 } from "./hostFilePickerModel";
 import { usePickerHost, type PickerHost } from "./usePickerHost";
-import { clientErrorText } from "@/utils/clientAppError";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 
 /**
  * Where the picker reads folders from: the window's own host, or — when the
@@ -294,8 +295,11 @@ function SummaryLines({
  */
 export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialogProps) {
   const [roots, setRoots] = useState<HostPickerRoots | null>(null);
-  const [directory, setDirectory] = useState<string | null>(
-    isAbsoluteHostPath(request.defaultPath) ? request.defaultPath : null
+  // The folder asked for. Without an absolute default it starts as the home
+  // token, so the home folder lists while the places are still being found:
+  // they stat project parents, any of which can sit on a stalled mount.
+  const [directory, setDirectory] = useState<string>(
+    isAbsoluteHostPath(request.defaultPath) ? request.defaultPath : HOST_HOME_PATH
   );
   const [listing, setListing] = useState<HostDirectoryListing | null>(null);
   // The folder `listing` was fetched for: a listing only ever answers for that one.
@@ -380,27 +384,27 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   // The typed folder the primary was pressed on: chosen once it opens, and
   // forgotten by any other navigation, an edit to the path, or a failure.
   const confirmOwedRef = useRef<string | null>(null);
+  // This host's places, settled to null when they can't be had: where a host
+  // from before the home token says its home is.
+  const rootsRef = useRef<Promise<HostPickerRoots | null> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    pickerSource(hostId)
+    const settled = pickerSource(hostId)
       .roots()
-      .then((result) => {
-        if (cancelled) return;
-        setRoots(result);
-        setDirectory((current) => current ?? result.home);
-      })
-      .catch(() => {
-        if (!cancelled) setDirectory((current) => current ?? "/");
-      });
+      .catch(() => null);
+    rootsRef.current = settled;
+    void settled.then((result) => {
+      if (!cancelled && result) setRoots(result);
+    });
     return () => {
       cancelled = true;
     };
   }, [hostId]);
 
   useEffect(() => {
-    if (directory === null) return;
     let cancelled = false;
+    let handedOff = false;
     setLoading(true);
     pickerSource(hostId)
       .list(directory, showHidden)
@@ -436,13 +440,22 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
+        const pending = rootsRef.current;
+        if (directory === HOST_HOME_PATH && clientErrorCode(cause) === "INVALID_PATH" && pending) {
+          // A host from before the home token: its places name the home.
+          handedOff = true;
+          void pending.then((result) => {
+            if (!cancelled) setDirectory(result?.home ?? "/");
+          });
+          return;
+        }
         if (confirmOwedRef.current === directory) confirmOwedRef.current = null;
         setLoadError(clientErrorText(cause, "Couldn't open that folder"));
-        setPathDraft(directory);
+        setPathDraft(directory === HOST_HOME_PATH ? (listedPathRef.current ?? "") : directory);
         setDraftEdited(false);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && !handedOff) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -471,15 +484,24 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const optionId = (index: number) => `${listId}-option-${index}`;
   const activeEntry = ready ? entries[activeIndex] : undefined;
   const multiple = request.mode === "file" && request.multiple === true;
-  const parentTarget =
-    directory === null ? null : ready ? listing.parent : hostPathParent(directory);
-  const shownPath = directory ?? listing?.path ?? "";
+  // The home token stands for a folder only the host can name.
+  const shownPath =
+    directory !== HOST_HOME_PATH
+      ? directory
+      : listing !== null && listedDirectory === directory
+        ? listing.path
+        : "";
+  const parentTarget = ready
+    ? listing.parent
+    : directory === HOST_HOME_PATH
+      ? null
+      : hostPathParent(directory);
   const draftTarget = pathDraft.trim();
   // A folder picker's field holds a path the user typed that the folder on
   // screen doesn't answer: the primary goes there (validating it, even when it
   // is empty) and chooses it, rather than the folder it replaces.
   const draftPending =
-    request.mode === "directory" && draftEdited && pathDraft !== (ready ? listing.path : directory);
+    request.mode === "directory" && draftEdited && pathDraft !== (ready ? listing.path : shownPath);
 
   const navigate = (target: string) => {
     confirmOwedRef.current = null;
@@ -616,12 +638,8 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     row?.scrollIntoView?.({ block: "nearest" });
   }, [activeIndex]);
 
-  const pendingLeaf = directory ? hostPathLeaf(directory) : null;
-  const openingText = pendingLeaf
-    ? stillWorking
-      ? `Still opening ${pendingLeaf}…`
-      : `Opening ${pendingLeaf}…`
-    : "";
+  const pendingLeaf = shownPath ? hostPathLeaf(shownPath) : "home folder";
+  const openingText = stillWorking ? `Still opening ${pendingLeaf}…` : `Opening ${pendingLeaf}…`;
   const status = loading
     ? showProgress
       ? openingText
@@ -755,7 +773,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         </div>
 
         <div className="relative h-1">
-          {showProgress && <ProgressBar label={openingText || "Opening folder"} />}
+          {showProgress && <ProgressBar label={openingText} />}
         </div>
 
         {roots && roots.roots.length > 0 && (
