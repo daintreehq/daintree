@@ -1135,6 +1135,38 @@ describe("SessionStore.nextFigureNumber (#9828)", () => {
     expect(store.figureCounters.has("help-c")).toBe(false);
   });
 
+  it("keeps the count while another transport of the same help session is live", () => {
+    // `daintree call` from the Assistant's pane opens and closes its own
+    // transport on the help bearer; the Assistant's next figure must not
+    // restart at 1 when it goes.
+    store.httpSessions.set("assistant", fakeHttpSession());
+    store.sessionHelpIdMap.set("assistant", "help-s");
+    store.httpSessions.set("shell-call", fakeHttpSession());
+    store.sessionHelpIdMap.set("shell-call", "help-s");
+    store.nextFigureNumber("help-s");
+    store.nextFigureNumber("help-s");
+
+    store.retireSession("shell-call", "session-ended");
+
+    expect(store.nextFigureNumber("help-s")).toBe(3);
+
+    store.retireSession("assistant", "session-ended");
+
+    expect(store.figureCounters.has("help-s")).toBe(false);
+  });
+
+  it("doesn't keep the count for a sibling row with no live transport", () => {
+    // A handshake that failed after its help id was filed leaves a row behind.
+    store.httpSessions.set("assistant", fakeHttpSession());
+    store.sessionHelpIdMap.set("assistant", "help-t");
+    store.sessionHelpIdMap.set("never-filed", "help-t");
+    store.nextFigureNumber("help-t");
+
+    store.retireSession("assistant", "session-ended");
+
+    expect(store.figureCounters.has("help-t")).toBe(false);
+  });
+
   it("clears all counters on drain()", () => {
     store.nextFigureNumber("help-1");
     store.nextFigureNumber("help-2");

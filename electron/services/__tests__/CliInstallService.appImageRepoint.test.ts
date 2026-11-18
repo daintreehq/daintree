@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const home = vi.hoisted(() => ({ dir: "" }));
@@ -175,6 +176,73 @@ describe("CliInstallService — following a moved AppImage", () => {
       expect(notDir.stderr).toContain("is not a directory");
     }
   );
+
+  /** Runs `generate` while the packaged script is readable, as from a running image. */
+  async function withPackagedScript<T>(generate: () => T | Promise<T>): Promise<T> {
+    const resources = path.join(root, "resources");
+    fs.mkdirSync(resources, { recursive: true });
+    fs.copyFileSync(
+      fileURLToPath(new URL("../../../scripts/daintree-cli.sh", import.meta.url)),
+      path.join(resources, "daintree-cli.sh")
+    );
+    const descriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", { value: resources, configurable: true });
+    try {
+      return await generate();
+    } finally {
+      if (descriptor) Object.defineProperty(process, "resourcesPath", descriptor);
+      else delete (process as { resourcesPath?: string }).resourcesPath;
+      fs.rmSync(resources, { recursive: true });
+    }
+  }
+
+  // The image's resources are unmounted whenever the app isn't running, so the
+  // wrapper has to carry the packaged script's client rather than point at it.
+  it.skipIf(process.platform === "win32")(
+    "carries the packaged script's call client, which runs without the image",
+    async () => {
+      const service = await load();
+      const content = await withPackagedScript(() =>
+        service.generateAppImageWrapper("/nonexistent/Daintree.AppImage", "1.2.3")
+      );
+      const wrapper = path.join(root, "daintree-cli.sh");
+      fs.writeFileSync(wrapper, content, { mode: 0o755 });
+      const run = (args: string[]) => {
+        const env = { ...process.env };
+        delete env.DAINTREE_MCP_URL;
+        delete env.DAINTREE_MCP_TOKEN;
+        return spawnSync("bash", [wrapper, ...args], { encoding: "utf8", env, timeout: 10_000 });
+      };
+
+      expect(run(["--help"]).stdout).toContain("daintree call <tool>");
+      const help = run(["call", "--help"]);
+      expect(help.status).toBe(0);
+      expect(help.stdout).toContain("Usage: daintree call <tool>");
+      const outsidePane = run(["call", "terminal.list"]);
+      expect(outsidePane.status).toBe(4);
+      expect(outsidePane.stderr).toContain("DAINTREE_MCP_URL");
+      // The launch line and the version stamp still read back as before.
+      expect(service.appImageOfWrapper(content)).toBe("/nonexistent/Daintree.AppImage");
+      expect(run(["--version"]).stdout.trim()).toBe("daintree 1.2.3");
+    }
+  );
+
+  it("keeps the installed call client when a repoint can't read the packaged script", async () => {
+    const oldImage = path.join(root, "Daintree-1.2.0.AppImage");
+    const newImage = path.join(root, "Daintree-1.3.0.AppImage");
+    const service = await installedFor(oldImage);
+    const withClient = await withPackagedScript(() => service.generateAppImageWrapper(oldImage));
+    fs.writeFileSync(wrapperPath, withClient, { mode: 0o755 });
+    fs.rmSync(oldImage);
+    fs.writeFileSync(newImage, "new image");
+
+    expect(service.repointAppImageWrapper(newImage)).toBe(true);
+
+    const wrapper = fs.readFileSync(wrapperPath, "utf8");
+    expect(service.appImageOfWrapper(wrapper)).toBe(newImage);
+    expect(wrapper).toContain('daintree_call "$@"');
+    expect(wrapper).toContain("# <<< daintree call <<<");
+  });
 
   it.skipIf(process.platform === "win32")(
     "sends one absolute folder when CDPATH is exported",
