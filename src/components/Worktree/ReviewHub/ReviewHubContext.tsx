@@ -1,6 +1,7 @@
 import {
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -28,6 +29,7 @@ import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { appendArrivals, orderRuns } from "./reviewHubRunOrder";
 import { REVIEW_HUB_COUNT_CHIP, REVIEW_HUB_SECTION_BAND } from "./reviewHubUtils";
 
 interface RunEntry {
@@ -131,41 +133,46 @@ export function ReviewHubContext({ worktreePath, worktreeId, isDialog }: ReviewH
       );
     })
   );
-  const byActivity: RunEntry[] = panels
-    .flatMap((panel) =>
-      isPtyPanel(panel)
-        ? [
-            {
-              panelId: panel.id,
-              title: getTerminalDisplayTitle(panel, "full", { showTask: showAgentTaskTitles }),
-              kind: panel.kind,
-              chrome: deriveTerminalChrome(panel),
-              firstPrompt: shownFirstPrompt(panel),
-              handback: panel.lastHandback,
-            },
-          ]
-        : []
-    )
-    .sort((a, b) => latestActivity(b) - latestActivity(a));
+
+  // The rows are rebuilt only when the panels or the title preference change,
+  // not when a row is expanded.
+  const byActivity = useMemo<RunEntry[]>(
+    () =>
+      panels
+        .flatMap((panel) =>
+          isPtyPanel(panel)
+            ? [
+                {
+                  panelId: panel.id,
+                  title: getTerminalDisplayTitle(panel, "full", { showTask: showAgentTaskTitles }),
+                  kind: panel.kind,
+                  chrome: deriveTerminalChrome(panel),
+                  firstPrompt: shownFirstPrompt(panel),
+                  handback: panel.lastHandback,
+                },
+              ]
+            : []
+        )
+        .sort((a, b) => latestActivity(b) - latestActivity(a)),
+    [panels, showAgentTaskTitles]
+  );
 
   // Order and the open run are both fixed for the visit: a handback landing on
   // another run while the reviewer reads must not move rows or swap which one
   // is open under them. The hub opens newest first; a run that appears later
   // takes the next place once and keeps it, and the next visit sorts afresh.
   // Adjusted during render rather than in an effect, so an arrival never paints
-  // in one place and then jumps to another.
+  // in one place and then jumps to another. A run that leaves keeps its place in
+  // the order, so one that comes back takes it again.
   const [visitOrder, setVisitOrder] = useState<readonly string[]>(() =>
     byActivity.map((run) => run.panelId)
   );
-  const arrivals = byActivity.filter((run) => !visitOrder.includes(run.panelId));
-  if (arrivals.length > 0) {
-    setVisitOrder([...visitOrder, ...arrivals.map((run) => run.panelId)]);
-  }
-  const runs = visitOrder.flatMap((id) => byActivity.filter((run) => run.panelId === id));
-  const openedWith = visitOrder[0] ?? null;
-  const defaultOpenId = runs.some((run) => run.panelId === openedWith)
-    ? openedWith
-    : (runs[0]?.panelId ?? null);
+  const order = useMemo(() => appendArrivals(visitOrder, byActivity), [visitOrder, byActivity]);
+  if (order !== visitOrder) setVisitOrder(order);
+  const runs = useMemo(() => orderRuns(order, byActivity), [order, byActivity]);
+  // The run the hub opened with while it is still here, else the first left:
+  // either way the first of the runs in visit order.
+  const defaultOpenId = runs[0]?.panelId ?? null;
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
 
   if (!issue && runs.length === 0) return null;
