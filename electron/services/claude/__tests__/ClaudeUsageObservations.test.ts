@@ -597,16 +597,20 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
   });
 
   it("keeps a saved account at quit when the probe repeats the export the last save resolved", async () => {
+    // The profile exports a link to WORK, which only a lookup can tell.
+    const LINK = path.resolve(os.tmpdir(), "daintree-17610", "work-link");
     const storage = memoryStorage();
-    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: WORK });
-    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: LINK });
+    restoreClaudeUsageObservations(storage, {
+      canonicalKey: async (dir) => (dir === LINK ? WORK : dir),
+    });
     recordClaudeUsageObservation(
       reading({ configDir: WORK, observedAt: Date.now(), resetsAt: Date.now() + HOUR })
     );
     await settle();
     expect(savedPlaces(storage.value)).toEqual([["t1", WORK]]);
 
-    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: WORK });
+    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: LINK });
     sealClaudeUsageObservations();
 
     expect(storage.writes).toBe(2);
