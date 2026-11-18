@@ -118,17 +118,17 @@ vi.mock("@shared/types", async () => {
     // Identity reconcile keeps persisted flags verbatim so these dispatch-path
     // tests stay focused on restart wiring rather than bypass reconciliation
     // (#10432, covered by agentSettings.test.ts and statePatcher.test.ts).
-    reconcileBypassFlags: (
+    reconcilePermissionFlags: (
       flags: readonly string[],
       _agentId: string,
-      _effectiveBypass: boolean,
-      _bypassArgs?: string,
-      pluginBypassArgHistory?: readonly (readonly string[])[]
+      _level: string,
+      options?: { pluginBypassArgHistory?: readonly (readonly string[])[] }
     ) => {
-      reconcileBypassHistoryMock(pluginBypassArgHistory);
+      reconcileBypassHistoryMock(options?.pluginBypassArgHistory);
       return reconcileBypassFlagsMock(flags);
     },
     resolveEffectiveBypass: () => false,
+    resolveEffectivePermissionLevel: () => "cli-default",
   };
 });
 
