@@ -531,6 +531,19 @@ describe("DiffViewer directional context expansion", () => {
 
     expect(screen.getByRole("button", { name: "Expand all 77" })).toBeTruthy();
   });
+
+  it("offers expansion once a source lands after the diff is already showing", () => {
+    const { rerender } = render(
+      wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={null} viewType="split" />)
+    );
+    expect(renderedContent()).toContain("line2-changed");
+    expect(screen.queryByRole("button", { name: /^Expand (up|down|all)/ })).toBeNull();
+
+    rerender(wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={FAR_HUNKS_SOURCE} viewType="split" />));
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand all 97" }));
+    expect(renderedContent()).toContain("line50");
+  });
 });
 
 describe("DiffViewer hunk copy", () => {

@@ -416,6 +416,16 @@ index 1a2b3c4..5d6e7f8 100644
       expect(args).toContain("--submodule=short");
     });
 
+    it("prints full blob ids on a per-file diff so two reads can be matched exactly", async () => {
+      gitClientMock.raw.mockResolvedValue("diff --git a/src/app.ts b/src/app.ts\n");
+
+      const service = new GitService(tempDir);
+      await service.compareWorktrees("main", "feature/test", "src/app.ts", undefined, true, 10);
+
+      const args = gitClientMock.raw.mock.calls[0][0] as string[];
+      expect(args).toContain("--full-index");
+    });
+
     it("returns file list for two-dot range", async () => {
       gitClientMock.raw.mockResolvedValue("M\0src/app.ts\0A\0src/new.ts\0");
 
