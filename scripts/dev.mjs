@@ -2,7 +2,6 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import concurrently from "concurrently";
 import { BUILD_READY_FILE, removeBuildReadyMarker } from "./lib/build-ready-gate.mjs";
 
@@ -49,6 +48,10 @@ async function findAvailablePort(host, startPort) {
 }
 
 export async function main({ readyFile = path.resolve(BUILD_READY_FILE) } = {}) {
+  // A marker left by the last session would let wait-on start Electron on old
+  // output before the watcher's own startup gets to remove it.
+  removeBuildReadyMarker(readyFile);
+
   const host = process.env.DAINTREE_DEV_SERVER_HOST?.trim() || DEFAULT_HOST;
   const requestedPort = parsePort(process.env.DAINTREE_DEV_SERVER_PORT) ?? DEFAULT_PORT;
   const port = await findAvailablePort(host, requestedPort);
@@ -79,10 +82,6 @@ export async function main({ readyFile = path.resolve(BUILD_READY_FILE) } = {}) 
   if (freshUserDataDir) {
     console.log(`[dev] Using fresh Electron userData ${freshUserDataDir}`);
   }
-
-  // A marker left by the last session would let wait-on start Electron on old
-  // output before the watcher's own startup gets to remove it.
-  removeBuildReadyMarker(readyFile);
 
   const { result } = concurrently(
     [
@@ -120,7 +119,7 @@ export async function main({ readyFile = path.resolve(BUILD_READY_FILE) } = {}) 
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.main) {
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, () => {
       interrupted = true;

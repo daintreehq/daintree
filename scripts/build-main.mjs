@@ -648,7 +648,10 @@ async function run() {
         onFirstReady: () => {
           validateCopiedPluginAssets();
           validateGuestAssets();
-          console.log("[Build] Initial build ready.");
+        },
+        onError: (error) => {
+          console.error("[Build] Failed:", error);
+          process.exit(1);
         },
         createContext: context,
       });

@@ -18,10 +18,12 @@ describe("dev launcher", () => {
     readyFile = path.join(workDir, BUILD_READY_FILE);
     fs.mkdirSync(path.dirname(readyFile), { recursive: true });
     vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.stubEnv("DAINTREE_RESET_DATA", "");
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     concurrently.mockReset();
     fs.rmSync(workDir, { recursive: true, force: true });
   });

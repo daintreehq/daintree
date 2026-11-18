@@ -20,13 +20,17 @@ export function writeBuildReadyMarker(file) {
  * fast preload can't release Electron while main is still building or broken.
  * After the first open, every later success that leaves all builds green
  * rewrites the marker again, debounced so one edit that rebuilds several
- * contexts writes once. `onFirstReady` runs once, just before the first write,
- * so checks of the finished output report before Electron can start.
+ * contexts writes once. `onFirstReady` runs just before the first write, so
+ * checks of the finished output report before Electron can start; a throw from
+ * it or from the write goes to `onError` instead of escaping a timer.
  */
 export function createBuildReadyGate({
   names,
   write,
   onFirstReady = () => {},
+  onError = (error) => {
+    throw error;
+  },
   delayMs = 100,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -50,11 +54,14 @@ export function createBuildReadyGate({
   const fire = () => {
     timer = null;
     if (!isReady()) return;
-    if (!opened) {
-      opened = true;
-      onFirstReady();
+    try {
+      if (!opened) onFirstReady();
+      write();
+    } catch (error) {
+      onError(error);
+      return;
     }
-    write();
+    opened = true;
   };
 
   const schedule = () => {
@@ -105,6 +112,7 @@ export async function startWatchBuild({
   readyFile,
   copyAssets = () => {},
   onFirstReady,
+  onError,
   createContext,
   delayMs,
 }) {
@@ -114,6 +122,7 @@ export async function startWatchBuild({
     names,
     write: () => writeBuildReadyMarker(readyFile),
     onFirstReady,
+    onError,
     delayMs,
   });
 
