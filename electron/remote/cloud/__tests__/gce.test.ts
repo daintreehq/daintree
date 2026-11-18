@@ -56,7 +56,7 @@ interface FakeInstance {
   machineType: string;
   natIP: string | null;
   hostKeysPublished: boolean;
-  body: Record<string, unknown>;
+  body: InsertBody;
 }
 
 /** The parts of an insert body the fake and the tests read. */
@@ -326,12 +326,12 @@ function fakeGoogle() {
       if (!failure) {
         instances.set(id, {
           id,
-          name: String(sent.name),
+          name: sent.name,
           zone: zone!,
           status: "RUNNING",
-          labels: (sent.labels as Record<string, string>) ?? {},
-          scheduling: (sent.scheduling as Record<string, unknown>) ?? {},
-          machineType: String(sent.machineType).split("/").pop()!,
+          labels: sent.labels ?? {},
+          scheduling: sent.scheduling ?? {},
+          machineType: sent.machineType.split("/").pop()!,
           // An external address only when the create asked for one.
           natIP: sent.networkInterfaces?.[0]?.accessConfigs?.length ? "203.0.113.20" : null,
           hostKeysPublished: false,
