@@ -4381,13 +4381,15 @@ export interface PluginCatalogSourceBrowse {
 }
 
 /**
- * Outcome of `plugin.browseCatalog` (#17434): Daintree's own catalog first,
- * then each one the person added, in their order. Each is read on its own, so
- * one that can't be read never hides the others.
+ * Outcome of `plugin.browseCatalog` (#17434): Daintree's own catalog, in the
+ * shape it always had so an older Daintree reading the answer still lists it,
+ * and under `added` each catalog the person added, in their order. Each is
+ * read on its own, so one that can't be read never hides the others. An older
+ * host answers without `added`.
  */
-export interface PluginCatalogsBrowseResult {
-  catalogs: PluginCatalogSourceBrowse[];
-}
+export type PluginCatalogsBrowseResult = PluginCatalogBrowseResult & {
+  added?: PluginCatalogSourceBrowse[];
+};
 
 /**
  * Outcome of `plugin.previewFromUrl` and `plugin.previewFromCatalog`. Failures
@@ -4721,6 +4723,12 @@ export interface PluginInstallOptions {
    * that changed catalogs since the review isn't replaced unseen. Transient.
    */
   catalogReplaces?: { sourceUrl?: string } | null;
+  /**
+   * Main-only, with `catalog`: this is the update an installed copy was
+   * offered (#17434). Under the install lock it lands only on a copy still
+   * installed from the same catalog, and only over an older version. Transient.
+   */
+  catalogUpdate?: boolean;
   /**
    * Correlation id for progress reporting and cancellation (#11302). Minted by
    * the caller that wants feedback; omitting it installs exactly as before, just

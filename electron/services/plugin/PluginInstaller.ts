@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { randomUUID } from "node:crypto";
+import * as semver from "semver";
 import { createRequire as nodeCreateRequire } from "node:module";
 
 import {
@@ -668,19 +669,27 @@ export class PluginInstaller {
         );
       }
 
-      // Checked here, under the lock and against what is installed right now,
-      // so a check made before queueing can't be stale by the time this
-      // replaces anything: an update queued behind a newer one must not
-      // downgrade it, and an install queued behind another must not replace it.
       // A catalog install was reviewed knowing which other catalog's copy, if
       // any, it replaces (#17434). Another window can have installed this id
       // from a third catalog since; replacing that copy unseen would switch
-      // its updates to a catalog nobody chose for it.
-      if (opts?.source === "catalog" && opts.catalogReplaces !== undefined) {
-        const replaced = replacedCatalogOf(
-          existing ? installedCatalogOf(this.records.getInstalledRecord(pluginId)) : null,
-          opts.catalog?.sourceUrl
+      // its updates to a catalog nobody chose for it. An update was offered to
+      // a copy from its own catalog, so it lands only on a copy still from
+      // that catalog: never on one a URL or file install has replaced since.
+      const installedCatalog = existing
+        ? installedCatalogOf(this.records.getInstalledRecord(pluginId))
+        : null;
+      if (
+        opts?.source === "catalog" &&
+        opts.catalogUpdate === true &&
+        (installedCatalog === null || installedCatalog.sourceUrl !== opts.catalog?.sourceUrl)
+      ) {
+        return fail(
+          "archive_mismatch",
+          `"${pluginId}" is no longer installed from the catalog this update comes from, so it wasn't applied`
         );
+      }
+      if (opts?.source === "catalog" && opts.catalogReplaces !== undefined) {
+        const replaced = replacedCatalogOf(installedCatalog, opts.catalog?.sourceUrl);
         const reviewed = opts.catalogReplaces;
         if (
           (replaced === null) !== (reviewed === null) ||
@@ -693,10 +702,30 @@ export class PluginInstaller {
         }
       }
 
+      // Checked here, under the lock and against what is installed right now,
+      // so a check made before queueing can't be stale by the time this
+      // replaces anything: an update queued behind a newer one must not
+      // downgrade it, and an install queued behind another must not replace it.
       const installedManifest = existing ? await readInstalledManifest(finalDir) : null;
       if (replacement) {
         const refusal = replacement(this.installedVersion(pluginId, installedManifest));
         if (refusal) return fail("archive_mismatch", refusal);
+      }
+      // The same for a catalog update reviewed before another window installed
+      // a newer release from that catalog (#17434): it never moves back.
+      if (opts?.source === "catalog" && opts.catalogUpdate === true) {
+        const installedVersion = this.installedVersion(pluginId, installedManifest);
+        if (
+          installedVersion !== null &&
+          semver.valid(installedVersion) !== null &&
+          semver.valid(manifest.version) !== null &&
+          !semver.gt(manifest.version, installedVersion)
+        ) {
+          return fail(
+            "archive_mismatch",
+            `v${installedVersion} of "${pluginId}" is installed now, so this update to v${manifest.version} wasn't applied`
+          );
+        }
       }
 
       // A mode change strands state either way (#14256): settings, grants and

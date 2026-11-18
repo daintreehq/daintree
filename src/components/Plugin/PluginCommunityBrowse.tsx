@@ -177,7 +177,11 @@ function ListingCard({
               </Badge>
             )}
             {otherCatalog !== null && (
-              <Badge size="xs" data-testid="community-listing-installed-elsewhere">
+              <Badge
+                size="xs"
+                className="whitespace-normal break-all"
+                data-testid="community-listing-installed-elsewhere"
+              >
                 {`Installed v${installedVersion} from ${catalogName(otherCatalog.sourceUrl)}`}
               </Badge>
             )}
@@ -222,7 +226,12 @@ function ListingCard({
             size="sm"
             onClick={onInstall}
             disabled={installDisabled}
-            aria-label={`Install ${listing.id}`}
+            aria-label={
+              // One plugin can be listed by several catalogs; say which this is.
+              listing.sourceUrl === undefined
+                ? `Install ${listing.id}`
+                : `Install ${listing.id} from ${catalogName(listing.sourceUrl)}`
+            }
           >
             Install
           </Button>

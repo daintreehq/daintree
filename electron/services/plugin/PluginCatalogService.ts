@@ -154,11 +154,36 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
   private inFlight: Promise<RemoteOutcome> | null = null;
   /** Writes run in order, so an older catalog never lands over a newer one. */
   private diskWrites: Promise<void> = Promise.resolve();
+  private pendingWrites = 0;
+  private activeReads = 0;
   private cachePath: Promise<string | null> | null = null;
 
   constructor(private readonly deps: PluginCatalogDeps = {}) {}
 
+  /**
+   * Nothing is being read, fetched or written. Only an idle client is let go
+   * (#17434), so a client built again for the same catalog never runs beside
+   * one whose write could still land over its newer copy.
+   */
+  isIdle(): boolean {
+    return this.activeReads === 0 && this.inFlight === null && this.pendingWrites === 0;
+  }
+
+  /** This client's cache file, for dropping it along with the client. */
+  cacheFile(): Promise<string | null> {
+    return this.resolveCachePath();
+  }
+
   async getCatalog(mode: PluginCatalogMode): Promise<PluginCatalogResult> {
+    this.activeReads += 1;
+    try {
+      return await this.readCatalog(mode);
+    } finally {
+      this.activeReads -= 1;
+    }
+  }
+
+  private async readCatalog(mode: PluginCatalogMode): Promise<PluginCatalogResult> {
     await this.loadDiskOnce();
     const cached = this.snapshot;
     if (mode === "browse" && cached && this.isFresh(cached)) {
@@ -291,7 +316,12 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
           // release disappears rather than lingering from an older copy.
           this.snapshot = outcome.snapshot;
           const snapshot = outcome.snapshot;
-          this.diskWrites = this.diskWrites.then(() => this.writeDisk(snapshot));
+          this.pendingWrites += 1;
+          this.diskWrites = this.diskWrites
+            .then(() => this.writeDisk(snapshot))
+            .finally(() => {
+              this.pendingWrites -= 1;
+            });
         }
         return outcome;
       })
@@ -481,13 +511,25 @@ function releasesById(entries: readonly PluginCatalogEntry[]): Map<string, Plugi
 }
 
 let sharedService: PluginCatalogService | null = null;
+/** Added catalogs' clients, least recently used first. */
 const addedSourceServices = new Map<string, PluginCatalogService>();
+
+/**
+ * How many added catalogs' clients and cache files are kept. A host serves
+ * whatever list each attached machine sends, so this bounds what every
+ * catalog anyone ever browsed there can hold (#17434), without one machine's
+ * Browse dropping another's.
+ */
+export const PLUGIN_CATALOG_SOURCES_KEPT = 16;
 
 /**
  * The process-wide client for one catalog, built by its first caller rather
  * than at startup: Daintree's own when `sourceUrl` is omitted, otherwise the
  * added catalog at that canonical URL (#17434). Callers pass a URL already
  * through `pluginCatalogSourceUrl`, so one catalog never gets two clients.
+ * Past {@link PLUGIN_CATALOG_SOURCES_KEPT} added catalogs, the least recently
+ * used idle one is let go with its cache file; an install from it still checks
+ * it for updates, since those reads always fetch afresh.
  */
 export function getPluginCatalogService(sourceUrl?: string): PluginCatalogService {
   if (sourceUrl === undefined) {
@@ -495,28 +537,31 @@ export function getPluginCatalogService(sourceUrl?: string): PluginCatalogServic
     return sharedService;
   }
   let service = addedSourceServices.get(sourceUrl);
-  if (!service) {
+  if (service) {
+    addedSourceServices.delete(sourceUrl);
+  } else {
     service = new PluginCatalogService({ sourceUrl });
-    addedSourceServices.set(sourceUrl, service);
+  }
+  addedSourceServices.set(sourceUrl, service);
+  for (const [url, candidate] of addedSourceServices) {
+    if (addedSourceServices.size <= PLUGIN_CATALOG_SOURCES_KEPT) break;
+    if (url === sourceUrl || !candidate.isIdle()) continue;
+    addedSourceServices.delete(url);
+    void candidate
+      .cacheFile()
+      .then((file) => (file ? fs.rm(file, { force: true }) : undefined))
+      .catch(() => {});
   }
   return service;
 }
 
 /**
- * Let go of the added catalogs a Browse no longer names (#17434): their
- * clients, and their cache files on disk. A host serves whatever list each
- * attached machine sends, so without this every catalog anyone ever browsed
- * would stay held for good. An install from a catalog dropped here still
- * checks it for updates: those reads always fetch afresh and build a new
- * client on demand.
+ * Bound the added catalogs' cache folder to {@link PLUGIN_CATALOG_SOURCES_KEPT}
+ * files, dropping the oldest that no live client holds. Files outlive the
+ * process, so catalogs browsed in earlier runs and never since would otherwise
+ * stay on disk for good. Costs one directory read until the folder is full.
  */
-export async function forgetPluginCatalogSourcesExcept(
-  keep: readonly string[],
-  cacheDir?: string | null
-): Promise<void> {
-  for (const sourceUrl of [...addedSourceServices.keys()]) {
-    if (!keep.includes(sourceUrl)) addedSourceServices.delete(sourceUrl);
-  }
+export async function sweepPluginCatalogCaches(cacheDir?: string | null): Promise<void> {
   const dir =
     cacheDir === undefined
       ? await loadUserDataPath().then((userData) =>
@@ -524,18 +569,34 @@ export async function forgetPluginCatalogSourcesExcept(
         )
       : cacheDir;
   if (dir === null) return;
-  const kept = new Set(keep.map(sourceCacheFileName));
   let names: string[];
   try {
-    names = await fs.readdir(dir);
+    names = (await fs.readdir(dir)).filter((name) => name.endsWith(".json"));
   } catch {
     return;
   }
-  await Promise.all(
+  if (names.length <= PLUGIN_CATALOG_SOURCES_KEPT) return;
+  const live = new Set([...addedSourceServices.keys()].map(sourceCacheFileName));
+  const dated = await Promise.all(
     names
-      .filter((name) => name.endsWith(".json") && !kept.has(name))
-      .map((name) => fs.rm(path.join(dir, name), { force: true }).catch(() => {}))
+      .filter((name) => !live.has(name))
+      .map(async (name) => {
+        const stat = await fs.stat(path.join(dir, name)).catch(() => null);
+        return { name, mtime: stat?.mtimeMs ?? 0 };
+      })
   );
+  dated.sort((a, b) => b.mtime - a.mtime);
+  const room = Math.max(0, PLUGIN_CATALOG_SOURCES_KEPT - live.size);
+  await Promise.all(
+    dated
+      .slice(room)
+      .map(({ name }) => fs.rm(path.join(dir, name), { force: true }).catch(() => {}))
+  );
+}
+
+/** Test seam: forget every added catalog's client. */
+export function resetPluginCatalogSourceServicesForTest(): void {
+  addedSourceServices.clear();
 }
 
 /** One file per catalog URL, named so no URL can reach outside the folder. */

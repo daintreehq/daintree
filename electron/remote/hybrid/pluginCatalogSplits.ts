@@ -41,8 +41,9 @@ function unknownCatalog(sourceUrl: string): PluginUrlInstallPreviewResult {
 /**
  * The added catalog a request names, canonical, once this machine has checked
  * it is one the person added: `"forward"` when there is nothing to check here
- * (Daintree's own catalog, or a name the host will refuse as malformed), the
- * refusal when it isn't on the list.
+ * (Daintree's own catalog), the refusal when it isn't on the list or isn't a
+ * catalog URL at all. A malformed name is refused here, not left to the host:
+ * an older host ignores the name and would answer from Daintree's catalog.
  */
 async function checkNamedCatalog(
   request: unknown
@@ -51,7 +52,13 @@ async function checkNamedCatalog(
   if (raw === undefined) return "forward";
   const { catalogSourceOf } = await loadSourceUrl();
   const sourceUrl = catalogSourceOf(raw);
-  if (sourceUrl === null || sourceUrl === undefined) return "forward";
+  if (sourceUrl === null) {
+    return refusal(
+      "catalog_not_listed",
+      "The install names a catalog address Daintree can't read, so nothing was installed."
+    );
+  }
+  if (sourceUrl === undefined) return "forward";
   const { isAddedPluginCatalogSource } = await loadSources();
   return isAddedPluginCatalogSource(sourceUrl) ? { sourceUrl } : unknownCatalog(sourceUrl);
 }

@@ -13,7 +13,7 @@ import {
   pluginPreviewFromCatalog,
 } from "../pluginCatalogSplits.js";
 import { CHANNELS } from "../../../ipc/channels.js";
-import { CHANNEL_LOCALITY } from "../../../ipc/channelLocality.js";
+import { CHANNEL_LOCALITY, EVENT_LOCALITY } from "../../../ipc/channelLocality.js";
 import type { HybridSplit } from "../../../ipc/endpoint.js";
 
 const SOURCE = "https://plugins.example.org/catalog.json";
@@ -71,6 +71,8 @@ describe("catalog splits for a window attached to a host (#17434)", () => {
     // The list itself never leaves this machine.
     expect(CHANNEL_LOCALITY["plugin:catalog-sources-get"]).toBe("shell");
     expect(CHANNEL_LOCALITY["plugin:catalog-sources-add"]).toBe("shell");
+    expect(CHANNEL_LOCALITY["plugin:catalog-sources-remove"]).toBe("shell");
+    expect(EVENT_LOCALITY["plugin:catalog-sources-changed"]).toBe("shell");
   });
 
   it("sends this machine's list with Browse, whatever the renderer passed", async () => {
@@ -93,12 +95,12 @@ describe("catalog splits for a window attached to a host (#17434)", () => {
   it("forwards an added catalog in its canonical spelling, with the job", async () => {
     storeMock.data.set("pluginCatalogSources", [SOURCE]);
     const { input, remote } = call(
-      [{ pluginId: "acme.listed", sourceUrl: `${SOURCE}#x` }, "job-1"],
+      [{ pluginId: "acme.listed", version: "1.0.0", sourceUrl: `${SOURCE}#x` }, "job-1"],
       preview(SOURCE)
     );
     expect(await pluginPreviewFromCatalog(input)).toEqual(preview(SOURCE));
     expect(remote).toHaveBeenCalledWith(undefined, [
-      { pluginId: "acme.listed", sourceUrl: SOURCE },
+      { pluginId: "acme.listed", version: "1.0.0", sourceUrl: SOURCE },
       "job-1",
     ]);
   });
@@ -117,6 +119,35 @@ describe("catalog splits for a window attached to a host (#17434)", () => {
     });
   });
 
+  it("refuses a catalog that isn't one Daintree can read, rather than let an older host read its own", async () => {
+    storeMock.data.set("pluginCatalogSources", [SOURCE]);
+    for (const sourceUrl of [
+      `https://plugins.example.org/${"a".repeat(3000)}`,
+      "https://10.0.0.8/catalog.json",
+      "http://plugins.example.org/catalog.json",
+    ]) {
+      const preview = call([{ pluginId: "acme.listed", sourceUrl }]);
+      expect(await pluginPreviewFromCatalog(preview.input)).toMatchObject({
+        status: "failed",
+        errors: [{ code: "catalog_not_listed" }],
+      });
+      expect(preview.remote).not.toHaveBeenCalled();
+      const install = call([{ pluginId: "acme.listed", version: "1.0.0", repo: REPO, sourceUrl }]);
+      expect(await pluginInstallFromCatalog(install.input)).toMatchObject({ status: "failed" });
+      expect(install.remote).not.toHaveBeenCalled();
+    }
+  });
+
+  it("forwards Daintree's own catalog named in another spelling as it is", async () => {
+    const { PLUGIN_CATALOG_URL } = await import("../../../../shared/config/pluginCatalog.js");
+    const { input, remote } = call(
+      [{ pluginId: "acme.listed", sourceUrl: `${PLUGIN_CATALOG_URL}#top` }],
+      preview()
+    );
+    expect(await pluginPreviewFromCatalog(input)).toEqual(preview());
+    expect(remote).toHaveBeenCalledWith();
+  });
+
   it("passes Daintree's own catalog straight through", async () => {
     const { input, remote } = call([{ pluginId: "acme.listed" }], preview());
     expect(await pluginPreviewFromCatalog(input)).toEqual(preview());
@@ -129,6 +160,23 @@ describe("catalog splits for a window attached to a host (#17434)", () => {
       errors: [{ code: "catalog_source_unknown" }],
     });
     expect(listing.remote).not.toHaveBeenCalled();
+
+    storeMock.data.set("pluginCatalogSources", [SOURCE]);
+    const request = {
+      pluginId: "acme.listed",
+      version: "1.0.0",
+      repo: REPO,
+      sourceUrl: SOURCE,
+      replacesCatalog: {},
+      expected: { kind: "update", pluginId: "acme.listed", archiveHash: "a".repeat(64) },
+    };
+    const added = call([request, "job-2"], { status: "installed", pluginId: "acme.listed" });
+    expect(await pluginInstallFromCatalog(added.input)).toEqual({
+      status: "installed",
+      pluginId: "acme.listed",
+    });
+    expect(added.remote).toHaveBeenCalledWith(undefined, [request, "job-2"]);
+    storeMock.data.clear();
 
     const update = call([
       { pluginId: "acme.listed", version: "1.0.1", sourceUrl: SOURCE, intent: "update" },

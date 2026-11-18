@@ -1,28 +1,36 @@
 import { useEffect, useState } from "react";
-import type { PluginCatalogBrowseResult, PluginCatalogsBrowseResult } from "@shared/types/plugin";
+import type { PluginCatalogBrowseResult, PluginCatalogSourceBrowse } from "@shared/types/plugin";
 import { logError } from "@/utils/logger";
 
+/** Every catalog a Browse read covers: Daintree's own first, then each one added (#17434). */
+export interface BrowsedCatalogs {
+  catalogs: PluginCatalogSourceBrowse[];
+}
+
 /** What a read of the catalogs came back with: main's answer, or a call that failed outright. */
-export type CatalogBrowseAnswer =
-  { kind: "result"; result: PluginCatalogsBrowseResult } | { kind: "error" };
+export type CatalogBrowseAnswer = { kind: "result"; result: BrowsedCatalogs } | { kind: "error" };
+
+function isBrowseResult(value: unknown): value is PluginCatalogBrowseResult {
+  if (typeof value !== "object" || value === null || !("status" in value)) return false;
+  return value.status === "available" || value.status === "unavailable";
+}
+
+function isSourceBrowse(value: unknown): value is PluginCatalogSourceBrowse {
+  if (typeof value !== "object" || value === null || !("result" in value)) return false;
+  const sourceUrl = "sourceUrl" in value ? value.sourceUrl : undefined;
+  return (sourceUrl === undefined || typeof sourceUrl === "string") && isBrowseResult(value.result);
+}
 
 /**
- * A host running an older Daintree answers with Daintree's own catalog alone,
- * in the shape it had before added catalogs (#17434). Anything else reads as a
- * call that failed.
+ * Daintree's own catalog in the shape it always had, and the added ones under
+ * `added`. A host running an older Daintree answers without `added`; anything
+ * else reads as a call that failed.
  */
 function normalize(answer: unknown): CatalogBrowseAnswer {
-  if (typeof answer !== "object" || answer === null) return { kind: "error" };
-  if ("catalogs" in answer && Array.isArray(answer.catalogs)) {
-    return { kind: "result", result: answer as PluginCatalogsBrowseResult };
-  }
-  if ("status" in answer) {
-    return {
-      kind: "result",
-      result: { catalogs: [{ result: answer as PluginCatalogBrowseResult }] },
-    };
-  }
-  return { kind: "error" };
+  if (!isBrowseResult(answer)) return { kind: "error" };
+  const added: unknown = "added" in answer ? answer.added : undefined;
+  const extra = Array.isArray(added) ? added.filter(isSourceBrowse) : [];
+  return { kind: "result", result: { catalogs: [{ result: answer }, ...extra] } };
 }
 
 /**

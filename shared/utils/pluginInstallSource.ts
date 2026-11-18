@@ -27,13 +27,15 @@ export function describeCatalogRepo(repo: string): string {
 
 /**
  * A catalog's URL as Browse and the install preview name its curator (#17434):
- * host and path, the scheme dropped like the banner's URLs, and the query and
- * fragment dropped since a link can carry a token there.
+ * host and path as they are, the scheme dropped like the banner's URLs. A
+ * query can carry a token, so it shows only as `?…`, which still tells two
+ * catalogs on one path apart from one without a query.
  */
 export function describeCatalogSource(sourceUrl: string): string {
   try {
     const url = new URL(sourceUrl);
-    return `${url.host}${url.pathname.replace(/\/+$/, "")}`;
+    const path = url.pathname === "/" ? "" : url.pathname;
+    return `${url.host}${path}${url.search === "" ? "" : "?…"}`;
   } catch {
     return sourceUrl;
   }

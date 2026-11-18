@@ -26,9 +26,11 @@ vi.mock("../../../utils/logger.js", () => ({
 
 import dns from "node:dns/promises";
 import {
+  PLUGIN_CATALOG_SOURCES_KEPT,
   PluginCatalogService,
-  forgetPluginCatalogSourcesExcept,
   getPluginCatalogService,
+  resetPluginCatalogSourceServicesForTest,
+  sweepPluginCatalogCaches,
 } from "../PluginCatalogService.js";
 import { createManualRedirectFetch } from "../../../utils/netManualRedirectFetch.js";
 import {
@@ -73,7 +75,7 @@ describe("PluginCatalogService for a catalog the person added (#17434)", () => {
   });
 
   afterEach(async () => {
-    await forgetPluginCatalogSourcesExcept([], null);
+    resetPluginCatalogSourceServicesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -169,18 +171,66 @@ describe("PluginCatalogService for a catalog the person added (#17434)", () => {
     expect(getPluginCatalogService(OTHER)).not.toBe(added);
   });
 
-  it("lets go of the clients and caches of catalogs a Browse no longer names", async () => {
+  it("keeps the most recently used idle catalogs, and drops the oldest with its cache", async () => {
+    const urls = Array.from(
+      { length: PLUGIN_CATALOG_SOURCES_KEPT + 1 },
+      (_, i) => `https://c${i}.example.com/catalog.json`
+    );
     const dir = path.join(tmpDir, PLUGIN_CATALOG_SOURCE_CACHE_DIR);
     await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(cacheFile(tmpDir, urls[0]!), "{}");
+    await fs.writeFile(cacheFile(tmpDir, urls[1]!), "{}");
+    const first = getPluginCatalogService(urls[0]);
+    const second = getPluginCatalogService(urls[1]);
+    for (const url of urls.slice(2, -1)) getPluginCatalogService(url);
+    // Using the first again leaves the second least recently used.
+    expect(getPluginCatalogService(urls[0])).toBe(first);
+
+    getPluginCatalogService(urls[urls.length - 1]);
+
+    await vi.waitFor(async () =>
+      expect(await fs.readdir(dir)).toEqual([path.basename(cacheFile(tmpDir, urls[0]!))])
+    );
+    expect(getPluginCatalogService(urls[0])).toBe(first);
+    expect(getPluginCatalogService(urls[1])).not.toBe(second);
+  });
+
+  it("never drops a catalog that is still reading, so no two clients write one cache", async () => {
+    const busy = getPluginCatalogService(SOURCE);
+    const reading = busy.getCatalog("browse");
+    expect(busy.isIdle()).toBe(false);
+    for (let i = 0; i < PLUGIN_CATALOG_SOURCES_KEPT; i++) {
+      getPluginCatalogService(`https://c${i}.example.com/catalog.json`);
+    }
+    expect(getPluginCatalogService(SOURCE)).toBe(busy);
+    await reading;
+    expect(busy.isIdle()).toBe(true);
+  });
+
+  it("bounds the cache folder, keeping live catalogs' files and the newest others", async () => {
+    const dir = path.join(tmpDir, PLUGIN_CATALOG_SOURCE_CACHE_DIR);
+    await fs.mkdir(dir, { recursive: true });
+    const old = Array.from(
+      { length: PLUGIN_CATALOG_SOURCES_KEPT + 3 },
+      (_, i) => `https://old${i}.example.com/catalog.json`
+    );
+    for (const [i, url] of old.entries()) {
+      const file = cacheFile(tmpDir, url);
+      await fs.writeFile(file, "{}");
+      const at = new Date(T0 + i * 1000);
+      await fs.utimes(file, at, at);
+    }
     await fs.writeFile(cacheFile(tmpDir, SOURCE), "{}");
-    await fs.writeFile(cacheFile(tmpDir, OTHER), "{}");
-    const kept = getPluginCatalogService(SOURCE);
-    const dropped = getPluginCatalogService(OTHER);
+    await fs.utimes(cacheFile(tmpDir, SOURCE), new Date(T0 - 10_000), new Date(T0 - 10_000));
+    getPluginCatalogService(SOURCE);
 
-    await forgetPluginCatalogSourcesExcept([SOURCE]);
+    await sweepPluginCatalogCaches();
 
-    expect(getPluginCatalogService(SOURCE)).toBe(kept);
-    expect(getPluginCatalogService(OTHER)).not.toBe(dropped);
-    expect(await fs.readdir(dir)).toEqual([path.basename(cacheFile(tmpDir, SOURCE))]);
+    const left = new Set(await fs.readdir(dir));
+    expect(left.size).toBe(PLUGIN_CATALOG_SOURCES_KEPT);
+    // The live catalog's file stays however old it is; the oldest others go.
+    expect(left.has(path.basename(cacheFile(tmpDir, SOURCE)))).toBe(true);
+    expect(left.has(path.basename(cacheFile(tmpDir, old[0]!)))).toBe(false);
+    expect(left.has(path.basename(cacheFile(tmpDir, old[old.length - 1]!)))).toBe(true);
   });
 });

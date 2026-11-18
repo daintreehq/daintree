@@ -95,14 +95,21 @@ export function catalogSourceOf(raw: unknown): string | undefined | null {
 
 /**
  * The catalog an installed copy came from (#17434): `null` when it isn't a
- * catalog install, and `sourceUrl` absent for Daintree's own catalog.
+ * catalog install, and `sourceUrl` absent for Daintree's own catalog. Read the
+ * way an update check reads it: a recorded name is canonicalized, so another
+ * spelling of one catalog is that catalog, and only a missing field is
+ * Daintree's own. A recorded name that isn't a catalog URL comes back as
+ * written, which no request can name, so nothing is ever matched to it.
  */
 export function installedCatalogOf(
   record: InstalledPluginRecord | undefined
 ): { sourceUrl?: string } | null {
   if (record?.source !== "catalog" || !record.catalog) return null;
-  const { sourceUrl } = record.catalog;
-  return typeof sourceUrl === "string" ? { sourceUrl } : {};
+  const raw: unknown = record.catalog.sourceUrl;
+  if (raw === undefined) return {};
+  const sourceUrl = catalogSourceOf(raw);
+  if (sourceUrl === null) return { sourceUrl: `invalid:${String(raw)}` };
+  return sourceUrl === undefined ? {} : { sourceUrl };
 }
 
 /**

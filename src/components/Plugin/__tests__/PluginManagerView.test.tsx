@@ -33,7 +33,7 @@ import { usePanelStore } from "@/store/panelStore";
 
 /** Daintree's own catalog alone, as Browse reads it when no catalog was added. */
 function ownCatalog(result: PluginCatalogBrowseResult): PluginCatalogsBrowseResult {
-  return { catalogs: [{ result }] };
+  return { ...result, added: [] };
 }
 
 vi.mock("@/utils/logger", () => ({
@@ -4765,10 +4765,11 @@ describe("PluginManagerView — Browse (#16782)", () => {
       }),
     ]);
     vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
-      catalogs: [
-        {
-          result: { status: "available", listings: [LISTING], fetchedAt: Date.now(), stale: false },
-        },
+      status: "available",
+      listings: [LISTING],
+      fetchedAt: Date.now(),
+      stale: false,
+      added: [
         {
           sourceUrl: SOURCE,
           result: {
@@ -4808,6 +4809,7 @@ describe("PluginManagerView — Browse (#16782)", () => {
     expect(within(dialog).getByTestId("plugin-install-catalog-switch").textContent).toBe(
       "This replaces the copy installed from Daintree's catalog with the listing from plugins.example.org/catalog.json, and its updates will come from there."
     );
+    expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
 
     await approveUrlReview();
     await waitFor(() =>

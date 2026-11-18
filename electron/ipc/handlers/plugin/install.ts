@@ -847,11 +847,10 @@ export async function handleBrowseCatalog(
   ctx: IpcContext,
   request?: PluginCatalogBrowseRequest
 ): Promise<PluginCatalogsBrowseResult> {
-  const [{ getPluginCatalogService, forgetPluginCatalogSourcesExcept }, sourceUrls] =
-    await Promise.all([
-      import("../../../services/plugin/PluginCatalogService.js"),
-      browseSourceUrls(catalogAuthority(ctx), request),
-    ]);
+  const [{ getPluginCatalogService, sweepPluginCatalogCaches }, sourceUrls] = await Promise.all([
+    import("../../../services/plugin/PluginCatalogService.js"),
+    browseSourceUrls(catalogAuthority(ctx), request),
+  ]);
   const read = async (sourceUrl: string | undefined): Promise<PluginCatalogSourceBrowse> => {
     let result: PluginCatalogBrowseResult;
     try {
@@ -861,9 +860,11 @@ export async function handleBrowseCatalog(
     }
     return sourceUrl === undefined ? { result } : { sourceUrl, result };
   };
-  const catalogs = await Promise.all([undefined, ...sourceUrls].map(read));
-  await forgetPluginCatalogSourcesExcept(sourceUrls);
-  return { catalogs };
+  const [own, added] = await Promise.all([read(undefined), Promise.all(sourceUrls.map(read))]);
+  if (sourceUrls.length > 0) await sweepPluginCatalogCaches();
+  // Daintree's own catalog keeps the shape it always had, so an older
+  // Daintree reading this answer still lists it; added ones ride beside it.
+  return { ...own.result, added };
 }
 
 async function browseSourceUrls(
@@ -893,9 +894,7 @@ async function browseSourceUrls(
  * anything is fetched. `sourceUrl` comes back canonical, undefined for
  * Daintree's own catalog in any spelling.
  */
-async function parseCatalogRequest(
-  request: unknown
-): Promise<{
+async function parseCatalogRequest(request: unknown): Promise<{
   pluginId: string;
   version: string | undefined;
   sourceUrl: string | undefined;
@@ -1069,6 +1068,7 @@ export async function handleInstallFromCatalog(
     originalUrl: target.trimmed,
     catalog: provenanceOf(entry, sourceUrl),
     catalogReplaces: reviewedReplacement,
+    ...(intent === "update" ? { catalogUpdate: true } : {}),
     expected:
       expected.kind === "update"
         ? { kind: "update", pluginId: entry.id, archiveHash: entry.sha256 }

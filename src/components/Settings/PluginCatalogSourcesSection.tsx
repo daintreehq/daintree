@@ -35,25 +35,38 @@ export function PluginCatalogSourcesSection() {
   const [loadNonce, setLoadNonce] = useState(0);
   const [draft, setDraft] = useState("");
   const [refusal, setRefusal] = useState<PluginCatalogSourceRefusal | null>(null);
-  const [failedSave, setFailedSave] = useState<{ message: string; retry: () => void } | null>(null);
+  const [failedSave, setFailedSave] = useState<{
+    kind: "add" | "remove";
+    message: string;
+    retry: () => void;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Only the latest request may settle the list, so a slow read can't put back
-  // a catalog a removal that started after it already took out.
-  const requestSeq = useRef(0);
+  // What the field holds now, so an answer for an address that has since been
+  // edited never clears or flags the new one.
+  const draftRef = useRef("");
+  const changeDraft = (value: string) => {
+    draftRef.current = value;
+    setDraft(value);
+  };
+  // Only the latest read or write may settle the list, so a slow read can't
+  // put back a catalog a removal that started after it already took out. A
+  // write's own outcome (busy, its error, the field) is never skipped: the
+  // change event its save broadcasts starts a read while it is still pending.
+  const listSeq = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
-    const seq = ++requestSeq.current;
+    const seq = ++listSeq.current;
     window.electron.plugin
       .getCatalogSources()
       .then(({ sources: next }) => {
-        if (cancelled || seq !== requestSeq.current) return;
+        if (cancelled || seq !== listSeq.current) return;
         setSources(next);
         setLoadFailed(false);
       })
       .catch((err: unknown) => {
-        if (cancelled || seq !== requestSeq.current) return;
+        if (cancelled || seq !== listSeq.current) return;
         logError("Failed to load plugin catalogs", err);
         setLoadFailed(true);
       });
@@ -68,55 +81,66 @@ export function PluginCatalogSourcesSection() {
     []
   );
 
+  /** A control disabled while it saved dropped focus to the page; hand it to the field. */
+  const keepFocus = () => {
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (active === null || active === document.body || !active.isConnected) {
+        inputRef.current?.focus();
+      }
+    }, 0);
+  };
+
   const add = () => {
-    const url = draft.trim();
+    const url = draftRef.current.trim();
     if (busy || url.length === 0) return;
-    const seq = ++requestSeq.current;
+    const seq = ++listSeq.current;
     setBusy(true);
     setFailedSave(null);
     window.electron.plugin
       .addCatalogSource(url)
       .then((result) => {
-        if (seq !== requestSeq.current) return;
-        setSources(result.sources);
+        if (seq === listSeq.current) setSources(result.sources);
+        if (draftRef.current.trim() !== url) return;
         if (result.status === "added") {
-          setDraft("");
+          changeDraft("");
           setRefusal(null);
         } else {
           setRefusal(result.reason);
-          inputRef.current?.focus();
         }
       })
       .catch((err: unknown) => {
-        if (seq !== requestSeq.current) return;
         logError("Failed to add a plugin catalog", err);
-        setFailedSave({ message: "The catalog wasn't added.", retry: add });
+        if (draftRef.current.trim() !== url) return;
+        setFailedSave({ kind: "add", message: "The catalog wasn't added.", retry: add });
       })
       .finally(() => {
-        if (seq === requestSeq.current) setBusy(false);
+        setBusy(false);
+        keepFocus();
       });
   };
 
   const remove = (sourceUrl: string) => {
     if (busy) return;
-    const seq = ++requestSeq.current;
+    const seq = ++listSeq.current;
     setBusy(true);
     setFailedSave(null);
     window.electron.plugin
       .removeCatalogSource(sourceUrl)
       .then((result) => {
-        if (seq === requestSeq.current) setSources(result.sources);
+        if (seq === listSeq.current) setSources(result.sources);
       })
       .catch((err: unknown) => {
-        if (seq !== requestSeq.current) return;
         logError("Failed to remove a plugin catalog", err);
         setFailedSave({
+          kind: "remove",
           message: `${describeCatalogSource(sourceUrl)} is still in the list.`,
           retry: () => remove(sourceUrl),
         });
       })
       .finally(() => {
-        if (seq === requestSeq.current) setBusy(false);
+        setBusy(false);
+        keepFocus();
       });
   };
 
@@ -149,7 +173,7 @@ export function PluginCatalogSourcesSection() {
         {(sources ?? []).map((sourceUrl) => (
           <SettingsRow
             key={sourceUrl}
-            label={describeCatalogSource(sourceUrl)}
+            label={<span className="break-all">{describeCatalogSource(sourceUrl)}</span>}
             description={<span className="break-all select-text">{sourceUrl}</span>}
             rootAttributes={{ "data-testid": "plugin-catalog-source" }}
             control={({ disabled }) => (
@@ -188,8 +212,10 @@ export function PluginCatalogSourcesSection() {
                 placeholder="https://example.com/plugins/catalog.json"
                 value={draft}
                 onChange={(event) => {
-                  setDraft(event.target.value);
+                  changeDraft(event.target.value);
                   setRefusal(null);
+                  // A failed add's Retry would send the address as it was.
+                  if (failedSave?.kind === "add") setFailedSave(null);
                 }}
                 disabled={disabled || sources === null}
                 aria-labelledby={labelId}
