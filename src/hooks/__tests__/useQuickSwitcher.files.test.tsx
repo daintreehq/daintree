@@ -482,6 +482,23 @@ describe("useQuickSwitcher file scope", () => {
     expect(openFileMock.mock.calls).toEqual([["/repo/b.ts", false]]);
   });
 
+  it("lists at most 50 files and opens none ranked past them", async () => {
+    const { result } = await openFiles();
+    await act(async () => searches[0]!.resolve({ files: ["x.ts"] }));
+    act(() => result.current.setQuery("f"));
+    await settle(150);
+    const many = Array.from({ length: 60 }, (_, i) => `f${i}.ts`);
+    await act(async () => searches[1]!.resolve({ files: many }));
+    expect(result.current.totalResults).toBe(50);
+    const top = result.current.results[0]!;
+    const past = {
+      ...top,
+      file: { ...top.file!, relativePath: "f55.ts", absolutePath: "/repo/f55.ts" },
+    };
+    act(() => result.current.selectItem(past));
+    expect(openFileMock).not.toHaveBeenCalled();
+  });
+
   it("opens nothing for a row git has since reported deleted", async () => {
     const { result, rerender } = await openFiles();
     await act(async () => searches[0]!.resolve({ files: ["x.ts"] }));
