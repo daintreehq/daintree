@@ -300,11 +300,13 @@ describe("adoptWindowHandlerDeps", () => {
     const registered: HandlerDependencies = {
       mainWindow: { isDestroyed: () => true } as never,
       projectSwitchService: {} as never,
+      projectViewManager: {} as never,
       eventBuffer: {} as never,
     };
     const next = {
       mainWindow: { isDestroyed: () => false } as never,
       projectSwitchService: {} as never,
+      projectViewManager: {} as never,
       eventBuffer: {} as never,
     };
 
@@ -312,6 +314,7 @@ describe("adoptWindowHandlerDeps", () => {
 
     expect(registered.mainWindow).toBe(next.mainWindow);
     expect(registered.projectSwitchService).toBe(next.projectSwitchService);
+    expect(registered.projectViewManager).toBe(next.projectViewManager);
     expect(registered.eventBuffer).toBe(next.eventBuffer);
   });
 });

@@ -2174,6 +2174,23 @@ describe("ProcessMemoryMonitor", () => {
         expect.objectContaining({ deltaMb: 2400 })
       );
     });
+
+    it("reads a pass whose webview push threw, and nothing else showed work, as unknown", async () => {
+      // The push earns no credit when it works, but its failure still means
+      // the pass can't say it found nothing.
+      mockGetAppMetrics.mockReturnValue(underPressure);
+      mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier: 1 | 2) => {
+        if (tier === 2) throw new Error("renderer push failed");
+      });
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advanceToTier2();
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier2-reclaim",
+        expect.objectContaining({ deltaMb: 0, outcome: "unknown" })
+      );
+    });
   });
 
   describe("blink memory sampling (issue #6272)", () => {

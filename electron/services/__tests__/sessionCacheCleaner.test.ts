@@ -486,9 +486,21 @@ describe("clearRetiredPortalPartitions", () => {
     return fs.readdirSync(partitionsRoot).filter((name) => name.includes("daintree-clearing"));
   }
 
+  it("names the host Portal sessions older builds wrote, escaped and hashed", () => {
+    expect(retiredPortalOf("studio")).toBe("browser-remote__studio__-portal");
+    expect(retiredPortalOf("Studio.Local")).toBe(
+      "browser-remote___0053tudio_002e_004cocal__-portal"
+    );
+    expect(retiredPortalOf(LONG_HOST)).toBe("browser-remote__-1fbb310b7169e9__-portal");
+  });
+
   it("names this machine's Portal session and every host's, in any host encoding", () => {
     for (const name of [
       "portal",
+      "browser-remote__studio__-portal",
+      "browser-remote___0053tudio_002e_004cocal__-portal",
+      "browser-remote__-1fbb310b7169e9__-portal",
+      `browser-remote__${"a".repeat(64)}__-portal`,
       retiredPortalOf("studio"),
       retiredPortalOf("Studio.Local"),
       retiredPortalOf(LONG_HOST),
@@ -521,7 +533,15 @@ describe("clearRetiredPortalPartitions", () => {
       "portals",
       "sidecar",
       "portal.daintree-clearing-xyz",
+      "portal.daintree-clearing-0123456789a",
+      "portal.daintree-clearing-0123456789abc",
       `${browserOf("studio", "proj-1")}.daintree-clearing-0123456789ab`,
+      // Spellings partitionPart never wrote: an escape past 64 characters, a
+      // malformed escape, and hashes that aren't its canonical hex.
+      `browser-remote__${"a".repeat(65)}__-portal`,
+      "browser-remote___12__-portal",
+      "browser-remote__-000000000000001__-portal",
+      "browser-remote__-1fbb310b7169e9a__-portal",
     ]) {
       expect(isRetiredPortalPartitionDirName(name), name).toBe(false);
     }
@@ -611,8 +631,20 @@ describe("clearRetiredPortalPartitions", () => {
     expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 0, failed: 1 });
     expect(leftovers()).toHaveLength(1);
     expect(leftovers()[0]).toMatch(/^portal\.daintree-clearing-[0-9a-f]{12}$/);
+    const renameSpy = vi.spyOn(fs, "renameSync");
 
     expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 0 });
+    expect(fs.readdirSync(partitionsRoot)).toEqual([]);
+    expect(renameSpy).not.toHaveBeenCalled();
+  });
+
+  it("removes a leftover in place, however many failed removals named it", async () => {
+    const name = `portal${".daintree-clearing-0123456789ab".repeat(8)}`;
+    seedFullPartition(name);
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 0 });
+    expect(renameSpy).not.toHaveBeenCalled();
     expect(fs.readdirSync(partitionsRoot)).toEqual([]);
   });
 
@@ -643,7 +675,9 @@ describe("clearRetiredPortalPartitions", () => {
     trackSession(live as unknown as Electron.Session);
 
     expect(await clearRetiredPortalPartitions()).toEqual({ cleared: 1, failed: 0 });
+    // No options: every data type, the sign-in cookies included.
     expect(live.clearData).toHaveBeenCalledTimes(1);
+    expect(live.clearData).toHaveBeenCalledWith();
     expect(fs.existsSync(dir)).toBe(true);
   });
 });

@@ -225,16 +225,23 @@ export function clearHostPartitions(hostId: string): Promise<ClearSessionCachesR
 /**
  * The retired Portal's sessions (#17257), as whole directory names: this
  * machine's `persist:portal`, and the `persist:browser-remote__<host>__-portal`
- * a window attached to a host used, its host part escaped or hashed as
- * `partitionPart` wrote it. No browser panel's partition ends `__-portal`, since
- * a project part is an escape (no `-`) or `-` and hex. A name may carry the
- * suffix of an earlier detach whose removal failed.
+ * a window attached to a host used, its host part as `partitionPart` wrote it:
+ * an escape of at most 64 characters, or `-` and its hash in hex. No browser
+ * panel's partition ends `__-portal`, since a project part is an escape (no
+ * `-`) or `-` and hex. A name may carry the suffix of an earlier detach whose
+ * removal failed.
  */
 const RETIRED_PORTAL_DIR_PATTERN =
-  /^(?:portal|browser-remote__(?:(?:[a-z0-9]|_[0-9a-f]{4})+|-[0-9a-f]+)__-portal)(?:\.daintree-clearing-[0-9a-f]{12})*$/;
+  /^(?:portal|browser-remote__([a-z0-9_]+|-(?:0|[1-9a-f][0-9a-f]{0,13}))__-portal)(?:\.daintree-clearing-[0-9a-f]{12})*$/;
+const ESCAPED_PART_PATTERN = /^(?:[a-z0-9]|_[0-9a-f]{4})+$/;
+const MAX_ESCAPED_HOST_PART = 64;
 
 export function isRetiredPortalPartitionDirName(name: string): boolean {
-  return RETIRED_PORTAL_DIR_PATTERN.test(name);
+  const match = RETIRED_PORTAL_DIR_PATTERN.exec(name);
+  if (!match) return false;
+  const hostPart = match[1];
+  if (hostPart === undefined || hostPart.startsWith("-")) return true;
+  return hostPart.length <= MAX_ESCAPED_HOST_PART && ESCAPED_PART_PATTERN.test(hostPart);
 }
 
 /**
@@ -285,10 +292,14 @@ async function wipePartitionDirs(
       }
       continue;
     }
-    // Synchronous with the liveness check: no session can open in between.
-    const detached = `${partitionDir}${DETACHED_MARKER}${randomBytes(6).toString("hex")}`;
+    // Synchronous with the liveness check: no session can open in between. A
+    // directory an earlier wipe detached is removed where it is, so a removal
+    // that keeps failing never grows its name past what the filesystem allows.
+    const detached = entry.name.includes(DETACHED_MARKER)
+      ? partitionDir
+      : `${partitionDir}${DETACHED_MARKER}${randomBytes(6).toString("hex")}`;
     try {
-      fs.renameSync(partitionDir, detached);
+      if (detached !== partitionDir) fs.renameSync(partitionDir, detached);
       await fs.promises.rm(detached, {
         recursive: true,
         force: true,

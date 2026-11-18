@@ -57,6 +57,12 @@ describe("useMenuActions", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("dispatches an action main sends with no args, such as the terminal cycle", async () => {
+    const { handler } = setup();
+    await handler?.({ actionId: "terminal.focusNext" });
+    expect(dispatchMock).toHaveBeenCalledWith("terminal.focusNext", undefined, { source: "menu" });
+  });
+
   it("dispatches directly when payload has actionId and args", async () => {
     const { handler } = setup();
 

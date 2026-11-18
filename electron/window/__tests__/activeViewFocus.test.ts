@@ -90,7 +90,7 @@ describe("attachActiveViewFocus", () => {
     expect(shell.isFocused()).toBe(false);
   });
 
-  it("leaves focus with a browser panel that Chromium restored after the focus event", async () => {
+  it("leaves focus with a sibling view that Chromium restored after the focus event", async () => {
     const { win, projectView, siblingView, activate } = createScene();
     attachActiveViewFocus(asWindow(win), { getActiveView: () => asView(projectView) });
 

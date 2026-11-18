@@ -3033,7 +3033,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /**
      * Fire-and-forget: the kind of panel holding DOM focus in this project
      * view, or `kind: null` when none does. Main combines it with window and
-     * Portal focus for `host.onDidChangeFocusedPanel` (#13221).
+     * project-view focus for `host.onDidChangeFocusedPanel` (#13221).
      */
     reportFocusedPanel(report: import("../plugin.js").PluginFocusedPanel): void;
     /**

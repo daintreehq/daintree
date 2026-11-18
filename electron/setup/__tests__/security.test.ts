@@ -228,13 +228,15 @@ describe("setupPermissionLockdown", () => {
   describe("retired Portal sessions", () => {
     it("never opens persist:portal", () => {
       setupPermissionLockdown();
-      expect(vi.mocked(session.fromPartition)).not.toHaveBeenCalledWith("persist:portal");
+      const opened = vi.mocked(session.fromPartition).mock.calls.map(([partition]) => partition);
+      expect(opened).toContain("persist:daintree");
+      expect(opened).not.toContain("persist:portal");
     });
 
     it.each([
       ["persist:portal"],
       [buildBrowserPartition(`${remotePartitionKeyPrefix("studio")}-portal`)],
-    ])("default-locks %s like any other unknown session", (partition) => {
+    ])("default-locks %s like any other untrusted session", (partition) => {
       setupPermissionLockdown();
       const retired = createMockSession();
       Object.defineProperty(retired, "partition", { value: partition });
@@ -328,11 +330,11 @@ describe("setupPermissionLockdown", () => {
       expect(unknownSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     });
 
-    it("skips the project partition in session-created", () => {
+    it("skips a legacy per-project partition in session-created", () => {
       setupPermissionLockdown();
       const projectSession = createMockSession();
       Object.defineProperty(projectSession, "partition", {
-        value: "persist:daintree",
+        value: "persist:project-legacy",
       });
 
       sessionCreatedListeners[0](projectSession);

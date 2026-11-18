@@ -160,5 +160,26 @@ describe("FocusedPanelTracker", () => {
       tracker.removeRemote(-1);
       expect(kindOf(tracker)).toBe("diff");
     });
+
+    it("never attributes a remote screen's portal report to its project", () => {
+      const tracker = new FocusedPanelTracker();
+      tracker.reportRemote(-1, "pa", { kind: "portal", worktreeId: "w" }, true);
+
+      expect(tracker.getCurrent()).toEqual({
+        panel: { kind: "portal", agent: false, worktreeId: null },
+        workspaceId: null,
+      });
+    });
+
+    it("falls back to a focused remote screen once the newer local window closes", () => {
+      const tracker = new FocusedPanelTracker();
+      tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
+      tracker.setFocusedWindow(W1);
+      tracker.report(10, W1, "p1", { kind: "diff" });
+      expect(kindOf(tracker)).toBe("diff");
+
+      tracker.removeWindow(W1);
+      expect(kindOf(tracker)).toBe("terminal");
+    });
   });
 });
