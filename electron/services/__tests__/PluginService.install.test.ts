@@ -1570,6 +1570,8 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
   });
 
   it("keeps the cloud provider consent across an update and forgets it on uninstall (#17352)", async () => {
+    // Uninstalls by earlier tests, heard with no cloud side to forget them, are drained first.
+    setPluginCloudConsentForgetter(() => {});
     const forgotten: string[] = [];
     setPluginCloudConsentForgetter((pluginId) => forgotten.push(pluginId));
     const service = new PluginService(pluginsRoot, "0.0.0");
