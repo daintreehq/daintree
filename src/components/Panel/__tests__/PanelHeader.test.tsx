@@ -982,6 +982,50 @@ describe("PanelHeader", () => {
     });
   });
 
+  describe("Reset terminal modes (#17328)", () => {
+    it("sits beside Redraw and dispatches only once focus is back on the panel", async () => {
+      mockHasPty = true;
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      const redraw = screen.getByTestId("panel-redraw");
+      const reset = screen.getByTestId("panel-reset-modes");
+      expect(redraw.nextElementSibling).toBe(reset);
+
+      fireEvent.click(reset);
+      // With an agent running the action stages a confirm, whose own close
+      // must return focus to this panel rather than to the dying menu item.
+      expect(mockDispatch).not.toHaveBeenCalled();
+      act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+      expect(mockDispatch).not.toHaveBeenCalled();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "terminal.resetModes",
+        { terminalId: "test-panel" },
+        { source: "menu" }
+      );
+    });
+
+    it("isn't offered on a panel without a terminal", () => {
+      mockHasPty = false;
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      expect(screen.queryByTestId("panel-reset-modes")).toBeNull();
+    });
+
+    it("isn't offered once the terminal's process has exited, beside a Redraw that still is", () => {
+      mockHasPty = true;
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: { "test-panel": { id: "test-panel", kind: "terminal", exitCode: 1 } },
+      };
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      expect(screen.getByTestId("panel-redraw")).toBeTruthy();
+      expect(screen.queryByTestId("panel-reset-modes")).toBeNull();
+    });
+  });
+
   describe("Move to worktree", () => {
     const findMenuButton = (label: string) =>
       Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button")).find(

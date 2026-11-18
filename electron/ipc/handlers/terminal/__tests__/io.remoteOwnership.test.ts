@@ -109,6 +109,7 @@ const ptyClient = {
   updateTitle: vi.fn(),
   updateWorktreeId: vi.fn(),
   forceResume: vi.fn(),
+  resetTerminalModesAsync: vi.fn(async () => true),
   getTerminalProjectId: vi.fn((id: string) => OWNERS.get(id) ?? null),
   getTerminalAsync: vi.fn((id: string) =>
     Promise.resolve(OWNERS.has(id) ? { id, projectId: OWNERS.get(id), hasPty: true } : null)
@@ -268,6 +269,33 @@ describe("terminal input from a remote view", () => {
     });
     expect(ptyClient.forceResume).not.toHaveBeenCalled();
   });
+
+  it("resets the modes of a terminal the endpoint's own project owns (#17328)", async () => {
+    await expect(remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a")).resolves.toMatchObject({
+      ok: true,
+      data: true,
+    });
+    expect(ptyClient.resetTerminalModesAsync).toHaveBeenCalledWith("term-a");
+  });
+
+  it("passes on the host's answer when it couldn't reset the modes", async () => {
+    ptyClient.resetTerminalModesAsync.mockResolvedValueOnce(false);
+    await expect(remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a")).resolves.toMatchObject({
+      ok: true,
+      data: false,
+    });
+  });
+
+  it.each([
+    ["a foreign project's terminal", "term-b"],
+    ["a terminal main does not track", "term-unknown"],
+  ])("refuses to reset the modes of %s", async (_label, id) => {
+    await expect(remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, id)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "NOT_FOUND" },
+    });
+    expect(ptyClient.resetTerminalModesAsync).not.toHaveBeenCalled();
+  });
 });
 
 describe("terminal input from a local view", () => {
@@ -306,6 +334,7 @@ describe("terminal input and the drive lease", () => {
     batchDoubleEscape: vi.fn(),
     broadcastWrite: vi.fn(),
     submit: vi.fn(),
+    resetTerminalModesAsync: vi.fn(async () => true),
     getTerminalAsync: vi.fn(async () => ({ hasPty: true })),
     getTerminalProjectId: vi.fn((id: string) => (id.startsWith("term-a") ? "project-a" : null)),
   };
@@ -373,6 +402,21 @@ describe("terminal input and the drive lease", () => {
     expect(envelope.ok).toBe(false);
     expect(envelope.ok ? null : envelope.error.code).toBe("DRIVEN_ELSEWHERE");
     expect(ptyClient.submit).not.toHaveBeenCalled();
+  });
+
+  // The reset changes how the driver's pane reads input, so a watcher can't.
+  it("refuses a non-driver's mode reset as DRIVEN_ELSEWHERE (#17328)", async () => {
+    leaseRef.current = { isDriving: () => false, getHolder: () => null };
+    const envelope = await remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a");
+    expect(envelope.ok ? null : envelope.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(ptyClient.resetTerminalModesAsync).not.toHaveBeenCalled();
+  });
+
+  it("lets the driver reset its terminal's modes (#17328)", async () => {
+    leaseRef.current = { isDriving: () => true, getHolder: () => null };
+    const envelope = await remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a");
+    expect(envelope.ok).toBe(true);
+    expect(ptyClient.resetTerminalModesAsync).toHaveBeenCalledWith("term-a");
   });
 
   it("lets the driver type and submit", async () => {

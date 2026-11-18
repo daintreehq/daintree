@@ -446,6 +446,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
     forceResume(id: string): Promise<void>;
+    /**
+     * Turn off the input modes a dead program left on (mouse tracking,
+     * bracketed paste, cursor keys), in the pane and its host mirror, without
+     * writing to the process (#17328). False when the terminal has no live
+     * screen to reset.
+     */
+    resetModes(id: string): Promise<boolean>;
     /** Main's current terminal-host memory pause, ORed across every host shard (#12375). */
     getHostMemoryPause(): Promise<HostMemoryPauseSnapshot>;
     /**

@@ -798,6 +798,7 @@ export const CHANNEL_LEASE_POLICY = {
   "terminal:release-worker-ingest-port": "free",
   "terminal:replay-history": "free",
   "terminal:request-worker-ingest-port": "free",
+  "terminal:reset-modes": "handler",
   "terminal:resize": "handler",
   "terminal:resource-metrics": "free",
   "terminal:restart-service": "driver",

@@ -20,6 +20,7 @@ import {
 } from "@shared/types/agentSessionFile";
 import {
   KeepConversationArgSchema,
+  ResetModesArgsSchema,
   RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
@@ -524,6 +525,32 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.redraw", args, ctx),
+  }));
+
+  // The gentler step before Restart (#17328): the process, its scrollback and
+  // an agent's session all stay. Off MCP: an agent has no stuck pane to see.
+  actions.set("terminal.resetModes", () => ({
+    id: "terminal.resetModes",
+    title: "Reset terminal modes",
+    description:
+      "Turn off the mouse, paste and keyboard modes a crashed program left on. The process keeps running and scrollback stays.",
+    paletteDescription: "Turn off stuck mouse and keyboard modes without restarting the process",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "A program still running in the terminal loses bracketed paste and the other input modes it set until it turns them on again.",
+    keywords: ["mouse", "stuck", "escape", "bracketed paste", "keyboard", "fix"],
+    mcpVisibility: "hidden",
+    palette: {
+      mode: "requireContext",
+      isReady: (ctx) => !!ctx.focusedTerminalId,
+      reason: "Focus a terminal to reset its modes",
+    },
+    argsSchema: ResetModesArgsSchema,
+    run: (args: unknown, ctx: ActionContext) =>
+      runTerminalLifecycleAction("terminal.resetModes", args, ctx),
   }));
 
   actions.set("terminal.rename", () => ({

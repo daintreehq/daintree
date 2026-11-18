@@ -1,5 +1,5 @@
 /**
- * Terminal I/O handlers - input, resize, submit, sendKey, acknowledge, forceResume.
+ * Terminal I/O handlers - input, resize, submit, sendKey, acknowledge, forceResume, resetModes.
  */
 
 import { z } from "zod";
@@ -547,6 +547,33 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
+  // The reset changes what the driver's pane does with input (#17328), so a
+  // window watching another's project can't send it.
+  const handleTerminalResetModes = async (ctx: IpcContext, id: string): Promise<boolean> => {
+    if (typeof id !== "string" || !id) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Invalid terminal ID: must be a non-empty string",
+      });
+    }
+    if (isRefusedForRemoteCaller(ctx, id)) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: `Terminal ${id} not found`,
+        context: { terminalId: id },
+      });
+    }
+    if (isDrivenElsewhere(ctx, id, "resetModes")) {
+      throw new AppError({
+        code: "DRIVEN_ELSEWHERE",
+        message: `terminal ${id} is driven elsewhere; only its driver may reset its modes`,
+        userMessage: "This project is being driven from another screen.",
+        context: { terminalId: id },
+      });
+    }
+    return ptyClient.resetTerminalModesAsync(id);
+  };
+
   // Dedicated worker-ingest port lifecycle (issue #10960). The invoke returns
   // the handshake token; the port itself arrives on the sender's WebContents
   // via `terminal-worker-port` postMessage — invoke results can't carry
@@ -756,6 +783,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         { withContext: true }
       ),
       forceResume: op(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume, {
+        withContext: true,
+      }),
+      resetModes: op(CHANNELS.TERMINAL_RESET_MODES, handleTerminalResetModes, {
         withContext: true,
       }),
       requestWorkerIngestPort: op(

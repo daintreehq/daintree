@@ -287,6 +287,27 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     });
   }
 
+  feedModeReset(data: string): boolean {
+    // Detached analysis has no mirror to fall out of step with the pane.
+    if (this.detached) return true;
+    if (this.released) return false;
+    // A prelude posts straight to the worker, past output held under flow
+    // control; a held `?2004h` parsed after the reset would put back the mode
+    // the user just cleared, in the mirror a remount repaints from.
+    if (!this.flushHeldFeed()) return false;
+    const sent = this.pool.post(this.spec.terminalId, {
+      type: "prelude",
+      terminalId: this.spec.terminalId,
+      data,
+    });
+    if (!sent) return false;
+    // The reset clears bracketed paste whatever the worker last reported, and a
+    // slot rebuilt before its next digest must not seed the mode back.
+    this.bracketedPasteMode = false;
+    this.bracketedPasteSeedPending = false;
+    return true;
+  }
+
   resize(cols: number, rows: number): void {
     if (this.inactive()) return;
     this.postGeometry("resize", cols, rows);

@@ -1107,6 +1107,9 @@ function buildElectronApi(): ElectronAPI {
       forceResume: (id: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
 
+      resetModes: (id: string): Promise<boolean> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_RESET_MODES, id),
+
       getHostMemoryPause: (): Promise<HostMemoryPauseSnapshot> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_GET_HOST_MEMORY_PAUSE),
 

@@ -7,6 +7,7 @@ import { TRASH_TTL_SECONDS } from "@/components/Layout/trashCountdown";
 import { actionService } from "@/services/ActionService";
 import type { ActionSource } from "@shared/types/actions";
 import { closeAndAnnounce } from "@/lib/accessibility";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -63,6 +64,23 @@ export function buildKillRunningAgentCopy(terminalTitle?: string): DestructiveCo
   };
 }
 
+/**
+ * Asked only while the pane is still wired to an agent (#17328): a shell left
+ * behind by a crashed program resets without it. The agent may already have
+ * gone, so the consequence is conditional. Someone fixing a garbled agent
+ * screen usually wants Redraw, which changes no modes.
+ */
+export function buildResetModesRunningAgentCopy(terminalTitle?: string): DestructiveConfirmCopy {
+  return {
+    title: `Reset terminal modes in ${quoted(terminalTitle, "this terminal")}?`,
+    lead: "An agent may still be running in it.",
+    description:
+      "If one is, it loses bracketed paste and the other input modes it turned on until it turns them on again, so a multi-line paste can arrive as separate lines and context can't be injected.",
+    note: "To fix a garbled display, use Redraw instead.",
+    confirmLabel: "Reset terminal modes",
+  };
+}
+
 export function buildRestartRunningAgentCopy(terminalTitle?: string): DestructiveConfirmCopy {
   return {
     title: `Restart ${quoted(terminalTitle, "terminal")}?`,
@@ -93,6 +111,8 @@ function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): Destructi
       return buildKillRunningAgentCopy(pending.terminalTitle);
     case "restart":
       return buildRestartRunningAgentCopy(pending.terminalTitle);
+    case "resetModes":
+      return buildResetModesRunningAgentCopy(pending.terminalTitle);
     case "killAll": {
       const counted = pluralize(count, "panel");
       return {
@@ -339,6 +359,20 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           { source }
         );
         announcement = "Terminal restarted";
+        break;
+      case "resetModes":
+        if (!pending.terminalId) break;
+        // Announced once the host has written it: the pane can exit while the
+        // dialog is open, and a reset that didn't happen mustn't read as done.
+        void actionService
+          .dispatch(
+            "terminal.resetModes",
+            { terminalId: pending.terminalId, confirmed: true },
+            { source }
+          )
+          .then((result) => {
+            if (result.ok) useAnnouncerStore.getState().announce("Terminal modes reset");
+          });
         break;
       case "killAll": {
         void actionService.dispatch("terminal.killAll", { confirmed: true }, { source });
