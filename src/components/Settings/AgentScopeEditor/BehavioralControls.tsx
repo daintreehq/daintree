@@ -112,7 +112,10 @@ export function BehavioralControls({
             {effectivePermissionArgs && (
               <span className="flex items-center gap-1.5 mt-1.5">
                 {effectiveLevel === "skip" && (
-                  <ShieldOff className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
+                  <ShieldOff
+                    className="h-3.5 w-3.5 shrink-0 text-status-error"
+                    aria-hidden="true"
+                  />
                 )}
                 <code className="font-mono text-xs text-text-primary">
                   {effectivePermissionArgs}

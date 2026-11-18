@@ -195,7 +195,6 @@ export function projectBypass(
   return out;
 }
 
-
 /** Why an agent's bypass payload can't be written as it is, or null when it can. */
 export function invalidBypassAgent(payload: unknown): string | null {
   if (!isRecord(payload)) return "Not a valid bypass setting";

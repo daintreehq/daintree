@@ -2815,7 +2815,9 @@ describe("Auto permission mode (#17435)", () => {
             expect([...once].sort(), label).toEqual([...fresh].sort());
             // A snapshot with a permission slot keeps it; one without gains the args at the end.
             if (from !== "cli-default") expect(once, label).toEqual(fresh);
-            expect(reconcilePermissionFlags(once, agentId, to), `${label} idempotent`).toEqual(once);
+            expect(reconcilePermissionFlags(once, agentId, to), `${label} idempotent`).toEqual(
+              once
+            );
           }
         }
       }
@@ -2829,9 +2831,11 @@ describe("Auto permission mode (#17435)", () => {
         "--model",
         "opus",
       ]);
-      expect(
-        reconcilePermissionFlags(["--approve-for-me", "-c", "a=b"], "codex", "skip")
-      ).toEqual(["--dangerously-bypass-approvals-and-sandbox", "-c", "a=b"]);
+      expect(reconcilePermissionFlags(["--approve-for-me", "-c", "a=b"], "codex", "skip")).toEqual([
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-c",
+        "a=b",
+      ]);
     });
 
     it("tells a user's own Auto args from Daintree's by today's settings", () => {

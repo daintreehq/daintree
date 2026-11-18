@@ -329,7 +329,11 @@ describe("permission bypass", () => {
       permissionBypass: { agents: { claude: { presets: { fast: { dangerousMode: "auto" } } } } },
     });
     expect(preview.changes).toEqual([
-      expect.objectContaining({ key: "agents.claude", from: "Fast: Always skip", to: "Fast: Auto" }),
+      expect.objectContaining({
+        key: "agents.claude",
+        from: "Fast: Always skip",
+        to: "Fast: Auto",
+      }),
     ]);
     await service.apply({ permissionBypass: { agents: { claude: { dangerousMode: "auto" } } } });
     expect(agents().claude.dangerousMode).toBe("auto");

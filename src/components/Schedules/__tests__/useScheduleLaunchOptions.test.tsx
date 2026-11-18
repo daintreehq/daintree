@@ -186,9 +186,9 @@ describe("useScheduleLaunchOptions", () => {
         globalSkipPermissions: true,
       },
     } as never);
-    expect(renderHook(() => useScheduleLaunchOptions("codex", null)).result.current.stopsAtPrompts).toBe(
-      false
-    );
+    expect(
+      renderHook(() => useScheduleLaunchOptions("codex", null)).result.current.stopsAtPrompts
+    ).toBe(false);
     expect(
       renderHook(() => useScheduleLaunchOptions("gemini", null)).result.current.stopsAtPrompts
     ).toBe(true);

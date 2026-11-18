@@ -98,9 +98,7 @@ describe("BehavioralControls — skip permissions control", () => {
     const { rerender } = render(<BehavioralControls {...makeProps({ onDangerousModeChange })} />);
     expect(screen.queryByRole("radio", { name: "Auto" })).toBeNull();
 
-    rerender(
-      <BehavioralControls {...makeProps({ autoSupported: true, onDangerousModeChange })} />
-    );
+    rerender(<BehavioralControls {...makeProps({ autoSupported: true, onDangerousModeChange })} />);
     expect(screen.getAllByRole("radio").map((radio) => radio.textContent)).toEqual([
       "Inherit (Skip all)",
       "CLI default",
