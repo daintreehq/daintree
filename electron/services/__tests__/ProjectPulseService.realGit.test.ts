@@ -188,3 +188,91 @@ describe("Project Pulse past 20,000 commits in the window (#17455)", () => {
     expect(pulse.activeDays).toBe(expected.size);
   });
 });
+
+describe("Project Pulse cache probe against real git (#17804)", () => {
+  function sameService() {
+    const svc = new ProjectPulseService();
+    return (worktreePath: string) =>
+      svc.getPulse({
+        worktreePath,
+        worktreeId: "wt-probe",
+        mainBranch: "main",
+        rangeDays: 60 as const,
+        includeDelta: false,
+        includeRecentCommits: false,
+      });
+  }
+
+  function initRepo(): string {
+    const repo = path.join(root, "probe");
+    fs.mkdirSync(repo);
+    git(repo, null, "init", "-q", "-b", "main");
+    return repo;
+  }
+
+  it("serves a hit on an unchanged branch and recomputes for a same-SHA switch or detach", async () => {
+    const repo = initRepo();
+    git(repo, "2025-01-14T12:00:00Z", "commit", "-q", "--allow-empty", "-m", "one");
+    const pulse = sameService();
+
+    const onMain = await pulse(repo);
+    expect(onMain.branch).toBe("main");
+    expect(await pulse(repo)).toBe(onMain);
+
+    git(repo, null, "checkout", "-q", "-b", "feature");
+    const onFeature = await pulse(repo);
+    expect(onFeature).not.toBe(onMain);
+    expect(onFeature.branch).toBe("feature");
+
+    git(repo, null, "checkout", "-q", "--detach");
+    const detached = await pulse(repo);
+    expect(detached).not.toBe(onFeature);
+    expect(detached.branch).toBeUndefined();
+    expect(await pulse(repo)).toBe(detached);
+  });
+
+  it("falls back to a recompute when a file named HEAD hides an unborn HEAD from the probe", async () => {
+    const repo = initRepo();
+    const pulse = sameService();
+    const unborn = await pulse(repo);
+    expect(await pulse(repo)).toBe(unborn);
+
+    // git then reads HEAD as a path and rejects the option after it, which the probe can't
+    // tell from any other failure.
+    fs.writeFileSync(path.join(repo, "HEAD"), "not a ref\n");
+    const recomputed = await pulse(repo);
+
+    expect(recomputed).not.toBe(unborn);
+    expect(recomputed.commitsInRange).toBe(0);
+  });
+
+  it("keeps an unborn branch's empty pulse until its first commit", async () => {
+    const repo = initRepo();
+    const pulse = sameService();
+
+    const unborn = await pulse(repo);
+    expect(unborn.commitsInRange).toBe(0);
+    expect(await pulse(repo)).toBe(unborn);
+
+    git(repo, "2025-01-14T12:00:00Z", "commit", "-q", "--allow-empty", "-m", "one");
+    const born = await pulse(repo);
+    expect(born.commitsInRange).toBe(1);
+
+    // An orphan checkout leaves HEAD on a branch with no commits again.
+    git(repo, null, "checkout", "-q", "--orphan", "fresh");
+    const orphan = await pulse(repo);
+    expect(orphan).not.toBe(born);
+    expect(orphan.commitsInRange).toBe(0);
+  });
+
+  it("recomputes and reports the missing worktree once it is deleted", async () => {
+    const repo = initRepo();
+    git(repo, "2025-01-14T12:00:00Z", "commit", "-q", "--allow-empty", "-m", "one");
+    const pulse = sameService();
+    await pulse(repo);
+
+    fs.rmSync(repo, { recursive: true, force: true });
+
+    await expect(pulse(repo)).rejects.toThrow("Worktree path does not exist");
+  });
+});

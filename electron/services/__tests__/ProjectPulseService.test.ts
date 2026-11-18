@@ -21,6 +21,11 @@ function createGitStub(impl: (args: string[]) => Promise<string>): SimpleGitStub
   };
 }
 
+// The cache probe reads HEAD and the branch in one rev-parse.
+function isHeadProbe(args: string[]): boolean {
+  return args[0] === "rev-parse" && args[1] === "HEAD" && args[2] === "--abbrev-ref";
+}
+
 describe("ProjectPulseService", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -919,6 +924,7 @@ describe("ProjectPulseService", () => {
 
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
+      if (isHeadProbe(args)) return "deadbeef\nmain\n";
       if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "log") return "";
@@ -995,6 +1001,7 @@ describe("ProjectPulseService", () => {
   it("serves cached pulse when HEAD-SHA probe matches within TTL", async () => {
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
+      if (isHeadProbe(args)) return "sha-aaa\nmain\n";
       if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "sha-aaa\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "log") return "";
@@ -1037,6 +1044,7 @@ describe("ProjectPulseService", () => {
     let currentSha = "sha-aaa";
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
+      if (isHeadProbe(args)) return `${currentSha}\nmain\n`;
       if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD")
         return `${currentSha}\n`;
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
@@ -1080,7 +1088,10 @@ describe("ProjectPulseService", () => {
   it("serves cached empty pulse when repo still has no commits", async () => {
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD")
+      if (
+        (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") ||
+        isHeadProbe(args)
+      )
         throw new Error("fatal: ambiguous argument 'HEAD': unknown revision");
       return "";
     });
@@ -1118,6 +1129,7 @@ describe("ProjectPulseService", () => {
     let currentBranch = "main";
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
+      if (isHeadProbe(args)) return `sha-aaa\n${currentBranch}\n`;
       if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "sha-aaa\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return `${currentBranch}\n`;
       if (cmd === "log") return "";
@@ -1162,15 +1174,16 @@ describe("ProjectPulseService", () => {
     let probeResolve: ((value: string) => void) | undefined;
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+      if (isHeadProbe(args)) {
         if (probeResolve) {
           // Suspend the probe so invalidate() can fire mid-await.
           return new Promise<string>((resolve) => {
             probeResolve = resolve;
           });
         }
-        return "sha-aaa\n";
+        return "sha-aaa\nmain\n";
       }
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "sha-aaa\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "log") return "";
       return "";
@@ -1204,12 +1217,13 @@ describe("ProjectPulseService", () => {
     const pulsePromise = svc.getPulse(opts);
     await vi.advanceTimersByTimeAsync(0);
 
-    // Probe is now suspended on the SHA call. Invalidate while it's in flight.
+    // Probe is now suspended on its read. Invalidate while it's in flight.
+    expect(raw.mock.calls.some(([args]) => isHeadProbe(args as string[]))).toBe(true);
     svc.invalidate("wt-1");
 
     // Release the probe with the same SHA. Without the re-check guard, this
     // would happily return the now-deleted cached pulse.
-    probeResolve!("sha-aaa\n");
+    probeResolve!("sha-aaa\nmain\n");
     probeResolve = undefined;
 
     await pulsePromise;
@@ -1261,10 +1275,11 @@ describe("ProjectPulseService", () => {
     let probeMode: "ok" | "throw" = "ok";
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") {
+      if (isHeadProbe(args)) {
         if (probeMode === "throw") throw new Error("fatal: some unexpected git failure");
-        return "sha-aaa\n";
+        return "sha-aaa\nmain\n";
       }
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "sha-aaa\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
       if (cmd === "log") return "";
       return "";
@@ -1286,24 +1301,23 @@ describe("ProjectPulseService", () => {
       includeRecentCommits: false,
     };
 
-    await svc.getPulse(opts);
+    const first = await svc.getPulse(opts);
     const heatmapCallsBefore = raw.mock.calls.filter(([args]) => {
       const argv = args as string[];
       return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
     }).length;
 
-    // Probe throws → fall through. computePulse will also throw (mock returns
-    // same behavior for both calls) so the call rejects; but we just want to
-    // verify it didn't short-circuit to the cached value.
+    // Only the probe throws: the caller must recompute rather than serve the cached value or
+    // surface the probe's error.
     probeMode = "throw";
-    await expect(svc.getPulse(opts)).rejects.toThrow();
+    const recomputed = await svc.getPulse(opts);
 
-    // No new heatmap call (computePulse failed at HEAD), but we did go past the cache.
     const heatmapCallsAfter = raw.mock.calls.filter(([args]) => {
       const argv = args as string[];
       return argv[0] === "log" && argv.some((a) => a.startsWith("--since="));
     }).length;
-    expect(heatmapCallsAfter).toBe(heatmapCallsBefore);
+    expect(heatmapCallsAfter).toBe(heatmapCallsBefore + 1);
+    expect(recomputed).not.toBe(first);
   });
 
   it("getPulse creates a fresh controller after invalidation", async () => {
