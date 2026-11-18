@@ -201,6 +201,36 @@ describe("markdownEditorExtensions (#12323)", () => {
     expect(callbacks.onFollowLink).not.toHaveBeenCalled();
   });
 
+  it("parses each version of the buffer once, however many links are followed in it (#17788)", async () => {
+    mounted = mount(TWO_RISKS);
+    const { view } = mounted;
+    view.focus();
+    const flatten = vi.spyOn(view.state.doc, "toString");
+
+    await followHeadingLink(view, "#risks");
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(3).from);
+    await followHeadingLink(view, "#risks-1");
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(7).from);
+    // Moving the caret is not an edit: the index stands.
+    view.dispatch({ selection: { anchor: 3 } });
+    await followHeadingLink(view, "#risks");
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(3).from);
+    expect(flatten).toHaveBeenCalledTimes(1);
+
+    // An edit below the caret while the next jump is pending leaves the caret
+    // where it was, so the jump goes ahead, against the new text: the second
+    // "Risks" is now on line 5, where the old index would say 7.
+    view.dispatch({ selection: { anchor: 3 } });
+    const pending = followHeadingLink(view, "#risks-1");
+    view.dispatch({ changes: { from: view.state.doc.line(3).from, insert: "## Risks\n\n" } });
+    const reflatten = vi.spyOn(view.state.doc, "toString");
+    await pending;
+
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(5).from);
+    expect(reflatten).toHaveBeenCalledTimes(1);
+    expect(flatten).toHaveBeenCalledTimes(1);
+  });
+
   it("a jump that resolves late yields to a closed editor or a reader who moved on", async () => {
     const outside = document.createElement("button");
     document.body.appendChild(outside);

@@ -7,6 +7,8 @@ import {
   rectangularSelection,
   crosshairCursor,
   dropCursor,
+  ViewPlugin,
+  type ViewUpdate,
 } from "@codemirror/view";
 import {
   Annotation,
@@ -30,6 +32,7 @@ import {
 import { markdownKeymap } from "@codemirror/lang-markdown";
 import type { SyntaxNode } from "@lezer/common";
 import { utf8ByteLength } from "@shared/utils/folderUpload";
+import type { MarkdownTargets } from "@/components/Markdown/markdownHeadingTargets";
 import {
   editorSearchHighlightTheme,
   editorSearchPanelTheme,
@@ -105,19 +108,47 @@ export const docUtf8Bytes = StateField.define<number>({
 });
 
 /**
+ * Where the buffer's same-document links land, parsed on the first link
+ * followed in a document version and kept for the next ones: an edit clears
+ * it, and so does closing the editor (#17788).
+ */
+class FragmentTargets {
+  private slot: { doc: Text; targets: MarkdownTargets } | null = null;
+
+  for(doc: Text, build: (source: string) => MarkdownTargets): MarkdownTargets {
+    if (this.slot?.doc !== doc) this.slot = { doc, targets: build(doc.toString()) };
+    return this.slot.targets;
+  }
+
+  update(update: ViewUpdate): void {
+    if (update.docChanged) this.slot = null;
+  }
+
+  destroy(): void {
+    this.slot = null;
+  }
+}
+
+const fragmentTargets = ViewPlugin.fromClass(FragmentTargets);
+
+/**
  * Mod+click on `[Risks](#risks)`: the caret goes to the line the rendered
  * document would scroll to. The parser that resolves it loads on the first
  * such link, not with the editor, and reads the buffer as it stands then.
  */
 export async function followHeadingLink(view: EditorView, href: string): Promise<void> {
   const selection = view.state.selection;
-  const { markdownTargetLine } = await import("@/components/Markdown/markdownHeadingTargets");
+  const { markdownTargets } = await import("@/components/Markdown/markdownHeadingTargets");
   // Closed or replaced by a reload while the parser loaded, or the reader has
   // moved on: a late jump must not take the caret, or focus, back from them.
   if (!view.dom.isConnected || !view.hasFocus || !view.state.selection.eq(selection)) return;
-  const line = markdownTargetLine(view.state.doc.toString(), href);
-  if (line === null || line > view.state.doc.lines) return;
-  const position = view.state.doc.line(line).from;
+  if (href === "#") return;
+  const doc = view.state.doc;
+  const cache = view.plugin(fragmentTargets);
+  const targets = cache ? cache.for(doc, markdownTargets) : markdownTargets(doc.toString());
+  const line = targets.lineOf(href);
+  if (line === null || line > doc.lines) return;
+  const position = doc.line(line).from;
   view.dispatch({
     selection: { anchor: position },
     effects: EditorView.scrollIntoView(position, { y: "start" }),
@@ -190,6 +221,7 @@ export function buildMarkdownEditorExtensions(options: {
       })
     ),
     docUtf8Bytes,
+    fragmentTargets,
     lineNumbers(),
     highlightSpecialChars(),
     history(),

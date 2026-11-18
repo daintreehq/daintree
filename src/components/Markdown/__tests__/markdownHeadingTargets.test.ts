@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownTargetLine } from "../markdownHeadingTargets";
+import { markdownTargetLine, markdownTargets } from "../markdownHeadingTargets";
 
 const PLAN = [
   "# Plan", // 1
@@ -72,5 +72,44 @@ describe("markdownTargetLine (#17335)", () => {
 
   it("counts lines the same in a CRLF document", () => {
     expect(markdownTargetLine(PLAN.replaceAll("\n", "\r\n"), "#risks-1")).toBe(11);
+  });
+
+  it("finds a non-ASCII heading by its encoded fragment, repeats included", () => {
+    const source = "## Café\n\n## Café\n";
+    expect(markdownTargetLine(source, "#caf%C3%A9")).toBe(1);
+    expect(markdownTargetLine(source, "#café-1")).toBe(3);
+    expect(markdownTargetLine(source, "#caf%C3%A9-1")).toBe(3);
+  });
+
+  it("lands a repeated footnote's back-links on each of its references", () => {
+    const source = "Claim.[^é]\n\nAgain.[^é]\n\n[^é]: Source.\n";
+    expect(markdownTargetLine(source, "#user-content-fnref-%C3%A9")).toBe(1);
+    expect(markdownTargetLine(source, "#user-content-fnref-%C3%A9-2")).toBe(3);
+    expect(markdownTargetLine(source, "#user-content-fn-%C3%A9")).toBe(5);
+  });
+});
+
+describe("markdownTargets (#17788)", () => {
+  it("answers every link in its source from one parse, as each lookup alone would", () => {
+    const source = ["---", "# Risks", "---", "", PLAN].join("\n");
+    const hrefs = [
+      "#plan",
+      "#risks",
+      "#risks-1",
+      "#user-content-risks-1",
+      "#use-slug-here--now",
+      "#user-content-fn-note",
+      "#user-content-fnref-note",
+      "#nowhere",
+      "#",
+    ];
+    const targets = markdownTargets(source);
+
+    const lines = hrefs.map((href) => targets.lineOf(href));
+
+    expect(lines).toEqual([5, 9, 15, 15, 18, 22, 20, null, null]);
+    expect(lines).toEqual(hrefs.map((href) => markdownTargetLine(source, href)));
+    // Asked twice, an index answers the same: a lookup changes nothing in it.
+    expect(hrefs.map((href) => targets.lineOf(href))).toEqual(lines);
   });
 });
