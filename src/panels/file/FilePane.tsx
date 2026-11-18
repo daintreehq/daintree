@@ -402,11 +402,15 @@ export function FilePane({
   // An unset mode opens what a viewer that ships with Daintree shows (a CSV's
   // table, #17336) and Source otherwise; a mode anyone chose is kept.
   const requestedMode = panel?.fileViewMode ?? (hasBuiltinViewer ? "rendered" : "source");
+  // A file refused for Source by size alone is still one an editor with room
+  // for it opens: the size filter already left only those on offer.
+  const sizeRefusedOnly =
+    loadState === "error" && errorCode === "FILE_TOO_LARGE" && observedBytes !== null;
   const canEdit =
     (builtinEditor !== null || pluginEditor !== null) &&
     location !== "dialog" &&
     isInsideGovernedRoot &&
-    (loadState === "loaded" || requestedMode === "edit" || isDirty);
+    (loadState === "loaded" || sizeRefusedOnly || requestedMode === "edit" || isDirty);
   const { lockedBy: editLockedBy, mayEdit } = useFileEditLock(
     canEdit && requestedMode === "edit",
     isDirty
@@ -923,6 +927,7 @@ export function FilePane({
 
           {filePath &&
             !showPluginViewer &&
+            !previewsDraft &&
             viewMode !== "diff" &&
             viewMode !== "edit" &&
             loadState === "loading" && (
@@ -1111,22 +1116,24 @@ export function FilePane({
             </Suspense>
           )}
 
+          {/* One place for a draft preview, whatever the disk read is doing, so a
+            refresh or a refusal underneath never remounts it. */}
           {filePath &&
             previewsDraft &&
             draftText !== null &&
-            !(loadState === "loaded" && content !== null) &&
             renderMarkdownDocument(filePath, draftText)}
 
           {filePath &&
             viewMode !== "diff" &&
             viewMode !== "edit" &&
             !showPluginViewer &&
+            !previewsDraft &&
             loadState === "loaded" &&
             content !== null &&
             (viewMode === "rendered" && isMarkdown ? (
               // The draft is document state, so Rendered previews it while one
-              // exists and the disk text otherwise (#12323).
-              renderMarkdownDocument(filePath, draftText ?? content)
+              // exists (above) and the disk text otherwise (#12323).
+              renderMarkdownDocument(filePath, content)
             ) : viewMode === "rendered" && isHtml ? (
               // Rendered HTML fills the pane in a sandboxed iframe rather than the
               // min-h-full source column; the frame owns its own scrolling.

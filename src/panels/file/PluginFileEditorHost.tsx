@@ -57,20 +57,15 @@ export default function PluginFileEditorHost({
 
   useEffect(() => handle.retain(), [handle]);
 
-  // The first tick is the one the panel mounted with, not a change.
-  const lastTick = useRef(changeTick);
+  // The values the panel mounted with are not changes. Either signal moving is
+  // one re-check, even when a Refresh moves both in the same commit.
+  const lastSignals = useRef({ changeTick, refreshEpoch });
   useEffect(() => {
-    if (changeTick === lastTick.current) return;
-    lastTick.current = changeTick;
+    const last = lastSignals.current;
+    if (changeTick === last.changeTick && refreshEpoch === last.refreshEpoch) return;
+    lastSignals.current = { changeTick, refreshEpoch };
     void handle.notifyDiskChange();
-  }, [changeTick, handle]);
-
-  const lastEpoch = useRef(refreshEpoch);
-  useEffect(() => {
-    if (refreshEpoch === lastEpoch.current) return;
-    lastEpoch.current = refreshEpoch;
-    void handle.notifyDiskChange();
-  }, [refreshEpoch, handle]);
+  }, [changeTick, refreshEpoch, handle]);
 
   return (
     <PluginHostedView

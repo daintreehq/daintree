@@ -673,6 +673,7 @@ export function FileBrowserViewer({
   // Which file the state on screen belongs to. A re-read triggered by a listing
   // change is for the same file, so it must not clear what is already rendered.
   const shownPathRef = useRef<string | null>(null);
+  const shownRootRef = useRef<string | null>(null);
   const lastContentRef = useRef<string | null>(null);
   const lastSurfaceRefreshNonceRef = useRef(surfaceRefreshNonce);
   // Survives a read the next one cancelled, so a Refresh pressed mid-read
@@ -706,11 +707,11 @@ export function FileBrowserViewer({
     const isSameFile = shownPathRef.current === filePath;
     shownPathRef.current = filePath;
     // A size seen for an earlier selection says nothing about this read, even
-    // for the same file met again after another: it may have grown since.
-    if (!isSameFile) {
-      lastContentRef.current = null;
-      setSizeEvidence(null);
-    }
+    // for the same file met again after another, or through another root: it
+    // may have grown since.
+    if (!isSameFile) lastContentRef.current = null;
+    if (!isSameFile || shownRootRef.current !== rootPath) setSizeEvidence(null);
+    shownRootRef.current = rootPath;
     if (lastSurfaceRefreshNonceRef.current !== surfaceRefreshNonce) {
       forceSurfaceReloadRef.current = true;
       lastSurfaceRefreshNonceRef.current = surfaceRefreshNonce;
@@ -1413,10 +1414,12 @@ export function FileBrowserViewer({
               fileName={fileName}
               rootPath={rootPath}
               candidate={pluginViewer}
-              // Only a write that could have touched the file, or a Refresh
-              // (which moves the same count), re-checks it: a viewer has no
-              // draft to protect.
+              // Only a write that could have touched the file, or a foreground
+              // refresh, re-checks it: a viewer has no draft to protect. The
+              // refresh rides on its own signal, since a scoped count can
+              // skip the revision a Refresh shares with an unrelated tick.
               changeTick={fileChangeCount}
+              refreshEpoch={surfaceRefreshNonce}
             />
           </Suspense>
         </div>

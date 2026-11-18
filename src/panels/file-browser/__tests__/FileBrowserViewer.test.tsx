@@ -309,6 +309,7 @@ import type { FolderListingStatus } from "../useFileBrowserTree";
 
 interface ViewerOpts {
   isFocused?: boolean;
+  rootPath?: string;
   editorContext?: { projectId: string; worktreePath: string | null; isFocused: boolean };
   panelId?: string;
   sidebarCollapsed?: boolean;
@@ -380,7 +381,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         panelId={opts.panelId ?? "panel-1"}
         isFocused={opts.isFocused}
         filePath={filePath}
-        rootPath="/repo"
+        rootPath={opts.rootPath ?? "/repo"}
         fileName={fileName}
         relativePath={
           opts.relativePath !== undefined ? opts.relativePath : filePath ? fileName : null
@@ -2875,6 +2876,22 @@ describe("a built-in viewer in the file browser (#17336)", () => {
 
     readMock.mockReturnValueOnce(new Promise(() => {}));
     viewer.rerender(viewerJsx("/repo/users.csv", { editorContext: context }));
+    await act(async () => {});
+    expect(viewerHostProps).toHaveLength(0);
+  });
+
+  it("never reuses a file's size across a change of root and back", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/sub/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    readMock.mockReturnValue(new Promise(() => {}));
+    viewer.rerender(
+      viewerJsx("/repo/sub/users.csv", { editorContext: context, rootPath: "/repo/sub" })
+    );
+    await act(async () => {});
+    viewerHostProps.length = 0;
+    viewer.rerender(viewerJsx("/repo/sub/users.csv", { editorContext: context }));
     await act(async () => {});
     expect(viewerHostProps).toHaveLength(0);
   });

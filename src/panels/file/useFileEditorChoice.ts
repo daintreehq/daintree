@@ -200,15 +200,22 @@ export function useFileEditorChoice({
     if (!projection?.dirty) return null;
     return isPluginFileDocumentIdentity(projection.identityKey) ? "plugin" : "host";
   });
+  // The draft's owner stays on offer whatever the file grew to: its own
+  // oversized state is the way back to the draft.
   const editOptions = useMemo(
     () => [
-      ...(editor && draftOwner !== "plugin" && fitsFile(editor.registration.maxBytes, loadedBytes)
+      ...(editor &&
+      draftOwner !== "plugin" &&
+      (draftOwner === "host" || fitsFile(editor.registration.maxBytes, loadedBytes))
         ? [HOST_FILE_EDITOR_CHOICE]
         : []),
       ...(draftOwner === "host"
         ? []
         : pluginEditCandidates
-            .filter((candidate) => fitsFile(candidate.editor.maxBytes, loadedBytes))
+            .filter(
+              (candidate) =>
+                draftOwner === "plugin" || fitsFile(candidate.editor.maxBytes, loadedBytes)
+            )
             .map((candidate) => candidate.choiceId)),
     ],
     [editor, draftOwner, pluginEditCandidates, loadedBytes]

@@ -85,6 +85,17 @@ describe("detectDelimiter", () => {
     expect(readDelimitedTable(text, "csv").rowCount).toBe(1);
   });
 
+  it("lets the header's width outweigh a few malformed rows", () => {
+    const text = 'a,b\n1,a;b\n2,c;d\n3,e;f\n4,h\n5,i\nx;"a,b,c"\ny;"d,e,f"\n';
+    expect(detectDelimiter(text, "csv")).toBe(",");
+  });
+
+  it("reads a quoted value longer than any sample whole", () => {
+    const text = `id;"${"word, ".repeat(20_000)}"\n1;2\n`;
+    expect(detectDelimiter(text, "csv")).toBe(";");
+    expect(readDelimitedTable(text, "csv").columnCount).toBe(2);
+  });
+
   it("never picks a delimiter that only splits quoted values", () => {
     const text = 'id,"a;b;c"\n1,"x;y;z"\n';
     expect(detectDelimiter(text, "csv")).toBe(",");

@@ -95,49 +95,51 @@ export function parseDelimited(text: string, delimiter: Delimiter, limit = Infin
   return records;
 }
 
-/** How many records the delimiter guess looks at. */
+/**
+ * How many records the delimiter guess reads. Whole records, never a cut by
+ * characters: a quoted value can run longer than any fixed sample, and a record
+ * cut inside one would read as malformed. The file is at most a few MiB, and a
+ * quoted value is skipped with `indexOf`, so reading whole records stays cheap.
+ */
 const SAMPLE_RECORDS = 50;
-/** How much of the file the delimiter guess reads, so a huge first field can't stall it. */
-const SAMPLE_CHARS = 64 * 1024;
 
 /**
- * The delimiter that best explains the start of the file: the most records of
- * one consistent width wider than a single column, less one for every record
- * whose quotes that delimiter can't account for, the wider width breaking a
- * tie. A delimiter that only appears inside quoted values leaves the records
- * around them stray and loses; a file whose values carry loose quotes still
- * keeps the delimiter its rows agree on. A `.tsv` prefers tab on a full tie,
- * anything else comma, then semicolon, then tab, so a single-column file or
- * one the sample can't decide keeps the delimiter its extension names.
+ * The delimiter that best explains the start of the file. The first record is
+ * the header, so its width under a delimiter is the width every row should
+ * have: a candidate that leaves the header a single field can't be the one.
+ * Each candidate scores the records that match the header's width, less one
+ * for every record whose quotes it can't account for (a quote mid-field, text
+ * after a closing quote, a quote never closed), so a delimiter that only
+ * appears inside quoted values loses while loose quotes in values don't sink
+ * the delimiter the rows agree on. The wider header breaks a tie. A `.tsv`
+ * prefers tab on a full tie, anything else comma, then semicolon, then tab, so
+ * a single-column file keeps the delimiter its extension names.
  */
 export function detectDelimiter(text: string, extension: string | null): Delimiter {
   const order: readonly Delimiter[] =
     extension?.toLowerCase() === "tsv" ? ["\t", ",", ";"] : [",", ";", "\t"];
-  const sample = text.length > SAMPLE_CHARS ? text.slice(0, SAMPLE_CHARS) : text;
-  const truncated = text.length > SAMPLE_CHARS;
   let best: Delimiter = order[0]!;
   let bestScore = 0;
   let bestWidth = 0;
   for (const delimiter of order) {
     const delim = delimiter.charCodeAt(0);
-    const widths = new Map<number, number>();
+    let headerWidth = 0;
+    let matching = 0;
     let stray = 0;
     let i = 0;
-    for (let n = 0; n < SAMPLE_RECORDS && i < sample.length; n += 1) {
-      const scan = scanRecord(sample, i, delim, null);
+    for (let n = 0; n < SAMPLE_RECORDS && i < text.length; n += 1) {
+      const scan = scanRecord(text, i, delim, null);
       i = scan.next;
-      // A sample cut mid-file may end in a partial record; it says nothing.
-      if (truncated && i >= sample.length && n > 0) break;
+      if (n === 0) headerWidth = scan.fields;
+      if (scan.fields === headerWidth) matching += 1;
       if (scan.stray) stray += 1;
-      if (scan.fields > 1) widths.set(scan.fields, (widths.get(scan.fields) ?? 0) + 1);
     }
-    for (const [width, rows] of widths) {
-      const score = rows - stray;
-      if (score > bestScore || (score === bestScore && score > 0 && width > bestWidth)) {
-        best = delimiter;
-        bestScore = score;
-        bestWidth = width;
-      }
+    if (headerWidth < 2) continue;
+    const score = matching - stray;
+    if (score > bestScore || (score === bestScore && score > 0 && headerWidth > bestWidth)) {
+      best = delimiter;
+      bestScore = score;
+      bestWidth = headerWidth;
     }
   }
   return best;

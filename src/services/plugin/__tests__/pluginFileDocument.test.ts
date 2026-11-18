@@ -409,6 +409,54 @@ describe("pluginFileDocument (#13809)", () => {
     expect(bridge.read).toHaveBeenCalledTimes(2);
   });
 
+  it("never lets a superseded read move the revision a draft is saved against", async () => {
+    let finishFirst: (value: unknown) => void = () => {};
+    bridge.read.mockImplementationOnce(() => new Promise((resolve) => (finishFirst = resolve)));
+    bridge.save.mockResolvedValue({ status: "conflict", revision: REV_B });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    const first = handle.document.read();
+    // The editor reads again (a change arrived) and holds A.
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "a", revision: REV_A });
+    await handle.document.read();
+    // B is written; the first read, which sampled it, lands last.
+    finishFirst({ status: "ok", text: "b", revision: REV_B });
+    await first;
+
+    handle.document.setDraft("edited from a");
+    await useFileDocumentStore.getState().byPanelId["panel-1"]!.save();
+    expect(bridge.save).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: REV_A }));
+  });
+
+  it("never conflicts a roomier editor's draft over a viewer's tighter ceiling", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const editor = openPluginFileDocument(target({ maxBytes: 4096 }));
+    editor.retain();
+    await editor.document.read();
+    editor.document.setDraft("mine");
+
+    const viewer = openPluginFileDocument(target({ mode: "view", maxBytes: 16 }));
+    bridge.read.mockResolvedValue({ status: "too-large" });
+    await viewer.notifyDiskChange();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(false);
+  });
+
+  it("reports every move of the disk, back to an earlier revision included", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine");
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+
+    for (const revision of [REV_B, REV_A, REV_B]) {
+      bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision });
+      await handle.notifyDiskChange();
+    }
+    expect(listener.mock.calls.map(([change]) => change.revision)).toEqual([REV_B, REV_A, REV_B]);
+  });
+
   it("stays quiet on a disk change before anything was read", async () => {
     const handle = openPluginFileDocument(target({ mode: "view" }));
     handle.retain();

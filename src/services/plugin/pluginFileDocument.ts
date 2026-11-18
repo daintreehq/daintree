@@ -58,14 +58,20 @@ interface DocumentRecord {
    * prompt's Save would quietly write the draft over a change it never saw.
    */
   revision: string | null;
-  /** The latest disk state a read or a disk-change check saw: a revision, or `status:<refusal>`. */
+  /**
+   * The latest disk state a read or a disk-change check saw: a revision, or
+   * `status:<refusal>`, so a move from one to another is reported once and a
+   * view showing a refusal hears when the file reads again.
+   */
   observedState: string | null;
-  /** What the view's own last read returned, the same way: what it is showing. */
-  shown: string | null;
-  /** The disk state the view was last told about since that read, so one change is reported once. */
-  announced: string | null;
   /** The view's reads in flight: a change that lands meanwhile is news to it. */
   reading: number;
+  /**
+   * The latest read started. A read that lands after a later one started is
+   * superseded: the view holds the later one, so the older answer moves
+   * nothing, least of all the revision a draft would be saved against.
+   */
+  readSeq: number;
   /** The disk-change check in flight, whether another was asked for, and with what ceiling. */
   probing: Promise<void> | null;
   probeAgain: boolean;
@@ -152,6 +158,7 @@ async function read(
   record: DocumentRecord,
   maxBytes: number
 ): Promise<PluginFileDocumentReadResult> {
+  const seq = ++record.readSeq;
   record.reading += 1;
   let result: PluginFileDocumentReadResult;
   try {
@@ -166,12 +173,10 @@ async function read(
   } finally {
     record.reading -= 1;
   }
-  // A refused read is what the view shows too, so the next disk change that
-  // makes the file readable again, even back to the revision it had, reaches it.
-  const state = stateOf(result);
-  record.observedState = state;
-  record.shown = state;
-  record.announced = null;
+  if (seq !== record.readSeq) return result;
+  // A refused read is an observation too, so the next disk change that makes
+  // the file readable again reaches a view still showing the refusal.
+  record.observedState = stateOf(result);
   if (result.status === "ok" && record.draft === null) {
     record.revision = result.revision;
     if (record.hostConflict) {
@@ -182,7 +187,7 @@ async function read(
   return result;
 }
 
-/** One disk-change check: re-read, and tell the view when the disk moved from what it shows. */
+/** One disk-change check: re-read, and tell the view when the disk moved. */
 async function probe(record: DocumentRecord, maxBytes: number): Promise<void> {
   let state: string;
   try {
@@ -198,13 +203,15 @@ async function probe(record: DocumentRecord, maxBytes: number): Promise<void> {
   } catch {
     return;
   }
+  const previous = record.observedState;
   record.observedState = state;
-  reconcileDraft(record, state);
-  // Nothing read and nothing being read means nothing to be stale against:
-  // the view's first read sees whatever is there now.
-  if (record.shown === null && record.reading === 0) return;
-  if (state === record.shown || state === record.announced) return;
-  record.announced = state;
+  // Only a check that could read as much as the draft's owner speaks for the
+  // draft: a viewer's tighter ceiling refusing the file says nothing about it.
+  if (maxBytes >= record.maxBytes) reconcileDraft(record, state);
+  if (state === previous) return;
+  // Nothing observed and nothing being read means nothing to be stale
+  // against: the view's first read sees whatever is there now.
+  if (previous === null && record.reading === 0) return;
   emit(record, { reason: "disk", revision: diskRevisionOf(record) });
 }
 
@@ -233,9 +240,6 @@ async function save(
   if (result.status === "saved") {
     record.revision = result.revision;
     record.observedState = result.revision;
-    // The editor holds what it just wrote.
-    record.shown = result.revision;
-    record.announced = null;
     // Typing that landed while the save was in flight stays a draft.
     if (record.draft === text) record.draft = null;
     record.hostConflict = false;
@@ -372,9 +376,8 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
       maxBytes: target.maxBytes,
       revision: null,
       observedState: null,
-      shown: null,
-      announced: null,
       reading: 0,
+      readSeq: 0,
       probing: null,
       probeAgain: false,
       probeMaxBytes: target.maxBytes,

@@ -57,5 +57,9 @@ describe("PluginFileEditorHost", () => {
 
     view.rerender(host(4, 8));
     expect(notifyDiskChange).toHaveBeenCalledTimes(2);
+
+    // A Refresh that moves both in one commit is one re-check.
+    view.rerender(host(5, 9));
+    expect(notifyDiskChange).toHaveBeenCalledTimes(3);
   });
 });

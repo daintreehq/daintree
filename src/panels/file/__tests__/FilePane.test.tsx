@@ -4574,6 +4574,27 @@ describe("FilePane edit mode (#12323)", () => {
     );
   });
 
+  // A file Source refuses only for its size still opens in an editor with room.
+  it("keeps Edit on offer for a file refused only for its size", async () => {
+    seedWorktree();
+    readMock.mockRejectedValue(
+      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+        code: "FILE_TOO_LARGE",
+        sizeBytes: 600 * 1024,
+      })
+    );
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "source",
+    };
+    render(paneElement());
+    await act(async () => {});
+    expect(screen.getByRole("radio", { name: "Edit" })).toBeTruthy();
+  });
+
   // A file that grows past Source's cap now surfaces the refusal (#17336), but
   // a standing draft is document state and Rendered keeps previewing it.
   it("keeps previewing a draft in Rendered when the file grows too large to read", async () => {
