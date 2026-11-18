@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LogBuffer, type LogEntry } from "../LogBuffer.js";
 
 function push(buffer: LogBuffer, n: number, opts: Partial<LogEntry> = {}): LogEntry[] {
@@ -112,5 +112,131 @@ describe("LogBuffer", () => {
     push(buffer, 3);
 
     expect(buffer.getFiltered({ levels: [] })).toHaveLength(3);
+  });
+
+  describe("circular storage", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("keeps only the latest entry at capacity one", () => {
+      const buffer = new LogBuffer(1);
+
+      const first = buffer.push({ timestamp: 1, level: "info", message: "one" });
+      expect(buffer.getAll()).toEqual([first]);
+
+      const second = buffer.push({ timestamp: 2, level: "warn", message: "two" });
+      const third = buffer.push({ timestamp: 3, level: "error", message: "three" });
+
+      expect(buffer.length).toBe(1);
+      expect(buffer.getAll()).toEqual([third]);
+      expect(buffer.getAll()[0]).not.toBe(second);
+      expect(buffer.getSources()).toEqual([]);
+    });
+
+    it("stays chronological across many full wraps", () => {
+      const buffer = new LogBuffer(7);
+      push(buffer, 7 * 5 + 3);
+
+      expect(buffer.length).toBe(7);
+      expect(buffer.getAll().map((e) => e.timestamp)).toEqual([31, 32, 33, 34, 35, 36, 37]);
+    });
+
+    it("returns the same entry objects that push handed back", () => {
+      const buffer = new LogBuffer(4);
+      const pushed = push(buffer, 6);
+
+      const all = buffer.getAll();
+      expect(all).toHaveLength(4);
+      all.forEach((entry, i) => expect(entry).toBe(pushed[i + 2]));
+    });
+
+    it("reports length growing up to capacity and never past it", () => {
+      const buffer = new LogBuffer(3);
+      const lengths: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        buffer.push({ timestamp: i, level: "info", message: `m${i}` });
+        lengths.push(buffer.length);
+      }
+
+      expect(lengths).toEqual([1, 2, 3, 3, 3, 3]);
+    });
+
+    it("filters in chronological order when the ring has wrapped", () => {
+      const buffer = new LogBuffer(5);
+      for (let i = 0; i < 12; i++) {
+        buffer.push({
+          timestamp: i,
+          level: i % 2 === 0 ? "error" : "info",
+          message: `m${i}`,
+          source: i % 3 === 0 ? "a" : "b",
+        });
+      }
+
+      expect(buffer.getFiltered({ levels: ["error"] }).map((e) => e.timestamp)).toEqual([8, 10]);
+      expect(buffer.getFiltered({ sources: ["a"] }).map((e) => e.timestamp)).toEqual([9]);
+      expect(buffer.getFiltered({ startTime: 8, endTime: 10 }).map((e) => e.timestamp)).toEqual([
+        8, 9, 10,
+      ]);
+      expect(buffer.getFiltered({ search: "m1" }).map((e) => e.timestamp)).toEqual([10, 11]);
+      expect(buffer.getSources()).toEqual(["a", "b"]);
+    });
+
+    it("getFiltered without active filters returns a fresh array, not internal storage", () => {
+      const buffer = new LogBuffer(5);
+      push(buffer, 8);
+
+      const unfiltered = buffer.getFiltered({});
+      const emptyLevels = buffer.getFiltered({ levels: [], sources: [] });
+      expect(unfiltered).not.toBe(emptyLevels);
+      expect(unfiltered.map((e) => e.timestamp)).toEqual([3, 4, 5, 6, 7]);
+
+      unfiltered.length = 0;
+      emptyLevels.push({ id: "fake", timestamp: 999, level: "error", message: "fake" });
+
+      expect(buffer.getAll().map((e) => e.timestamp)).toEqual([3, 4, 5, 6, 7]);
+      expect(buffer.getFiltered({}).map((e) => e.timestamp)).toEqual([3, 4, 5, 6, 7]);
+    });
+
+    it("an array returned before later pushes does not change when the ring wraps", () => {
+      const buffer = new LogBuffer(3);
+      push(buffer, 3);
+      const before = buffer.getAll();
+
+      buffer.push({ timestamp: 100, level: "info", message: "later" });
+
+      expect(before.map((e) => e.timestamp)).toEqual([0, 1, 2]);
+      expect(buffer.getAll().map((e) => e.timestamp)).toEqual([1, 2, 100]);
+    });
+
+    it("clear empties a wrapped ring and later pushes start a fresh chronological run", () => {
+      const buffer = new LogBuffer(3);
+      push(buffer, 8);
+
+      buffer.clear();
+      expect(buffer.length).toBe(0);
+      expect(buffer.getAll()).toEqual([]);
+      expect(buffer.getFiltered({ levels: ["info"] })).toEqual([]);
+      expect(buffer.getSources()).toEqual([]);
+
+      buffer.push({ timestamp: 50, level: "info", message: "a" });
+      buffer.push({ timestamp: 51, level: "info", message: "b" });
+      expect(buffer.getAll().map((e) => e.message)).toEqual(["a", "b"]);
+
+      buffer.push({ timestamp: 52, level: "info", message: "c" });
+      buffer.push({ timestamp: 53, level: "info", message: "d" });
+      expect(buffer.getAll().map((e) => e.message)).toEqual(["b", "c", "d"]);
+    });
+
+    it("onProjectSwitch clears the buffer", () => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const buffer = new LogBuffer(3);
+      push(buffer, 5);
+
+      buffer.onProjectSwitch();
+
+      expect(buffer.length).toBe(0);
+      expect(buffer.getAll()).toEqual([]);
+    });
   });
 });
