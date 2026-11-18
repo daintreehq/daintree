@@ -337,7 +337,8 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           ctx: IpcContext,
           request: DevPreviewDestructivePreviewSizesCancelRequest
         ): Promise<void> => {
-          sizeScans?.cancel(sizeScanOwner(ctx), readSizeSessionId(request));
+          const sessionId = readSizeSessionId(request);
+          sizeScans?.cancel(sizeScanOwner(ctx), sessionId);
         },
         { withContext: true }
       ),
