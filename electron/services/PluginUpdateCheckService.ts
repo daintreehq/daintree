@@ -11,7 +11,7 @@ import { getSystemSleepService } from "./SystemSleepService.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logInfo, logError } from "../utils/logger.js";
-import type { PluginUpdateCheckOptions } from "./plugin/PluginInstaller.js";
+import type { PluginCatalogUpdateSource } from "./plugin/PluginCatalogService.js";
 
 // Daily cadence. A URL re-fetch of every installed plugin is cheap but not free,
 // so once a day is the coarsest useful granularity for "an update landed."
@@ -354,23 +354,19 @@ export class PluginUpdateCheckService {
     // The registry can list one plugin twice while a re-enable is in flight (running
     // and disabled rows). One check per id keeps a plugin out of both `found` and
     // `failedIds`, so a fresh offer never sits beside its own cached version.
-    const eligible = pluginService
-      .listPlugins()
-      // A catalog install is checked against the catalog, not its URL (#16781).
-      .filter(
-        (p) => !p.isBuiltin && (p.source === "catalog" || (!!p.originalUrl && !!p.archiveHash))
-      );
-    const targets = [...new Set(eligible.map((p) => p.manifest.name))];
+    const targets = [
+      ...new Set(
+        pluginService
+          .listPlugins()
+          // A catalog install is checked against the catalog, not its URL (#16781).
+          .filter(
+            (p) => !p.isBuiltin && (p.source === "catalog" || (!!p.originalUrl && !!p.archiveHash))
+          )
+          .map((p) => p.manifest.name)
+      ),
+    ];
 
-    // One catalog answers every catalog install in the pass, rather than one
-    // fetch per check (#17805). A pass with none never loads the catalog client.
-    let options: PluginUpdateCheckOptions | undefined;
-    if (eligible.some((p) => p.source === "catalog")) {
-      const { getPluginCatalogService } = await import("./plugin/PluginCatalogService.js");
-      options = { catalog: getPluginCatalogService().openUpdateBatch() };
-    }
-
-    const { found, failedIds } = await this.checkAll(pluginService, targets, options);
+    const { found, failedIds } = await this.checkAll(pluginService, targets);
     return {
       updates: found,
       inconclusive: failedIds.length > 0,
@@ -386,8 +382,7 @@ export class PluginUpdateCheckService {
    */
   private async checkAll(
     pluginService: typeof import("./PluginService.js").pluginService,
-    ids: string[],
-    options: PluginUpdateCheckOptions | undefined
+    ids: string[]
   ): Promise<{ found: PluginBackgroundUpdateEntry[]; failedIds: string[] }> {
     const found: PluginBackgroundUpdateEntry[] = [];
     // Ids we couldn't determine this pass (fetch-failed or threw). Collected as
@@ -395,15 +390,17 @@ export class PluginUpdateCheckService {
     // available" pass from an inconclusive one.
     const failedIds: string[] = [];
     let cursor = 0;
+    // Every catalog install in the pass reads one catalog rather than fetching
+    // its own (#17805). Opened by the first catalog lookup, whatever the list
+    // said, so a pass with no catalog install never loads the catalog client.
+    const options = { catalog: passCatalog() };
 
     const worker = async (): Promise<void> => {
       while (cursor < ids.length) {
         if (this.disposed || !this.getSettings().enabled) return;
         const id = ids[cursor++];
         try {
-          const result = options
-            ? await pluginService.checkForUpdate(id, options)
-            : await pluginService.checkForUpdate(id);
+          const result = await pluginService.checkForUpdate(id, options);
           if (result.status === "available") {
             found.push({
               pluginId: id,
@@ -440,6 +437,19 @@ interface PassOutcome {
   inconclusive: boolean;
   unchecked: ReadonlySet<string> | null;
   failedEntirely: boolean;
+}
+
+/** One pass's catalog, opened on its first lookup. */
+function passCatalog(): PluginCatalogUpdateSource {
+  let batch: Promise<PluginCatalogUpdateSource> | null = null;
+  return {
+    lookupUpdate: async (id, installedVersion) => {
+      batch ??= import("./plugin/PluginCatalogService.js").then((m) =>
+        m.getPluginCatalogService().openUpdateBatch()
+      );
+      return (await batch).lookupUpdate(id, installedVersion);
+    },
+  };
 }
 
 /** The cached result cut down to the plugins a pass couldn't check, or `null` when none is left. */

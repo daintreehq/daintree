@@ -500,7 +500,9 @@ describe("PluginUpdateCheckService", () => {
     const svc = new PluginUpdateCheckService();
     await svc.maybeRunDue("Periodic");
 
-    expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledWith("pub.a");
+    expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledWith("pub.a", {
+      catalog: expect.anything(),
+    });
   });
 
   it("caps concurrency at 2", async () => {
@@ -766,7 +768,9 @@ describe("PluginUpdateCheckService", () => {
       expect(svc.getLatest()).toMatchObject({ signature: "pub.p3@1.1.0" });
     });
 
-    it("fetches afresh on the pass after a failed one, and that pass counts", async () => {
+    it("fetches afresh on the next due pass after a failed one, and that pass counts", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-01-10T12:00:00Z"));
       storeState.value = { enabled: true, lastCheckedAt: null };
       pluginServiceMock.listPlugins.mockReturnValue(TEN.map(catalogPlugin));
       const fetchImpl = catalogServes("offline", {
@@ -775,14 +779,22 @@ describe("PluginUpdateCheckService", () => {
       checksAgainstCatalog();
       const svc = new PluginUpdateCheckService();
 
-      await svc._checkNowForTest();
+      await svc.maybeRunDue("Periodic");
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(10);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       // Nothing was learned, so the day's check is still owed.
       expect(storeState.value.lastCheckedAt).toBeNull();
 
-      await svc._checkNowForTest();
+      // Inside the backoff window nothing runs; past it the next pass fetches
+      // its own catalog rather than reusing the failed one.
+      await svc.maybeRunDue("Periodic");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + 31 * 60 * 1000);
+      await svc.maybeRunDue("Periodic");
+
       expect(fetchImpl).toHaveBeenCalledTimes(2);
-      expect(storeState.value.lastCheckedAt).not.toBeNull();
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(20);
+      expect(storeState.value.lastCheckedAt).toBe(Date.now());
       expect(svc.getLatest()).toBeNull();
     });
 
