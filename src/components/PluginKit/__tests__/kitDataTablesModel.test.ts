@@ -4,11 +4,14 @@ import {
   buildTreeRows,
   createCheckReader,
   dropPositionAt,
+  indexTreeRows,
+  isWithin,
   resolveDrop,
   resolveKeyMove,
   toggleChecked,
   type KnownChildren,
   type TreeId,
+  type TreeIndex,
 } from "../kitTreeModel";
 import { buildInspectorRows, copyTextOf, type InspectorOptions } from "../kitObjectInspectorModel";
 
@@ -217,7 +220,7 @@ describe("tree model", () => {
   });
 
   it("resolves drops counted with the node removed, and refuses its own subtree", () => {
-    const rows = rowsFor(["api", "web"]);
+    const rows = indexTreeRows(rowsFor(["api", "web"]));
     // auth after billing, same parent: index 1 once auth is out.
     expect(resolveDrop(rows, "auth", "billing", "after", 0)).toEqual({
       id: "auth",
@@ -240,7 +243,7 @@ describe("tree model", () => {
   });
 
   it("resolves Alt+arrow moves", () => {
-    const rows = rowsFor(["api"]);
+    const rows = indexTreeRows(rowsFor(["api"]));
     const count = (id: TreeId) => (id === "web" ? 1 : 0);
     expect(resolveKeyMove(rows, "billing", "ArrowUp", count)).toMatchObject({ index: 0 });
     expect(resolveKeyMove(rows, "billing", "ArrowDown", count)).toBeNull();
@@ -253,6 +256,113 @@ describe("tree model", () => {
       index: 1,
     });
     expect(resolveKeyMove(rows, "api", "ArrowLeft", count)).toBeNull();
+  });
+
+  it("indexes the drawn rows by id, path and parent, in sibling order", () => {
+    const rows = rowsFor(["api", "web"]);
+    const tree = indexTreeRows(rows);
+    expect(tree.byPath.get("s:edge")).toBe(rows[4]);
+    expect(tree.byId.get("billing")).toBe(rows[2]);
+    expect(tree.children.get(null)?.map((row) => row.id)).toEqual(["api", "web", "jobs"]);
+    expect(tree.children.get("api")?.map((row) => row.index)).toEqual([0, 1]);
+    expect(tree.children.has("jobs")).toBe(false);
+    // A collapsed parent's children are not drawn, so not indexed.
+    expect(indexTreeRows(rowsFor([])).children.has("api")).toBe(false);
+  });
+
+  it("resolves drops across roots and children", () => {
+    const tree = indexTreeRows(rowsFor(["api", "web"]));
+    // A child out to the top level, before the last root.
+    expect(resolveDrop(tree, "auth", "jobs", "before", 0)).toEqual({
+      id: "auth",
+      parentId: null,
+      index: 2,
+      fromParentId: "api",
+      fromIndex: 0,
+    });
+    // A root down into another root's children.
+    expect(resolveDrop(tree, "jobs", "edge", "after", 0)).toEqual({
+      id: "jobs",
+      parentId: "web",
+      index: 1,
+      fromParentId: null,
+      fromIndex: 2,
+    });
+    // A child across to a cousin's parent, appended.
+    expect(resolveDrop(tree, "billing", "web", "inside", 1)).toMatchObject({
+      parentId: "web",
+      index: 1,
+    });
+  });
+
+  it("refuses a drop onto itself or anywhere in its own subtree", () => {
+    const tree = indexTreeRows(rowsFor(["api", "web"]));
+    expect(isWithin(tree, "edge", "web")).toBe(true);
+    expect(isWithin(tree, "web", "web")).toBe(true);
+    expect(isWithin(tree, "web", "edge")).toBe(false);
+    expect(isWithin(tree, "auth", "web")).toBe(false);
+    for (const position of ["before", "inside", "after"] as const) {
+      expect(resolveDrop(tree, "api", "api", position, 2)).toBeNull();
+      expect(resolveDrop(tree, "api", "billing", position, 0)).toBeNull();
+      expect(resolveDrop(tree, "web", "edge", position, 0)).toBeNull();
+    }
+    expect(resolveDrop(tree, "api", "missing", "before", 0)).toBeNull();
+  });
+
+  it("counts same-parent offsets with the dragged node taken out", () => {
+    const tree = indexTreeRows(rowsFor([]));
+    // Roots api, web, jobs at 0, 1, 2.
+    expect(resolveDrop(tree, "api", "web", "after", 0)).toMatchObject({ index: 1 });
+    expect(resolveDrop(tree, "api", "jobs", "after", 0)).toMatchObject({ index: 2 });
+    expect(resolveDrop(tree, "jobs", "api", "before", 0)).toMatchObject({ index: 0 });
+    expect(resolveDrop(tree, "jobs", "web", "before", 0)).toMatchObject({ index: 1 });
+    // Either side of its own neighbour is where it already is.
+    expect(resolveDrop(tree, "api", "web", "before", 0)).toBeNull();
+    expect(resolveDrop(tree, "jobs", "web", "after", 0)).toBeNull();
+    // Inside its own parent goes last, unless it is last already.
+    const open = indexTreeRows(rowsFor(["api"]));
+    expect(resolveDrop(open, "auth", "api", "inside", 2)).toMatchObject({
+      parentId: "api",
+      index: 1,
+    });
+    expect(resolveDrop(open, "billing", "api", "inside", 2)).toBeNull();
+  });
+
+  it("resolves a drop without a pass over the rows", () => {
+    const flat = Array.from({ length: 10_000 }, (_, at) => ({ id: `n${at}`, label: `n${at}` }));
+    const rows = buildTreeRows({
+      nodes: flat,
+      idOf,
+      labelOf: (node) => nodeOf(node).label,
+      childrenOf: () => ({ kind: "leaf" }),
+      expanded: new Set(),
+    });
+    const index = indexTreeRows(rows);
+    let reads = 0;
+    const guarded = <K, V>(map: ReadonlyMap<K, V>): ReadonlyMap<K, V> =>
+      new Proxy(map, {
+        get(target, key) {
+          if (key !== "get" && key !== "has" && key !== "size") {
+            throw new Error(`walked the index with ${String(key)}`);
+          }
+          const value: unknown = Reflect.get(target, key, target);
+          if (typeof value !== "function") return value;
+          return (...args: [K]) => {
+            reads += 1;
+            return Reflect.apply(value, target, args);
+          };
+        },
+      });
+    const tree: TreeIndex = {
+      byId: guarded(index.byId),
+      byPath: guarded(index.byPath),
+      children: guarded(index.children),
+    };
+    for (let at = 1; at <= 100; at += 1) {
+      expect(resolveDrop(tree, "n0", `n${at}`, "after", 0)).toMatchObject({ index: at });
+    }
+    // The dragged row, the target, and the target's one-step ancestry walk.
+    expect(reads).toBe(300);
   });
 });
 

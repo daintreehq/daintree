@@ -45,6 +45,7 @@ import {
   buildTreeRows,
   createCheckReader,
   dropPositionAt,
+  indexTreeRows,
   isTreeId,
   isWithin,
   MAX_TREE_DEPTH,
@@ -95,7 +96,8 @@ function useControllable<T>(
 interface DropTarget {
   path: string;
   position: DropPosition;
-  move: TreeMoveResult | null;
+  /** Whether it resolves to a move the plugin allows; one that doesn't draws no mark. */
+  allowed: boolean;
 }
 
 interface TreeContext {
@@ -138,7 +140,7 @@ const DRAG_ACCESSIBILITY = {
 };
 
 function DropMarks({ drop, depth }: { drop: DropTarget | null; depth: number }) {
-  if (!drop || !drop.move) return null;
+  if (!drop || !drop.allowed) return null;
   if (drop.position === "inside") {
     return (
       <span
@@ -382,7 +384,8 @@ function KitTreeView(props: PluginTreeViewProps) {
   });
   const nodeRows = rows.filter((row): row is TreeRow => row.kind === "node");
   const hasParents = nodeRows.some((row) => row.isDirectory);
-  const byPath = new Map(rows.map((row) => [row.path, row]));
+  const treeIndex = indexTreeRows(rows);
+  const byPath = treeIndex.byPath;
 
   // Selection: the visible nodes, in drawn order.
   const multiple = selectionMode === "multiple";
@@ -456,7 +459,7 @@ function KitTreeView(props: PluginTreeViewProps) {
   if (isCheckable) walkChecked(roots, 0, new Set());
   const checkState = createCheckReader(checkInput, inheritedSet);
   const toggleCheck = (row: TreeRow) => {
-    const chain = ancestorsOf(rows, row.id).map((ancestor) => ancestor.node);
+    const chain = ancestorsOf(treeIndex, row.id).map((ancestor) => ancestor.node);
     setChecked(toggleChecked(checkInput, inheritedSet, row.node, chain));
   };
 
@@ -495,7 +498,7 @@ function KitTreeView(props: PluginTreeViewProps) {
     // Closing a branch the cursor is inside moves the cursor up to it.
     const at = cursorPath === null ? undefined : byPath.get(cursorPath);
     const atId = at?.kind === "node" ? at.id : at?.kind === "status" ? at.parentId : undefined;
-    if (!open && atId !== undefined && atId !== row.id && isWithin(rows, atId, row.id)) {
+    if (!open && atId !== undefined && atId !== row.id && isWithin(treeIndex, atId, row.id)) {
       setCursor(row.path);
     } else if (!open && at?.kind === "status" && at.parentId === row.id) {
       setCursor(row.path);
@@ -520,19 +523,19 @@ function KitTreeView(props: PluginTreeViewProps) {
   };
 
   const childCount = (id: TreeId): number => {
-    const row = nodeRows.find((candidate) => candidate.id === id);
+    const row = treeIndex.byId.get(id);
     if (!row) return 0;
     // Called from key and drag handlers only, so asking a collapsed parent
     // for its children here is not a render-time load.
     const known = readLazyChildren<unknown>(lazyScope, row.node, () => load(row.node));
     return (
-      nodeRows.filter((candidate) => candidate.parentId === id).length ||
+      (treeIndex.children.get(id)?.length ?? 0) ||
       (known?.status === "done" ? known.items.length : 0)
     );
   };
   const describeMove = (move: TreeMoveResult) => {
-    const moved = nodeRows.find((row) => row.id === move.id);
-    const parent = move.parentId === null ? null : nodeRows.find((row) => row.id === move.parentId);
+    const moved = treeIndex.byId.get(move.id);
+    const parent = move.parentId === null ? null : treeIndex.byId.get(move.parentId);
     const where = parent ? `into ${parent.name}` : "to the top level";
     return `Moved ${moved?.name ?? String(move.id)} ${where}, position ${move.index + 1}.`;
   };
@@ -557,7 +560,7 @@ function KitTreeView(props: PluginTreeViewProps) {
       ) {
         event.preventDefault();
         if (!allowDrag(current.node)) return;
-        commitMove(resolveKeyMove(rows, current.id, event.key, childCount));
+        commitMove(resolveKeyMove(treeIndex, current.id, event.key, childCount));
         return;
       }
     }
@@ -641,6 +644,10 @@ function KitTreeView(props: PluginTreeViewProps) {
   const [dragPath, setDragPath] = useState<string | null>(null);
   const [drop, setDrop] = useState<DropTarget | null>(null);
   const dragRow = dragPath === null ? undefined : byPath.get(dragPath);
+  // The row and band under the pointer at its last move. A release resolves
+  // it again against the rows as they are then, since a lazy load or a new
+  // row model can land while the pointer holds still.
+  const lastHit = useRef<{ path: string; position: DropPosition } | null>(null);
   // Where the pointer really is: dnd-kit's delta folds in the scroll of the
   // ancestors, which would aim the hit test above or below it.
   const pointer = useRef<{ x: number; y: number } | null>(null);
@@ -668,6 +675,8 @@ function KitTreeView(props: PluginTreeViewProps) {
     }
     return null;
   };
+  const resolveHit = (dragged: TreeRow, target: TreeRow, position: DropPosition) =>
+    resolveDrop(treeIndex, dragged.id, target.id, position, childCount(target.id));
   const onDragMove = (event: DragMoveEvent) => {
     if (dragRow?.kind !== "node") return;
     const point = pointerOf(event);
@@ -684,29 +693,25 @@ function KitTreeView(props: PluginTreeViewProps) {
     const path = element?.getAttribute("data-tree-path") ?? null;
     const targetRow = path === null ? undefined : byPath.get(path);
     if (!element || !point || path === null || targetRow?.kind !== "node") {
+      lastHit.current = null;
       if (drop !== null) setDrop(null);
       return;
     }
     const rect = element.getBoundingClientRect();
     const position = dropPositionAt(point.y - rect.top, rect.height, true);
-    const move = allowMove(
-      resolveDrop(rows, dragRow.id, targetRow.id, position, childCount(targetRow.id))
-    );
-    if (
-      drop?.path === path &&
-      drop.position === position &&
-      drop.move?.parentId === move?.parentId &&
-      drop.move?.index === move?.index
-    ) {
-      return;
-    }
-    setDrop({ path, position, move });
+    lastHit.current = { path, position };
+    const allowed = allowMove(resolveHit(dragRow, targetRow, position)) !== null;
+    if (drop?.path === path && drop.position === position && drop.allowed === allowed) return;
+    setDrop({ path, position, allowed });
   };
   const endDrag = (event: DragEndEvent | null) => {
-    const move = event && drop ? drop.move : null;
+    const hit = lastHit.current;
+    lastHit.current = null;
     setDragPath(null);
     setDrop(null);
-    if (move) commitMove(move);
+    const target = hit === null ? undefined : byPath.get(hit.path);
+    if (!event || !hit || dragRow?.kind !== "node" || target?.kind !== "node") return;
+    commitMove(resolveHit(dragRow, target, hit.position));
   };
 
   const content = fn(renderNode);
@@ -843,6 +848,7 @@ function KitTreeView(props: PluginTreeViewProps) {
       sensors={sensors}
       accessibility={DRAG_ACCESSIBILITY}
       onDragStart={(event: DragStartEvent) => {
+        lastHit.current = null;
         setDragPath(String(event.active.id));
         setDrop(null);
       }}

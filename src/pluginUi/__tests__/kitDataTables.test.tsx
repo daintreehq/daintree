@@ -950,7 +950,145 @@ describe("TreeView", () => {
       expect.objectContaining({ id: "data", parentId: null, index: 0 })
     );
   });
+
+  it("drags across levels and resolves the drop on release against the rows as they are then", async () => {
+    const onMove = vi.fn();
+    const nodes = SERVICES.filter((service) => !service.lazy);
+    const props = { "aria-label": "Drag", defaultExpanded: ["edge"], onMove };
+    const { rerender } = render(
+      inViewport(createElement(kit.TreeView<Service>, { ...props, nodes }))
+    );
+    const drag = treeDrag();
+    try {
+      drag.lift("s:waf");
+      // Before CDN, its sibling: up one place within Edge.
+      drag.point("s:cdn", 2);
+      expect(drag.mark()).toBe("before");
+      // Into Edge's middle puts it back where it was, so no mark.
+      drag.point("s:edge", 13);
+      expect(drag.mark()).toBeNull();
+      drag.point("s:data", 20);
+      expect(drag.mark()).toBe("after");
+      // A root lands above and Edge's children swap while the pointer holds
+      // still: the release counts both.
+      const [edge, ...rest] = nodes;
+      rerender(
+        inViewport(
+          createElement(kit.TreeView<Service>, {
+            ...props,
+            nodes: [
+              { id: "auth", label: "Auth" },
+              { ...edge!, children: [...edge!.children!].reverse() },
+              ...rest,
+            ],
+          })
+        )
+      );
+      expect(drag.mark()).toBe("after");
+      drag.drop();
+      expect(onMove).toHaveBeenCalledTimes(1);
+      expect(onMove).toHaveBeenLastCalledWith({
+        id: "waf",
+        parentId: null,
+        index: 3,
+        fromParentId: "edge",
+        fromIndex: 0,
+      });
+    } finally {
+      await drag.end();
+    }
+  });
+
+  it("appends a drop into a lazy parent after the children that load while it hovers", async () => {
+    let resolve: (nodes: Service[]) => void = () => {};
+    const onMove = vi.fn();
+    render(
+      inViewport(
+        createElement(kit.TreeView<Service>, {
+          "aria-label": "Lazy drag",
+          nodes: SERVICES,
+          getChildren: (node) =>
+            node.lazy
+              ? new Promise<Service[]>((done) => {
+                  resolve = done;
+                })
+              : node.children,
+          hasChildren: (node) => node.lazy === true || (node.children?.length ?? 0) > 0,
+          onMove,
+        })
+      )
+    );
+    const drag = treeDrag();
+    try {
+      drag.lift("s:data");
+      drag.point("s:core", 13);
+      expect(drag.mark()).toBe("inside");
+      await act(async () => {
+        resolve([
+          { id: "queue", label: "Queue" },
+          { id: "cache", label: "Cache" },
+        ]);
+        await Promise.resolve();
+      });
+      drag.drop();
+      expect(onMove).toHaveBeenLastCalledWith({
+        id: "data",
+        parentId: "core",
+        index: 2,
+        fromParentId: null,
+        fromIndex: 2,
+      });
+    } finally {
+      await drag.end();
+    }
+  });
 });
+
+// A pointer drag over the tree. Every row sits 24px tall at the top of the
+// viewport, so the pointer's y picks the band on whichever row it is over.
+function treeDrag() {
+  let over = "";
+  const rowAt = (path: string) => {
+    const found = document.querySelector(`[data-tree-path="${path}"]`);
+    if (!(found instanceof HTMLElement)) throw new Error(`no row ${path}`);
+    return found;
+  };
+  Object.defineProperty(document, "elementsFromPoint", {
+    configurable: true,
+    value: () => [rowAt(over)],
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+    DOMRect.fromRect({ x: 0, y: 0, width: 200, height: 24 })
+  );
+  const moveTo = (clientY: number) =>
+    act(() => {
+      fireEvent.mouseMove(document, { clientX: 10, clientY });
+    });
+  const release = () =>
+    act(() => {
+      fireEvent.mouseUp(document);
+    });
+  return {
+    // Pressed at y 12, so a point there again moves nothing.
+    lift(path: string) {
+      fireEvent.mouseDown(rowAt(path), { button: 0, clientX: 10, clientY: 12 });
+      moveTo(1);
+    },
+    point(path: string, clientY: number) {
+      over = path;
+      moveTo(clientY);
+    },
+    mark: () => document.querySelector("[data-tree-drop]")?.getAttribute("data-tree-drop") ?? null,
+    drop: release,
+    // Ends a drag an assertion stopped midway, so its listeners don't
+    // swallow the next test's clicks, then outwaits dnd-kit's 50ms click guard.
+    async end() {
+      release();
+      Reflect.deleteProperty(document, "elementsFromPoint");
+      await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+    },
+  };
+}
 
 describe("ObjectInspector", () => {
   const response = {
