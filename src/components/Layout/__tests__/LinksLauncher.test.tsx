@@ -4,8 +4,10 @@ import { StrictMode, useSyncExternalStore } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { DeclaredProjectLink, ProjectLink } from "@shared/types";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
-import type { ForgeCheckRun } from "@shared/types/ipc/forge";
-import type { LauncherPullRequest } from "@/hooks/useLinksLauncher";
+import type { DeploymentTarget } from "@shared/types/forge";
+import type { ForgeCheckRun, ForgeDeployment } from "@shared/types/ipc/forge";
+import type { LauncherDeploymentTarget, LauncherPullRequest } from "@/hooks/useLinksLauncher";
+import type { LauncherDeployments } from "../LinksLauncherDeployments";
 import type { GlobalLink } from "@/store/globalLinksStore";
 import { primeRadix } from "@/components/ui/radix-loader";
 
@@ -29,6 +31,12 @@ const h = vi.hoisted(() => ({
   getChecks: vi.fn<(cwd: string, prNumber: number) => Promise<{ checks: ForgeCheckRun[] } | null>>(
     () => Promise.resolve({ checks: [] })
   ),
+  /** Where deployments are read while the launcher shows no pull request. */
+  branchTarget: null as LauncherDeploymentTarget | null,
+  getDeployments: vi.fn<
+    (cwd: string, target: DeploymentTarget) => Promise<{ deployments: ForgeDeployment[] } | null>
+  >(() => Promise.resolve({ deployments: [] })),
+  openUrlExternally: vi.fn<(url: string, logPrefix: string) => void>(),
   listeners: new Set<() => void>(),
   restart: vi.fn((_target: unknown) => Promise.resolve()),
   stop: vi.fn((_target: unknown) => Promise.resolve()),
@@ -47,6 +55,13 @@ function setLinks(next: typeof h.links): void {
 /** Replace the active worktree's pull request, as a selection or a PR poll would. */
 function setPullRequest(next: LauncherPullRequest | null): void {
   h.pullRequest = next;
+  notify();
+}
+
+/** Replace the active worktree's pull request and branch together, as a selection would. */
+function select(pullRequest: LauncherPullRequest | null, branch: LauncherDeploymentTarget | null) {
+  h.pullRequest = pullRequest;
+  h.branchTarget = branch;
   notify();
 }
 
@@ -88,6 +103,7 @@ vi.mock("@/hooks", () => ({
 vi.mock("../ToolbarContextMenuItems", () => ({ ToolbarContextMenuItems: () => null }));
 vi.mock("@/services/openLinkUrl", () => ({
   openLinkUrl: (url: string) => h.openLinkUrl(url),
+  openUrlExternally: (url: string, logPrefix: string) => h.openUrlExternally(url, logPrefix),
   opensInPanel: (url: string) => url.startsWith("http://localhost"),
 }));
 vi.mock("@/components/Terminal/contentGridFocus", () => ({
@@ -101,6 +117,20 @@ vi.mock("@/hooks/useLinksLauncher", async () => {
   return {
     useLinksLauncherLinks: () => useSyncExternalStore(subscribe, () => h.links),
     useLinksLauncherPullRequest: () => useSyncExternalStore(subscribe, () => h.pullRequest),
+    // The real hook's contract: the pull request it is handed, else the branch.
+    useLinksLauncherDeploymentTarget: (pullRequest: LauncherPullRequest | null) => {
+      const branch = useSyncExternalStore(subscribe, () => h.branchTarget);
+      if (pullRequest === null) return branch;
+      return {
+        worktreeId: pullRequest.worktreeId,
+        worktreePath: pullRequest.worktreePath,
+        worktreeLabel: pullRequest.worktreeLabel,
+        providerId: pullRequest.providerId,
+        kind: "pullRequest",
+        prNumber: pullRequest.number,
+        prUrl: pullRequest.url,
+      };
+    },
     hasLauncherLinks: (l: typeof h.links) =>
       l.projectLinks.length > 0 || l.declaredLinks.length > 0 || l.globalLinks.length > 0,
   };
@@ -108,6 +138,7 @@ vi.mock("@/hooks/useLinksLauncher", async () => {
 vi.mock("@/clients/forgeClient", () => ({
   forgeClient: {
     getChecks: (cwd: string, prNumber: number) => h.getChecks(cwd, prNumber),
+    getDeployments: (cwd: string, target: DeploymentTarget) => h.getDeployments(cwd, target),
   },
 }));
 vi.mock("@/components/Worktree/ReviewHub/usePullRequestTerm", () => ({
@@ -131,12 +162,13 @@ vi.mock("@/store/scratchStore", () => ({
 }));
 
 const {
+  LinksLauncherList,
   LinksLauncherToolbarButton,
   LinksLauncherDetachedHost,
   LinksLauncherOverflowItems,
   closeLinksLauncherForHiddenButton,
 } = await import("../LinksLauncher");
-const { useLinksLauncherStore } = await import("@/store/linksLauncherStore");
+const { openLinksLauncher, useLinksLauncherStore } = await import("@/store/linksLauncherStore");
 const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } =
   await import("@/components/ui/dropdown-menu");
 
@@ -225,6 +257,10 @@ beforeEach(() => {
   h.pullRequest = null;
   h.getChecks.mockReset();
   h.getChecks.mockImplementation(() => Promise.resolve({ checks: [] }));
+  h.branchTarget = null;
+  h.getDeployments.mockReset();
+  h.getDeployments.mockImplementation(() => Promise.resolve({ deployments: [] }));
+  h.openUrlExternally.mockClear();
   Reflect.set(window, "electron", { devPreview: { restart: h.restart, stop: h.stop } });
   useLinksLauncherStore.setState({
     opening: null,
@@ -237,6 +273,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 describe("links launcher button", () => {
@@ -1018,6 +1055,339 @@ describe("the active worktree's pull request in the launcher", () => {
       name: "Merge request !42",
       description: "MR !42 · Merged",
     });
+  });
+});
+
+/** The branch the pull request was opened from. */
+const LOGIN_BRANCH: LauncherDeploymentTarget = {
+  worktreeId: "wt-1",
+  worktreePath: "/repo/wt-1",
+  worktreeLabel: "feature/login",
+  providerId: "github.github",
+  kind: "branch",
+  branch: "feature/login",
+};
+const BRANCH_DEPLOYMENTS: LauncherDeploymentTarget = {
+  worktreeId: "wt-2",
+  worktreePath: "/repo/wt-2",
+  worktreeLabel: "feature/signup",
+  providerId: "github.github",
+  kind: "branch",
+  branch: "feature/signup",
+};
+const SIGNUP_PREVIEW: ForgeDeployment = {
+  id: "d9",
+  environment: "Preview",
+  state: "success",
+  url: "https://signup.example.dev/",
+  createdAt: 9_000,
+  updatedAt: 9_000,
+};
+const DEPLOYMENTS: ForgeDeployment[] = [
+  {
+    id: "d3",
+    environment: "Preview",
+    state: "in_progress",
+    createdAt: 3_000,
+    updatedAt: 3_000,
+  },
+  {
+    id: "d2",
+    environment: "Storybook",
+    state: "success",
+    url: "https://storybook-git-login.example.dev/?path=/docs",
+    createdAt: 2_000,
+    updatedAt: 2_000,
+  },
+  {
+    id: "d1",
+    environment: "Preview",
+    state: "success",
+    url: "https://app-git-login.example.dev/",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  },
+];
+
+describe("the active worktree's deployments in the launcher", () => {
+  async function openLauncher() {
+    render(<LinksLauncherToolbarButton />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+  }
+
+  function deploymentRows(): string[] {
+    const section = Array.from(launcher()?.querySelectorAll("section") ?? []).find((node) =>
+      node.querySelector("h2")?.textContent?.startsWith("Deployments")
+    );
+    return Array.from(section?.querySelectorAll("li") ?? []).map((li) => {
+      const button = li.querySelector("button");
+      if (button === null) return `${li.textContent} (no link)`;
+      const { name, description } = describeRow(button);
+      return `${name}: ${description}`;
+    });
+  }
+
+  it("lists each environment after the pull request, opening its address in the system browser", async () => {
+    h.pullRequest = PR;
+    h.getDeployments.mockResolvedValue({ deployments: DEPLOYMENTS });
+    h.devSessions.sessions = [devSession()];
+    await openLauncher();
+
+    expect(headings()).toEqual([
+      "Project links",
+      "Your links",
+      "Pull request feature/login",
+      "Deployments feature/login",
+      "Dev servers",
+    ]);
+    expect(h.getDeployments).toHaveBeenCalledTimes(1);
+    expect(h.getDeployments).toHaveBeenCalledWith("/repo/wt-1", {
+      kind: "pullRequest",
+      prNumber: 42,
+    });
+    expect(deploymentRows()).toEqual([
+      "PreviewDeploying (no link)",
+      "Storybook: Deployed · storybook-git-login.example.dev",
+    ]);
+
+    const storybook = Array.from(launcher()!.querySelectorAll("button")).find(
+      (button) => describeRow(button).name === "Storybook"
+    )!;
+    await act(async () => {
+      fireEvent.click(storybook, { detail: 1 });
+    });
+    await flush();
+    expect(h.openUrlExternally).toHaveBeenCalledWith(
+      "https://storybook-git-login.example.dev/?path=/docs",
+      expect.any(String)
+    );
+    expect(h.openLinkUrl).not.toHaveBeenCalled();
+    expect(launcher()).toBeNull();
+  });
+
+  it("reads once per opening, never while closed, and once for the host that opened under StrictMode", async () => {
+    h.branchTarget = BRANCH_DEPLOYMENTS;
+    render(
+      <StrictMode>
+        <LinksLauncherToolbarButton />
+        <LinksLauncherDetachedHost />
+      </StrictMode>
+    );
+    await flush();
+    expect(h.getDeployments).not.toHaveBeenCalled();
+
+    const button = screen.getByRole("button", { name: "Links" });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await flush();
+    expect(h.getDeployments).toHaveBeenCalledTimes(1);
+    expect(h.getDeployments).toHaveBeenCalledWith("/repo/wt-2", {
+      kind: "branch",
+      branch: "feature/signup",
+    });
+
+    await act(async () => {
+      useLinksLauncherStore.getState().open("button");
+    });
+    await flush();
+    expect(h.getDeployments).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await flush();
+    expect(h.getDeployments).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows nothing for a worktree with nothing deployed", async () => {
+    h.pullRequest = PR;
+    await openLauncher();
+    expect(h.getDeployments).toHaveBeenCalledTimes(1);
+    expect(headings()).toEqual(["Project links", "Your links", "Pull request feature/login"]);
+  });
+
+  it("holds the prompt to add a link until a branch's deployments are read", async () => {
+    const answer = deferred<{ deployments: ForgeDeployment[] } | null>();
+    h.getDeployments.mockImplementationOnce(() => answer.promise);
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
+    h.branchTarget = BRANCH_DEPLOYMENTS;
+    await openLauncher();
+    expect(within(launcher()!).queryByRole("button", { name: "Add a project link" })).toBeNull();
+
+    await act(async () => {
+      answer.resolve({ deployments: DEPLOYMENTS });
+    });
+    await flush();
+    expect(headings()).toEqual(["Deployments feature/signup"]);
+    expect(within(launcher()!).queryByRole("button", { name: "Add a project link" })).toBeNull();
+  });
+
+  it("names the next step once a branch turns out to have nothing deployed", async () => {
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
+    h.branchTarget = BRANCH_DEPLOYMENTS;
+    await openLauncher();
+    expect(h.getDeployments).toHaveBeenCalledTimes(1);
+    expect(headings()).toEqual([]);
+    expect(within(launcher()!).getByRole("button", { name: "Add a project link" })).toBeTruthy();
+  });
+
+  it("says when the deployments couldn't be read, keeping everything else", async () => {
+    h.pullRequest = PR;
+    h.getDeployments.mockRejectedValue(new Error("rate limited"));
+    await openLauncher();
+    expect(within(launcher()!).getByText("Couldn't load deployments")).toBeTruthy();
+    expect(headings()).toEqual([
+      "Project links",
+      "Your links",
+      "Pull request feature/login",
+      "Deployments feature/login",
+    ]);
+  });
+
+  it("switches with the active worktree, keeping a late answer for the one before off it", async () => {
+    for (const settleLate of ["resolve", "reject"] as const) {
+      const first = deferred<{ deployments: ForgeDeployment[] } | null>();
+      h.getDeployments.mockReset();
+      h.getDeployments.mockImplementationOnce(() => first.promise);
+      h.getDeployments.mockImplementationOnce(() =>
+        Promise.resolve({ deployments: [SIGNUP_PREVIEW] })
+      );
+      h.pullRequest = PR;
+      h.branchTarget = null;
+      await openLauncher();
+
+      await act(async () => {
+        select(null, BRANCH_DEPLOYMENTS);
+      });
+      await flush();
+      expect(h.getDeployments).toHaveBeenNthCalledWith(2, "/repo/wt-2", {
+        kind: "branch",
+        branch: "feature/signup",
+      });
+      const signupRows = ["Preview: Deployed · signup.example.dev"];
+      expect(deploymentRows(), settleLate).toEqual(signupRows);
+
+      await act(async () => {
+        if (settleLate === "resolve") first.resolve({ deployments: DEPLOYMENTS });
+        else first.reject(new Error("rate limited"));
+      });
+      await flush();
+      expect(deploymentRows(), settleLate).toEqual(signupRows);
+      expect(within(launcher()!).queryByText("Couldn't load deployments")).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("asks of the branch once the forge says the pull request is gone", async () => {
+    const byPullRequest = deferred<{ deployments: ForgeDeployment[] } | null>();
+    h.getDeployments.mockImplementationOnce(() => byPullRequest.promise);
+    h.getDeployments.mockImplementationOnce(() =>
+      Promise.resolve({ deployments: [SIGNUP_PREVIEW] })
+    );
+    h.getChecks.mockResolvedValue(null);
+    h.pullRequest = PR;
+    h.branchTarget = LOGIN_BRANCH;
+    await openLauncher();
+
+    expect(h.getDeployments.mock.calls.map(([, target]) => target)).toEqual([
+      { kind: "pullRequest", prNumber: 42 },
+      { kind: "branch", branch: "feature/login" },
+    ]);
+    expect(headings()).toEqual(["Project links", "Your links", "Deployments feature/login"]);
+    expect(deploymentRows()).toEqual(["Preview: Deployed · signup.example.dev"]);
+
+    await act(async () => {
+      byPullRequest.resolve({ deployments: DEPLOYMENTS });
+    });
+    await flush();
+    expect(deploymentRows()).toEqual(["Preview: Deployed · signup.example.dev"]);
+  });
+
+  it("opens from the palette with only deployments to show", async () => {
+    h.links = { projectLinks: [], declaredLinks: [], globalLinks: [] };
+    h.branchTarget = BRANCH_DEPLOYMENTS;
+    h.getDeployments.mockResolvedValue({ deployments: DEPLOYMENTS });
+    render(<LinksLauncherDetachedHost />);
+    // The palette's route: with no toolbar button on screen it opens detached.
+    await act(async () => {
+      openLinksLauncher();
+    });
+    await flush();
+    expect(useLinksLauncherStore.getState().opening?.origin).toBe("detached");
+    expect(h.getDeployments).toHaveBeenCalledTimes(1);
+    expect(headings()).toEqual(["Deployments feature/signup"]);
+    expect(deploymentRows()).toEqual([
+      "PreviewDeploying (no link)",
+      "Storybook: Deployed · storybook-git-login.example.dev",
+    ]);
+  });
+
+  it("holds a slow read's skeleton through its floor before naming the next step", () => {
+    vi.useFakeTimers();
+    const list = (deployments: LauncherDeployments) => (
+      <LinksLauncherList
+        links={{ projectLinks: [], declaredLinks: [], globalLinks: [] }}
+        pullRequest={null}
+        checks={{ kind: "idle" }}
+        deploymentTarget={BRANCH_DEPLOYMENTS}
+        deployments={deployments}
+        devSessions={{ sessions: [], hydrated: true, fetchError: false }}
+        onOpen={() => {}}
+        onOpenExternal={() => {}}
+        onManage={() => {}}
+      />
+    );
+    const cta = () => screen.queryByRole("button", { name: "Add a project link" });
+    const skeleton = () => screen.queryByRole("status", { name: "Loading deployments" });
+    const answers: LauncherDeployments[] = [{ kind: "loaded", rows: [] }, { kind: "error" }];
+    for (const answer of answers) {
+      const { rerender, unmount } = render(list({ kind: "loading" }));
+      expect(cta()).toBeNull();
+      act(() => vi.advanceTimersByTime(200));
+      expect(skeleton()).not.toBeNull();
+
+      rerender(list(answer));
+      expect(skeleton(), answer.kind).not.toBeNull();
+      expect(cta(), answer.kind).toBeNull();
+
+      act(() => vi.advanceTimersByTime(250));
+      expect(skeleton(), answer.kind).toBeNull();
+      if (answer.kind === "error") {
+        expect(screen.getByText("Couldn't load deployments")).toBeTruthy();
+        expect(cta()).toBeNull();
+      } else {
+        expect(cta()).not.toBeNull();
+      }
+      unmount();
+    }
+  });
+
+  it("keeps the keyboard in the list when the deployment it was on goes away", async () => {
+    h.pullRequest = PR;
+    h.getDeployments.mockResolvedValueOnce({ deployments: DEPLOYMENTS });
+    h.getDeployments.mockImplementation(() => new Promise(() => {}));
+    await openLauncher();
+    const storybook = Array.from(launcher()!.querySelectorAll("button")).find(
+      (button) => describeRow(button).name === "Storybook"
+    )!;
+    act(() => storybook.focus());
+    expect(document.activeElement).toBe(storybook);
+
+    await act(async () => {
+      select(null, BRANCH_DEPLOYMENTS);
+    });
+    await flush();
+
+    expect(storybook.isConnected).toBe(false);
+    expect(describeRow(document.activeElement as HTMLElement).name).toBe("Staging");
+    expect(launcher()).not.toBeNull();
   });
 });
 

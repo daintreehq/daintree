@@ -8,6 +8,7 @@ import { safeDetailsUrl } from "@/components/Worktree/ReviewHub/prChecks";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useWorktreeStore, useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { getWorktreeBranchLabel } from "@/lib/worktreeHeadline";
+import { copyableBranchName } from "@/lib/worktreeFilters";
 import { acquireAllDevSessions, useAllDevSessionsStore } from "@/store/allDevSessionsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -185,6 +186,69 @@ export function useLinksLauncherPullRequest(): LauncherPullRequest | null {
     })
   );
   return pullRequest !== null && pullRequest.providerId === codeProviderId ? pullRequest : null;
+}
+
+/**
+ * What the active worktree's deployments are read for (#17255): its pull
+ * request when the launcher shows one, since a forge can tie deployments to a
+ * pull request that its branch alone doesn't reach, else its checked-out
+ * branch.
+ */
+export type LauncherDeploymentTarget = {
+  worktreeId: string;
+  worktreePath: string;
+  /** The worktree's branch, or its name where it has none to show. */
+  worktreeLabel: string;
+  providerId: string;
+} & (
+  | {
+      kind: "pullRequest";
+      prNumber: number;
+      /** Tells two repositories apart at one path, as the checks read does. */
+      prUrl: string;
+    }
+  | { kind: "branch"; branch: string }
+);
+
+/**
+ * Where to ask the forge about the active worktree's deployments, or `null`
+ * when there is nowhere to ask: no code forge, no remote, a detached HEAD, or
+ * a selection this view doesn't hold. Pass the pull request the launcher
+ * shows, so the two never disagree about which one the worktree has.
+ */
+export function useLinksLauncherDeploymentTarget(
+  pullRequest: LauncherPullRequest | null
+): LauncherDeploymentTarget | null {
+  const codeProviderId = useResolvedForgeProvider(useViewProjectId()).providerId;
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const branch = useWorktreeStore(
+    useShallow((state) => {
+      const worktree = activeWorktreeId ? state.worktrees.get(activeWorktreeId) : undefined;
+      if (!worktree || worktree.hasRemote === false) return null;
+      const name = copyableBranchName(worktree);
+      // Passed on as git has it: a branch can begin with a space-like character.
+      if (name === null || !name.trim()) return null;
+      return {
+        worktreeId: worktree.id,
+        worktreePath: worktree.path,
+        worktreeLabel: getWorktreeBranchLabel(worktree),
+        branch: name,
+      };
+    })
+  );
+  if (pullRequest !== null) {
+    return {
+      worktreeId: pullRequest.worktreeId,
+      worktreePath: pullRequest.worktreePath,
+      worktreeLabel: pullRequest.worktreeLabel,
+      providerId: pullRequest.providerId,
+      kind: "pullRequest",
+      prNumber: pullRequest.number,
+      prUrl: pullRequest.url,
+    };
+  }
+  if (branch === null || codeProviderId === null) return null;
+  return { ...branch, providerId: codeProviderId, kind: "branch" };
 }
 
 /**

@@ -28,15 +28,18 @@ import { enterFocusedPanel } from "@/components/Terminal/contentGridFocus";
 import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
 import {
   hasLauncherLinks,
+  useLinksLauncherDeploymentTarget,
   useLinksLauncherLinks,
   useLinksLauncherPullRequest,
+  type LauncherDeploymentTarget,
   type LauncherPullRequest,
   type LinksLauncherLinks,
 } from "@/hooks/useLinksLauncher";
+import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
-import { opensInPanel, openLinkUrl } from "@/services/openLinkUrl";
+import { opensInPanel, openLinkUrl, openUrlExternally } from "@/services/openLinkUrl";
 import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { useLinksLauncherStore } from "@/store/linksLauncherStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -51,6 +54,12 @@ import {
   summarizeDevServers,
   type DevSessionsSnapshot,
 } from "./LinksLauncherDevServers";
+import {
+  LinksLauncherDeployments,
+  showsDeployments,
+  useLauncherDeployments,
+  type LauncherDeployments,
+} from "./LinksLauncherDeployments";
 import {
   LinksLauncherPullRequest,
   pullRequestFacts,
@@ -104,6 +113,13 @@ const CONTENT_ATTR = "data-links-launcher";
 
 function openLink(url: string): void {
   openLinkUrl(url).catch((error: unknown) => logError("Failed to open link", error));
+}
+
+const LOG_PREFIX = "[LinksLauncher]";
+
+function deploymentSectionKey(target: LauncherDeploymentTarget): string {
+  const ref = target.kind === "pullRequest" ? `pr:${target.prNumber}` : `branch:${target.branch}`;
+  return `${target.worktreeId}:${ref}`;
 }
 
 /**
@@ -195,27 +211,46 @@ function openProjectLinkSettings(): void {
 /**
  * The launcher's list: this project's saved links, then the ones its
  * manifests declare, one section per file, then the person's own, then the
- * active worktree's pull request, then the dev servers across every worktree.
+ * active worktree's pull request and where it is deployed, then the dev
+ * servers across every worktree.
  */
 export function LinksLauncherList({
   links,
   pullRequest,
   checks,
+  deploymentTarget,
+  deployments,
   devSessions,
   onOpen,
+  onOpenExternal,
   onManage,
 }: {
   links: LinksLauncherLinks;
   pullRequest: LauncherPullRequest | null;
   checks: LauncherChecks;
+  deploymentTarget: LauncherDeploymentTarget | null;
+  deployments: LauncherDeployments;
   devSessions: DevSessionsSnapshot;
   onOpen: (url: string) => void;
+  /** Opens in the system browser, whatever the address. */
+  onOpenExternal: (url: string) => void;
   onManage: () => void;
 }) {
   const baseId = useId();
   const { projectLinks, declaredLinks, globalLinks } = links;
   const shownPullRequest = showsPullRequest(pullRequest, checks) ? pullRequest : null;
-  if (!hasLauncherLinks(links) && shownPullRequest === null && !hasDevServersSection(devSessions)) {
+  const deploymentSkeleton = useSkeletonFloor(useSkeletonGate(deployments.kind === "loading"));
+  // Still being read, or shown: either way the prompt to add a link would be
+  // premature, since the answer may be all the launcher has to show.
+  const holdsDeployments =
+    deploymentTarget !== null &&
+    (deployments.kind === "loading" || showsDeployments(deployments, deploymentSkeleton));
+  if (
+    !hasLauncherLinks(links) &&
+    shownPullRequest === null &&
+    !holdsDeployments &&
+    !hasDevServersSection(devSessions)
+  ) {
     return (
       <div className="flex flex-col items-start gap-2 p-3">
         <p className="text-xs text-text-secondary">
@@ -287,6 +322,17 @@ export function LinksLauncherList({
           onOpen={onOpen}
         />
       )}
+      {deploymentTarget !== null && (
+        <LinksLauncherDeployments
+          // A section per target, like the pull request's.
+          key={deploymentSectionKey(deploymentTarget)}
+          worktreeLabel={deploymentTarget.worktreeLabel}
+          deployments={deployments}
+          showSkeleton={deploymentSkeleton}
+          sectionId={`${baseId}-deployments`}
+          onOpen={onOpenExternal}
+        />
+      )}
       <LinksLauncherDevServers snapshot={devSessions} sectionId={`${baseId}-dev-servers`} />
     </div>
   );
@@ -308,11 +354,18 @@ function LinksLauncherPopoverContent({
   onCloseAutoFocus: NonNullable<ComponentProps<typeof PopoverContent>["onCloseAutoFocus"]>;
 }) {
   const links = useLinksLauncherLinks();
-  // Read here rather than in their sections, so a server or a check leaving
-  // the list re-runs the focus repair below like a link leaving it does.
+  // Read here rather than in their sections, so a server, a check or a
+  // deployment leaving the list re-runs the focus repair below like a link
+  // leaving it does.
   const devSessions = useAllDevSessions();
   const pullRequest = useLinksLauncherPullRequest();
   const checks = useLauncherPullRequestChecks(pullRequest, seq);
+  // Asked of the pull request the list shows: once the forge says it is gone,
+  // the branch it was opened from may still be deployed.
+  const deploymentTarget = useLinksLauncherDeploymentTarget(
+    showsPullRequest(pullRequest, checks) ? pullRequest : null
+  );
+  const deployments = useLauncherDeployments(deploymentTarget, seq);
   const close = useLinksLauncherStore((s) => s.close);
   const contentRef = useRef<HTMLDivElement>(null);
   // The control inside that last held focus. Kept through its removal, which
@@ -353,10 +406,16 @@ function LinksLauncherPopoverContent({
         links={links}
         pullRequest={pullRequest}
         checks={checks}
+        deploymentTarget={deploymentTarget}
+        deployments={deployments}
         devSessions={devSessions}
         onOpen={(url) => {
           close(seq ?? undefined);
           openLink(url);
+        }}
+        onOpenExternal={(url) => {
+          close(seq ?? undefined);
+          openUrlExternally(url, LOG_PREFIX);
         }}
         onManage={() => {
           close(seq ?? undefined);
