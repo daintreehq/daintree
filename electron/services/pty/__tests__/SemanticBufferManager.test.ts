@@ -326,7 +326,10 @@ describe("SemanticBufferManager", () => {
     const manager = new SemanticBufferManager(info);
 
     manager.onData(
-      "\n" + Array.from({ length: 4000 }, (_, i) => `a${i}\r`).join("") + "b".repeat(20_000) + "\rlast"
+      "\n" +
+        Array.from({ length: 4000 }, (_, i) => `a${i}\r`).join("") +
+        "b".repeat(20_000) +
+        "\rlast"
     );
     manager.flush();
 
