@@ -15,6 +15,12 @@ interface FileListCacheEntry {
   shortestOnlyFiles?: string[];
   lastSearchQuery?: string;
   lastSearchCandidates?: number[];
+  /**
+   * Built by the first natural-language search against this listing and
+   * dropped with it, so a project that never resolves a spoken file name never
+   * pays for one.
+   */
+  naturalLanguageIndex?: NaturalLanguageIndex;
 }
 
 /**
@@ -490,65 +496,218 @@ const NL_STOP_WORDS = new Set([
   "this",
 ]);
 
-function splitCamelCase(name: string): string[] {
-  return name
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/([a-zA-Z])([0-9])/g, "$1 $2")
-    .replace(/([0-9])([a-zA-Z])/g, "$1 $2")
-    .split(/[\s_\-./]+/)
-    .filter(Boolean)
-    .map((w) => w.toLowerCase());
+const UNICODE_SPACE = /\s/;
+
+function isWordSeparator(code: number): boolean {
+  if (code < 128) {
+    return code === 32 || (code >= 9 && code <= 13) || code === 95 || code === 45 || code === 46 || code === 47;
+  }
+  return UNICODE_SPACE.test(String.fromCharCode(code));
 }
 
-function scorePathNaturalLanguage(tokens: string[], file: string): number | null {
-  if (tokens.length === 0) return null;
+const isLower = (code: number): boolean => code >= 97 && code <= 122;
+const isUpper = (code: number): boolean => code >= 65 && code <= 90;
+const isDigit = (code: number): boolean => code >= 48 && code <= 57;
 
-  const lastSlash = file.lastIndexOf("/");
-  const basename = file.slice(lastSlash + 1);
-  const nameWithoutExt = basename.replace(/\.[^.]+$/, "");
-  const words = splitCamelCase(nameWithoutExt);
-
-  let matched = 0;
-  for (const token of tokens) {
-    if (
-      words.some(
-        (w) =>
-          w === token ||
-          (token.length >= 3 && w.length >= 3 && (w.startsWith(token) || token.startsWith(w)))
-      )
-    ) {
-      matched++;
+/**
+ * Lowercase words of a name, split at `\s`, `_`, `-`, `.` and `/`, at a
+ * lower-to-upper step (`fooBar`), before the last capital of an acronym that
+ * runs into a word (`HTMLParser`), and between letters and digits (`s3Client`).
+ * ASCII letters only, as the regex passes this replaced did. One scan with no
+ * intermediate strings, because a natural-language index runs it over every
+ * basename in the tree.
+ *
+ * @internal Exported for tests only.
+ */
+export function splitCamelCase(name: string): string[] {
+  const words: string[] = [];
+  let start = 0;
+  for (let i = 0; i <= name.length; i++) {
+    if (i === name.length) {
+      if (i > start) words.push(name.slice(start, i).toLowerCase());
+      break;
+    }
+    const code = name.charCodeAt(i);
+    if (isWordSeparator(code)) {
+      if (i > start) words.push(name.slice(start, i).toLowerCase());
+      start = i + 1;
+      continue;
+    }
+    if (i === start) continue;
+    const prev = name.charCodeAt(i - 1);
+    const boundary =
+      (isLower(prev) && isUpper(code)) ||
+      (isUpper(prev) && isUpper(code) && i + 1 < name.length && isLower(name.charCodeAt(i + 1))) ||
+      ((isLower(prev) || isUpper(prev)) && isDigit(code)) ||
+      (isDigit(prev) && (isLower(code) || isUpper(code)));
+    if (boundary) {
+      words.push(name.slice(start, i).toLowerCase());
+      start = i;
     }
   }
-
-  if (matched === 0) return null;
-  return matched / tokens.length;
+  return words;
 }
 
+function wordMatchesToken(word: string, token: string): boolean {
+  return (
+    word === token ||
+    (token.length >= 3 && word.length >= 3 && (word.startsWith(token) || token.startsWith(word)))
+  );
+}
+
+/**
+ * Every file's basename words, split once per index rather than once per
+ * description. Words are interned: a file holds ids into `vocabulary`, so a
+ * description is compared against each distinct word once, however many files
+ * share it, and the index costs a few bytes per word rather than an array of
+ * strings per file.
+ */
+interface NaturalLanguageIndex {
+  vocabulary: string[];
+  /** File `i`'s word ids are `fileWords[wordStarts[i]]` up to `wordStarts[i + 1]`; none for a directory. */
+  wordStarts: Int32Array;
+  fileWords: Int32Array;
+}
+
+/** The basename less its last extension: `a.test.ts` is `a.test`, `.env` is empty, `Makefile` and `notes.` stay whole. */
+function nameWithoutExtension(file: string): string {
+  const name = file.slice(file.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot !== -1 && dot < name.length - 1 ? name.slice(0, dot) : name;
+}
+
+function buildNaturalLanguageIndex(files: string[]): NaturalLanguageIndex {
+  const vocabulary: string[] = [];
+  const wordIds = new Map<string, number>();
+  const wordStarts = new Int32Array(files.length + 1);
+  let fileWords = new Int32Array(Math.max(16, files.length * 4));
+  let wordCount = 0;
+
+  const append = (wordId: number): void => {
+    if (wordCount === fileWords.length) {
+      const grown = new Int32Array(fileWords.length * 2);
+      grown.set(fileWords);
+      fileWords = grown;
+    }
+    fileWords[wordCount++] = wordId;
+  };
+
+  for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+    wordStarts[fileIdx] = wordCount;
+    const file = files[fileIdx];
+    if (file.endsWith("/")) continue;
+
+    for (const word of splitCamelCase(nameWithoutExtension(file))) {
+      let wordId = wordIds.get(word);
+      if (wordId === undefined) {
+        wordId = vocabulary.push(word) - 1;
+        wordIds.set(word, wordId);
+      }
+      append(wordId);
+    }
+  }
+  wordStarts[files.length] = wordCount;
+
+  return { vocabulary, wordStarts, fileWords: fileWords.slice(0, wordCount) };
+}
+
+/**
+ * The `limit` best files for a description, best first, in the order a stable
+ * sort by score then path length would give them.
+ *
+ * Every file is scored against the same token list, so comparing matched-token
+ * counts orders exactly as comparing `matched / tokens.length` did, without
+ * floating point. The file index is the stability of that sort made explicit:
+ * with it the order is total, and the first `limit` of a total order are the
+ * `limit` smallest, which a bounded heap finds without sorting every match.
+ */
 function pickTopNaturalLanguageMatches(
-  files: string[],
+  entry: FileListCacheEntry,
   description: string,
   limit: number
 ): string[] {
-  const rawTokens = description
+  const tokens = description
     .toLowerCase()
     .split(/\s+/)
     .filter((t) => t.length > 0 && !NL_STOP_WORDS.has(t))
     .flatMap((t) => splitCamelCase(t));
 
-  if (rawTokens.length === 0) return [];
+  if (tokens.length === 0) return [];
 
-  const scored: Array<{ file: string; score: number; pathLen: number }> = [];
-  for (const file of files) {
-    if (file.endsWith("/")) continue;
-    const score = scorePathNaturalLanguage(rawTokens, file);
-    if (score === null) continue;
-    scored.push({ file, score, pathLen: file.length });
+  const index = (entry.naturalLanguageIndex ??= buildNaturalLanguageIndex(entry.files));
+  const { vocabulary, wordStarts, fileWords } = index;
+
+  // A repeated token counts once per occurrence, as it always has: its weight
+  // is how many times the description says it.
+  const tokenWeights = new Map<string, number>();
+  for (const token of tokens) tokenWeights.set(token, (tokenWeights.get(token) ?? 0) + 1);
+  const distinctTokens = [...tokenWeights.keys()];
+  const weights = distinctTokens.map((token) => tokenWeights.get(token)!);
+
+  // `matchesByToken[t]` marks the vocabulary words distinct token `t` matches.
+  const matchesByToken = distinctTokens.map((token) => {
+    const matches = new Uint8Array(vocabulary.length);
+    for (let wordId = 0; wordId < vocabulary.length; wordId++) {
+      if (wordMatchesToken(vocabulary[wordId], token)) matches[wordId] = 1;
+    }
+    return matches;
+  });
+
+  const files = entry.files;
+  const matchedOf = new Int32Array(files.length);
+  const compare = (a: number, b: number): number =>
+    matchedOf[b] - matchedOf[a] || files[a].length - files[b].length || a - b;
+
+  // A max-heap of the best files seen so far: its root is the worst of them.
+  const heap: number[] = [];
+  const siftDown = (): void => {
+    let parent = 0;
+    while (true) {
+      const left = parent * 2 + 1;
+      const right = left + 1;
+      let worst = parent;
+      if (left < heap.length && compare(heap[left], heap[worst]) > 0) worst = left;
+      if (right < heap.length && compare(heap[right], heap[worst]) > 0) worst = right;
+      if (worst === parent) return;
+      [heap[parent], heap[worst]] = [heap[worst], heap[parent]];
+      parent = worst;
+    }
+  };
+
+  for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+    const start = wordStarts[fileIdx];
+    const end = wordStarts[fileIdx + 1];
+    if (start === end) continue;
+
+    let matched = 0;
+    for (let t = 0; t < matchesByToken.length; t++) {
+      const matches = matchesByToken[t];
+      for (let i = start; i < end; i++) {
+        if (matches[fileWords[i]] === 1) {
+          matched += weights[t];
+          break;
+        }
+      }
+    }
+    if (matched === 0) continue;
+    matchedOf[fileIdx] = matched;
+
+    if (heap.length < limit) {
+      let child = heap.push(fileIdx) - 1;
+      while (child > 0) {
+        const parent = (child - 1) >> 1;
+        if (compare(heap[child], heap[parent]) <= 0) break;
+        [heap[parent], heap[child]] = [heap[child], heap[parent]];
+        child = parent;
+      }
+      continue;
+    }
+    if (compare(fileIdx, heap[0]) >= 0) continue;
+    heap[0] = fileIdx;
+    siftDown();
   }
 
-  scored.sort((a, b) => b.score - a.score || a.pathLen - b.pathLen);
-  return scored.slice(0, limit).map((s) => s.file);
+  return heap.sort(compare).map((fileIdx) => files[fileIdx]);
 }
 
 export class FileSearchService {
@@ -590,7 +749,7 @@ export class FileSearchService {
 
       const entry = await this.getFiles(resolvedCwd);
 
-      return pickTopNaturalLanguageMatches(entry.files, payload.description, limit);
+      return pickTopNaturalLanguageMatches(entry, payload.description, limit);
     } catch {
       return [];
     }
@@ -650,6 +809,18 @@ export class FileSearchService {
    */
   getRetainedKeyCount(): number {
     return FILE_LIST_CACHE.size() + FILE_LIST_IN_FLIGHT.size;
+  }
+
+  /**
+   * How many cached indexes carry a natural-language word index, for tests
+   * that check only a spoken-name lookup builds one.
+   */
+  getNaturalLanguageIndexCount(): number {
+    let count = 0;
+    FILE_LIST_CACHE.forEach((entry) => {
+      if (entry.naturalLanguageIndex) count++;
+    });
+    return count;
   }
 
   /**

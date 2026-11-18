@@ -595,6 +595,219 @@ describe("FileSearchService", () => {
       // pathLen. The w.length >= 3 guard suppresses these false positives.
       expect(result[0]).toBe("src/AppLayout.tsx");
     });
+
+    it("keeps exact ties in listing order across the cutoff", async () => {
+      // Every file fits fully and every path is one length, so listing order is
+      // the only thing left to rank them by. The listing is deliberately not
+      // sorted, so neither path nor directory order can stand in for it.
+      const listing = Array.from(
+        { length: 30 },
+        (_, i) => `d${String((i * 7) % 30).padStart(2, "0")}/UserProfile.tsx`
+      );
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, `${listing.join("\0")}\0`);
+
+      const service = await createService();
+      const page = await service.searchNaturalLanguage({
+        cwd: dir,
+        description: "user profile",
+        limit: 20,
+      });
+
+      expect(page).toEqual(listing.slice(0, 20));
+    });
+
+    it("builds its word index on the first lookup only, and drops it with the listing", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "src/UserProfilePanel.tsx\0src/SettingsDialog.tsx\0");
+      const service = await createService();
+
+      await service.search({ cwd: dir, query: "user", limit: 5 });
+      expect(service.getNaturalLanguageIndexCount()).toBe(0);
+
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "user profile" })
+      ).resolves.toEqual(["src/UserProfilePanel.tsx"]);
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "settings dialog" })
+      ).resolves.toEqual(["src/SettingsDialog.tsx"]);
+      expect(service.getNaturalLanguageIndexCount()).toBe(1);
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+
+      service.invalidate(dir);
+      expect(service.getNaturalLanguageIndexCount()).toBe(0);
+      gitClientMock.raw.mockResolvedValue("src/UserProfileView.tsx\0");
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "user profile" })
+      ).resolves.toEqual(["src/UserProfileView.tsx"]);
+    });
+
+    describe("against the per-description scan it replaced", () => {
+      function legacySplit(name: string): string[] {
+        return name
+          .replace(/([a-z])([A-Z])/g, "$1 $2")
+          .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+          .replace(/([a-zA-Z])([0-9])/g, "$1 $2")
+          .replace(/([0-9])([a-zA-Z])/g, "$1 $2")
+          .split(/[\s_\-./]+/)
+          .filter(Boolean)
+          .map((w) => w.toLowerCase());
+      }
+
+      const STOP_WORDS = new Set([
+        "component",
+        "file",
+        "the",
+        "a",
+        "an",
+        "to",
+        "for",
+        "of",
+        "and",
+        "or",
+        "in",
+        "my",
+        "this",
+      ]);
+
+      function legacyRank(files: readonly string[], description: string, limit: number): string[] {
+        const tokens = description
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((t) => t.length > 0 && !STOP_WORDS.has(t))
+          .flatMap((t) => legacySplit(t));
+        if (tokens.length === 0) return [];
+        const scored: Array<{ file: string; score: number; pathLen: number }> = [];
+        for (const file of files) {
+          if (file.endsWith("/")) continue;
+          const words = legacySplit(file.slice(file.lastIndexOf("/") + 1).replace(/\.[^.]+$/, ""));
+          let matched = 0;
+          for (const token of tokens) {
+            if (
+              words.some(
+                (w) =>
+                  w === token ||
+                  (token.length >= 3 &&
+                    w.length >= 3 &&
+                    (w.startsWith(token) || token.startsWith(w)))
+              )
+            ) {
+              matched++;
+            }
+          }
+          if (matched > 0) scored.push({ file, score: matched / tokens.length, pathLen: file.length });
+        }
+        scored.sort((a, b) => b.score - a.score || a.pathLen - b.pathLen);
+        return scored.slice(0, limit).map((s) => s.file);
+      }
+
+      function seededRng(seed: number): () => number {
+        let state = seed >>> 0;
+        return () => {
+          state = (state * 1664525 + 1013904223) >>> 0;
+          return state / 2 ** 32;
+        };
+      }
+
+      const pick = <T,>(rng: () => number, items: readonly T[]): T =>
+        items[Math.floor(rng() * items.length)]!;
+
+      // Few words and few directories, so most files tie on score and many on
+      // path length too, and listing order decides more than one page boundary.
+      const NAME_PARTS = ["User", "Profile", "Panel", "HTML", "Parser", "s3", "Client", "us", "Set"];
+      const JOINERS = ["", "", "_", "-", "."];
+      const DIRS = ["src", "lib", "a/b", "pkg", "src/ui"];
+      const EXTENSIONS = [".ts", ".tsx", ".test.ts", "", "."];
+      const DESCRIPTION_WORDS = [
+        "user",
+        "profile",
+        "panel",
+        "html",
+        "parser",
+        "s3",
+        "client",
+        "us",
+        "set",
+        "settings",
+        "prof",
+        "the",
+        "UserProfile",
+        "file",
+        "x",
+      ];
+
+      function randomListing(rng: () => number, count: number): string[] {
+        const listing: string[] = [];
+        for (let i = 0; i < count; i++) {
+          if (rng() < 0.1) {
+            listing.push(`${pick(rng, DIRS)}/`);
+            continue;
+          }
+          const parts = 1 + Math.floor(rng() * 3);
+          let name = pick(rng, NAME_PARTS);
+          for (let p = 1; p < parts; p++) name += pick(rng, JOINERS) + pick(rng, NAME_PARTS);
+          listing.push(`${pick(rng, DIRS)}/${name}${pick(rng, EXTENSIONS)}`);
+        }
+        return listing;
+      }
+
+      it("ranks every description exactly as before, at every limit", async () => {
+        for (let seed = 1; seed <= 12; seed++) {
+          const rng = seededRng(seed);
+          const listing = randomListing(rng, 300);
+          const dir = makeTempDir();
+          tempDirs.push(dir);
+          gitRepo(dir, `${listing.join("\0")}\0`);
+          const service = await createService();
+          const files = await service.listFiles(dir);
+
+          for (let q = 0; q < 15; q++) {
+            const words = 1 + Math.floor(rng() * 4);
+            const description = Array.from({ length: words }, () => pick(rng, DESCRIPTION_WORDS)).join(
+              " "
+            );
+            for (const limit of [1, 20, 100]) {
+              const page = await service.searchNaturalLanguage({ cwd: dir, description, limit });
+              expect(page, `seed ${seed} "${description}" limit ${limit}`).toEqual(
+                legacyRank(files, description, limit)
+              );
+            }
+          }
+        }
+      });
+
+      it("splits names into the same words as the regex passes", async () => {
+        const { splitCamelCase } = await import("../FileSearchService.js");
+        const alphabet = [
+          ..."abzABZ09 \t_-./$",
+          " ",
+          " ",
+          "﻿",
+          "　",
+          "é",
+          "É",
+          "İ",
+          "ß",
+          "Σ",
+          "😀",
+        ];
+        const rng = seededRng(7);
+        for (let n = 0; n < 20_000; n++) {
+          let name = "";
+          const length = Math.floor(rng() * 12);
+          for (let i = 0; i < length; i++) name += pick(rng, alphabet);
+          expect(splitCamelCase(name), JSON.stringify(name)).toEqual(legacySplit(name));
+        }
+        for (let code = 0; code <= 0xffff; code++) {
+          const name = `aB${String.fromCharCode(code)}Cd1e`;
+          if (splitCamelCase(name).join(" ") !== legacySplit(name).join(" ")) {
+            expect(splitCamelCase(name), `U+${code.toString(16)}`).toEqual(legacySplit(name));
+          }
+        }
+      });
+    });
   });
 
   describe("cache lifecycle", () => {
