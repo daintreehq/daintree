@@ -10,6 +10,8 @@ import { remotePartitionKeyPrefix } from "../../shared/utils/partitionUtils.js";
 const CACHE_DIR_NAMES = ["Cache", "Code Cache"] as const;
 const DETACHED_MARKER = ".daintree-clearing-";
 const DETACHED_DIR_PATTERN = /^(Cache|Code Cache)\.daintree-clearing-[0-9a-f]+$/;
+/** The tail a whole-partition wipe gives the directory it detaches. */
+const DETACHED_PARTITION_SUFFIX = /\.daintree-clearing-[0-9a-f]{12}$/;
 
 export interface ClearSessionCachesResult {
   /**
@@ -295,7 +297,7 @@ async function wipePartitionDirs(
     // Synchronous with the liveness check: no session can open in between. A
     // directory an earlier wipe detached is removed where it is, so a removal
     // that keeps failing never grows its name past what the filesystem allows.
-    const detached = entry.name.includes(DETACHED_MARKER)
+    const detached = DETACHED_PARTITION_SUFFIX.test(entry.name)
       ? partitionDir
       : `${partitionDir}${DETACHED_MARKER}${randomBytes(6).toString("hex")}`;
     try {

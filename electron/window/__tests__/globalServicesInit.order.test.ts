@@ -1077,12 +1077,15 @@ describe("initGlobalServices task ordering", () => {
       const actions = vi.mocked(startAppMetricsMonitor).mock.calls[0]![0]!;
       vi.mocked(sendToRenderer).mockClear();
 
+      await actions.destroyHiddenWebviews(1);
       await actions.destroyHiddenWebviews(2);
 
-      const push = { name: "window:destroy-hidden-webviews", payload: { tier: 2 } };
+      const push = (tier: 1 | 2) => ({ name: "window:destroy-hidden-webviews", payload: { tier } });
       expect(vi.mocked(sendToRenderer).mock.calls).toEqual([
-        [liveA.browserWindow, CHANNELS.EVENTS_PUSH, push],
-        [liveB.browserWindow, CHANNELS.EVENTS_PUSH, push],
+        [liveA.browserWindow, CHANNELS.EVENTS_PUSH, push(1)],
+        [liveB.browserWindow, CHANNELS.EVENTS_PUSH, push(1)],
+        [liveA.browserWindow, CHANNELS.EVENTS_PUSH, push(2)],
+        [liveB.browserWindow, CHANNELS.EVENTS_PUSH, push(2)],
       ]);
     } finally {
       getStopAppMetricsMonitor()?.();

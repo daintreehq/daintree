@@ -176,8 +176,11 @@ describe("FocusedPanelTracker", () => {
       tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
       tracker.setFocusedWindow(W1);
       tracker.report(10, W1, "p1", { kind: "diff" });
+      tracker.report(20, W2, "p2", { kind: "browser" });
       expect(kindOf(tracker)).toBe("diff");
 
+      tracker.removeWindow(W2);
+      expect(kindOf(tracker)).toBe("diff");
       tracker.removeWindow(W1);
       expect(kindOf(tracker)).toBe("terminal");
     });

@@ -500,6 +500,8 @@ describe("clearRetiredPortalPartitions", () => {
       "browser-remote__studio__-portal",
       "browser-remote___0053tudio_002e_004cocal__-portal",
       "browser-remote__-1fbb310b7169e9__-portal",
+      "browser-remote__-0__-portal",
+      "browser-remote__-1fffffffffffff__-portal",
       `browser-remote__${"a".repeat(64)}__-portal`,
       retiredPortalOf("studio"),
       retiredPortalOf("Studio.Local"),
@@ -541,6 +543,7 @@ describe("clearRetiredPortalPartitions", () => {
       `browser-remote__${"a".repeat(65)}__-portal`,
       "browser-remote___12__-portal",
       "browser-remote__-000000000000001__-portal",
+      "browser-remote__-01__-portal",
       "browser-remote__-1fbb310b7169e9a__-portal",
     ]) {
       expect(isRetiredPortalPartitionDirName(name), name).toBe(false);
