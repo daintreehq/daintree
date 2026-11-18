@@ -18,6 +18,7 @@ import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStor
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerSessionStore, type FleetPickerOwner } from "@/store/fleetPickerSessionStore";
 import type { SemanticSearchMatch, SemanticSearchResult } from "@shared/types";
+import { SEMANTIC_SEARCH_TERMINAL_IDS_MAX } from "@shared/types/ipc/terminal";
 import type { PtyPanelData } from "@shared/types/panel";
 
 // Fallback empty worktree store for hosts that mount the picker without a
@@ -48,6 +49,12 @@ let nextSearchRequestId = 0;
 function issueSearchRequestId(): number {
   nextSearchRequestId += 1;
   return nextSearchRequestId;
+}
+
+// The terminal ids a `searchScopeKey` (a sorted JSON list) names.
+function readSearchScope(key: string): string[] {
+  const scope: unknown = JSON.parse(key);
+  return Array.isArray(scope) ? scope.filter((id): id is string => typeof id === "string") : [];
 }
 
 // A host on an older build answers with the bare match array it always sent,
@@ -333,71 +340,6 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     }
   }, [isOpen, acquired, mode]);
 
-  // One output search for `trimmed`, applied only while `issueId` is still the
-  // latest request. The debounced effect and Retry share it so both obey the
-  // same stale-response guard.
-  const runOutputSearch = useCallback((trimmed: string, issueId: number) => {
-    window.electron.terminal
-      .searchSemanticBuffers(trimmed, false)
-      .then((raw) => {
-        if (currentRequestRef.current !== issueId) return;
-        const result = readOutputSearchResult(raw);
-        const next = new Map<string, SemanticSearchMatch>();
-        for (const m of result.matches) next.set(m.terminalId, m);
-        setSnippetMap(next);
-        setSnippetQuery(trimmed);
-        setSettledOutputSearch({ query: trimmed, complete: result.complete });
-      })
-      .catch(() => {
-        if (currentRequestRef.current !== issueId) return;
-        // Keep what an earlier answer for this query already found; a previous
-        // query's hits are hidden by the `snippetQuery` freshness check anyway.
-        setSettledOutputSearch({ query: trimmed, complete: false });
-      });
-  }, []);
-
-  // Debounced semantic-buffer search with stale-response guarding via the
-  // module-scope monotonic counter. Each request bumps `nextSearchRequestId`
-  // and stores the issued id in `currentRequestRef`; responses whose issued
-  // id no longer matches are dropped.
-  useEffect(() => {
-    if (!isOpen || !acquired) {
-      // Invalidate any in-flight request when the picker closes. A fired-but-
-      // unresolved IPC promise would otherwise call `setSnippetMap` after
-      // close, leaking state into the (potentially still-mounted) component.
-      // Bumping the counter guarantees the late `.then()` sees a stale id.
-      currentRequestRef.current = issueSearchRequestId();
-      return;
-    }
-    const trimmed = deferredQuery.trim();
-    if (trimmed === "") {
-      setSnippetMap(new Map());
-      setSnippetQuery("");
-      setSettledOutputSearch(null);
-      currentRequestRef.current = issueSearchRequestId();
-      return;
-    }
-
-    const issueId = issueSearchRequestId();
-    currentRequestRef.current = issueId;
-
-    const timer = window.setTimeout(() => {
-      // A Retry during the debounce already searched this query.
-      if (currentRequestRef.current !== issueId) return;
-      runOutputSearch(trimmed, issueId);
-    }, SEMANTIC_SEARCH_DEBOUNCE_MS);
-
-    return () => window.clearTimeout(timer);
-  }, [deferredQuery, isOpen, acquired, runOutputSearch]);
-
-  const retryOutputSearch = useCallback(() => {
-    const trimmed = deferredQuery.trim();
-    if (!isOpen || !acquired || trimmed === "") return;
-    const issueId = issueSearchRequestId();
-    currentRequestRef.current = issueId;
-    runOutputSearch(trimmed, issueId);
-  }, [deferredQuery, isOpen, acquired, runOutputSearch]);
-
   const eligibleTerminals = useMemo<PickerTerminal[]>(() => {
     const out: PickerTerminal[] = [];
     for (const id of panelIds) {
@@ -423,6 +365,109 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     for (const t of eligibleTerminals) s.add(t.id);
     return s;
   }, [eligibleTerminals]);
+
+  // A sorted JSON list, so an agent-state change or a reorder among the same
+  // panes is value-equal and neither restarts the debounce nor re-searches,
+  // while a pane joining or leaving the eligible set searches again. An empty
+  // id can't be searched and would fail the whole request, so it stays out.
+  const searchScopeKey = useMemo(
+    () =>
+      JSON.stringify(
+        eligibleTerminals
+          .map((t) => t.id)
+          .filter((id) => id !== "")
+          .sort()
+      ),
+    [eligibleTerminals]
+  );
+
+  // One output search for `trimmed` over `terminalIds`, applied only while
+  // `issueId` is still the latest request. The debounced effect and Retry
+  // share it so both obey the same stale-response guard.
+  const runOutputSearch = useCallback((trimmed: string, terminalIds: string[], issueId: number) => {
+    window.electron.terminal
+      .searchSemanticBuffers(
+        trimmed,
+        false,
+        // Past the cap the host scans everything; rows still read only their own ids.
+        terminalIds.length > SEMANTIC_SEARCH_TERMINAL_IDS_MAX ? undefined : terminalIds
+      )
+      .then((raw) => {
+        if (currentRequestRef.current !== issueId) return;
+        const result = readOutputSearchResult(raw);
+        // An unscoped reply (past the cap) also carries panes outside the picker.
+        const inScope = new Set(terminalIds);
+        const next = new Map<string, SemanticSearchMatch>();
+        for (const m of result.matches) if (inScope.has(m.terminalId)) next.set(m.terminalId, m);
+        setSnippetMap(next);
+        setSnippetQuery(trimmed);
+        setSettledOutputSearch({ query: trimmed, complete: result.complete });
+      })
+      .catch(() => {
+        if (currentRequestRef.current !== issueId) return;
+        // Keep what an earlier answer for this query already found; a previous
+        // query's hits are hidden by the `snippetQuery` freshness check anyway.
+        setSettledOutputSearch({ query: trimmed, complete: false });
+      });
+  }, []);
+
+  // Debounced semantic-buffer search with stale-response guarding via the
+  // module-scope monotonic counter. Each request bumps `nextSearchRequestId`
+  // and stores the issued id in `currentRequestRef`; responses whose issued
+  // id no longer matches are dropped. Only the panes the picker can show are
+  // scanned, so other projects' shards and buffers stay untouched.
+  useEffect(() => {
+    if (!isOpen || !acquired) {
+      // Invalidate any in-flight request when the picker closes. A fired-but-
+      // unresolved IPC promise would otherwise call `setSnippetMap` after
+      // close, leaking state into the (potentially still-mounted) component.
+      // Bumping the counter guarantees the late `.then()` sees a stale id.
+      currentRequestRef.current = issueSearchRequestId();
+      return;
+    }
+    const trimmed = deferredQuery.trim();
+    const terminalIds = readSearchScope(searchScopeKey);
+    if (trimmed === "" || terminalIds.length === 0) {
+      setSnippetMap(new Map());
+      setSnippetQuery(trimmed);
+      // With no pane to search, nothing matched and nothing went unsearched.
+      setSettledOutputSearch(trimmed === "" ? null : { query: trimmed, complete: true });
+      currentRequestRef.current = issueSearchRequestId();
+      return;
+    }
+
+    // A pane that left the scope drops its hit, so one that rejoins (a restart
+    // under the same id) waits for the search that covers it instead of showing
+    // its previous process's line.
+    setSnippetMap((prev) => {
+      const kept = new Map<string, SemanticSearchMatch>();
+      for (const id of terminalIds) {
+        const hit = prev.get(id);
+        if (hit) kept.set(id, hit);
+      }
+      return kept.size === prev.size ? prev : kept;
+    });
+
+    const issueId = issueSearchRequestId();
+    currentRequestRef.current = issueId;
+
+    const timer = window.setTimeout(() => {
+      // A Retry during the debounce already searched this query.
+      if (currentRequestRef.current !== issueId) return;
+      runOutputSearch(trimmed, terminalIds, issueId);
+    }, SEMANTIC_SEARCH_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [deferredQuery, searchScopeKey, isOpen, acquired, runOutputSearch]);
+
+  const retryOutputSearch = useCallback(() => {
+    const trimmed = deferredQuery.trim();
+    const terminalIds = readSearchScope(searchScopeKey);
+    if (!isOpen || !acquired || trimmed === "" || terminalIds.length === 0) return;
+    const issueId = issueSearchRequestId();
+    currentRequestRef.current = issueId;
+    runOutputSearch(trimmed, terminalIds, issueId);
+  }, [deferredQuery, searchScopeKey, isOpen, acquired, runOutputSearch]);
 
   // Stable identity-and-source key for the Fuse memo. Each eligible terminal
   // contributes its search-relevant projection — id, title, worktreeId — as

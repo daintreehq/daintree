@@ -26,6 +26,7 @@ import type {
   SerializeReadOptions,
   SerializedTerminalSnapshot,
 } from "../../../../shared/types/terminal.js";
+import { SEMANTIC_SEARCH_TERMINAL_IDS_MAX } from "../../../../shared/types/ipc/terminal.js";
 
 type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloadSchema>;
 
@@ -388,13 +389,30 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   const handleTerminalSearchSemanticBuffers = async (
     ctx: IpcContext,
     query: string,
-    isRegex: boolean
+    isRegex: boolean,
+    terminalIds?: string[]
   ): Promise<import("../../../../shared/types/ipc/terminal.js").SemanticSearchResult> => {
     if (typeof query !== "string") {
       throw new Error("Invalid query: must be a string");
     }
     if (typeof isRegex !== "boolean") {
       throw new Error("Invalid isRegex: must be a boolean");
+    }
+    if (terminalIds !== undefined) {
+      if (!Array.isArray(terminalIds)) {
+        throw new Error("Invalid terminal IDs: must be an array");
+      }
+      if (terminalIds.length > SEMANTIC_SEARCH_TERMINAL_IDS_MAX) {
+        throw new Error(
+          `Invalid terminal IDs: maximum ${SEMANTIC_SEARCH_TERMINAL_IDS_MAX} IDs allowed`
+        );
+      }
+      // for…of, not every(): a sparse array's holes must fail too.
+      for (const id of terminalIds) {
+        if (typeof id !== "string" || id.length === 0) {
+          throw new Error("Invalid terminal IDs: each must be a non-empty string");
+        }
+      }
     }
     // Cap query length so a pathological regex can't lock up the pty-host
     // event loop scanning every terminal's buffer. A refused query is a
@@ -404,24 +422,38 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     }
     // A window on another machine searches its own project's terminals only,
     // so one with no project has nothing to search and nothing left unsearched.
-    if (ctx.endpoint?.kind === "remote-view" && ctx.endpoint.projectId === null) {
-      return { matches: [], complete: true };
+    // Its ids are narrowed before the scan, and an older peer that sends none
+    // is scoped to the project's terminals rather than every shard's.
+    const endpoint = ctx.endpoint;
+    const remoteProjectId = endpoint?.kind === "remote-view" ? endpoint.projectId : undefined;
+    if (remoteProjectId === null) return { matches: [], complete: true };
+    const inScope = (id: string) =>
+      !isHostThrowawayTerminalId(id) &&
+      (remoteProjectId === undefined || ptyClient.getTerminalProjectId(id) === remoteProjectId);
+    let scope: Set<string> | undefined;
+    if (terminalIds !== undefined || remoteProjectId !== undefined) {
+      scope = new Set((terminalIds ?? ptyClient.getTrackedTerminalIds()).filter(inScope));
+      if (scope.size === 0) return { matches: [], complete: true };
     }
     try {
-      const result = await ptyClient.searchSemanticBuffersAsync(query, isRegex);
-      const matches = result.matches.filter(
-        (match) => !isHostThrowawayTerminalId(match.terminalId)
+      const result = await ptyClient.searchSemanticBuffersAsync(
+        query,
+        isRegex,
+        scope && [...scope]
       );
-      if (ctx.endpoint?.kind !== "remote-view") return { matches, complete: result.complete };
-      // Read after the search: the view may have been rebound while it ran.
-      const projectId = ctx.endpoint.projectId;
+      // The view may have rebound to another project, or closed, while the shards
+      // scanned. Only the old project's terminals were asked, so the new one's
+      // went unsearched.
+      if (
+        remoteProjectId !== undefined &&
+        (endpoint?.projectId !== remoteProjectId || endpoint.isClosed())
+      ) {
+        return { matches: [], complete: false };
+      }
       return {
-        matches:
-          projectId === null
-            ? []
-            : matches.filter(
-                (match) => ptyClient.getTerminalProjectId(match.terminalId) === projectId
-              ),
+        matches: result.matches.filter(
+          (match) => inScope(match.terminalId) && (!scope || scope.has(match.terminalId))
+        ),
         complete: result.complete,
       };
     } catch (error) {

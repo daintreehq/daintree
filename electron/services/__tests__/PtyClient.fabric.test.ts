@@ -1589,6 +1589,128 @@ describe("PtyClient fabric", () => {
     });
   });
 
+  describe("semantic search scope (#17516)", () => {
+    const twoProjects = () => {
+      const client = createFabricClient();
+      client.spawn("a1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("a2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("a3", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("b1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      const shardA = projectShard("project-a");
+      const shardB = projectShard("project-b");
+      shardA.child.emit("message", { type: "ready" });
+      shardB.child.emit("message", { type: "ready" });
+      return { client, shardA, shardB };
+    };
+
+    it("asks only the owning shard, for only the requested terminals", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.searchSemanticBuffersAsync("done", false, ["a1", "a2"]);
+
+      const requests = messagesOfType(shardA.child, "search-semantic-buffers");
+      expect(requests).toEqual([
+        expect.objectContaining({ query: "done", isRegex: false, terminalIds: ["a1", "a2"] }),
+      ]);
+      expect(messagesOfType(shardB.child, "search-semantic-buffers")).toHaveLength(0);
+      expect(messagesOfType(defaultShard().child, "search-semantic-buffers")).toHaveLength(0);
+
+      const matches = [
+        { terminalId: "a1", line: "build done", matchStart: 6, matchEnd: 10 },
+        { terminalId: "a2", line: "tests done", matchStart: 6, matchEnd: 10 },
+      ];
+      shardA.child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requests[0].requestId,
+        matches,
+      });
+      await expect(promise).resolves.toEqual({ matches, complete: true });
+      client.dispose();
+    });
+
+    it("splits a scope that spans projects into one request per owning shard", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.searchSemanticBuffersAsync("done", false, ["b1", "a1", "a3"]);
+
+      const requestsA = messagesOfType(shardA.child, "search-semantic-buffers");
+      const requestsB = messagesOfType(shardB.child, "search-semantic-buffers");
+      expect(requestsA).toEqual([expect.objectContaining({ terminalIds: ["a1", "a3"] })]);
+      expect(requestsB).toEqual([expect.objectContaining({ terminalIds: ["b1"] })]);
+      const [requestA] = requestsA;
+      const [requestB] = requestsB;
+      expect(messagesOfType(defaultShard().child, "search-semantic-buffers")).toHaveLength(0);
+
+      const fromA = { terminalId: "a3", line: "a done", matchStart: 2, matchEnd: 6 };
+      const fromB = { terminalId: "b1", line: "b done", matchStart: 2, matchEnd: 6 };
+      shardA.child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requestA.requestId,
+        matches: [fromA],
+      });
+      shardB.child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requestB.requestId,
+        matches: [fromB],
+      });
+      const { matches: merged, complete } = await promise;
+      expect(merged).toHaveLength(2);
+      expect(merged).toEqual(expect.arrayContaining([fromA, fromB]));
+      expect(complete).toBe(true);
+      client.dispose();
+    });
+
+    it("sends nothing for an empty scope", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      await expect(client.searchSemanticBuffersAsync("done", false, [])).resolves.toEqual({
+        matches: [],
+        complete: true,
+      });
+
+      for (const child of [shardA.child, shardB.child, defaultShard().child]) {
+        expect(messagesOfType(child, "search-semantic-buffers")).toHaveLength(0);
+      }
+      client.dispose();
+    });
+
+    it("skips a shard that is not ready, as the unscoped fan-out does, and says so", async () => {
+      const client = createFabricClient();
+      client.spawn("a1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("b1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      projectShard("project-a").child.emit("message", { type: "ready" });
+
+      const promise = client.searchSemanticBuffersAsync("done", false, ["a1", "b1"]);
+
+      const requests = messagesOfType(projectShard("project-a").child, "search-semantic-buffers");
+      expect(requests).toEqual([expect.objectContaining({ terminalIds: ["a1"] })]);
+      expect(messagesOfType(projectShard("project-b").child, "search-semantic-buffers")).toEqual(
+        []
+      );
+      projectShard("project-a").child.emit("message", {
+        type: "semantic-search-result",
+        requestId: requests[0].requestId,
+        matches: [],
+      });
+      // b1's output went unsearched, so no match there is not evidence of none.
+      await expect(promise).resolves.toEqual({ matches: [], complete: false });
+      client.dispose();
+    });
+
+    it("still scans every ready shard when no scope is given", () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      void client.searchSemanticBuffersAsync("done", false);
+
+      for (const child of [shardA.child, shardB.child, defaultShard().child]) {
+        const [request] = messagesOfType(child, "search-semantic-buffers");
+        expect(request).toBeDefined();
+        expect(request).not.toHaveProperty("terminalIds");
+      }
+      client.dispose();
+    });
+  });
+
   describe("cross-shard aggregation", () => {
     it("merges memory rollups across shards", async () => {
       const client = createFabricClient();
