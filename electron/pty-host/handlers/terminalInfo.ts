@@ -1,4 +1,5 @@
 import type { AgentId } from "../../../shared/types/agent.js";
+import type { PtyHostTerminalStatusFields } from "../../../shared/types/pty-host.js";
 import { isDetectableAgentId } from "../../services/ProcessDetector/registries.js";
 import { readPtyDimension } from "../../services/pty/TerminalProcess.js";
 import type { HostContext } from "./types.js";
@@ -122,4 +123,27 @@ export function mapTerminalInfo(
         ? undefined
         : ctx.ptyManager.getSubmission(t.id, submissionToken),
   };
+}
+
+/**
+ * The projection a `get-terminal-status-fields` query answers with (#17809):
+ * plain fields off the record and nothing else. Unlike {@link mapTerminalInfo}
+ * it never touches the pty handle, so a status read of many live terminals
+ * costs no native grid reads.
+ */
+export function mapTerminalStatusFields(
+  t: NonNullable<TerminalInfoLike>,
+  ctx: HostContext,
+  submissionToken?: string
+): PtyHostTerminalStatusFields {
+  const fields: PtyHostTerminalStatusFields = {
+    id: t.id,
+    projectId: t.projectId,
+    lastOutputChangeAt: t.lastOutputChangeAt,
+    lastTypedInputAt: t.lastTypedInputAt,
+  };
+  if (submissionToken !== undefined) {
+    fields.submission = ctx.ptyManager.getSubmission(t.id, submissionToken);
+  }
+  return fields;
 }

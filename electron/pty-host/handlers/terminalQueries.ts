@@ -2,7 +2,8 @@ import { stripAnsi } from "../../services/pty/AgentPatternDetector.js";
 import { toHostSnapshot } from "../index.js";
 import type { SemanticSearchMatch } from "../../../shared/types/ipc/terminal.js";
 import type { HandlerMap, HostContext } from "./types.js";
-import { mapTerminalInfo } from "./terminalInfo.js";
+import type { PtyHostTerminalStatusFields } from "../../../shared/types/pty-host.js";
+import { mapTerminalInfo, mapTerminalStatusFields } from "./terminalInfo.js";
 import { findCaseInsensitiveLiteral } from "./caseInsensitiveLiteralMatch.js";
 
 export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
@@ -48,6 +49,21 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
         // the unconditional projection.
         terminal: terminal ? mapTerminalInfo(terminal, ctx, msg.submissionToken) : null,
       });
+    },
+
+    "get-terminal-status-fields": (msg) => {
+      // A malformed list reads nothing rather than throwing the whole query away.
+      const ids: unknown[] = Array.isArray(msg.ids) ? msg.ids : [];
+      const token = typeof msg.submissionToken === "string" ? msg.submissionToken : undefined;
+      const seen = new Set<string>();
+      const terminals: PtyHostTerminalStatusFields[] = [];
+      for (const id of ids) {
+        if (typeof id !== "string" || seen.has(id)) continue;
+        seen.add(id);
+        const terminal = ptyManager.getTerminal(id);
+        if (terminal) terminals.push(mapTerminalStatusFields(terminal, ctx, token));
+      }
+      sendEvent({ type: "terminal-status-fields", requestId: msg.requestId, terminals });
     },
 
     "get-available-terminals": (msg) => {

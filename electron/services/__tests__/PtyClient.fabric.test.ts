@@ -1980,6 +1980,260 @@ describe("PtyClient fabric", () => {
     });
   });
 
+  describe("status field lookup (#17809)", () => {
+    const REQUEST = "get-terminal-status-fields";
+    // Under the client's pending-spawn cap, with room for project-b's terminal.
+    const LARGE = 240;
+    const answer = (
+      child: MockUtilityProcess,
+      request: Record<string, unknown>,
+      terminals: Array<Record<string, unknown>>
+    ) => {
+      child.emit("message", {
+        type: "terminal-status-fields",
+        requestId: request.requestId,
+        terminals,
+      });
+    };
+    const settled = <T>(promise: Promise<T>) => {
+      const state: { done: boolean; error?: unknown } = { done: false };
+      promise.then(
+        () => {
+          state.done = true;
+        },
+        (error: unknown) => {
+          state.done = true;
+          state.error = error ?? new Error("rejected");
+        }
+      );
+      return state;
+    };
+
+    const twoProjects = (opts: { readyB?: boolean } = {}) => {
+      const client = createFabricClient();
+      for (let i = 0; i < LARGE; i++) {
+        client.spawn(`a${i}`, { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      }
+      client.spawn("b1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      const shardA = projectShard("project-a");
+      const shardB = projectShard("project-b");
+      shardA.child.emit("message", { type: "ready" });
+      if (opts.readyB !== false) shardB.child.emit("message", { type: "ready" });
+      return { client, shardA, shardB };
+    };
+
+    it("reads a large selection on one shard with a single request", async () => {
+      const { client, shardA, shardB } = twoProjects();
+      const ids = Array.from({ length: LARGE }, (_, i) => `a${i}`);
+
+      const promise = client.getTerminalStatusFieldsAsync(ids);
+
+      const requests = messagesOfType(shardA.child, REQUEST);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ ids });
+      expect(requests[0]).not.toHaveProperty("submissionToken");
+      expect(messagesOfType(shardB.child, REQUEST)).toHaveLength(0);
+      expect(messagesOfType(defaultShard().child, REQUEST)).toHaveLength(0);
+      expect(messagesOfType(shardA.child, "get-terminal")).toHaveLength(0);
+
+      answer(
+        shardA.child,
+        requests[0],
+        ids.map((id) => ({ id, projectId: "project-a", lastOutputChangeAt: 9 }))
+      );
+      const fields = await promise;
+      expect(fields.size).toBe(LARGE);
+      expect(fields.get(`a${LARGE - 1}`)).toEqual({
+        id: `a${LARGE - 1}`,
+        projectId: "project-a",
+        lastOutputChangeAt: 9,
+      });
+      client.dispose();
+    });
+
+    it("splits a mixed selection into one request per owning shard, unknown ids to the default", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.getTerminalStatusFieldsAsync(["b1", "a1", "t-unknown", "a2"], "tok-1");
+
+      const [requestA, ...extraA] = messagesOfType(shardA.child, REQUEST);
+      const [requestB, ...extraB] = messagesOfType(shardB.child, REQUEST);
+      const [requestDefault, ...extraDefault] = messagesOfType(defaultShard().child, REQUEST);
+      expect([extraA, extraB, extraDefault]).toEqual([[], [], []]);
+      expect(requestA).toMatchObject({ ids: ["a1", "a2"], submissionToken: "tok-1" });
+      expect(requestB).toMatchObject({ ids: ["b1"], submissionToken: "tok-1" });
+      expect(requestDefault).toMatchObject({ ids: ["t-unknown"], submissionToken: "tok-1" });
+
+      // No shard is also asked for full records.
+      for (const child of [shardA.child, shardB.child, defaultShard().child]) {
+        expect(messagesOfType(child, "get-terminal")).toHaveLength(0);
+      }
+
+      const recordA = { token: "tok-1", phase: "pty_written", at: 7 };
+      const recordB = { token: "tok-1", phase: "accepted", at: 11 };
+      answer(shardA.child, requestA, [
+        { id: "a1", projectId: "project-a", submission: recordA },
+        // The shard's answer for an id with no record for the token.
+        { id: "a2", projectId: "project-a" },
+      ]);
+      answer(shardB.child, requestB, [{ id: "b1", projectId: "project-b", submission: recordB }]);
+      // The default shard holds no such terminal and leaves it out.
+      answer(defaultShard().child, requestDefault, []);
+
+      const fields = await promise;
+      expect([...fields.keys()].sort()).toEqual(["a1", "a2", "b1"]);
+      expect(fields.get("a1")?.submission).toEqual(recordA);
+      expect(fields.get("a2")?.submission).toBeUndefined();
+      expect(fields.get("b1")?.submission).toEqual(recordB);
+      client.dispose();
+    });
+
+    it("asks once per id however often it is repeated", async () => {
+      const { client, shardA } = twoProjects();
+
+      void client.getTerminalStatusFieldsAsync(["a1", "a1", "a2", "a1"]);
+
+      const requests = messagesOfType(shardA.child, REQUEST);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ ids: ["a1", "a2"] });
+      client.dispose();
+    });
+
+    it("keeps the answering shard's fields when another shard goes away mid-request", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      expect(messagesOfType(shardB.child, REQUEST)).toHaveLength(1);
+      answer(shardA.child, requestA, [{ id: "a1", projectId: "project-a" }]);
+      shardB.child.emit("exit", 1);
+
+      // b1 went unread, so it is missing rather than present and empty.
+      const fields = await promise;
+      expect([...fields.keys()]).toEqual(["a1"]);
+      client.dispose();
+    });
+
+    it("keeps a sibling's fields when a ready shard never answers", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+      const state = settled(promise);
+
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      answer(shardA.child, requestA, [{ id: "a1", projectId: "project-a" }]);
+      expect(messagesOfType(shardB.child, REQUEST)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state.done).toBe(false);
+
+      // The shard broker's own deadline; the silent shard costs only its ids.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(state).toEqual({ done: true });
+      expect([...(await promise).keys()]).toEqual(["a1"]);
+      client.dispose();
+    });
+
+    it("skips a shard still booting without waiting out the deadline", async () => {
+      const { client, shardA, shardB } = twoProjects({ readyB: false });
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+      const state = settled(promise);
+
+      expect(messagesOfType(shardB.child, REQUEST)).toHaveLength(0);
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      answer(shardA.child, requestA, [{ id: "a1", projectId: "project-a" }]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(state.done).toBe(true);
+      expect([...(await promise).keys()]).toEqual(["a1"]);
+      client.dispose();
+    });
+
+    it("skips a shard that is already down without waiting out the deadline", async () => {
+      const { client, shardA, shardB } = twoProjects();
+      shardB.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(0);
+      const postsToB = messagesOfType(shardB.child, REQUEST).length;
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+      const state = settled(promise);
+
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      answer(shardA.child, requestA, [{ id: "a1", projectId: "project-a" }]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(state.done).toBe(true);
+      expect(messagesOfType(shardB.child, REQUEST)).toHaveLength(postsToB);
+      expect([...(await promise).keys()]).toEqual(["a1"]);
+      client.dispose();
+    });
+
+    it("never lets one shard answer for a terminal another shard was asked about", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      const [requestB] = messagesOfType(shardB.child, REQUEST);
+      answer(shardB.child, requestB, [
+        { id: "b1", projectId: "project-b", lastOutputChangeAt: 100 },
+      ]);
+      // A plausible row for b1 from the wrong shard, arriving last.
+      answer(shardA.child, requestA, [
+        { id: "a1", projectId: "project-a" },
+        { id: "b1", projectId: "project-b", lastOutputChangeAt: 999 },
+      ]);
+
+      const fields = await promise;
+      expect(fields.get("b1")?.lastOutputChangeAt).toBe(100);
+      expect([...fields.keys()].sort()).toEqual(["a1", "b1"]);
+      client.dispose();
+    });
+
+    it("leaves a terminal unread when only the wrong shard reports it", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      const [requestB] = messagesOfType(shardB.child, REQUEST);
+      answer(shardA.child, requestA, [
+        { id: "a1", projectId: "project-a" },
+        { id: "b1", projectId: "project-b", lastOutputChangeAt: 999 },
+      ]);
+      answer(shardB.child, requestB, []);
+
+      expect([...(await promise).keys()]).toEqual(["a1"]);
+      client.dispose();
+    });
+
+    it("asks nothing of a retired shard whose host has yet to exit", async () => {
+      const { client } = twoProjects();
+      client.dispose();
+      const before = messagesOfType(defaultShard().child, REQUEST).length;
+
+      const promise = client.getTerminalStatusFieldsAsync(["t-unknown"]);
+      const state = settled(promise);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(state).toEqual({ done: true });
+      expect(messagesOfType(defaultShard().child, REQUEST)).toHaveLength(before);
+      await expect(promise).resolves.toEqual(new Map());
+    });
+
+    it("sends nothing for an empty selection", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      await expect(client.getTerminalStatusFieldsAsync([])).resolves.toEqual(new Map());
+
+      for (const child of [shardA.child, shardB.child, defaultShard().child]) {
+        expect(messagesOfType(child, REQUEST)).toHaveLength(0);
+      }
+      client.dispose();
+    });
+  });
+
   describe("cross-shard aggregation", () => {
     it("merges memory rollups across shards", async () => {
       const client = createFabricClient();

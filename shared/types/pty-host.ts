@@ -440,6 +440,17 @@ export type PtyHostRequest =
   // (#17776); `get-terminals-for-project` stays for callers that need ids only.
   | { type: "get-project-terminals"; projectId: string; requestId: string }
   | { type: "get-terminal"; id: string; requestId: string; submissionToken?: string }
+  /**
+   * The few fields a status read needs, for many terminals in one round trip
+   * (#17809), instead of a full `get-terminal` record per id. An id the shard
+   * holds no record for is left out of the answer.
+   */
+  | {
+      type: "get-terminal-status-fields";
+      ids: string[];
+      requestId: string;
+      submissionToken?: string;
+    }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }
   | { type: "reset-terminal-modes"; id: string; requestId: string }
   | { type: "get-serialized-state"; id: string; requestId: string; tailRows?: number }
@@ -1010,6 +1021,11 @@ export type PtyHostEvent =
   | { type: "terminals-for-project"; requestId: string; terminalIds: string[] }
   | { type: "project-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "terminal-info"; requestId: string; terminal: PtyHostTerminalInfo | null }
+  | {
+      type: "terminal-status-fields";
+      requestId: string;
+      terminals: PtyHostTerminalStatusFields[];
+    }
   | { type: "replay-history-result"; requestId: string; replayed: number }
   | { type: "reset-terminal-modes-result"; requestId: string; reset: boolean }
   | {
@@ -1302,6 +1318,16 @@ export interface OwnedTypedInput {
   owner: string;
   at: number;
 }
+
+/**
+ * What a `get-terminal-status-fields` query answers per terminal. `submission`
+ * is present only when the query named a token, and then absent means the
+ * terminal holds no record for it.
+ */
+export type PtyHostTerminalStatusFields = Pick<
+  PtyHostTerminalInfo,
+  "id" | "projectId" | "lastOutputChangeAt" | "lastTypedInputAt" | "submission"
+>;
 
 /** Terminal info sent from Host → Main for getTerminal queries */
 export interface PtyHostTerminalInfo {
