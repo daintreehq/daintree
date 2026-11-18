@@ -91,33 +91,40 @@ async function nestedGitDirs(commonDir: string, budget: { left: number }): Promi
 }
 
 /**
- * Every git directory of the repository a checkout belongs to, read from disk
- * rather than from any cached worktree list, so a worktree created outside
- * Daintree, or a submodule paused mid-rebase, is covered too.
+ * Every git directory of the repositories these checkouts belong to, read from
+ * disk rather than from any cached worktree list, so a worktree created outside
+ * Daintree, or a submodule paused mid-rebase, is covered too. Linked worktrees
+ * of one repository share its common directory, which is walked once, so the
+ * submodule budget counts each directory once however many of them are passed.
  */
 async function repositoryGitDirs(
-  checkoutPath: string,
-  budget: { left: number }
-): Promise<string[]> {
-  const gitDir = await resolveGitDir(checkoutPath);
-  const commonDir = await resolveCommonDir(gitDir);
-  return [gitDir, ...(await nestedGitDirs(commonDir, budget))];
+  checkoutPaths: readonly string[],
+  missingRepoIsClear: boolean
+): Promise<Set<string>> {
+  const gitDirs = new Set<string>();
+  const commonDirs = new Set<string>();
+  for (const checkoutPath of checkoutPaths) {
+    try {
+      const gitDir = await resolveGitDir(checkoutPath);
+      gitDirs.add(gitDir);
+      commonDirs.add(await resolveCommonDir(gitDir));
+    } catch (error) {
+      if (missingRepoIsClear && isMissing(error)) continue;
+      throw error;
+    }
+  }
+  const budget = { left: MAX_MODULE_DIRS };
+  for (const commonDir of commonDirs) {
+    for (const dir of await nestedGitDirs(commonDir, budget)) gitDirs.add(dir);
+  }
+  return gitDirs;
 }
 
 async function probe(
   checkoutPaths: readonly string[],
   missingRepoIsClear: boolean
 ): Promise<GitSleepSafety> {
-  const gitDirs = new Set<string>();
-  const budget = { left: MAX_MODULE_DIRS };
-  for (const checkoutPath of checkoutPaths) {
-    try {
-      for (const dir of await repositoryGitDirs(checkoutPath, budget)) gitDirs.add(dir);
-    } catch (error) {
-      if (missingRepoIsClear && isMissing(error)) continue;
-      throw error;
-    }
-  }
+  const gitDirs = await repositoryGitDirs(checkoutPaths, missingRepoIsClear);
   for (const gitDir of gitDirs) {
     const entries = new Set(await readdir(gitDir));
     const marker = SLEEP_BLOCKING_MARKERS.find((name) => entries.has(name));
