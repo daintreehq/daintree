@@ -300,27 +300,56 @@ describe("SemanticBufferManager", () => {
     manager.dispose();
   });
 
-  it("keeps the last lines of a newline-heavy 64-KiB burst into an existing buffer", () => {
-    const info = createTerminalInfo({ semanticBuffer: ["earlier"] });
-    const manager = new SemanticBufferManager(info);
+  it("keeps the last lines of a newline-heavy burst, dropping blanks only on the first flush", () => {
+    const burst = "\n" + Array.from({ length: 10_000 }, (_, i) => `l${i}\n`).join("");
+    const lines = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => `l${from + i}`);
 
-    manager.onData("\n" + "x\n".repeat(32 * 1024 - 1));
-    manager.flush();
+    const existing = createTerminalInfo({ semanticBuffer: ["earlier"] });
+    const continuing = new SemanticBufferManager(existing);
+    continuing.onData(burst);
+    continuing.flush();
+    expect(existing.semanticBuffer).toEqual([...lines(9951, 9999), ""]);
 
-    expect(info.semanticBuffer).toEqual([...Array<string>(49).fill("x"), ""]);
+    const fresh = createTerminalInfo();
+    const first = new SemanticBufferManager(fresh);
+    first.onData(burst);
+    first.flush();
+    expect(fresh.semanticBuffer).toEqual(lines(9950, 9999));
 
-    manager.dispose();
+    continuing.dispose();
+    first.dispose();
   });
 
   it("finds the start of a long line that follows a newline-dense run", () => {
     const info = createTerminalInfo({ semanticBuffer: ["earlier"] });
     const manager = new SemanticBufferManager(info);
 
-    manager.onData("\n" + "a\r\n".repeat(9000) + "b".repeat(20_000) + "\r\nlast");
+    manager.onData(
+      "\n" + Array.from({ length: 4000 }, (_, i) => `a${i}\r`).join("") + "b".repeat(20_000) + "\rlast"
+    );
     manager.flush();
 
-    expect(info.semanticBuffer.slice(-3)).toEqual(["a", "b".repeat(1000) + MARKER, "last"]);
-    expect(info.semanticBuffer).toHaveLength(50);
+    expect(info.semanticBuffer).toEqual([
+      ...Array.from({ length: 48 }, (_, i) => `a${3952 + i}`),
+      "b".repeat(1000) + MARKER,
+      "last",
+    ]);
+
+    manager.dispose();
+  });
+
+  it("truncates a break-free continuation that passes the cap after an empty entry", () => {
+    const info = createTerminalInfo({ semanticBuffer: ["done", ""] });
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("z".repeat(1001));
+    manager.flush();
+    expect(info.semanticBuffer).toEqual(["done", "z".repeat(1000) + MARKER]);
+
+    manager.onData("more\nnext");
+    manager.flush();
+    expect(info.semanticBuffer).toEqual(["done", "z".repeat(1000) + MARKER, "next"]);
 
     manager.dispose();
   });
@@ -374,6 +403,10 @@ describe("SemanticBufferManager", () => {
       () => "\n".repeat(between(1, 120)),
       () => "w\r\n".repeat(between(1, 80)),
       () => "v\n".repeat(between(40, 60)),
+      // Two-byte strings, code units whose low byte is LF or CR, a non-break separator, and
+      // surrogate pairs that the cap splits.
+      () => "Ċč ",
+      () => "\u{1f600}".repeat(between(495, 505)),
     ];
     const seeds: Array<() => string[]> = [
       () => [],
@@ -404,6 +437,15 @@ describe("SemanticBufferManager", () => {
       [],
       [["a".repeat(300) + "\r\n" + "b".repeat(1500) + "\r" + "c".repeat(513) + "\n"]]
     );
+    // The onData cap discards the prefix before the retained LF, so the chunk starts a new line.
+    assertMatchesReference(["seed"], [["discard\r", "\nhead\n" + "x".repeat(65_530)]]);
+    // A break at the floor of the scan: the LF right after the continuation's CRLF.
+    assertMatchesReference(["p"], [["q\r\n\n" + "k".repeat(512)]]);
+    // Bare CRs either side of the backward-scan limit and the gallop's window edges.
+    for (const length of [255, 256, 257, 511, 512, 513, 16_383, 16_384, 16_385]) {
+      assertMatchesReference(["earlier"], [["\rhead\r" + "k".repeat(length)]]);
+      assertMatchesReference(["earlier"], [["v\r".repeat(100) + "k".repeat(length) + "\r"]]);
+    }
   });
 
   it("getLastCommand() strips shell prompt prefixes", () => {

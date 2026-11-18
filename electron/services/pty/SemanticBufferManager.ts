@@ -10,9 +10,12 @@ const PENDING_SEMANTIC_DATA_MAX_CHARS = 64 * 1024;
 const LF = 10;
 const CR = 13;
 // Breaks within this distance are found by a plain backward loop. Past it the search switches to
-// indexOf, which V8 runs as memchr: its backward searches, lastIndexOf included, only run at loop
-// speed, so a 64-KiB line would otherwise cost far more to scan than the old split did.
+// LINE_BREAK, which V8 runs at memchr speed on one-byte strings: its backward searches, lastIndexOf
+// included, only run at loop speed, so a 64-KiB line would otherwise cost far more to scan than
+// the old split did. The regex rather than indexOf because indexOf's memchr stops on every
+// two-byte code unit sharing a byte with CR or LF (U+010A, U+4E0D, all of Malayalam).
 const BACKWARD_SCAN_LIMIT = 256;
+const LINE_BREAK = /[\r\n]/;
 
 function capLine(line: string): string {
   if (line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH) {
@@ -30,6 +33,13 @@ function capRange(text: string, start: number, end: number): string {
   return text.slice(start, end);
 }
 
+// Entries outlive the flush. V8 keeps a slice of 13 or more characters as a view into its parent,
+// so a retained line would pin the whole pending chunk, which the onData cap can leave larger than
+// 64 Ki; concatenating and slicing again flattens the line into a string of its own.
+function detach(line: string): string {
+  return (" " + line).slice(1);
+}
+
 function isTruncatedLine(line: string): boolean {
   return (
     line.length === SEMANTIC_BUFFER_MAX_LINE_LENGTH + SEMANTIC_BUFFER_TRUNCATION_MARKER.length &&
@@ -41,17 +51,9 @@ function isLineBreak(code: number): boolean {
   return code === LF || code === CR;
 }
 
-function firstLineBreak(text: string): number {
-  const lf = text.indexOf("\n");
-  // Searching for CR only before the first LF keeps LF-only output from scanning the whole chunk.
-  const cr = (lf === -1 ? text : text.slice(0, lf)).indexOf("\r");
-  return cr === -1 ? lf : cr;
-}
-
-// The slice bounds both searches; indexOf on the whole text could run on to its end.
+// The slice bounds the search; a regex run on the whole text could scan on to its end.
 function hasLineBreak(text: string, start: number, end: number): boolean {
-  const range = text.slice(start, end);
-  return range.indexOf("\n") !== -1 || range.indexOf("\r") !== -1;
+  return LINE_BREAK.test(text.slice(start, end));
 }
 
 function scanBackForLineBreak(text: string, end: number, floor: number): number {
@@ -69,7 +71,7 @@ function lastLineBreak(text: string, end: number, floor: number): number {
 
   // Gallop back through doubling windows to the first that holds a break, then halve it down to
   // the last break in it, keeping a break in [lo, hi) and none in [hi, end).
-  let lo = hi;
+  let lo: number;
   for (let width = BACKWARD_SCAN_LIMIT; ; width *= 2) {
     if (hi === floor) return floor - 1;
     lo = Math.max(floor, hi - width);
@@ -95,7 +97,7 @@ function retainedLines(text: string, start: number, keepEmpty: boolean): string[
   for (;;) {
     const lineBreak = lastLineBreak(text, end, start);
     if (end - lineBreak > 1 || keepEmpty) {
-      lines.push(capRange(text, lineBreak + 1, end));
+      lines.push(detach(capRange(text, lineBreak + 1, end)));
       if (lines.length === SEMANTIC_BUFFER_MAX_LINES) break;
     }
     if (lineBreak < start) break;
@@ -187,7 +189,7 @@ export class SemanticBufferManager {
 
     let restStart = 0;
     if (continuesLastLine) {
-      const firstBreak = firstLineBreak(chunk);
+      const firstBreak = chunk.search(LINE_BREAK);
       // A capped line has already discarded its tail; dropping the continuation keeps it bounded
       // and stops the next fragment from being joined onto the marker.
       if (!isTruncatedLine(last)) {
@@ -196,7 +198,7 @@ export class SemanticBufferManager {
           firstBreak === -1 ? chunk.length : firstBreak,
           SEMANTIC_BUFFER_MAX_LINE_LENGTH + 1
         );
-        terminal.semanticBuffer[lastIndex] = capLine(last + chunk.slice(0, fragmentEnd));
+        terminal.semanticBuffer[lastIndex] = detach(capLine(last + chunk.slice(0, fragmentEnd)));
       }
       restStart =
         firstBreak === -1
