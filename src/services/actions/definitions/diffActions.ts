@@ -73,7 +73,7 @@ const DIFF_ACTIONS: readonly DiffActionSpec[] = [
     command: "toggleViewed",
     title: "Toggle viewed",
     description:
-      "Mark the diff viewer's open file viewed, or clear the mark. With a row of its file list focused, the row's file is marked instead.",
+      "Mark the diff viewer's open file viewed, or clear the mark. Pressed as a key on a row of its file list, it marks that row's file instead.",
     paletteDescription: "Mark the open file viewed, or clear the mark",
     keywords: ["mark viewed", "reviewed"],
   },
@@ -98,8 +98,13 @@ export function registerDiffActions(actions: ActionRegistry, _callbacks: ActionC
       },
       argsSchema,
       run: async (args: unknown, ctx: ActionContext) => {
-        const id = resolveDiffPanelId(argsSchema.parse(args)?.panelId);
-        if (!id) throw new Error("No diff viewer is focused");
+        const explicit = argsSchema.parse(args)?.panelId;
+        const id = resolveDiffPanelId(explicit);
+        if (!id) {
+          throw new Error(
+            explicit ? `Panel ${explicit} isn't a diff viewer` : "No diff viewer is focused"
+          );
+        }
         const delivered = sendDiffCommand({
           id,
           command: spec.command,

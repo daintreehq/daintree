@@ -1570,7 +1570,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "git",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Mark the diff viewer's open file viewed, or clear the mark. With a row of its file list focused, the row's file is marked instead.",
+    "description": "Mark the diff viewer's open file viewed, or clear the mark. Pressed as a key on a row of its file list, it marks that row's file instead.",
     "examples": undefined,
     "id": "diff.toggleViewed",
     "keywords": [

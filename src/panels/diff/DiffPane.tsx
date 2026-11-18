@@ -255,6 +255,16 @@ function buildSubject(
   };
 }
 
+const SCROLL_KEYS: ReadonlySet<string> = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+]);
+
 /** How the pane tells change-set entries apart: a partially staged file's two sides share a Viewed key. */
 function diffEntryIdentity(entry: DiffChangeSetEntry): string {
   return `${entry.side ?? ""}\0${entry.viewedKey}`;
@@ -1345,17 +1355,21 @@ export function DiffPane({
     const paneRoot = paneRootRef.current;
     if (!root) return;
     const release = () => releaseStep();
+    // Only keys that scroll: any other key reaching the panel isn't the reader
+    // moving the view, and a held step key's repeats reach it too (the global
+    // layer consumes the first press and lets repeats by).
+    const releaseOnScrollKey = (event: KeyboardEvent) => {
+      if (SCROLL_KEYS.has(event.key)) releaseStep();
+    };
     root.addEventListener("wheel", release, { passive: true });
     root.addEventListener("touchstart", release, { passive: true });
     root.addEventListener("pointerdown", release);
-    // The step keys are consumed before they reach the panel, so any key that
-    // does is the reader's own (PageDown, Space, an arrow).
-    paneRoot?.addEventListener("keydown", release, { capture: true });
+    paneRoot?.addEventListener("keydown", releaseOnScrollKey, { capture: true });
     return () => {
       root.removeEventListener("wheel", release);
       root.removeEventListener("touchstart", release);
       root.removeEventListener("pointerdown", release);
-      paneRoot?.removeEventListener("keydown", release, { capture: true });
+      paneRoot?.removeEventListener("keydown", releaseOnScrollKey, { capture: true });
     };
   }, []);
   const hasStops = (stopCount ?? 0) > 0;

@@ -1773,6 +1773,31 @@ describe("DiffPane — hunk stepping (#17326)", () => {
     expect(revealed()).toBe(null);
   });
 
+  it("lets only a scrolling key call off a pending landing, not a held step key's repeats", () => {
+    viewerHunkCount.current = 1;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+    pressInPane("p");
+    expectSelected(0);
+    seedAt(0);
+    withContent(undefined);
+    rerender(paneElement());
+
+    // Held down: the global layer consumes the first press and lets repeats by.
+    const root = screen.getByTestId("panel-root");
+    fireEvent.keyDown(root, { key: "p", repeat: true });
+    viewerHunkCount.current = 4;
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(3);
+
+    // PageDown is the reader moving the view: a step in flight goes.
+    pressInPane("p");
+    fireEvent.keyDown(root, { key: "PageDown" });
+    expect(revealed()).toBe(null);
+  });
+
   it("asks the viewer afresh for a step after the reader withdrew the last one", () => {
     viewerHunkCount.current = 3;
     seedSingle();

@@ -125,8 +125,13 @@ describe("diff actions", () => {
     expect(await run("diff.toggleViewed", { panelId: "diff-2" })).toEqual([
       viaApi("diff-2", "toggleViewed"),
     ]);
-    await expect(run("diff.toggleViewed", { panelId: "term-1" })).rejects.toThrow();
-    await expect(run("diff.toggleViewed", { panelId: "gone" })).rejects.toThrow();
+    await expect(run("diff.toggleViewed", { panelId: "term-1" })).rejects.toThrow(
+      "Panel term-1 isn't a diff viewer"
+    );
+    await expect(run("diff.toggleViewed", { panelId: "gone" })).rejects.toThrow(
+      "Panel gone isn't a diff viewer"
+    );
+    expect(received).toEqual([]);
   });
 
   it("refuses rather than report success when no mounted viewer takes the command", async () => {
