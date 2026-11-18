@@ -646,24 +646,39 @@ function createReadyMarkerPlugin() {
   };
 }
 
+async function prepareCanopyReaderModel() {
+  const { fetched } = await canopyReaderModel.prepareModel();
+  if (fetched.length > 0)
+    console.log(`[Build] Fetched Canopy's reader model: ${fetched.join(", ")}`);
+}
+
 /**
  * Canopy's reader model ships inside the app (#16415): fetched once per
  * checkout from its pinned revision, and verified on every build. A build that
- * can't get it fails, since a package without it can't read a screen; a dev
- * watch only warns, so working offline still starts the app.
+ * can't get it fails before building anything, since a package without it
+ * can't read a screen. A dev watch starts building at once and prepares the
+ * model beside it (#17818), so the network never holds the app's launch: the
+ * unpackaged app waits for the model and reads with it only once every file
+ * matches its pin. Resolves once the build has started; `model` settles when
+ * the watch's preparation does, and never rejects.
  */
-async function prepareCanopyReaderModel() {
-  try {
-    const { fetched } = await canopyReaderModel.prepareModel();
-    if (fetched.length > 0)
-      console.log(`[Build] Fetched Canopy's reader model: ${fetched.join(", ")}`);
-  } catch (error) {
-    if (!isWatch) throw error;
-    console.warn(
-      `[Build] Canopy's reader model isn't ready (${error instanceof Error ? error.message : error}). ` +
-        "Canopy reads nothing until `npm run fetch:canopy-model` succeeds."
-    );
+export async function runWithCanopyModel({ watch, prepare, startBuild, warn = console.warn }) {
+  if (!watch) {
+    await prepare();
+    await startBuild();
+    return { model: Promise.resolve() };
   }
+  const building = startBuild();
+  const model = Promise.resolve()
+    .then(prepare)
+    .catch((error) => {
+      warn(
+        `[Build] Canopy's reader model isn't ready (${error instanceof Error ? error.message : error}). ` +
+          "Canopy reads nothing until `npm run fetch:canopy-model` succeeds."
+      );
+    });
+  await building;
+  return { model };
 }
 
 async function run() {
@@ -713,8 +728,7 @@ async function run() {
 
   const sdkConfig = pluginSdkRuntimeBuildConfig({ minify: isProd, absWorkingDir: root });
 
-  try {
-    await prepareCanopyReaderModel();
+  const startBuild = async () => {
     if (isWatch) {
       const ctxEsm = await context(esmConfig);
       const ctxCjs = await context(cjsConfig);
@@ -751,6 +765,10 @@ async function run() {
       writeBuildReadyMarker();
       console.log("[Build] Complete.");
     }
+  };
+
+  try {
+    await runWithCanopyModel({ watch: isWatch, prepare: prepareCanopyReaderModel, startBuild });
   } catch (error) {
     console.error("[Build] Failed:", error);
     process.exit(1);

@@ -134,6 +134,111 @@ describe("CanopyModels, the model that ships with Daintree", () => {
   });
 });
 
+describe("CanopyModels, a dev build's copy still on its way (#17818)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Fires the armed look and waits until it has armed the next one, or put the folder in use. */
+  async function lookOnce(models: CanopyModels): Promise<void> {
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.waitFor(() => {
+      expect(vi.getTimerCount() === 1 || models.currentDir() !== null).toBe(true);
+    });
+  }
+
+  it("waits for a folder still filling, and reads with it once every file matches its pin", async () => {
+    writeFileSync(path.join(dir, "tokenizer.json"), TOKENIZER);
+    const changes = vi.fn();
+    const models = new CanopyModels(dir, changes, { shipped: SHIPPED, awaitBundled: true });
+
+    await models.ensure();
+    // Not damaged: on its way, so said as a wait, with no advice to reinstall.
+    expect(models.state()).toEqual({ id: CANOPY_MODEL, status: "missing" });
+    expect(await models.installedDir()).toBeNull();
+    expect((await models.info()).installed).toBe(false);
+    expect(changes).toHaveBeenCalledTimes(1);
+
+    // Same size as the pin, wrong bytes: still not read with.
+    writeFileSync(path.join(dir, "model.int8.onnx"), Buffer.alloc(WEIGHTS.length, 0x61));
+    await lookOnce(models);
+    expect(models.state()?.status).toBe("missing");
+    expect(models.currentDir()).toBeNull();
+    expect(changes).toHaveBeenCalledTimes(1);
+
+    ship();
+    await lookOnce(models);
+    // The same instance, with no relaunch: the reader hears of it once.
+    expect(models.currentDir()).toBe(dir);
+    expect(await models.installedDir()).toBe(dir);
+    expect(models.state()).toMatchObject({ status: "ready", source: "bundled" });
+    expect(changes).toHaveBeenCalledTimes(2);
+    // Nothing is looked at again once a copy is in use.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("looks again only while Canopy is on", async () => {
+    const changes = vi.fn();
+    const models = new CanopyModels(dir, changes, { shipped: SHIPPED, awaitBundled: true });
+
+    // Made and asked about without turning Canopy on: nothing is checked or armed.
+    expect(models.state()).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await models.ensure();
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+    models.cancel();
+    expect(vi.getTimerCount()).toBe(0);
+
+    ship();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(models.currentDir()).toBeNull();
+
+    // On again: looked at again soon, not after the backoff it had reached.
+    await models.ensure();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(models.currentDir()).toBe(dir));
+    expect(changes).toHaveBeenCalledTimes(2);
+  });
+
+  it("arms nothing when turned off while the launch's check is still running", async () => {
+    const models = new CanopyModels(dir, () => {}, { shipped: SHIPPED, awaitBundled: true });
+
+    const checked = models.ensure();
+    models.cancel();
+    await checked;
+    expect(models.state()?.status).toBe("missing");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops looking once let go", async () => {
+    const changes = vi.fn();
+    const models = new CanopyModels(dir, changes, { shipped: SHIPPED, awaitBundled: true });
+
+    await models.ensure();
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+    models.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    ship();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(changes).toHaveBeenCalledTimes(1);
+  });
+
+  it("never waits for the copy a packaged app ships: a bad one is damaged, and checked once", async () => {
+    const models = new CanopyModels(dir, () => {}, { shipped: SHIPPED });
+
+    await models.ensure();
+    expect(models.state()?.status).toBe("failed");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
 describe("the tracked manifest", () => {
   it("is the reader Canopy names, with the weights the worker loads pinned by SHA-256", () => {
     expect(manifest.id).toBe(CANOPY_MODEL);

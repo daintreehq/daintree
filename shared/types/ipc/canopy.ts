@@ -474,8 +474,9 @@ export interface CanopyModelInfo {
 
 /**
  * Where the model stands on this machine. A host that ships it (#16415) says
- * only `ready` or `failed`; `missing` and `downloading` come from a host from
- * before, which still fetches it. A newer revision on its way leaves it
+ * only `ready` or `failed`, or `missing` while a dev build is still fetching
+ * it (#17818); `downloading` comes from a host from before, which still
+ * fetches it. A newer revision on its way leaves it
  * `ready`: the copy in use reads meanwhile, and only Settings shows the update.
  */
 export type CanopyModelState =

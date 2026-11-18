@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TRASH_TTL_MS } from "../../../../shared/config/trash.js";
+import canopyReaderManifest from "../../../services/canopy/canopy-reader-manifest.json" with { type: "json" };
 
 const ipcHandlers = vi.hoisted(() => new Map<string, unknown>());
 const ipcMainMock = vi.hoisted(() => ({
@@ -961,9 +962,9 @@ describe("canopy IPC", () => {
     expect(models.ensure).not.toHaveBeenCalled();
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on");
     expect(models.ensure).toHaveBeenCalled();
-    // Unpackaged, the shipped model is where the build fetched it.
+    // Unpackaged, the shipped model is the folder the build fetched this build's revision into.
     expect(vi.mocked(CanopyModels).mock.calls[0]?.[0]).toBe(
-      path.join("/repo", "electron", "resources", "canopy-reader")
+      path.join("/repo", "electron", "resources", "canopy-reader", canopyReaderManifest.revision)
     );
     // Updates go beside the user's data, never where earlier versions downloaded to.
     const options = vi.mocked(CanopyModels).mock.calls[0]?.[2];
@@ -971,6 +972,8 @@ describe("canopy IPC", () => {
       updates: path.join("/tmp", "canopy", "reader-updates"),
       trial: expect.any(Function),
       build: "1.4.0",
+      // The dev build fetches it beside the running app (#17818): waited for, not damaged.
+      awaitBundled: true,
     });
 
     expect(models.cancel).not.toHaveBeenCalled();
@@ -1133,6 +1136,8 @@ describe("canopy IPC", () => {
       expect(vi.mocked(CanopyModels).mock.calls[0]?.[0]).toBe(
         path.join("/Applications/Daintree.app/Contents/Resources", "canopy-reader")
       );
+      // What a package ships is all there is: a bad copy is damaged, not on its way.
+      expect(vi.mocked(CanopyModels).mock.calls[0]?.[2]?.awaitBundled).toBe(false);
     } finally {
       if (resources) Object.defineProperty(process, "resourcesPath", resources);
       else delete (process as { resourcesPath?: string }).resourcesPath;

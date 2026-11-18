@@ -67,6 +67,7 @@ import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.j
 import { CanopyLocalReader, tryReaderModel } from "../../services/canopy/canopyLocalReader.js";
 import {
   CANOPY_MODEL,
+  CANOPY_SHIPPED_REVISION,
   CanopyModels,
   canopyModelName,
   removeDownloadedModels,
@@ -191,12 +192,18 @@ let modelDirWas: string | null = null;
 
 /**
  * Where the app ships the reader model (#16415): its resources once packaged,
- * else where the build fetched it.
+ * else the folder the build fetched this build's revision into (#17818).
  */
 function bundledModelDir(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, "canopy-reader")
-    : path.join(app.getAppPath(), "electron", "resources", "canopy-reader");
+    : path.join(
+        app.getAppPath(),
+        "electron",
+        "resources",
+        "canopy-reader",
+        CANOPY_SHIPPED_REVISION
+      );
 }
 
 /**
@@ -216,6 +223,9 @@ function getModels(): CanopyModels {
     // the reader in use lets go of the copy that works.
     trial: (dir, signal) => tryReaderModel(dir, signal),
     build: app.getVersion(),
+    // A dev build fetches the model beside the running app (#17818); a test
+    // run's build has already fetched it, or failed.
+    awaitBundled: !app.isPackaged && !isE2EMode && !isSmokeTest,
   });
   return models;
 }
