@@ -111,7 +111,9 @@ describe("worktreeDiskUsage handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     indexSpy.calls = 0;
-    getAllStatesForProjectAsync.mockImplementation(async () => states);
+    // A fresh inventory per test: lookups are cached by inventory identity.
+    const inventory = [...states];
+    getAllStatesForProjectAsync.mockImplementation(async () => inventory);
     projectStoreMock.getProjectById.mockImplementation((id) =>
       id === PROJECT ? { id, path: "/repo" } : null
     );
@@ -207,8 +209,9 @@ describe("worktreeDiskUsage handlers", () => {
       id === PROJECT ? { id, path: "/repo" } : id === OTHER ? { id, path: "/other" } : null
     );
     const otherStates = [{ id: "theirs", path: "/other" }];
+    const ownStates = [...states];
     getAllStatesForProjectAsync.mockImplementation(async (_path, projectId) =>
-      projectId === OTHER ? otherStates : states
+      projectId === OTHER ? otherStates : ownStates
     );
     await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, new FakeSender(1), {
       sessionId: "s1",
