@@ -64,7 +64,10 @@ describe("toPluginFocusedPanel", () => {
   });
 
   it("reads a retired portal report as no focused panel", () => {
-    expect(toPluginFocusedPanel({ kind: "portal", worktreeId: "wt-1" })).toBe(NO_FOCUSED_PANEL);
+    const focus = toPluginFocusedPanel({ kind: "portal", agent: true, worktreeId: "wt-1" });
+
+    expect(focus).toStrictEqual({ kind: null, agent: false, worktreeId: null });
+    expect(focus).toBe(NO_FOCUSED_PANEL);
   });
 
   it("drops the worktree and agent flag when there is no kind", () => {

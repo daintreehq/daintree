@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FocusedPanelTracker, NO_FOCUSED_PANEL_STATE } from "../FocusedPanelTracker.js";
+import { FocusedPanelTracker } from "../FocusedPanelTracker.js";
 
 const W1 = 1;
 const W2 = 2;
@@ -92,9 +92,13 @@ describe("FocusedPanelTracker", () => {
     const tracker = new FocusedPanelTracker();
     tracker.setFocusedWindow(W1);
     tracker.report(10, W1, "p1", { kind: "terminal" });
-    tracker.report(10, W1, "p1", { kind: "portal" });
+    expect(kindOf(tracker)).toBe("terminal");
+    tracker.report(10, W1, "p1", { kind: "portal", agent: true, worktreeId: "w" });
 
-    expect(tracker.getCurrent()).toBe(NO_FOCUSED_PANEL_STATE);
+    expect(tracker.getCurrent()).toStrictEqual({
+      panel: { kind: null, agent: false, worktreeId: null },
+      workspaceId: null,
+    });
   });
 
   it("forgets a destroyed view and a closed window", () => {
@@ -161,11 +165,33 @@ describe("FocusedPanelTracker", () => {
 
     it("reads an older remote screen's portal report as no focused panel", () => {
       const tracker = new FocusedPanelTracker();
+      tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
       tracker.setFocusedWindow(W1);
       tracker.report(10, W1, "p1", { kind: "diff" });
-      tracker.reportRemote(-1, "pa", { kind: "portal", worktreeId: "w" }, true);
+      expect(kindOf(tracker)).toBe("diff");
 
-      expect(tracker.getCurrent()).toBe(NO_FOCUSED_PANEL_STATE);
+      tracker.reportRemote(-1, "pa", { kind: "portal", worktreeId: "w" }, true);
+      expect(tracker.getCurrent()).toStrictEqual({
+        panel: { kind: null, agent: false, worktreeId: null },
+        workspaceId: null,
+      });
+
+      tracker.removeRemote(-1);
+      expect(kindOf(tracker)).toBe("diff");
+    });
+
+    it("treats a portal report after no panel as the same report, so newer local focus stands", () => {
+      const tracker = new FocusedPanelTracker();
+      tracker.reportRemote(-1, "pa", { kind: null }, true);
+      tracker.setFocusedWindow(W1);
+      tracker.report(10, W1, "p1", { kind: "diff" });
+      const listener = vi.fn();
+      tracker.subscribe(listener);
+
+      tracker.reportRemote(-1, "pa", { kind: "portal", agent: true, worktreeId: "w" }, true);
+
+      expect(kindOf(tracker)).toBe("diff");
+      expect(listener).not.toHaveBeenCalled();
     });
 
     it("falls back to a focused remote screen once the newer local window closes", () => {

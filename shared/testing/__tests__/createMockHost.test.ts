@@ -2226,10 +2226,12 @@ describe("createMockHost production-parity validation (#10617)", () => {
       });
       await Promise.resolve();
       host.simulateFocusedPanelChange({ kind: "file", agent: false, worktreeId: "w" });
+      host.simulateFocusedPanelChange({ kind: "portal", agent: false, worktreeId: "w" });
 
       expect(received).toEqual([
         { kind: null, agent: false, worktreeId: null },
         { kind: "file", agent: false, worktreeId: "w" },
+        { kind: null, agent: false, worktreeId: null },
       ]);
       expect(errors).toHaveBeenCalled();
 
