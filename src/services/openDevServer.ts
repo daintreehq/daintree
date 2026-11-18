@@ -1,5 +1,6 @@
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { isDevPreviewPanel, type PanelInstance } from "@shared/types/panel";
+import ipaddr from "ipaddr.js";
 import { isLoopbackHostname } from "@shared/utils/urlUtils";
 import { focusPanelInItsWorktree } from "@/lib/panelNavigation";
 import { notify } from "@/lib/notify";
@@ -8,7 +9,7 @@ import {
   hostForwardFailure,
   parseLoopbackLink,
   remoteHostOfView,
-  resolveTerminalLinkForHost,
+  resolveExternalPageForView,
 } from "@/services/terminal/remoteLoopbackLinks";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -64,6 +65,15 @@ function devServerRefused(message: string): void {
   notify({ type: "error", title: "Couldn't open dev server", message });
 }
 
+function isWildcardAddress(host: string): boolean {
+  const literal = host.replace(/^\[|\]$/g, "");
+  try {
+    return ipaddr.isValid(literal) && ipaddr.process(literal).range() === "unspecified";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Whether a host's `hostname` names that host itself, so opened here it would
  * land on this machine instead: any loopback or wildcard spelling, and the
@@ -73,8 +83,7 @@ function namesTheHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, "");
   return (
     isLoopbackHostname(host) ||
-    host === "0.0.0.0" ||
-    host === "[::]" ||
+    isWildcardAddress(host) ||
     host === "localhost" ||
     host.endsWith(".localhost")
   );
@@ -83,8 +92,10 @@ function namesTheHost(hostname: string): boolean {
 /**
  * Hand a dev server's address to the system browser. In a view bound to a
  * Remote Host the server is the host's, so its port is forwarded here first,
- * the way a terminal's link is, and the address is never opened against this
- * machine's own localhost.
+ * at the same port as the browser panel's own forward is: a dev server's
+ * absolute URLs, redirects and sockets name that port, and on any other one
+ * they would come back to whatever this machine runs there. When the port is
+ * taken here, or the address can't be forwarded, nothing opens.
  */
 export async function openDevServerExternally(url: string): Promise<void> {
   const hostId = remoteHostOfView();
@@ -112,7 +123,7 @@ export async function openDevServerExternally(url: string): Promise<void> {
     return;
   }
   try {
-    openUrlExternally(await resolveTerminalLinkForHost(address, hostId), LOG_PREFIX);
+    openUrlExternally(await resolveExternalPageForView(address, "Dev server"), LOG_PREFIX);
   } catch (error) {
     logError(`${LOG_PREFIX} Failed to forward the dev server's port`, error);
     devServerRefused(hostForwardFailure(address, error));

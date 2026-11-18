@@ -25,9 +25,8 @@ const view = vi.hoisted(() => ({
 }));
 const remote = vi.hoisted(() => ({
   hostId: null as string | null,
-  resolve: vi.fn<(url: string, hostId: string | null) => Promise<string>>((url) =>
-    Promise.resolve(url)
-  ),
+  /** The same-port forward: the address back once the host's port is held here. */
+  resolve: vi.fn<(url: string, label: string) => Promise<string>>((url) => Promise.resolve(url)),
 }));
 
 vi.mock("@/clients", () => ({ systemClient: { openExternal: vi.fn() } }));
@@ -48,7 +47,7 @@ vi.mock("@/store/storeAccessors", () => ({ getWorktreeIdSet: () => view.worktree
 vi.mock("@/services/terminal/remoteLoopbackLinks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/terminal/remoteLoopbackLinks")>()),
   remoteHostOfView: () => remote.hostId,
-  resolveTerminalLinkForHost: (url: string, hostId: string | null) => remote.resolve(url, hostId),
+  resolveExternalPageForView: (url: string, label: string) => remote.resolve(url, label),
   hostForwardFailure: () => "Port 5824 on the host couldn't be forwarded to this machine.",
 }));
 vi.mock("@/store/panelStore", () => ({
@@ -231,20 +230,19 @@ describe("openDevServerExternally", () => {
     expect(openedExternally()).toEqual(["http://localhost:5824"]);
   });
 
-  it("forwards a Remote Host's port first and opens the forwarded address", async () => {
+  it("holds a Remote Host's port here at the same port, then opens the address", async () => {
     remote.hostId = "host-1";
-    remote.resolve.mockResolvedValue("http://localhost:61234/");
-    await openDevServerExternally("http://localhost:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824/", "host-1");
-    expect(openedExternally()).toEqual(["http://localhost:61234/"]);
+    remote.resolve.mockImplementation((url) => Promise.resolve(`${url}#held`));
+    await openDevServerExternally("http://localhost:5824/app?tab=2");
+    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824/app?tab=2", "Dev server");
+    expect(openedExternally()).toEqual(["http://localhost:5824/app?tab=2#held"]);
   });
 
   it("forwards an address spelled the way the system browser reads it", async () => {
     remote.hostId = "host-1";
-    remote.resolve.mockResolvedValue("http://localhost:61234/");
     await openDevServerExternally("http:localhost:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824/", "host-1");
-    expect(openedExternally()).toEqual(["http://localhost:61234/"]);
+    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824/", "Dev server");
+    expect(openedExternally()).toEqual(["http://localhost:5824/"]);
   });
 
   it("opens nothing, and says why, when the host's port can't be forwarded", async () => {
@@ -260,30 +258,33 @@ describe("openDevServerExternally", () => {
   it("forwards a host's wildcard address as its loopback", async () => {
     remote.hostId = "host-1";
     await openDevServerExternally("http://0.0.0.0:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://0.0.0.0:5824/", "host-1");
+    expect(remote.resolve).toHaveBeenCalledWith("http://0.0.0.0:5824/", "Dev server");
   });
 
-  it.each(["http://app.localhost:5824", "http://[::]:5824", "http://127.0.0.2:5824"])(
-    "never opens the host's %s against this machine",
-    async (url) => {
-      remote.hostId = "host-1";
-      await openDevServerExternally(url);
-      expect(remote.resolve).not.toHaveBeenCalled();
-      expect(openedExternally()).toEqual([]);
-      expect(notify).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "error",
-          message: expect.stringContaining("can't be forwarded to this machine"),
-        })
-      );
-    }
-  );
+  it.each([
+    "http://app.localhost:5824",
+    "http://[::]:5824",
+    "http://[::ffff:0:0]:5824",
+    "http://127.0.0.2:5824",
+    "http://[::ffff:127.0.0.1]:5824",
+  ])("never opens the host's %s against this machine", async (url) => {
+    remote.hostId = "host-1";
+    await openDevServerExternally(url);
+    expect(remote.resolve).not.toHaveBeenCalled();
+    expect(openedExternally()).toEqual([]);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("can't be forwarded to this machine"),
+      })
+    );
+  });
 
   it("passes a host's private-network address through the host's resolver", async () => {
     remote.hostId = "host-1";
     remote.resolve.mockImplementation((url) => Promise.resolve(`${url}#resolved`));
     await openDevServerExternally("http://10.0.0.5:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://10.0.0.5:5824/", "host-1");
+    expect(remote.resolve).toHaveBeenCalledWith("http://10.0.0.5:5824/", "Dev server");
     expect(openedExternally()).toEqual(["http://10.0.0.5:5824/#resolved"]);
   });
 });

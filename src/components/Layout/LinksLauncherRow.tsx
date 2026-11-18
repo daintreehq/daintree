@@ -52,8 +52,8 @@ export function LinksLauncherRow({
     <span
       id={titleId}
       className={cn(
-        "min-w-0 truncate text-sm text-text-primary",
-        !keepDetail && "shrink-0 max-w-[60%]"
+        "truncate text-sm text-text-primary",
+        keepDetail ? "min-w-12" : "min-w-0 shrink-0 max-w-[60%]"
       )}
     >
       {title}
@@ -76,7 +76,9 @@ export function LinksLauncherRow({
           id={detailId}
           className={cn(
             "truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150",
-            keepDetail ? "shrink-0" : "min-w-0"
+            // The title keeps a floor, so a very narrow launcher cuts the
+            // address rather than the name that tells two servers apart.
+            keepDetail ? "shrink-0 max-w-[calc(100%-3.5rem)]" : "min-w-0"
           )}
         >
           {detail}
