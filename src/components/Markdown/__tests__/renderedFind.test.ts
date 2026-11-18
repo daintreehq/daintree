@@ -57,7 +57,8 @@ describe("findInRenderedText", () => {
   it("skips text the reader cannot see or read as the document", () => {
     const root = documentWith(
       '<p>store<span class="sr-only">store</span><span aria-hidden="true">store</span></p>' +
-        "<svg><text>store</text></svg><button>store</button>"
+        "<svg><text>store</text></svg><button>store</button>" +
+        "<script>store</script><style>.store {}</style><p hidden>store</p>"
     );
     expect(found(root, "store")).toHaveLength(1);
   });
@@ -120,21 +121,26 @@ describe("createRenderedTextIndex", () => {
     expect(textWalks()).toBe(1);
   });
 
-  it("does not walk the document for a blank query", () => {
+  it("does not walk the document for a blank query, nor drop the index for one", () => {
     const { textWalks, find } = indexOf(documentWith("<p>store</p>"));
     expect(find("  ")).toEqual([]);
     expect(textWalks()).toBe(0);
+    find("store");
+    expect(find("  ")).toEqual([]);
+    expect(find("store")).toEqual(["store"]);
+    expect(textWalks()).toBe(1);
   });
 
   it("keeps offsets across inline markup on a reused index", () => {
-    const root = documentWith("<p>use <code>Panel</code><em>Store</em> here</p>");
-    const { index, find } = indexOf(root);
+    const root = documentWith("<p>use <code>xPanel</code><em>Storey</em> here</p>");
+    const { index, textWalks, find } = indexOf(root);
     find("here");
     const [range] = index.find("panelstore", false).ranges;
     expect(range!.startContainer).toBe(root.querySelector("code")!.firstChild);
-    expect(range!.startOffset).toBe(0);
+    expect(range!.startOffset).toBe(1);
     expect(range!.endContainer).toBe(root.querySelector("em")!.firstChild);
     expect(range!.endOffset).toBe(5);
+    expect(textWalks()).toBe(1);
   });
 
   it.each([
@@ -183,20 +189,19 @@ describe("createRenderedTextIndex", () => {
   });
 
   it("rebuilds when a block boundary moves", () => {
-    const root = documentWith("<p>store families</p>");
+    const root = documentWith("<p>store<span>families</span></p>");
     const { find } = indexOf(root);
-    expect(find("store families")).toEqual(["store families"]);
+    expect(find("storefamilies")).toEqual(["storefamilies"]);
 
-    const p = root.querySelector("p")!;
-    p.textContent = "store";
+    // The same text node, moved into a block of its own.
     const next = document.createElement("p");
-    next.textContent = "families";
-    p.after(next);
-    expect(find("store families")).toEqual([]);
+    next.append(root.querySelector("span")!);
+    root.append(next);
+    expect(find("storefamilies")).toEqual([]);
     expect(find("families")).toEqual(["families"]);
   });
 
-  it("lets go of the document on dispose and still searches it fresh", async () => {
+  it("stops watching on dispose, and searches fresh every time after", async () => {
     const root = documentWith("<p>store</p>");
     const disconnect = vi.spyOn(MutationObserver.prototype, "disconnect");
     const onChange = vi.fn();
@@ -215,12 +220,22 @@ describe("createRenderedTextIndex", () => {
   });
 
   it("tells its owner about changes it has not already searched past", async () => {
-    const root = documentWith("<p>store</p>");
-    const onChange = vi.fn();
-    const { find } = indexOf(root, onChange);
+    const root = documentWith("<p data-state='a'>store</p>");
+    const seen: number[] = [];
+    // Assigned below; the owner searches as it hears of a change.
+    let find: (query: string) => string[] = () => [];
+    const onChange = vi.fn(() => seen.push(find("store").length));
+    ({ find } = indexOf(root, onChange));
     find("store");
 
     root.querySelector("p")!.append(" store");
+    await delivered();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([2]);
+
+    // Not an attribute the search depends on.
+    root.querySelector("p")!.dataset.state = "b";
+    root.querySelector("p")!.title = "store";
     await delivered();
     expect(onChange).toHaveBeenCalledTimes(1);
 
