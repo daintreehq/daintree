@@ -20,6 +20,7 @@ import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
 import { hasUnclosedQuote, parseShellArgs } from "../utils/shellArgs.js";
 import { quoteLaunchPrompt } from "../utils/launchPromptArg.js";
 import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
+import type { DangerousMode } from "./dangerousMode.js";
 
 /**
  * Quotes one argument of an agent launch command, for the shell it runs under
@@ -59,14 +60,14 @@ function parseLaunchArgs(text: string | undefined): string[] {
 // reconciled. argv elements are C strings, so no real argument holds a NUL.
 const RECIPE_ARGS_SLOT = "\0recipe-args";
 
+export { DANGEROUS_MODES, isDangerousMode, type DangerousMode } from "./dangerousMode.js";
+
 /**
- * Tri-state permission-bypass intent. `"on"`/`"off"` are explicit user choices
- * (force-enable / force-disable); `"inherit"` defers to the next level up
- * (preset → agent → global). Modeled after VS Code workspace-vs-user override
- * and IAM explicit-deny precedence: a more-specific `"off"` always vetoes a
- * broader `"on"` (principle of least privilege).
+ * What a launch does about permission prompts once every scope is resolved:
+ * Daintree adds nothing (`"cli-default"`), the agent's declared Auto args, or
+ * its bypass args (`"skip"`).
  */
-export type DangerousMode = "inherit" | "on" | "off";
+export type PermissionLevel = "cli-default" | "auto" | "skip";
 
 /**
  * One of an agent's accounts (#16040): a config folder its CLI keeps
@@ -270,6 +271,18 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
 };
 
 /**
+ * The agent's own "approve without asking me, inside its rules" mode (#17435),
+ * declared beside its bypass flag and offered only where one exists. Codex's
+ * routes approval requests to its automatic reviewer and keeps its
+ * workspace-write sandbox, where its bypass flag turns the sandbox off.
+ * Plugin agents declare none.
+ */
+export const DEFAULT_AUTO_ARGS: Readonly<Record<string, readonly string[]>> = {
+  claude: ["--permission-mode", "auto"],
+  codex: ["--approve-for-me"],
+};
+
+/**
  * Bypass flags an agent's default used to be, before its CLI stopped accepting
  * them. Settings seeded from the old default, config bundles exported from
  * them, and captured launch flags all outlive the change, so a retired value
@@ -297,6 +310,11 @@ export function getDefaultDangerousArgs(agentId: string | undefined): string {
   const builtIn = ownEntry(DEFAULT_DANGEROUS_ARGS, agentId);
   if (builtIn !== undefined) return builtIn.trim();
   return getEffectiveAgentConfig(agentId)?.permissionBypassArgs?.join(" ") ?? "";
+}
+
+/** The args that put `agentId` in its own Auto permission mode, or none. */
+export function getPermissionAutoArgs(agentId: string | undefined): readonly string[] {
+  return ownEntry(DEFAULT_AUTO_ARGS, agentId) ?? [];
 }
 
 /**
@@ -511,10 +529,40 @@ export function resolveEffectiveBypass(
   agentId: string | undefined,
   globalSkipPermissions?: boolean
 ): boolean {
+  return resolveEffectivePermissionLevel(entry, agentId, globalSkipPermissions) === "skip";
+}
+
+/**
+ * The full permission decision behind {@link resolveEffectiveBypass}: an
+ * explicit `"auto"` is Auto where the agent declares Auto args and the CLI's
+ * default where it doesn't, never Skip all, so a saved Auto the agent can't
+ * honour (a user agent, a CLI that dropped the flag) still vetoes the global
+ * switch instead of falling through to it.
+ */
+export function resolveEffectivePermissionLevel(
+  entry: AgentSettingsEntry,
+  agentId: string | undefined,
+  globalSkipPermissions?: boolean
+): PermissionLevel {
   const mode = resolveDangerousMode(entry);
-  if (mode === "on") return true;
-  if (mode === "off") return false;
-  return !!globalSkipPermissions && isAgentTerminalBypassSupported(agentId);
+  if (mode === "on") return "skip";
+  if (mode === "off") return "cli-default";
+  if (mode === "auto") return getPermissionAutoArgs(agentId).length > 0 ? "auto" : "cli-default";
+  return globalSkipPermissions && isAgentTerminalBypassSupported(agentId) ? "skip" : "cli-default";
+}
+
+/**
+ * The args a launch at `level` adds for permissions: the resolved bypass args
+ * for Skip all, the declared Auto args, or nothing.
+ */
+export function permissionArgsForLevel(
+  level: PermissionLevel,
+  entry: Pick<AgentSettingsEntry, "dangerousArgs">,
+  agentId: string | undefined
+): string[] {
+  if (level === "auto") return [...getPermissionAutoArgs(agentId)];
+  if (level === "cli-default") return [];
+  return resolveDangerousArgs(entry.dangerousArgs, agentId).split(/\s+/).filter(Boolean);
 }
 
 /** Splits args into options, each paired with the non-option value after it. */
@@ -691,6 +739,12 @@ export interface GenerateAgentFlagsOptions {
    * launches with it; see {@link resolveEffectiveBypass}.
    */
   globalSkipPermissions?: boolean;
+  /**
+   * Args the command already carries ahead of these flags (a preset's or a
+   * recipe's). An Auto group among them, or among the custom flags, is left as
+   * the only copy: Codex rejects `--approve-for-me` given twice.
+   */
+  precedingArgs?: readonly string[];
 }
 
 export function generateAgentFlags(
@@ -699,16 +753,15 @@ export function generateAgentFlags(
   options?: GenerateAgentFlagsOptions
 ): string[] {
   const flags: string[] = [];
-  if (resolveEffectiveBypass(entry, agentId, options?.globalSkipPermissions)) {
-    // Use entry.dangerousArgs if set, otherwise fall back to default for this agent
-    const dangerousArgs = resolveDangerousArgs(entry.dangerousArgs, agentId);
-    if (dangerousArgs) {
-      flags.push(...dangerousArgs.split(/\s+/));
-    }
-  }
-  if (entry.customFlags) {
-    flags.push(...parseLaunchArgs(entry.customFlags));
-  }
+  const customFlags = entry.customFlags ? parseLaunchArgs(entry.customFlags) : [];
+  const level = resolveEffectivePermissionLevel(entry, agentId, options?.globalSkipPermissions);
+  const permissionArgs = permissionArgsForLevel(level, entry, agentId);
+  const alreadyCarried =
+    level === "auto" &&
+    (findTokenSequence(customFlags, permissionArgs) !== -1 ||
+      findTokenSequence(options?.precedingArgs ?? [], permissionArgs) !== -1);
+  if (!alreadyCarried) flags.push(...permissionArgs);
+  flags.push(...customFlags);
 
   // Decorative-effect opt-out (e.g. Codex's composer sparkles): the registry
   // args ride every launch unless the user keeps the effects. Custom flags
@@ -811,6 +864,7 @@ export function generateAgentCommand(
   const flags = generateAgentFlags(entry, agentId, {
     clipboardDirectory: options?.clipboardDirectory,
     globalSkipPermissions: options?.globalSkipPermissions,
+    precedingArgs: [...(options?.presetArgs ?? []), ...parseLaunchArgs(options?.recipeArgs)],
   });
   const parts: string[] = [baseCommand];
   let registryArgsEnd = parts.length;
@@ -990,6 +1044,7 @@ export function buildAgentLaunchFlags(
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
   const settingsFlags = generateAgentFlags(entry, agentId, {
     globalSkipPermissions: options?.globalSkipPermissions,
+    precedingArgs: [...(options?.presetArgs ?? []), ...recipeArgs],
   });
   flags.push(...settingsFlags);
 

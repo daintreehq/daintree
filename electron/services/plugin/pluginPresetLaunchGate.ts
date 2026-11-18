@@ -4,7 +4,7 @@ import { type AgentPreset, getEffectiveAgentConfig } from "../../../shared/confi
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import {
   resolveDangerousMode,
-  resolveEffectiveBypass,
+  resolveEffectivePermissionLevel,
   type AgentSettings,
 } from "../../../shared/types/agentSettings.js";
 import type { BuiltInPluginCapability, PluginScopeKey } from "../../../shared/types/plugin.js";
@@ -120,7 +120,7 @@ export async function gatePluginPresetLaunch(
     args: preset.args ?? [],
     ...(preset.customFlags !== undefined ? { customFlags: preset.customFlags } : {}),
     dangerousMode: resolveDangerousMode(preset),
-    skipsPermissions: resolveEffectiveBypass(
+    permissionLevel: resolveEffectivePermissionLevel(
       applyPresetBehaviorOverrides(entry, preset),
       agentId,
       sources.settings?.globalSkipPermissions
@@ -136,7 +136,7 @@ export async function gatePluginPresetLaunch(
           args: fallback.args ?? [],
           ...(fallback.customFlags !== undefined ? { customFlags: fallback.customFlags } : {}),
           dangerousMode: resolveDangerousMode(fallback),
-          skipsPermissions: resolveEffectiveBypass(
+          permissionLevel: resolveEffectivePermissionLevel(
             applyPresetBehaviorOverrides(entry, fallback),
             agentId,
             sources.settings?.globalSkipPermissions

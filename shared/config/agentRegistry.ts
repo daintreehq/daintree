@@ -1,6 +1,7 @@
 import type { PrerequisiteSpec } from "../types/ipc/system.js";
 import type { CompletionSourceConfig } from "../types/completionSources.js";
 import type { LaunchMcpInjection } from "./launchMcp.js";
+import type { DangerousMode } from "../types/dangerousMode.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -234,12 +235,11 @@ export interface AgentPreset {
   /** Legacy per-preset bypass override; superseded by `dangerousMode`. */
   dangerousEnabled?: boolean;
   /**
-   * Per-preset tri-state bypass override (`DangerousMode`), layered on top of
-   * the agent's resolved mode: `"off"` vetoes the agent/global value,
-   * `"inherit"`/absent defers to the agent's Default scope. Inlined union to
-   * avoid a config→types import cycle.
+   * Per-preset permission override (`DangerousMode`), layered on top of the
+   * agent's resolved mode: `"off"` and `"auto"` veto the agent/global value,
+   * `"inherit"`/absent defers to the agent's Default scope.
    */
-  dangerousMode?: "inherit" | "on" | "off";
+  dangerousMode?: DangerousMode;
   /** Per-preset override: extra CLI flags merged on top of agent-level customFlags */
   customFlags?: string;
   /** Optional brand color (CSS hex) this preset's mark inks are derived from */
@@ -289,7 +289,7 @@ export interface AgentProviderTemplate {
   env?: Record<string, string>;
   args?: string[];
   dangerousEnabled?: boolean;
-  dangerousMode?: "inherit" | "on" | "off";
+  dangerousMode?: DangerousMode;
   customFlags?: string;
 }
 

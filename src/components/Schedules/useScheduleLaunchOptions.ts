@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { getMergedPresets } from "@/config/agents";
 import {
-  resolveSkipPermissions,
+  resolvePermissionLevel,
   savedPresetStatus,
 } from "@/components/Settings/AgentScopeEditor/scopeUtils";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -23,8 +23,10 @@ export interface ScheduleLaunchOptions {
    */
   presetStatus: "none" | "found" | "missing" | "loading";
   /**
-   * True when the launch would stop at permission prompts, read the way the
-   * launch resolves it. Null until agent settings and the chosen preset have loaded.
+   * True when the launch adds no permission flag, so the CLI's own defaults
+   * decide whether it stops at prompts; read the way the launch resolves it.
+   * Auto and Skip all both count as false. Null until agent settings and the
+   * chosen preset have loaded.
    */
   stopsAtPrompts: boolean | null;
 }
@@ -56,7 +58,12 @@ export function useScheduleLaunchOptions(
     const presetStatus = status === "missing" && !settings ? "loading" : status;
     const stopsAtPrompts =
       settings && agentId && presetStatus !== "loading"
-        ? !resolveSkipPermissions(agentId, entry, preset, settings.globalSkipPermissions ?? false)
+        ? resolvePermissionLevel(
+            agentId,
+            entry,
+            preset,
+            settings.globalSkipPermissions ?? false
+          ) === "cli-default"
         : null;
     return { presets, preset, presetStatus, stopsAtPrompts };
   }, [

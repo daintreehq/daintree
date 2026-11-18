@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { FALLBACK_CHAIN_MAX } from "@shared/config/agentRegistry";
+import { DANGEROUS_MODES } from "@shared/types/dangerousMode";
 import { withWorktreeLocation } from "./locationArgs";
 import { AgentIdSchema } from "./schemas";
 
@@ -111,9 +112,9 @@ export const SessionHistoryListArgsSchema = z
 // of these tools over the wire budget.
 const PresetAgentIdSchema = z.string().min(1).describe("Agent id from the agent listing.");
 const PresetEnvSchema = z.record(z.string(), z.string());
-const PresetModeSchema = z.enum(["inherit", "on", "off"]);
+const PresetModeSchema = z.enum(DANGEROUS_MODES);
 const PRESET_ARGS_DESCRIPTION = "CLI argv, one argument each.";
-const PRESET_SKIP_DESCRIPTION = "Skip permissions.";
+const PRESET_SKIP_DESCRIPTION = "Permission prompts: on skips all, auto is the agent's Auto mode.";
 const PRESET_COLOR_DESCRIPTION = "Hex colour, e.g. #3b82f6.";
 const PRESET_TITLE_DESCRIPTION = "Panel title; defaults to the name.";
 const PRESET_FALLBACKS_DESCRIPTION = `Up to ${FALLBACK_CHAIN_MAX} of this agent's preset ids, tried if its provider fails.`;

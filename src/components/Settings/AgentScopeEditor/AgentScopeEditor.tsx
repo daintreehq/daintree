@@ -23,7 +23,6 @@ interface AgentScopeEditorProps {
   ccrPresets: AgentPreset[] | undefined;
   projectPresets: AgentPreset[] | undefined;
   presetInventory: PresetInventoryState;
-  defaultDangerousArg: string;
   editingPresetId: string | null;
   setEditingPresetId: (id: string | null) => void;
   editName: string;
@@ -44,7 +43,6 @@ interface AgentScopeEditorProps {
  * the picker is the parent the rest depends on.
  */
 export function AgentScopeEditor(props: AgentScopeEditorProps) {
-  const { defaultDangerousArg } = props;
   const scope = useAgentScope(props);
   const addPresetButtonRef = useRef<HTMLButtonElement>(null);
   const agentName = scope.agentCfg?.name ?? props.agentId;
@@ -170,14 +168,15 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
                 scopeKind={scope.scopeKind}
                 scopeLabel={scope.scopeLabel}
                 dangerousMode={scope.dangerousMode}
-                effectiveSkipPerms={scope.effectiveSkipPerms}
-                inheritResolvesToOn={scope.inheritResolvesToOn}
+                effectiveLevel={scope.effectiveLevel}
+                effectivePermissionArgs={scope.effectivePermissionArgs}
+                autoSupported={scope.autoSupported}
+                inheritLevel={scope.inheritLevel}
                 inheritHint={scope.inheritHint}
                 customArgsValue={scope.customArgsValue}
                 customArgsPlaceholder={scope.customArgsPlaceholder}
                 customArgsDescription={scope.customArgsDescription}
                 customFlagsOverride={scope.customFlagsOverride}
-                defaultDangerousArg={defaultDangerousArg}
                 onDangerousModeChange={scope.handleDangerousModeChange}
                 onCustomFlagsChange={scope.handleCustomFlagsChange}
                 onCustomFlagsOverrideReset={scope.handleCustomFlagsOverrideReset}
@@ -201,7 +200,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
                   selectedPreset={scope.selectedPreset}
                   agentName={agentName}
                   agentCustomFlags={scope.agentDefaultCustomFlags}
-                  effectiveSkipPerms={scope.effectiveSkipPerms}
+                  effectiveLevel={scope.effectiveLevel}
                   onDuplicate={scope.handleDuplicatePreset}
                 />
               )}

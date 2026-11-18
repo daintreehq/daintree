@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { SettingsRow } from "../SettingsGroup";
 import { stripCcrPrefix } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
-import { resolveDangerousMode } from "@shared/types";
+import { resolveDangerousMode, type PermissionLevel } from "@shared/types";
+import { PERMISSION_LEVEL_LABELS } from "@/lib/permissionLabels";
 import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
 
 interface ReadOnlyDetailProps {
@@ -14,7 +15,7 @@ interface ReadOnlyDetailProps {
   /** The agent's own arguments, used when the preset sets none. */
   agentCustomFlags: string;
   /** Resolved the way a launch resolves them, preset over agent over global. */
-  effectiveSkipPerms: boolean;
+  effectiveLevel: PermissionLevel;
   onDuplicate: (preset: AgentPreset) => void;
 }
 
@@ -29,7 +30,7 @@ export function ReadOnlyDetail({
   selectedPreset,
   agentName,
   agentCustomFlags,
-  effectiveSkipPerms,
+  effectiveLevel,
   onDuplicate,
 }: ReadOnlyDetailProps) {
   const displayName =
@@ -149,9 +150,9 @@ export function ReadOnlyDetail({
         />
       )}
       <SettingsRow
-        label="Skip permissions"
+        label="Permission prompts"
         description={presetSetsSkip ? fromPreset : fromAgent}
-        control={value(effectiveSkipPerms ? "On" : "Off")}
+        control={value(PERMISSION_LEVEL_LABELS[effectiveLevel])}
       />
     </>
   );

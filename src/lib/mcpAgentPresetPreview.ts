@@ -12,6 +12,7 @@
  */
 
 import { pluralize } from "@/lib/pluralize";
+import { EXPLICIT_MODE_LABELS } from "@/lib/permissionLabels";
 import type { AgentPresetMutation } from "@/services/actions/definitions/agentPresetMutation";
 import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
 import type { AgentPreset } from "@shared/config/agentRegistry";
@@ -68,12 +69,13 @@ const PRESET_FIELDS: readonly PresetField[] = [
     unset: "the agent's own",
   },
   {
-    label: "Skip permissions",
+    label: "Permission prompts",
     read: (p) => {
-      if (p.dangerousMode === "on") return "On";
-      if (p.dangerousMode === "off") return "Off";
+      if (p.dangerousMode === "on" || p.dangerousMode === "off" || p.dangerousMode === "auto") {
+        return EXPLICIT_MODE_LABELS[p.dangerousMode];
+      }
       if (p.dangerousMode === undefined && typeof p.dangerousEnabled === "boolean") {
-        return p.dangerousEnabled ? "On" : "Off";
+        return p.dangerousEnabled ? EXPLICIT_MODE_LABELS.on : EXPLICIT_MODE_LABELS.off;
       }
       return undefined;
     },

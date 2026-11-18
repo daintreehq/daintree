@@ -16,6 +16,7 @@ import { DaintreeIcon } from "@/components/icons";
 import { pluralize } from "@/lib/pluralize";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { getPermissionAutoArgs } from "@shared/types/agentSettings";
 import {
   isScheduleAssistantAgentId,
   SCHEDULE_ASSISTANT_AGENT_ID,
@@ -677,17 +678,29 @@ export function ScheduleEditor({
                 <div className="px-4 py-3">
                   <Callout
                     severity="warning"
-                    title="This run will stop at permission prompts"
+                    title="This run may stop at permission prompts"
                     action={
                       <Button variant="outline" size="sm" onClick={onOpenAgentSettings}>
                         Agent settings
                       </Button>
                     }
                   >
-                    {agentName} asks before it runs commands or edits files with{" "}
-                    {preset ? `the ${preset.name} preset` : "no preset"}, and nobody will be there
-                    to answer. Choose a preset that skips permission prompts, or the run waits until
-                    you open it.
+                    {getPermissionAutoArgs(draft.agentId).length > 0 ? (
+                      <>
+                        {agentName} launches on its own permission defaults with{" "}
+                        {preset ? `the ${preset.name} preset` : "no preset"}, and nobody will be
+                        there to answer a prompt. Choose a preset set to Auto, so {agentName}{" "}
+                        approves actions under its own rules, or to Skip all, which approves
+                        everything; otherwise the run waits until you open it.
+                      </>
+                    ) : (
+                      <>
+                        {agentName} asks before it runs commands or edits files with{" "}
+                        {preset ? `the ${preset.name} preset` : "no preset"}, and nobody will be
+                        there to answer. Choose a preset that skips permission prompts, or the run
+                        waits until you open it.
+                      </>
+                    )}
                   </Callout>
                 </div>
               )}
