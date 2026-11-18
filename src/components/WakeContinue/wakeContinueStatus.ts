@@ -63,13 +63,24 @@ export function wakeOfferCounts(
   offer.entries.forEach((entry, index) => {
     const status = entry.delivery?.status;
     if (status === "sent") counts.sent++;
-    else if (status === "unconfirmed") counts.unconfirmed++;
-    else if (status === "failed") counts.failed++;
+    // A partial write may have left text in the input: not the same as nothing sent.
+    else if (
+      status === "unconfirmed" ||
+      (entry.delivery?.status === "failed" && entry.delivery.partial === true)
+    ) {
+      counts.unconfirmed++;
+    } else if (status === "failed") counts.failed++;
     // Once sending starts, the panes counted are the ones it took on, whatever
     // they have done since; a pane started afterwards was never one of them.
     if (offer.phase === "offered" ? outcomes[index] === "resumed" : status !== undefined) {
       counts.resumed++;
-    } else if (outcomes[index] === "held" && entry.holdReason === "resume-deferred") counts.held++;
+    } else if (
+      outcomes[index] === "held" &&
+      entry.holdReason === "resume-deferred" &&
+      entry.heldSessionId !== undefined
+    ) {
+      counts.held++;
+    }
   });
   return counts;
 }

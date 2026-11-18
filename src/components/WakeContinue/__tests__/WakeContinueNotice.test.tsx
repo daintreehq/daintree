@@ -29,7 +29,7 @@ function entry(terminalId: string, outcome: Outcome): WakeContinueOffer["entries
     agentId: "claude",
     worktreeId: null,
     outcome,
-    ...(outcome === "held" && { holdReason: "resume-deferred" }),
+    ...(outcome === "held" && { holdReason: "resume-deferred", heldSessionId: `s-${terminalId}` }),
     restoredAt: RESTORED_AT,
   };
 }
@@ -170,13 +170,18 @@ describe("WakeContinueNotice", () => {
         entries: [
           { ...entry("a", "resumed"), delivery: { status: "sent" } },
           { ...entry("b", "resumed"), delivery: { status: "failed", message: "Closed" } },
+          {
+            ...entry("d", "resumed"),
+            delivery: { status: "failed", message: "Cut off", partial: true },
+          },
           entry("c", "fresh"),
         ],
       }),
     });
     renderOffer();
     const text = screen.getByTestId("wake-continue-notice").textContent;
-    expect(text).toContain("1 of 2 agents sent");
+    expect(text).toContain("1 of 3 agents sent");
+    expect(text).toContain("1 unconfirmed");
     expect(text).toContain("1 not sent");
     fireEvent.click(screen.getByRole("button", { name: "Stop sending" }));
     expect(dismissWakeContinue).toHaveBeenCalledTimes(1);

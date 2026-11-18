@@ -95,7 +95,9 @@ export function publishWakeCandidates(
   const offerable = candidates.some(
     (candidate) =>
       candidate.outcome === "resumed" ||
-      (candidate.outcome === "held" && candidate.holdReason === "resume-deferred")
+      (candidate.outcome === "held" &&
+        candidate.holdReason === "resume-deferred" &&
+        candidate.heldSessionId !== undefined)
   );
   if (!projectId || !offerable) {
     if (previous) store.setOffer(null);
@@ -142,6 +144,11 @@ interface Waiting {
   deadline: number;
   /** The prompt reading being timed, and when this view first saw it. */
   promptSince?: { lastStateChange: number; seenAt: number };
+  /**
+   * Pinned on the first attempt and held across retries: the agent that
+   * attempt found in the pty, and what had been typed into it by then.
+   */
+  pinned?: { incarnation: number | undefined; typedAt: number | undefined | "unread" };
 }
 
 /**
@@ -191,11 +198,23 @@ export async function sendWakeContinueNotes(note: string): Promise<void> {
         const slot = slots.find((candidate) => !candidate.busy && candidate.freeAt <= now);
         if (!slot) continue;
         waiting.splice(waiting.indexOf(item), 1);
-        slot.busy = true;
         const panel = panelOf(item.entry.terminalId);
+        const incarnation = panel && isPtyPanel(panel) ? panel.agentIncarnation : undefined;
+        item.pinned ??= { incarnation, typedAt: "unread" };
+        if (item.pinned.incarnation !== incarnation) {
+          // Another agent took the pty over between attempts: not the session
+          // the wake resumed.
+          setDelivery(offer.id, item.entry.terminalId, {
+            status: "failed",
+            message: `${item.entry.title} was restarted after it resumed — no note sent`,
+          });
+          continue;
+        }
+        slot.busy = true;
         const admitted: Admission = {
           generation: startedAtOf(panel),
           settledAt: panel && isPtyPanel(panel) ? panel.lastStateChange : undefined,
+          pinned: item.pinned,
         };
         void deliverNote(offer, item.entry, text, admitted, owned).then((outcome) => {
           slot.busy = false;
@@ -262,6 +281,7 @@ function assess(
 interface Admission {
   generation: number | undefined;
   settledAt: number | undefined;
+  pinned: NonNullable<Waiting["pinned"]>;
 }
 
 /**
@@ -296,7 +316,13 @@ async function deliverNote(
         setDelivery(offer.id, entry.terminalId, delivery.state);
       },
       buildPrompt: async () => note,
-      readiness: promptReadiness,
+      // Only the prompt the scheduler timed: one that replaced it is untimed.
+      readiness: (status) => {
+        const readiness = promptReadiness(status);
+        return readiness === "ready" && status.lastTransitionAt !== admitted.settledAt
+          ? "not-yet"
+          : readiness;
+      },
       verify: async () => {
         const panelNow = usePanelStore.getState().panelsById[entry.terminalId];
         const settledAt = panelNow && isPtyPanel(panelNow) ? panelNow.lastStateChange : undefined;
@@ -347,8 +373,11 @@ async function untouchedSinceWake(
   // launch that types its own command (a shell without the startup wrapper)
   // stamps the pty before the agent ever settles, and is no one's draft.
   const typedAt = activity.lastTypedInputAt;
-  return typedAt !== undefined &&
-    (admitted.settledAt === undefined || typedAt >= admitted.settledAt)
-    ? `${entry.title} was typed in after it resumed — no note sent`
-    : null;
+  // And against what the first attempt read: a prompt timestamp the renderer
+  // stamped itself can't be ordered against the host's, but a change can.
+  if (admitted.pinned.typedAt === "unread") admitted.pinned.typedAt = typedAt;
+  const typedSince =
+    typedAt !== admitted.pinned.typedAt ||
+    (typedAt !== undefined && (admitted.settledAt === undefined || typedAt >= admitted.settledAt));
+  return typedSince ? `${entry.title} was typed in after it resumed — no note sent` : null;
 }

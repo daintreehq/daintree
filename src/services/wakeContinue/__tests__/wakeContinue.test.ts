@@ -121,11 +121,16 @@ describe("publishWakeCandidates", () => {
     expect(useWakeContinueStore.getState().offer).toBeNull();
   });
 
-  it("offers for a pane held only until the user starts it", () => {
+  it("offers for a pane held only until the user starts it on a named session", () => {
+    publishWakeCandidates("p1", [
+      candidate("a", { outcome: "held", holdReason: "resume-deferred", heldSessionId: "s-a" }),
+    ]);
+    expect(useWakeContinueStore.getState().offer?.entries).toHaveLength(1);
+    // Without the session it was held with, no start of it could ever count.
     publishWakeCandidates("p1", [
       candidate("a", { outcome: "held", holdReason: "resume-deferred" }),
     ]);
-    expect(useWakeContinueStore.getState().offer?.entries).toHaveLength(1);
+    expect(useWakeContinueStore.getState().offer).toBeNull();
   });
 
   it("replaces an open offer with a newer wake's, and withdraws the old one's notes", () => {
@@ -318,16 +323,15 @@ describe("sendWakeContinueNotes", () => {
     void sendWakeContinueNotes("Go on");
     await vi.advanceTimersByTimeAsync(SETTLE);
     const verify = deliveries[0]!.options.verify!;
+    // The launch typing its own command, before the agent settled, is no one's draft.
+    const launchTyped = { x: { status: "read" }, a: { status: "read", lastTypedInputAt: 0 } };
+    getOutputActivity.mockResolvedValueOnce(launchTyped);
+    expect(await verify()).toBeNull();
+    getOutputActivity.mockResolvedValueOnce(launchTyped);
     expect(await verify()).toBeNull();
 
     getOutputActivity.mockResolvedValueOnce({ x: { status: "read" }, a: { status: "unreadable" } });
     expect(await verify()).toBe("Couldn't tell whether Agent a was typed in — no note sent");
-    // The launch typing its own command, before the agent settled, is no one's draft.
-    getOutputActivity.mockResolvedValueOnce({
-      x: { status: "read" },
-      a: { status: "read", lastTypedInputAt: 0 },
-    });
-    expect(await verify()).toBeNull();
     getOutputActivity.mockResolvedValueOnce({
       x: { status: "read" },
       a: { status: "read", lastTypedInputAt: 1 },
@@ -374,12 +378,70 @@ describe("sendWakeContinueNotes", () => {
     expect(useWakeContinueStore.getState().offer?.phase).toBe("offered");
   });
 
-  it("asks the lane for the agent's prompt, never the idle reading", async () => {
-    setPane("a");
+  it("asks the lane for the prompt it timed, never the idle reading or a newer prompt", async () => {
+    setPane("a", { lastStateChange: 7 });
     publishWakeCandidates("p1", [candidate("a")]);
     void sendWakeContinueNotes("Go on");
     await vi.advanceTimersByTimeAsync(SETTLE);
     const readiness = deliveries[0]!.options.readiness!;
-    expect(readiness({ terminalId: "a", agentId: "codex", agentState: "idle" })).toBe("not-yet");
+    const at = (lastTransitionAt: number, agentState: "waiting" | "idle" = "waiting") =>
+      readiness({
+        terminalId: "a",
+        agentId: "codex",
+        agentState,
+        waitingReason: "prompt",
+        lastTransitionAt,
+      });
+    expect(at(7)).toBe("ready");
+    expect(at(7, "idle")).toBe("not-yet");
+    expect(at(8)).toBe("not-yet");
+  });
+
+  it("refuses a retry into a different agent the pty now runs", async () => {
+    setPane("a");
+    usePanelStore.setState((state) => ({
+      panelsById: {
+        ...state.panelsById,
+        a: { ...state.panelsById.a!, agentIncarnation: 0 } as PanelInstance,
+      },
+    }));
+    publishWakeCandidates("p1", [candidate("a")]);
+    void sendWakeContinueNotes("Go on");
+    await vi.advanceTimersByTimeAsync(SETTLE);
+    // The first attempt lapses; the agent quits and another is started in its shell.
+    deliveries[0]!.options.onState({
+      id: "r",
+      state: { status: "queued" },
+      title: "",
+      terminalId: "a",
+    });
+    deliveries[0]!.settle();
+    usePanelStore.setState((state) => ({
+      panelsById: {
+        ...state.panelsById,
+        a: { ...state.panelsById.a!, agentIncarnation: 1, lastStateChange: 9 } as PanelInstance,
+      },
+    }));
+    await vi.advanceTimersByTimeAsync(SETTLE + WAKE_CONTINUE_SPACING_MS);
+    expect(deliveries).toHaveLength(1);
+    expect(
+      useWakeContinueStore.getState().offer!.entries.find((e) => e.terminalId === "a")?.delivery
+    ).toEqual({
+      status: "failed",
+      message: "Agent a was restarted after it resumed — no note sent",
+    });
+  });
+
+  it("refuses typing it can't order against a renderer-stamped prompt", async () => {
+    setPane("a", { lastStateChange: 1_000_000 });
+    publishWakeCandidates("p1", [candidate("a")]);
+    void sendWakeContinueNotes("Go on");
+    await vi.advanceTimersByTimeAsync(SETTLE);
+    const verify = deliveries[0]!.options.verify!;
+    getOutputActivity.mockResolvedValueOnce({ a: { status: "read", lastTypedInputAt: 5 } });
+    expect(await verify()).toBeNull();
+    // Older than the prompt by the clocks, but new since the first look.
+    getOutputActivity.mockResolvedValueOnce({ a: { status: "read", lastTypedInputAt: 6 } });
+    expect(await verify()).toBe("Agent a was typed in after it resumed — no note sent");
   });
 });
