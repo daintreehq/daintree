@@ -2792,8 +2792,8 @@ export class PtyClient extends EventEmitter {
    * resolves that submission's record per terminal.
    *
    * An id missing from the map was not observed — its shard holds no record for
-   * it, or failed to answer in time — so a caller must not read its absence as
-   * "nothing to report". Never rejects.
+   * it, is down or still booting, or failed to answer in time — so a caller
+   * must not read its absence as "nothing to report". Never rejects.
    */
   async getTerminalStatusFieldsAsync(
     ids: readonly string[],
@@ -2804,6 +2804,9 @@ export class PtyClient extends EventEmitter {
     if (unique.length === 0) return fields;
     await Promise.all(
       [...this.groupByOwnerShard(unique)].map(async ([shard, shardIds]) => {
+        // A request to a host that isn't up would only sit out the broker's
+        // deadline and hold every other shard's answer back with it.
+        if (shard.retired || !shard.isRunning()) return;
         const terminals = await sendPtyHostRpc<PtyHostTerminalStatusFields[]>(
           shard,
           "terminal-status-fields",

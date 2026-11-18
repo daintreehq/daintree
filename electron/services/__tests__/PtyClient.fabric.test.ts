@@ -1713,6 +1713,8 @@ describe("PtyClient fabric", () => {
 
   describe("status field lookup (#17809)", () => {
     const REQUEST = "get-terminal-status-fields";
+    // Under the client's pending-spawn cap, with room for project-b's terminal.
+    const LARGE = 240;
     const answer = (
       child: MockUtilityProcess,
       request: Record<string, unknown>,
@@ -1724,23 +1726,30 @@ describe("PtyClient fabric", () => {
         terminals,
       });
     };
+    const settled = <T>(promise: Promise<T>) => {
+      const state = { done: false };
+      void promise.then(() => {
+        state.done = true;
+      });
+      return state;
+    };
 
-    const twoProjects = () => {
+    const twoProjects = (opts: { readyB?: boolean } = {}) => {
       const client = createFabricClient();
-      for (let i = 0; i < 256; i++) {
+      for (let i = 0; i < LARGE; i++) {
         client.spawn(`a${i}`, { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       }
       client.spawn("b1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
       const shardA = projectShard("project-a");
       const shardB = projectShard("project-b");
       shardA.child.emit("message", { type: "ready" });
-      shardB.child.emit("message", { type: "ready" });
+      if (opts.readyB !== false) shardB.child.emit("message", { type: "ready" });
       return { client, shardA, shardB };
     };
 
-    it("reads 256 terminals on one shard with a single request", async () => {
+    it("reads a large selection on one shard with a single request", async () => {
       const { client, shardA, shardB } = twoProjects();
-      const ids = Array.from({ length: 256 }, (_, i) => `a${i}`);
+      const ids = Array.from({ length: LARGE }, (_, i) => `a${i}`);
 
       const promise = client.getTerminalStatusFieldsAsync(ids);
 
@@ -1758,9 +1767,9 @@ describe("PtyClient fabric", () => {
         ids.map((id) => ({ id, projectId: "project-a", lastOutputChangeAt: 9 }))
       );
       const fields = await promise;
-      expect(fields.size).toBe(256);
-      expect(fields.get("a255")).toEqual({
-        id: "a255",
+      expect(fields.size).toBe(LARGE);
+      expect(fields.get(`a${LARGE - 1}`)).toEqual({
+        id: `a${LARGE - 1}`,
         projectId: "project-a",
         lastOutputChangeAt: 9,
       });
@@ -1824,17 +1833,77 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("ignores an entry for a terminal the shard was not asked about", async () => {
-      const { client, shardA } = twoProjects();
+    it("keeps a sibling's fields when a ready shard never answers", async () => {
+      const { client, shardA, shardB } = twoProjects();
 
-      const promise = client.getTerminalStatusFieldsAsync(["a1"]);
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+      const state = settled(promise);
 
-      const [request] = messagesOfType(shardA.child, REQUEST);
-      answer(shardA.child, request, [
-        { id: "a1", projectId: "project-a" },
-        { id: "b1", projectId: "project-b" },
-      ]);
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      answer(shardA.child, requestA, [{ id: "a1", projectId: "project-a" }]);
+      expect(messagesOfType(shardB.child, REQUEST)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state.done).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5_000);
       expect([...(await promise).keys()]).toEqual(["a1"]);
+      client.dispose();
+    });
+
+    it("skips a shard still booting without waiting out the deadline", async () => {
+      const { client, shardA, shardB } = twoProjects({ readyB: false });
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+      const state = settled(promise);
+
+      expect(messagesOfType(shardB.child, REQUEST)).toHaveLength(0);
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      answer(shardA.child, requestA, [{ id: "a1", projectId: "project-a" }]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(state.done).toBe(true);
+      expect([...(await promise).keys()]).toEqual(["a1"]);
+      client.dispose();
+    });
+
+    it("skips a shard that is already down without waiting out the deadline", async () => {
+      const { client, shardA, shardB } = twoProjects();
+      shardB.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(0);
+      const postsToB = messagesOfType(shardB.child, REQUEST).length;
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+      const state = settled(promise);
+
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      answer(shardA.child, requestA, [{ id: "a1", projectId: "project-a" }]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(state.done).toBe(true);
+      expect(messagesOfType(shardB.child, REQUEST)).toHaveLength(postsToB);
+      expect([...(await promise).keys()]).toEqual(["a1"]);
+      client.dispose();
+    });
+
+    it("never lets one shard answer for a terminal another shard was asked about", async () => {
+      const { client, shardA, shardB } = twoProjects();
+
+      const promise = client.getTerminalStatusFieldsAsync(["a1", "b1"]);
+
+      const [requestA] = messagesOfType(shardA.child, REQUEST);
+      const [requestB] = messagesOfType(shardB.child, REQUEST);
+      answer(shardB.child, requestB, [
+        { id: "b1", projectId: "project-b", lastOutputChangeAt: 100 },
+      ]);
+      // A plausible row for b1 from the wrong shard, arriving last.
+      answer(shardA.child, requestA, [
+        { id: "a1", projectId: "project-a" },
+        { id: "b1", projectId: "project-b", lastOutputChangeAt: 999 },
+      ]);
+
+      const fields = await promise;
+      expect(fields.get("b1")?.lastOutputChangeAt).toBe(100);
+      expect([...fields.keys()].sort()).toEqual(["a1", "b1"]);
       client.dispose();
     });
 
