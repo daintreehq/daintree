@@ -76,10 +76,7 @@ export class CloudGuestPowerOff {
   async tick(): Promise<void> {
     if (this.disposed) return;
     const bindings = this.deps.store.bindings();
-    const live = new Set(bindings.map((binding) => binding.id));
-    for (const map of [this.problems, this.checkedAt, this.retryAt, this.unconfirmed]) {
-      for (const id of map.keys()) if (!live.has(id)) map.delete(id);
-    }
+    this.forgetRemoved(bindings);
     const now = this.now();
     for (const binding of bindings) {
       if (this.disposed) return;
@@ -94,6 +91,14 @@ export class CloudGuestPowerOff {
           ? retryAt <= now
           : checked === undefined || now - checked >= CHECK_EVERY_MS;
       if (due) await this.arm(binding.hostId, session);
+    }
+  }
+
+  /** Forgets what was found for bindings no longer stored; the keeper may not pass again to do it. */
+  forgetRemoved(bindings = this.deps.store.bindings()): void {
+    const live = new Set(bindings.map((binding) => binding.id));
+    for (const map of [this.problems, this.checkedAt, this.retryAt, this.unconfirmed]) {
+      for (const id of map.keys()) if (!live.has(id)) map.delete(id);
     }
   }
 
@@ -118,6 +123,8 @@ export class CloudGuestPowerOff {
       })
       .finally(() => {
         if (this.arming.get(bindingId)?.promise === promise) this.arming.delete(bindingId);
+        // Its host was removed meanwhile: what it just wrote is about a binding that is gone.
+        if (!this.deps.store.binding(bindingId)) this.forgetRemoved();
         const next = this.queued.get(bindingId);
         this.queued.delete(bindingId);
         if (next && next.session.isOpen && this.deps.sessionFor(next.hostId) === next.session) {

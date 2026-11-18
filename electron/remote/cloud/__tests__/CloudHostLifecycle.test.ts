@@ -2485,6 +2485,7 @@ describe("CloudHostLifecycle guest power-off (#17362)", () => {
           bindingId === env?.store.bindings()[0]?.id ? problem : null
         ),
         tick: vi.fn(async () => {}),
+        forgetRemoved: vi.fn(),
       };
       env = await setup({ machine: "running" }, { guestPowerOff });
       env.lifecycle.start();
@@ -2567,6 +2568,7 @@ describe("CloudHostLifecycle background timers (#17795)", () => {
     const guestPowerOff = {
       problemFor: vi.fn((): string | null => null),
       tick: vi.fn(async () => {}),
+      forgetRemoved: vi.fn(),
     };
     const env = await setup({ machine: "running" }, { machineKeys, guestPowerOff });
     return { ...env, machineKeys, guestPowerOff };
@@ -2618,9 +2620,12 @@ describe("CloudHostLifecycle background timers (#17795)", () => {
     expect(env.machineKeys.tick).toHaveBeenCalledTimes(1);
     expect(env.guestPowerOff.tick).toHaveBeenCalledTimes(1);
 
+    expect(env.guestPowerOff.forgetRemoved).not.toHaveBeenCalled();
     await env.lifecycle.forgetAccountHosts(env.account.id);
     expect(env.store.bindings()).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
+    // No keeper pass comes to forget what was found about the machine.
+    expect(env.guestPowerOff.forgetRemoved).toHaveBeenCalledWith([]);
     env.backend.get.mockClear();
     await vi.advanceTimersByTimeAsync(HOUR);
     expect(env.backend.get).not.toHaveBeenCalled();

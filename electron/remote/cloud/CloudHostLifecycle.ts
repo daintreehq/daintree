@@ -211,7 +211,7 @@ export interface CloudHostLifecycleDeps {
   /** The keys machines renew and stop themselves with (#17361); absent where nothing issues them. */
   machineKeys?: Pick<CloudMachineKeys, "problemFor" | "tick" | "revokePending">;
   /** EC2 and Compute Engine machines powering themselves off once idle (#17362). */
-  guestPowerOff?: Pick<CloudGuestPowerOff, "problemFor" | "tick">;
+  guestPowerOff?: Pick<CloudGuestPowerOff, "problemFor" | "tick" | "forgetRemoved">;
   /**
    * Whether a worktree on this device is gone: true once its root reads as
    * missing, false while it is there, null when that couldn't be told (a hung
@@ -566,9 +566,8 @@ export class CloudHostLifecycle {
    */
   private armTimers(): void {
     if (this.disposed) return;
-    const machines = this.deps.store
-      .bindings()
-      .some((binding) => Boolean(binding.resourceId && binding.hostId));
+    const bindings = this.deps.store.bindings();
+    const machines = bindings.some((binding) => Boolean(binding.resourceId && binding.hostId));
     const keeper =
       machines ||
       (this.deps.machineKeys !== undefined && this.deps.store.machineKeys().some(awaitsRevoke));
@@ -589,6 +588,8 @@ export class CloudHostLifecycle {
     } else if (!keeper && this.keeperTimer) {
       clearInterval(this.keeperTimer);
       this.keeperTimer = null;
+      // Its pass would have forgotten a removed machine's findings; none comes now.
+      this.deps.guestPowerOff?.forgetRemoved(bindings);
     }
   }
 
