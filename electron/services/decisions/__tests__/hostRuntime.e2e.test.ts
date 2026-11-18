@@ -1099,6 +1099,81 @@ describe("Answers the person makes on the owner computer (#17101)", () => {
         .map((r) => r.deviceId)
     ).toEqual([owner.deviceId]);
   }, 60_000);
+
+  it("types the person's decline of the owner's own question into the pane still listening, through Daintree's view path (#17239)", async () => {
+    const { owner, relay, terminals, listener, service } = await startOwner();
+    relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
+    const asked = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    expect(relay.declared.get(owner.deviceId)).toContain("owner-desktop-declines-v1");
+    const question = await readOnHost(service, "pane-2", asked);
+    const decline = {
+      reference: question.reference,
+      declineId: "0190f0aa-1111-4222-8333-44445555eeee",
+      expectedRevision: question.revision,
+    };
+
+    // A reference naming another of this computer's panes names nothing.
+    await expect(
+      service.declineQuestion({
+        ...decline,
+        reference: { ...decline.reference, terminalId: "pane-1" },
+      })
+    ).resolves.toEqual({ result: "refused", reason: "not-found" });
+
+    await expect(service.declineQuestion(decline)).resolves.toEqual({
+      result: "submitted",
+      declineId: decline.declineId,
+      outcome: { status: "declined" },
+    });
+    await expect(service.getDeclineResult(decline.declineId)).resolves.toEqual({
+      result: "read",
+      questionId: asked,
+      expectedRevision: question.revision,
+      outcome: { status: "declined" },
+    });
+
+    // Told plainly that the person declined, with nothing approved, as a phone's Dismiss would.
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    const typed = terminals.submitted[0]!;
+    expect(typed.id).toBe("pane-2");
+    expect(typed.text).toContain("source: human\nstatus: declined\nauthorised: no\nnote: ");
+    expect(typedChoices(typed.text)).toEqual([]);
+    const decision = await callTool(listener.port, "token-pane-2", "get_decision", {
+      question_id: asked,
+    });
+    expect(decision.structuredContent).toMatchObject({
+      status: "cancelled",
+      closed_reason: "declined",
+      choice: null,
+    });
+    // It leaves this computer's waiting questions, and needs no one.
+    await vi.waitFor(
+      async () =>
+        expect((await new DaintreeLocalStore(sqlite).getQuestion(asked))!.local_status).toBe(
+          "cancelled"
+        ),
+      { timeout: 15_000 }
+    );
+    expect(await service.getAnswerDelivery()!.attentionItems()).toEqual([]);
+    expect(await readOnHost(service, "pane-2", asked)).toMatchObject({
+      status: "cancelled",
+      closedReason: "declined",
+    });
+
+    // Sent once, by the owner's own device: the same decline again sends nothing more and types nothing.
+    await expect(service.declineQuestion(decline)).resolves.toMatchObject({
+      result: "submitted",
+      outcome: { status: "declined" },
+    });
+    expect(
+      relay.requests
+        .filter((r) => r.path === `/api/v1/questions/${asked}/cancel`)
+        .map((r) => r.deviceId)
+    ).toEqual([owner.deviceId]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(terminals.submitted).toHaveLength(1);
+  }, 60_000);
 });
 
 describe("Decisions on an enrolled Remote Host, with its owner's computer gone (#16022)", () => {

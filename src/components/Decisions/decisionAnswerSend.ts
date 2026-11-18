@@ -1,5 +1,6 @@
 import { decisionsClient } from "@/clients/decisionsClient";
 import {
+  isDeclineInFlight,
   isInFlight,
   readAnswerRecord,
   useDecisionsAnswerStore,
@@ -32,10 +33,17 @@ export function isCommitted(phase: AnswerPhase): boolean {
   );
 }
 
-/** Whether Send may start a new answer: nothing in flight, and none taken. */
+/** Whether Send may start a new answer: nothing in flight, none taken, and no dismissal from here. */
 export function canStartAnswer(record: AnswerRecord): boolean {
-  if (isInFlight(record)) return false;
+  if (isInFlight(record) || isDeclineCommitted(record)) return false;
   return record.submission === null || !isCommitted(record.submission.phase);
+}
+
+/** A dismissal from here that is under way or was taken: the question isn't answered from here meanwhile. */
+export function isDeclineCommitted(record: AnswerRecord): boolean {
+  if (isDeclineInFlight(record)) return true;
+  const phase = record.decline?.phase;
+  return phase?.kind === "settled" && phase.outcome.status === "declined";
 }
 
 /** The answer one send or one recovery is about: the store's generation then, and its id. */
@@ -108,7 +116,7 @@ class DeadlineError extends Error {
 }
 
 /** `call`, or a rejection once the deadline passes; a reply after that is ignored. */
-function withDeadline<T>(call: () => Promise<T>): Promise<T> {
+export function withDeadline<T>(call: () => Promise<T>): Promise<T> {
   // Called first, so one that throws at once never leaves a deadline armed.
   const pending = call();
   let timer: ReturnType<typeof setTimeout> | undefined;

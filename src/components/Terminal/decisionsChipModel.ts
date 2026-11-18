@@ -8,7 +8,14 @@ import { pluralize } from "@/lib/pluralize";
  */
 
 export type DecisionItemKind =
-  "attention" | "uncertain" | "answer" | "expired" | "open" | "queued" | "cancelling";
+  | "attention"
+  | "uncertain"
+  | "answer"
+  | "expired"
+  | "open"
+  | "queued"
+  | "dismissing"
+  | "cancelling";
 
 /**
  * What an answer for this pane waits on before it's typed in (#16282): a
@@ -68,7 +75,8 @@ const KIND_ORDER: Record<DecisionItemKind, number> = {
   expired: 3,
   open: 4,
   queued: 5,
-  cancelling: 6,
+  dismissing: 6,
+  cancelling: 7,
 };
 
 /**
@@ -133,13 +141,16 @@ function epoch(iso: string | null): number | null {
 /**
  * Every outstanding question for the pane, worst first, then in the order
  * they were asked. `cancelling` holds the questions a person withdrew here
- * that main has committed but the relay hasn't confirmed: each stays listed,
- * as cancelling, until the pane's state no longer lists it as waiting.
+ * that main has committed but the relay hasn't confirmed, and `dismissing`
+ * those a person dismissed here (#17239) whose decline is under way or was
+ * taken: each stays listed, so, until the pane's state no longer lists it as
+ * waiting.
  */
 export function decisionItems(
   state: PaneDecisionState,
   wait: PaneWait = "composer",
-  cancelling: ReadonlySet<string> = NO_IDS
+  cancelling: ReadonlySet<string> = NO_IDS,
+  dismissing: ReadonlySet<string> = NO_IDS
 ): DecisionItem[] {
   const items: DecisionItem[] = [];
   for (const entry of state.needsAttention) {
@@ -178,16 +189,19 @@ export function decisionItems(
   for (const question of state.openQuestions) {
     const queued = question.status === "queued";
     const withdrawn = cancelling.has(question.questionId);
+    const declined = !withdrawn && dismissing.has(question.questionId);
     items.push({
       questionId: question.questionId,
       label: aliasLabel(question.alias),
-      kind: withdrawn ? "cancelling" : queued ? "queued" : "open",
+      kind: withdrawn ? "cancelling" : declined ? "dismissing" : queued ? "queued" : "open",
       // Answered from the question's view as well as on a phone (#17102).
       status: withdrawn
         ? "Cancelling, waiting for the relay to confirm"
-        : queued
-          ? "Queued to send; you can answer it here"
-          : "Waiting for an answer, here or on your phone",
+        : declined
+          ? "Dismissed here, waiting for it to close"
+          : queued
+            ? "Queued to send; you can answer it here"
+            : "Waiting for an answer, here or on your phone",
       reason: null,
       waitsFor: null,
       askedAt: epoch(question.askedAt),
@@ -202,30 +216,32 @@ function isAttention(item: DecisionItem): boolean {
   return item.kind === "attention" || item.kind === "uncertain";
 }
 
-/** Still waiting for an answer, so a person may withdraw it. */
+/** Still waiting for an answer, so a person may dismiss it. */
 export function isCancellable(item: DecisionItem): boolean {
   return item.kind === "open" || item.kind === "queued";
 }
 
 /**
- * Why some rows offer no cancel: an answered question's answer is already
+ * Why some rows offer no Dismiss: an answered question's answer is already
  * the agent's, and an expired one is over. Null when every row is waiting,
- * or already being cancelled.
+ * or already being dismissed or withdrawn.
  */
 export function cancelNote(items: readonly DecisionItem[]): string | null {
-  // A held follow-up puts a question still waiting under attention too; its waiting row offers the cancel.
+  // A held follow-up puts a question still waiting under attention too; its waiting row offers Dismiss.
   const waiting = new Set(
     items
-      .filter((item) => isCancellable(item) || item.kind === "cancelling")
+      .filter(
+        (item) => isCancellable(item) || item.kind === "cancelling" || item.kind === "dismissing"
+      )
       .map((item) => item.questionId)
   );
   const answered = items.some(
     (item) => (item.kind === "answer" || isAttention(item)) && !waiting.has(item.questionId)
   );
   const expired = items.some((item) => item.kind === "expired");
-  if (answered && expired) return "Answered and expired questions can't be cancelled";
-  if (answered) return "Answered questions can't be cancelled";
-  if (expired) return "Expired questions can't be cancelled";
+  if (answered && expired) return "Answered and expired questions can't be dismissed";
+  if (answered) return "Answered questions can't be dismissed";
+  if (expired) return "Expired questions can't be dismissed";
   return null;
 }
 
@@ -266,6 +282,8 @@ export function chipLabel(items: readonly DecisionItem[]): ChipLabel {
       return { text: `${item.label} expired`, detail: null };
     case "queued":
       return { text: `${item.label} queued`, detail: null };
+    case "dismissing":
+      return { text: `${item.label} dismissing`, detail: null };
     case "cancelling":
       return { text: `${item.label} cancelling`, detail: null };
     default:
@@ -282,9 +300,13 @@ export function deliveryNotes(
   wait: PaneWait = "composer"
 ): string[] {
   const notes: string[] = [];
-  // A question being withdrawn has no answer coming.
+  // A question being dismissed or withdrawn has no answer coming.
   const waitsHere = items.some(
-    (item) => !isAttention(item) && item.kind !== "cancelling" && item.waitsFor !== "host"
+    (item) =>
+      !isAttention(item) &&
+      item.kind !== "cancelling" &&
+      item.kind !== "dismissing" &&
+      item.waitsFor !== "host"
   );
   if (waitsHere) notes.push(`Answers are typed in here ${WAIT_PHRASES[wait]}`);
   if (items.some((item) => item.waitsFor === "host")) {
@@ -306,6 +328,8 @@ export function itemSentence(item: DecisionItem): string {
       return `Question ${item.label} is waiting for an answer, here or on your phone`;
     case "queued":
       return `Question ${item.label} is queued to send; you can answer it here`;
+    case "dismissing":
+      return `Question ${item.label} was dismissed here, waiting for it to close`;
     case "cancelling":
       return `Question ${item.label} is being cancelled, waiting for the relay to confirm`;
     case "answer":
@@ -350,6 +374,7 @@ const SUMMARY_GROUPS: Array<{
     many: "waiting for an answer",
   },
   { matches: (item) => item.kind === "queued", one: "queued to send", many: "queued to send" },
+  { matches: (item) => item.kind === "dismissing", one: "dismissing", many: "dismissing" },
   { matches: (item) => item.kind === "cancelling", one: "cancelling", many: "cancelling" },
 ];
 

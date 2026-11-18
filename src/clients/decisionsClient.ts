@@ -6,10 +6,13 @@ import type {
 } from "@shared/types/decisionsAttention";
 import type {
   AnswerDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
   DecisionQuestionAnswerResult,
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
+  DecisionQuestionDeclineResult,
   DecisionQuestionImagePart,
   DecisionQuestionImagePartResult,
   DecisionQuestionImageResult,
@@ -304,6 +307,18 @@ export const decisionsClient = {
   /** Where an answer stands, by the id it was submitted with: a queued one settles later. */
   getAnswerResult: (answerId: string): Promise<DecisionAnswerResultRead> =>
     window.electron.decisions.getAnswerResult({ answerId }),
+
+  /**
+   * The person's decline of a question (#17239), signed by this computer,
+   * named as an answer is. Send the same `declineId` again when a result is lost.
+   */
+  declineQuestion: (
+    payload: DeclineDecisionQuestionPayload
+  ): Promise<DecisionQuestionDeclineResult> => window.electron.decisions.declineQuestion(payload),
+
+  /** Where a decline stands, by the id it was submitted with: a queued one settles later. */
+  getDeclineResult: (declineId: string): Promise<DecisionDeclineResultRead> =>
+    window.electron.decisions.getDeclineResult({ declineId }),
 
   /** Every pane's state changes for this project. Callers filter by `terminalId`. */
   onPaneState: (callback: (state: PaneDecisionState) => void): (() => void) =>

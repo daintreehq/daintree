@@ -30,6 +30,7 @@ import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.
 import type { QuestionReadScope } from "../questionContent.js";
 import type {
   AnswerDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
   DecisionQuestionCancelResult,
   DecisionQuestionListItem,
 } from "../../../../shared/types/decisionsQuestion.js";
@@ -1269,6 +1270,8 @@ describe("DecisionsService relay connection", () => {
     const cancels: Array<{ route: number; questionId: string; scope: QuestionReadScope }> = [];
     const answers: Array<{ route: number; payload: unknown; hostId: string | null }> = [];
     const results: Array<{ route: number; answerId: string }> = [];
+    const declines: Array<{ route: number; payload: unknown; hostId: string | null }> = [];
+    const declineReads: Array<{ route: number; declineId: string }> = [];
     const openQuestions = (source: QuestionSource, previous: Promise<void>) => {
       let release!: () => void;
       const released = new Promise<void>((resolve) => {
@@ -1301,6 +1304,21 @@ describe("DecisionsService relay connection", () => {
           results.push({ route: opened.indexOf(record) + 1, answerId });
           return { result: "not-found" as const };
         },
+        declineForPerson: async (
+          payload: DeclineDecisionQuestionPayload,
+          hostId: string | null
+        ) => {
+          declines.push({ route: opened.indexOf(record) + 1, payload, hostId });
+          return {
+            result: "submitted" as const,
+            declineId: payload.declineId,
+            outcome: { status: "declined" as const },
+          };
+        },
+        declineResultForPerson: async (declineId: string) => {
+          declineReads.push({ route: opened.indexOf(record) + 1, declineId });
+          return { result: "not-found" as const };
+        },
         close: () => {
           record.closed += 1;
           events.push(`questions closed ${opened.indexOf(record) + 1}`);
@@ -1310,7 +1328,7 @@ describe("DecisionsService relay connection", () => {
         },
       };
     };
-    return { opened, openQuestions, cancels, answers, results };
+    return { opened, openQuestions, cancels, answers, results, declines, declineReads };
   }
 
   const SOURCE: QuestionSource = {
@@ -1451,6 +1469,56 @@ describe("DecisionsService relay connection", () => {
     await service.stop();
     await expect(service.answerQuestion(payload)).resolves.toEqual({ result: "not-running" });
     expect(routes.answers).toHaveLength(1);
+  });
+
+  it("hands the person's dismissal to the current route with this computer's host id, and never on a Host (#17239)", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    const payload: DeclineDecisionQuestionPayload = {
+      reference: {
+        hostId: "host_studio",
+        projectId: "project-b",
+        terminalId: "pane-1",
+        questionId: "q_0123456789",
+      },
+      declineId: "0190f0aa-1111-4222-8333-44445555dddd",
+      expectedRevision: 2,
+    };
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }));
+    await expect(service.declineQuestion(payload)).resolves.toEqual({ result: "not-running" });
+    await expect(service.getDeclineResult(payload.declineId)).resolves.toEqual({
+      result: "not-running",
+    });
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    await expect(service.declineQuestion(payload)).resolves.toEqual({
+      result: "submitted",
+      declineId: payload.declineId,
+      outcome: { status: "declined" },
+    });
+    await expect(service.getDeclineResult(payload.declineId)).resolves.toEqual({
+      result: "not-found",
+    });
+    expect(routes.declines).toEqual([{ route: 1, payload, hostId: "host_aaaaaaaa" }]);
+    expect(routes.declineReads).toEqual([{ route: 1, declineId: payload.declineId }]);
+    for (const route of routes.opened) route.release();
+    await service.stop();
+    await expect(service.declineQuestion(payload)).resolves.toEqual({ result: "not-running" });
+
+    // A Remote Host's own lifetime never signs the person's decline, and its route is never asked to.
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }), "host");
+    made.at(-1)!.options.onQuestionsReady!(SOURCE);
+    await expect(service.declineQuestion(payload)).resolves.toEqual({
+      result: "refused",
+      reason: "not-owner",
+    });
+    await expect(service.getDeclineResult(payload.declineId)).resolves.toEqual({
+      result: "not-found",
+    });
+    expect(routes.declines).toHaveLength(1);
+    expect(routes.declineReads).toHaveLength(1);
+    for (const route of routes.opened) route.release();
+    await service.stop();
   });
 
   it("hands a launch the route's port once the connection opens it, waiting while its identity loads", async () => {

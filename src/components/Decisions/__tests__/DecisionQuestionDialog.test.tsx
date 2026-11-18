@@ -3,14 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import type {
+  DecisionDeclineResultRead,
   DecisionQuestionCancelResult,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
   DecisionQuestionList,
   DecisionQuestionReference,
+  DecisionQuestionDeclineResult,
   DecisionQuestionSummariesResult,
+  DeclineDecisionQuestionPayload,
 } from "@shared/types/decisionsQuestion";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 
 let decisionsOn = true;
@@ -44,6 +48,10 @@ const getQuestionSummariesByReference =
 const cancelQuestion = vi.fn<(payload: Payload) => Promise<DecisionQuestionCancelResult>>();
 const cancelQuestionByReference =
   vi.fn<(payload: ByReference) => Promise<DecisionQuestionCancelResult>>();
+const declineQuestion =
+  vi.fn<(payload: DeclineDecisionQuestionPayload) => Promise<DecisionQuestionDeclineResult>>();
+const getDeclineResult =
+  vi.fn<(payload: { declineId: string }) => Promise<DecisionDeclineResultRead>>();
 let paneListeners: Array<(state: PaneDecisionState) => void> = [];
 let listListeners: Array<(list: DecisionQuestionList) => void> = [];
 
@@ -134,8 +142,36 @@ function pushPane(terminalId: string) {
   }
 }
 
+/** Main's answer to the next dismissal: `outcome`, under the id it was sent with. */
+function declinedOnce(
+  outcome: Extract<DecisionQuestionDeclineResult, { result: "submitted" }>["outcome"]
+) {
+  declineQuestion.mockImplementationOnce(async ({ declineId }) => ({
+    result: "submitted",
+    declineId,
+    outcome,
+  }));
+}
+
 function openView(ids: string[], id: string) {
   act(() => useDecisionsQuestionViewStore.getState().open("t1", ids, id));
+}
+
+/**
+ * The withdrawal the shown question's footer offers once its dismissal can't
+ * be taken, opened from there: the confirmation, ready to withdraw.
+ */
+async function reachWithdrawal(): Promise<HTMLElement> {
+  declinedOnce({ status: "unsupported", by: "relay" });
+  fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
+  const asked = await screen.findByRole("alertdialog");
+  await act(async () => {
+    fireEvent.click(within(asked).getByRole("button", { name: "Dismiss question" }));
+  });
+  fireEvent.click(within(asked).getByRole("button", { name: "Keep question" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  fireEvent.click(await screen.findByTestId("decision-question-withdraw"));
+  return screen.findByRole("alertdialog");
 }
 
 function openReference(references: DecisionQuestionReference[], reference = references[0]!) {
@@ -195,6 +231,13 @@ beforeEach(() => {
   });
   cancelQuestion.mockReset().mockResolvedValue({ result: "cancelling" });
   cancelQuestionByReference.mockReset().mockResolvedValue({ result: "cancelling" });
+  declineQuestion.mockReset().mockImplementation(async ({ declineId }) => ({
+    result: "submitted",
+    declineId,
+    outcome: { status: "declined" },
+  }));
+  getDeclineResult.mockReset().mockResolvedValue({ result: "not-found" });
+  useDecisionsAnswerStore.getState().clear();
   Reflect.set(window, "electron", {
     decisions: {
       getQuestionContent,
@@ -203,6 +246,8 @@ beforeEach(() => {
       getQuestionSummariesByReference,
       cancelQuestion,
       cancelQuestionByReference,
+      declineQuestion,
+      getDeclineResult,
     },
     events: {
       on: (name: string, callback: (list: DecisionQuestionList) => void) => {
@@ -763,8 +808,8 @@ describe("DecisionQuestionDialog", () => {
       expect(paneListeners).toHaveLength(0);
     });
 
-    it("withdraws a waiting question by its reference, after a confirmation naming it", async () => {
-      QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    it("dismisses a waiting question by its reference, after a confirmation naming it, at the revision read (#17239)", async () => {
+      QUESTIONS.qw = content("qw", 11, { status: "open", thread: [], revision: 4 });
       const waiting = { ...OTHER_PROJECT, questionId: "qw" };
       getQuestionSummariesByReference.mockResolvedValue({
         result: "read",
@@ -772,20 +817,60 @@ describe("DecisionQuestionDialog", () => {
       });
       try {
         openReference([waiting]);
-        fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+        fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
         const confirm = await screen.findByRole("alertdialog");
-        expect(confirm.textContent).toContain("q-11");
+        expect(confirm.textContent).toContain("Dismiss question q-11?");
         await waitFor(() => expect(confirm.textContent).toContain("Ship the migration?"));
         expect(getQuestionSummariesByReference).toHaveBeenCalledWith({ references: [waiting] });
+        const reads = getQuestionContentByReference.mock.calls.length;
 
         await act(async () => {
-          fireEvent.click(within(confirm).getByRole("button", { name: "Cancel question" }));
+          fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        });
+        expect(declineQuestion).toHaveBeenCalledExactlyOnceWith({
+          reference: QUESTIONS.qw!.reference,
+          declineId: expect.any(String),
+          expectedRevision: 4,
+        });
+        expect(cancelQuestionByReference).not.toHaveBeenCalled();
+        expect(cancelQuestion).not.toHaveBeenCalled();
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        // Read again first, and again once taken, to show it declined once it's recorded.
+        await waitFor(() =>
+          expect(getQuestionContentByReference.mock.calls.length).toBeGreaterThanOrEqual(reads + 2)
+        );
+        expect(screen.getByTestId("decision-question-dismiss-status").textContent).toMatch(
+          /^Dismissed/
+        );
+      } finally {
+        delete QUESTIONS.qw;
+      }
+    });
+
+    it("withdraws one by its reference only after a second confirmation, once the relay can't take a dismissal", async () => {
+      QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+      const waiting = { ...OTHER_PROJECT, questionId: "qw" };
+      declinedOnce({ status: "unsupported", by: "relay" });
+      try {
+        openReference([waiting]);
+        fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
+        const confirm = await screen.findByRole("alertdialog");
+        await act(async () => {
+          fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+        });
+        expect(confirm.textContent).toContain("Withdraw question q-11?");
+        expect(confirm.textContent).toContain("Your relay needs an update");
+        expect(cancelQuestionByReference).not.toHaveBeenCalled();
+
+        const withdraw = within(confirm).getByRole("button", { name: "Withdraw question" });
+        await waitFor(() => expect(withdraw.hasAttribute("aria-disabled")).toBe(false));
+        await act(async () => {
+          fireEvent.click(withdraw);
         });
         expect(cancelQuestionByReference).toHaveBeenCalledExactlyOnceWith({ reference: waiting });
         expect(cancelQuestion).not.toHaveBeenCalled();
+        expect(declineQuestion).toHaveBeenCalledOnce();
         await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-        // Read again at once, to show it withdrawn once the relay confirms.
-        await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(2));
       } finally {
         delete QUESTIONS.qw;
       }
@@ -800,7 +885,7 @@ describe("DecisionQuestionDialog", () => {
     try {
       openView(["qd"], "qd");
       let body = await screen.findByTestId("decision-question-content");
-      expect(screen.queryByTestId("decision-question-cancel")).not.toBeNull();
+      expect(screen.queryByTestId("decision-question-dismiss")).not.toBeNull();
       expect(body.querySelector(EXPIRY)).not.toBeNull();
       const waiting = statusOf(body);
 
@@ -811,7 +896,7 @@ describe("DecisionQuestionDialog", () => {
         thread: [{ type: "declined", entryId: "d1", sentAt: "2026-11-02T10:07:00.000Z" }],
       });
       act(() => pushPane("t1"));
-      await waitFor(() => expect(screen.queryByTestId("decision-question-cancel")).toBeNull());
+      await waitFor(() => expect(screen.queryByTestId("decision-question-dismiss")).toBeNull());
       body = screen.getByTestId("decision-question-content");
       const declined = statusOf(body);
       expect(declined).not.toBe(waiting);
@@ -844,25 +929,80 @@ describe("DecisionQuestionDialog", () => {
     }
   });
 
-  it("offers a withdrawal only while the question waits, and sends a pane's through its pane", async () => {
+  it("offers Dismiss only while the question waits, and withdraws a pane's through its pane when it can't be dismissed", async () => {
     openView(["qa"], "qa");
     await screen.findByTestId("decision-question-content");
-    expect(screen.queryByTestId("decision-question-cancel")).toBeNull();
+    expect(screen.queryByTestId("decision-question-dismiss")).toBeNull();
 
     QUESTIONS.qw = content("qw", 11, { status: "queued", thread: [] });
+    declinedOnce({ status: "unsupported", by: "asking-desktop" });
     try {
       openView(["qw"], "qw");
-      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
-      expect(confirm.textContent).toMatch(/hasn't been sent to your phones yet/);
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Cancel question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      });
+      expect(confirm.textContent).toMatch(/hasn't been sent to your phones yet/);
+      const withdraw = within(confirm).getByRole("button", { name: "Withdraw question" });
+      await waitFor(() => expect(withdraw.hasAttribute("aria-disabled")).toBe(false));
+      await act(async () => {
+        fireEvent.click(withdraw);
       });
       expect(cancelQuestion).toHaveBeenCalledExactlyOnceWith({
         terminalId: "t1",
         questionId: "qw",
       });
       expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    } finally {
+      delete QUESTIONS.qw;
+    }
+  });
+
+  it("follows a queued dismissal by its id while shown, offering no answer meanwhile, and offers withdrawing once it can't be taken (#17239)", async () => {
+    QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
+    declinedOnce({ status: "queued" });
+    try {
+      openView(["qw"], "qw");
+      await screen.findByTestId("decision-question-content");
+      // It takes an answer here: the options are the composer's.
+      expect(document.querySelector("section[aria-label='Options']")).toBeNull();
+      fireEvent.click(screen.getByTestId("decision-question-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      });
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+      const status = screen.getByTestId("decision-question-dismiss-status");
+      expect(status.textContent).toMatch(/Dismissal queued/);
+      expect(screen.queryByTestId("decision-question-dismiss")).toBeNull();
+      // Nothing is answered from here while it's being dismissed.
+      expect(document.querySelector("section[aria-label='Options']")).not.toBeNull();
+
+      const declineId = declineQuestion.mock.calls[0]![0].declineId;
+      getDeclineResult.mockResolvedValue({
+        result: "read",
+        questionId: "qw",
+        expectedRevision: 1,
+        outcome: { status: "unsupported", by: "relay" },
+      });
+      await waitFor(() => expect(getDeclineResult).toHaveBeenCalledWith({ declineId }));
+      const fallback = await screen.findByTestId("decision-question-dismiss-fallback");
+      expect(fallback.textContent).toContain("Your relay needs an update");
+      expect(declineQuestion).toHaveBeenCalledOnce();
+
+      fireEvent.click(screen.getByTestId("decision-question-withdraw"));
+      const asked = await screen.findByRole("alertdialog");
+      expect(asked.textContent).toContain("Withdraw question q-11?");
+      expect(asked.textContent).toContain("Your relay needs an update");
+      await act(async () => {
+        fireEvent.click(within(asked).getByRole("button", { name: "Withdraw question" }));
+      });
+      expect(cancelQuestion).toHaveBeenCalledExactlyOnceWith({
+        terminalId: "t1",
+        questionId: "qw",
+      });
     } finally {
       delete QUESTIONS.qw;
     }
@@ -876,12 +1016,12 @@ describe("DecisionQuestionDialog", () => {
     ["cancelled", false],
     ["expired", false],
     ["publish-failed", false],
-  ] as const)("offers a withdrawal for a %s question: %s", async (status, offered) => {
+  ] as const)("offers Dismiss for a %s question: %s", async (status, offered) => {
     QUESTIONS.qw = content("qw", 11, { status, thread: [] });
     try {
       openView(["qw"], "qw");
       await screen.findByTestId("decision-question-content");
-      expect(screen.queryByTestId("decision-question-cancel") !== null).toBe(offered);
+      expect(screen.queryByTestId("decision-question-dismiss") !== null).toBe(offered);
     } finally {
       delete QUESTIONS.qw;
     }
@@ -891,17 +1031,18 @@ describe("DecisionQuestionDialog", () => {
     QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
     try {
       openView(["qw"], "qw");
-      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
       const confirm = await screen.findByRole("alertdialog");
 
       QUESTIONS.qw = content("qw", 11, { status: "human-answered" });
       act(() => pushPane("t1"));
       await waitFor(() => expect(confirm.textContent).toMatch(/isn't waiting for an answer/));
-      const send = within(confirm).getByRole("button", { name: "Cancel question" });
+      const send = within(confirm).getByRole("button", { name: "Dismiss question" });
       expect(send.getAttribute("aria-disabled")).toBe("true");
       await act(async () => {
         fireEvent.click(send);
       });
+      expect(declineQuestion).not.toHaveBeenCalled();
       expect(cancelQuestion).not.toHaveBeenCalled();
     } finally {
       delete QUESTIONS.qw;
@@ -912,8 +1053,7 @@ describe("DecisionQuestionDialog", () => {
     QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
     try {
       openView(["qw"], "qw");
-      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
-      const confirm = await screen.findByRole("alertdialog");
+      const confirm = await reachWithdrawal();
       const pending: Array<(result: DecisionQuestionContentResult) => void> = [];
       getQuestionContent.mockImplementation(
         () => new Promise<DecisionQuestionContentResult>((resolve) => pending.push(resolve))
@@ -922,7 +1062,7 @@ describe("DecisionQuestionDialog", () => {
       expect(pending).toHaveLength(1);
 
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Cancel question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Withdraw question" }));
       });
       expect(cancelQuestion).toHaveBeenCalledOnce();
       expect(pending).toHaveLength(1);
@@ -941,10 +1081,9 @@ describe("DecisionQuestionDialog", () => {
     );
     try {
       openView(["qw", "qa"], "qw");
-      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
-      const confirm = await screen.findByRole("alertdialog");
+      const confirm = await reachWithdrawal();
       await act(async () => {
-        fireEvent.click(within(confirm).getByRole("button", { name: "Cancel question" }));
+        fireEvent.click(within(confirm).getByRole("button", { name: "Withdraw question" }));
       });
       expect(cancelQuestion).toHaveBeenCalledOnce();
 
@@ -958,16 +1097,16 @@ describe("DecisionQuestionDialog", () => {
     }
   });
 
-  it("keeps focus in the view when stepping away from the withdrawal button by arrow key", async () => {
+  it("keeps focus in the view when stepping away from the dismissal button by arrow key", async () => {
     QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
     try {
       openView(["qw", "qa"], "qw");
-      const cancel = await screen.findByTestId("decision-question-cancel");
+      const cancel = await screen.findByTestId("decision-question-dismiss");
       act(() => cancel.focus());
       fireEvent.keyDown(cancel, { key: "ArrowRight" });
       await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-7"));
       expect(document.activeElement).toBe(screen.getByTestId("decision-question-next"));
-      expect(screen.queryByTestId("decision-question-cancel")).toBeNull();
+      expect(screen.queryByTestId("decision-question-dismiss")).toBeNull();
 
       fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
       expect(useDecisionsQuestionViewStore.getState().request?.index).toBe(0);
@@ -980,16 +1119,17 @@ describe("DecisionQuestionDialog", () => {
     QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
     try {
       openView(["qw"], "qw");
-      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
       await screen.findByRole("alertdialog");
 
       act(() => useDecisionsQuestionViewStore.getState().close());
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       openView(["qw"], "qw");
-      await screen.findByTestId("decision-question-cancel");
+      await screen.findByTestId("decision-question-dismiss");
       await act(async () => {});
 
       expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(declineQuestion).not.toHaveBeenCalled();
       expect(cancelQuestion).not.toHaveBeenCalled();
     } finally {
       delete QUESTIONS.qw;
@@ -1000,16 +1140,17 @@ describe("DecisionQuestionDialog", () => {
     QUESTIONS.qw = content("qw", 11, { status: "open", thread: [] });
     try {
       openView(["qw", "qa"], "qw");
-      fireEvent.click(await screen.findByTestId("decision-question-cancel"));
+      fireEvent.click(await screen.findByTestId("decision-question-dismiss"));
       await screen.findByRole("alertdialog");
 
       act(() => useDecisionsQuestionViewStore.getState().step(1));
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       act(() => useDecisionsQuestionViewStore.getState().step(-1));
-      await screen.findByTestId("decision-question-cancel");
+      await screen.findByTestId("decision-question-dismiss");
       await act(async () => {});
 
       expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(declineQuestion).not.toHaveBeenCalled();
       expect(cancelQuestion).not.toHaveBeenCalled();
     } finally {
       delete QUESTIONS.qw;

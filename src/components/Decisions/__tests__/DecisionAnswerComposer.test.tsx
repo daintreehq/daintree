@@ -684,22 +684,22 @@ describe("answering a question from the view (#17102)", () => {
     expect(answerQuestion).toHaveBeenCalledOnce();
   });
 
-  it("offers no withdrawal while Send reads the question again", async () => {
+  it("offers no dismissal while Send reads the question again", async () => {
     await openOn("q1");
     fireEvent.click(option("Ship it"));
     getQuestionContent.mockImplementation(() => new Promise(() => {}));
-    expect(screen.queryByTestId("decision-question-cancel")).not.toBeNull();
+    expect(screen.queryByTestId("decision-question-dismiss")).not.toBeNull();
     await act(async () => fireEvent.click(send()));
-    expect(screen.queryByTestId("decision-question-cancel")).toBeNull();
+    expect(screen.queryByTestId("decision-question-dismiss")).toBeNull();
   });
 
-  it("offers no withdrawal while an answer from here is on its way", async () => {
+  it("offers no dismissal while an answer from here is on its way", async () => {
     answerQuestion.mockImplementation(() => new Promise(() => {}));
     await openOn("q1");
-    expect(screen.queryByTestId("decision-question-cancel")).not.toBeNull();
+    expect(screen.queryByTestId("decision-question-dismiss")).not.toBeNull();
     fireEvent.click(option("Ship it"));
     await act(async () => fireEvent.click(send()));
-    await waitFor(() => expect(screen.queryByTestId("decision-question-cancel")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("decision-question-dismiss")).toBeNull());
     expect(status()).toMatch(/Sending/);
   });
 });
