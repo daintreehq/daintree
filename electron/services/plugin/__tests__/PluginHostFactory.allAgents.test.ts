@@ -649,8 +649,11 @@ describe("focused panel", () => {
       tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "terminal", worktreeId: "w" });
       tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "portal", worktreeId: "w" });
 
-      expect(seen.at(-1)).toEqual({ kind: null, agent: false, worktreeId: null });
-      expect(seen.map((f) => f.kind)).not.toContain("portal");
+      expect(seen).toEqual([
+        { kind: null, agent: false, worktreeId: null },
+        { kind: "terminal", agent: false, worktreeId: "w" },
+        { kind: null, agent: false, worktreeId: null },
+      ]);
     });
 
     it("shows a project plugin focus in its own project only", async () => {

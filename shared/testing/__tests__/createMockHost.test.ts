@@ -2194,6 +2194,24 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(received).toHaveLength(2);
     });
 
+    it("onDidChangeFocusedPanel never delivers the retired portal kind to an installed plugin", async () => {
+      const host = createMockHost({
+        capabilities: ["panel:focus-read"],
+        focusedPanel: { kind: "portal", agent: false, worktreeId: "w" },
+      });
+      const received: unknown[] = [];
+      await host.onDidChangeFocusedPanel((f) => received.push(f));
+      await Promise.resolve();
+      host.simulateFocusedPanelChange({ kind: "file", agent: false, worktreeId: "w" });
+      host.simulateFocusedPanelChange({ kind: "portal", agent: false, worktreeId: "w" });
+
+      expect(received).toEqual([
+        { kind: null, agent: false, worktreeId: null },
+        { kind: "file", agent: false, worktreeId: "w" },
+        { kind: null, agent: false, worktreeId: null },
+      ]);
+    });
+
     it("onDidChangeFocusedPanel reads the retired portal kind as no panel and survives a throw", async () => {
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       const host = createMockHost({
