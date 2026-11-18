@@ -55,10 +55,20 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-async function settleProbe(stdout: string): Promise<void> {
+const ACTIVE_ASSERTIONS = JSON.stringify({
+  data: [
+    {
+      storeAssertionRecords: [
+        { assertionDetails: { assertionDetailsModeIdentifier: "com.apple.focus.work" } },
+      ],
+    },
+  ],
+});
+
+async function settleProbe(stdout: string, err: Error | null = null): Promise<void> {
   const callback = childProcessMock.pending.shift();
   if (!callback) throw new Error("no plutil probe in flight");
-  callback(null, stdout, "");
+  callback(err, stdout, "");
   await flush();
 }
 
@@ -87,7 +97,7 @@ describe("os-dnd IPC on macOS", () => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 
-  it("registers without waiting on plutil and answers hydration with the probed boolean", async () => {
+  it("registers without waiting on plutil and answers hydration with the probed state", async () => {
     cleanup = registerOsDndHandlers({} as HandlerDependencies);
     expect(childProcessMock.execFileSync).not.toHaveBeenCalled();
     expect(childProcessMock.pending).toHaveLength(1);
@@ -100,11 +110,26 @@ describe("os-dnd IPC on macOS", () => {
     await flush();
     expect(answered).toBe(false);
 
-    await settleProbe("com.apple.donotdisturb.mode.default\n");
+    await settleProbe(ACTIVE_ASSERTIONS);
     await expect(hydration).resolves.toBe(true);
     expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.OS_DND_STATE_CHANGED, {
       osDndActive: true,
     });
+  });
+
+  it("answers hydration with unknown, not off, when the probe cannot read the state", async () => {
+    cleanup = registerOsDndHandlers({} as HandlerDependencies);
+    const hydration = invokeGetState();
+
+    await settleProbe(ACTIVE_ASSERTIONS, Object.assign(new Error("Command failed"), { code: 1 }));
+    await expect(hydration).resolves.toBeUndefined();
+    expect(broadcastMock).not.toHaveBeenCalled();
+
+    notificationHandlers.get("_NSDoNotDisturbEnabledNotification")?.();
+    expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.OS_DND_STATE_CHANGED, {
+      osDndActive: true,
+    });
+    await expect(invokeGetState()).resolves.toBe(true);
   });
 
   it("answers hydration with a live notification that lands while the probe is in flight", async () => {
@@ -112,7 +137,7 @@ describe("os-dnd IPC on macOS", () => {
     const hydration = invokeGetState();
 
     notificationHandlers.get("_NSDoNotDisturbDisabledNotification")?.();
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE_ASSERTIONS);
 
     await expect(hydration).resolves.toBe(false);
     expect(broadcastMock).toHaveBeenCalledTimes(1);
@@ -127,7 +152,7 @@ describe("os-dnd IPC on macOS", () => {
     cleanup = null;
 
     expect(ipcHandlers.has(OS_DND_METHOD_CHANNELS.getState)).toBe(false);
-    await settleProbe("com.apple.focus.work\n");
+    await settleProbe(ACTIVE_ASSERTIONS);
     expect(broadcastMock).not.toHaveBeenCalled();
   });
 });
