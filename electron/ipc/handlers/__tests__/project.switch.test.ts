@@ -2313,12 +2313,9 @@ describe("project:switch PTY port ordering (#10075)", () => {
 
     const ptyClient = {
       onProjectSwitch: vi.fn(),
-      getTerminalsForProjectAsync: vi.fn(async () => ["t1"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        projectId: "proj-new",
-        kind: "terminal",
-      })),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        { id: "t1", projectId: "proj-new", kind: "terminal" },
+      ]),
     };
     const worktreeService = {
       loadProject: vi.fn(opts.loadProject),
@@ -2679,12 +2676,9 @@ describe("project:switch terminal inventory prefetch", () => {
     projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
     const ptyClient = {
       onProjectSwitch: vi.fn(),
-      getTerminalsForProjectAsync: vi.fn(async () => ["t1"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        projectId: "proj-new",
-        kind: "terminal",
-      })),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        { id: "t1", projectId: "proj-new", kind: "terminal" },
+      ]),
     };
     const worktreeService = {
       loadProject: vi.fn(async () => undefined),
@@ -2717,8 +2711,8 @@ describe("project:switch terminal inventory prefetch", () => {
   it("starts the pty-host inventory fetch for a cold target before the swap", async () => {
     const { invoke, ptyClient, pvm } = setupWith(true);
     await invoke();
-    expect(ptyClient.getTerminalsForProjectAsync).toHaveBeenCalledWith("proj-new");
-    expect(ptyClient.getTerminalsForProjectAsync.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledWith("proj-new");
+    expect(ptyClient.getProjectTerminalsAsync.mock.invocationCallOrder[0]).toBeLessThan(
       pvm.switchTo.mock.invocationCallOrder[0]!
     );
   });
@@ -2726,7 +2720,7 @@ describe("project:switch terminal inventory prefetch", () => {
   it("does not fetch the inventory for a target that already has a live view", async () => {
     const { invoke, ptyClient } = setupWith(false);
     await invoke();
-    expect(ptyClient.getTerminalsForProjectAsync).not.toHaveBeenCalled();
+    expect(ptyClient.getProjectTerminalsAsync).not.toHaveBeenCalled();
   });
 });
 

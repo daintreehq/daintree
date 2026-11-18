@@ -436,6 +436,9 @@ export type PtyHostRequest =
   | { type: "dispose" }
   | { type: "set-log-level-overrides"; overrides: Record<string, string> }
   | { type: "get-terminals-for-project"; projectId: string; requestId: string }
+  // The project's full terminal records in one round trip, for restore
+  // (#17776); `get-terminals-for-project` stays for callers that need ids only.
+  | { type: "get-project-terminals"; projectId: string; requestId: string }
   | { type: "get-terminal"; id: string; requestId: string; submissionToken?: string }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }
   | { type: "reset-terminal-modes"; id: string; requestId: string }
@@ -1005,6 +1008,7 @@ export type PtyHostEvent =
   | { type: "pong" }
   | { type: "ready" }
   | { type: "terminals-for-project"; requestId: string; terminalIds: string[] }
+  | { type: "project-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "terminal-info"; requestId: string; terminal: PtyHostTerminalInfo | null }
   | { type: "replay-history-result"; requestId: string; replayed: number }
   | { type: "reset-terminal-modes-result"; requestId: string; reset: boolean }

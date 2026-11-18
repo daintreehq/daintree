@@ -2745,6 +2745,21 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * A project's terminal records, read in one request from the shard that
+   * owns the project, where `getTerminalsForProjectAsync` plus a
+   * `getTerminalAsync` per id costs a request per terminal (#17776). Resolves
+   * `[]` when the host doesn't answer, as the id read does.
+   */
+  async getProjectTerminalsAsync(projectId: string): Promise<TerminalInfoResponse[]> {
+    const shard = this.shardForProjectQuery(projectId);
+    return sendPtyHostRpc<TerminalInfoResponse[]>(
+      shard,
+      `project-terminals-${projectId}`,
+      (requestId) => ({ type: "get-project-terminals", projectId, requestId })
+    ).catch(() => []);
+  }
+
+  /**
    * Get terminal info by ID. Passing `submissionToken` additionally resolves
    * that submission's correlation record onto the response (#12337) — the same
    * round trip, so a status read correlating a send costs no extra RPC.

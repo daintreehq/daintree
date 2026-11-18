@@ -404,6 +404,47 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    // #17776: restore reads every record in one request instead of one per id.
+    it("reads a project's terminal records from its owning shard in a single request", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const promise = client.getProjectTerminalsAsync("project-a");
+      const requests = messagesOfType(shardA.child, "get-project-terminals");
+      expect(requests).toHaveLength(1);
+      expect(requests[0].projectId).toBe("project-a");
+      expect(messagesOfType(defaultShard().child, "get-project-terminals")).toHaveLength(0);
+      expect(messagesOfType(shardA.child, "get-terminal")).toHaveLength(0);
+
+      const records = [
+        { id: "t2", projectId: "project-a", kind: "terminal" },
+        { id: "t1", projectId: "project-a", kind: "terminal" },
+      ];
+      shardA.child.emit("message", {
+        type: "project-terminals",
+        requestId: requests[0].requestId,
+        terminals: records,
+      });
+      await expect(promise).resolves.toEqual(records);
+      client.dispose();
+    });
+
+    it("resolves an empty project inventory when the owning shard goes away mid-read", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const promise = client.getProjectTerminalsAsync("project-a");
+      shardA.child.emit("exit", 1);
+
+      await expect(promise).resolves.toEqual([]);
+      client.dispose();
+    });
+
     // The dev preview cancels revival work on this announcement (#13170): the
     // exits that follow the kill arrive too late to stop a queued respawn.
     it("announces a project-wide kill before sending either kill request", () => {

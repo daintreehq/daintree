@@ -19,16 +19,19 @@ function terminal(id: string, kind = "terminal", extra: Record<string, unknown> 
 }
 
 describe("buildTerminalInventory", () => {
-  it("lists the project's terminals and drops dev-preview and help PTYs", async () => {
+  it("lists the project's terminals in host order and drops dev-preview and help PTYs", async () => {
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t1", "dp", "help-1", "gone"]),
-      getTerminalAsync: vi.fn(async (id: string) =>
-        id === "gone" ? null : terminal(id, id === "dp" ? "dev-preview" : "terminal")
-      ),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        terminal("t2"),
+        terminal("dp", "dev-preview"),
+        terminal("help-1"),
+        terminal("t1"),
+      ]),
     };
     const inventory = await buildTerminalInventory(ptyClient, "p1");
-    expect(inventory.map((t) => t.id)).toEqual(["t1"]);
-    expect(ptyClient.getTerminalAsync).toHaveBeenCalledTimes(4);
+    expect(inventory.map((t) => t.id)).toEqual(["t2", "t1"]);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledWith("p1");
   });
 
   it("drops an assistant PTY the renderer has not marked yet", async () => {
@@ -39,13 +42,58 @@ describe("buildTerminalInventory", () => {
     // saved panel as a grid orphan. The spawn-time record stamp closes that
     // window, since it is on the record before the PTY is reachable at all.
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t1", "assistant"]),
-      getTerminalAsync: vi.fn(async (id: string) =>
-        terminal(id, "terminal", id === "assistant" ? { isAssistantTerminal: true } : {})
-      ),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        terminal("t1"),
+        terminal("assistant", "terminal", { isAssistantTerminal: true }),
+      ]),
     };
     const inventory = await buildTerminalInventory(ptyClient, "p1");
     expect(inventory.map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  it("keeps each pane's live grid, and an exited terminal without one", async () => {
+    const ptyClient = {
+      getProjectTerminalsAsync: vi.fn(async () => [
+        terminal("live", "terminal", { ptyCols: 203, ptyRows: 51 }),
+        terminal("exited", "terminal", { hasPty: false }),
+      ]),
+    };
+    const [live, exited] = await buildTerminalInventory(ptyClient, "p1");
+    expect(live).toMatchObject({ id: "live", ptyCols: 203, ptyRows: 51, hasPty: true });
+    expect(exited).toMatchObject({ id: "exited", hasPty: false });
+    expect(exited?.ptyCols).toBeUndefined();
+    expect(exited?.ptyRows).toBeUndefined();
+  });
+});
+
+// #17776: restore used to send one request for the ids and one per terminal.
+describe("restore inventory request count", () => {
+  beforeEach(() => _resetTerminalInventoryPrefetchForTests());
+  afterEach(() => _resetTerminalInventoryPrefetchForTests());
+
+  function client(count: number) {
+    const ids = Array.from({ length: count }, (_, i) => `t${count - i}`);
+    return {
+      ids,
+      ptyClient: { getProjectTerminalsAsync: vi.fn(async () => ids.map((id) => terminal(id))) },
+    };
+  }
+
+  it.each([1, 32, 64])("reads %i panes in one request without a prefetch", async (count) => {
+    const { ids, ptyClient } = client(count);
+    expect(consumeTerminalInventoryPrefetch("p1")).toBeNull();
+    const inventory = await buildTerminalInventory(ptyClient, "p1");
+    expect(inventory.map((t) => t.id)).toEqual(ids);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([1, 32, 64])("reads %i panes in one request on a prefetch hit", async (count) => {
+    const { ids, ptyClient } = client(count);
+    void prefetchTerminalInventory("p1", (id) => buildTerminalInventory(ptyClient, id));
+    const prefetched = consumeTerminalInventoryPrefetch("p1");
+    expect(prefetched).not.toBeNull();
+    expect((await prefetched!).map((t) => t.id)).toEqual(ids);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
   });
 });
 

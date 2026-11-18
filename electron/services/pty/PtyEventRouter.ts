@@ -318,6 +318,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.terminalIds ?? []);
       return true;
 
+    case "project-terminals":
+      broker.resolve(event.requestId, event.terminals ?? []);
+      return true;
+
     case "terminal-info":
       broker.resolve(event.requestId, event.terminal ?? null);
       return true;
