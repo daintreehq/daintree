@@ -77,12 +77,15 @@ async function loadRealTimeVAD(): Promise<RealTimeVADClass | undefined> {
   return ns.RealTimeVAD ?? ns.default?.RealTimeVAD;
 }
 
-type VadEvent = { type: "start" } | { type: "end"; frame: number };
+type VadEvent = { type: "start"; frame: number } | { type: "end"; frame: number };
 
 type SessionOutbound = Extract<LocalSpeechWorkerOutbound, { session: number }>;
 
-/** A closed passage whose end of speech is decided when the output is let go. */
-type HeldMessage = SessionOutbound | (SessionOutbound & { type: "segment"; pauseEnd: true });
+/**
+ * A passage a pause closed, whose end of speech is decided when the output is
+ * let go: `endedAtMs` is where that pause's speech stopped.
+ */
+type HeldMessage = SessionOutbound | (SessionOutbound & { type: "segment"; endedAtMs: number });
 
 interface Session {
   id: number;
@@ -106,6 +109,8 @@ interface Session {
   vadFrames: number;
   vadEvents: VadEvent[];
   speaking: boolean;
+  /** Where in the session's audio speech last started; it resumed any pause that ended before. */
+  lastSpeechStartMs: number;
   failed: boolean;
 }
 
@@ -147,7 +152,7 @@ async function createVad(target: Session): Promise<RealTimeVADInstance | null> {
       },
       onSpeechStart: () => {
         target.speaking = true;
-        target.vadEvents.push({ type: "start" });
+        target.vadEvents.push({ type: "start", frame: target.vadFrames });
       },
       onSpeechEnd: () => {
         target.speaking = false;
@@ -186,7 +191,6 @@ function postEvents(target: Session, events: SegmentEvent[]): void {
     }
     // A pause after nothing the model wrote: nothing to complete.
     if (event.text === "" && !event.shown && event.reason === "pause") continue;
-    const pauseEnd = event.reason === "pause";
     hold(target, {
       type: "segment",
       session: target.id,
@@ -195,35 +199,41 @@ function postEvents(target: Session, events: SegmentEvent[]): void {
       shown: event.shown,
       reason: event.reason,
       endOfSpeech: false,
-      ...(pauseEnd ? { pauseEnd: true as const } : {}),
+      ...(event.reason === "pause" && event.atMs !== undefined
+        ? { endedAtMs: event.atMs - PAUSE_CLOSE_GUARD_MS }
+        : {}),
     });
   }
 }
 
 /**
  * Posts the held output in order. A passage a pause closed ended speech only
- * if no speech start follows it in what was held and the VAD hears silence
- * now: one that the speaker went on from must never carry a send.
+ * when `confirmed` (no captured audio waits unheard behind it), speech hasn't
+ * started anywhere in the audio since that pause, and the VAD hears silence
+ * now: one the speaker went on from must never carry a send. Whatever order
+ * the output was made in, positions in the audio decide.
  */
-function flushOutbox(target: Session): void {
+function flushOutbox(target: Session, confirmed: boolean): void {
   const outbox = target.outbox;
   target.outbox = [];
   target.heldSince = null;
-  let resumed = target.speaking || target.vad === null;
-  for (let i = outbox.length - 1; i >= 0; i--) {
+  for (let i = 0; i < outbox.length; i++) {
     const message = outbox[i];
-    if (message.type === "speech-start") resumed = true;
-    if (message.type === "segment" && "pauseEnd" in message) {
-      outbox[i] = {
-        type: "segment",
-        session: message.session,
-        segment: message.segment,
-        text: message.text,
-        shown: message.shown,
-        reason: message.reason,
-        endOfSpeech: !resumed,
-      };
-    }
+    if (message.type !== "segment" || !("endedAtMs" in message)) continue;
+    const ended =
+      confirmed &&
+      target.vad !== null &&
+      !target.speaking &&
+      target.lastSpeechStartMs <= message.endedAtMs;
+    outbox[i] = {
+      type: "segment",
+      session: message.session,
+      segment: message.segment,
+      text: message.text,
+      shown: message.shown,
+      reason: message.reason,
+      endOfSpeech: ended,
+    };
   }
   for (const message of outbox) post(message);
 }
@@ -231,8 +241,15 @@ function flushOutbox(target: Session): void {
 /** Lets the output go once no captured audio waits behind it, or it has waited too long. */
 function flushIfCaughtUp(target: Session): void {
   const waiting = (queuedAudio.get(target.id) ?? 0) > 0;
-  const tooLong = target.heldSince !== null && performance.now() - target.heldSince >= MAX_HOLD_MS;
-  if (!waiting || tooLong) flushOutbox(target);
+  if (!waiting) {
+    flushOutbox(target, true);
+    return;
+  }
+  // Held too long: what's known goes out, but no pause it closed can send,
+  // since the audio that would say whether the speaker went on is unheard.
+  if (target.heldSince !== null && performance.now() - target.heldSince >= MAX_HOLD_MS) {
+    flushOutbox(target, false);
+  }
 }
 
 /** Where decoding has reached in the session's own audio. */
@@ -295,6 +312,7 @@ async function startSession(id: number, promptId: number): Promise<void> {
     vadFrames: 0,
     vadEvents: [],
     speaking: false,
+    lastSpeechStartMs: Number.NEGATIVE_INFINITY,
     failed: false,
   };
   session = next;
@@ -320,6 +338,7 @@ async function processAudio(target: Session, pcm: ArrayBuffer): Promise<void> {
     await target.vad.processAudio(samples);
     for (const event of target.vadEvents) {
       if (event.type === "start") {
+        target.lastSpeechStartMs = event.frame * VAD_FRAME_MS;
         hold(target, { type: "speech-start", session: target.id });
       } else {
         // The VAD counts the session's own audio, the same clock token times use.
@@ -356,7 +375,7 @@ async function closeSession(target: Session, reason: "cut" | "finish"): Promise<
 function failSession(target: Session, err: unknown): void {
   if (target.failed) return;
   target.failed = true;
-  flushOutbox(target);
+  flushOutbox(target, false);
   post({
     type: "session-error",
     session: target.id,
@@ -459,7 +478,7 @@ port.on("message", ({ data: message }) => {
       const id = message.session;
       forSession(id, async (target) => {
         await closeSession(target, "finish");
-        flushOutbox(target);
+        flushOutbox(target, true);
         await releaseVad(target);
       });
       chain = chain.then(() => {

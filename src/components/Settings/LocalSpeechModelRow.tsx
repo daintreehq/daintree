@@ -154,14 +154,14 @@ export function LocalSpeechModelRow({
         layout="stacked"
         description={
           <span role="status">
-            {readFailed && !status
+            {readFailed && (!status || status.state === "checking")
               ? "Couldn't read the model's status."
               : describeLocalModel(status)}
           </span>
         }
         error={failure ?? undefined}
         control={({ disabled, descriptionId }) => {
-          if (readFailed && !status) {
+          if (readFailed && (!status || status.state === "checking")) {
             return (
               <Button size="sm" variant="outline" onClick={retry} aria-describedby={descriptionId}>
                 Retry

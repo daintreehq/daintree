@@ -224,6 +224,11 @@ describe("commands closing a passage in another script (#17338)", () => {
       text: "どこで send it？",
       send: false,
     });
+    // A full-width comma inside an English clause doesn't cut its negation away.
+    expect(extractSendCommand("Fix the login bug but don't， send it。")).toEqual({
+      text: "Fix the login bug but don't， send it。",
+      send: false,
+    });
   });
 
   it("reads a break command closed by a full-width full stop", () => {

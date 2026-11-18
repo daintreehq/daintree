@@ -1042,6 +1042,8 @@ class VoiceRecordingService {
   // When the dictation shortcut was pressed, for a start in the same dispatch.
   private pendingPressAt: number | null = null;
   private transcriptionProvider: VoiceTranscriptionProvider | null = null;
+  /** Moves on with every settings read: one overtaken while it waited applies nothing. */
+  private configurationRefreshes = 0;
   // What the session panel reads about the running session (#14920): the
   // provider it started on, whether its clock runs, and when each auto-stop
   // would land.
@@ -1781,12 +1783,15 @@ class VoiceRecordingService {
   }
 
   async refreshConfiguration(): Promise<boolean> {
+    const refresh = ++this.configurationRefreshes;
     const settings = await window.electron.voiceInput.getSettings();
     // A start in a fresh view, or during the launch's check of the model's
     // files, waits for main's answer rather than taking "not yet" for "no".
     if (settings.enabled && transcribesOnDevice(settings.transcriptionProvider)) {
       const known = getLocalModelStatus();
       if (!known || known.state === "checking") await readLocalModelStatus().catch(() => null);
+      // A newer read began while this one waited: its settings are the ones that hold.
+      if (refresh !== this.configurationRefreshes) return this.configured;
     }
     return this.applySettings(settings);
   }

@@ -259,6 +259,15 @@ describe("LocalSpeechModelStore", () => {
     expect(tries).toEqual([null, "bytes=1000-", null]);
   });
 
+  it("counts files a failed deletion left behind, so they can still be deleted", async () => {
+    const { fetch } = fakeFetch();
+    await store(fetch).download();
+    await rm(path.join(root, REVISION, "install.json"));
+    const status = await store(fetch).check();
+    expect(status.state).toBe("absent");
+    expect(status.receivedBytes).toBe(status.totalBytes);
+  });
+
   it("never fetches on a platform that can't run it", async () => {
     const { fetch } = fakeFetch();
     const models = store(fetch, false);

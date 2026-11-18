@@ -103,8 +103,8 @@ export class LocalSpeechModelStore {
   private lastProgressAt = 0;
   /** Moves on with every removal: a check or download begun before it reports nothing. */
   private epoch = 0;
-  /** A removal is under way: nothing may start reading or writing the files. */
-  private removing = false;
+  /** The removal under way: nothing may start reading or writing the files. */
+  private removing: object | null = null;
   private readonly fetchImpl: FetchLike;
   private readonly files: readonly LocalSpeechFileSpec[];
   private readonly revision: string;
@@ -157,6 +157,8 @@ export class LocalSpeechModelStore {
    * over from what they leave.
    */
   check(): Promise<LocalSpeechModelStatus> {
+    // Nothing is hashed while files are being deleted; the removal reports.
+    if (this.removing) return Promise.resolve(this.status());
     this.checked ??= this.checkInstall(this.epoch);
     return this.checked.then(() => this.status());
   }
@@ -180,7 +182,16 @@ export class LocalSpeechModelStore {
       );
       return;
     }
-    this.set({ state: "absent", receivedBytes: await this.stagedBytes() }, epoch);
+    // Files a failed deletion left in the install folder count too, so they
+    // can still be deleted.
+    const left = (await this.stagedBytes()) + (await this.leftoverBytes(this.installDir));
+    this.set({ state: "absent", receivedBytes: Math.min(left, this.totalBytes) }, epoch);
+  }
+
+  private async leftoverBytes(dir: string): Promise<number> {
+    let total = 0;
+    for (const spec of this.files) total += await sizeOf(path.join(dir, spec.name));
+    return total;
   }
 
   private async installRecorded(): Promise<boolean> {
@@ -241,7 +252,7 @@ export class LocalSpeechModelStore {
     const done = this.check()
       .then(async (status) => {
         if (status.state === "ready" || abort.signal.aborted) return;
-        await this.fetchAndInstall(abort.signal);
+        await this.fetchAndInstall(abort.signal, epoch);
       })
       .catch(async (error: unknown) => {
         const receivedBytes = await this.stagedBytes();
@@ -276,7 +287,8 @@ export class LocalSpeechModelStore {
   async remove(beforeDelete?: () => Promise<void>): Promise<void> {
     if (this.current.state === "unsupported") return;
     if (this.removing) throw new Error("The model is already being deleted");
-    this.removing = true;
+    const removal = {};
+    this.removing = removal;
     this.epoch++;
     try {
       const operation = this.operation;
@@ -290,29 +302,30 @@ export class LocalSpeechModelStore {
       this.checked = Promise.resolve();
       this.set({ state: "absent", receivedBytes: 0 });
     } catch (error) {
-      this.removing = false;
+      if (this.removing === removal) this.removing = null;
       this.checked = null;
       await this.check().catch(() => {});
       throw error;
     } finally {
-      this.removing = false;
+      if (this.removing === removal) this.removing = null;
     }
   }
 
-  private async fetchAndInstall(signal: AbortSignal): Promise<void> {
+  private async fetchAndInstall(signal: AbortSignal, epoch: number): Promise<void> {
     const staging = this.stagingDir;
     await mkdir(staging, { recursive: true });
     let received = await this.stagedBytes();
-    this.set({ state: "downloading", receivedBytes: received });
+    this.set({ state: "downloading", receivedBytes: received }, epoch);
     for (const spec of this.files) {
       if (signal.aborted) throw new Cancelled();
       const into = path.join(staging, spec.name);
       if ((await sizeOf(into)) === spec.size) continue;
       const before = Math.min(spec.size, await sizeOf(`${into}.part`));
-      received += (await this.fetchFile(spec, `${into}.part`, signal, received - before)) - before;
+      received +=
+        (await this.fetchFile(spec, `${into}.part`, signal, received - before, epoch)) - before;
       await rename(`${into}.part`, into);
     }
-    this.set({ state: "checking", receivedBytes: this.totalBytes });
+    this.set({ state: "checking", receivedBytes: this.totalBytes }, epoch);
     const bad = await this.mismatched(staging, signal);
     if (bad.length > 0) {
       // Fetched again from scratch next time: a file that doesn't match is wrong all through.
@@ -327,8 +340,9 @@ export class LocalSpeechModelStore {
     );
     await rm(this.installDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
     await rename(staging, this.installDir);
+    if (epoch !== this.epoch) return;
     this.checked = Promise.resolve();
-    this.set({ state: "ready", receivedBytes: this.totalBytes });
+    this.set({ state: "ready", receivedBytes: this.totalBytes }, epoch);
   }
 
   /** Fetches one file into `part`, resuming what is there. Returns the file's size on disk. */
@@ -336,7 +350,8 @@ export class LocalSpeechModelStore {
     spec: LocalSpeechFileSpec,
     part: string,
     signal: AbortSignal,
-    receivedOthers: number
+    receivedOthers: number,
+    epoch: number
   ): Promise<number> {
     let have = await sizeOf(part);
     if (have > spec.size) {
@@ -381,7 +396,7 @@ export class LocalSpeechModelStore {
             done(new Error(`${spec.name} is larger than the pinned model file`));
             return;
           }
-          this.progress(receivedOthers + size);
+          this.progress(receivedOthers + size, epoch);
           done(null, chunk);
         },
       });
@@ -404,13 +419,14 @@ export class LocalSpeechModelStore {
     }
   }
 
-  private progress(receivedBytes: number): void {
+  private progress(receivedBytes: number, epoch: number): void {
+    if (epoch !== this.epoch) return;
     const now = Date.now();
     if (now - this.lastProgressAt < PROGRESS_INTERVAL_MS) {
       this.current = { ...this.current, receivedBytes };
       return;
     }
     this.lastProgressAt = now;
-    this.set({ state: "downloading", receivedBytes });
+    this.set({ state: "downloading", receivedBytes }, epoch);
   }
 }

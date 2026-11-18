@@ -25,7 +25,15 @@ export type SegmentCloseReason = "pause" | "cap" | "cut" | "finish";
 
 export type SegmentEvent =
   | { type: "text"; segment: number; text: string }
-  | { type: "end"; segment: number; text: string; shown: boolean; reason: SegmentCloseReason };
+  | {
+      type: "end";
+      segment: number;
+      text: string;
+      shown: boolean;
+      reason: SegmentCloseReason;
+      /** For a pause: the audio position it closed the passage at. */
+      atMs?: number;
+    };
 
 /** Past this much continuous speech, a passage is closed at the next word. */
 export const SEGMENT_CAP_MS = 15_000;
@@ -36,7 +44,7 @@ export const SEGMENT_CAP_MS = 15_000;
  * or full stop; it belongs to the passage already completed. An ASCII mark
  * goes only where a space or the end follows it, so `.env` keeps its dot.
  */
-const LEADING_CLOSERS = /^(?:\s|[.,;:!?…](?=[\s.,;:!?…]|$)|[。、，．！？；：])+/u;
+const LEADING_CLOSERS = /^(?:\s|[.,;:!?…](?=[\s.,;:!?…。、，．！？；：]|$)|[。、，．！？；：])+/u;
 
 export function segmentText(vocabulary: SegmentVocabulary, ids: readonly number[]): string {
   return vocabulary.decode(ids).replace(/\s+/g, " ").replace(LEADING_CLOSERS, "").trimEnd();
@@ -75,8 +83,7 @@ export class LocalSpeechSegmenter {
     const events: SegmentEvent[] = [];
     for (const token of tokens) {
       while (this.pendingCloses.length > 0 && token.atMs >= this.pendingCloses[0]) {
-        this.pendingCloses.shift();
-        this.close("pause", events);
+        this.close("pause", events, this.pendingCloses.shift());
       }
       if (
         this.firstAtMs !== null &&
@@ -89,8 +96,7 @@ export class LocalSpeechSegmenter {
       this.ids.push(token.id);
     }
     while (this.pendingCloses.length > 0 && decodedThroughMs >= this.pendingCloses[0]) {
-      this.pendingCloses.shift();
-      this.close("pause", events);
+      this.close("pause", events, this.pendingCloses.shift());
     }
     this.showOpen(events);
     return events;
@@ -111,10 +117,17 @@ export class LocalSpeechSegmenter {
     events.push({ type: "text", segment: this.segment, text });
   }
 
-  private close(reason: SegmentCloseReason, events: SegmentEvent[]): void {
+  private close(reason: SegmentCloseReason, events: SegmentEvent[], atMs?: number): void {
     const text = segmentText(this.vocabulary, this.ids);
     const shown = this.shownText !== "";
-    events.push({ type: "end", segment: this.segment, text, shown, reason });
+    events.push({
+      type: "end",
+      segment: this.segment,
+      text,
+      shown,
+      reason,
+      ...(atMs !== undefined ? { atMs } : {}),
+    });
     this.segment++;
     this.ids = [];
     this.firstAtMs = null;

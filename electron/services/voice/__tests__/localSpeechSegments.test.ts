@@ -30,7 +30,7 @@ describe("LocalSpeechSegmenter", () => {
     // Decoding hasn't reached the pause yet: nothing closes.
     expect(s.addChunk([], 560).filter((e) => e.type === "end")).toEqual([]);
     expect(s.addChunk([], 1120)).toEqual([
-      { type: "end", segment: 0, text: "Fix the", shown: true, reason: "pause" },
+      { type: "end", segment: 0, text: "Fix the", shown: true, reason: "pause", atMs: 800 },
     ]);
   });
 
@@ -41,7 +41,7 @@ describe("LocalSpeechSegmenter", () => {
     // One chunk brings the last word before the pause and the first one after it.
     const events = s.addChunk([t(2, 600), t(4, 1000), t(5, 1080)], 1120);
     expect(events).toEqual([
-      { type: "end", segment: 0, text: "Fix the test", shown: true, reason: "pause" },
+      { type: "end", segment: 0, text: "Fix the test", shown: true, reason: "pause", atMs: 800 },
       { type: "text", segment: 1, text: "then send" },
     ]);
   });
@@ -81,7 +81,7 @@ describe("LocalSpeechSegmenter", () => {
     const s = new LocalSpeechSegmenter(vocab);
     s.closeAt(100);
     expect(s.addChunk([], 560)).toEqual([
-      { type: "end", segment: 0, text: "", shown: false, reason: "pause" },
+      { type: "end", segment: 0, text: "", shown: false, reason: "pause", atMs: 100 },
     ]);
   });
 
@@ -101,5 +101,6 @@ describe("segmentText", () => {
     // A dot that starts a word stays: it isn't the last passage's full stop.
     expect(segmentText({ ...vocab, decode: () => " .env is missing" }, [])).toBe(".env is missing");
     expect(segmentText({ ...vocab, decode: () => ". Then" }, [])).toBe("Then");
+    expect(segmentText({ ...vocab, decode: () => ".，Then" }, [])).toBe("Then");
   });
 });

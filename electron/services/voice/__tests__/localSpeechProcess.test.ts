@@ -188,4 +188,21 @@ describe("LocalSpeechHost", () => {
       kill.mockRestore();
     }
   });
+
+  it("gives up a lease still loading: a stop keeps the load, a hung load goes", async () => {
+    const host = new LocalSpeechHost(60_000);
+    const stopped = new AbortController();
+    const first = host.acquire("/models/rev", handlers(), stopped.signal);
+    await vi.waitFor(() => expect(children()).toHaveLength(1));
+    stopped.abort("stopped");
+    await expect(first).rejects.toThrow(/Cancelled/);
+    expect(host.leased).toBe(false);
+    expect(children()[0].posted.some((m) => m.type === "destroy")).toBe(false);
+
+    const wedged = new AbortController();
+    const second = host.acquire("/models/rev", handlers(), wedged.signal);
+    wedged.abort("wedged");
+    await expect(second).rejects.toThrow(/Cancelled/);
+    expect(children()[0].posted.at(-1)).toEqual({ type: "destroy" });
+  });
 });

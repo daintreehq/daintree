@@ -80,6 +80,8 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
   } | null = null;
   private sessionStartedAt = 0;
   private startTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Gives up a lease still waiting on the model's load. */
+  private acquireAbort: AbortController | null = null;
   /** Previews shown for passages not yet completed, by item. */
   private readonly openPreviews = new Map<string, string>();
 
@@ -130,13 +132,19 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
       return;
     }
     let lease: LocalSpeechLease;
+    const abort = new AbortController();
+    this.acquireAbort = abort;
     try {
-      lease = await this.deps.host().acquire(dir, {
-        onMessage: (message) => this.handle(generation, message),
-        onLost: () => this.lost(generation),
-      });
+      lease = await this.deps.host().acquire(
+        dir,
+        {
+          onMessage: (message) => this.handle(generation, message),
+          onLost: () => this.lost(generation),
+        },
+        abort.signal
+      );
     } catch {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || abort.signal.aborted) return;
       models.invalidate();
       this.fail(generation, {
         severity: "fatal",
@@ -145,6 +153,7 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
       });
       return;
     }
+    if (this.acquireAbort === abort) this.acquireAbort = null;
     if (generation !== this.generation) {
       lease.release();
       return;
@@ -254,6 +263,9 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
       this.droppedConnect++;
       if (!this.overflowWarned) {
         this.overflowWarned = true;
+        // The words lost here would say what came before them meant: the
+        // passage closes at the gap, so no command is read across it.
+        this.queued.push({ type: "cut" });
         this.emit({ type: "error", error: createAudioBufferOverflowError() });
       }
       return;
@@ -311,6 +323,9 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
       this.emit({ type: "complete", text, itemId, incomplete: true });
     }
     this.openPreviews.clear();
+    // A load that hasn't finished in all this time has hung: it goes too.
+    this.acquireAbort?.abort("wedged");
+    this.acquireAbort = null;
     this.emit({
       type: "error",
       error: {
@@ -377,6 +392,8 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
   private cleanup(): void {
     this.generation++;
     this.clearStartTimer();
+    this.acquireAbort?.abort("stopped");
+    this.acquireAbort = null;
     this.openPreviews.clear();
     this.releaseLease();
     this.ready = false;

@@ -359,6 +359,13 @@ describe("LocalTranscriptionProvider", () => {
     for (let i = 0; i < 152; i++) h.provider.sendAudioChunk(pcm(2400));
     const overflow = h.events.filter((e) => e.type === "error");
     expect(overflow).toHaveLength(1);
+    await h.loaded();
+    const session = h.leases[0].session;
+    h.deliver({ type: "started", session, vad: true });
+    // The passage closes where audio was lost, so no command spans the gap.
+    const sent = h.posted.filter((m) => m.type === "audio" || m.type === "cut");
+    expect(sent).toHaveLength(151);
+    expect(sent.at(-1)).toEqual({ type: "cut", session });
     expect(h.provider.getSessionStats()).toEqual({
       delayTier: "none",
       droppedConnect: 2,

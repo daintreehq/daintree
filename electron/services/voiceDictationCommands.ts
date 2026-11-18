@@ -125,7 +125,9 @@ export function pendingCommandStart(text: string): number {
 
 const SEND_COMMAND_RE = /(?:^|[\s.,;:!?。．、，！？；：]+)\bsend\s+it[\s.,;:!?。．、，！？；：]*$/i;
 
-const CLAUSE_BREAK_RE = /[.,;:!?。．、，！？；：\u2014\u2013]/;
+// ASCII only: the guards below read English, and a full-width mark inside an
+// English clause ("don't， send it") mustn't cut its negation away.
+const CLAUSE_BREAK_RE = /[.,;:!?\u2014\u2013]/;
 
 // Negation anywhere in the clause ("don't actually send it", "do not ever send
 // it") makes "send it" part of the sentence, not an order.

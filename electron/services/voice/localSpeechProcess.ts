@@ -220,7 +220,16 @@ export class LocalSpeechHost {
    * Loads the model from `modelDir` (or reuses the loaded one) and leases the
    * process to a new session. Rejects when the model can't be loaded.
    */
-  async acquire(modelDir: string, handlers: LocalSpeechLeaseHandlers): Promise<LocalSpeechLease> {
+  /**
+   * `signal` gives the lease up while the model is still loading: aborted
+   * with the reason "wedged" (a load that has hung), the loading process
+   * goes too; otherwise it keeps loading for the next dictation.
+   */
+  async acquire(
+    modelDir: string,
+    handlers: LocalSpeechLeaseHandlers,
+    signal?: AbortSignal
+  ): Promise<LocalSpeechLease> {
     if (this.shuttingDown) throw new Error("Daintree is quitting");
     this.clearIdle();
     const session = this.nextSession++;
@@ -249,8 +258,29 @@ export class LocalSpeechHost {
     }
     const owner = this.process;
     try {
-      await owner.ready;
+      await new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new Error("Cancelled"));
+          return;
+        }
+        const onAbort = () => reject(new Error("Cancelled"));
+        signal?.addEventListener("abort", onAbort, { once: true });
+        owner.ready.then(resolve, reject).finally(() => {
+          signal?.removeEventListener("abort", onAbort);
+        });
+      });
     } catch (error) {
+      if (signal?.aborted && signal.reason === "wedged" && this.process === owner) {
+        if (this.lease?.session === session) this.lease = null;
+        logWarn(`${P} Model load stopped answering; starting a fresh one next time`);
+        this.retire(owner);
+        throw error;
+      }
+      if (signal?.aborted) {
+        if (this.lease?.session === session) this.lease = null;
+        this.armIdleIfFree();
+        throw error;
+      }
       if (this.lease?.session === session) this.lease = null;
       if (this.process === owner) this.retire(owner);
       this.armIdleIfFree();

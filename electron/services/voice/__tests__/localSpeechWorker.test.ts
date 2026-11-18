@@ -324,4 +324,30 @@ describe("localSpeechWorker", () => {
     expect(posted.filter((m) => m.type === "session-error")).toEqual([]);
     expect(segments()).toEqual([expect.objectContaining({ text: "tests", reason: "finish" })]);
   });
+
+  it("never ends speech at a pause the speaker went on from, whatever order the output was made in", async () => {
+    await start();
+    script.tokens = [
+      [
+        [0, 1],
+        [1, 3],
+      ],
+      [],
+      [[2, 1]],
+      [],
+      [],
+      [],
+    ];
+    script.vad[0] = ["start"];
+    // The holdover runs out and speech starts again in one packet, then a
+    // second pause ends that speech; all of it queued before any is heard.
+    script.vad[11] = ["end", "start"];
+    script.vad[19] = ["end"];
+    packets(24);
+    await vi.waitFor(() => expect(segments()).toHaveLength(2));
+    expect(segments().map((s) => [s.text, s.endOfSpeech])).toEqual([
+      ["send it", false],
+      ["to", true],
+    ]);
+  });
 });
