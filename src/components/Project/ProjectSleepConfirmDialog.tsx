@@ -151,7 +151,7 @@ function WhenToSleepChoice({
         <div className={cn("flex items-start gap-2 px-3 pb-2.5", CHOICE_LABEL_INSET)}>
           <Checkbox
             id={noteId}
-            size="sm"
+            className="mt-0.5 shrink-0"
             checked={pauseNote}
             disabled={when !== "idle"}
             onCheckedChange={(checked) => onPauseNote(checked === true)}
