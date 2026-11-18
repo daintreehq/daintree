@@ -290,7 +290,8 @@ describe("DecisionQuestionDialog", () => {
     expect(body.textContent).toContain("Ship it");
     expect(body.querySelector("em")?.textContent).toBe("today");
     expect(body.textContent).toContain("Hold");
-    expect(screen.getByTestId("decision-question-requirement").textContent).not.toBe("");
+    // A person's answer is what every question needs, so only another requirement is said.
+    expect(screen.queryByTestId("decision-question-requirement")).toBeNull();
     expect(body.querySelector("time[datetime='2099-01-01T00:00:00.000Z']")).not.toBeNull();
 
     const entries = screen.getAllByTestId("decision-thread-entry");
@@ -307,12 +308,14 @@ describe("DecisionQuestionDialog", () => {
     openView(["qa", "qb"], "qa");
     await screen.findByText("Some notes", { exact: false });
     expect(screen.getByTestId("decision-question-position").textContent).toBe("1 of 2");
-    const requirementA = screen.getByTestId("decision-question-requirement").textContent;
+    expect(screen.queryByTestId("decision-question-requirement")).toBeNull();
 
     fireEvent.click(screen.getByTestId("decision-question-next"));
     await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("q-8"));
     expect(screen.getByTestId("decision-question-position").textContent).toBe("2 of 2");
-    expect(screen.getByTestId("decision-question-requirement").textContent).not.toBe(requirementA);
+    expect(screen.getByTestId("decision-question-requirement").textContent).toBe(
+      "The decision model may answer"
+    );
     expect(screen.getByTestId("decision-question-next").getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.keyDown(screen.getByTestId("decision-question-next"), { key: "ArrowLeft" });

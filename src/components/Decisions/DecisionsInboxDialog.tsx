@@ -446,7 +446,10 @@ function InboxRow({
             </span>
             {/* Not twice: a row whose line couldn't be read is already named by it. */}
             {line !== null && (
-              <span className="shrink-0 font-mono text-2xs tabular-nums">
+              <span
+                className="shrink-0 font-mono text-2xs tabular-nums"
+                data-testid="decisions-inbox-row-alias"
+              >
                 {aliasLabel(item.alias)}
               </span>
             )}
