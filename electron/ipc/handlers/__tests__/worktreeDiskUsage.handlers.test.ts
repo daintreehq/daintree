@@ -57,7 +57,10 @@ vi.mock("../../../window/windowRef.js", () => ({
 
 import { CHANNELS } from "../../channels.js";
 import { registerWorktreeDiskUsageHandlers } from "../worktreeDiskUsage.js";
-import { WorktreeDiskUsageService } from "../../../services/WorktreeDiskUsageService.js";
+import {
+  DISK_USAGE_CONCURRENCY,
+  WorktreeDiskUsageService,
+} from "../../../services/WorktreeDiskUsageService.js";
 
 const PROJECT = "a".repeat(64);
 
@@ -87,6 +90,15 @@ function handler(channel: string): (...args: unknown[]) => Promise<unknown> {
   const call = (ipcMainMock.handle as Mock).mock.calls.find(([c]) => c === channel);
   if (!call) throw new Error(`${channel} was never registered`);
   return call[1] as (...args: unknown[]) => Promise<unknown>;
+}
+
+/** A size unique to each root, so a result shows which root was scanned. */
+function sizeOf(root: string): number {
+  return [...root].reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 1_000_003, 7);
+}
+
+function measured(root: string) {
+  return { status: "measured", bytes: sizeOf(root) };
 }
 
 function excludeEntries(): number {
@@ -126,7 +138,7 @@ describe("worktreeDiskUsage handlers", () => {
     projectStoreMock.getProjectById.mockImplementation((id) =>
       id === PROJECT ? { id, path: "/repo" } : null
     );
-    measureMock.mockResolvedValue(2048);
+    measureMock.mockImplementation(async (root) => sizeOf(root));
     register();
   });
 
@@ -141,7 +153,7 @@ describe("worktreeDiskUsage handlers", () => {
       sessionId: "s1",
       worktreeId: "main",
     });
-    expect(result).toEqual({ status: "measured", bytes: 2048 });
+    expect(result).toEqual(measured("/repo"));
     expect(getAllStatesForProjectAsync).toHaveBeenCalledWith("/repo", PROJECT);
     const [root, options] = measureMock.mock.calls[0];
     expect(root).toBe("/repo");
@@ -155,26 +167,28 @@ describe("worktreeDiskUsage handlers", () => {
     }));
     getAllStatesForProjectAsync.mockImplementation(async () => siblings);
     const enqueue = vi.spyOn(WorktreeDiskUsageService.prototype, "measure");
-    const release: Array<() => void> = [];
-    measureMock.mockImplementation(
-      () => new Promise((resolve) => release.push(() => resolve(2048)))
-    );
+    let open: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    measureMock.mockImplementation(async (root) => {
+      await gate;
+      return sizeOf(root);
+    });
     const sender = new FakeSender(1);
     const pending = Promise.all(
       siblings.map(({ id }) =>
         invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, { sessionId: "s1", worktreeId: id })
       )
     );
-    // Every request is queued behind the two running scans.
-    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(200));
-    expect(measureMock.mock.calls.length).toBeLessThan(200);
-    expect(indexSpy.calls).toBe(1);
-    expect(enqueue.mock.calls.reduce((sum, [, , exclude]) => sum + exclude.length, 0)).toBe(0);
-
-    measureMock.mockResolvedValue(2048);
-    while (release.length > 0) release.shift()!();
-    const results = await pending;
-    expect(results.every((r) => (r as { status: string }).status === "measured")).toBe(true);
+    try {
+      // Every request is queued behind the scans holding the slots.
+      await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(200));
+      expect(measureMock).toHaveBeenCalledTimes(DISK_USAGE_CONCURRENCY);
+      expect(indexSpy.calls).toBe(1);
+      expect(enqueue.mock.calls.reduce((sum, [, , exclude]) => sum + exclude.length, 0)).toBe(0);
+    } finally {
+      open();
+    }
+    expect(await pending).toEqual(siblings.map(({ path }) => measured(path)));
     expect(excludeEntries()).toBe(0);
   });
 
@@ -185,14 +199,18 @@ describe("worktreeDiskUsage handlers", () => {
       { id: "inner", path: "/repo/.worktrees/a/inner" },
       { id: "b", path: "/repo/.worktrees/b" },
       { id: "sibling", path: "/repo-worktrees/c" },
+      // A repeated id is the worktree of its first listing, and only that is indexed.
+      { id: "b", path: "/repo/duplicate-b" },
     ];
     getAllStatesForProjectAsync.mockImplementation(async () => nested);
     const sender = new FakeSender(1);
-    await Promise.all(
-      nested.map(({ id }) =>
+    const ids = ["main", "a", "inner", "b", "sibling"];
+    const results = await Promise.all(
+      ids.map((id) =>
         invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, { sessionId: "s1", worktreeId: id })
       )
     );
+    expect(results).toEqual(ids.map((id) => measured(nested.find((s) => s.id === id)!.path)));
     expect(indexSpy.calls).toBe(1);
     expect([...excludeFor("/repo")!].sort()).toEqual(["/repo/.worktrees/a", "/repo/.worktrees/b"]);
     expect(excludeFor("/repo/.worktrees/a")).toEqual(["/repo/.worktrees/a/inner"]);
@@ -204,24 +222,27 @@ describe("worktreeDiskUsage handlers", () => {
 
   it("builds a fresh lookup for a newer inventory, so a moved worktree is excluded where it now is", async () => {
     const sender = new FakeSender(1);
-    await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, {
-      sessionId: "s1",
-      worktreeId: "main",
-    });
+    const ask = (worktreeId: string) =>
+      invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, { sessionId: "s1", worktreeId });
+    await ask("main");
     expect(excludeFor("/repo")).toEqual(["/repo/.worktrees/feature"]);
 
-    getAllStatesForProjectAsync.mockImplementation(async () => [
+    const moved = [
       { id: "main", path: "/repo" },
       { id: "nested", path: "/repo-worktrees/feature" },
       { id: "sibling", path: "/repo/sub/other" },
-    ]);
+    ];
+    getAllStatesForProjectAsync.mockImplementation(async () => moved);
     measureMock.mockClear();
-    await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, {
-      sessionId: "s2",
-      worktreeId: "main",
-    });
+    expect(await ask("main")).toEqual(measured("/repo"));
+    expect(await ask("nested")).toEqual(measured("/repo-worktrees/feature"));
     expect(indexSpy.calls).toBe(2);
     expect(excludeFor("/repo")).toEqual(["/repo/sub/other"]);
+
+    // Another read with the same content is another inventory.
+    getAllStatesForProjectAsync.mockImplementation(async () => moved.map((s) => ({ ...s })));
+    expect(await ask("sibling")).toEqual(measured("/repo/sub/other"));
+    expect(indexSpy.calls).toBe(3);
   });
 
   it("resolves overlapping requests against each view's own project inventory", async () => {
@@ -252,28 +273,38 @@ describe("worktreeDiskUsage handlers", () => {
         worktreeId: "main",
       }),
     ]);
-    expect(results).toEqual([
-      { status: "measured", bytes: 2048 },
-      { status: "measured", bytes: 2048 },
-    ]);
+    expect(results).toEqual([measured("/repo"), measured("/other")]);
     expect(getAllStatesForProjectAsync).toHaveBeenCalledWith("/repo", PROJECT);
     expect(getAllStatesForProjectAsync).toHaveBeenCalledWith("/other", OTHER);
     expect(indexSpy.calls).toBe(2);
     expect(excludeFor("/repo")).toEqual(["/repo/wt"]);
     expect(excludeFor("/other")).toEqual([]);
+
+    // The first view switches to the other project: its next request reads that inventory.
+    viewProject.byView.set(1, OTHER);
+    expect(
+      await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, new FakeSender(1), {
+        sessionId: "s2",
+        worktreeId: "wt",
+      })
+    ).toEqual(measured("/other-worktrees/wt"));
+    expect(getAllStatesForProjectAsync).toHaveBeenLastCalledWith("/other", OTHER);
   });
 
   it("a cancel while the inventory is still being read stops the request before any preparation", async () => {
     let deliver: (value: { id: string; path: string }[]) => void = () => {};
-    getAllStatesForProjectAsync.mockImplementation(
-      () => new Promise((resolve) => (deliver = resolve))
-    );
+    let readStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => (readStarted = resolve));
+    getAllStatesForProjectAsync.mockImplementation(() => {
+      readStarted();
+      return new Promise((resolve) => (deliver = resolve));
+    });
     const sender = new FakeSender(1);
     const pending = invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, {
       sessionId: "s1",
       worktreeId: "main",
     });
-    await vi.waitFor(() => expect(getAllStatesForProjectAsync).toHaveBeenCalled());
+    await started;
     await invoke(CHANNELS.WORKTREE_DISK_USAGE_CANCEL, sender, { sessionId: "s1" });
     deliver([...states]);
     expect(await pending).toEqual({ status: "unknown" });

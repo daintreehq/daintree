@@ -151,9 +151,12 @@ export function indexNestedRoots(
   }
   const nested = new Map<string, string[]>();
   for (const { resolved, given } of known.values()) {
-    // Upward, so the first known ancestor is the nearest; `dirname` returns
-    // its argument at a filesystem, drive or UNC share root.
-    for (let child = resolved, dir = pathApi.dirname(resolved); dir !== child;) {
+    // Upward, so the first known ancestor is the nearest. Each ancestor is
+    // resolved as the roots were (`dirname` keeps the slash that `resolve`
+    // drops from `\\?\C:\`), and is its own parent at a filesystem, drive or
+    // share root.
+    const up = (dir: string) => pathApi.resolve(pathApi.dirname(dir));
+    for (let child = resolved, dir = up(resolved); dir !== child;) {
       const key = keyOf(dir);
       if (known.has(key)) {
         const list = nested.get(key);
@@ -162,7 +165,7 @@ export function indexNestedRoots(
         break;
       }
       child = dir;
-      dir = pathApi.dirname(dir);
+      dir = up(dir);
     }
   }
   return (root) => nested.get(keyOf(pathApi.resolve(root))) ?? NO_NESTED_ROOTS;

@@ -65,9 +65,10 @@ describe("indexNestedRoots", () => {
   const sorted = (list: readonly string[]) => [...list].sort();
 
   it("gives siblings nothing to exclude", () => {
-    const roots = Array.from({ length: 200 }, (_, i) => `/work/wt-${i}`);
-    const nestedIn = indexNestedRoots(roots, "linux");
-    expect(roots.reduce((sum, root) => sum + nestedIn(root).length, 0)).toBe(0);
+    const siblings = Array.from({ length: 200 }, (_, i) => `/work/wt-${i}`);
+    const nestedIn = indexNestedRoots([...siblings, "/repo", "/repo/wt"], "linux");
+    expect(siblings.reduce((sum, root) => sum + nestedIn(root).length, 0)).toBe(0);
+    expect(nestedIn("/repo")).toEqual(["/repo/wt"]);
   });
 
   it("lists only the nearest nested roots, each under one parent", () => {
@@ -100,7 +101,9 @@ describe("indexNestedRoots", () => {
       "linux"
     );
     expect(nestedIn("/repo")).toEqual(["/repo/x/../a"]);
+    expect(nestedIn("/repo/")).toEqual(["/repo/x/../a"]);
     expect(nestedIn("/repo/a")).toEqual(["/repo/a/b"]);
+    expect(nestedIn("/repo/x/../a")).toEqual(["/repo/a/b"]);
     expect(nestedIn("/repo/a/b")).toEqual([]);
   });
 
@@ -111,8 +114,9 @@ describe("indexNestedRoots", () => {
   });
 
   it("compares case-sensitively off Windows", () => {
-    const nestedIn = indexNestedRoots(["/Repo", "/repo/wt"], "linux");
-    expect(nestedIn("/Repo")).toEqual([]);
+    const nestedIn = indexNestedRoots(["/Repo", "/repo/wt", "/Repo/wt"], "linux");
+    expect(nestedIn("/Repo")).toEqual(["/Repo/wt"]);
+    expect(nestedIn("/repo")).toEqual([]);
   });
 
   it("ignores case and separator style on Windows, and never crosses drives or shares", () => {
@@ -121,11 +125,14 @@ describe("indexNestedRoots", () => {
         "C:\\Repo",
         "c:\\repo\\.worktrees\\A",
         "C:/REPO/.worktrees/a/inner",
+        "C:\\REPO\\.WORKTREES\\a",
         "C:\\Repo2\\wt",
         "D:\\repo\\wt",
         "\\\\server\\share",
         "\\\\server\\share\\wt",
-        "\\\\server\\other\\wt",
+        "\\\\server\\other\\other-wt",
+        "\\\\?\\E:\\",
+        "\\\\?\\E:\\wt",
       ],
       "win32"
     );
@@ -134,6 +141,8 @@ describe("indexNestedRoots", () => {
     expect(nestedIn("C:\\Repo2\\wt")).toEqual([]);
     expect(nestedIn("\\\\server\\share")).toEqual(["\\\\server\\share\\wt"]);
     expect(nestedIn("\\\\SERVER\\Share\\")).toEqual(["\\\\server\\share\\wt"]);
+    // `dirname` keeps the slash that `resolve` drops from an extended-length root.
+    expect(nestedIn("\\\\?\\E:\\")).toEqual(["\\\\?\\E:\\wt"]);
   });
 
   it("agrees with the pairwise definition of nearest nested on generated layouts", () => {
