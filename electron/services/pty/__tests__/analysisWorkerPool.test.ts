@@ -916,6 +916,51 @@ describe("WorkerAnalysisBackend feed accounting", () => {
       expect(posted.filter((m) => m.type === "ensure-geometry")).toHaveLength(1);
     });
   });
+
+  describe("mode reset ordering (#17328)", () => {
+    const RESET = "\x1b[!p";
+
+    it("parses behind output still held under flow control", () => {
+      const { backend, delivered } = stubBackend();
+      holdOutput(backend, "\x1b[?2004h");
+
+      expect(backend.feedModeReset(RESET)).toBe(true);
+
+      // Overtaking the hold would let the program's own `?2004h` land after
+      // the reset and put the cleared mode back in the mirror.
+      const heldIndex = delivered.findIndex((m) => m.type === "data" && m.data === "\x1b[?2004h");
+      const resetIndex = delivered.findIndex((m) => m.type === "prelude" && m.data === RESET);
+      expect(heldIndex).toBeGreaterThanOrEqual(0);
+      expect(resetIndex).toBeGreaterThan(heldIndex);
+    });
+
+    it("writes nothing when the hold can't reach the worker first", () => {
+      const { backend, control, delivered } = stubBackend();
+      holdOutput(backend, "HELD");
+
+      control.sendSucceeds = false;
+      expect(backend.feedModeReset(RESET)).toBe(false);
+      control.sendSucceeds = true;
+
+      expect(delivered.some((m) => m.type === "prelude")).toBe(false);
+    });
+
+    it("stops reporting bracketed paste as soon as the reset is accepted", () => {
+      const { backend } = stubBackend();
+      backend.handleWorkerEvent({
+        type: "viewport",
+        terminalId: "t1",
+        lines: [],
+        cursorLine: null,
+        bracketedPasteMode: true,
+      });
+      expect(backend.isBracketedPasteMode()).toBe(true);
+
+      backend.feedModeReset(RESET);
+
+      expect(backend.isBracketedPasteMode()).toBe(false);
+    });
+  });
 });
 
 describe("WorkerAnalysisBackend process-state mirror (#17043)", () => {

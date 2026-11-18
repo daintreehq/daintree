@@ -546,3 +546,48 @@ describe("TerminalDestructiveActionConfirmDialog — confirmed re-dispatch sourc
     }
   );
 });
+
+describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#17328)", () => {
+  const RESET: TerminalPendingDestructiveActionSnapshot = {
+    kind: "resetModes",
+    targetCount: 1,
+    runningAgentCount: 1,
+    terminalId: "t1",
+    terminalTitle: "Claude · auth",
+  };
+
+  it("names the pane and what the running agent loses", () => {
+    const { title, described } = open(RESET);
+
+    expect(title).toContain("'Claude · auth'");
+    expect(described).toMatch(/^An agent is still running/);
+    expect(described).toMatch(/bracketed paste/);
+  });
+
+  it("points at Redraw outside the accessible description", () => {
+    const { described } = open(RESET);
+
+    expect(screen.getByText(/use Redraw instead/)).toBeTruthy();
+    expect(described).not.toMatch(/Redraw/);
+  });
+
+  it("resets the named terminal on confirm", () => {
+    open(RESET);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset terminal modes" }));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.resetModes",
+      { terminalId: "t1", confirmed: true },
+      { source: "user" }
+    );
+  });
+
+  it("dispatches nothing when the snapshot lost its terminal", () => {
+    open({ ...RESET, terminalId: undefined });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset terminal modes" }));
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});

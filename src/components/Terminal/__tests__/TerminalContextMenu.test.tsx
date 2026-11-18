@@ -12,6 +12,10 @@ import { render, screen, cleanup, fireEvent, act } from "@testing-library/react"
 import type React from "react";
 import { Terminal as HeadlessTerminal } from "@xterm/headless";
 
+const menuCloseHook = vi.hoisted(() => ({
+  current: undefined as ((event: Event) => void) | undefined,
+}));
+
 vi.mock("@/components/ui/context-menu", () => {
   const Passthrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
   const Item = ({
@@ -30,9 +34,17 @@ vi.mock("@/components/ui/context-menu", () => {
   return {
     ContextMenu: Passthrough,
     ContextMenuTrigger: Passthrough,
-    ContextMenuContent: ({ children }: { children?: React.ReactNode }) => (
-      <div data-testid="context-menu-content">{children}</div>
-    ),
+    ContextMenuContent: ({
+      children,
+      onCloseAutoFocus,
+    }: {
+      children?: React.ReactNode;
+      onCloseAutoFocus?: (event: Event) => void;
+    }) => {
+      // Captured so a test can play the close Radix runs once the menu is gone.
+      menuCloseHook.current = onCloseAutoFocus;
+      return <div data-testid="context-menu-content">{children}</div>;
+    },
     ContextMenuItem: Item,
     ContextMenuActionItem: Item,
     ContextMenuCheckboxItem: ({
@@ -1511,6 +1523,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     ]);
     expect(level(submenu(tree, "Session"))).toEqual([
       "Redraw",
+      "Reset terminal modes",
       "---",
       // Disabled, with its reason beside it, until something is sent (#16746).
       "Resend last messageNothing sent to this panel yet",
@@ -1544,6 +1557,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     const tree = menuTree();
     expect(level(submenu(tree, "Session"))).toEqual([
       "Redraw",
+      "Reset terminal modes",
       "Restart on preset ›",
       "---",
       "Resend last messageNothing sent to this panel yet",
@@ -1747,6 +1761,25 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
 
     expect(dispatch).toHaveBeenCalledWith(
       "terminal.toggleInputLock",
+      { terminalId: "panel-1" },
+      expect.anything()
+    );
+  });
+
+  // Deferred to the close, unlike Redraw: with an agent in the pane the action
+  // stages a confirm, whose own close must hand focus back to the pane (#17328).
+  it("resets a terminal's modes once the menu has handed focus back", async () => {
+    renderMenu(terminal);
+
+    fireEvent.click(screen.getByText("Reset terminal modes"));
+    expect(dispatch).not.toHaveBeenCalled();
+    act(() => menuCloseHook.current?.(new Event("closeAutoFocus", { cancelable: true })));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.resetModes",
       { terminalId: "panel-1" },
       expect.anything()
     );
