@@ -9,6 +9,7 @@ export interface StoppedTerminal {
   launchAgentId?: string;
   agentState?: AgentState;
   lastStateChange?: number;
+  spawnedAt?: number;
   agentIncarnation?: number;
 }
 
@@ -22,7 +23,7 @@ const MAX_REQUEST_ENTRIES = 1_000;
  * renderer's last report is no record of what the agent was doing.
  *
  * An agent the user's Sleep request found working keeps that reading, unless
- * another run of an agent has taken the pane since: a Sleep that waited for it
+ * another process or agent run has taken the pane since: a Sleep that waited for it
  * to settle must not turn it into one that was idle all along. A stopped pane
  * with no usable reading maps to `null`: whatever an earlier stop left on it
  * no longer describes it.
@@ -43,6 +44,7 @@ export function stopObservationsFor(
     const request = requested.get(id);
     const sameRun =
       request !== undefined &&
+      (request.spawnedAt === undefined || request.spawnedAt === terminal.spawnedAt) &&
       (request.agentIncarnation === undefined ||
         request.agentIncarnation === terminal.agentIncarnation);
     const observation = sameRun
@@ -86,21 +88,29 @@ export function applyStopObservations(
   return changed;
 }
 
-/** Read the renderer's list of agents its Sleep request found working; untrusted. */
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+/**
+ * Read the renderer's list of agents its Sleep request found working; untrusted.
+ * An entry whose identity can't be read is dropped rather than left to match
+ * whatever runs in the pane now.
+ */
 export function sanitizeWorkingAtRequest(value: unknown): SleepRequestWorking[] {
   if (!Array.isArray(value)) return [];
   const entries: SleepRequestWorking[] = [];
   for (const entry of value.slice(0, MAX_REQUEST_ENTRIES)) {
     if (entry === null || typeof entry !== "object") continue;
-    const { terminalId, at, agentIncarnation } = entry as Record<string, unknown>;
+    const { terminalId, at, spawnedAt, agentIncarnation } = entry as Record<string, unknown>;
     if (typeof terminalId !== "string" || terminalId === "") continue;
+    if (spawnedAt !== undefined && !isCount(spawnedAt)) continue;
+    if (agentIncarnation !== undefined && !isCount(agentIncarnation)) continue;
     const reading = readLastSeen("working", at);
     entries.push({
       terminalId,
       ...(reading?.at !== undefined && { at: reading.at }),
-      ...(typeof agentIncarnation === "number" &&
-        Number.isSafeInteger(agentIncarnation) &&
-        agentIncarnation >= 0 && { agentIncarnation }),
+      ...(spawnedAt !== undefined && { spawnedAt }),
+      ...(agentIncarnation !== undefined && { agentIncarnation }),
     });
   }
   return entries;

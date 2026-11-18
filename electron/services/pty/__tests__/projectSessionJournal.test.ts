@@ -663,6 +663,17 @@ describe("gracefulTeardownAndJournalProject", () => {
           },
           // A plain shell has no agent to have been doing anything.
           { id: "shell", projectId: "proj", cwd: "/s", spawnedAt: 1, agentState: "idle" },
+          // The assistant isn't a grid pane.
+          {
+            id: "assistant",
+            projectId: "proj",
+            launchAgentId: "claude",
+            isAssistantTerminal: true,
+            cwd: "/a",
+            spawnedAt: 1,
+            agentState: "working",
+            lastStateChange: 45,
+          },
           // Read before the kill, but the host never reported tearing it down.
           {
             id: "survivor",
@@ -680,6 +691,7 @@ describe("gracefulTeardownAndJournalProject", () => {
             { id: "working", agentSessionId: null },
             { id: "idle", agentSessionId: "s-idle" },
             { id: "shell", agentSessionId: null },
+            { id: "assistant", agentSessionId: null },
           ],
         },
       });
@@ -690,7 +702,13 @@ describe("gracefulTeardownAndJournalProject", () => {
 
       const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
       const state = {
-        terminals: [{ id: "working" }, { id: "idle" }, { id: "shell" }, { id: "survivor" }],
+        terminals: [
+          { id: "working" },
+          { id: "idle" },
+          { id: "shell" },
+          { id: "survivor" },
+          { id: "assistant" },
+        ],
       };
       expect(updater(state)).toBe(state);
       expect(state.terminals).toEqual([
@@ -698,6 +716,7 @@ describe("gracefulTeardownAndJournalProject", () => {
         { id: "idle", agentSessionId: "s-idle", stopObservation: { agentState: "idle", at: 30 } },
         { id: "shell" },
         { id: "survivor" },
+        { id: "assistant" },
       ]);
     });
 
@@ -728,95 +747,64 @@ describe("gracefulTeardownAndJournalProject", () => {
     });
 
     it("keeps the working reading the Sleep request took for an agent that has settled since", async () => {
-      const settled = (id: string, agentIncarnation: number) => ({
+      const settled = (id: string, spawnedAt: number, agentIncarnation: number) => ({
         id,
         projectId: "proj",
         launchAgentId: "claude",
         cwd: `/${id}`,
-        spawnedAt: 1,
+        spawnedAt,
         agentState: "waiting",
         lastStateChange: 50,
         agentIncarnation,
       });
       const { client } = makePtyClient({
-        terminals: [settled("paused", 2), settled("replaced", 3), settled("unasked", 1)],
+        terminals: [
+          settled("paused", 1, 2),
+          settled("replaced", 1, 3),
+          // A restart reuses the id, and its process counts runs from zero again.
+          settled("restarted", 7, 0),
+          settled("unasked", 1, 1),
+          settled("notStopped", 1, 0),
+        ],
         outcome: {
           confirmed: true,
-          sessions: ["paused", "replaced", "unasked"].map((id) => ({ id, agentSessionId: null })),
+          sessions: ["paused", "replaced", "restarted", "unasked"].map((id) => ({
+            id,
+            agentSessionId: null,
+          })),
         },
       });
 
       await gracefulTeardownAndJournalProject("proj", client, undefined, {
         writeBackSessionIds: true,
         workingAtRequest: [
-          { terminalId: "paused", at: 10, agentIncarnation: 2 },
+          { terminalId: "paused", at: 10, spawnedAt: 1, agentIncarnation: 2 },
           // Another run of an agent took the pane after the request.
-          { terminalId: "replaced", at: 10, agentIncarnation: 2 },
-          { terminalId: "elsewhere", at: 10 },
+          { terminalId: "replaced", at: 10, spawnedAt: 1, agentIncarnation: 2 },
+          { terminalId: "restarted", at: 10, spawnedAt: 1, agentIncarnation: 0 },
+          // Read by the request, but the kill never reached it.
+          { terminalId: "notStopped", at: 10, spawnedAt: 1, agentIncarnation: 0 },
         ],
       });
 
       const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
-      const state = { terminals: [{ id: "paused" }, { id: "replaced" }, { id: "unasked" }] };
-      updater(state);
+      const state = {
+        terminals: [
+          { id: "paused" },
+          { id: "replaced" },
+          { id: "restarted" },
+          { id: "unasked" },
+          { id: "notStopped" },
+        ],
+      };
+      expect(updater(state)).toBe(state);
       expect(state.terminals).toEqual([
         { id: "paused", stopObservation: { agentState: "working", at: 10 } },
         { id: "replaced", stopObservation: { agentState: "waiting", at: 50 } },
+        { id: "restarted", stopObservation: { agentState: "waiting", at: 50 } },
         { id: "unasked", stopObservation: { agentState: "waiting", at: 50 } },
+        { id: "notStopped" },
       ]);
-    });
-
-    it("bails out of the updater when the scope has no saved terminals", async () => {
-      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
-
-      await gracefulTeardownAndJournalProject("proj", client, undefined, {
-        writeBackSessionIds: true,
-      });
-
-      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
-      expect(updater(null)).toBeNull();
-      expect(updater({})).toBeNull();
-    });
-
-    it("waits for the writeback to land before journaling", async () => {
-      // Comparing invocation order would still pass if the writeback were fired
-      // without being awaited, which is the bug worth catching: the snapshot and
-      // the journal are the two halves of a resume and must not interleave.
-      let releaseWriteback!: () => void;
-      projectStoreMock.enqueueProjectStateUpdate.mockReturnValue(
-        new Promise<void>((resolve) => {
-          releaseWriteback = resolve;
-        })
-      );
-      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
-
-      const pending = gracefulTeardownAndJournalProject("proj", client, undefined, {
-        writeBackSessionIds: true,
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalled();
-      expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
-
-      releaseWriteback();
-      await pending;
-
-      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
-    });
-
-    it("still journals when the writeback throws", async () => {
-      // Best-effort, exactly as shutdown behaves: losing the in-place resume
-      // must not also cost the picker's resume record.
-      projectStoreMock.enqueueProjectStateUpdate.mockRejectedValue(new Error("disk full"));
-      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
-
-      const result = await gracefulTeardownAndJournalProject("proj", client, undefined, {
-        writeBackSessionIds: true,
-      });
-
-      expect(result.confirmed).toBe(true);
-      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -259,22 +259,32 @@ describe("project:sleep", () => {
 
       await invoke("proj-1", {
         workingAtRequest: [
-          { terminalId: "t1", at: 10, agentIncarnation: 2 },
-          { terminalId: "t2", at: "soon", agentIncarnation: -1 },
+          { terminalId: "t1", at: 10, spawnedAt: 5, agentIncarnation: 2 },
+          { terminalId: "t2", at: "soon" },
+          // An identity that can't be read would match whatever runs there now.
+          { terminalId: "t3", at: 10, agentIncarnation: -1 },
+          { terminalId: "t4", at: 10, spawnedAt: "earlier" },
+          { terminalId: 7, at: 10 },
           { terminalId: "" },
           null,
-          "t3",
+          "t5",
         ],
       });
 
       const [, , , options] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[0]!;
-      expect(options).toMatchObject({
-        workingAtRequest: [{ terminalId: "t1", at: 10, agentIncarnation: 2 }, { terminalId: "t2" }],
-      });
+      expect((options as { workingAtRequest?: unknown }).workingAtRequest).toStrictEqual([
+        { terminalId: "t1", at: 10, spawnedAt: 5, agentIncarnation: 2 },
+        { terminalId: "t2" },
+      ]);
 
       await invoke("proj-1", { workingAtRequest: "everything" });
       const [, , , second] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[1]!;
       expect(second).toEqual({ preserveSession: true, writeBackSessionIds: true });
+
+      const many = Array.from({ length: 1_005 }, (_, i) => ({ terminalId: `t${i}` }));
+      await invoke("proj-1", { workingAtRequest: many });
+      const [, , , third] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[2]!;
+      expect((third as { workingAtRequest: unknown[] }).workingAtRequest).toHaveLength(1_000);
     });
 
     it("capture-revokes the assistant's session before tearing the project down", async () => {

@@ -699,7 +699,10 @@ describe("panel serializer field coverage", () => {
     expect(output.restoreProvenance).toEqual(terminalFixture.restoreProvenance);
     expect(output.lastAgentObservation).toEqual(terminalFixture.lastAgentObservation);
     // It has run nothing since it was stopped (#17886).
-    expect(output.stopObservation).toEqual(terminalFixture.stopObservation);
+    expect(output).toHaveProperty("stopObservation", {
+      agentState: "working",
+      at: 1_699_999_999_500,
+    });
     // So is what the run it holds was first asked (#14592).
     expect(output.firstPrompt).toEqual(terminalFixture.firstPrompt);
     expect(output).not.toHaveProperty("agentSessionId");

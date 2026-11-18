@@ -131,6 +131,12 @@ describe("publishWakeCandidates", () => {
       // A snapshot from before observations were kept says nothing either way.
       candidate("unknown", { lastSeen: undefined }),
       candidate("fresh", { outcome: "fresh" }),
+      candidate("heldIdle", {
+        outcome: "held",
+        holdReason: "resume-deferred",
+        heldSessionId: "s-held",
+        lastSeen: { agentState: "idle", at: 1 },
+      }),
     ]);
     const offer = useWakeContinueStore.getState().offer!;
     expect(offer.entries.map((e) => e.terminalId)).toEqual(["working", "fresh"]);
@@ -154,6 +160,12 @@ describe("publishWakeCandidates", () => {
     publishWakeCandidates("p1", [
       candidate("b", { outcome: "fresh" }),
       candidate("c", { lastSeen: { agentState: "idle", at: 1 } }),
+      candidate("d", {
+        outcome: "held",
+        holdReason: "resume-deferred",
+        heldSessionId: "s-d",
+        lastSeen: { agentState: "completed", at: 1 },
+      }),
     ]);
     expect(useWakeContinueStore.getState().offer).toBeNull();
     expect(cancelAgentRequests).toHaveBeenCalledWith(`wake-continue:${first.id}:`);

@@ -238,7 +238,12 @@ export interface SleepRequestWorking {
   terminalId: string;
   /** When the working state began, by the host's clock. */
   at?: number;
-  /** Which run of an agent in the pane it was, so a later one isn't credited with it. */
+  /**
+   * The process and the agent run it was: a restart reuses the terminal id and
+   * starts a new process's count of runs again, so it takes both to keep a
+   * later run from being credited with it.
+   */
+  spawnedAt?: number;
   agentIncarnation?: number;
 }
 

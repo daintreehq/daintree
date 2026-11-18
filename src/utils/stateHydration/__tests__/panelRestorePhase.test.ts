@@ -474,14 +474,25 @@ describe("restorePanelsPhase — saved panels", () => {
           stopObservation: { agentState: "directing", at: 5 } as never,
           lastAgentObservation: { agentState: "idle", at: 6 },
         }),
+        // Resumed, and idle when stopped, whatever the report after the stop said.
+        panel("resumedIdle", {
+          kind: "agent",
+          launchAgentId: "claude",
+          restoreProvenance: { at: 1, disposition: "resume" },
+          stopObservation: { agentState: "idle", at: 7 },
+          lastAgentObservation: { agentState: "working", at: 8 },
+        }),
       ],
       ctx
     );
-    expect(Object.fromEntries(wakeCandidates.map((c) => [c.terminalId, c.lastSeen]))).toEqual({
-      slept: { agentState: "working", at: 10 },
-      crashed: { agentState: "working", at: 20 },
-      legacy: undefined,
-      garbled: { agentState: "idle", at: 6 },
+    expect(
+      Object.fromEntries(wakeCandidates.map((c) => [c.terminalId, [c.outcome, c.lastSeen]]))
+    ).toStrictEqual({
+      slept: ["fresh", { agentState: "working", at: 10 }],
+      crashed: ["fresh", { agentState: "working", at: 20 }],
+      legacy: ["fresh", undefined],
+      garbled: ["fresh", { agentState: "idle", at: 6 }],
+      resumedIdle: ["resumed", { agentState: "idle", at: 7 }],
     });
   });
 

@@ -42,6 +42,7 @@ vi.mock("electron", () => ({
 
 const projectStoreMock = vi.hoisted(() => ({
   getAllProjects: vi.fn(() => []),
+  getProjectById: vi.fn<(id: string) => { status?: string } | undefined>(() => undefined),
   getProjectState: vi.fn(),
   saveProjectState: vi.fn(),
   enqueueProjectStateUpdate: vi.fn<
@@ -2894,6 +2895,9 @@ describe("registerShutdownHandler", () => {
         { id: "proj-1" },
         { id: "asleep" },
       ] as never);
+      projectStoreMock.getProjectById.mockImplementation((id: string) =>
+        id === "asleep" ? { status: "closed" } : { status: "active" }
+      );
       const ptyClient = makePtyClient({
         // Read before the kill; the quit keys move the agents on afterwards.
         getAllTerminalsAsync: vi.fn(async () => [
@@ -2901,28 +2905,54 @@ describe("registerShutdownHandler", () => {
           { ...agentTerminal, id: "t2", agentState: "completed", lastStateChange: 30 },
           { ...agentTerminal, id: "assistant", isAssistantTerminal: true, agentState: "working" },
           { id: "shell", projectId: "proj-1", cwd: "/repo", agentState: "idle" },
+          // What a session-preserving Sleep left registered: its own Sleep recorded it.
+          {
+            ...agentTerminal,
+            id: "retained",
+            projectId: "asleep",
+            agentState: "exited",
+            lastStateChange: 50,
+          },
         ]),
-        // Neither pane reported back before the deadline: both still go with the app.
-        gracefulKillByProject: vi.fn(async () => []),
+        // t2 reported back; t1 didn't before the deadline but still goes with the
+        // app; "gone" answered the kill but missed the inventory read.
+        gracefulKillByProject: vi.fn(async (pid: string) =>
+          pid === "proj-1"
+            ? [
+                { id: "t2", agentSessionId: "sess-2" },
+                { id: "gone", agentSessionId: null },
+              ]
+            : [{ id: "retained", agentSessionId: null }]
+        ),
       });
       const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
 
       await beforeQuitCb(makeEvent());
       await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
 
-      // A project with nothing running is left as it was saved.
       expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledTimes(1);
       const [projectId, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
       expect(projectId).toBe("proj-1");
       const state = {
-        terminals: [{ id: "t1" }, { id: "t2" }, { id: "assistant" }, { id: "shell" }],
+        terminals: [
+          { id: "t1" },
+          { id: "t2" },
+          { id: "assistant" },
+          { id: "shell" },
+          { id: "gone", stopObservation: { agentState: "working", at: 5 } },
+        ],
       };
       expect(updater(state)).toBe(state);
       expect(state.terminals).toEqual([
         { id: "t1", stopObservation: { agentState: "working", at: 40 } },
-        { id: "t2", stopObservation: { agentState: "completed", at: 30 } },
+        {
+          id: "t2",
+          agentSessionId: "sess-2",
+          stopObservation: { agentState: "completed", at: 30 },
+        },
         { id: "assistant" },
         { id: "shell" },
+        { id: "gone" },
       ]);
     });
 

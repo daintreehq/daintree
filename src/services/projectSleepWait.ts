@@ -450,7 +450,9 @@ export async function sleepProjectsInOrder(
 
 /**
  * The agents in these projects the request finds working, added to any an
- * earlier request for them found.
+ * earlier request for them found. One a retry finds in a pane that another
+ * process or agent run held before replaces that run's reading, which Main
+ * would no longer credit to the pane.
  */
 function recordWorkingAtRequest(
   run: ActiveRun,
@@ -461,12 +463,20 @@ function recordWorkingAtRequest(
     if (t.projectId === undefined || !ids.has(t.projectId)) continue;
     if (observeAgent(t) !== "working") continue;
     const recorded = run.workingAtRequest.get(t.projectId) ?? [];
-    if (recorded.some((entry) => entry.terminalId === t.id)) continue;
+    const earlier = recorded.find((entry) => entry.terminalId === t.id);
+    if (
+      earlier &&
+      earlier.spawnedAt === t.spawnedAt &&
+      earlier.agentIncarnation === t.agentIncarnation
+    ) {
+      continue;
+    }
     run.workingAtRequest.set(t.projectId, [
-      ...recorded,
+      ...recorded.filter((entry) => entry !== earlier),
       {
         terminalId: t.id,
         ...(t.lastStateChange !== undefined && { at: t.lastStateChange }),
+        spawnedAt: t.spawnedAt,
         ...(t.agentIncarnation !== undefined && { agentIncarnation: t.agentIncarnation }),
       },
     ]);
@@ -551,15 +561,18 @@ export async function startSleepWait(
     pauseNote: options.pauseNote,
   });
   const targetIds = new Set(targets.map((t) => t.id));
-  let terminals: BackendTerminalInfo[] | null = null;
-  try {
-    terminals = await terminalClient.getAll();
-  } catch {
-    // Unread: each agent's stop is recorded from Main's own pre-kill reading.
+  // Presence is read beside the request, as every poll reads it, so a project
+  // opened while the listing is still coming counts as one the user came back to.
+  const [listing, presence] = await Promise.allSettled([terminalClient.getAll(), readShown()]);
+  if (presence.status === "fulfilled") {
+    for (const id of targetIds) {
+      if (!presence.value.has(id)) run.trackers.get(id)!.hiddenSeen = true;
+    }
   }
-  if (terminals) {
-    recordWorkingAtRequest(run, terminals, targetIds);
-    if (options.pauseNote) await sendPauseNotes(run, terminals, targetIds);
+  // Unread: each agent's stop is recorded from Main's own pre-kill reading.
+  if (listing.status === "fulfilled") {
+    recordWorkingAtRequest(run, listing.value, targetIds);
+    if (options.pauseNote) await sendPauseNotes(run, listing.value, targetIds);
   }
   if (active !== run) return;
   await tick(run);
