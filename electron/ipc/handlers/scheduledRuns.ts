@@ -58,12 +58,15 @@ function requireLocalView(ctx: IpcContext): void {
 export const scheduledRunsNamespace = defineIpcNamespace({
   name: "scheduledRuns",
   ops: {
+    // Each schedule's latest run, not the project's whole history (#17465). The
+    // name stays so Shells and Hosts on different builds still reach each other;
+    // an older Shell keeps the first run per schedule, which this answer is.
     listByProject: opValidated(
       SCHEDULED_RUNS_METHOD_CHANNELS.listByProject,
       ListByProjectSchema,
       async (payload: ScheduledRunsListByProjectPayload): Promise<ScheduledRun[]> => {
         const recorder = await getScheduledRunRecorder();
-        return recorder ? recorder.listByProject(payload.projectId) : [];
+        return recorder ? recorder.latestByProject(payload.projectId) : [];
       }
     ),
     listBySchedule: opValidated(

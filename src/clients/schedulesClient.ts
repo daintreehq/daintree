@@ -48,8 +48,12 @@ export const schedulesClient = {
   repairOsJob: (): Promise<ScheduleOsJobStatus> => window.electron.schedules.repairOsJob(),
   onChanged: (callback: (snapshot: SchedulesSnapshot) => void): (() => void) =>
     window.electron.schedules.onChanged(callback),
-  /** The project's recorded runs, newest first (#15976). */
-  listRuns: (projectId: string): Promise<ScheduledRun[]> =>
+  /**
+   * Each schedule's latest recorded run in the project, newest first (#17465).
+   * A remote host on an older build answers with the whole history instead, so
+   * a schedule can appear more than once: its first run is its latest.
+   */
+  listLatestRuns: (projectId: string): Promise<ScheduledRun[]> =>
     window.electron.scheduledRuns.listByProject({ projectId }),
   /** One schedule's recorded runs, newest first (#15976). */
   listScheduleRuns: (scheduleId: string): Promise<ScheduledRun[]> =>
