@@ -120,8 +120,8 @@ let loading: Promise<void> = Promise.resolve();
 let chain: Promise<void> = Promise.resolve();
 let session: Session | null = null;
 let destroyed = false;
-/** Audio messages received and not yet processed, by session. */
-const queuedAudio = new Map<number, number>();
+/** Audio and boundary messages received and not yet processed, by session. */
+const queuedWork = new Map<number, number>();
 
 async function load(dir: string, threads: number): Promise<void> {
   const started = performance.now();
@@ -240,7 +240,7 @@ function flushOutbox(target: Session, confirmed: boolean): void {
 
 /** Lets the output go once no captured audio waits behind it, or it has waited too long. */
 function flushIfCaughtUp(target: Session): void {
-  const waiting = (queuedAudio.get(target.id) ?? 0) > 0;
+  const waiting = (queuedWork.get(target.id) ?? 0) > 0;
   if (!waiting) {
     flushOutbox(target, true);
     return;
@@ -362,7 +362,7 @@ async function processAudio(target: Session, pcm: ArrayBuffer): Promise<void> {
   postEvents(target, target.segmenter.addChunk([], decodedThroughMs(target)));
 }
 
-async function closeSession(target: Session, reason: "cut" | "finish"): Promise<void> {
+async function closeSession(target: Session, reason: "cut" | "gap" | "finish"): Promise<void> {
   const current = engine;
   if (!current || target.failed) return;
   if (reason === "finish") append(target, target.resampler.flush());
@@ -380,6 +380,26 @@ function failSession(target: Session, err: unknown): void {
     type: "session-error",
     session: target.id,
     message: formatErrorMessage(err, "On-device transcription failed"),
+  });
+}
+
+/**
+ * Runs `work` for the live session `id` in order, counted as waiting until it
+ * runs: output held behind it isn't let go while it waits.
+ */
+function queueWork(id: number, work: (target: Session) => Promise<void>): void {
+  queuedWork.set(id, (queuedWork.get(id) ?? 0) + 1);
+  chain = chain.then(async () => {
+    const left = (queuedWork.get(id) ?? 1) - 1;
+    if (left > 0) queuedWork.set(id, left);
+    else queuedWork.delete(id);
+    const target = session;
+    if (destroyed || !target || target.id !== id) return;
+    try {
+      await work(target);
+    } catch (err) {
+      failSession(target, err);
+    }
   });
 }
 
@@ -451,27 +471,24 @@ port.on("message", ({ data: message }) => {
       return;
     }
     case "audio": {
-      const { session: id, pcm } = message;
-      queuedAudio.set(id, (queuedAudio.get(id) ?? 0) + 1);
-      chain = chain.then(async () => {
-        const left = (queuedAudio.get(id) ?? 1) - 1;
-        if (left > 0) queuedAudio.set(id, left);
-        else queuedAudio.delete(id);
-        const target = session;
-        if (destroyed || !target || target.id !== id) return;
-        try {
-          await processAudio(target, pcm);
-        } catch (err) {
-          failSession(target, err);
-        }
+      const { pcm } = message;
+      queueWork(message.session, async (target) => {
+        await processAudio(target, pcm);
         flushIfCaughtUp(target);
       });
       return;
     }
     case "cut":
-      forSession(message.session, async (target) => {
+      queueWork(message.session, async (target) => {
         await closeSession(target, "cut");
         flushIfCaughtUp(target);
+      });
+      return;
+    case "gap":
+      queueWork(message.session, async (target) => {
+        await closeSession(target, "gap");
+        // What follows the gap is unheard: no pause held until now may send.
+        flushOutbox(target, false);
       });
       return;
     case "finish": {

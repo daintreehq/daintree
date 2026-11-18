@@ -36,7 +36,7 @@ export const LOCAL_DRAIN_TIMEOUT_CODE = "local_drain_timeout";
 
 type SessionMessage = Extract<LocalSpeechWorkerOutbound, { session: number }>;
 /** What arrived before the model was ready, in order. */
-type Queued = { type: "audio"; pcm: ArrayBuffer } | { type: "cut" };
+type Queued = { type: "audio"; pcm: ArrayBuffer } | { type: "cut" } | { type: "gap" };
 
 export interface LocalTranscriptionDeps {
   models: () => Pick<LocalSpeechModelStore, "readyDir" | "invalidate">;
@@ -200,6 +200,16 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
         const pause = message.reason === "pause";
         const itemId = this.itemId(message.segment);
         this.openPreviews.delete(itemId);
+        if (message.reason === "gap") {
+          // Words around the gap are missing: whatever it closed lands as said.
+          this.emit({
+            type: "complete",
+            text: message.text,
+            ...(message.shown || message.text ? { itemId } : {}),
+            incomplete: true,
+          });
+          return;
+        }
         if (message.text === "" && !message.shown) return;
         this.emit({
           type: "complete",
@@ -235,7 +245,7 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
     for (const item of this.queued) {
       if (item.type === "audio")
         lease.post({ type: "audio", session: lease.session, pcm: item.pcm });
-      else lease.post({ type: "cut", session: lease.session });
+      else lease.post({ type: item.type, session: lease.session });
     }
     this.queued = [];
     this.queuedChunks = 0;
@@ -264,8 +274,9 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
       if (!this.overflowWarned) {
         this.overflowWarned = true;
         // The words lost here would say what came before them meant: the
-        // passage closes at the gap, so no command is read across it.
-        this.queued.push({ type: "cut" });
+        // passage closes at the gap as incomplete, so no command is read
+        // across it.
+        this.queued.push({ type: "gap" });
         this.emit({ type: "error", error: createAudioBufferOverflowError() });
       }
       return;

@@ -35,6 +35,14 @@ export type LocalSpeechWorkerInbound =
       session: number;
     }
   | {
+      /**
+       * Audio was lost here (the connect buffer overflowed): close the
+       * passage as incomplete, so no command is read across the gap.
+       */
+      type: "gap";
+      session: number;
+    }
+  | {
       /** A graceful stop: transcribe everything heard, close the passage, then `finished`. */
       type: "finish";
       session: number;
@@ -49,7 +57,7 @@ export type LocalSpeechWorkerInbound =
       type: "destroy";
     };
 
-export type LocalSpeechSegmentReason = "pause" | "cap" | "cut" | "finish";
+export type LocalSpeechSegmentReason = "pause" | "cap" | "cut" | "gap" | "finish";
 
 /** Speech process → main. */
 export type LocalSpeechWorkerOutbound =

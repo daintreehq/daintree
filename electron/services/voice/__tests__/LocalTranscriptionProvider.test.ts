@@ -363,9 +363,31 @@ describe("LocalTranscriptionProvider", () => {
     const session = h.leases[0].session;
     h.deliver({ type: "started", session, vad: true });
     // The passage closes where audio was lost, so no command spans the gap.
-    const sent = h.posted.filter((m) => m.type === "audio" || m.type === "cut");
+    const sent = h.posted.filter((m) => m.type === "audio" || m.type === "gap");
     expect(sent).toHaveLength(151);
-    expect(sent.at(-1)).toEqual({ type: "cut", session });
+    expect(sent.at(-1)).toEqual({ type: "gap", session });
+    h.deliver({
+      type: "segment",
+      session,
+      segment: 0,
+      text: "fix it and send",
+      shown: true,
+      reason: "gap",
+      endOfSpeech: false,
+    });
+    h.deliver({
+      type: "segment",
+      session,
+      segment: 1,
+      text: "",
+      shown: false,
+      reason: "gap",
+      endOfSpeech: false,
+    });
+    expect(h.events.slice(-2)).toEqual([
+      { type: "complete", text: "fix it and send", itemId: `local-${session}-0`, incomplete: true },
+      { type: "complete", text: "", incomplete: true },
+    ]);
     expect(h.provider.getSessionStats()).toEqual({
       delayTier: "none",
       droppedConnect: 2,

@@ -240,7 +240,8 @@ export class LocalSpeechHost {
       // A process still releasing the same files would double the memory held.
       await this.waitForRetiring(RETIRE_KILL_MS + 1_000);
       // Another start may have taken over, or forked, while this one waited.
-      if (this.lease?.session !== session || this.shuttingDown) {
+      if (this.lease?.session !== session || this.shuttingDown || signal?.aborted) {
+        if (this.lease?.session === session) this.lease = null;
         throw new Error("Superseded by a newer dictation");
       }
     }
@@ -270,8 +271,14 @@ export class LocalSpeechHost {
         });
       });
     } catch (error) {
-      if (signal?.aborted && signal.reason === "wedged" && this.process === owner) {
-        if (this.lease?.session === session) this.lease = null;
+      // Only while this start still holds it: a newer one may be waiting on the same load.
+      if (
+        signal?.aborted &&
+        signal.reason === "wedged" &&
+        this.process === owner &&
+        this.lease?.session === session
+      ) {
+        this.lease = null;
         logWarn(`${P} Model load stopped answering; starting a fresh one next time`);
         this.retire(owner);
         throw error;
@@ -286,7 +293,11 @@ export class LocalSpeechHost {
       this.armIdleIfFree();
       throw error;
     }
-    if (this.lease?.session !== session || this.process !== owner) {
+    if (this.lease?.session !== session || this.process !== owner || signal?.aborted) {
+      if (this.lease?.session === session) {
+        this.lease = null;
+        this.armIdleIfFree();
+      }
       throw new Error("Superseded by a newer dictation");
     }
     return {

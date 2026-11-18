@@ -350,4 +350,29 @@ describe("localSpeechWorker", () => {
       ["to", true],
     ]);
   });
+
+  it("closes the passage at lost audio as a gap, and lets no pause held before it send", async () => {
+    await start();
+    script.tokens = [
+      [
+        [0, 1],
+        [1, 3],
+      ],
+      [],
+      [],
+      [],
+    ];
+    script.vad[0] = ["start"];
+    script.vad[11] = ["end"];
+    packets(14);
+    send({ type: "gap", session: 1 });
+    await vi.waitFor(() => expect(segments()).toHaveLength(2));
+    // The pause before the gap was real, but what followed it is unheard.
+    expect(segments().map((s) => [s.text, s.reason, s.endOfSpeech])).toEqual([
+      ["send it", "pause", false],
+      ["", "gap", false],
+    ]);
+    send({ type: "finish", session: 1 });
+    await vi.waitFor(() => expect(posted.at(-1)).toEqual({ type: "finished", session: 1 }));
+  });
 });

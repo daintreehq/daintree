@@ -21,7 +21,7 @@ export interface TimedToken {
   atMs: number;
 }
 
-export type SegmentCloseReason = "pause" | "cap" | "cut" | "finish";
+export type SegmentCloseReason = "pause" | "cap" | "cut" | "gap" | "finish";
 
 export type SegmentEvent =
   | { type: "text"; segment: number; text: string }
@@ -102,8 +102,8 @@ export class LocalSpeechSegmenter {
     return events;
   }
 
-  /** Enter or stop: everything decoded so far is one passage, closed now. */
-  closeNow(reason: "cut" | "finish"): SegmentEvent[] {
+  /** Enter, lost audio or stop: everything decoded so far is one passage, closed now. */
+  closeNow(reason: "cut" | "gap" | "finish"): SegmentEvent[] {
     const events: SegmentEvent[] = [];
     this.pendingCloses = [];
     this.close(reason, events);

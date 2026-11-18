@@ -205,4 +205,17 @@ describe("LocalSpeechHost", () => {
     await expect(second).rejects.toThrow(/Cancelled/);
     expect(children()[0].posted.at(-1)).toEqual({ type: "destroy" });
   });
+
+  it("never lets an older start's hung-load abort take the load a newer start is waiting on", async () => {
+    const host = new LocalSpeechHost(60_000);
+    const older = new AbortController();
+    const first = host.acquire("/models/rev", handlers(), older.signal);
+    await vi.waitFor(() => expect(children()).toHaveLength(1));
+    const second = host.acquire("/models/rev", handlers());
+    older.abort("wedged");
+    await expect(first).rejects.toThrow();
+    expect(children()[0].posted.some((m) => m.type === "destroy")).toBe(false);
+    children()[0].reply({ type: "ready", loadMs: 5 });
+    await expect(second).resolves.toMatchObject({ session: expect.any(Number) });
+  });
 });
