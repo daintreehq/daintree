@@ -40,6 +40,9 @@ import {
 } from "../wakeContinue";
 
 const RESTORED_AT = 10_000;
+
+const targetOf = (options: AgentRequestOptions) =>
+  options.destination.kind === "terminal" ? options.destination.terminalId : null;
 /** Long enough for the scheduler to see a prompt settle and admit it. */
 const SETTLE = WAKE_CONTINUE_PROMPT_SETTLE_MS + 500;
 
@@ -195,7 +198,7 @@ describe("sendWakeContinueNotes", () => {
     setPane("a", { disposition: "resume" });
     void sendWakeContinueNotes("Go on");
     await vi.advanceTimersByTimeAsync(SETTLE);
-    expect(deliveries.map((d) => d.options.destination.terminalId)).toEqual(["a"]);
+    expect(deliveries.map((d) => targetOf(d.options))).toEqual(["a"]);
   });
 
   it("waits for a prompt to hold before typing at it", async () => {
@@ -227,7 +230,7 @@ describe("sendWakeContinueNotes", () => {
     );
     void sendWakeContinueNotes("Go on");
     await vi.advanceTimersByTimeAsync(SETTLE);
-    const first = deliveries.map((d) => d.options.destination.terminalId);
+    const first = deliveries.map((d) => targetOf(d.options));
     expect(first).toHaveLength(3);
     expect(first.every((id) => ready.includes(id))).toBe(true);
 
