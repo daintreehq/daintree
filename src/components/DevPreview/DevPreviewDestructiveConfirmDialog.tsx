@@ -116,9 +116,12 @@ export function DevPreviewDestructiveConfirmDialog({
 
     return () => {
       current = false;
-      void Promise.resolve()
+      Promise.resolve()
         .then(() => window.electron.devPreview.cancelDestructivePreviewSizes({ sessionId }))
-        .catch(() => {});
+        .catch(() => {
+          // Best effort: a Host that predates the cancel, or a dropped link,
+          // leaves the opening's scans to their deadline.
+        });
     };
   }, [isOpen, panelId, projectId, tier]);
 

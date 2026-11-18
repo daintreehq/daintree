@@ -28,7 +28,12 @@ function remoteContext() {
       },
     },
   } as unknown as IpcContext;
-  return { ctx, close: () => [...closers].forEach((cb) => cb()), listeners: () => closers.size };
+  const close = () => {
+    const pending = [...closers];
+    closers.clear();
+    pending.forEach((cb) => cb());
+  };
+  return { ctx, close, listeners: () => closers.size };
 }
 
 describe("createOwnerWatcher", () => {
@@ -39,6 +44,7 @@ describe("createOwnerWatcher", () => {
 
     sender.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
     sender.emit("did-start-navigation", { isMainFrame: false, isSameDocument: false });
+    sender.emit("did-start-navigation", { isMainFrame: false, isSameDocument: true });
     expect(stop).not.toHaveBeenCalled();
 
     sender.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
@@ -52,7 +58,7 @@ describe("createOwnerWatcher", () => {
 
     sender.emit("render-process-gone");
     sender.emit("render-process-gone");
-    expect(stop).toHaveBeenCalledTimes(2);
+    expect(stop.mock.calls).toEqual([["owner-1"], ["owner-1"]]);
   });
 
   it("stops the owner and drops every listener when the view is destroyed", () => {
@@ -62,9 +68,10 @@ describe("createOwnerWatcher", () => {
     watcher.watch(localContext(sender), "owner-1");
 
     sender.emit("destroyed");
-    expect(stop).toHaveBeenCalledWith("owner-1");
+    expect(stop.mock.calls).toEqual([["owner-1"]]);
     expect(sender.listenerCount("did-start-navigation")).toBe(0);
     expect(sender.listenerCount("render-process-gone")).toBe(0);
+    expect(sender.listenerCount("destroyed")).toBe(0);
 
     // The owner is free to be watched again under a new view.
     const next = new FakeSender();
@@ -77,6 +84,7 @@ describe("createOwnerWatcher", () => {
     const watcher = createOwnerWatcher(vi.fn());
     watcher.watch(localContext(sender), "owner-1");
     watcher.watch(localContext(sender), "owner-1");
+    expect(sender.listenerCount("did-start-navigation")).toBe(1);
     expect(sender.listenerCount("render-process-gone")).toBe(1);
     expect(sender.listenerCount("destroyed")).toBe(1);
   });
@@ -84,10 +92,17 @@ describe("createOwnerWatcher", () => {
   it("stops a remote owner when its endpoint closes", () => {
     const stop = vi.fn();
     const remote = remoteContext();
-    createOwnerWatcher(stop).watch(remote.ctx, "remote-owner");
+    const watcher = createOwnerWatcher(stop);
+    watcher.watch(remote.ctx, "remote-owner");
 
     remote.close();
-    expect(stop).toHaveBeenCalledWith("remote-owner");
+    expect(stop.mock.calls).toEqual([["remote-owner"]]);
+
+    // A closed endpoint releases the owner, so its next endpoint is watched too.
+    const next = remoteContext();
+    watcher.watch(next.ctx, "remote-owner");
+    next.close();
+    expect(stop.mock.calls).toEqual([["remote-owner"], ["remote-owner"]]);
   });
 
   it("dispose detaches every watch without stopping anything", () => {
@@ -106,5 +121,9 @@ describe("createOwnerWatcher", () => {
     expect(remote.listeners()).toBe(0);
     sender.emit("render-process-gone");
     expect(stop).not.toHaveBeenCalled();
+
+    // Nothing is retained either: the same owner can be watched afresh.
+    watcher.watch(localContext(sender), "owner-1");
+    expect(sender.listenerCount("render-process-gone")).toBe(1);
   });
 });

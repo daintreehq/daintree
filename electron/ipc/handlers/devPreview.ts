@@ -1,4 +1,5 @@
 // eager-import-allow: reads saved user-stopped previews only when the session service is created on demand, after its dynamic imports
+import { randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { app } from "electron";
 import { z } from "zod";
@@ -38,6 +39,7 @@ import type {
   ResolveRemoteUpstream,
 } from "../../services/DevPreviewProxyService.js";
 import { events } from "../../services/events.js";
+import { measureDirectorySize } from "../../services/DirectoryDiskUsage.js";
 import { WorktreeDiskUsageService } from "../../services/WorktreeDiskUsageService.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 
@@ -52,12 +54,20 @@ const WORKTREE_GONE_PROBE_TIMEOUT_MS = 5000;
 const SIZE_SCAN_CONCURRENCY = 2;
 const SIZE_SCAN_TIMEOUT_MS = 30_000;
 const SIZE_SCAN_QUEUE_TIMEOUT_MS = 120_000;
+/**
+ * One `lstat` at a time per walk (Windows): with two scans that is at most two
+ * of Main's four libuv workers, so a share that stops answering mid-walk can't
+ * take the pool from the metadata read that gates confirmation (#16361).
+ */
+const SIZE_SCAN_STAT_BATCH = 1;
 
-function readSizeSessionId(request: unknown): string {
+/** The request's session id, undefined when it sent none; a malformed one is refused. */
+function readSizeSessionId(request: unknown): string | undefined {
   const sessionId =
     request && typeof request === "object" && !Array.isArray(request)
       ? (request as { sessionId?: unknown }).sessionId
       : undefined;
+  if (sessionId === undefined) return undefined;
   if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 512) {
     throw new Error("Invalid sessionId");
   }
@@ -128,6 +138,8 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
       concurrency: SIZE_SCAN_CONCURRENCY,
       timeoutMs: SIZE_SCAN_TIMEOUT_MS,
       queueTimeoutMs: SIZE_SCAN_QUEUE_TIMEOUT_MS,
+      measure: (root, options) =>
+        measureDirectorySize(root, { ...options, statBatch: SIZE_SCAN_STAT_BATCH }),
     }));
   const sizeScanOwners = createOwnerWatcher((owner) => sizeScans?.cancel(owner));
 
@@ -309,23 +321,30 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           ctx: IpcContext,
           request: DevPreviewDestructivePreviewSizesRequest
         ): Promise<DevPreviewDestructivePreviewSizes> => {
-          const sessionId = readSizeSessionId(request);
+          const requested = readSizeSessionId(request);
+          // A Shell built before sessions sends no id and never cancels, so its
+          // request opens a session of its own, closed once it answers.
+          const sessionId = requested ?? randomUUID();
           const owner = sizeScanOwner(ctx);
           const scans = getSizeScans();
           sizeScanOwners.watch(ctx, owner);
           // Before the first await, so a cancel sent right behind this request
-          // (or a newer opening) finds the session it belongs to.
-          // The session stays open after this answers: the renderer's cancel,
-          // the next opening, or the view going away closes it.
+          // (or a newer opening) finds the session it belongs to. A named
+          // session stays open after this answers: the renderer's cancel, the
+          // next opening, or the view going away closes it.
           const signal = scans.begin(owner, sessionId);
-          const svc = await getSessionService();
-          return svc.getDestructivePreviewSizes(request, {
-            signal,
-            measure: async (dirPath) => {
-              const result = await scans.measure(signal, dirPath, []);
-              return result.status === "measured" ? result.bytes : null;
-            },
-          });
+          try {
+            const svc = await getSessionService();
+            return await svc.getDestructivePreviewSizes(request, {
+              signal,
+              measure: async (dirPath) => {
+                const result = await scans.measure(signal, dirPath, []);
+                return result.status === "measured" ? result.bytes : null;
+              },
+            });
+          } finally {
+            if (requested === undefined) scans.cancel(owner, sessionId);
+          }
         },
         { withContext: true }
       ),
@@ -336,6 +355,7 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           request: DevPreviewDestructivePreviewSizesCancelRequest
         ): Promise<void> => {
           const sessionId = readSizeSessionId(request);
+          if (sessionId === undefined) throw new Error("Invalid sessionId");
           sizeScans?.cancel(sizeScanOwner(ctx), sessionId);
         },
         { withContext: true }

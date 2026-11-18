@@ -121,7 +121,7 @@ describe("measureDirectorySize on the Windows walk", () => {
   });
 
   it("doesn't take a file replaced by a directory mid-scan as the figure", async () => {
-    injectFailures({
+    const spies = injectFailures({
       lstat: (target, n) => {
         if (target !== nestedFile || n !== 1) return null;
         fs.rmSync(nestedFile);
@@ -131,8 +131,10 @@ describe("measureDirectorySize on the Windows walk", () => {
       },
     });
     // The walk classifies each entry by its own lstat, not by the listing, so
-    // it walks the replacement's contents instead of counting a stale file.
+    // it walks the replacement's contents in the same pass instead of counting
+    // a stale file.
     expect(await measure(root)).toBe(7 + 1000);
+    expect(spies.opened(root)).toBe(1);
   });
 
   it("counts a hard-linked file once", async () => {
@@ -162,8 +164,34 @@ describe("measureDirectorySize on the Windows walk", () => {
     expect(await measure(root)).toBe(18 + 200);
   });
 
-  it("answers unknown for a path that isn't a directory", async () => {
+  it("answers unknown for a path that isn't a directory, without listing it", async () => {
+    const spies = injectFailures({});
+    const missing = path.join(tmp, "missing");
     expect(await measure(rootFile)).toBeNull();
-    expect(await measure(path.join(tmp, "missing"))).toBeNull();
+    expect(await measure(missing)).toBeNull();
+    expect(spies.opened(rootFile) + spies.opened(missing)).toBe(0);
+  });
+
+  it("keeps no more lstats in flight than the caller's batch allows", async () => {
+    for (let i = 0; i < 6; i++) fs.writeFileSync(path.join(root, `f${i}.bin`), Buffer.alloc(1));
+    const realLstat = fsPromises.lstat.bind(fsPromises);
+    let inFlight = 0;
+    let peak = 0;
+    vi.spyOn(fsPromises, "lstat").mockImplementation((async (target: string, options?: unknown) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return await realLstat(target, options as never);
+      } finally {
+        inFlight -= 1;
+      }
+    }) as never);
+
+    expect(await measureDirectorySize(root, { platform: "win32", statBatch: 1 })).toBe(18 + 6);
+    expect(peak).toBe(1);
+    peak = 0;
+    expect(await measure(root)).toBe(18 + 6);
+    expect(peak).toBeGreaterThan(1);
   });
 });
