@@ -11,14 +11,15 @@ function makeProps(overrides: Partial<Props> = {}): Props {
     scopeKind: "default",
     scopeLabel: "Claude",
     dangerousMode: "inherit",
-    effectiveSkipPerms: false,
-    inheritResolvesToOn: true,
+    effectiveLevel: "cli-default",
+    effectivePermissionArgs: "",
+    autoSupported: false,
+    inheritLevel: "skip",
     inheritHint: "Inherited from global setting",
     customArgsValue: "",
     customArgsPlaceholder: "--flag",
     customArgsDescription: "Extra CLI flags",
     customFlagsOverride: undefined,
-    defaultDangerousArg: "--dangerously-skip-permissions",
     onDangerousModeChange: vi.fn(),
     onCustomFlagsChange: vi.fn(),
     onCustomFlagsOverrideReset: vi.fn(),
@@ -27,7 +28,7 @@ function makeProps(overrides: Partial<Props> = {}): Props {
 }
 
 describe("BehavioralControls — skip permissions control", () => {
-  it("renders the skip-permissions control as three radios, not text inputs (issue #10530)", () => {
+  it("renders the permission control as three radios, not text inputs, for an agent with no Auto mode (issue #10530)", () => {
     const { container } = render(<BehavioralControls {...makeProps()} />);
     const region = container.querySelector("#agents-skip-permissions");
     if (!(region instanceof HTMLElement)) throw new Error("skip-permissions region not found");
@@ -41,7 +42,7 @@ describe("BehavioralControls — skip permissions control", () => {
     const region = container.querySelector("#agents-skip-permissions");
     if (!(region instanceof HTMLElement)) throw new Error("skip-permissions region not found");
     expect(region.getAttribute("data-settings-row")).toBe("inline");
-    const group = within(region).getByRole("radiogroup", { name: "Skip permissions" });
+    const group = within(region).getByRole("radiogroup", { name: "Permission prompts" });
     const describedBy = group.getAttribute("aria-describedby") ?? "";
     const described = describedBy
       .split(" ")
@@ -50,23 +51,78 @@ describe("BehavioralControls — skip permissions control", () => {
     expect(described).toContain("Inherited from global setting");
   });
 
-  it("names the dangerous flag in the row once bypass is in effect", () => {
-    const { container } = render(
-      <BehavioralControls {...makeProps({ effectiveSkipPerms: true })} />
+  it("names the flags the resolved level adds, marking only Skip all as a bypass", () => {
+    const { container, rerender } = render(
+      <BehavioralControls
+        {...makeProps({
+          effectiveLevel: "skip",
+          effectivePermissionArgs: "--dangerously-skip-permissions",
+        })}
+      />
     );
     const region = container.querySelector("#agents-skip-permissions");
     if (!(region instanceof HTMLElement)) throw new Error("skip-permissions region not found");
     expect(within(region).getByText("--dangerously-skip-permissions")).toBeTruthy();
+    expect(region.querySelector("svg.lucide-shield-off")).not.toBeNull();
+
+    rerender(
+      <BehavioralControls
+        {...makeProps({
+          autoSupported: true,
+          dangerousMode: "auto",
+          effectiveLevel: "auto",
+          effectivePermissionArgs: "--permission-mode auto",
+        })}
+      />
+    );
+    expect(within(region).getByText("--permission-mode auto")).toBeTruthy();
+    expect(region.querySelector("svg.lucide-shield-off")).toBeNull();
+
+    rerender(<BehavioralControls {...makeProps({ dangerousMode: "off" })} />);
+    expect(region.querySelector("code")).toBeNull();
   });
 
-  it("surfaces the inherited resolved value inline on the Default option and updates with the parent", () => {
-    const { rerender } = render(
-      <BehavioralControls {...makeProps({ inheritResolvesToOn: true })} />
-    );
-    expect(screen.getByRole("radio", { name: /Default \(On\)/ })).toBeTruthy();
+  it("surfaces the inherited resolved level inline on the Inherit option and updates with the parent", () => {
+    const { rerender } = render(<BehavioralControls {...makeProps({ inheritLevel: "skip" })} />);
+    expect(screen.getByRole("radio", { name: "Inherit (Skip all)" })).toBeTruthy();
 
-    rerender(<BehavioralControls {...makeProps({ inheritResolvesToOn: false })} />);
-    expect(screen.getByRole("radio", { name: /Default \(Off\)/ })).toBeTruthy();
+    rerender(<BehavioralControls {...makeProps({ inheritLevel: "cli-default" })} />);
+    expect(screen.getByRole("radio", { name: "Inherit (CLI default)" })).toBeTruthy();
+
+    rerender(<BehavioralControls {...makeProps({ autoSupported: true, inheritLevel: "auto" })} />);
+    expect(screen.getByRole("radio", { name: "Inherit (Auto)" })).toBeTruthy();
+  });
+
+  it("offers Auto between the CLI default and Skip all only where the agent declares it (#17435)", () => {
+    const onDangerousModeChange = vi.fn();
+    const { rerender } = render(<BehavioralControls {...makeProps({ onDangerousModeChange })} />);
+    expect(screen.queryByRole("radio", { name: "Auto" })).toBeNull();
+
+    rerender(<BehavioralControls {...makeProps({ autoSupported: true, onDangerousModeChange })} />);
+    expect(screen.getAllByRole("radio").map((radio) => radio.textContent)).toEqual([
+      "Inherit (Skip all)",
+      "CLI default",
+      "Auto",
+      "Skip all",
+    ]);
+    screen.getByRole("radio", { name: "Auto" }).click();
+    expect(onDangerousModeChange).toHaveBeenCalledWith("auto");
+  });
+
+  it("keeps a saved Auto the agent can't honour visible but disabled, and says what launches", () => {
+    const { container } = render(
+      <BehavioralControls {...makeProps({ dangerousMode: "auto", autoSupported: false })} />
+    );
+    const auto = screen.getByRole("radio", { name: "Auto" });
+    expect(auto.getAttribute("aria-checked")).toBe("true");
+    expect(auto.hasAttribute("disabled") || auto.getAttribute("aria-disabled") === "true").toBe(
+      true
+    );
+    const region = container.querySelector("#agents-skip-permissions");
+    if (!(region instanceof HTMLElement)) throw new Error("skip-permissions region not found");
+    expect(region.textContent).toContain(
+      "This agent has no Auto mode, so it launches with its CLI default"
+    );
   });
 
   it("shows the inherit provenance hint only while Default is selected", () => {
@@ -101,7 +157,7 @@ describe("BehavioralControls — skip permissions control", () => {
       );
       expect(region(container).getByText(inheritHint)).toBeTruthy();
       expect(region(container).queryByText("Inherited from global setting")).toBeNull();
-      for (const dangerousMode of ["on", "off"] as const) {
+      for (const dangerousMode of ["on", "off", "auto"] as const) {
         rerender(<BehavioralControls {...makeProps({ inheritHint, dangerousMode })} />);
         expect(region(container).queryByText(inheritHint), dangerousMode).toBeNull();
       }
@@ -111,7 +167,7 @@ describe("BehavioralControls — skip permissions control", () => {
 });
 
 describe("BehavioralControls — no screen-mode choice (#16356)", () => {
-  it("offers no alt-screen control, leaving only the radios for skip permissions", () => {
+  it("offers no alt-screen control, leaving only the radios for permission prompts", () => {
     const { container } = render(<BehavioralControls {...makeProps()} />);
     expect(screen.queryByText(/alt.screen/i)).toBeNull();
     expect(screen.queryByRole("radio", { name: "Inline" })).toBeNull();

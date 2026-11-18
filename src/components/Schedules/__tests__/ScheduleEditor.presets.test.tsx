@@ -47,6 +47,7 @@ type EditorLeaveState = import("../ScheduleEditor").EditorLeaveState;
 
 const NOW = Date.UTC(2027, 0, 4, 8);
 const MISSING_ERROR = "This preset no longer exists for this agent";
+const PROMPTS_WARNING = "This run may stop at permission prompts";
 
 function withPreset(presetId: string): Schedule {
   return createSchedule(
@@ -108,12 +109,13 @@ describe("ScheduleEditor: the saved preset (#17210)", () => {
 
     expect(presetTrigger().textContent).toContain("Loading preset…");
     expect(screen.queryByText(MISSING_ERROR)).toBeNull();
-    expect(screen.queryByText("This run will stop at permission prompts")).toBeNull();
+    expect(screen.queryByText(PROMPTS_WARNING)).toBeNull();
 
     act(() => useProjectPresetsStore.getState().setPresetsByAgent("b", {}));
 
     expect(presetTrigger().textContent).toContain("Missing preset");
     expect(screen.getByText(MISSING_ERROR)).toBeTruthy();
+    expect(screen.getByText(PROMPTS_WARNING)).toBeTruthy();
   });
 
   it("doesn't take another project's preset for this one's", () => {
@@ -164,5 +166,51 @@ describe("ScheduleEditor: the saved preset (#17210)", () => {
     act(() => useCcrPresetsStore.getState().markInitialized());
 
     expect(screen.getByText(MISSING_ERROR)).toBeTruthy();
+  });
+});
+
+describe("ScheduleEditor: permission prompts on an unattended run (#17435)", () => {
+  function bare(): Schedule {
+    return createSchedule(
+      {
+        id: "s2",
+        projectId: "b",
+        name: "Nightly",
+        launch: { agentId: "claude", prompt: "Go.", presetId: null },
+        timeZone: "Europe/London",
+      },
+      NOW - 1000
+    );
+  }
+
+  const callout = () => document.querySelector<HTMLElement>('[data-callout="warning"]');
+
+  it("suggests Auto ahead of Skip all when the agent launches on its own defaults", () => {
+    renderEditor(bare());
+    const text = callout()?.textContent ?? "";
+    expect(text).toContain(PROMPTS_WARNING);
+    expect(text.indexOf("set to Auto")).toBeGreaterThan(-1);
+    expect(text.indexOf("set to Auto")).toBeLessThan(text.indexOf("Skip all"));
+  });
+
+  it("reads the chosen preset over the agent's own Skip all", () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          claude: {
+            dangerousMode: "on",
+            customPresets: [
+              { id: "user-auto", name: "Reviewed", dangerousMode: "auto" },
+              { id: "user-plain", name: "Plain", dangerousMode: "off" },
+            ],
+          },
+        },
+      } as unknown as AgentSettings,
+    } as never);
+    renderEditor(withPreset("user-auto"));
+    expect(callout()).toBeNull();
+    cleanup();
+    renderEditor(withPreset("user-plain"));
+    expect(callout()?.textContent).toContain(PROMPTS_WARNING);
   });
 });

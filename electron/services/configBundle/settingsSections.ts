@@ -363,6 +363,7 @@ const presetKey = (agentId: string, presetId: string) => `agents.${agentId}.pres
 const MODE_LABELS: Record<string, string> = {
   on: "Always skip",
   off: "Never skip",
+  auto: "Auto",
   inherit: "Follow the global setting",
 };
 

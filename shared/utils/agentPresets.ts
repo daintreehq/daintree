@@ -8,6 +8,7 @@ import { isAccountId } from "./agentAccountId.js";
 import { isPresetHexColor } from "./presetColor.js";
 import {
   combineDangerousModes,
+  isDangerousMode,
   resolveDangerousMode,
   resolveEffectivePresetId,
   type AgentSettingsEntry,
@@ -136,12 +137,7 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
     args: sanitizeArgs(preset.args),
     dangerousEnabled:
       typeof preset.dangerousEnabled === "boolean" ? preset.dangerousEnabled : undefined,
-    dangerousMode:
-      preset.dangerousMode === "inherit" ||
-      preset.dangerousMode === "on" ||
-      preset.dangerousMode === "off"
-        ? preset.dangerousMode
-        : undefined,
+    dangerousMode: isDangerousMode(preset.dangerousMode) ? preset.dangerousMode : undefined,
     customFlags:
       typeof preset.customFlags === "string" && !hasShellMetachar(preset.customFlags)
         ? preset.customFlags.slice(0, 10000)
@@ -428,10 +424,10 @@ export function applyPresetBehaviorOverrides(
   preset: AgentPreset | undefined
 ): AgentSettingsEntry {
   if (!preset) return entry;
-  // Layer the preset's tri-state bypass mode on top of the agent's resolved
-  // mode and bake the combined result onto the effective entry, so the single
-  // `resolveEffectiveBypass` chokepoint sees the final intent (a preset "off"
-  // vetoes an agent/global "on"). `dangerousEnabled` is mirrored for any
+  // Layer the preset's permission mode on top of the agent's resolved mode and
+  // bake the combined result onto the effective entry, so the single
+  // `resolveEffectivePermissionLevel` chokepoint sees the final intent (a
+  // preset "off" or "auto" beats an agent/global "on"). `dangerousEnabled` is mirrored for any
   // legacy boolean reader of the merged entry.
   const combinedMode = combineDangerousModes(
     resolveDangerousMode(entry),

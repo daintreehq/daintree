@@ -36,10 +36,11 @@ import {
   buildLaunchCommandFromFlags,
   mintAssignedSessionId,
   getPluginBypassArgHistory,
-  reconcileBypassFlags,
+  reconcilePermissionFlags,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
-  resolveEffectiveBypass,
+  resolveEffectivePermissionLevel,
+  userPermissionArgs,
   resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
@@ -811,8 +812,11 @@ export function buildArgsForRespawn(
     // once it's toggled off, and vice-versa. Strip-and-re-add against the
     // current resolution so every restart/restore replays clean flags.
     const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-    const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
-    const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
+    const permissionLevel = resolveEffectivePermissionLevel(
+      effectiveEntry,
+      agentId,
+      globalSkipPermissions
+    );
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
     // A stale preset voids the captured flags, but not the caller's standing
     // instruction (#12431), which no setting can rebuild. It is carried into
@@ -830,13 +834,12 @@ export function buildArgsForRespawn(
     const reconcileFlags = (base: string[]): string[] =>
       reconcileDecorationFlags(
         reconcileInlineModeFlag(
-          reconcileBypassFlags(
-            base,
-            agentId,
-            effectiveBypass,
-            dangerousArgs,
-            getPluginBypassArgHistory(agentSettings, agentId)
-          ),
+          reconcilePermissionFlags(base, agentId, permissionLevel, {
+            bypassArgs: effectiveEntry.dangerousArgs,
+            pluginBypassArgHistory: getPluginBypassArgHistory(agentSettings, agentId),
+            userArgs: userPermissionArgs(effectiveEntry, preset?.args),
+            carriedArgs: callerLaunchFlags,
+          }),
           agentId
         ),
         agentId,

@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ReadOnlyDetail } from "../ReadOnlyDetail";
 import type { AgentPreset } from "@/config/agents";
 
-function renderDetail(env: Record<string, string>) {
+function renderDetail(
+  env: Record<string, string>,
+  effectiveLevel: "cli-default" | "auto" | "skip" = "cli-default"
+) {
   const preset: AgentPreset = { id: "ccr-router", name: "ccr:router", env };
   render(
     <ReadOnlyDetail
@@ -12,11 +15,25 @@ function renderDetail(env: Record<string, string>) {
       selectedPreset={preset}
       agentName="Claude"
       agentCustomFlags=""
-      effectiveSkipPerms={false}
+      effectiveLevel={effectiveLevel}
       onDuplicate={vi.fn()}
     />
   );
 }
+
+describe("ReadOnlyDetail permission prompts", () => {
+  it("shows the level a launch on the preset resolves to, Auto included (#17435)", () => {
+    for (const [level, label] of [
+      ["auto", "Auto"],
+      ["skip", "Skip all"],
+      ["cli-default", "CLI default"],
+    ] as const) {
+      renderDetail({}, level);
+      expect(screen.getByText(label), level).toBeTruthy();
+      cleanup();
+    }
+  });
+});
 
 describe("ReadOnlyDetail environment", () => {
   /**

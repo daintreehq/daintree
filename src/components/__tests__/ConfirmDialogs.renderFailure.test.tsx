@@ -256,7 +256,7 @@ describe("queued dialogs answer the request whose content threw and show the nex
     source: "project",
     args: [],
     dangerousMode: "inherit",
-    skipsPermissions: false,
+    permissionLevel: "cli-default",
     envNames: [],
     fallbacks: [],
     fallbackOnRateLimit: false,

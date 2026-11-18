@@ -73,14 +73,14 @@ describe("gatePluginPresetLaunch", () => {
       source: "custom",
       args: ["--model", "glm"],
       dangerousMode: "on",
-      skipsPermissions: true,
+      permissionLevel: "skip",
       envNames: ["ANTHROPIC_AUTH_TOKEN"],
       fallbacks: [
         {
           presetName: "Backup",
           args: ["--fast"],
           dangerousMode: "inherit",
-          skipsPermissions: false,
+          permissionLevel: "cli-default",
           envNames: ["BACKUP_KEY"],
         },
       ],

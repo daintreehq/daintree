@@ -5,6 +5,9 @@ const buildResumeCommandMock = vi.hoisted(() => vi.fn());
 const buildResumeLatestCommandMock = vi.hoisted(() => vi.fn());
 const reconcileBypassFlagsMock = vi.hoisted(() => vi.fn());
 const resolveEffectiveBypassMock = vi.hoisted(() => vi.fn());
+const resolveAgentRuntimeSettingsMock = vi.hoisted(() =>
+  vi.fn((): { preset?: { id: string; name: string; dangerousMode?: string } } => ({}))
+);
 const reconcileInlineModeFlagMock = vi.hoisted(() => vi.fn());
 // Outermost reconcile in the chain; a pass-through keeps every assertion on
 // the inline-mode mock's return value intact.
@@ -36,12 +39,35 @@ vi.mock("@/utils/agentLaunchCommand", () => ({
 vi.mock("@shared/types/agentSettings", () => ({
   buildResumeCommand: buildResumeCommandMock,
   buildResumeLatestCommand: buildResumeLatestCommandMock,
-  reconcileBypassFlags: reconcileBypassFlagsMock,
+  reconcilePermissionFlags: reconcileBypassFlagsMock,
   getPluginBypassArgHistory: () => [],
-  resolveEffectiveBypass: resolveEffectiveBypassMock,
+  resolveEffectivePermissionLevel: resolveEffectiveBypassMock,
+  userPermissionArgs: () => [],
+  capturedPermissionLevel: () => "auto",
+  lesserPermissionLevel: (a: string, b: string) => {
+    const order = ["cli-default", "auto", "skip"];
+    return order.indexOf(a) <= order.indexOf(b) ? a : b;
+  },
   reconcileInlineModeFlag: reconcileInlineModeFlagMock,
   reconcileDecorationFlags: reconcileDecorationFlagsMock,
   resolveKeepDecorations: resolveKeepDecorationsMock,
+}));
+vi.mock("@shared/utils/agentPresets", () => ({
+  applyPresetBehaviorOverrides: (
+    entry: Record<string, unknown>,
+    preset?: { dangerousMode?: string }
+  ) => (preset ? { ...entry, dangerousMode: preset.dangerousMode } : entry),
+}));
+vi.mock("@/utils/agentRuntimeSettings", () => ({
+  resolveAgentRuntimeSettings: resolveAgentRuntimeSettingsMock,
+}));
+vi.mock("@/store/ccrPresetsStore", () => ({
+  useCcrPresetsStore: { getState: () => ({ ccrPresetsByAgent: {} }) },
+}));
+vi.mock("@/store/projectPresetsStore", () => ({
+  useProjectPresetsStore: {
+    getState: () => ({ presetsByAgent: { claude: [{ id: "team" }] }, hydratedProjectId: "a" }),
+  },
 }));
 vi.mock("@shared/config/agentRegistry", () => ({
   getEffectiveAgentConfig: getEffectiveAgentConfigMock,
@@ -76,7 +102,8 @@ beforeEach(() => {
       agents: { claude: { dangerousArgs: "--dangerously-skip-permissions" } },
     },
   });
-  resolveEffectiveBypassMock.mockReturnValue(true);
+  resolveEffectiveBypassMock.mockReturnValue("skip");
+  resolveAgentRuntimeSettingsMock.mockReturnValue({});
   reconcileBypassFlagsMock.mockReturnValue(["--dangerously-skip-permissions"]);
   // Inline reconciliation is layered after bypass; pass the flags through so the
   // existing resume-command assertions (bypass token) still hold (#10876).
@@ -116,28 +143,36 @@ describe("reconcileResumeLaunchFlags", () => {
     expect(reconcileBypassFlagsMock).toHaveBeenCalledWith(
       ["--dangerously-skip-permissions"],
       "claude",
-      true,
-      "--dangerously-skip-permissions",
-      []
+      "skip",
+      {
+        bypassArgs: "--dangerously-skip-permissions",
+        pluginBypassArgHistory: [],
+        userArgs: [],
+        carriedArgs: [],
+      }
     );
     expect(result).toEqual(["--dangerously-skip-permissions"]);
   });
 
   it("passes an empty flag array when the session captured none", () => {
     reconcileResumeLaunchFlags({ agentId: "claude" });
-    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith(
-      [],
-      "claude",
-      true,
-      "--dangerously-skip-permissions",
-      []
-    );
+    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([], "claude", "skip", {
+      bypassArgs: "--dangerously-skip-permissions",
+      pluginBypassArgHistory: [],
+      userArgs: [],
+      carriedArgs: [],
+    });
   });
 
   it("passes undefined dangerousArgs when the agent has no settings entry", () => {
     reconcileResumeLaunchFlags({ agentId: "gemini" });
     expect(resolveEffectiveBypassMock).toHaveBeenCalledWith({}, "gemini", true);
-    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([], "gemini", true, undefined, []);
+    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([], "gemini", "skip", {
+      bypassArgs: undefined,
+      pluginBypassArgHistory: [],
+      userArgs: [],
+      carriedArgs: [],
+    });
   });
 
   // #13046: the caller's verbatim tail never reaches the reconcile, and comes
@@ -152,11 +187,59 @@ describe("reconcileResumeLaunchFlags", () => {
     expect(reconcileBypassFlagsMock).toHaveBeenCalledWith(
       ["--dangerously-skip-permissions"],
       "claude",
-      true,
-      "--dangerously-skip-permissions",
-      []
+      "skip",
+      {
+        bypassArgs: "--dangerously-skip-permissions",
+        pluginBypassArgHistory: [],
+        userArgs: [],
+        carriedArgs: ["--effort", "high"],
+      }
     );
     expect(result).toEqual(["--dangerously-skip-permissions", "--effort", "high"]);
+  });
+
+  // #17435: a scheduled run resumes on the preset it ran on, so an Auto preset
+  // under an agent set to Skip all isn't resolved as Skip all.
+  it("resolves the record's preset over the agent's own mode", () => {
+    resolveAgentRuntimeSettingsMock.mockReturnValue({
+      preset: { id: "reviewed", name: "Reviewed", dangerousMode: "auto" },
+    });
+    reconcileResumeLaunchFlags({ ...baseSession, agentPresetId: "reviewed" });
+    expect(resolveAgentRuntimeSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "claude", presetId: "reviewed" })
+    );
+    expect(resolveEffectiveBypassMock).toHaveBeenCalledWith(
+      { dangerousArgs: "--dangerously-skip-permissions", dangerousMode: "auto" },
+      "claude",
+      true
+    );
+  });
+
+  it("resumes on the agent's own settings when the record names no preset", () => {
+    reconcileResumeLaunchFlags(baseSession);
+    expect(resolveAgentRuntimeSettingsMock).not.toHaveBeenCalled();
+    expect(reconcileBypassFlagsMock).toHaveBeenCalled();
+  });
+
+  it("resumes an unreadable preset at the lesser of its captured level and the agent's", () => {
+    reconcileResumeLaunchFlags({ ...baseSession, agentPresetId: "gone" });
+    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith(
+      ["--dangerously-skip-permissions"],
+      "claude",
+      "auto",
+      expect.anything()
+    );
+  });
+
+  it("reads project presets only when the store holds the record's own project", () => {
+    reconcileResumeLaunchFlags({ ...baseSession, agentPresetId: "team", projectId: "a" });
+    expect(resolveAgentRuntimeSettingsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ projectPresets: [{ id: "team" }] })
+    );
+    reconcileResumeLaunchFlags({ ...baseSession, agentPresetId: "team", projectId: "b" });
+    expect(resolveAgentRuntimeSettingsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ projectPresets: undefined })
+    );
   });
 });
 
@@ -181,6 +264,21 @@ describe("buildResumePanelOptions", () => {
       agentLaunchFlags: ["--dangerously-skip-permissions"],
       agentSessionId: "s-1",
     });
+  });
+
+  it("keeps the preset the record resolved on the resumed pane, and none it couldn't find", () => {
+    resolveAgentRuntimeSettingsMock.mockReturnValue({
+      preset: { id: "reviewed", name: "Reviewed", dangerousMode: "auto" },
+    });
+    expect(
+      buildResumePanelOptions({ ...baseSession, agentPresetId: "reviewed" }, { cwd: "/active" })
+        ?.agentPresetId
+    ).toBe("reviewed");
+
+    resolveAgentRuntimeSettingsMock.mockReturnValue({});
+    expect(
+      buildResumePanelOptions({ ...baseSession, agentPresetId: "gone" }, { cwd: "/active" })
+    ).not.toHaveProperty("agentPresetId");
   });
 
   it("reopens a conversation from the account folder its record names (#17087)", () => {

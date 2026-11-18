@@ -1,4 +1,6 @@
 import { type AgentPreset, getEffectiveAgentConfig } from "../config/agentRegistry.js";
+import type { DangerousMode } from "../types/dangerousMode.js";
+import type { PermissionLevel } from "../types/agentSettings.js";
 import {
   getMergedPreset,
   getMergedPresetIdentities,
@@ -67,9 +69,9 @@ export interface PluginPresetLaunchSummary {
   /** Present when the preset replaces the agent's own extra flags. */
   customFlags?: string;
   /** The preset's own bypass override, before the agent's setting is layered under it. */
-  dangerousMode: "inherit" | "on" | "off";
-  /** Whether a launch on this preset skips permission prompts, with today's agent settings. */
-  skipsPermissions: boolean;
+  dangerousMode: DangerousMode;
+  /** What a launch on this preset does about permission prompts, with today's agent settings. */
+  permissionLevel: PermissionLevel;
   /** The account the preset pins, when it pins one. A worktree's own account still wins. */
   accountName?: string;
   envNames: string[];
@@ -86,8 +88,8 @@ export interface PluginPresetFallbackSummary {
   presetName: string;
   args: string[];
   customFlags?: string;
-  dangerousMode: "inherit" | "on" | "off";
-  skipsPermissions: boolean;
+  dangerousMode: DangerousMode;
+  permissionLevel: PermissionLevel;
   envNames: string[];
 }
 

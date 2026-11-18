@@ -1,12 +1,17 @@
 import {
+  capturedPermissionLevel,
   getPluginBypassArgHistory,
-  reconcileBypassFlags,
+  lesserPermissionLevel,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
-  resolveEffectiveBypass,
+  reconcilePermissionFlags,
+  resolveEffectivePermissionLevel,
   resolveKeepDecorations,
+  userPermissionArgs,
   type AgentSettings,
 } from "../types/agentSettings.js";
+import type { AgentPreset } from "../config/agentRegistry.js";
+import { applyPresetBehaviorOverrides } from "./agentPresets.js";
 import { splitCallerLaunchFlags } from "./callerLaunchFlags.js";
 
 /**
@@ -27,29 +32,49 @@ export function reconcileResumeLaunchFlagsWith(
     /** The caller's verbatim tail (#13046), re-appended untouched after reconcile. */
     callerLaunchFlags?: string[];
   },
-  settings: AgentSettings | null | undefined
+  settings: AgentSettings | null | undefined,
+  /**
+   * The preset the session launched on. `null` when the session names one
+   * that can't be read now (deleted, not loaded): the launch then takes the
+   * lesser of the level its flags were captured at and the agent's own, so a
+   * lost Auto preset doesn't become the agent's Skip all, and a captured
+   * bypass the agent no longer allows doesn't come back.
+   */
+  preset?: AgentPreset | null
 ): string[] {
-  const entry = settings?.agents?.[session.agentId] ?? {};
-  const effectiveBypass = resolveEffectiveBypass(
-    entry,
-    session.agentId,
-    settings?.globalSkipPermissions
+  const entry = applyPresetBehaviorOverrides(
+    settings?.agents?.[session.agentId] ?? {},
+    preset ?? undefined
   );
   const { base, caller } = splitCallerLaunchFlags(
     session.agentLaunchFlags,
     session.callerLaunchFlags
   );
+  const bypassOptions = {
+    bypassArgs: entry.dangerousArgs,
+    pluginBypassArgHistory: getPluginBypassArgHistory(settings, session.agentId),
+  };
+  const settingsLevel = resolveEffectivePermissionLevel(
+    entry,
+    session.agentId,
+    settings?.globalSkipPermissions
+  );
+  const permissionLevel =
+    preset === null
+      ? lesserPermissionLevel(
+          settingsLevel,
+          capturedPermissionLevel(base, session.agentId, bypassOptions)
+        )
+      : settingsLevel;
   // Pass [] when no flags were captured so a global-on still injects the token
   // for a supported agent (each reconcile no-ops for agents without one).
   const reconciled = reconcileDecorationFlags(
     reconcileInlineModeFlag(
-      reconcileBypassFlags(
-        base,
-        session.agentId,
-        effectiveBypass,
-        entry.dangerousArgs as string | undefined,
-        getPluginBypassArgHistory(settings, session.agentId)
-      ),
+      reconcilePermissionFlags(base, session.agentId, permissionLevel, {
+        ...bypassOptions,
+        userArgs: userPermissionArgs(entry, preset?.args),
+        carriedArgs: caller,
+      }),
       session.agentId
     ),
     session.agentId,

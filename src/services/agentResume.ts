@@ -1,5 +1,9 @@
-import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
-import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import {
+  buildResumeCommand,
+  buildResumeLatestCommand,
+  type AgentSettings,
+} from "@shared/types/agentSettings";
+import { getEffectiveAgentConfig, type AgentPreset } from "@shared/config/agentRegistry";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -8,6 +12,9 @@ import { isPtyPanel } from "@shared/types/panel";
 import { reconcileResumeLaunchFlagsWith } from "@shared/utils/agentResumeFlags";
 import { conversationStoreFor } from "@shared/utils/conversationStore";
 import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
+import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 
 /**
  * {@link reconcileResumeLaunchFlagsWith} against the current global settings.
@@ -20,8 +27,37 @@ export function reconcileResumeLaunchFlags(session: {
   agentLaunchFlags?: string[];
   /** The caller's verbatim tail (#13046), re-appended untouched after reconcile. */
   callerLaunchFlags?: string[];
+  agentPresetId?: string;
+  projectId?: string | null;
 }): string[] | undefined {
-  return reconcileResumeLaunchFlagsWith(session, useAgentSettingsStore.getState().settings);
+  const settings = useAgentSettingsStore.getState().settings;
+  return reconcileResumeLaunchFlagsWith(session, settings, resumePreset(session, settings));
+}
+
+/**
+ * The preset a record says its session launched on (#17435): `undefined` when
+ * it names none, so the agent's own settings apply as they always did, and
+ * `null` when it names one this view can't read (deleted, not loaded, or held
+ * for another project), so the launch takes the lesser of the level its flags
+ * were captured at and the agent's own.
+ */
+function resumePreset(
+  session: { agentId: string; agentPresetId?: string; projectId?: string | null },
+  settings: AgentSettings | null | undefined
+): AgentPreset | null | undefined {
+  const { agentId, agentPresetId: presetId, projectId } = session;
+  if (!presetId) return undefined;
+  const projectPresets = useProjectPresetsStore.getState();
+  const ownProject = !projectId || projectPresets.hydratedProjectId === projectId;
+  return (
+    resolveAgentRuntimeSettings({
+      agentId,
+      presetId,
+      entry: settings?.agents?.[agentId],
+      ccrPresets: useCcrPresetsStore.getState().ccrPresetsByAgent[agentId],
+      projectPresets: ownProject ? projectPresets.presetsByAgent[agentId] : undefined,
+    }).preset ?? null
+  );
 }
 
 /**
@@ -51,6 +87,7 @@ export function buildResumePanelOptions(
   const agentConfig = getEffectiveAgentConfig(session.agentId);
   if (!agentConfig) return null;
   const resumeFlags = reconcileResumeLaunchFlags(session);
+  const preset = resumePreset(session, useAgentSettingsStore.getState().settings);
   const command =
     buildResumeCommand(session.agentId, session.sessionId, resumeFlags, baseCommand) ??
     buildResumeLatestCommand(session.agentId, resumeFlags, baseCommand);
@@ -71,6 +108,8 @@ export function buildResumePanelOptions(
     // restart from rebuilding the rest from settings.
     agentLaunchFlags: session.agentLaunchFlags?.length ? resumeFlags : undefined,
     agentSessionId: session.sessionId,
+    // So a restart of the resumed pane reconciles against the same preset.
+    ...(preset ? { agentPresetId: preset.id } : {}),
     // A conversation recorded in another account's folder reopens from there
     // (#17087); the launch's own folder is looked up by id.
     conversationStore: conversationStoreFor(session.conversationStore, session.sessionId),

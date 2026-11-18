@@ -2092,6 +2092,102 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
   });
 
+  it("strips the terminal setting's Auto args from help launches, keeping the assistant's own bypass choice (#17435)", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "full" : false));
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+    const spawnWith = async (command: string, bypass: boolean) => {
+      mockGetBypassPermissions.mockImplementation(() => bypass);
+      ptyClient.spawn.mockClear();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command,
+          launchAgentId: "claude",
+          env: { DAINTREE_MCP_TOKEN: "help-token" },
+        } as unknown as Parameters<typeof handler>[1]
+      );
+      return ptyClient.spawn.mock.calls[0][1].command as string;
+    };
+
+    expect(await spawnWith("claude --permission-mode 'auto' --model opus", false)).toBe(
+      "claude --model opus"
+    );
+    expect(await spawnWith("claude --permission-mode=auto", true)).toBe(
+      "claude --dangerously-skip-permissions"
+    );
+    // Another mode the user picked for the assistant isn't the Auto setting's.
+    expect(await spawnWith("claude --permission-mode plan", false)).toBe(
+      "claude --permission-mode plan"
+    );
+    // A brief that mentions the flag is one quoted word, and stays.
+    expect(await spawnWith("claude 'Explain --permission-mode auto to me'", false)).toBe(
+      "claude 'Explain --permission-mode auto to me'"
+    );
+  });
+
+  it("strips the Auto args from a restarted assistant, which respawns without its help token (#17435)", async () => {
+    mockIsHelpTerminal.mockImplementation((id) => id === "assistant-term");
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        id: "assistant-term",
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude --permission-mode 'auto'",
+        launchAgentId: "claude",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+    expect(ptyClient.spawn.mock.calls[0][1].command).toBe("claude");
+  });
+
+  it("strips Codex's Auto flag from a fresh assistant launch too", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "full" : false));
+    mockGetBypassPermissions.mockImplementation(() => false);
+    mockGetCodexLaunchArgs.mockImplementation(() => []);
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "codex --approve-for-me --search",
+        launchAgentId: "codex",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+    expect(ptyClient.spawn.mock.calls[0][1].command).not.toContain("--approve-for-me");
+    expect(ptyClient.spawn.mock.calls[0][1].command).toContain("--search");
+  });
+
+  it("keeps the Auto args on an ordinary agent launch", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "codex --approve-for-me",
+        launchAgentId: "codex",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+    expect(ptyClient.spawn.mock.calls[0][1].command).toContain("--approve-for-me");
+  });
+
   it("strips a lookalike --dangerously-skip-permissions=false from help launches with bypass off", async () => {
     // Defense-in-depth: a customArgs lookalike like
     // `--dangerously-skip-permissions=false` could survive a substring-only

@@ -23,11 +23,12 @@ import {
   stripConversationSelectorFlags,
   supportsSessionIdAssignment,
   getPluginBypassArgHistory,
-  reconcileBypassFlags,
+  reconcilePermissionFlags,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
   resolveKeepDecorations,
-  resolveEffectiveBypass,
+  resolveEffectivePermissionLevel,
+  userPermissionArgs,
 } from "@shared/types";
 import {
   agentClipboardDirectory,
@@ -760,22 +761,21 @@ export const createRestartActions = (
       let reconcileFlags = (base: string[]): string[] =>
         reconcileInlineModeFlag(base, effectiveAgentId);
       if (runtimeForEnv) {
-        const effectiveBypass = resolveEffectiveBypass(
-          runtimeForEnv.settings.effectiveEntry,
+        const effectiveEntry = runtimeForEnv.settings.effectiveEntry;
+        const permissionLevel = resolveEffectivePermissionLevel(
+          effectiveEntry,
           effectiveAgentId,
           runtimeForEnv.globalSkipPermissions
         );
-        const dangerousArgs = runtimeForEnv.settings.effectiveEntry.dangerousArgs;
         reconcileFlags = (base: string[]): string[] =>
           reconcileDecorationFlags(
             reconcileInlineModeFlag(
-              reconcileBypassFlags(
-                base,
-                effectiveAgentId,
-                effectiveBypass,
-                dangerousArgs,
-                runtimeForEnv.pluginBypassArgHistory
-              ),
+              reconcilePermissionFlags(base, effectiveAgentId, permissionLevel, {
+                bypassArgs: effectiveEntry.dangerousArgs,
+                pluginBypassArgHistory: runtimeForEnv.pluginBypassArgHistory,
+                userArgs: userPermissionArgs(effectiveEntry, runtimeForEnv.settings.preset?.args),
+                carriedArgs: callerLaunchFlags,
+              }),
               effectiveAgentId
             ),
             effectiveAgentId,

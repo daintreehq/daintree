@@ -371,6 +371,7 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
       systemPromptArgs: options?.systemPromptArgs,
       presetArgs: preset?.args,
       globalSkipPermissions,
+      callerArgs: options?.agentLaunchFlags,
       sessionId: assignedSessionId,
     });
 
@@ -381,6 +382,7 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
         systemPromptArgs: options?.systemPromptArgs,
         presetArgs: preset?.args,
         globalSkipPermissions,
+        callerArgs: options?.agentLaunchFlags,
       });
     }
 

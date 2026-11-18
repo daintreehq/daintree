@@ -55,6 +55,7 @@ import {
 } from "../../../../shared/types/terminal.js";
 import {
   DEFAULT_DANGEROUS_ARGS,
+  stripPermissionAutoArgs,
   relaunchResumeAsAssignedSession,
   supportsExactSessionCapture,
   supportsSessionIdAssignment,
@@ -897,6 +898,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // Recorded only as the PTY is dispatched, so a launch that fails before
     // then leaves no agent behind to be offered a relaunch.
     let pluginToolsLaunchProjectId: string | null = null;
+
+    // The terminal setting's Auto mode (#17435) reaches an assistant's command
+    // through the agent's launch flags, and a restart rebuilds it from them
+    // with no help token, but the assistant's permission level is its own. So
+    // the declared Auto args never survive on an assistant launch, fresh or
+    // restarted, as its bypass flag never survives on its own.
+    if (typeof launchAgentId === "string" && (isHelpLaunch || isBoundHelpTerminal(id))) {
+      safeCommand = stripPermissionAutoArgs(safeCommand, launchAgentId);
+    }
 
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
