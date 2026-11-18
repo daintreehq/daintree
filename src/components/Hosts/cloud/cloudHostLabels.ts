@@ -416,6 +416,6 @@ function keepMachineState(
     default:
       return billedStopped
         ? `Daintree can't tell whether it's running; check on ${providerName}, where it keeps billing until it's deleted.`
-        : `Daintree can't tell whether it's running; check on ${providerName}, where it keeps billing while it runs${storageBilled ? `, and for its disk until it's deleted` : ""}.`;
+        : `Daintree can't tell whether it's running; check on ${providerName}, where it keeps billing while it runs${storageBilled && status.machine !== "deleted" ? `, and for its disk until it's deleted` : ""}.`;
   }
 }

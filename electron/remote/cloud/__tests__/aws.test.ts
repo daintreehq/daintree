@@ -1213,6 +1213,43 @@ describe("AwsProvider", () => {
     expect(starts).toBe(2);
   });
 
+  it("waits out a read that still shows the machine as it was before joining its start", async () => {
+    const { provider, credentials, fake } = setup();
+    const { resourceId } = await provider.create(credentials, CREATE);
+    fake.instances[0]!.state = "stopped";
+    const original = fake.fetch;
+    let starts = 0;
+    let staleReads = 1;
+    const lagging = new AwsProvider({
+      client: new AwsClient({
+        fetch: (async (input: URL | string, init?: RequestInit) => {
+          const action = new URLSearchParams(String(init?.body ?? "")).get("Action");
+          if (action === "StartInstances" && ++starts === 1) {
+            await original(input, init);
+            throw new TypeError("socket hang up");
+          }
+          // The first read after the start still says stopped.
+          if (action === "DescribeInstances" && staleReads > 0) {
+            staleReads -= 1;
+            const state = fake.instances[0]!.state;
+            fake.instances[0]!.state = "stopped";
+            try {
+              return await original(input, init);
+            } finally {
+              fake.instances[0]!.state = state;
+            }
+          }
+          return original(input, init);
+        }) as typeof fetch,
+        sleep: async () => {},
+      }),
+      sleep: async () => {},
+    });
+    await expect(lagging.start(credentials, resourceId, {})).resolves.toMatchObject({
+      machine: "starting",
+    });
+  });
+
   it("starts, stops, renames and terminates the instance in its region", async () => {
     const { provider, credentials, fake } = setup();
     const { resourceId } = await provider.create(credentials, CREATE);
@@ -1323,9 +1360,11 @@ describe("AwsProvider", () => {
 
   it("gives up on a console that never answers at the deadline, but not on a cancelled caller", async () => {
     const fake = fakeAws({ console: () => null });
+    let enteredConsole: (() => void) | null = null;
     const stalling = (async (input: URL | string, init?: RequestInit) => {
       const action = new URLSearchParams(String(init?.body ?? "")).get("Action");
       if (action !== "GetConsoleOutput") return fake.fetch(input, init);
+      enteredConsole?.();
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () =>
           reject(new DOMException("aborted", "AbortError"))
@@ -1343,8 +1382,11 @@ describe("AwsProvider", () => {
       hostKey: null,
     });
 
+    // Cancelled while the console read is under way: the caller's cancel, not "no key".
     const caller = new AbortController();
+    const reading = new Promise<void>((resolve) => (enteredConsole = resolve));
     const pending = provider.sshAccess({ ...credentials, signal: caller.signal }, resourceId);
+    await reading;
     caller.abort();
     await expect(pending).rejects.toMatchObject({ kind: "cancelled" });
   });

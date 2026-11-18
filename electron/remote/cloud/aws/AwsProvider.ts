@@ -888,13 +888,17 @@ export class AwsProvider implements CloudProvider {
     ) {
       throw error;
     }
-    let resource: ProviderResource;
-    try {
-      resource = await this.inspect(credentials, resourceId);
-    } catch {
-      throw error;
+    // EC2's reads lag its writes: the machine may still read as it was for a moment.
+    for (const wait of [0, ...NOT_FOUND_RETRIES]) {
+      if (wait > 0) await this.sleep(wait, credentials.signal);
+      let resource: ProviderResource;
+      try {
+        resource = await this.inspect(credentials, resourceId);
+      } catch {
+        throw error;
+      }
+      if (joining.includes(resource.machine)) return resource;
     }
-    if (joining.includes(resource.machine)) return resource;
     throw error;
   }
 

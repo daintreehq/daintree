@@ -213,6 +213,10 @@ describe("RemoveCloudHostDialog by what the provider declares (#17346)", () => {
     cleanup();
     open(status({ createdFor: null, machine: "unknown", rawState: "?" }), sleeper);
     expect(dialogText()).toContain("and for its disk until it's deleted");
+    cleanup();
+    // A machine already deleted has no disk left to bill.
+    open(status({ createdFor: null, machine: "deleted", rawState: "terminated" }), sleeper);
+    expect(dialogText()).not.toContain("for its disk");
   });
 
   it("offers no Delete for a provider that can't delete, and only forgets the host", async () => {
