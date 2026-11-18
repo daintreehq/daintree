@@ -44,9 +44,9 @@ Daintree updates itself, and Homebrew never reinstalls over a copy that already 
 
 Daintree runs your agent CLIs as a standing hierarchy rather than one run at a time:
 
-- **The global Assistant** sits above every project on this machine and on the hosts you've let it control. It reads every agent's state in one call, hears when one starts waiting, and steers work wherever it runs.
+- **The global Assistant** sits above every project on this machine and on the hosts you've let it work on. It reads agents' state across projects and hosts in one call, can arm a notice for the next one that starts waiting, and steers work wherever it runs.
 - **Project assistants** are long-lived seats in one project. They plan the work, open worktrees, launch agents into them and watch their terminals.
-- **Worker agents** each take one task in their own git worktree, starting from a clean context, and go with the worktree once the work has landed.
+- **Worker agents** each take one task, in a git worktree of their own, starting from a clean context. Once the work lands, the worktree can be retired with them.
 
 An assistant can reply in a worker's terminal, or pick a permission option there, inside the authority you've already given it, and brings you the rest. Canopy ranks every agent waiting on you, and with Decisions on, an agent can send you a question to answer on your computer or your phone.
 
@@ -66,19 +66,19 @@ The Assistant is Claude Code, Codex or Antigravity, signed in the way you alread
 
 ### The global Assistant
 
-One assistant above every project and every host, with no project of its own. Pick it with the Project / Global switch in the Assistant panel. It outlives the window it started in, shows the same session in every window, and reaches projects on this machine and on every remote host with Assistant control on. It reads the state of agents across all of them in one call, gets a notice when any of them starts waiting instead of polling, prompts, presses keys in and interrupts agents it didn't launch, brings agents back after a restart, and tries to bring back a host whose link went down.
+One assistant above every project and every host, with no project of its own. Pick it with the Project / Global switch in the Assistant panel. It outlives the window it started in, shows the same session in every window, and reaches projects on this machine and on every remote host where both machines let assistants work. It reads the state of agents across them in one call, arms a notice for the next agent that starts waiting instead of polling, prompts, presses keys in and interrupts agents it didn't launch, reopens agents' recorded sessions after a restart, and tries to bring back a host whose link went down.
 
 ### Project assistants
 
-Each project keeps its own assistant, with up to six sessions, each on the agent you choose. It plans the work, opens worktrees, launches agents into them and watches their terminals, then brings back the ones that need you. When something reaches past its project, it raises it with the global Assistant.
+Each project keeps its own assistant, with up to six sessions, each on the agent you choose. It plans the work, opens worktrees, launches agents into them and watches their terminals, then brings back the ones that need you. It can raise work that reaches past its project with the global Assistant running on the same machine.
 
 ### Rules the hierarchy can't route around
 
 Some authority always stays with you, which is what makes it reasonable to hand the rest to an assistant and leave it running:
 
-- **Confirmations are yours.** A confirm-gated action waits for a person's answer. The global Assistant has no setting that skips that, a project assistant skips only the confirmations you've told it to, and a confirmation nobody answered never counts as a yes.
-- **Ownership.** The global Assistant closes only the terminals it launched, and its prompts and keys to an agent it didn't launch are refused if that run has restarted or someone is typing there. A project assistant asks you before closing a terminal it didn't launch or one whose agent is still mid-task.
-- **Tool-set tiers.** Each machine sets which of Daintree's tools its assistants get (**Settings → Daintree Assistant → Security → Tool set**), and an action above that tier is refused.
+- **Confirmations are yours.** A confirm-gated action waits for a person's answer unless your own settings already allow it, and a confirmation nobody answered never counts as a yes.
+- **Ownership.** The global Assistant closes only the terminals it launched, and its prompts and keys to an agent it didn't launch are refused if that run has restarted or someone is typing there. By default, a project assistant asks you before closing a terminal it didn't launch or one whose agent is still mid-task.
+- **Tool-set tiers.** Each machine sets the tool set its assistants start with (**Settings → Daintree Assistant → Security → Tool set**), plus any single tools you grant, and anything beyond that is refused.
 - **Reports are claims.** A worker's handback proves the agent printed its marker, not that the work is finished or correct, and its summary is untrusted text to check, never an instruction.
 
 ## Daintree Decisions
@@ -101,13 +101,13 @@ Questions travel through a relay you deploy into your own Cloudflare account, en
 
 Put agents on whichever machine has the capacity. From macOS or Linux, a Daintree window drives Daintree on another Mac or Linux machine over your own `ssh`: the agents, terminals, worktrees, git, files, plugins and MCP server all run on the host, and the window is its screen and keyboard. Agents on an always-on host keep running while your laptop sleeps. From Windows, drive Linux hosts in WSL.
 
-One window drives a host's project at a time, and every other window attached to it watches its terminals live. The global Assistant reaches every host with Assistant control on: it lists each host's projects and agents, reads their state across hosts in one call, and can bring back a host whose link went down, waking it over your LAN where you've set that up and starting Daintree there when its Host mode is on. Nothing dials or listens until you add a host or turn Host mode on. [Remote&nbsp;hosts&nbsp;docs&nbsp;→](https://daintree.org/docs/remote-hosts)
+One machine drives a host's project at a time, and every attached window watches its terminals live. The global Assistant reaches every host where both machines let assistants work: it lists each host's projects and agents, reads their state across hosts in one call, and can try to bring back a host whose link went down, waking it over your LAN where you've set that up and starting Daintree there when its Host mode is on. Nothing dials or listens until you add a host or turn Host mode on. [Remote&nbsp;hosts&nbsp;docs&nbsp;→](https://daintree.org/docs/remote-hosts)
 
 ## Plugins
 
-A project can build its own tools where its agents run. A project plugin, committed to the repository under `.daintree/plugins/`, can be a whole application, such as a CRM, a ledger or a board: its data lives in the repository, a panel renders it, and once you give them access, the project's agents work on the same data through the plugin's own MCP tools.
+A project can build its own tools where its agents run. A project plugin, committed to the repository under `.daintree/plugins/`, can be a whole application, such as a CRM, a ledger or a board: its data can live in the repository, a panel renders it, and agents launched with access to it work on the same data through the plugin's own MCP tools.
 
-Plugins also add panels, actions, settings, agents, forge providers, themes, recipes and tours. GitHub and GitLab support and the Markdown editor ship as built-in plugins. Installing one from a URL or from the reviewed community catalog shows every capability it asks for before it's installed. [Plugin&nbsp;docs&nbsp;→](docs/plugins/README.md)
+Plugins also add panels, actions, settings, recipes and tours, and a plugin you install for every project can add agents, forge providers and themes too. GitHub and GitLab support and the Markdown editor ship as built-in plugins. Installing one from a URL or from the reviewed community catalog shows every capability it asks for before it's installed. [Plugin&nbsp;docs&nbsp;→](docs/plugins/README.md)
 
 ## Worktrees and review
 
