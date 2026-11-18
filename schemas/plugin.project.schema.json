@@ -1966,6 +1966,14 @@
                       },
                       "stoppedComputeBilled": {
                         "type": "boolean"
+                      },
+                      "stoppedStorageBilled": {
+                        "default": false,
+                        "type": "boolean"
+                      },
+                      "stoppedBilling": {
+                        "type": "string",
+                        "maxLength": 280
                       }
                     },
                     "required": [
@@ -2067,6 +2075,7 @@
                     "enum": [
                       "pinned-from-api",
                       "confirm-on-first-connect",
+                      "api-or-confirm",
                       "provider-tunnel"
                     ]
                   },
@@ -2170,6 +2179,13 @@
                   "deletion"
                 ],
                 "additionalProperties": false
+              },
+              "createReplay": {
+                "type": "string",
+                "enum": [
+                  "same-key",
+                  "lookup-only"
+                ]
               }
             },
             "required": [

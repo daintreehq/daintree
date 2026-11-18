@@ -52,6 +52,7 @@ function contribution(
         retentionDays: null,
         saveRetryBilled: false,
         stoppedComputeBilled: false,
+        stoppedStorageBilled: false,
       },
       typicalStartSeconds: 60,
       lifetime: { kind: "none" },

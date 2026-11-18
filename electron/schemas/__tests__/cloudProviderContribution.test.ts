@@ -170,6 +170,50 @@ describe("contributes.cloudProviders", () => {
     expect(ssh({ sshTrust: "pinned-from-api" })).toBe(true);
     // A key confirmed on first connect can't be confirmed through the provider's tunnel.
     expect(ssh({ sshTrust: "confirm-on-first-connect" })).toBe(false);
+    // Nor can the API's key be checked against the one the machine presents through it.
+    expect(ssh({ transport: "direct", tunnel: null, sshTrust: "api-or-confirm" })).toBe(true);
+    expect(ssh({ sshTrust: "api-or-confirm" })).toBe(false);
+  });
+
+  it("reads a stop that bills nothing for its disk unless the provider says it does", () => {
+    const declared = (persistence: Record<string, unknown>) => {
+      const capabilities = provider().capabilities;
+      const result = parse([
+        provider({
+          capabilities: {
+            ...capabilities,
+            persistence: { ...capabilities.persistence, ...persistence },
+          },
+        }),
+      ]);
+      return result.success ? result.data.contributes.cloudProviders[0]!.capabilities : null;
+    };
+    expect(declared({})?.persistence).toEqual(
+      expect.objectContaining({ stoppedStorageBilled: false })
+    );
+    expect(declared({})?.persistence).not.toHaveProperty("stoppedBilling");
+    expect(
+      declared({ stoppedStorageBilled: true, stoppedBilling: "A stopped VM bills its IP." })
+        ?.persistence
+    ).toEqual(
+      expect.objectContaining({
+        stoppedStorageBilled: true,
+        stoppedBilling: "A stopped VM bills its IP.",
+      })
+    );
+    expect(declared({ stoppedStorageBilled: "yes" })).toBeNull();
+    expect(declared({ stoppedBilling: " " })).toBeNull();
+  });
+
+  it("replays a lost create with its key unless the provider has none", () => {
+    const replay = (createReplay?: unknown) => {
+      const result = parse([provider(createReplay === undefined ? {} : { createReplay })]);
+      return result.success ? result.data.contributes.cloudProviders[0]!.createReplay : "refused";
+    };
+    expect(replay()).toBeUndefined();
+    expect(replay("same-key")).toBe("same-key");
+    expect(replay("lookup-only")).toBe("lookup-only");
+    expect(replay("never")).toBe("refused");
   });
 
   it("refuses a capability it doesn't know", () => {

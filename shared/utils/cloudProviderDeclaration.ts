@@ -99,7 +99,7 @@ function tunnelProblem(tunnel: CloudSshTunnelCommand): string | null {
  * Why a provider's SSH declaration can't be used, or null when it can. Only
  * a provider's own tunnel can stand in for a pinned host key, so trust in the
  * tunnel needs one, a direct dial never declares one, and a key confirmed on
- * first connect is confirmed on a direct dial.
+ * first connect, or checked against the API's report, is checked on a direct dial.
  */
 export function sshDeclarationProblem(
   capabilities: Pick<CloudProviderCapabilities, "sshTrust" | "transport" | "tunnel">

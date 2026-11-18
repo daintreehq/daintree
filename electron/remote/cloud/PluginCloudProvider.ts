@@ -62,6 +62,7 @@ function wireCredentials(credentials: ProviderCredentials) {
  */
 export class PluginCloudProvider implements CloudProvider {
   readonly id: CloudProviderId;
+  readonly createReplay?: CloudProvider["createReplay"];
   readonly renewLifetime?: CloudProvider["renewLifetime"];
   readonly authorizeSsh?: CloudProvider["authorizeSsh"];
   readonly sshAccess?: CloudProvider["sshAccess"];
@@ -75,6 +76,9 @@ export class PluginCloudProvider implements CloudProvider {
     this.id = declaration.providerId;
     this.pluginId = declaration.pluginId;
     this.name = declaration.contribution.name;
+    if (declaration.contribution.createReplay !== undefined) {
+      this.createReplay = declaration.contribution.createReplay;
+    }
     const { capabilities } = declaration.contribution;
     // Only what the declaration calls for exists, so the registry's contract checks read the manifest.
     if (capabilities.lifetime.kind === "renewable") {
@@ -152,9 +156,12 @@ export class PluginCloudProvider implements CloudProvider {
 
   async list(
     credentials: ProviderCredentials,
-    options?: { label?: string }
+    options?: { label?: string; location?: string }
   ): Promise<ProviderResource[]> {
-    const filter = options?.label === undefined ? {} : { label: options.label };
+    const filter = {
+      ...(options?.label === undefined ? {} : { label: options.label }),
+      ...(options?.location === undefined ? {} : { location: options.location }),
+    };
     const answer = readResources(
       await this.call("list", [wireCredentials(credentials), filter], credentials.signal)
     );

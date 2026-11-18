@@ -339,6 +339,9 @@ export const CloudProviderCapabilitiesSchema = z
         retentionDays: z.number().int().min(0).max(3650).nullable(),
         saveRetryBilled: z.boolean(),
         stoppedComputeBilled: z.boolean(),
+        // Left out reads as a stop that ends billing, which is how Daintree words a provider that doesn't say.
+        stoppedStorageBilled: z.boolean().default(false),
+        stoppedBilling: CloudProviderTextSchema(280).optional(),
       })
       .strict(),
     typicalStartSeconds: SecondsSchema.nullable(),
@@ -348,7 +351,12 @@ export const CloudProviderCapabilitiesSchema = z
       z.object({ kind: z.literal("renewable") }).strict(),
       z.object({ kind: z.literal("idle-sleep"), idleSeconds: SecondsSchema.nullable() }).strict(),
     ]),
-    sshTrust: z.enum(["pinned-from-api", "confirm-on-first-connect", "provider-tunnel"]),
+    sshTrust: z.enum([
+      "pinned-from-api",
+      "confirm-on-first-connect",
+      "api-or-confirm",
+      "provider-tunnel",
+    ]),
     transport: z.enum(["direct", "provider-command"]),
     tunnel: CloudSshTunnelCommandSchema.nullable(),
     provisioning: z
@@ -403,6 +411,7 @@ export const CloudProviderContributionSchema = z
     docsUrl: cloudProviderLink("docsUrl"),
     credentialFields: z.array(CloudCredentialFieldSchema).min(1).max(MAX_CLOUD_CREDENTIAL_FIELDS),
     capabilities: CloudProviderCapabilitiesSchema,
+    createReplay: z.enum(["same-key", "lookup-only"]).optional(),
   })
   .strict()
   .superRefine((provider, ctx) => {

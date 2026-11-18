@@ -69,6 +69,7 @@ function contribution(
         retentionDays: null,
         saveRetryBilled: false,
         stoppedComputeBilled: true,
+        stoppedStorageBilled: false,
       },
       typicalStartSeconds: 90,
       lifetime: { kind: "none" },
@@ -381,6 +382,62 @@ describe("PluginCloudProvider", () => {
 
     call.mockResolvedValueOnce(null);
     await expect(provider.stop(CREDENTIALS, "i-1")).resolves.toBeNull();
+  });
+
+  it("reads a machine's sleep as the provider reports it, and nothing for one that doesn't say", async () => {
+    const { provider, call } = harness();
+    call.mockResolvedValueOnce(machine());
+    const plain = await provider.inspect(CREDENTIALS, "i-1");
+    expect(plain).not.toHaveProperty("asleep");
+    expect(plain).not.toHaveProperty("idleSleep");
+
+    call.mockResolvedValueOnce(
+      machine({ machine: "stopped", asleep: true, idleSleep: { enabled: true, idleSeconds: 900 } })
+    );
+    await expect(provider.inspect(CREDENTIALS, "i-1")).resolves.toMatchObject({
+      asleep: true,
+      idleSleep: { enabled: true, idleSeconds: 900 },
+    });
+
+    for (const malformed of [
+      { asleep: "yes" },
+      { idleSleep: { idleSeconds: 900 } },
+      { idleSleep: { enabled: true, idleSeconds: "15m" } },
+    ]) {
+      call.mockResolvedValueOnce(machine(malformed));
+      await expect(provider.inspect(CREDENTIALS, "i-1"), JSON.stringify(malformed)).rejects.toThrow(
+        "the machine"
+      );
+    }
+  });
+
+  it("takes every kind of billing scope a provider may offer", async () => {
+    const { provider, call } = harness();
+    const kinds = ["personal", "organization", "workspace", "project", "account"] as const;
+    call.mockResolvedValueOnce({
+      identity: "arn:aws:iam::1:user/ada",
+      scopes: kinds.map((kind) => ({ scope: { kind, id: kind, name: kind }, active: true })),
+    });
+    const checked = await provider.checkCredentials({ accessKeyId: "x" }, CREDENTIALS.apiUrl);
+    expect(checked.scopes.map((choice) => choice.scope.kind)).toEqual(kinds);
+  });
+
+  it("looks for machines where a create was sent, and replays a lost create as declared", async () => {
+    const { provider, call } = harness();
+    expect(provider.createReplay).toBeUndefined();
+    call.mockResolvedValueOnce([]);
+    await provider.list(CREDENTIALS, { label: "daintree-binding=cb_1", location: "eu-west-1" });
+    expect(call).toHaveBeenLastCalledWith(
+      "list",
+      [CREDENTIALS, { label: "daintree-binding=cb_1", location: "eu-west-1" }],
+      expect.any(AbortSignal)
+    );
+
+    const lookupOnly = new PluginCloudProvider(declaration({ createReplay: "lookup-only" }), {
+      runtime: () => null,
+      binding: () => undefined,
+    });
+    expect(lookupOnly.createReplay).toBe("lookup-only");
   });
 
   it("never hands one load's credentials to the impl a later load bound", async () => {

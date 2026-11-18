@@ -2816,10 +2816,10 @@ type Answer<T> = Promise<T> | T;
  * has 30 seconds, the plugin's activation included.
  *
  * A failure the provider can name throws an `Error` whose `code` is a
- * `CloudHostErrorCode`: `credential-invalid`,
- * `permission`, `billing`, `rate-limited` and `capacity` tell Daintree that
- * nothing was done, so a refused create is retried with a fresh key. Any
- * other throw reads as `failed`.
+ * `CloudHostErrorCode`: `credential-invalid`, `permission`, `billing`,
+ * `rate-limited`, `capacity`, `ssh-authorization`, `unsupported` and
+ * `refused` tell Daintree that nothing was done, so a refused create is
+ * retried with a fresh key. Any other throw reads as `failed`.
  */
 interface CloudProviderImpl {
     /**
@@ -2831,12 +2831,21 @@ interface CloudProviderImpl {
         identity: string | null;
     }>;
     catalog(credentials: CloudProviderCallCredentials): Answer<CloudProviderCatalog>;
-    /** Every machine in the scope; with `label`, only those carrying that `key=value`. */
+    /**
+     * Every machine in the scope; with `label`, only those carrying that
+     * `key=value`; with `location`, only those in that location, for a provider
+     * whose create takes one (where a create was sent, when one is looked for).
+     */
     list(credentials: CloudProviderCallCredentials, options: {
         label?: string;
+        location?: string;
     }): Answer<CloudProviderResource[]>;
     inspect(credentials: CloudProviderCallCredentials, resourceId: string): Answer<CloudProviderResource>;
-    /** Must be idempotent on `request.idempotencyKey`: a lost answer is retried with the same key. */
+    /**
+     * Must be idempotent on `request.idempotencyKey`: a lost answer is retried
+     * with the same key, unless the manifest declares `createReplay:
+     * "lookup-only"`, when it is only ever looked for again.
+     */
     create(credentials: CloudProviderCallCredentials, request: CloudProviderCreateRequest): Answer<CloudProviderResource>;
     /** Starts a stopped machine; `lifetimeSeconds` is absent when it keeps the limit it has. */
     start(credentials: CloudProviderCallCredentials, resourceId: string, options: {
@@ -2878,6 +2887,13 @@ interface CloudProviderContribution {
     /** What connecting an account asks for, in order. */
     credentialFields: CloudCredentialField[];
     capabilities: CloudProviderCapabilities;
+    /**
+     * What a create whose answer was lost may do once a lookup by its labels
+     * finds nothing: send it again with the same idempotency key (`same-key`,
+     * the default when left out), or, for a provider with no such key, where a
+     * second send could make a second machine, only look again (`lookup-only`).
+     */
+    createReplay?: "same-key" | "lookup-only";
 }
 
 /** Notification type */

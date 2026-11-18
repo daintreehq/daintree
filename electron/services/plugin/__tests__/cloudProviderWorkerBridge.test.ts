@@ -62,6 +62,7 @@ const DEVBOX: CloudProviderContribution = {
       retentionDays: null,
       saveRetryBilled: false,
       stoppedComputeBilled: false,
+      stoppedStorageBilled: false,
     },
     typicalStartSeconds: 30,
     lifetime: { kind: "none" },

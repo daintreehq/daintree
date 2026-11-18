@@ -480,6 +480,7 @@ const CLOUD_HOST_ERROR_CODES = {
   "outcome-unknown": true,
   unsupported: true,
   "lifetime-renewal": true,
+  refused: true,
   failed: true,
 } as const satisfies Record<CloudHostErrorCode, true>;
 

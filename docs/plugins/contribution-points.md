@@ -2067,7 +2067,8 @@ A cloud provider an installed plugin runs in its worker: Daintree creates, start
             "lost": "Instance store and memory",
             "retentionDays": null,
             "saveRetryBilled": false,
-            "stoppedComputeBilled": false
+            "stoppedComputeBilled": false,
+            "stoppedStorageBilled": true
           },
           "typicalStartSeconds": 45,
           "lifetime": { "kind": "none" },
@@ -2096,6 +2097,7 @@ A cloud provider an installed plugin runs in its worker: Daintree creates, start
 | `apiKeyUrl`, `dashboardUrl`, `docsUrl` | yes | https links opened in the system browser. |
 | `credentialFields` | yes | 1 to 16 values an account's credentials are made of, each `{ id, label, secret, input, required, help? }`. |
 | `capabilities` | yes | What a stop keeps and bills, how a machine stops by itself, how its SSH server is reached and trusted, what a create names, and whether machines can be deleted. See [the guide](./cloud-provider.md#manifest-entry). |
+| `createReplay` | no | `"same-key"` (default) or `"lookup-only"`: whether a create whose answer was lost may be sent again with the same idempotency key once a lookup finds nothing, or is only ever looked for again. |
 
 At most 8 per plugin. The provider is listed, and its accounts and machines named, from the manifest before any plugin code runs; each call activates the plugin if it isn't running and has 30 seconds, activation included. A crash, a timeout or a call made while the plugin is starting is a provider error on that account, and while the plugin is turned off, blocked, failed to load or start, or uninstalled, its accounts and machines stay listed as unavailable with the reason. Until Daintree asks consent before handing a plugin credentials (#17352), a plugin's provider is not offered in **Connect account**. Rejected under `scope: "project"`. No capability is needed.
 

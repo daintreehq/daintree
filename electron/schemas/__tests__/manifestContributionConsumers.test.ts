@@ -2005,6 +2005,20 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Drives the lifecycle exactly as a built-in's do, and which methods the bound impl must have.",
     },
+    createReplay: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "electron/remote/cloud/PluginCloudProvider.ts",
+          symbol: "PluginCloudProvider constructor (createReplay)",
+        },
+        {
+          file: "electron/remote/cloud/CloudHostLifecycle.ts",
+          symbol: "CloudHostLifecycle runCreate (createReplay)",
+        },
+      ],
+      note: "Whether a create whose answer was lost is sent again with its key once a lookup finds nothing, or only looked for again.",
+    },
   },
   "cloudProviders.credentialFields": {
     id: {

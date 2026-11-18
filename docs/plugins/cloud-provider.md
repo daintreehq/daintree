@@ -1,6 +1,6 @@
 # Implementing a Cloud Provider
 
-A cloud provider lets Daintree create, start, stop and delete machines on someone's own cloud account and use them as hosts: an EC2 instance, a Compute Engine VM, a droplet, a machine from any service with an API. Daintree ships one built in (Boat); an installed plugin can add more without any change to Daintree. This page covers the manifest entry, the implementation the plugin binds in its worker, and what Daintree expects of each call.
+A cloud provider lets Daintree create, start, stop and delete machines on someone's own cloud account and use them as hosts: an EC2 instance, a Compute Engine VM, a droplet, a machine from any service with an API. Daintree ships several built in (Boat, Agent 37, DigitalOcean, Google Compute Engine and AWS EC2); an installed plugin can add more without any change to Daintree. This page covers the manifest entry, the implementation the plugin binds in its worker, and what Daintree expects of each call.
 
 ## Before you start
 
@@ -56,7 +56,8 @@ Daintree, not the plugin, decides when a machine is idle, when to stop it, and w
             "lost": "Instance store and memory",
             "retentionDays": null,
             "saveRetryBilled": false,
-            "stoppedComputeBilled": false
+            "stoppedComputeBilled": false,
+            "stoppedStorageBilled": true
           },
           "typicalStartSeconds": 45,
           "lifetime": { "kind": "none" },
@@ -84,13 +85,14 @@ Daintree, not the plugin, decides when a machine is idle, when to stop it, and w
 | `apiUrl` | The https origin (no path, query or fragment) the provider's API calls go to. An account is tied to the origin it connected with, and its credentials are handed over only for that origin. |
 | `apiKeyUrl`, `dashboardUrl`, `docsUrl` | https links Daintree opens in the system browser: where to create credentials, the provider's console, its docs. |
 | `credentialFields` | What connecting an account asks for, in order, 1 to 16 fields. Each is `{ id, label, secret, input, required, help? }`: `input` is `"single-line"`, `"multi-line"` or `"key-file"` (the contents of a file chosen from disk). Secret values are masked as they're typed, kept only in the OS keychain, and never shown again. |
-| `capabilities` | What the provider can do, as semantics rather than a bare "supports start": what a stop keeps and loses and what it bills, how long a start takes, how the machine stops by itself (`lifetime`), how its SSH server is reached and trusted, what a create names beyond its size (`provisioning`), and whether machines can be deleted from Daintree. The UI words every promise about a machine from these, never from what one provider happens to do. |
+| `capabilities` | What the provider can do, as semantics rather than a bare "supports start": what a stop keeps and loses and what it bills, how long a start takes, how the machine stops by itself (`lifetime`), how its SSH server is reached and trusted, what a create names beyond its size (`provisioning`), and whether machines can be deleted from Daintree. The UI words every promise about a machine from these, never from what one provider happens to do. In `persistence`, `stoppedComputeBilled` says a stopped machine still bills for compute (`stoppedBilling`, optional, says what it bills in your own terms), and `stoppedStorageBilled` says its disk keeps billing on its own; left out, it reads as `false`, a stop that ends billing. |
+| `createReplay` | Optional. `"same-key"` (the default) when your `create` is idempotent on `request.idempotencyKey`, so a create whose answer was lost may be sent again with the same key; `"lookup-only"` when your API has no such key and a second send could make a second machine, so Daintree only ever looks for it again. |
 
 A plugin declares at most 8 providers. The manifest is checked when the plugin loads: an id declared twice, credential fields a form couldn't render or keep apart, a non-https link, or an SSH declaration that doesn't add up is a manifest error naming the field.
 
 ### SSH
 
-`transport: "direct"` means Daintree dials the address the provider returns. `sshTrust` says where trust in the machine's host key comes from: `"pinned-from-api"` (your API returns the key and Daintree pins it before dialling) or `"confirm-on-first-connect"` (the person confirms its fingerprint once).
+`transport: "direct"` means Daintree dials the address the provider returns. `sshTrust` says where trust in the machine's host key comes from: `"pinned-from-api"` (your API returns the key and Daintree pins it before dialling), `"confirm-on-first-connect"` (the person confirms its fingerprint once), or `"api-or-confirm"` (your API reports the key once it has one, which may lag boot; Daintree trusts it when the machine presents exactly that key, and otherwise the person confirms the fingerprint once).
 
 `transport: "provider-command"` runs your provider's own CLI as ssh's `ProxyCommand`, for machines only reachable through it (AWS Systems Manager, a cloud's IAP tunnel). Declare it in `tunnel`:
 
@@ -100,7 +102,7 @@ A plugin declares at most 8 providers. The manifest is checked when the plugin l
 "tunnel": { "command": "aws", "args": ["ssm", "start-session", "--target", "%h"], "installUrl": "https://aws.amazon.com/cli/" }
 ```
 
-With a tunnel, trust comes from it (`"provider-tunnel"`) or from your API (`"pinned-from-api"`); a key confirmed on first connect needs a direct transport, and the manifest refuses the combination. `command` is a bare executable name Daintree finds on the person's `PATH`; `args` are plain words, or one of ssh's tokens `%h`, `%p`, `%r` and `%n`, each a whole argument. Nothing else reaches the `ProxyCommand` line. When the command isn't installed, Daintree says so beside the machine and links `installUrl`.
+With a tunnel, trust comes from it (`"provider-tunnel"`) or from your API (`"pinned-from-api"`); a key confirmed on first connect, or checked against your API's report (`"api-or-confirm"`), needs a direct transport, and the manifest refuses the combination. `command` is a bare executable name Daintree finds on the person's `PATH`; `args` are plain words, or one of ssh's tokens `%h`, `%p`, `%r` and `%n`, each a whole argument. Nothing else reaches the `ProxyCommand` line. When the command isn't installed, Daintree says so beside the machine and links `installUrl`.
 
 ## Implementing it
 
@@ -126,8 +128,8 @@ export async function activate(host: PluginHostApi) {
     async catalog(credentials) {
       /* machine types, regions, images, subnets */
     },
-    async list(credentials, { label }) {
-      /* every machine in the scope, or those carrying `label` */
+    async list(credentials, { label, location }) {
+      /* every machine in the scope, or those carrying `label`, in `location` when given */
     },
     async inspect(credentials, resourceId) {
       /* one machine */
@@ -159,17 +161,17 @@ Every method except `checkCredentials` takes the account's `credentials` first: 
 
 | Method | When | Answers |
 | --- | --- | --- |
-| `checkCredentials(values, apiUrl, signal)` | Before anything is kept, for a new set and a replacement alike | `{ identity, scopes }`: who the credentials sign in as (or null), and the billing scopes they may use |
+| `checkCredentials(values, apiUrl, signal)` | Before anything is kept, for a new set and a replacement alike | `{ identity, scopes }`: who the credentials sign in as (or null), and the billing scopes they may use, each of kind `personal`, `organization`, `workspace`, `project` or `account` |
 | `validate` | When the person checks an account | `{ identity }` |
 | `catalog` | When the person creates a machine | machine types, quotas, and the location, image and network choices your `provisioning` says a create takes |
-| `list` | Importing a machine, and looking for a create that didn't answer (by the `daintree-binding` label) | machines in the scope |
-| `inspect` | Polling a machine's state | the machine |
+| `list` | Importing a machine, and looking for a create that didn't answer (by the `daintree-binding` label, and the `location` the create was sent to when your create takes one) | machines in the scope |
+| `inspect` | Polling a machine's state | the machine, with `asleep: true` when it is stopped because your provider slept it on idle, and `idleSleep: { enabled, idleSeconds }` when you report its idle sleep per machine |
 | `create` | Creating a machine | the machine, which may still be starting |
 | `start`, `stop` | The person, or Daintree's idle stop | the machine, or null when the provider said nothing about it |
 | `renewLifetime` | Moving a running machine's automatic stop; required, and only called, for `lifetime.kind: "renewable"` | the machine |
 | `rename`, `delete` | Renaming, and deleting while `capabilities.deletion` is true | nothing |
 | `authorizeSsh(credentials, resourceId, publicKey)` | Required for `sshKey: "after-create"`: put the key on the machine | `{ user, endpoint, hostKey }` |
-| `sshAccess` | Required for `sshKey: "at-create"`: the key went with `create` (`request.publicKey`) | `{ user, endpoint, hostKey }` |
+| `sshAccess` | Required for `sshKey: "at-create"`: the key went with `create` (`request.publicKey`), and an imported machine is reached the same way | `{ user, endpoint, hostKey }` |
 
 Main checks the registration against the manifest: an id that isn't declared, or an impl missing a method its declaration needs, is refused, and the plugin's activation fails with that message (in the worker the `await` itself still resolves; the failure is the activation's). It is revoke-guarded: call it during `activate()`. Re-registering the same id replaces the binding. Calls reach the impl only once the activation that bound it has finished: a worker that crashed and is starting again answers nothing until its own `activate()` returns.
 
@@ -177,7 +179,7 @@ Main checks the registration against the manifest: an id that isn't declared, or
 
 - **30 seconds, activation included.** A call that takes longer is given up on, and its `signal` aborts. Waiting for a machine to come up is Daintree's job, between calls: answer with the machine as it is, still `starting` if need be.
 - **Honour the signal.** It aborts when Daintree stops waiting: the deadline passed, or the person cancelled. Pass it to your HTTP client.
-- **Create is idempotent.** A create whose answer was lost is retried with the same `idempotencyKey`, and before it is retried Daintree looks for the machine by the `daintree-binding` label it put in `request.labels`. Keep those labels on the machine, and return the machine you already made when you see a key again.
+- **Create is idempotent.** A create whose answer was lost is retried with the same `idempotencyKey`, and before it is retried Daintree looks for the machine by the `daintree-binding` label it put in `request.labels`. Keep those labels on the machine, and return the machine you already made when you see a key again. If your API has no idempotency key, declare `"createReplay": "lookup-only"`: Daintree then only ever looks for the machine again, and never sends the create a second time.
 - **No state between calls.** The worker may be stopped while idle and started again for the next call, and credentials are handed over for one call at a time. Never keep them.
 
 ### Failures
@@ -188,13 +190,13 @@ Throw an `Error` whose `code` names what happened, and the person sees your mess
 throw Object.assign(new Error("No capacity for t3.large in eu-west-1a"), { code: "capacity" });
 ```
 
-`credential-invalid`, `permission`, `billing`, `rate-limited` and `capacity` tell Daintree the provider refused and nothing was done, so a refused create is retried with a fresh key. `not-found` says there is no such machine. Any other `CloudHostErrorCode` is kept as given, and a throw without a code reads as `failed`. Keep messages to one line; they're shown as they are, cut at 300 characters.
+`credential-invalid`, `permission`, `billing`, `rate-limited`, `capacity`, `ssh-authorization`, `unsupported` and `refused` (the request was turned down as it was made: a size its region lacks, a limit reached) tell Daintree the provider refused and nothing was done, so a refused create is retried with a fresh key. `not-found` says there is no such machine. Any other `CloudHostErrorCode` is kept as given, and a throw without a code reads as `failed`. Keep messages to one line; they're shown as they are, cut at 300 characters.
 
 A crash of the worker, a call that misses its deadline, a plugin that didn't start, or one that started without binding the provider are all reported as `provider-unreachable` on that account or machine, never as a failure of Daintree itself. A create that may have reached the provider is never assumed not to have: it is marked as unconfirmed, and Retry looks for it first.
 
 ### What Daintree checks
 
-Your answers cross a process boundary, and Daintree reads only what it can use. A machine without a `resourceId`, with a `machine` state it doesn't know, or without real booleans for `dataExpired`, `snapshotsDisabled` and `restricted`, a catalog without a list of machine types, or billing scopes without ids are refused as an answer Daintree can't read (`failed`). A field the contract lets be null may be left out and reads as unknown, but one that is there with the wrong shape (a timestamp that doesn't parse, a lifetime that isn't a number, an identity that isn't a string or `null`) fails the whole answer: null means something, such as no deadline, that a malformed value doesn't. Labels beyond the first 64 are dropped, except Daintree's own (`daintree-*`). An answer about a machine other than the one asked about is refused. If an answer can't be serialized, the call fails with no code, so a create that got that far is looked for rather than retried as refused. An SSH address is checked before it's written into any ssh configuration, and a host key is pinned only for `"pinned-from-api"`. One answer is at most 1 MB.
+Your answers cross a process boundary, and Daintree reads only what it can use. A machine without a `resourceId`, with a `machine` state it doesn't know, without real booleans for `dataExpired`, `snapshotsDisabled` and `restricted`, or with an `asleep` or `idleSleep` that isn't the declared shape, a catalog without a list of machine types, or billing scopes without ids are refused as an answer Daintree can't read (`failed`). A field the contract lets be null may be left out and reads as unknown, but one that is there with the wrong shape (a timestamp that doesn't parse, a lifetime that isn't a number, an identity that isn't a string or `null`) fails the whole answer: null means something, such as no deadline, that a malformed value doesn't. Labels beyond the first 64 are dropped, except Daintree's own (`daintree-*`). An answer about a machine other than the one asked about is refused. If an answer can't be serialized, the call fails with no code, so a create that got that far is looked for rather than retried as refused. An SSH address is checked before it's written into any ssh configuration, and a host key is pinned only for `"pinned-from-api"`, and trusted without a confirmation only when the machine presents it under `"api-or-confirm"`. One answer is at most 1 MB.
 
 ## When the provider isn't there
 

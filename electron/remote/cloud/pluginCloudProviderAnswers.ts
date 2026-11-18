@@ -1,6 +1,7 @@
 import type {
   CloudAccountCheckResult,
   CloudAccountScopeChoice,
+  CloudBillingScope,
   CloudMachineState,
   CloudMachineType,
 } from "../../../shared/types/cloudHosts.js";
@@ -32,6 +33,13 @@ const MACHINE_STATES: ReadonlySet<string> = new Set<CloudMachineState>([
   "error",
   "deleted",
   "unknown",
+]);
+const SCOPE_KINDS: ReadonlySet<string> = new Set<CloudBillingScope["kind"]>([
+  "personal",
+  "organization",
+  "workspace",
+  "project",
+  "account",
 ]);
 const STOP_STATUSES: ReadonlySet<string> = new Set([
   "pending",
@@ -118,6 +126,22 @@ function stop(value: unknown): ProviderResource["stop"] | typeof MALFORMED {
   };
 }
 
+/** Left out reads as not asleep; anything but a boolean is malformed. */
+function asleep(value: unknown): boolean | undefined | typeof MALFORMED {
+  if (absent(value)) return undefined;
+  return typeof value === "boolean" ? value : MALFORMED;
+}
+
+/** Left out reads as the declared lifetime holding; one that is there must say both. */
+function idleSleep(value: unknown): ProviderResource["idleSleep"] | typeof MALFORMED {
+  if (absent(value)) return undefined;
+  const raw = record(value);
+  if (!raw || typeof raw.enabled !== "boolean") return MALFORMED;
+  const idleSeconds = count(raw.idleSeconds);
+  if (idleSeconds === MALFORMED) return MALFORMED;
+  return { enabled: raw.enabled, idleSeconds };
+}
+
 export function readResource(value: unknown): ProviderResource | null {
   const raw = record(value);
   if (!raw) return null;
@@ -141,6 +165,8 @@ export function readResource(value: unknown): ProviderResource | null {
   const createdAt = timestamp(raw.createdAt);
   const lastSnapshotAt = timestamp(raw.lastSnapshotAt);
   const stopped = stop(raw.stop);
+  const sleeping = asleep(raw.asleep);
+  const sleeps = idleSleep(raw.idleSleep);
   if (
     vcpu === MALFORMED ||
     memoryGB === MALFORMED ||
@@ -149,7 +175,9 @@ export function readResource(value: unknown): ProviderResource | null {
     stoppedAt === MALFORMED ||
     createdAt === MALFORMED ||
     lastSnapshotAt === MALFORMED ||
-    stopped === MALFORMED
+    stopped === MALFORMED ||
+    sleeping === MALFORMED ||
+    sleeps === MALFORMED
   ) {
     return null;
   }
@@ -172,6 +200,8 @@ export function readResource(value: unknown): ProviderResource | null {
     labels: labels(raw.labels),
     restricted: raw.restricted,
     error: text(raw.error),
+    ...(sleeping !== undefined ? { asleep: sleeping } : {}),
+    ...(sleeps !== undefined ? { idleSleep: sleeps } : {}),
   };
 }
 
@@ -198,10 +228,14 @@ export function readCheckResult(value: unknown): CloudAccountCheckResult | null 
     const scope = choice ? record(choice.scope) : null;
     const scopeId = scope ? id(scope.id) : null;
     if (!scope || scopeId === null || seen.has(scopeId)) return null;
-    if (scope.kind !== "personal" && scope.kind !== "organization") return null;
+    if (typeof scope.kind !== "string" || !SCOPE_KINDS.has(scope.kind)) return null;
     seen.add(scopeId);
     scopes.push({
-      scope: { kind: scope.kind, id: scopeId, name: text(scope.name, MAX_ID) ?? scopeId },
+      scope: {
+        kind: scope.kind as CloudBillingScope["kind"],
+        id: scopeId,
+        name: text(scope.name, MAX_ID) ?? scopeId,
+      },
       active: choice!.active === true,
     });
   }
