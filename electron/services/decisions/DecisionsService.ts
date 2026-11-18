@@ -58,6 +58,7 @@ import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import { projectDecisionQuestions } from "./questionList.js";
 import type { QuestionNotifications } from "./questionNotifications.js";
+import type { DesktopPresenceOptions } from "./desktopPresence.js";
 import {
   RelayConnection,
   type QuestionSource,
@@ -106,7 +107,15 @@ export interface DecisionsRelayConnection {
   observeQuestions?(rows: readonly QuestionRow[]): void;
   /** The terminal snapshots switch may have turned (#16230). */
   snapshotsChanged?(): void;
+  /** Whether presence may be reported may have changed (#17240). */
+  presenceChanged?(): void;
 }
+
+/**
+ * What reporting the person's presence needs from main (#17240): whether it
+ * may be reported now. Only an owner's lifetime reports it.
+ */
+export type DecisionsPresenceDeps = Omit<DesktopPresenceOptions, "report">;
 
 /** What delivery needs from main, apart from this machine's host id, which the service reads from its settings. */
 export type DecisionsDeliveryDeps = Omit<AnswerDeliveryDeps, "hostId">;
@@ -212,6 +221,8 @@ export interface DecisionsServiceOptions {
   delivery?: DecisionsDeliveryDeps;
   /** Publishes the asking panes' snapshots while they're on (#16230); without it none are. */
   snapshots?: DecisionsSnapshotDeps;
+  /** Tells the relay while the person is at this computer, for an owner (#17240); without it nothing does. */
+  presence?: DecisionsPresenceDeps;
   /** The setup check's diagnostic terminals (#16024), whose own image their questions attach. */
   diagnostics?: SetupDiagnostics;
   /** The decision model's history and CLIs (#16026): the library's unless a test says otherwise. */
@@ -272,6 +283,7 @@ export class DecisionsService {
   private readonly onDevicesChanged: () => void;
   private readonly delivery: DecisionsDeliveryDeps | null;
   private readonly snapshots: DecisionsSnapshotDeps | null;
+  private readonly presence: DecisionsPresenceDeps | null;
   private connection: DecisionsRelayConnection | null = null;
   private connectionKey: string | null = null;
   /**
@@ -373,6 +385,7 @@ export class DecisionsService {
     this.openQuestions = options.openQuestions ?? null;
     this.delivery = options.delivery ?? null;
     this.snapshots = options.snapshots ?? null;
+    this.presence = options.presence ?? null;
     this.diagnostics = options.diagnostics ?? null;
     this.modelOptions = options.model;
     this.onModelChanged = options.onModelChanged ?? (() => {});
@@ -745,6 +758,15 @@ export class DecisionsService {
   snapshotsChanged(): void {
     if (this.disposed) return;
     this.connection?.snapshotsChanged?.();
+  }
+
+  /**
+   * Whether presence may be reported may have changed (#17240): the switch,
+   * or desktop notifications. Out of turn, like `snapshotsChanged`.
+   */
+  presenceChanged(): void {
+    if (this.disposed) return;
+    this.connection?.presenceChanged?.();
   }
 
   /**
@@ -1136,6 +1158,8 @@ export class DecisionsService {
         : {}),
       ...(this.attachments ? { attachments: this.attachments } : {}),
       ...(this.phoneImages ? { phoneImages: this.phoneImages } : {}),
+      // A Host is never at its owner's desk: only the owner says whether the person is here.
+      ...(role === "owner" && this.presence ? { presence: this.presence } : {}),
       onStatus: (status) => {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks.

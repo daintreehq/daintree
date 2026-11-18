@@ -49,6 +49,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     askHumanAgents: [],
     terminalSnapshots: false,
     terminalSnapshotsConsentedAt: null,
+    holdPhonePushes: true,
   };
 }
 
@@ -231,6 +232,8 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     // agreed to that; Decisions' own consent doesn't cover them.
     terminalSnapshots: value.terminalSnapshots === true && terminalSnapshotsConsentedAt !== null,
     terminalSnapshotsConsentedAt,
+    // On unless turned off: a setting saved before the field existed holds them.
+    holdPhonePushes: value.holdPhonePushes !== false,
   };
 }
 

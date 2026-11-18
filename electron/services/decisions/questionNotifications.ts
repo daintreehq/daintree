@@ -46,6 +46,8 @@ export interface QuestionNotifierOptions {
   show: (question: DecisionQuestionListItem, openingLine: string | null, key: string) => void;
   /** Takes down the banner shown under `key`, once its question no longer waits. */
   close: (key: string) => void;
+  /** It started following the list, or stopped: `following` changed (#17240). */
+  onFollowing?: () => void;
   now?: () => number;
 }
 
@@ -111,12 +113,24 @@ export class QuestionNotifier implements QuestionNotifications {
     this.seenBefore = record === null ? this.startedAt : null;
     this.off = this.o.questions.onChange((list) => this.follow(list));
     this.follow(this.o.questions.get());
+    this.o.onFollowing?.();
   }
 
   stop(): void {
     this.stopped = true;
+    const following = this.off !== null;
     this.off?.();
     this.off = null;
+    if (following) this.o.onFollowing?.();
+  }
+
+  /**
+   * Following the list, so a newly asked question can show (#17240): false
+   * before its record is read, for a lifetime whose record couldn't be, and
+   * once stopped.
+   */
+  get following(): boolean {
+    return this.off !== null;
   }
 
   /** Resolves once every claim made so far has been written, or failed to be. */

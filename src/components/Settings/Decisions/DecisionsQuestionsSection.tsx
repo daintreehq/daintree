@@ -37,6 +37,7 @@ import {
 import { questionExpiryLabel, questionExpiryText } from "./policyCopy";
 import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
 import { useDecisionsTerminalSnapshots } from "./useDecisionsTerminalSnapshots";
+import { useDecisionsHoldPhonePushes } from "./useDecisionsHoldPhonePushes";
 import { DecisionsTerminalSnapshotsConsentDialog } from "./DecisionsTerminalSnapshotsConsentDialog";
 
 const NEVER = "never";
@@ -65,7 +66,8 @@ interface DecisionsQuestionsSectionProps {
 /**
  * Questions: how long one waits when its agent sets no expiry (#16122), as
  * the library applies the saved choice, whether the phone may show the pane
- * that asked one (#16228), and the answers that couldn't be typed in on
+ * that asked one (#16228), whether a new question's phone push waits while
+ * the person is here (#17240), the answers that couldn't be typed in on
  * their own (#16020), and the inbox of every question (#17231). The
  * description follows what main has saved, not a choice still being saved.
  * Snapshots ask before every turn on.
@@ -83,6 +85,9 @@ export function DecisionsQuestionsSection({
   const [snapshotsConsentOpen, setSnapshotsConsentOpen] = useState(false);
   const snapshotsLocked = locked || snapshots.saving;
   const snapshotsFailure = snapshots.failure;
+  const hold = useDecisionsHoldPhonePushes(status, onChanged);
+  const holdLocked = locked || hold.saving;
+  const holdFailure = hold.failure;
   const shownExpiry = pendingExpiry ?? (policy ? { ms: policy.defaultQuestionExpiryMs } : null);
   const attention = useDecisionsAttentionCount();
   const openAttention = useDecisionsAttentionStore((state) => state.open);
@@ -138,6 +143,21 @@ export function DecisionsQuestionsSection({
             if (!snapshotsLocked) void snapshots.set({ enabled: false });
           }}
           resetAriaLabel="Turn off terminal snapshots"
+        />
+        <SettingsSwitchCard
+          id="decisions-hold-phone-pushes"
+          title="Hold phone notifications while I'm at this computer"
+          subtitle="While desktop notifications are on, tells your relay whether you're here, so it waits up to two minutes before notifying your phone of a new question"
+          isEnabled={hold.enabled}
+          onChange={() => {
+            if (!holdLocked) void hold.set(!hold.enabled);
+          }}
+          disabled={holdLocked}
+          isModified={status.holdPhonePushes === false}
+          onReset={() => {
+            if (!holdLocked) void hold.set(true);
+          }}
+          resetAriaLabel="Hold phone notifications again"
         />
         <SettingsRow
           id="decisions-questions-inbox"
@@ -195,6 +215,19 @@ export function DecisionsQuestionsSection({
           message={snapshotsFailure.message}
           onRetry={() => {
             if (!snapshotsLocked) void snapshots.set(snapshotsFailure.payload);
+          }}
+        />
+      )}
+      {holdFailure && (
+        <SettingsLoadErrorBanner
+          title={
+            holdFailure.enabled
+              ? "Couldn't turn on holding phone notifications"
+              : "Couldn't turn off holding phone notifications"
+          }
+          message={holdFailure.message}
+          onRetry={() => {
+            if (!holdLocked) void hold.set(holdFailure.enabled);
           }}
         />
       )}

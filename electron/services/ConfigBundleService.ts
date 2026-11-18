@@ -10,7 +10,10 @@ import {
 import { getValidatedOverrides, saveKeybindingOverrides } from "./keybindingOverridesStore.js";
 import { getAllowedSoundFiles } from "./getSoundService.js";
 import { appCustomSchemesWriteSchema } from "../schemas/customSchemes.js";
-import { sanitizeNotificationSettingsPatch } from "../utils/notificationSettingsPatch.js";
+import {
+  notificationSettingsWritten,
+  sanitizeNotificationSettingsPatch,
+} from "../utils/notificationSettingsPatch.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { SAFE_AGENT_ID_PATTERN, UserAgentConfigSchema } from "../../shared/types/index.js";
 import {
@@ -1434,8 +1437,13 @@ export class ConfigBundleService {
           pending.push(key);
         }
 
-        for (const key of pending) {
-          store.set(`notificationSettings.${key}` as never, sanitized[key] as never);
+        try {
+          for (const key of pending) {
+            store.set(`notificationSettings.${key}` as never, sanitized[key] as never);
+          }
+        } finally {
+          // A write that landed before one that threw still counts.
+          if (pending.length > 0) notificationSettingsWritten();
         }
 
         const readBack = readSettings();
@@ -1450,6 +1458,7 @@ export class ConfigBundleService {
       },
       restore: async (snapshot) => {
         store.set("notificationSettings", (snapshot ?? {}) as never);
+        notificationSettingsWritten();
       },
     };
   }

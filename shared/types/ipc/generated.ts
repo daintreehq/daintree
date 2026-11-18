@@ -1047,6 +1047,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
     result: import("../decisions.js").DecisionsStatus;
   };
+  "decisions:set-hold-phone-pushes": {
+    args: [enabled: boolean];
+    result: import("../decisions.js").DecisionsStatus;
+  };
   "decisions:set-model": {
     args: [payload: import("../decisionsModel.js").SetDecisionsModelPayload];
     result: import("../decisionsModel.js").DecisionsModelState;

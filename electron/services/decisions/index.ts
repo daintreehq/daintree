@@ -1,3 +1,4 @@
+import { Notification } from "electron";
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { hostname } from "node:os";
@@ -145,9 +146,11 @@ import {
 import type { AnswerDelivery, PaneSignal } from "./answerDelivery.js";
 import type {
   DecisionsDeliveryDeps,
+  DecisionsPresenceDeps,
   DecisionsService,
   DecisionsSnapshotDeps,
 } from "./DecisionsService.js";
+import { onNotificationSettingsWritten } from "../../utils/notificationSettingsPatch.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
 import {
@@ -488,6 +491,9 @@ export function onDecisionsHostQuestionsChanged(listener: () => void): () => voi
   };
 }
 
+/** The owner lifetime's question notifications, the latest made; following only while they can show one. */
+let questionNotifier: QuestionNotifier | null = null;
+
 /**
  * Desktop notifications for the questions agents ask (#17232), and for the
  * follow-ups that want a reply and the answers delivery stops on (#17235),
@@ -512,6 +518,8 @@ function notifyQuestions(store: MetaStore): QuestionNotifications {
     presenter?.decisionQuestionNotificationsOn(projectId) ?? false;
   const close = (key: string) => presenter?.closeDecisionQuestion(key);
   const asked = new QuestionNotifier({
+    // Presence holds the phone only while a question can show here (#17240).
+    onFollowing: () => service?.presenceChanged(),
     store,
     questions,
     readOpeningLine,
@@ -532,6 +540,7 @@ function notifyQuestions(store: MetaStore): QuestionNotifications {
     showStall: (question, key) => presenter?.notifyDecisionStall(question, key),
     close,
   });
+  questionNotifier = asked;
   void asked.start();
   void thread.start();
   return {
@@ -809,6 +818,35 @@ const snapshotDeps: DecisionsSnapshotDeps = {
   watchPanes: watchSnapshotPanes,
 };
 
+/**
+ * Whether the person's presence may be reported now (#17240): Decisions on in
+ * this run, holding phone pushes on, and #17232's question notifications able
+ * to show a question here: turned on, supported by the system, and following
+ * this lifetime's questions. Read each time, so it answers false as soon as
+ * any of them stops holding; a setting that can't be read holds nothing.
+ */
+function presenceAllowed(): boolean {
+  try {
+    const settings = readDecisionsSettings(store);
+    return (
+      !shutDown &&
+      settings.enabled &&
+      settings.holdPhonePushes &&
+      store.get("notificationSettings")?.enabled !== false &&
+      questionNotifier?.following === true &&
+      Notification.isSupported()
+    );
+  } catch {
+    return false;
+  }
+}
+
+const presenceDeps: DecisionsPresenceDeps = { allowed: presenceAllowed };
+
+// Turning desktop notifications off ends presence at once, and on starts it.
+// This module loads only once Decisions is on, so vanilla Daintree never listens.
+onNotificationSettingsWritten(() => service?.presenceChanged());
+
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
   transitions = run.catch(() => {});
@@ -838,6 +876,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
           openDecisionsMcpRoute(source, sources, previousClosed),
         delivery: deliveryDeps,
         snapshots: snapshotDeps,
+        presence: presenceDeps,
         onDevicesChanged: publishDevicesChanged,
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
@@ -900,6 +939,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(settings.relayOrigin ? { relayOrigin: settings.relayOrigin } : {}),
     ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
     ...(settings.terminalSnapshots ? { terminalSnapshots: true } : {}),
+    ...(settings.holdPhonePushes ? {} : { holdPhonePushes: false }),
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
     ...(checked !== null
@@ -1989,6 +2029,41 @@ export function setDecisionsTerminalSnapshots(
   });
 }
 
+/** Rises with each turn off of holding phone pushes, so a turn on queued before one never lands after it. */
+let holdPhonePushesOffs = 0;
+
+/**
+ * Turns holding phone pushes while the person is here on or off (#17240).
+ * Off is saved to the store before the queue, as terminal snapshots' is, so
+ * presence stops being reported the moment it's turned off; the service hears
+ * of the setting in turn.
+ */
+export function setDecisionsHoldPhonePushes(enabled: boolean): Promise<DecisionsStatus> {
+  const offs = enabled ? holdPhonePushesOffs : ++holdPhonePushesOffs;
+  if (!enabled) {
+    const current = readDecisionsSettings(store);
+    if (current.holdPhonePushes) {
+      writeDecisionsSettings(store, { ...current, holdPhonePushes: false });
+      service?.presenceChanged();
+      // Every window shows it off now, not once the queue reaches it.
+      publishStatus();
+    }
+  }
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (enabled) {
+      if (shutDown || !current.enabled) throw setupRefused();
+      // Turned off since this was asked for, here or in another window: the later off stands.
+      if (offs !== holdPhonePushesOffs) return getDecisionsStatus();
+    }
+    const saved = writeDecisionsSettings(store, { ...current, holdPhonePushes: enabled });
+    service?.updateSettings(saved);
+    service?.presenceChanged();
+    publishStatus();
+    return getDecisionsStatus();
+  });
+}
+
 /**
  * Whether a terminal snapshot may be captured or published now (#16228):
  * Decisions on in this run, and snapshots on with the person's agreement.
@@ -3041,6 +3116,8 @@ export function _resetDecisionsForTesting(): void {
   setupCheckEpoch = 0;
   service = null;
   creating = null;
+  questionNotifier = null;
+  holdPhonePushesOffs = 0;
   shutDown = false;
   transitions = Promise.resolve();
   statusRevision = 0;
