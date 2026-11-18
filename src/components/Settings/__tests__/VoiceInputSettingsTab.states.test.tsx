@@ -170,6 +170,14 @@ describe("dictationBlockers", () => {
       "download the on-device model",
     ]);
     expect(dictationBlockers(local, "granted", status("ready"))).toEqual([]);
+    // Not known yet, or still being checked: not a blocker the page can name.
+    expect(dictationBlockers(local, "granted", null)).toEqual([]);
+    expect(dictationBlockers(local, "granted", { ...status("ready"), state: "checking" })).toEqual(
+      []
+    );
+    expect(dictationBlockers(local, "granted", { ...status("ready"), state: "failed" })).toEqual([
+      "download the on-device model",
+    ]);
     expect(dictationBlockers(local, "granted", status("unsupported"))).toEqual([
       "choose another provider",
     ]);

@@ -95,7 +95,7 @@ const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
   deepgram: `Deepgram receives your audio over an encrypted connection and, by default, may keep audio and transcripts to improve its models. ${RECOGNITION_HINTS_PRIVACY}`,
   grok: `xAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse auditing unless your team turns on Zero Data Retention, and doesn't train on it without permission. ${RECOGNITION_HINTS_PRIVACY}`,
   local:
-    "Your audio is transcribed on this computer and never leaves it. With AI cleanup off, nothing you dictate leaves the machine. With it on, your cleanup provider receives each passage, the redacted screen and Claude's last reply, and spoken file references are looked up through OpenAI.",
+    "Your audio is transcribed on this computer and never leaves it. With AI cleanup off, what you dictate stays here too, except a spoken rewrite of selected text, which goes to your cleanup provider with the selection. With cleanup on, your cleanup provider receives each passage, the redacted screen and Claude's last reply, and with file references on, a passage that mentions a file goes to OpenAI to find it.",
 };
 
 // Completes "...are sent to", for the AI text correction section.
@@ -289,8 +289,12 @@ export function dictationBlockers(
   const blockers: string[] = [];
   const issuer = transcriptionKeyIssuer(settings.transcriptionProvider);
   if (issuer === null) {
-    if (localModel?.state === "unsupported") blockers.push("choose another provider");
-    else if (localModel?.state !== "ready") blockers.push("download the on-device model");
+    // Only what's known: a model still being checked isn't missing.
+    const state = localModel?.state;
+    if (state === "unsupported") blockers.push("choose another provider");
+    else if (state === "absent" || state === "failed" || state === "downloading") {
+      blockers.push("download the on-device model");
+    }
   } else if (!hasTranscriptionKey(settings)) {
     blockers.push(`add your ${issuer} API key`);
   }
@@ -567,7 +571,8 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
 
   const provider = settings.transcriptionProvider;
   const onDevice = transcribesOnDevice(provider);
-  const localModel = useLocalSpeechModelStatus(settings.enabled && onDevice);
+  const localModelState = useLocalSpeechModelStatus(settings.enabled && onDevice);
+  const localModel = localModelState.status;
   const dictating = useVoiceRecordingStore(
     (s) => (s.status !== "idle" && s.status !== "error") || s.sessionElsewhere !== null
   );
@@ -740,7 +745,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               {providerKeyField ? (
                 keyRow(providerKeyField)
               ) : (
-                <LocalSpeechModelRow dictating={dictating} />
+                <LocalSpeechModelRow model={localModelState} dictating={dictating} />
               )}
 
               {provider === "openai" && isLegacyKey && (
@@ -925,7 +930,11 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="Custom dictionary"
-          description="Terms sent to the transcription service so it recognises your product names and jargon."
+          description={
+            onDevice
+              ? "Terms cleanup and spoken rewrites use to spell your product names and jargon. On-device transcription takes none."
+              : "Terms sent to the transcription service so it recognises your product names and jargon."
+          }
           id="voice-custom-dictionary"
         >
           {saveError("dictionary")}

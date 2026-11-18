@@ -98,5 +98,8 @@ describe("segmentText", () => {
   it("collapses whitespace and drops leading closers", () => {
     expect(segmentText(vocab, [3, 7, 4, 5])).toBe("then send");
     expect(segmentText({ ...vocab, decode: () => "  ， 下一步  " }, [])).toBe("下一步");
+    // A dot that starts a word stays: it isn't the last passage's full stop.
+    expect(segmentText({ ...vocab, decode: () => " .env is missing" }, [])).toBe(".env is missing");
+    expect(segmentText({ ...vocab, decode: () => ". Then" }, [])).toBe("Then");
   });
 });

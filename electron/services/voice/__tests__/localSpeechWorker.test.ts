@@ -17,8 +17,8 @@ type VadCallbacks = {
 };
 
 const script = vi.hoisted(() => ({
-  /** Per audio packet, in order: VAD callbacks to fire, as frame offsets inside it. */
-  vad: [] as Array<Array<"start" | "end">>,
+  /** Per audio packet, in order: VAD callbacks to fire on its first and second frames. */
+  vad: [] as Array<Array<"start" | "end" | "misfire">>,
   /** Per decoded chunk (priming excluded): tokens as [id, frame]. */
   tokens: [] as Array<Array<[number, number]>>,
   chunks: 0,
@@ -28,19 +28,23 @@ vi.mock("avr-vad", () => ({
   RealTimeVAD: {
     new: async (options: VadCallbacks) => {
       let packet = 0;
+      // avr-vad works in 32 ms frames at 16 kHz, 768 samples of the 24 kHz
+      // capture, and carries what's left over to the next packet.
+      let carried = 0;
       return {
         start: () => {},
         destroy: async () => {},
         processAudio: async (samples: Float32Array) => {
-          // avr-vad works in 32 ms frames at 16 kHz: about three a packet.
-          const frames = Math.round(((samples.length / 24_000) * 1000) / 32);
+          carried += samples.length;
+          const frames = Math.floor(carried / 768);
+          carried -= frames * 768;
           const events = script.vad[packet++] ?? [];
           for (let f = 0; f < frames; f++) {
             options.onFrameProcessed();
-            if (f === 0 && events[0] === "end") options.onSpeechEnd();
-            if (f === 0 && events[0] === "start") options.onSpeechStart();
-            if (f === 1 && events[1] === "start") options.onSpeechStart();
-            if (f === 1 && events[1] === "end") options.onSpeechEnd();
+            const event = events[f];
+            if (event === "start") options.onSpeechStart();
+            if (event === "end") options.onSpeechEnd();
+            if (event === "misfire") options.onVADMisfire();
           }
         },
       };
@@ -82,8 +86,14 @@ vi.mock("../localSpeechEngine.js", () => ({
 
 let posted: LocalSpeechWorkerOutbound[];
 let listener: ((event: { data: LocalSpeechWorkerInbound }) => void) | null;
+let processHandlers: { exception: Set<unknown>; rejection: Set<unknown> };
 
 async function bootWorker() {
+  // Each import registers process-wide handlers; only the ones it added go after.
+  processHandlers = {
+    exception: new Set(process.listeners("uncaughtException")),
+    rejection: new Set(process.listeners("unhandledRejection")),
+  };
   posted = [];
   listener = null;
   (process as unknown as { parentPort: unknown }).parentPort = {
@@ -126,6 +136,12 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete (process as unknown as { parentPort?: unknown }).parentPort;
+  for (const handler of process.listeners("uncaughtException")) {
+    if (!processHandlers.exception.has(handler)) process.off("uncaughtException", handler);
+  }
+  for (const handler of process.listeners("unhandledRejection")) {
+    if (!processHandlers.rejection.has(handler)) process.off("unhandledRejection", handler);
+  }
 });
 
 describe("localSpeechWorker", () => {
@@ -232,8 +248,68 @@ describe("localSpeechWorker", () => {
     packets(6, 1);
     send({ type: "finish", session: 2 });
     await vi.waitFor(() => expect(posted.at(-1)).toEqual({ type: "finished", session: 2 }));
+    // Session 1's audio reached neither session: session 2 ran the model only
+    // for its own stop, never for the 600 ms session 1 sent.
+    expect(script.chunks).toBe(1);
     expect(posted.filter((m) => "session" in m && m.session === 1 && m.type !== "started")).toEqual(
       []
     );
+  });
+
+  it("holds a pause's end of speech until the audio queued behind it shows the speaker went on", async () => {
+    await start();
+    script.tokens = [[[0, 1], [1, 3]], [], [], []];
+    script.vad[0] = ["start"];
+    // Silence ends speech in packet 12; packet 13, already captured, starts it again.
+    script.vad[11] = ["end"];
+    script.vad[12] = ["start"];
+    packets(14);
+    await vi.waitFor(() => expect(segments()).toHaveLength(1));
+    expect(segments()[0]).toMatchObject({ text: "send it", reason: "pause", endOfSpeech: false });
+  });
+
+  it("keeps a word spoken just before the pause point in the passage the pause closes", async () => {
+    await start();
+    // "it" lands at 560 + 80 = 640 ms, after speech ended at 320 ms but
+    // before the close point 400 ms past it.
+    script.tokens = [[[0, 1]], [[1, 1]], [], []];
+    script.vad[0] = ["start"];
+    script.vad[10] = ["end"];
+    packets(14);
+    await vi.waitFor(() => expect(segments()).toHaveLength(1));
+    expect(segments()[0]).toMatchObject({ text: "send it", reason: "pause" });
+  });
+
+  it("closes a pause heard in silence without waiting for the next chunk to fill", async () => {
+    await start();
+    script.tokens = [[[0, 1], [1, 3]], []];
+    script.vad[0] = ["start"];
+    // Speech end heard in packet 16; only two whole chunks (1,120 ms) are decoded.
+    script.vad[15] = ["end"];
+    packets(16);
+    await vi.waitFor(() => expect(segments()).toHaveLength(1));
+    expect(segments()[0]).toMatchObject({ text: "send it", reason: "pause", endOfSpeech: true });
+  });
+
+  it("closes the passage a blip too short for speech ended", async () => {
+    await start();
+    script.tokens = [[[0, 1]], [], [], []];
+    script.vad[0] = ["start"];
+    script.vad[11] = ["misfire"];
+    packets(14);
+    await vi.waitFor(() => expect(segments()).toHaveLength(1));
+    expect(segments()[0]).toMatchObject({ text: "send", reason: "pause", endOfSpeech: true });
+  });
+
+  it("stops cleanly when the audio heard ends exactly on a chunk boundary", async () => {
+    await start();
+    script.tokens = [[], [], [], [], [], [[4, 6]]];
+    packets(28);
+    send({ type: "finish", session: 1 });
+    await vi.waitFor(() => expect(posted.at(-1)).toEqual({ type: "finished", session: 1 }));
+    expect(posted.filter((m) => m.type === "session-error")).toEqual([]);
+    expect(segments()).toEqual([
+      expect.objectContaining({ text: "tests", reason: "finish" }),
+    ]);
   });
 });

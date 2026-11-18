@@ -15,11 +15,12 @@ class FakeChild extends EventEmitter {
   }
 }
 
-const state = vi.hoisted(() => ({ children: [] as unknown[] }));
+const state = vi.hoisted(() => ({ children: [] as unknown[], failFork: false }));
 
 vi.mock("electron", () => ({
   utilityProcess: {
     fork: () => {
+      if (state.failFork) throw new Error("fork failed");
       const child = new FakeChild(60_000 + state.children.length);
       state.children.push(child);
       return child;
@@ -52,6 +53,7 @@ async function acquireLoaded(host: LocalSpeechHost, h = handlers(), dir = "/mode
 
 beforeEach(() => {
   state.children.length = 0;
+  state.failFork = false;
 });
 
 afterEach(() => {
@@ -131,5 +133,59 @@ describe("LocalSpeechHost", () => {
     expect(child.posted.at(-1)).toEqual({ type: "destroy" });
     child.emit("exit", 0);
     await released;
+  });
+
+  it("tells the lease when the process reports a failure of its own and exits", async () => {
+    const host = new LocalSpeechHost(60_000);
+    const { child, h } = await acquireLoaded(host);
+    child.reply({ type: "error", message: "native abort" });
+    expect(child.posted.at(-1)).toEqual({ type: "destroy" });
+    child.emit("exit", 1);
+    expect(h.onLost).toHaveBeenCalledTimes(1);
+    expect(host.leased).toBe(false);
+  });
+
+  it("forks once when a newer start supersedes one waiting for a retiring process", async () => {
+    const host = new LocalSpeechHost(60_000);
+    const first = await acquireLoaded(host, handlers(), "/models/a");
+    first.lease.release();
+    // A different folder retires the loaded process; both starts wait on it.
+    const older = host.acquire("/models/b", handlers());
+    const newer = host.acquire("/models/b", handlers());
+    first.child.emit("exit", 0);
+    await expect(older).rejects.toThrow(/Superseded/);
+    await vi.waitFor(() => expect(children()).toHaveLength(2));
+    children()[1].reply({ type: "ready", loadMs: 5 });
+    await newer;
+    expect(children()).toHaveLength(2);
+  });
+
+  it("leaves no lease behind when the process can't be forked", async () => {
+    const host = new LocalSpeechHost(60_000);
+    state.failFork = true;
+    await expect(host.acquire("/models/rev", handlers())).rejects.toThrow(/fork failed/);
+    expect(host.leased).toBe(false);
+  });
+
+  it("refuses new dictations once quitting has begun", async () => {
+    const host = new LocalSpeechHost(60_000);
+    await host.shutdown(0);
+    await expect(host.acquire("/models/rev", handlers())).rejects.toThrow(/quitting/);
+    expect(children()).toHaveLength(0);
+  });
+
+  it("kills a retired process that never exits, without UtilityProcess.kill", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const host = new LocalSpeechHost(60_000);
+      const { lease, child } = await acquireLoaded(host);
+      lease.abandon();
+      expect(child.posted.at(-1)).toEqual({ type: "destroy" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(kill).toHaveBeenCalledWith(child.pid, "SIGKILL");
+    } finally {
+      kill.mockRestore();
+    }
   });
 });

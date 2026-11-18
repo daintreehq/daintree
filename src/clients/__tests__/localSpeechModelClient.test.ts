@@ -35,6 +35,13 @@ afterEach(() => {
 });
 
 describe("localSpeechModelClient", () => {
+  it("counts only a ready model as ready", async () => {
+    stub(async () => status("downloading", 40));
+    await readLocalModelStatus();
+    expect(getLocalModelStatus()?.state).toBe("downloading");
+    expect(isLocalModelReady()).toBe(false);
+  });
+
   it("knows nothing until it reads, then reports what main said", async () => {
     stub(async () => status("ready", 100));
     expect(getLocalModelStatus()).toBeNull();

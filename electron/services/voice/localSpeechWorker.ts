@@ -56,6 +56,12 @@ const VAD_REDEMPTION_FRAMES = 24;
  * heard again (the holdover).
  */
 const PAUSE_CLOSE_GUARD_MS = 400;
+/**
+ * Output held while captured audio waits behind the packet that made it is
+ * let go after this long anyway, so a machine that can't keep up still shows
+ * words; a held passage then decides end of speech from what was heard so far.
+ */
+const MAX_HOLD_MS = 3_000;
 const CHUNK_MS = (G.chunkSamples / G.sampleRate) * 1000;
 const FRAME_MS = CHUNK_MS / FRAMES_PER_CHUNK;
 
@@ -73,8 +79,21 @@ async function loadRealTimeVAD(): Promise<RealTimeVADClass | undefined> {
 
 type VadEvent = { type: "start" } | { type: "end"; frame: number };
 
+type SessionOutbound = Extract<LocalSpeechWorkerOutbound, { session: number }>;
+
+/** A closed passage whose end of speech is decided when the output is let go. */
+type HeldMessage = SessionOutbound | (SessionOutbound & { type: "segment"; pauseEnd: true });
+
 interface Session {
   id: number;
+  /**
+   * Output not yet posted, in order. It waits while more captured audio is
+   * queued behind the packet that made it: a pause has only ended speech if
+   * nothing in that audio starts it again.
+   */
+  outbox: HeldMessage[];
+  /** When the oldest held output was made. */
+  heldSince: number | null;
   resampler: Resampler24kTo16k;
   /** 16 kHz samples short of a whole chunk. */
   pending: Float32Array;
@@ -96,6 +115,8 @@ let loading: Promise<void> = Promise.resolve();
 let chain: Promise<void> = Promise.resolve();
 let session: Session | null = null;
 let destroyed = false;
+/** Audio messages received and not yet processed, by session. */
+const queuedAudio = new Map<number, number>();
 
 async function load(dir: string, threads: number): Promise<void> {
   const started = performance.now();
@@ -132,9 +153,11 @@ async function createVad(target: Session): Promise<RealTimeVADInstance | null> {
         target.speaking = false;
         target.vadEvents.push({ type: "end", frame: target.vadFrames });
       },
-      // A blip too short to be speech: back to silence, with no passage to close.
+      // Speech too short to count as speech for avr-vad, a short "yes" among
+      // them: it ends there, after the same holdover, and closes what it said.
       onVADMisfire: () => {
         target.speaking = false;
+        target.vadEvents.push({ type: "end", frame: target.vadFrames });
       },
     });
     vad.start();
@@ -150,24 +173,67 @@ async function releaseVad(target: Session): Promise<void> {
   await vad?.destroy().catch(() => {});
 }
 
+function hold(target: Session, message: HeldMessage): void {
+  target.outbox.push(message);
+  target.heldSince ??= performance.now();
+}
+
 function postEvents(target: Session, events: SegmentEvent[]): void {
   for (const event of events) {
     if (event.type === "text") {
-      post({ type: "text", session: target.id, segment: event.segment, text: event.text });
+      hold(target, { type: "text", session: target.id, segment: event.segment, text: event.text });
       continue;
     }
     // A pause after nothing the model wrote: nothing to complete.
     if (event.text === "" && !event.shown && event.reason === "pause") continue;
-    post({
+    const pauseEnd = event.reason === "pause";
+    hold(target, {
       type: "segment",
       session: target.id,
       segment: event.segment,
       text: event.text,
       shown: event.shown,
       reason: event.reason,
-      endOfSpeech: event.reason === "pause" && target.vad !== null && !target.speaking,
+      endOfSpeech: false,
+      ...(pauseEnd ? { pauseEnd: true as const } : {}),
     });
   }
+}
+
+/**
+ * Posts the held output in order. A passage a pause closed ended speech only
+ * if no speech start follows it in what was held and the VAD hears silence
+ * now: one that the speaker went on from must never carry a send.
+ */
+function flushOutbox(target: Session): void {
+  const outbox = target.outbox;
+  target.outbox = [];
+  target.heldSince = null;
+  let resumed = target.speaking || target.vad === null;
+  for (let i = outbox.length - 1; i >= 0; i--) {
+    const message = outbox[i];
+    if (message.type === "speech-start") resumed = true;
+    if (message.type === "segment" && "pauseEnd" in message) {
+      outbox[i] = {
+        type: "segment",
+        session: message.session,
+        segment: message.segment,
+        text: message.text,
+        shown: message.shown,
+        reason: message.reason,
+        endOfSpeech: !resumed,
+      };
+    }
+  }
+  for (const message of outbox) post(message);
+}
+
+/** Lets the output go once no captured audio waits behind it, or it has waited too long. */
+function flushIfCaughtUp(target: Session): void {
+  const waiting = (queuedAudio.get(target.id) ?? 0) > 0;
+  const tooLong =
+    target.heldSince !== null && performance.now() - target.heldSince >= MAX_HOLD_MS;
+  if (!waiting || tooLong) flushOutbox(target);
 }
 
 /** Where decoding has reached in the session's own audio. */
@@ -219,6 +285,8 @@ async function startSession(id: number, promptId: number): Promise<void> {
   }
   const next: Session = {
     id,
+    outbox: [],
+    heldSince: null,
     resampler: new Resampler24kTo16k(),
     pending: new Float32Array(0),
     chunks: 0,
@@ -253,7 +321,7 @@ async function processAudio(target: Session, pcm: ArrayBuffer): Promise<void> {
     await target.vad.processAudio(samples);
     for (const event of target.vadEvents) {
       if (event.type === "start") {
-        post({ type: "speech-start", session: target.id });
+        hold(target, { type: "speech-start", session: target.id });
       } else {
         // The VAD counts the session's own audio, the same clock token times use.
         const endedAt = (event.frame - VAD_REDEMPTION_FRAMES) * VAD_FRAME_MS;
@@ -264,6 +332,14 @@ async function processAudio(target: Session, pcm: ArrayBuffer): Promise<void> {
   }
   append(target, target.resampler.push(samples));
   await decodeWhole(target, current);
+  // A pause heard in silence closes now rather than when the next chunk
+  // fills, which a paused capture may never send: the part-chunk is
+  // transcribed, finished with silence. Not while speech has started again,
+  // where finishing the chunk early would cut its first word.
+  const closeAt = target.segmenter.nextCloseAt();
+  if (closeAt !== null && decodedThroughMs(target) < closeAt && !target.speaking) {
+    await decodeRest(target, current);
+  }
   // A pause heard in this message may already be behind what was decoded.
   postEvents(target, target.segmenter.addChunk([], decodedThroughMs(target)));
 }
@@ -272,6 +348,8 @@ async function closeSession(target: Session, reason: "cut" | "finish"): Promise<
   const current = engine;
   if (!current || target.failed) return;
   if (reason === "finish") append(target, target.resampler.flush());
+  // A whole chunk or more can be waiting: the resampler's tail can complete one.
+  await decodeWhole(target, current);
   await decodeRest(target, current);
   postEvents(target, target.segmenter.closeNow(reason));
 }
@@ -279,6 +357,7 @@ async function closeSession(target: Session, reason: "cut" | "finish"): Promise<
 function failSession(target: Session, err: unknown): void {
   if (target.failed) return;
   target.failed = true;
+  flushOutbox(target);
   post({
     type: "session-error",
     session: target.id,
@@ -354,17 +433,34 @@ port.on("message", ({ data: message }) => {
       return;
     }
     case "audio": {
-      const { pcm } = message;
-      forSession(message.session, (target) => processAudio(target, pcm));
+      const { session: id, pcm } = message;
+      queuedAudio.set(id, (queuedAudio.get(id) ?? 0) + 1);
+      chain = chain.then(async () => {
+        const left = (queuedAudio.get(id) ?? 1) - 1;
+        if (left > 0) queuedAudio.set(id, left);
+        else queuedAudio.delete(id);
+        const target = session;
+        if (destroyed || !target || target.id !== id) return;
+        try {
+          await processAudio(target, pcm);
+        } catch (err) {
+          failSession(target, err);
+        }
+        flushIfCaughtUp(target);
+      });
       return;
     }
     case "cut":
-      forSession(message.session, (target) => closeSession(target, "cut"));
+      forSession(message.session, async (target) => {
+        await closeSession(target, "cut");
+        flushIfCaughtUp(target);
+      });
       return;
     case "finish": {
       const id = message.session;
       forSession(id, async (target) => {
         await closeSession(target, "finish");
+        flushOutbox(target);
         await releaseVad(target);
       });
       chain = chain.then(() => {

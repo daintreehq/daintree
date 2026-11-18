@@ -54,14 +54,18 @@ export interface LocalSpeechModelStoreOptions {
   revision?: string;
 }
 
-async function matches(file: string, spec: LocalSpeechFileSpec): Promise<boolean> {
+async function matches(
+  file: string,
+  spec: LocalSpeechFileSpec,
+  signal?: AbortSignal
+): Promise<boolean> {
   const size = await stat(file).then(
     (s) => s.size,
     () => -1
   );
   if (size !== spec.size) return false;
   const hash = createHash("sha256");
-  await pipeline(createReadStream(file), hash);
+  await pipeline(createReadStream(file), hash, signal ? { signal } : {});
   return hash.digest("hex") === spec.sha256;
 }
 
@@ -97,6 +101,10 @@ export class LocalSpeechModelStore {
   private checked: Promise<void> | null = null;
   private operation: { abort: AbortController; done: Promise<void> } | null = null;
   private lastProgressAt = 0;
+  /** Moves on with every removal: a check or download begun before it reports nothing. */
+  private epoch = 0;
+  /** A removal is under way: nothing may start reading or writing the files. */
+  private removing = false;
   private readonly fetchImpl: FetchLike;
   private readonly files: readonly LocalSpeechFileSpec[];
   private readonly revision: string;
@@ -137,7 +145,8 @@ export class LocalSpeechModelStore {
     return { ...this.current };
   }
 
-  private set(status: Omit<LocalSpeechModelStatus, "totalBytes">): void {
+  private set(status: Omit<LocalSpeechModelStatus, "totalBytes">, epoch = this.epoch): void {
+    if (epoch !== this.epoch) return;
     this.current = { totalBytes: this.totalBytes, ...status };
     this.onChange(this.status());
   }
@@ -148,27 +157,30 @@ export class LocalSpeechModelStore {
    * over from what they leave.
    */
   check(): Promise<LocalSpeechModelStatus> {
-    this.checked ??= this.checkInstall();
+    this.checked ??= this.checkInstall(this.epoch);
     return this.checked.then(() => this.status());
   }
 
-  private async checkInstall(): Promise<void> {
+  private async checkInstall(epoch: number): Promise<void> {
     if (await this.installRecorded()) {
-      this.set({ state: "checking", receivedBytes: this.totalBytes });
+      this.set({ state: "checking", receivedBytes: this.totalBytes }, epoch);
       const bad = await this.mismatched(this.installDir);
       if (bad.length === 0) {
-        this.set({ state: "ready", receivedBytes: this.totalBytes });
+        this.set({ state: "ready", receivedBytes: this.totalBytes }, epoch);
         return;
       }
       console.warn(`[LocalSpeech] Installed model fails its check: ${bad.join(", ")}`);
-      this.set({
-        state: "failed",
-        receivedBytes: 0,
-        error: "The downloaded model is damaged. Download it again to repair it.",
-      });
+      this.set(
+        {
+          state: "failed",
+          receivedBytes: 0,
+          error: "The downloaded model is damaged. Download it again to repair it.",
+        },
+        epoch
+      );
       return;
     }
-    this.set({ state: "absent", receivedBytes: await this.stagedBytes() });
+    this.set({ state: "absent", receivedBytes: await this.stagedBytes() }, epoch);
   }
 
   private async installRecorded(): Promise<boolean> {
@@ -182,10 +194,13 @@ export class LocalSpeechModelStore {
     }
   }
 
-  private async mismatched(dir: string): Promise<string[]> {
+  private async mismatched(dir: string, signal?: AbortSignal): Promise<string[]> {
     const bad: string[] = [];
     for (const spec of this.files) {
-      if (!(await matches(path.join(dir, spec.name), spec).catch(() => false))) bad.push(spec.name);
+      const ok = await matches(path.join(dir, spec.name), spec, signal).catch(() => false);
+      // Stopped part way, a file read isn't a verdict on it.
+      if (signal?.aborted) throw new Cancelled();
+      if (!ok) bad.push(spec.name);
     }
     return bad;
   }
@@ -202,8 +217,9 @@ export class LocalSpeechModelStore {
 
   /** The installed model's folder when it is ready to read; null otherwise. */
   async readyDir(): Promise<string | null> {
+    if (this.removing) return null;
     const status = await this.check();
-    return status.state === "ready" ? this.installDir : null;
+    return status.state === "ready" && !this.removing ? this.installDir : null;
   }
 
   /** A load from an installed folder failed: the next `check()` hashes it again. */
@@ -218,9 +234,10 @@ export class LocalSpeechModelStore {
    * outcome is in the status, never thrown.
    */
   download(): Promise<void> {
-    if (this.current.state === "unsupported") return Promise.resolve();
+    if (this.current.state === "unsupported" || this.removing) return Promise.resolve();
     if (this.operation) return this.operation.done;
     const abort = new AbortController();
+    const epoch = this.epoch;
     const done = this.check()
       .then(async (status) => {
         if (status.state === "ready" || abort.signal.aborted) return;
@@ -229,11 +246,11 @@ export class LocalSpeechModelStore {
       .catch(async (error: unknown) => {
         const receivedBytes = await this.stagedBytes();
         if (error instanceof Cancelled || abort.signal.aborted) {
-          this.set({ state: "absent", receivedBytes });
+          this.set({ state: "absent", receivedBytes }, epoch);
           return;
         }
         console.warn("[LocalSpeech] Model download failed", voiceErrorLogFields(error));
-        this.set({ state: "failed", receivedBytes, error: describeFailure(error) });
+        this.set({ state: "failed", receivedBytes, error: describeFailure(error) }, epoch);
       })
       .finally(() => {
         if (this.operation?.abort === abort) this.operation = null;
@@ -251,16 +268,35 @@ export class LocalSpeechModelStore {
   }
 
   /**
-   * Deletes the installed model and any partial download. The caller makes
-   * sure nothing is reading the model first.
+   * Deletes the installed model and any partial download. From the moment it
+   * is called, no dictation gets the folder and no download starts;
+   * `beforeDelete` stops whatever already has the files open. A removal that
+   * fails part way checks the folder again, so the status says what is left.
    */
-  async remove(): Promise<void> {
+  async remove(beforeDelete?: () => Promise<void>): Promise<void> {
     if (this.current.state === "unsupported") return;
-    await this.cancel();
-    this.checked = Promise.resolve();
-    await rm(this.installDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
-    await rm(this.stagingDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
-    this.set({ state: "absent", receivedBytes: 0 });
+    if (this.removing) throw new Error("The model is already being deleted");
+    this.removing = true;
+    this.epoch++;
+    try {
+      const operation = this.operation;
+      if (operation) {
+        operation.abort.abort();
+        await operation.done;
+      }
+      await beforeDelete?.();
+      await rm(this.installDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+      await rm(this.stagingDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+      this.checked = Promise.resolve();
+      this.set({ state: "absent", receivedBytes: 0 });
+    } catch (error) {
+      this.removing = false;
+      this.checked = null;
+      await this.check().catch(() => {});
+      throw error;
+    } finally {
+      this.removing = false;
+    }
   }
 
   private async fetchAndInstall(signal: AbortSignal): Promise<void> {
@@ -277,7 +313,7 @@ export class LocalSpeechModelStore {
       await rename(`${into}.part`, into);
     }
     this.set({ state: "checking", receivedBytes: this.totalBytes });
-    const bad = await this.mismatched(staging);
+    const bad = await this.mismatched(staging, signal);
     if (bad.length > 0) {
       // Fetched again from scratch next time: a file that doesn't match is wrong all through.
       await Promise.all(bad.map((name) => rm(path.join(staging, name), { force: true })));
@@ -359,7 +395,9 @@ export class LocalSpeechModelStore {
       return size;
     } catch (error) {
       if (signal.aborted) throw new Cancelled();
-      if (stall.signal.aborted) throw new Error("The download stalled. Try again to resume.");
+      if (stall.signal.aborted) {
+        throw new Error("The download stalled. Try again to resume.", { cause: error });
+      }
       throw error;
     } finally {
       if (stallTimer) clearTimeout(stallTimer);

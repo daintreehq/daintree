@@ -106,7 +106,7 @@ export function LastDictationTermsSection() {
             <SettingsRow
               label={
                 transcribesOnDevice(last.provider)
-                  ? "Transcribed on this computer"
+                  ? "On-device transcription"
                   : `${last.rewrite ? "Rewrite instruction sent" : "Sent"} to ${transcriptionProviderName(last.provider)}`
               }
               description={summarize(last)}

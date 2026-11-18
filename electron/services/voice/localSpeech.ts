@@ -43,11 +43,24 @@ export function onLocalSpeechModelStatus(
  * Refused while a dictation is using them.
  */
 export async function removeLocalSpeechModel(): Promise<void> {
-  await host?.releaseModel();
-  await getLocalSpeechModels().remove();
+  await getLocalSpeechModels().remove(async () => {
+    await host?.releaseModel();
+  });
 }
 
-/** On quit: stop a download and the speech process, waiting up to `timeoutMs` for it to exit. */
+/**
+ * On quit: stop a download and the speech process, waiting up to `timeoutMs`
+ * for both. A download stopped part way resumes next launch.
+ */
 export async function shutdownLocalSpeech(timeoutMs: number): Promise<void> {
-  await Promise.all([models?.cancel(), host?.shutdown(timeoutMs)]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+    timer.unref?.();
+  });
+  await Promise.race([
+    Promise.all([models?.cancel(), host?.shutdown(timeoutMs)]).then(() => undefined),
+    budget,
+  ]);
+  if (timer !== undefined) clearTimeout(timer);
 }

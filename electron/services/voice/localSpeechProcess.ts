@@ -46,6 +46,8 @@ class SpeechProcess {
   private exited = false;
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private killDue = false;
+  /** The process said it failed: its exit is not one the host asked for, whoever retired it. */
+  private reportedFailure = false;
   private resolveExit!: () => void;
   readonly whenExited: Promise<void>;
   readonly ready: Promise<void>;
@@ -65,16 +67,17 @@ class SpeechProcess {
       readyReject = reject;
     });
     this.ready.catch(() => {});
-    const loadTimer = setTimeout(() => {
-      readyReject(new Error("The on-device model took too long to load."));
-      this.retire();
-    }, LOAD_TIMEOUT_MS);
-    loadTimer.unref?.();
+    // Forked first: a fork that throws leaves nothing armed behind it.
     this.child = utilityProcess.fork(resolveWorkerPath(), [], {
       serviceName: SPEECH_SERVICE_NAME,
       env: minimalSpawnEnv(),
       stdio: "ignore",
     });
+    const loadTimer = setTimeout(() => {
+      readyReject(new Error("The on-device model took too long to load."));
+      this.retire();
+    }, LOAD_TIMEOUT_MS);
+    loadTimer.unref?.();
     this.child.on("spawn", () => {
       logInfo(`${P} Speech process spawned`, { pid: this.child.pid });
       if (this.killDue) this.killUndrained();
@@ -93,6 +96,7 @@ class SpeechProcess {
         case "error":
           clearTimeout(loadTimer);
           logWarn(`${P} Speech process reported an error`, { type: reply.type });
+          this.reportedFailure = true;
           readyReject(new Error("The on-device model couldn't be loaded."));
           this.retire();
           return;
@@ -111,7 +115,7 @@ class SpeechProcess {
       if (this.killTimer !== null) clearTimeout(this.killTimer);
       readyReject(new Error("The on-device model stopped."));
       this.resolveExit();
-      const expected = this.retiredAt !== null;
+      const expected = this.retiredAt !== null && !this.reportedFailure;
       if (expected) logInfo(`${P} Speech process exited`, { code });
       else logError(`${P} Speech process exited unexpectedly`, undefined, { code });
       this.onExit(this, expected);
@@ -184,6 +188,11 @@ export interface LocalSpeechLease {
   post(message: LocalSpeechWorkerInbound): boolean;
   /** Ends the hold; the model stays loaded for the next dictation until it idles out. */
   release(): void;
+  /**
+   * Ends the hold and stops the process, which stopped answering: the next
+   * dictation starts a fresh one rather than queueing behind it.
+   */
+  abandon(): void;
 }
 
 /**
@@ -198,6 +207,7 @@ export class LocalSpeechHost {
   private lease: { session: number; handlers: LocalSpeechLeaseHandlers } | null = null;
   private nextSession = 1;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private shuttingDown = false;
 
   constructor(private readonly idleMs = LOCAL_SPEECH_IDLE_MS) {}
 
@@ -211,34 +221,44 @@ export class LocalSpeechHost {
    * process to a new session. Rejects when the model can't be loaded.
    */
   async acquire(modelDir: string, handlers: LocalSpeechLeaseHandlers): Promise<LocalSpeechLease> {
+    if (this.shuttingDown) throw new Error("Daintree is quitting");
     this.clearIdle();
     const session = this.nextSession++;
     this.lease = { session, handlers };
-    let current = this.process;
-    if (current && (!current.live || current.modelDir !== modelDir)) {
-      this.retire(current);
-      current = null;
-    }
-    if (!current) {
+    const current = this.process;
+    if (current && (!current.live || current.modelDir !== modelDir)) this.retire(current);
+    if (!this.process) {
       // A process still releasing the same files would double the memory held.
       await this.waitForRetiring(RETIRE_KILL_MS + 1_000);
-      current = new SpeechProcess(
-        modelDir,
-        (message) => this.route(message),
-        (process, expected) => this.handleExit(process, expected)
-      );
-      this.process = current;
+      // Another start may have taken over, or forked, while this one waited.
+      if (this.lease?.session !== session || this.shuttingDown) {
+        throw new Error("Superseded by a newer dictation");
+      }
     }
+    if (!this.process) {
+      try {
+        this.process = new SpeechProcess(
+          modelDir,
+          (message) => this.route(message),
+          (process, expected) => this.handleExit(process, expected)
+        );
+      } catch (error) {
+        this.lease = null;
+        throw error;
+      }
+    }
+    const owner = this.process;
     try {
-      await current.ready;
+      await owner.ready;
     } catch (error) {
       if (this.lease?.session === session) this.lease = null;
-      if (this.process === current) this.retire(current);
+      if (this.process === owner) this.retire(owner);
       this.armIdleIfFree();
       throw error;
     }
-    if (this.lease?.session !== session) throw new Error("Superseded by a newer dictation");
-    const owner = current;
+    if (this.lease?.session !== session || this.process !== owner) {
+      throw new Error("Superseded by a newer dictation");
+    }
     return {
       session,
       post: (message) =>
@@ -248,6 +268,14 @@ export class LocalSpeechHost {
         this.lease = null;
         owner.post({ type: "end", session });
         this.armIdleIfFree();
+      },
+      abandon: () => {
+        if (this.lease?.session !== session) return;
+        this.lease = null;
+        if (this.process === owner) {
+          logWarn(`${P} Speech process stopped answering; starting a fresh one next time`);
+          this.retire(owner);
+        }
       },
     };
   }
@@ -265,6 +293,7 @@ export class LocalSpeechHost {
 
   /** On quit: stop every process and wait up to `timeoutMs` for them to exit. */
   async shutdown(timeoutMs: number): Promise<void> {
+    this.shuttingDown = true;
     this.clearIdle();
     this.lease = null;
     if (this.process) this.retire(this.process);

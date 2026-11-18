@@ -24,9 +24,15 @@ const P = "[VoiceTranscription:local]";
  * left is dropped.
  */
 export const LOCAL_DRAIN_TIMEOUT_MS = 15_000;
+/**
+ * How long a loaded model may take to begin a session. It answers within
+ * about 100 ms; one that hasn't in this long is stuck on earlier work.
+ */
+export const LOCAL_START_TIMEOUT_MS = 10_000;
 
 export const LOCAL_MODEL_MISSING_CODE = "local_model_missing";
 export const LOCAL_MODEL_FAILED_CODE = "local_model_failed";
+export const LOCAL_DRAIN_TIMEOUT_CODE = "local_drain_timeout";
 
 type SessionMessage = Extract<LocalSpeechWorkerOutbound, { session: number }>;
 /** What arrived before the model was ready, in order. */
@@ -73,6 +79,9 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
     timer: ReturnType<typeof setTimeout>;
   } | null = null;
   private sessionStartedAt = 0;
+  private startTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Previews shown for passages not yet completed, by item. */
+  private readonly openPreviews = new Map<string, string>();
 
   constructor(private readonly deps: LocalTranscriptionDeps = DEFAULT_DEPS) {}
 
@@ -150,6 +159,17 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
       session: lease.session,
       promptId: localSpeechPromptId(settings.language),
     });
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null;
+      if (generation !== this.generation || this.ready) return;
+      logWarn(`${P} Session didn't start`, { voiceSessionId: this.voiceSessionId });
+      this.abandonLease();
+      this.fail(generation, {
+        severity: "fatal",
+        code: LOCAL_MODEL_FAILED_CODE,
+        message: "On-device transcription didn't start. Try again.",
+      });
+    }, LOCAL_START_TIMEOUT_MS);
   }
 
   private handle(generation: number, message: SessionMessage): void {
@@ -158,24 +178,24 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
       case "started":
         this.onStarted(message.vad);
         return;
-      case "text":
-        this.emit({
-          type: "delta",
-          text: message.text,
-          itemId: this.itemId(message.segment),
-          replace: true,
-        });
+      case "text": {
+        const itemId = this.itemId(message.segment);
+        this.openPreviews.set(itemId, message.text);
+        this.emit({ type: "delta", text: message.text, itemId, replace: true });
         return;
+      }
       case "speech-start":
         this.emit({ type: "speech_started" });
         return;
       case "segment": {
         const pause = message.reason === "pause";
+        const itemId = this.itemId(message.segment);
+        this.openPreviews.delete(itemId);
         if (message.text === "" && !message.shown) return;
         this.emit({
           type: "complete",
           text: message.text,
-          itemId: this.itemId(message.segment),
+          itemId,
           ...(pause ? { endsAtPause: true, paused: true } : {}),
           ...(pause && message.endOfSpeech ? { endOfSpeech: true } : {}),
         });
@@ -199,6 +219,7 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
     const lease = this.lease;
     if (!lease) return;
     if (!vad) logWarn(`${P} VAD unavailable; passages close only at Enter and stop`);
+    this.clearStartTimer();
     this.ready = true;
     this.emit({ type: "terms_sent", terms: [] });
     this.emit({ type: "status", status: this.intakeClosed ? "finishing" : "recording" });
@@ -266,7 +287,7 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
     });
     const timer = setTimeout(() => {
       logWarn(`${P} Drain timed out`, { voiceSessionId: this.voiceSessionId, ready: this.ready });
-      this.settleDrain();
+      this.settleUnfinished(generation);
     }, LOCAL_DRAIN_TIMEOUT_MS);
     this.drain = { promise, resolve, timer };
     const lease = this.lease;
@@ -277,6 +298,29 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
       this.cleanup();
       this.emit({ type: "status", status: "idle" });
     }
+  }
+
+  /**
+   * The model never finished what it heard. What it showed lands as said and
+   * marked incomplete, so no command is read across the missing words, and a
+   * process that stopped answering is replaced for the next dictation.
+   */
+  private settleUnfinished(generation: number): void {
+    if (generation !== this.generation) return;
+    for (const [itemId, text] of this.openPreviews) {
+      this.emit({ type: "complete", text, itemId, incomplete: true });
+    }
+    this.openPreviews.clear();
+    this.emit({
+      type: "error",
+      error: {
+        severity: "transient",
+        code: LOCAL_DRAIN_TIMEOUT_CODE,
+        message: "On-device transcription didn't finish, so the last words may be missing.",
+      },
+    });
+    this.abandonLease();
+    this.settleDrain();
   }
 
   private settleDrain(): void {
@@ -318,9 +362,22 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
     lease?.release();
   }
 
+  private abandonLease(): void {
+    const lease = this.lease;
+    this.lease = null;
+    lease?.abandon();
+  }
+
+  private clearStartTimer(): void {
+    if (this.startTimer) clearTimeout(this.startTimer);
+    this.startTimer = null;
+  }
+
   /** Ends the session's state; the next start begins clean. */
   private cleanup(): void {
     this.generation++;
+    this.clearStartTimer();
+    this.openPreviews.clear();
     this.releaseLease();
     this.ready = false;
     this.queued = [];

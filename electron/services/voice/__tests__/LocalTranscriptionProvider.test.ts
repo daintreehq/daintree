@@ -12,8 +12,10 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 import {
+  LOCAL_DRAIN_TIMEOUT_CODE,
   LOCAL_DRAIN_TIMEOUT_MS,
   LOCAL_MODEL_FAILED_CODE,
+  LOCAL_START_TIMEOUT_MS,
   LOCAL_MODEL_MISSING_CODE,
   LocalTranscriptionProvider,
 } from "../LocalTranscriptionProvider.js";
@@ -30,8 +32,12 @@ const SETTINGS = { language: "fr", transcriptionProvider: "local" } as VoiceInpu
 
 function harness(options: { readyDir?: string | null; acquireFails?: boolean } = {}) {
   const posted: LocalSpeechWorkerInbound[] = [];
-  const leases: Array<{ session: number; handlers: LocalSpeechLeaseHandlers; released: boolean }> =
-    [];
+  const leases: Array<{
+    session: number;
+    handlers: LocalSpeechLeaseHandlers;
+    released: boolean;
+    abandoned: boolean;
+  }> = [];
   let nextSession = 1;
   let resolveAcquire: (() => void) | null = null;
   const invalidate = vi.fn();
@@ -44,7 +50,7 @@ function harness(options: { readyDir?: string | null; acquireFails?: boolean } =
       acquire: async (_dir, handlers) => {
         if (options.acquireFails) throw new Error("load failed");
         await new Promise<void>((resolve) => (resolveAcquire = resolve));
-        const lease = { session: nextSession++, handlers, released: false };
+        const lease = { session: nextSession++, handlers, released: false, abandoned: false };
         leases.push(lease);
         return {
           session: lease.session,
@@ -55,6 +61,10 @@ function harness(options: { readyDir?: string | null; acquireFails?: boolean } =
           },
           release: () => {
             lease.released = true;
+          },
+          abandon: () => {
+            lease.released = true;
+            lease.abandoned = true;
           },
         };
       },
@@ -252,6 +262,51 @@ describe("LocalTranscriptionProvider", () => {
     await vi.advanceTimersByTimeAsync(LOCAL_DRAIN_TIMEOUT_MS);
     await stopped;
     expect(h.events.at(-1)).toEqual({ type: "status", status: "idle" });
+  });
+
+  it("lands what was shown as incomplete when the worker never finishes, and replaces it", async () => {
+    const h = harness();
+    const session = await h.start();
+    h.deliver({ type: "text", session, segment: 2, text: "and then send" });
+    vi.useFakeTimers();
+    const stopped = h.provider.stopGracefully();
+    await vi.advanceTimersByTimeAsync(LOCAL_DRAIN_TIMEOUT_MS);
+    await stopped;
+    const tail = h.events.slice(-3);
+    expect(tail[0]).toEqual({
+      type: "complete",
+      text: "and then send",
+      itemId: `local-${session}-2`,
+      incomplete: true,
+    });
+    expect(tail[1]).toEqual({
+      type: "error",
+      error: expect.objectContaining({ severity: "transient", code: LOCAL_DRAIN_TIMEOUT_CODE }),
+    });
+    expect(tail[2]).toEqual({ type: "status", status: "idle" });
+    expect(h.leases[0].abandoned).toBe(true);
+  });
+
+  it("gives up on a loaded model that never begins the session, and replaces it", async () => {
+    const h = harness();
+    const started = h.provider.start(SETTINGS, "voice-1");
+    await h.loaded();
+    vi.useFakeTimers();
+    await vi.advanceTimersByTimeAsync(LOCAL_START_TIMEOUT_MS);
+    expect(await started).toMatchObject({ ok: false });
+    expect(h.leases[0].abandoned).toBe(true);
+    expect(h.events.at(-1)).toEqual({ type: "status", status: "error" });
+  });
+
+  it("ignores a loss reported for a session already ended", async () => {
+    const h = harness();
+    await h.start();
+    const firstLease = h.leases[0];
+    h.provider.stop();
+    await h.start();
+    const before = h.events.length;
+    firstLease.handlers.onLost();
+    expect(h.events.length).toBe(before);
   });
 
   it("fails the start with a fix when the model isn't downloaded", async () => {

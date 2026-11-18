@@ -197,6 +197,68 @@ describe("LocalSpeechModelStore", () => {
     await expect(stat(path.join(root, `${REVISION}.download`))).rejects.toThrow();
   });
 
+  it("hands no dictation the folder, and starts no download, while a removal runs", async () => {
+    const { fetch } = fakeFetch();
+    const models = store(fetch);
+    await models.download();
+    let release!: () => void;
+    const releasing = new Promise<void>((resolve) => (release = resolve));
+    const removal = models.remove(() => releasing);
+    expect(await models.readyDir()).toBeNull();
+    await models.download();
+    expect(fetch).toHaveBeenCalledTimes(FILES.length);
+    release();
+    await removal;
+    expect(models.status().state).toBe("absent");
+  });
+
+  it("never lets a check begun before a removal report on the files it removed", async () => {
+    const { fetch } = fakeFetch();
+    await store(fetch).download();
+    const models = store(fetch);
+    const checking = models.check();
+    await models.remove();
+    await checking;
+    expect(statuses.at(-1)).toMatchObject({ state: "absent" });
+    expect(models.status().state).toBe("absent");
+  });
+
+  it("checks the folder again when a removal fails, so the status says what is left", async () => {
+    const { fetch } = fakeFetch();
+    const models = store(fetch);
+    await models.download();
+    await expect(
+      models.remove(async () => {
+        throw new Error("Dictation is using the on-device model");
+      })
+    ).rejects.toThrow(/using/);
+    expect(models.status().state).toBe("ready");
+    expect(await models.readyDir()).toBe(path.join(root, REVISION));
+  });
+
+  it("starts a file again when a resumed response begins somewhere else", async () => {
+    const { fetch: inner, requests } = fakeFetch({ "encoder.onnx.data": [{ cutAfter: 1000 }] });
+    let resumed = 0;
+    const fetch = vi.fn(async (url: string, init: RequestInit) => {
+      const response = await inner(url, init);
+      if (response.status === 206 && resumed++ === 0) {
+        return new Response(response.body, {
+          status: 206,
+          headers: { "content-range": "bytes 0-4095/4096" },
+        });
+      }
+      return response;
+    });
+    const models = store(fetch as unknown as ReturnType<typeof fakeFetch>["fetch"]);
+    await models.download();
+    await models.download();
+    expect(models.status().state).toBe("failed");
+    await models.download();
+    expect(models.status().state).toBe("ready");
+    const tries = requests.filter((r) => r.name === "encoder.onnx.data").map((r) => r.range);
+    expect(tries).toEqual([null, "bytes=1000-", null]);
+  });
+
   it("never fetches on a platform that can't run it", async () => {
     const { fetch } = fakeFetch();
     const models = store(fetch, false);

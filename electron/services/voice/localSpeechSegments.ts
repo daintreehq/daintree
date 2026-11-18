@@ -33,9 +33,10 @@ export const SEGMENT_CAP_MS = 15_000;
 /**
  * The model writes a sentence's closing punctuation only once it hears what
  * comes next, so a passage after a pause can open with the last one's comma
- * or full stop; it belongs to the passage already completed.
+ * or full stop; it belongs to the passage already completed. An ASCII mark
+ * goes only where a space or the end follows it, so `.env` keeps its dot.
  */
-const LEADING_CLOSERS = /^[\s.,;:!?…。、，．！？；：]+/u;
+const LEADING_CLOSERS = /^(?:\s|[.,;:!?…](?=[\s.,;:!?…]|$)|[。、，．！？；：])+/u;
 
 export function segmentText(vocabulary: SegmentVocabulary, ids: readonly number[]): string {
   return vocabulary.decode(ids).replace(/\s+/g, " ").replace(LEADING_CLOSERS, "").trimEnd();
@@ -53,6 +54,11 @@ export class LocalSpeechSegmenter {
     private readonly vocabulary: SegmentVocabulary,
     private readonly capMs = SEGMENT_CAP_MS
   ) {}
+
+  /** Where the next pause waiting on decoding closes its passage; null when none waits. */
+  nextCloseAt(): number | null {
+    return this.pendingCloses[0] ?? null;
+  }
 
   /** A pause ended speech: close the open passage at `atMs` once decoding passes it. */
   closeAt(atMs: number): void {

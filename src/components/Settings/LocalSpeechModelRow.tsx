@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ProgressBar } from "@/components/ui/ProgressBar";
@@ -17,28 +17,49 @@ import { SettingsRow } from "./SettingsGroup";
 
 const MODEL_NAME = "NVIDIA Nemotron 3.5 ASR";
 
+export interface LocalSpeechModelState {
+  status: LocalSpeechModelStatus | null;
+  /** The last read from main failed; `retry` reads again. */
+  readFailed: boolean;
+  retry: () => void;
+}
+
 /**
  * The status this view last heard, kept current by every push. Read from main
  * once `active` (on-device transcription is chosen), since that read checks
  * the installed files.
  */
-export function useLocalSpeechModelStatus(active = true): LocalSpeechModelStatus | null {
+export function useLocalSpeechModelStatus(active = true): LocalSpeechModelState {
   const [status, setStatus] = useState<LocalSpeechModelStatus | null>(getLocalModelStatus);
+  const [readFailed, setReadFailed] = useState(false);
+  const [reads, setReads] = useState(0);
   useEffect(() => {
     if (!active) return;
-    const unsubscribe = subscribeLocalModelStatus(setStatus);
+    let current = true;
+    const unsubscribe = subscribeLocalModelStatus((next) => {
+      setStatus(next);
+      setReadFailed(false);
+    });
     readLocalModelStatus()
       .then((read) => {
+        if (!current) return;
         if (read) setStatus(read);
+        setReadFailed(false);
       })
       .catch((error: unknown) => {
+        if (!current) return;
+        setReadFailed(true);
         logWarn("Couldn't read the on-device model's status", {
           error: error instanceof Error ? error.name : "unknown",
         });
       });
-    return unsubscribe;
-  }, [active]);
-  return status;
+    return () => {
+      current = false;
+      unsubscribe();
+    };
+  }, [active, reads]);
+  const retry = useCallback(() => setReads((n) => n + 1), []);
+  return { status, readFailed, retry };
 }
 
 export function describeLocalModel(status: LocalSpeechModelStatus | null): string {
@@ -62,28 +83,51 @@ export function describeLocalModel(status: LocalSpeechModelStatus | null): strin
   }
 }
 
-export function LocalSpeechModelRow({ dictating }: { dictating: boolean }) {
-  const status = useLocalSpeechModelStatus();
+/** What Delete takes away: the installed model, or what a download left. */
+function deletable(status: LocalSpeechModelStatus | null): "model" | "download" | null {
+  if (!status) return null;
+  if (status.state === "ready") return "model";
+  if (status.state === "failed") return "model";
+  if (status.state === "absent" && status.receivedBytes > 0) return "download";
+  return null;
+}
+
+export function LocalSpeechModelRow({
+  model,
+  dictating,
+}: {
+  model: LocalSpeechModelState;
+  dictating: boolean;
+}) {
+  const { status, readFailed, retry } = model;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [removeFailed, setRemoveFailed] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const run = async (action: () => Promise<unknown>, failed: string) => {
+    setFailure(null);
+    try {
+      await action();
+    } catch {
+      setFailure(failed);
+    }
+  };
 
   const handleRemove = async () => {
     setRemoving(true);
-    setRemoveFailed(false);
-    try {
-      await removeLocalModel();
-    } catch {
-      setRemoveFailed(true);
-    } finally {
-      setRemoving(false);
-      setConfirmOpen(false);
-    }
+    await run(
+      removeLocalModel,
+      dictating ? "Stop dictating, then delete the model." : "Couldn't delete the model. Try again."
+    );
+    setRemoving(false);
+    setConfirmOpen(false);
   };
 
   const state = status?.state ?? "checking";
   const size = formatBytes(status?.totalBytes ?? 0);
+  const received = formatBytes(status?.receivedBytes ?? 0);
   const resumable = state === "absent" && (status?.receivedBytes ?? 0) > 0;
+  const toDelete = deletable(status);
 
   return (
     <>
@@ -93,24 +137,42 @@ export function LocalSpeechModelRow({ dictating }: { dictating: boolean }) {
         onConfirm={() => void handleRemove()}
         onClose={() => setConfirmOpen(false)}
         isConfirmLoading={removing}
-        title="Delete the on-device model?"
-        description={`Its ${size} are deleted from this computer. On-device dictation stops until you download it again.`}
-        confirmLabel="Delete model"
+        title={
+          toDelete === "download" ? "Delete the partial download?" : "Delete the on-device model?"
+        }
+        description={
+          toDelete === "download"
+            ? `The ${received} downloaded so far are deleted from this computer. A later download starts from the beginning.`
+            : `Its ${size} are deleted from this computer. On-device dictation stops until you download it again.`
+        }
+        confirmLabel={toDelete === "download" ? "Delete download" : "Delete model"}
         zIndex="nested"
       />
       <SettingsRow
         id="voice-local-model"
         label="On-device model"
         layout="stacked"
-        description={<span role="status">{describeLocalModel(status)}</span>}
-        error={
-          removeFailed
-            ? dictating
-              ? "Stop dictating, then delete the model."
-              : "Couldn't delete the model. Try again."
-            : undefined
+        description={
+          <span role="status">
+            {readFailed && !status
+              ? "Couldn't read the model's status."
+              : describeLocalModel(status)}
+          </span>
         }
+        error={failure ?? undefined}
         control={({ disabled, descriptionId }) => {
+          if (readFailed && !status) {
+            return (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={retry}
+                aria-describedby={descriptionId}
+              >
+                Retry
+              </Button>
+            );
+          }
           if (state === "unsupported" || state === "checking") return null;
           if (state === "downloading") {
             return (
@@ -120,12 +182,14 @@ export function LocalSpeechModelRow({ dictating }: { dictating: boolean }) {
                   value={status?.receivedBytes ?? 0}
                   max={status?.totalBytes ?? 1}
                   label="On-device model download"
-                  valueText={`${formatBytes(status?.receivedBytes ?? 0)} of ${size}`}
+                  valueText={`${received} of ${size}`}
                 />
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => void cancelLocalModelDownload()}
+                  onClick={() =>
+                    void run(cancelLocalModelDownload, "Couldn't cancel the download. Try again.")
+                  }
                   aria-describedby={descriptionId}
                 >
                   Cancel download
@@ -133,9 +197,26 @@ export function LocalSpeechModelRow({ dictating }: { dictating: boolean }) {
               </div>
             );
           }
-          if (state === "ready") {
-            return (
-              <div className="flex flex-wrap items-center gap-2">
+          return (
+            <div className="flex flex-wrap items-center gap-2">
+              {state !== "ready" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    void run(downloadLocalModel, "Couldn't start the download. Try again.")
+                  }
+                  disabled={disabled}
+                  aria-describedby={descriptionId}
+                >
+                  {state === "failed"
+                    ? "Retry"
+                    : resumable
+                      ? "Resume download"
+                      : `Download ${size}`}
+                </Button>
+              )}
+              {toDelete && (
                 <Button
                   size="sm"
                   variant="ghost-danger"
@@ -144,22 +225,9 @@ export function LocalSpeechModelRow({ dictating }: { dictating: boolean }) {
                   loading={removing}
                   aria-describedby={descriptionId}
                 >
-                  Delete model
+                  {toDelete === "download" ? "Delete download" : "Delete model"}
                 </Button>
-              </div>
-            );
-          }
-          return (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void downloadLocalModel()}
-                disabled={disabled}
-                aria-describedby={descriptionId}
-              >
-                {state === "failed" ? "Retry" : resumable ? "Resume download" : `Download ${size}`}
-              </Button>
+              )}
             </div>
           );
         }}

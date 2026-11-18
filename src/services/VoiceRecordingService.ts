@@ -1764,15 +1764,15 @@ class VoiceRecordingService {
     this.unsubscribers.push(() => window.removeEventListener("blur", handlePttBlur));
 
     // On-device transcription is configured once its model is ready, which a
-    // download in any view can change.
+    // download or a deletion in any view can change. The provider is read
+    // afresh: another view may have chosen on-device since this one last read.
     let localModelReady = isLocalModelReady();
     this.unsubscribers.push(
       subscribeLocalModelStatus((status) => {
         const ready = status.state === "ready";
         if (ready === localModelReady) return;
         localModelReady = ready;
-        const provider = this.transcriptionProvider;
-        if (provider && transcribesOnDevice(provider)) void this.refreshConfiguration();
+        void this.refreshConfiguration().catch(() => false);
       })
     );
 
@@ -1781,7 +1781,14 @@ class VoiceRecordingService {
   }
 
   async refreshConfiguration(): Promise<boolean> {
-    return this.applySettings(await window.electron.voiceInput.getSettings());
+    const settings = await window.electron.voiceInput.getSettings();
+    // A start in a fresh view, or during the launch's check of the model's
+    // files, waits for main's answer rather than taking "not yet" for "no".
+    if (settings.enabled && transcribesOnDevice(settings.transcriptionProvider)) {
+      const known = getLocalModelStatus();
+      if (!known || known.state === "checking") await readLocalModelStatus().catch(() => null);
+    }
+    return this.applySettings(settings);
   }
 
   private applySettings(settings: VoiceInputSettings): boolean {
