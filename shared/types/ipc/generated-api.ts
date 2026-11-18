@@ -1779,35 +1779,6 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["plugin-process:list"]["args"]
     ): Promise<IpcInvokeMap["plugin-process:list"]["result"]>;
   };
-  portal: {
-    closeTab(
-      ...args: IpcInvokeMap["portal:close-tab"]["args"]
-    ): Promise<IpcInvokeMap["portal:close-tab"]["result"]>;
-    create(
-      ...args: IpcInvokeMap["portal:create"]["args"]
-    ): Promise<IpcInvokeMap["portal:create"]["result"]>;
-    goBack(
-      ...args: IpcInvokeMap["portal:go-back"]["args"]
-    ): Promise<IpcInvokeMap["portal:go-back"]["result"]>;
-    goForward(
-      ...args: IpcInvokeMap["portal:go-forward"]["args"]
-    ): Promise<IpcInvokeMap["portal:go-forward"]["result"]>;
-    hide(
-      ...args: IpcInvokeMap["portal:hide"]["args"]
-    ): Promise<IpcInvokeMap["portal:hide"]["result"]>;
-    navigate(
-      ...args: IpcInvokeMap["portal:navigate"]["args"]
-    ): Promise<IpcInvokeMap["portal:navigate"]["result"]>;
-    reload(
-      ...args: IpcInvokeMap["portal:reload"]["args"]
-    ): Promise<IpcInvokeMap["portal:reload"]["result"]>;
-    resize(
-      ...args: IpcInvokeMap["portal:resize"]["args"]
-    ): Promise<IpcInvokeMap["portal:resize"]["result"]>;
-    show(
-      ...args: IpcInvokeMap["portal:show"]["args"]
-    ): Promise<IpcInvokeMap["portal:show"]["result"]>;
-  };
   portForwards: {
     forward(
       ...args: IpcInvokeMap["port-forwards:forward"]["args"]

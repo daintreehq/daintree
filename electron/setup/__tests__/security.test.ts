@@ -24,7 +24,6 @@ function createMockSession() {
 const {
   defaultSession,
   browserSession,
-  portalSession,
   daintreeAppSession,
   sessionCreatedListeners,
   appMock,
@@ -33,7 +32,6 @@ const {
   return {
     defaultSession: createMockSession(),
     browserSession: createMockSession(),
-    portalSession: createMockSession(),
     daintreeAppSession: createMockSession(),
     sessionCreatedListeners: [] as Array<
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -65,7 +63,6 @@ vi.mock("electron", () => ({
     defaultSession,
     fromPartition: vi.fn((partition: string) => {
       if (partition === "persist:browser") return browserSession;
-      if (partition === "persist:portal") return portalSession;
       if (partition === "persist:daintree") return daintreeAppSession;
       return createMockSession();
     }),
@@ -100,8 +97,9 @@ import { observeIpcEnvelopeRejections } from "../../ipc/envelopeRejections.js";
 import {
   buildBrowserPartition,
   partitionProjectKey,
-  remotePortalPartition,
+  remotePartitionKeyPrefix,
 } from "../../../shared/utils/partitionUtils.js";
+import { session } from "electron";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockWebContents = {} as any;
@@ -134,13 +132,11 @@ describe("setupPermissionLockdown", () => {
     _resetPermissionLockdownForTesting();
   });
 
-  it("configures handlers on default, portal, and daintree-app sessions eagerly", () => {
+  it("configures handlers on default and daintree-app sessions eagerly", () => {
     setupPermissionLockdown();
 
     expect(defaultSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(defaultSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
-    expect(portalSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
-    expect(portalSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     expect(daintreeAppSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(daintreeAppSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
   });
@@ -219,12 +215,7 @@ describe("setupPermissionLockdown", () => {
       expect(handler(mockWebContents, "clipboard-read", "http://localhost:3000", {})).toBe(false);
       expect(handler(mockWebContents, "media", "http://localhost:3000", {})).toBe(false);
     });
-    it("gives a host's portal session the portal's allowance, and a host's project panel none", () => {
-      const portal = getRequestHandler(
-        lockdownDynamicBrowserSession(remotePortalPartition("studio"))
-      );
-      expect(testPermissionRequest(portal, "clipboard-sanitized-write")).toBe(true);
-      expect(testPermissionRequest(portal, "clipboard-read")).toBe(false);
+    it("grants a host's project panel nothing", () => {
       const panel = getRequestHandler(
         lockdownDynamicBrowserSession(
           buildBrowserPartition(partitionProjectKey("-portal", "studio"))
@@ -234,27 +225,30 @@ describe("setupPermissionLockdown", () => {
     });
   });
 
-  describe("portal session", () => {
-    it("allows clipboard-sanitized-write", () => {
+  describe("retired Portal sessions", () => {
+    it("never opens persist:portal", () => {
       setupPermissionLockdown();
-      const handler = getRequestHandler(portalSession);
-      expect(testPermissionRequest(handler, "clipboard-sanitized-write")).toBe(true);
+      const opened = vi.mocked(session.fromPartition).mock.calls.map(([partition]) => partition);
+      expect(opened).toContain("persist:daintree");
+      expect(opened).not.toContain("persist:portal");
     });
 
-    it("denies clipboard-read", () => {
+    it.each([
+      ["persist:portal"],
+      [buildBrowserPartition(`${remotePartitionKeyPrefix("studio")}-portal`)],
+    ])("default-locks %s like any other untrusted session", (partition) => {
       setupPermissionLockdown();
-      const handler = getRequestHandler(portalSession);
-      expect(testPermissionRequest(handler, "clipboard-read")).toBe(false);
-    });
+      const retired = createMockSession();
+      Object.defineProperty(retired, "partition", { value: partition });
 
-    it("check handler allows only clipboard-sanitized-write", () => {
-      setupPermissionLockdown();
-      const handler = getCheckHandler(portalSession);
-      expect(handler(mockWebContents, "clipboard-sanitized-write", "https://portal.ai", {})).toBe(
-        true
+      sessionCreatedListeners[0](retired);
+
+      expect(testPermissionRequest(getRequestHandler(retired), "clipboard-sanitized-write")).toBe(
+        false
       );
-      expect(handler(mockWebContents, "clipboard-read", "https://portal.ai", {})).toBe(false);
-      expect(handler(mockWebContents, "media", "https://portal.ai", {})).toBe(false);
+      expect(getCheckHandler(retired)(mockWebContents, "clipboard-sanitized-write", "", {})).toBe(
+        false
+      );
     });
   });
 
@@ -336,17 +330,17 @@ describe("setupPermissionLockdown", () => {
       expect(unknownSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     });
 
-    it("skips portal partition in session-created", () => {
+    it("skips a legacy per-project partition in session-created", () => {
       setupPermissionLockdown();
-      const portalSession = createMockSession();
-      Object.defineProperty(portalSession, "partition", {
-        value: "persist:portal",
+      const projectSession = createMockSession();
+      Object.defineProperty(projectSession, "partition", {
+        value: "persist:project-legacy",
       });
 
-      sessionCreatedListeners[0](portalSession);
+      sessionCreatedListeners[0](projectSession);
 
-      expect(portalSession.setPermissionRequestHandler).not.toHaveBeenCalled();
-      expect(portalSession.setPermissionCheckHandler).not.toHaveBeenCalled();
+      expect(projectSession.setPermissionRequestHandler).not.toHaveBeenCalled();
+      expect(projectSession.setPermissionCheckHandler).not.toHaveBeenCalled();
     });
   });
 

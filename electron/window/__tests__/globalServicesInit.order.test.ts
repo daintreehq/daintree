@@ -491,6 +491,7 @@ import { startEventLoopLagMonitor } from "../../utils/performance.js";
 import { startAppMetricsMonitor } from "../../services/ProcessMemoryMonitor.js";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
+import { sendToRenderer } from "../../ipc/handlers.js";
 import { store } from "../../store.js";
 import { releaseDeferredQueueOnWindowClosed } from "../lastWindowClosed.js";
 import { projectVisibilityClock } from "../../services/projectVisibilityClock.js";
@@ -1051,6 +1052,41 @@ describe("initGlobalServices task ordering", () => {
       idleAutoCloseServiceMock.sleepUnderMemoryPressure.mockResolvedValueOnce(3);
       await expect(actions.hibernateIdleProjects()).resolves.toBe(3);
       expect(idleAutoCloseServiceMock.sleepUnderMemoryPressure).toHaveBeenCalledTimes(1);
+    } finally {
+      getStopAppMetricsMonitor()?.();
+      setStopAppMetricsMonitor(previousStop);
+    }
+  });
+
+  it("asks every live window to drop its hidden webviews, and no closed one", async () => {
+    const previousStop = getStopAppMetricsMonitor();
+    setStopAppMetricsMonitor(null);
+    vi.mocked(startAppMetricsMonitor).mockClear();
+
+    try {
+      const liveA = { browserWindow: { isDestroyed: () => false } };
+      const closed = { browserWindow: { isDestroyed: () => true } };
+      const liveB = { browserWindow: { isDestroyed: () => false } };
+      const windows = [liveA, closed, liveB];
+      const fakeRegistry = {
+        all: () => windows,
+        size: windows.length,
+      } as unknown as WindowRegistry;
+      await initGlobalServices(fakeRegistry);
+      registeredTaskRuns.get("app-metrics-monitor")!();
+      const actions = vi.mocked(startAppMetricsMonitor).mock.calls[0]![0]!;
+      vi.mocked(sendToRenderer).mockClear();
+
+      await actions.destroyHiddenWebviews(1);
+      await actions.destroyHiddenWebviews(2);
+
+      const push = (tier: 1 | 2) => ({ name: "window:destroy-hidden-webviews", payload: { tier } });
+      expect(vi.mocked(sendToRenderer).mock.calls).toEqual([
+        [liveA.browserWindow, CHANNELS.EVENTS_PUSH, push(1)],
+        [liveB.browserWindow, CHANNELS.EVENTS_PUSH, push(1)],
+        [liveA.browserWindow, CHANNELS.EVENTS_PUSH, push(2)],
+        [liveB.browserWindow, CHANNELS.EVENTS_PUSH, push(2)],
+      ]);
     } finally {
       getStopAppMetricsMonitor()?.();
       setStopAppMetricsMonitor(previousStop);

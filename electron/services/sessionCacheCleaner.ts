@@ -10,6 +10,8 @@ import { remotePartitionKeyPrefix } from "../../shared/utils/partitionUtils.js";
 const CACHE_DIR_NAMES = ["Cache", "Code Cache"] as const;
 const DETACHED_MARKER = ".daintree-clearing-";
 const DETACHED_DIR_PATTERN = /^(Cache|Code Cache)\.daintree-clearing-[0-9a-f]+$/;
+/** The tail a whole-partition wipe gives the directory it detaches. */
+const DETACHED_PARTITION_SUFFIX = /\.daintree-clearing-[0-9a-f]{12}$/;
 
 export interface ClearSessionCachesResult {
   /**
@@ -44,7 +46,7 @@ export function trackSession(ses: Electron.Session): void {
  * session enumeration API, and `session.fromPartition()` permanently creates a
  * BrowserContext, so this registry is the only safe way to know which
  * partitions have an open disk-cache backend. Must run before `app.whenReady`
- * so the eagerly created `persist:daintree` / `persist:portal` sessions are seen.
+ * so the eagerly created `persist:daintree` session is seen.
  */
 export function startSessionCacheTracking(): () => void {
   if (stopTracking) return stopTracking;
@@ -202,9 +204,10 @@ async function clearPartitionDir(
 }
 
 /**
- * The partition directory names a host's browser, dev-preview and portal
- * sessions use. The prefix ends at the host part's closing `__`, which no host
- * part holds, so one host's partitions never match another's.
+ * The partition directory names a host's browser and dev-preview sessions use
+ * (and the Portal session its windows had before #17257). The prefix ends at
+ * the host part's closing `__`, which no host part holds, so one host's
+ * partitions never match another's.
  */
 export function isHostPartitionDirName(name: string, hostId: string): boolean {
   const prefix = remotePartitionKeyPrefix(hostId);
@@ -217,7 +220,46 @@ export function isHostPartitionDirName(name: string, hostId: string): boolean {
  * through the Session API; one not open this run has its directory removed,
  * detached first so a session opening meanwhile starts empty.
  */
-export async function clearHostPartitions(hostId: string): Promise<ClearSessionCachesResult> {
+export function clearHostPartitions(hostId: string): Promise<ClearSessionCachesResult> {
+  return wipePartitionDirs((name) => isHostPartitionDirName(name, hostId));
+}
+
+/**
+ * The retired Portal's sessions (#17257), as whole directory names: this
+ * machine's `persist:portal`, and the `persist:browser-remote__<host>__-portal`
+ * a window attached to a host used, its host part as `partitionPart` wrote it:
+ * an escape of at most 64 characters, or `-` and its hash in hex. No browser
+ * panel's partition ends `__-portal`, since a project part is an escape (no
+ * `-`) or `-` and hex. A name may carry the suffix of an earlier detach whose
+ * removal failed.
+ */
+const RETIRED_PORTAL_DIR_PATTERN =
+  /^(?:portal|browser-remote__([a-z0-9_]+|-(?:0|[1-9a-f][0-9a-f]{0,13}))__-portal)(?:\.daintree-clearing-[0-9a-f]{12})*$/;
+const ESCAPED_PART_PATTERN = /^(?:[a-z0-9]|_[0-9a-f]{4})+$/;
+const MAX_ESCAPED_HOST_PART = 64;
+
+export function isRetiredPortalPartitionDirName(name: string): boolean {
+  const match = RETIRED_PORTAL_DIR_PATTERN.exec(name);
+  if (!match) return false;
+  const hostPart = match[1];
+  if (hostPart === undefined || hostPart.startsWith("-")) return true;
+  return hostPart.length <= MAX_ESCAPED_HOST_PART && ESCAPED_PART_PATTERN.test(hostPart);
+}
+
+/**
+ * Wipe the retired Portal sessions, which still hold web-chat sign-ins
+ * (#17257). Nothing opens them any more, so a directory still present is one
+ * no launch has cleared yet: the first launch after upgrading removes them,
+ * and later launches find nothing to do, or finish what an earlier one could
+ * not. Every other partition is left alone.
+ */
+export function clearRetiredPortalPartitions(): Promise<ClearSessionCachesResult> {
+  return wipePartitionDirs(isRetiredPortalPartitionDirName);
+}
+
+async function wipePartitionDirs(
+  matches: (dirName: string) => boolean
+): Promise<ClearSessionCachesResult> {
   const result: ClearSessionCachesResult = { cleared: 0, failed: 0 };
   const partitionsRoot = path.join(app.getPath("sessionData"), "Partitions");
   let entries: fs.Dirent[];
@@ -233,7 +275,7 @@ export async function clearHostPartitions(hostId: string): Promise<ClearSessionC
   for (const entry of entries) {
     const isSymlink = entry.isSymbolicLink();
     if (!entry.isDirectory() && !isSymlink) continue;
-    if (!isHostPartitionDirName(entry.name, hostId)) continue;
+    if (!matches(entry.name)) continue;
     const partitionDir = path.join(partitionsRoot, entry.name);
     const live = findLiveSession(partitionDir);
     if (!live && isSymlink) {
@@ -252,10 +294,14 @@ export async function clearHostPartitions(hostId: string): Promise<ClearSessionC
       }
       continue;
     }
-    // Synchronous with the liveness check: no session can open in between.
-    const detached = `${partitionDir}${DETACHED_MARKER}${randomBytes(6).toString("hex")}`;
+    // Synchronous with the liveness check: no session can open in between. A
+    // directory an earlier wipe detached is removed where it is, so a removal
+    // that keeps failing never grows its name past what the filesystem allows.
+    const detached = DETACHED_PARTITION_SUFFIX.test(entry.name)
+      ? partitionDir
+      : `${partitionDir}${DETACHED_MARKER}${randomBytes(6).toString("hex")}`;
     try {
-      fs.renameSync(partitionDir, detached);
+      if (detached !== partitionDir) fs.renameSync(partitionDir, detached);
       await fs.promises.rm(detached, {
         recursive: true,
         force: true,

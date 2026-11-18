@@ -43,20 +43,6 @@ describe("FocusedPanelTracker", () => {
     expect(kindOf(tracker)).toBe("browser");
   });
 
-  it("lets Portal focus override the view's panel until it blurs", () => {
-    const tracker = new FocusedPanelTracker();
-    tracker.setFocusedWindow(W1);
-    tracker.report(10, W1, "p1", { kind: "terminal", worktreeId: "w" });
-
-    tracker.setPortalFocused(W1, true);
-    expect(tracker.getCurrent()).toEqual({
-      panel: { kind: "portal", agent: false, worktreeId: null },
-      workspaceId: null,
-    });
-    tracker.setPortalFocused(W1, false);
-    expect(kindOf(tracker)).toBe("terminal");
-  });
-
   it("follows the view holding native focus, not the newest report", () => {
     let focused = 11;
     const tracker = new FocusedPanelTracker({ isFocused: (id) => id === focused });
@@ -121,7 +107,6 @@ describe("FocusedPanelTracker", () => {
     expect(kindOf(tracker)).toBeNull();
 
     tracker.report(10, W1, "p1", { kind: "file" });
-    tracker.setPortalFocused(W1, true);
     tracker.removeWindow(W1);
     tracker.setFocusedWindow(W1);
     expect(kindOf(tracker)).toBeNull();
@@ -176,12 +161,28 @@ describe("FocusedPanelTracker", () => {
       expect(kindOf(tracker)).toBe("diff");
     });
 
-    it("treats this machine's Portal gaining focus as its newest activity", () => {
+    it("never attributes a remote screen's portal report to its project", () => {
       const tracker = new FocusedPanelTracker();
-      tracker.setFocusedWindow(W1);
+      tracker.reportRemote(-1, "pa", { kind: "portal", worktreeId: "w" }, true);
+
+      expect(tracker.getCurrent()).toEqual({
+        panel: { kind: "portal", agent: false, worktreeId: null },
+        workspaceId: null,
+      });
+    });
+
+    it("falls back to a focused remote screen once the newer local window closes", () => {
+      const tracker = new FocusedPanelTracker();
       tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
-      tracker.setPortalFocused(W1, true);
-      expect(kindOf(tracker)).toBe("portal");
+      tracker.setFocusedWindow(W1);
+      tracker.report(10, W1, "p1", { kind: "diff" });
+      tracker.report(20, W2, "p2", { kind: "browser" });
+      expect(kindOf(tracker)).toBe("diff");
+
+      tracker.removeWindow(W2);
+      expect(kindOf(tracker)).toBe("diff");
+      tracker.removeWindow(W1);
+      expect(kindOf(tracker)).toBe("terminal");
     });
   });
 });

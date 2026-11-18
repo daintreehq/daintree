@@ -2014,7 +2014,7 @@ describe("voiceInput — a session live in another view (#14601)", () => {
       expect(winA.show).toHaveBeenCalled();
       expect(winA.focus).toHaveBeenCalled();
       expect(winB.focus).not.toHaveBeenCalled();
-      // A browser panel or portal tab there may hold the keyboard: a view's own
+      // A browser panel there may hold the keyboard: a view's own
       // focus moves can't take it from another view.
       expect(ownerA.focus).toHaveBeenCalled();
       // The owner's stop request carries the return; a reveal on top would

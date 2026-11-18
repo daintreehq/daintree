@@ -669,13 +669,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     notifyFirstInteractive(): Promise<void>;
     notifyViewPainted(): Promise<void>;
     notifyWarmViewPainted(): Promise<void>;
-    /**
-     * `portalActionId` names the portal action the same keystroke is bound to,
-     * for main-intercepted keys the renderer resolves by its own focus scope.
-     */
-    onMenuAction(
-      callback: (payload: { actionId: string; args?: unknown; portalActionId?: string }) => void
-    ): () => void;
+    onMenuAction(callback: (payload: { actionId: string; args?: unknown }) => void): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
     /** This machine's saved grid layout, after any view changes it (#14700). */
@@ -1462,16 +1456,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // onImported is a renderer-only subscription (#11889).
   configBundle: GeneratedElectronAPI["configBundle"] & {
     onImported(callback: () => void): () => void;
-  };
-  // create / show / hide / resize / navigate / goBack / goForward / reload /
-  // closeTab come from GeneratedElectronAPI; the rest are
-  // renderer-only subscriptions.
-  portal: GeneratedElectronAPI["portal"] & {
-    onNavEvent(callback: (data: import("../portal.js").PortalNavEvent) => void): () => void;
-    onFocus(callback: () => void): () => void;
-    onBlur(callback: () => void): () => void;
-    onTabEvicted(callback: (data: { tabId: string }) => void): () => void;
-    onTabsEvicted(callback: (payload: { tabIds: string[] }) => void): () => void;
   };
   webview: {
     /** Freeze or unfreeze a webview's JS execution via CDP Page.setWebLifecycleState */
@@ -3049,7 +3033,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /**
      * Fire-and-forget: the kind of panel holding DOM focus in this project
      * view, or `kind: null` when none does. Main combines it with window and
-     * Portal focus for `host.onDidChangeFocusedPanel` (#13221).
+     * project-view focus for `host.onDidChangeFocusedPanel` (#13221).
      */
     reportFocusedPanel(report: import("../plugin.js").PluginFocusedPanel): void;
     /**

@@ -1,6 +1,5 @@
 import type { BrowserWindow, MessagePortMain } from "electron";
 import type { EventBuffer } from "../services/EventBuffer.js";
-import type { PortalManager } from "../services/PortalManager.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { SurfaceViewManager } from "./SurfaceViewManager.js";
@@ -22,7 +21,6 @@ export interface FocusTrackingApp {
 }
 
 export interface WindowServices {
-  portalManager?: PortalManager;
   eventBuffer?: EventBuffer;
   projectSwitchService?: ProjectSwitchService;
   projectViewManager?: ProjectViewManager;

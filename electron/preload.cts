@@ -69,7 +69,6 @@ import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.
 import { buildConfigBundlePreloadBindings } from "./ipc/handlers/configBundle.preload.js";
 import { buildHelpPreloadBindings } from "./ipc/handlers/help.preload.js";
 import { buildEventInspectorPreloadBindings } from "./ipc/handlers/eventInspector.preload.js";
-import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
 import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.js";
@@ -1514,9 +1513,8 @@ function buildElectronApi(): ElectronAPI {
 
       notifyWarmViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_WARM_PAINTED),
 
-      onMenuAction: (
-        callback: (payload: { actionId: string; args?: unknown; portalActionId?: string }) => void
-      ) => _typedOn(CHANNELS.MENU_ACTION, callback),
+      onMenuAction: (callback: (payload: { actionId: string; args?: unknown }) => void) =>
+        _typedOn(CHANNELS.MENU_ACTION, callback),
 
       reloadConfig: () => _unwrappingInvoke(CHANNELS.APP_RELOAD_CONFIG),
 
@@ -2383,30 +2381,6 @@ function buildElectronApi(): ElectronAPI {
 
       onSupportChanged: (callback: (data: { enabled: boolean }) => void) =>
         _typedOn(CHANNELS.ACCESSIBILITY_SUPPORT_CHANGED, callback),
-    },
-
-    // Portal API
-    portal: {
-      ...buildPortalPreloadBindings(_unwrappingInvoke),
-
-      onNavEvent: (
-        callback: (data: {
-          tabId: string;
-          title: string;
-          url: string;
-          canGoBack: boolean;
-          canGoForward: boolean;
-        }) => void
-      ) => _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
-
-      onFocus: (callback: () => void) => _typedOn(CHANNELS.PORTAL_FOCUS, callback),
-
-      onBlur: (callback: () => void) => _typedOn(CHANNELS.PORTAL_BLUR, callback),
-
-      onTabEvicted: (callback: (data: { tabId: string }) => void) =>
-        _typedOn(CHANNELS.PORTAL_TAB_EVICTED, callback),
-      onTabsEvicted: (callback: (payload: { tabIds: string[] }) => void) =>
-        _typedOn(CHANNELS.PORTAL_TABS_EVICTED, callback),
     },
 
     // Webview API

@@ -20,7 +20,6 @@ import { registerGlobalEnvHandlers } from "./handlers/globalEnv.js";
 import { registerTerminalLayoutHandlers } from "./handlers/terminalLayout.js";
 import { registerProjectInRepoSettingsHandlers } from "./handlers/projectInRepoSettings.js";
 import { registerAppHandlers } from "./handlers/app.js";
-import { registerPortalHandlers } from "./handlers/portal.js";
 import { registerSessionRestoreHandlers } from "./handlers/sessionRestore.js";
 import { registerWindowOpeningHandlers } from "./handlers/windowOpening.js";
 import { registerKeepAwakeHandlers } from "./handlers/keepAwake.js";
@@ -223,7 +222,6 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerProjectInRepoSettingsHandlers(deps));
     register(() => registerAppHandlers(deps));
     register(() => installCachedViewFlushListeners());
-    register(() => registerPortalHandlers(deps));
     register(() => registerMenuHandlers(deps));
     register(() => registerSessionRestoreHandlers(deps));
     register(() => registerWindowOpeningHandlers(deps));

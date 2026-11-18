@@ -3706,42 +3706,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { forwardId: string }];
     result: void;
   };
-  "portal:close-tab": {
-    args: [payload: import("../portal.js").PortalCloseTabPayload];
-    result: void;
-  };
-  "portal:create": {
-    args: [payload: import("../portal.js").PortalCreatePayload];
-    result: void;
-  };
-  "portal:go-back": {
-    args: [tabId: string];
-    result: boolean;
-  };
-  "portal:go-forward": {
-    args: [tabId: string];
-    result: boolean;
-  };
-  "portal:hide": {
-    args: [];
-    result: void;
-  };
-  "portal:navigate": {
-    args: [payload: import("../portal.js").PortalNavigatePayload];
-    result: void;
-  };
-  "portal:reload": {
-    args: [tabId: string];
-    result: void;
-  };
-  "portal:resize": {
-    args: [bounds: import("../portal.js").PortalBounds];
-    result: void;
-  };
-  "portal:show": {
-    args: [payload: import("../portal.js").PortalShowPayload];
-    result: boolean;
-  };
   "privacy:clear-cache": {
     args: [];
     result: { cleared: number; failed: number };

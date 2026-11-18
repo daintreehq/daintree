@@ -10,7 +10,6 @@ import {
   comboToAccelerator,
   getEffectiveMenuCombo,
   findActionForInput,
-  findPortalPageAction,
   findTerminalCycleAction,
   getMenuAccelerator,
   isAcceleratorClaimedByKeybinding,
@@ -191,7 +190,7 @@ describe("findActionForInput", () => {
 });
 
 describe("findTerminalCycleAction", () => {
-  it("takes Ctrl+Tab, naming no portal tab key now the portal has none by default", () => {
+  it("takes Ctrl+Tab and Ctrl+Shift+Tab as the terminal cycle", () => {
     setProcessPlatform("darwin");
     expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toEqual({
       actionId: "terminal.focusNext",
@@ -201,12 +200,11 @@ describe("findTerminalCycleAction", () => {
     });
   });
 
-  it("names the portal tab key a saved rebind still puts on the same key", () => {
+  it("names no retired portal action a saved rebind still puts on the same key", () => {
     setProcessPlatform("darwin");
     storeMock.get.mockReturnValue({ "portal.nextTab": ["Ctrl+Tab"] });
     expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toEqual({
       actionId: "terminal.focusNext",
-      portalActionId: "portal.nextTab",
     });
   });
 
@@ -215,35 +213,6 @@ describe("findTerminalCycleAction", () => {
     storeMock.get.mockReturnValue({ "terminal.focusNext": ["Ctrl+V"] });
     expect(findTerminalCycleAction(input({ key: "v", control: true }))).toBeUndefined();
     expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toBeUndefined();
-  });
-
-  it("omits the portal action once the portal's tab key moves elsewhere", () => {
-    setProcessPlatform("darwin");
-    storeMock.get.mockReturnValue({ "portal.nextTab": ["Ctrl+Alt+Tab"] });
-    expect(findTerminalCycleAction(input({ key: "Tab", control: true }))).toEqual({
-      actionId: "terminal.focusNext",
-    });
-  });
-});
-
-describe("findPortalPageAction", () => {
-  const PORTAL = ["portal.closeTab", "portal.newTab", "portal.nextTab", "portal.prevTab"];
-
-  it("ignores a portal rebind to a key the page types with", () => {
-    setProcessPlatform("darwin");
-    storeMock.get.mockReturnValue({ "portal.closeTab": ["Backspace"] });
-    expect(findPortalPageAction(input({ key: "Backspace" }), PORTAL)).toBeUndefined();
-  });
-
-  it("takes no key by default now the portal has no bindings", () => {
-    setProcessPlatform("darwin");
-    expect(findPortalPageAction(input({ key: "w", meta: true }), PORTAL)).toBeUndefined();
-  });
-
-  it("takes a Cmd-held key a saved rebind gives a portal action", () => {
-    setProcessPlatform("darwin");
-    storeMock.get.mockReturnValue({ "portal.closeTab": ["Cmd+W"] });
-    expect(findPortalPageAction(input({ key: "w", meta: true }), PORTAL)).toBe("portal.closeTab");
   });
 });
 

@@ -44,7 +44,7 @@ export async function handleGetAuditConfig(): Promise<PluginAuditConfig> {
  * destroys the shared forensic trail, so it carries a sender-trust gate that
  * the read paths don't need (#10517). Plugin view modules are `import()`ed
  * into the shared renderer realm, but a frame outside the first-party origin
- * (a cross-origin iframe, `<webview>`, or portal WebContents) must never reach
+ * (a cross-origin iframe or a `<webview>` guest) must never reach
  * this — it would let an untrusted surface erase the evidence of its own and
  * every other plugin's activity. The rejected attempt is itself audited (the
  * security-relevant signal is "an untrusted frame tried to clear the log"),

@@ -656,7 +656,7 @@ describe("ProcessMemoryMonitor", () => {
 
     beforeEach(() => {
       mockActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         evictCachedProjectViews: vi.fn().mockResolvedValue(0),
       };
@@ -779,7 +779,7 @@ describe("ProcessMemoryMonitor", () => {
 
     beforeEach(() => {
       mockActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         evictCachedProjectViews: vi.fn().mockResolvedValue(0),
       };
@@ -901,7 +901,6 @@ describe("ProcessMemoryMonitor", () => {
         if (tier === 1) {
           mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 10 * 1024, 100)]);
         }
-        return 0;
       });
 
       stop = startAppMetricsMonitor(mockActions);
@@ -927,7 +926,7 @@ describe("ProcessMemoryMonitor", () => {
         return level;
       });
       mockActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(0),
         evictCachedProjectViews: vi.fn().mockResolvedValue(0),
         releaseRendererMemory: vi.fn(),
@@ -960,7 +959,6 @@ describe("ProcessMemoryMonitor", () => {
           postTier1 = true;
           onTier1?.();
         }
-        return 0;
       });
     }
 
@@ -1136,7 +1134,7 @@ describe("ProcessMemoryMonitor", () => {
 
     beforeEach(() => {
       mockActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
       };
     });
@@ -1157,7 +1155,6 @@ describe("ProcessMemoryMonitor", () => {
       });
       mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier) => {
         if (tier === 1) postMitigation = true;
-        return 0;
       });
     }
 
@@ -1376,7 +1373,6 @@ describe("ProcessMemoryMonitor", () => {
       });
       mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier) => {
         if (tier === 1) throwNextSample = true;
-        return 0;
       });
       stop = startAppMetricsMonitor({ ...mockActions, retireIdleCanopyReader: vi.fn(() => 1) });
 
@@ -1529,7 +1525,6 @@ describe("ProcessMemoryMonitor", () => {
       const callOrder: string[] = [];
       mockActions.destroyHiddenWebviews = vi.fn(async (tier: 1 | 2) => {
         callOrder.push(`destroyHiddenWebviews(${tier})`);
-        return 0;
       });
       mockActions.hibernateIdleProjects = vi.fn(async () => {
         callOrder.push("hibernateIdleProjects");
@@ -1607,7 +1602,6 @@ describe("ProcessMemoryMonitor", () => {
       });
       mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier) => {
         if (tier === 1) postMitigation = true;
-        return 0;
       });
       stop = startAppMetricsMonitor(mockActions);
 
@@ -1709,7 +1703,6 @@ describe("ProcessMemoryMonitor", () => {
       mockActions = {
         destroyHiddenWebviews: vi.fn(async (tier: 1 | 2) => {
           passes[tier].push(Date.now());
-          return 0;
         }),
         hibernateIdleProjects: vi.fn().mockResolvedValue(0),
         evictCachedProjectViews: vi.fn().mockReturnValue(0),
@@ -1931,7 +1924,6 @@ describe("ProcessMemoryMonitor", () => {
       mockActions.destroyHiddenWebviews = vi.fn(async (tier: 1 | 2) => {
         passes[tier].push(Date.now());
         if (tier === 1 && passes[1].length === 3) throw new Error("teardown failed");
-        return 0;
       });
       stop = startAppMetricsMonitor(mockActions);
 
@@ -1988,7 +1980,7 @@ describe("ProcessMemoryMonitor", () => {
 
     beforeEach(() => {
       mockActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         evictCachedProjectViews: vi.fn().mockResolvedValue(0),
       };
@@ -2065,27 +2057,19 @@ describe("ProcessMemoryMonitor", () => {
       expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier2-reclaim", expect.any(Object));
     });
 
-    it("reports what each tier destroyed so a zero delta is attributable", async () => {
-      // Nothing is freed, so both tiers report deltaMb 0 — the counts are what
-      // separate "nothing was eligible" from "levers ran, the metric could not
-      // observe it yet". Each tier returns a distinct count so a tier that
-      // reported its sibling's number would not pass.
+    it("reports what tier 2 evicted so a zero delta is attributable", async () => {
+      // Nothing is freed, so deltaMb reads 0 — the count is what separates
+      // "nothing was eligible" from "levers ran, the metric could not observe
+      // it yet".
       mockGetAppMetrics.mockReturnValue(underPressure);
-      mockActions.destroyHiddenWebviews = vi
-        .fn()
-        .mockImplementation(async (tier: 1 | 2) => (tier === 1 ? 2 : 4));
       mockActions.evictCachedProjectViews = vi.fn().mockResolvedValue(3);
 
       stop = startAppMetricsMonitor(mockActions);
       await advanceToTier2();
 
       expect(logInfo).toHaveBeenCalledWith(
-        "memory-pressure-tier1-reclaim",
-        expect.objectContaining({ deltaMb: 0, portalTabsDestroyed: 2 })
-      );
-      expect(logInfo).toHaveBeenCalledWith(
         "memory-pressure-tier2-reclaim",
-        expect.objectContaining({ deltaMb: 0, portalTabsDestroyed: 4, viewsEvicted: 3 })
+        expect.objectContaining({ deltaMb: 0, viewsEvicted: 3, outcome: "productive" })
       );
     });
 
@@ -2174,8 +2158,7 @@ describe("ProcessMemoryMonitor", () => {
       // measurement — the reclaim log is the point of the tier.
       mockGetAppMetrics.mockReturnValue(underPressure);
       mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier: 1 | 2) => {
-        if (tier === 2) throw new Error("portal manager gone");
-        return 0;
+        if (tier === 2) throw new Error("renderer push failed");
       });
       mockActions.hibernateIdleProjects = vi.fn().mockImplementation(async () => {
         mockGetAppMetrics.mockReturnValue(metricsForMb(100));
@@ -2188,7 +2171,24 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
       expect(logInfo).toHaveBeenCalledWith(
         "memory-pressure-tier2-reclaim",
-        expect.objectContaining({ deltaMb: 2400, portalTabsDestroyed: 0 })
+        expect.objectContaining({ deltaMb: 2400 })
+      );
+    });
+
+    it("reads a pass whose webview push threw, and nothing else showed work, as unknown", async () => {
+      // The push earns no credit when it works, but its failure still means
+      // the pass can't say it found nothing.
+      mockGetAppMetrics.mockReturnValue(underPressure);
+      mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier: 1 | 2) => {
+        if (tier === 2) throw new Error("renderer push failed");
+      });
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advanceToTier2();
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier2-reclaim",
+        expect.objectContaining({ deltaMb: 0, outcome: "unknown" })
       );
     });
   });
@@ -2230,7 +2230,7 @@ describe("ProcessMemoryMonitor", () => {
       const preFreeze = { ...getBlinkSamples().get(7)! };
       const sampleBlinkMemory = vi.fn();
       stop = startAppMetricsMonitor({
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleBlinkMemory,
       });
@@ -2248,7 +2248,7 @@ describe("ProcessMemoryMonitor", () => {
     it("startAppMetricsMonitor invokes actions.sampleBlinkMemory once per poll", () => {
       const sampleBlinkMemory = vi.fn();
       const actions: MemoryPressureActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleBlinkMemory,
       };
@@ -2270,7 +2270,7 @@ describe("ProcessMemoryMonitor", () => {
         throw new Error("renderer port closed");
       });
       const actions: MemoryPressureActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleBlinkMemory,
       };
@@ -2290,7 +2290,7 @@ describe("ProcessMemoryMonitor", () => {
     it("invokes actions.sampleSystemHealth on every poll, warmup included", () => {
       const sampleSystemHealth = vi.fn();
       const actions: MemoryPressureActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleSystemHealth,
       };
@@ -2310,7 +2310,7 @@ describe("ProcessMemoryMonitor", () => {
         throw new Error("probe wiring broke");
       });
       const actions: MemoryPressureActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleSystemHealth,
       };
@@ -2498,7 +2498,7 @@ describe("ProcessMemoryMonitor", () => {
     it("startAppMetricsMonitor invokes actions.sampleRendererElu once per poll", () => {
       const sampleRendererElu = vi.fn();
       const actions: MemoryPressureActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleRendererElu,
       };
@@ -2517,7 +2517,7 @@ describe("ProcessMemoryMonitor", () => {
         throw new Error("renderer port closed");
       });
       const actions: MemoryPressureActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
         sampleRendererElu,
       };

@@ -6,7 +6,6 @@ import { buildGlobalEnvPreloadBindings } from "../handlers/globalEnv.preload.js"
 import { buildHelpPreloadBindings } from "../handlers/help.preload.js";
 import { buildAccessibilityPreloadBindings } from "../handlers/accessibility.preload.js";
 import { buildEventInspectorPreloadBindings } from "../handlers/eventInspector.preload.js";
-import { buildPortalPreloadBindings } from "../handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "../handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "../handlers/plugin.preload.js";
 import { buildScratchPreloadBindings } from "../handlers/scratch/preload.js";
@@ -97,19 +96,6 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("event-inspector:get-filtered", filters);
-    });
-  });
-
-  describe("portal", () => {
-    it("routes create(payload) to portal:create with the payload forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue(undefined);
-      const bindings = buildPortalPreloadBindings(invoke);
-
-      const payload = { tabId: "t1", url: "https://example.com" };
-      await bindings.create(payload);
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("portal:create", payload);
     });
   });
 
