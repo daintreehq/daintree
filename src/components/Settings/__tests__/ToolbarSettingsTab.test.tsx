@@ -100,7 +100,9 @@ vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...a
 
 // Decisions as main last reported it; off unless a case turns it on.
 let mockDecisionsSwitch: "on" | "off" | "unknown" = "off";
-vi.mock("@/hooks/useDecisionsOn", () => ({ useDecisionsSwitch: () => mockDecisionsSwitch }));
+vi.mock("@/hooks/useDecisionsOn", () => ({
+  useDecisionsSwitch: (active = true) => (active ? mockDecisionsSwitch : "unknown"),
+}));
 
 // The toolbar's agent pins are this machine's (#14702).
 vi.mock("@/store/agentToolbarPinsStore", () => ({
@@ -1503,9 +1505,10 @@ describe("ToolbarSettingsTab — the Decisions inbox while Decisions is off", ()
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
     mockAgentPins = null;
+    // Moved to the left, away from its default side.
     mockToolbarState = makeToolbarState({
-      leftButtons: ["launcher", "terminal"],
-      rightButtons: ["decisions-inbox", "settings"],
+      leftButtons: ["launcher", "decisions-inbox", "terminal"],
+      rightButtons: ["settings"],
       pinnedButtons: {},
     });
   });
@@ -1528,7 +1531,7 @@ describe("ToolbarSettingsTab — the Decisions inbox while Decisions is off", ()
     ] as const) {
       mockDecisionsSwitch = known;
       rerender(<ToolbarSettingsTab />);
-      expect(switchNamesIn(rightColumn(container)).includes(row)).toBe(shown);
+      expect(switchNamesIn(leftColumn(container)).includes(row)).toBe(shown);
       expect(switchNamesIn(container).includes(row)).toBe(shown);
     }
     expect(setRightButtonsMock).not.toHaveBeenCalled();

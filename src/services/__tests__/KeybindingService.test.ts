@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import {
   DEFAULT_KEYBINDINGS,
   KeybindingService,
@@ -706,11 +707,21 @@ describe("KeybindingService", () => {
       (actionId) => {
         setPlatform("MacIntel");
         const service = new KeybindingService();
-        const rows = service
-          .getAllBindingsWithEffectiveCombos()
-          .filter((b) => b.actionId === actionId);
-        expect(rows.length).toBeGreaterThan(0);
-        expect(rows.map((b) => b.effectiveCombo).filter((combo) => combo !== "")).toEqual([]);
+        // Unbound on every platform's table, not just the one this run loaded.
+        for (const [isWindows, isLinux] of [
+          [false, false],
+          [true, false],
+          [false, true],
+        ] as const) {
+          const rows = buildDefaultKeybindings(isWindows, isLinux).filter(
+            (b) => b.actionId === actionId
+          );
+          expect(rows.length).toBeGreaterThan(0);
+          expect(rows.map((b) => b.combo).filter((combo) => combo !== "")).toEqual([]);
+        }
+        expect(
+          service.getAllBindingsWithEffectiveCombos().some((b) => b.actionId === actionId)
+        ).toBe(true);
         expect(service.findConflicts("Cmd+Alt+Shift+J")).toEqual([]);
 
         seedOverride(service, actionId, ["Cmd+Alt+Shift+J"]);

@@ -143,9 +143,9 @@ describe("useOverflowBadgeSeverity", () => {
     expect(severity(["decisions-inbox"], 0)).toBeNull();
     expect(severity(["copy-tree"], 2)).toBeNull();
 
-    const mounted = renderHook(() =>
-      useOverflowBadgeSeverity(["decisions-inbox"], 0, 0, false, false, 2)
-    );
+    // One array across renders, as the toolbar holds it, so only the store's change can move the result.
+    const folded: Parameters<typeof useOverflowBadgeSeverity>[0] = ["decisions-inbox"];
+    const mounted = renderHook(() => useOverflowBadgeSeverity(folded, 0, 0, false, false, 2));
     expect(mounted.result.current).toBe("waiting");
     try {
       act(() => useDecisionsInboxStore.setState({ isOpen: true }));

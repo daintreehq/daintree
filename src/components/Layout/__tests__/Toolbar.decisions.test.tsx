@@ -241,6 +241,7 @@ describe("Toolbar's Decisions inbox button", () => {
     const registry: ActionRegistry = new Map();
     registerDecisionsActions(registry);
     for (const factory of registry.values()) actionService.register(factory());
+    const inboxBefore = useDecisionsInboxStore.getState();
     try {
       const dispatch = vi.spyOn(actionService, "dispatch");
       await mount();
@@ -250,8 +251,10 @@ describe("Toolbar's Decisions inbox button", () => {
       expect(dispatch).toHaveBeenCalledWith("decisions.openInbox", undefined, { source: "user" });
       expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
     } finally {
+      // Unmounted first, so restoring the store re-renders nothing.
+      cleanup();
       for (const id of registry.keys()) actionService.unregister(id);
-      useDecisionsInboxStore.setState({ isOpen: false });
+      useDecisionsInboxStore.setState({ isOpen: inboxBefore.isOpen, request: inboxBefore.request });
     }
   });
 
