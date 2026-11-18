@@ -65,7 +65,7 @@ describe("project-links:get-declared (#17252)", () => {
       { source: "Cargo.toml", title: "Repository", url: "https://github.com/acme/widget" },
       { source: "catalog-info.yaml", title: "Dashboard", url: "https://grafana.example.dev/" },
     ];
-    readMock.mockResolvedValue(declared);
+    readMock.mockResolvedValue(structuredClone(declared));
     projectStoreMock.getProjectById.mockImplementation((id) => PROJECTS[id] ?? null);
     await expect(getDeclared({ projectId: "p1" })).resolves.toEqual(declared);
   });

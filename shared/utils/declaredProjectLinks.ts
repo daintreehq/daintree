@@ -98,9 +98,10 @@ const MAX_TITLE_SCAN = MAX_PROJECT_LINK_TITLE_LENGTH * 4;
  */
 function linkTitle(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const clipped = value.length > MAX_TITLE_SCAN;
+  const text = value.trimStart();
+  const clipped = text.length > MAX_TITLE_SCAN;
   let line = "";
-  for (const char of clipped ? value.slice(0, MAX_TITLE_SCAN) : value) {
+  for (const char of clipped ? text.slice(0, MAX_TITLE_SCAN) : text) {
     const code = char.codePointAt(0) ?? 0;
     line += code < 0x20 || (code >= 0x7f && code < 0xa0) ? " " : char;
   }

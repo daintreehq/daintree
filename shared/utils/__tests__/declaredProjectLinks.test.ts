@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DeclaredProjectLinkSource } from "../../types/projectLinks.js";
 import {
   declaredLinksFromBackstageCatalog,
@@ -207,10 +207,15 @@ describe("declaredLinksFromPyproject (#17254)", () => {
   });
 
   it("names a link from the start of a very long label without reading all of it", () => {
-    const title = declaredLinksFromPyproject({
-      project: { urls: { [`Docs ${"x".repeat(100_000)}`]: "https://acme.dev/a" } },
-    })[0]?.title;
-    expect(title).toBe(`Docs ${"x".repeat(74)}\u2026`);
+    const titleOf = (label: string) =>
+      declaredLinksFromPyproject({ project: { urls: { [label]: "https://acme.dev/a" } } })[0]
+        ?.title;
+    expect(titleOf(`Docs ${"x".repeat(100_000)}`)).toBe(`Docs ${"x".repeat(74)}\u2026`);
+    // Past the part it reads, there is more to the name than it shows.
+    expect(titleOf(`Docs${" ".repeat(316)}Hidden`)).toBe("Docs\u2026");
+    expect(titleOf(`${" ".repeat(400)}Docs`)).toBe("Docs");
+    // A pair split where the reading stops leaves nothing of itself behind.
+    expect(titleOf(`Docs${" ".repeat(315)}\u{1F600}x`)).toBe("Docs\u2026");
   });
 
   it("lists an address two labels share once, under the first", () => {
@@ -276,12 +281,32 @@ describe("declaredLinksFromCargoToml (#17254)", () => {
   it("reads a pre-2024 crate's [project] table as its package", () => {
     expect(
       declaredLinksFromCargoToml({
-        project: { name: "widget", homepage: "https://widget.acme.dev" },
+        project: {
+          name: "widget",
+          homepage: "https://widget.acme.dev",
+          repository: { workspace: true },
+        },
         workspace: {
-          package: { homepage: "https://acme.dev", documentation: "https://d.acme.dev" },
+          package: {
+            homepage: "https://acme.dev",
+            documentation: "https://d.acme.dev",
+            repository: "https://github.com/acme/monorepo",
+          },
         },
       })
-    ).toEqual([{ source: "Cargo.toml", title: "Homepage", url: "https://widget.acme.dev/" }]);
+    ).toEqual([
+      { source: "Cargo.toml", title: "Homepage", url: "https://widget.acme.dev/" },
+      { source: "Cargo.toml", title: "Repository", url: "https://github.com/acme/monorepo" },
+    ]);
+  });
+
+  it("prefers [package] when a manifest has both package tables", () => {
+    expect(
+      declaredLinksFromCargoToml({
+        package: { homepage: "https://package.acme.dev" },
+        project: { homepage: "https://project.acme.dev" },
+      })
+    ).toEqual([{ source: "Cargo.toml", title: "Homepage", url: "https://package.acme.dev/" }]);
   });
 
   it("reads a virtual workspace's shared fields, since its root has no package", () => {
@@ -377,14 +402,22 @@ describe("declaredLinksFromBackstageCatalog (#17254)", () => {
     expect(link?.title).toBe(`${host.slice(0, 79)}\u2026`);
   });
 
-  it("lists a link repeated across entities once, under its first title", () => {
+  it("lists a link repeated across entities once, under its first title, never naming it again", () => {
     const shared = { url: "https://acme.dev/runbook", title: "Runbook" };
+    const later = vi.fn(() => "Again");
+    const repeat = {
+      url: "https://acme.dev/runbook",
+      get title() {
+        return later();
+      },
+    };
     expect(
       declaredLinksFromBackstageCatalog([
-        { metadata: { links: [shared, { url: "https://acme.dev/runbook", title: "Again" }] } },
+        { metadata: { links: [shared, repeat] } },
         { metadata: { links: [shared] } },
       ])
     ).toEqual([{ source: "catalog-info.yaml", title: "Runbook", url: "https://acme.dev/runbook" }]);
+    expect(later).not.toHaveBeenCalled();
   });
 
   it("reads nothing from an empty file", () => {

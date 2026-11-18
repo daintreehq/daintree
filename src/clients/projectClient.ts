@@ -93,6 +93,13 @@ export function withProjectSettingsWrite<T>(
 }
 
 /**
+ * A declared link as a Remote Host sends it. One built between #17252 and
+ * #17254 reads only package.json and names no source.
+ */
+type DeclaredLinkAsSent = Omit<DeclaredProjectLink, "source"> &
+  Partial<Pick<DeclaredProjectLink, "source">>;
+
+/**
  * Adds an approved host by reading the settings and saving them whole, as
  * builds before `project:add-browser-allowed-host` did. Only for a host that
  * lacks that channel: a whole save can revert a write made between the read
@@ -301,8 +308,16 @@ export const projectClient = {
     }
   },
 
-  getDeclaredLinks: (projectId: string): Promise<DeclaredProjectLink[]> =>
-    window.electron.projectLinks.getDeclared({ projectId }),
+  getDeclaredLinks: async (projectId: string): Promise<DeclaredProjectLink[]> => {
+    const links: DeclaredLinkAsSent[] = await window.electron.projectLinks.getDeclared({
+      projectId,
+    });
+    return links.map(({ source, title, url }) => ({
+      source: source ?? "package.json",
+      title,
+      url,
+    }));
+  },
 
   addBrowserAllowedHost: async (projectId: string, hostname: string): Promise<string[]> => {
     invalidateProjectSettingsCache(projectId);

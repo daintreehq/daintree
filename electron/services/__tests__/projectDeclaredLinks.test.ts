@@ -288,7 +288,7 @@ describe("readDeclaredProjectLinks across manifests (#17254)", () => {
       "catalog-info.yaml https://api.example.dev/docs",
     ]);
     await rm(join(root, "catalog-info.yaml"));
-    await expect(readDeclaredProjectLinks(root)).resolves.toHaveLength(3);
+    await expect(readDeclaredProjectLinks(root)).resolves.toEqual(links.slice(0, 3));
   });
 
   it("skips a manifest too large to be one a person wrote", async () => {

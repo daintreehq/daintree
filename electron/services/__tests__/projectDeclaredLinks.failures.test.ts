@@ -159,8 +159,9 @@ describe("readDeclaredProjectLinks when the disk misbehaves (#17252)", () => {
   });
 
   it("rejects when a parser can't load, rather than reading its file as malformed (#17254)", async () => {
+    const missing = new Error("parser chunk missing");
     vi.doMock("smol-toml", () => {
-      throw new Error("parser chunk missing");
+      throw missing;
     });
     try {
       fsMock.realpath.mockImplementation(async (path) => {
@@ -172,7 +173,13 @@ describe("readDeclaredProjectLinks when the disk misbehaves (#17252)", () => {
           ? textHandle(JSON.stringify({ homepage: "https://widget.example.dev" }))
           : textHandle('[project.urls]\nDocs = "https://docs.example.dev"\n')
       );
-      await expect(readDeclaredProjectLinks(freshRoot())).rejects.toThrow();
+      const error: unknown = await readDeclaredProjectLinks(freshRoot()).then(
+        () => null,
+        (rejection: unknown) => rejection
+      );
+      // The loader may wrap the factory's error; either way it is the one that surfaces.
+      const cause = error instanceof Error ? error.cause : undefined;
+      expect(error === missing || cause === missing).toBe(true);
       expect(fsMock.open).toHaveBeenCalledTimes(2);
     } finally {
       vi.doUnmock("smol-toml");

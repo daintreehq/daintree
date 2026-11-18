@@ -551,3 +551,43 @@ describe("withProjectSettingsWrite", () => {
     expect(read.devServerCommand).toBe("new");
   });
 });
+
+describe("projectClient.getDeclaredLinks (#17254)", () => {
+  let getDeclaredMock: ReturnType<typeof vi.fn>;
+  let client: typeof import("../projectClient").projectClient;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    getDeclaredMock = vi.fn();
+    typedGlobal.window = {
+      electron: {
+        project: { onSwitch: vi.fn(() => () => {}) },
+        projectLinks: { getDeclared: getDeclaredMock },
+      },
+    };
+    client = (await import("../projectClient")).projectClient;
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("reads the project's declared links with the manifest each came from", async () => {
+    const links = [
+      { source: "package.json", title: "Homepage", url: "https://widget.example.dev/" },
+      { source: "Cargo.toml", title: "Documentation", url: "https://docs.rs/widget" },
+    ];
+    getDeclaredMock.mockResolvedValue(structuredClone(links));
+    await expect(client.getDeclaredLinks("p1")).resolves.toEqual(links);
+    expect(getDeclaredMock).toHaveBeenCalledWith({ projectId: "p1" });
+  });
+
+  it("puts the links from a host that names no source under package.json, the one file it read", async () => {
+    getDeclaredMock.mockResolvedValue([
+      { field: "homepage", title: "Homepage", url: "https://widget.example.dev/" },
+    ]);
+    await expect(client.getDeclaredLinks("p1")).resolves.toEqual([
+      { source: "package.json", title: "Homepage", url: "https://widget.example.dev/" },
+    ]);
+  });
+});
