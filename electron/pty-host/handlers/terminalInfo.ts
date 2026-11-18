@@ -100,6 +100,7 @@ export function mapTerminalInfo(
     isExited: t.isExited === true,
     agentSessionId: t.agentSessionId,
     claudeConfigDir: t.claudeConfigDir,
+    codexHome: t.codexHome,
     agentLaunchFlags: t.agentLaunchFlags,
     agentModelId: t.agentModelId,
     scheduledRun: t.scheduledRun,

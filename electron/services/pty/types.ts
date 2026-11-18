@@ -154,6 +154,11 @@ export interface TerminalPublicState {
    * spawn (#16269). Absent when the env names one that can't be resolved.
    */
   claudeConfigDir?: string;
+  /**
+   * The Codex home this terminal's launch env names, resolved once at spawn
+   * (#17318). Absent when the env names one that can't be resolved.
+   */
+  codexHome?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */

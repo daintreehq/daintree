@@ -76,7 +76,11 @@ export function defaultClaudeConfigDir(
   return resolveLaunchClaudeConfigDir(named ?? {});
 }
 
-function accountKey(identity: string | null): string {
+/**
+ * The opaque key a login's readings are grouped under, from the folder's
+ * canonical identity: what a live pane's folder is matched by (#17318).
+ */
+export function claudeUsageAccountKey(identity: string | null): string {
   return createHash("sha256")
     .update(identity === null ? "unknown\0" : `folder\0${identity}`)
     .digest("hex")
@@ -184,7 +188,7 @@ export async function readClaudeUsageAccounts(
   );
 
   return ordered.map((group) => ({
-    key: accountKey(group.identity),
+    key: claudeUsageAccountKey(group.identity),
     kind: group.kind,
     accountNames: group.accountNames,
     accountIds: group.accountIds,
@@ -204,6 +208,33 @@ export async function readClaudeUsageAccounts(
         };
       }),
   }));
+}
+
+/**
+ * The key a live pane's readings group under (#17318), placed by the rule a
+ * reading is: in the shell whose profile exports another folder, a pane's
+ * launch folder isn't certain, and its key is unknown's, which no known
+ * login's readings are under. The inventory doesn't say which shell a pane
+ * runs, so it is taken to run the profile, as an agent pane does.
+ */
+export async function claudeLiveAccountKey(
+  configDir: string,
+  deps: Pick<ClaudeUsageDeps, "canonicalKey" | "readShellObservation"> = defaultDeps()
+): Promise<string> {
+  const profile = await readClaudeUsageProfile(deps.readShellObservation(), deps.canonicalKey);
+  const placed = placeClaudeUsageRecord(
+    { configDir: await deps.canonicalKey(configDir), shell: null },
+    profile
+  );
+  return claudeUsageAccountKey(placed);
+}
+
+/**
+ * The same groups without asking any pane host for titles, for the sidebar's
+ * readout (#17318), which names the login and never the pane.
+ */
+export function readClaudeUsageAccountsWithoutPanes(): Promise<ClaudeUsageAccount[]> {
+  return readClaudeUsageAccounts({ ...defaultDeps(), describePane: async () => null });
 }
 
 function nonEmpty(value: unknown): string | null {

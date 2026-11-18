@@ -134,6 +134,10 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string, pinned: boolean];
     result: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
   };
+  "agent-usage:set-following": {
+    args: [payload: { following: boolean }];
+    result: import("./agentUsage.js").AgentUsageSnapshot | null;
+  };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
     result: { cleared: boolean };

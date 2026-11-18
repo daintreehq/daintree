@@ -60,6 +60,8 @@ import {
   redeliverClientWorktreePort,
 } from "./worktreePort/attach.js";
 import { createLogger } from "../utils/logger.js";
+import { getAgentUsageReadouts } from "../services/agentUsage/AgentUsageReadouts.js";
+import { createAgentUsageHostsSource } from "./metrics/agentUsageHosts.js";
 
 const logger = createLogger("main:boot");
 
@@ -354,6 +356,17 @@ function startClient(options: StartRemoteHostsOptions): void {
   );
   // Dictation into a host's pane reads the pane's context from that host (#14782).
   teardowns.push(installVoicePaneHostsClient({ sessionFor: client.sessionFor }));
+  // The sidebar's usage readout takes in what every linked host reports (#17318).
+  teardowns.push(
+    getAgentUsageReadouts().setRemoteSource(
+      createAgentUsageHostsSource({
+        registry: client.registry,
+        manager: client.manager,
+        sessionFor: client.sessionFor,
+        metrics: () => getRemoteService("hostMetrics"),
+      })
+    )
+  );
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
   const observeHosts = () => {
     const metrics = getRemoteService("hostMetrics");

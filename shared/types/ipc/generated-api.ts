@@ -71,6 +71,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["agent-toolbar-pins:set"]["args"]
     ): Promise<IpcInvokeMap["agent-toolbar-pins:set"]["result"]>;
   };
+  agentUsage: {
+    setFollowing(
+      ...args: IpcInvokeMap["agent-usage:set-following"]["args"]
+    ): Promise<IpcInvokeMap["agent-usage:set-following"]["result"]>;
+  };
   app: {
     getVersionInfo(
       ...args: IpcInvokeMap["app:get-version-info"]["args"]

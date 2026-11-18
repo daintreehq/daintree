@@ -229,6 +229,7 @@ function CodexQuota() {
 
   return (
     <SettingsSection
+      id="agents-account-quota"
       title="Account quota"
       description={
         several
@@ -447,6 +448,7 @@ function ClaudeUsage() {
 
   return (
     <SettingsSection
+      id="agents-account-quota"
       title="Account quota"
       description="Claude Code's own usage messages, as your terminals showed them. Not a live account reading."
     >

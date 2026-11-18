@@ -411,6 +411,53 @@ export function refreshCodexQuotaProfiles(): Promise<CodexQuotaProfile[]> {
   return readProfiles(true);
 }
 
+/** One readable home's reading, keyed by its realpath'd identity. Main's alone. */
+export interface CodexHomeQuota {
+  homeKey: string;
+  isDefault: boolean;
+  accountNames: string[];
+  presetNames: string[];
+  result: CodexQuotaResult;
+}
+
+/**
+ * The quota of only the homes in `homes` (#17318), canonical key to the home
+ * as a running pane's env named it, behind the same cache and queue as every
+ * other read: a home with no agent in it is never asked about. A home a
+ * profile names is read and labelled as Settings reads it; one none does (a
+ * project's own `CODEX_HOME`) is read the way that pane runs, unlabelled.
+ * Never rejects.
+ */
+export async function readCodexQuotaForHomes(
+  homes: ReadonlyMap<string, string>
+): Promise<CodexHomeQuota[]> {
+  if (homes.size === 0) return [];
+  const profiles = await foldBySameDirectory(resolveCodexQuotaProfiles(await readCodexSettings()));
+  const named = new Set(profiles.map((target) => target.homeKey));
+  const unnamed: CanonicalTarget[] = [...homes]
+    .filter(([homeKey]) => !named.has(homeKey))
+    .map(([homeKey, home]) => ({
+      home,
+      homeKey,
+      isDefault: false,
+      presetNames: [],
+      presetOrder: [],
+    }));
+  const readings: CodexHomeQuota[] = [];
+  for (const target of [...profiles, ...unnamed]) {
+    if (!homes.has(target.homeKey) || (await unreadableReason(target))) continue;
+    const { result } = await readTarget(target, target.homeKey, false);
+    readings.push({
+      homeKey: target.homeKey,
+      isDefault: target.isDefault,
+      accountNames: target.accountNames ?? [],
+      presetNames: target.presetNames,
+      result,
+    });
+  }
+  return readings;
+}
+
 /** The queue is kept: a read still running from before the reset must still finish first. */
 export function resetCodexQuotaCacheForTests(): void {
   cacheByHome = new Map();

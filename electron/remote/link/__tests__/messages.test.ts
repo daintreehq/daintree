@@ -195,6 +195,47 @@ describe("link messages", () => {
     }
   });
 
+  it("carries a host's usage readings, one that sends none, and drops a reading a later build adds (#17318)", () => {
+    const codex = {
+      agentId: "codex",
+      accountNames: ["Work"],
+      isDefault: false,
+      windowDurationMins: 300,
+      usedPercent: 82.5,
+      resetsAt: 1_800_000,
+      observedAt: 10,
+    };
+    const claude = {
+      agentId: "claude",
+      accountNames: [],
+      isDefault: true,
+      window: "weekly limit",
+      statement: "approaching",
+      usedPercent: null,
+      resetsAt: null,
+      observedAt: 20,
+    };
+    expect(hostSummary({ agentUsage: [codex, claude] }).agentUsage).toEqual([codex, claude]);
+    expect(hostSummary({ agentUsage: [] }).agentUsage).toEqual([]);
+    expect(hostSummary({})).not.toHaveProperty("agentUsage");
+    // One bad or unknown reading is left out; the summary and the other reading stand.
+    for (const bad of [
+      { ...codex, agentId: "gemini" },
+      { ...claude, window: "hourly limit" },
+      { ...codex, usedPercent: 140 },
+      { ...codex, usedPercent: null },
+      { ...codex, windowDurationMins: 0 },
+      { ...codex, accountNames: [42] },
+      // A figure without a statement that names one, or the other way round, never ranks.
+      { ...claude, statement: "used", usedPercent: null },
+      { ...claude, statement: "approaching", usedPercent: 90 },
+    ]) {
+      expect(hostSummary({ agentUsage: [bad, claude] }).agentUsage).toEqual([claude]);
+    }
+    expect(() => hostSummary({ agentUsage: "none" })).toThrow();
+    expect(() => hostSummary({ agentUsage: Array.from({ length: 17 }, () => codex) })).toThrow();
+  });
+
   it("carries a summary's timing, and one from a host that sends none (#14462)", () => {
     const timed = hostSummary({ timing: { sampleAgeMs: 120, afterPing: 4 } }) as HostSummaryFrame;
     expect(timed.timing).toEqual({ sampleAgeMs: 120, afterPing: 4 });

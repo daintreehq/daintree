@@ -6,6 +6,7 @@ import type {
   HostMetricsSummary,
 } from "../../../shared/types/remoteHosts.js";
 import type { HostIdleObservation } from "../../../shared/types/hostIdle.js";
+import type { AgentUsageReading } from "../../../shared/types/ipc/agentUsage.js";
 import type { SystemMemorySnapshot } from "../../utils/systemMemory.js";
 import { LOCAL_HOST_ID, MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
 import {
@@ -74,6 +75,11 @@ export interface HostSampleSources {
   forges?(): Promise<HostForgeObservation[]>;
   /** This host's idle clock; null while it isn't listening as a host. */
   idle?(): HostIdleObservation | null;
+  /**
+   * The usage readings this machine already holds (#17318); null while
+   * nothing watches them. Never starts or waits on a read.
+   */
+  agentUsage?(): AgentUsageReading[] | null;
   /**
    * Readers for one sample, so the reads they share (the project list) happen
    * once per sample rather than once per reader. Absent, the sampler uses the
@@ -277,6 +283,13 @@ export class HostMetricsSampler {
       // Unknown is left out, never sent as an idle host.
     }
 
+    let agentUsage: AgentUsageReading[] | null = null;
+    try {
+      agentUsage = s.agentUsage?.() ?? null;
+    } catch {
+      // Left out: unknown is not "no readings".
+    }
+
     const clusterPercent = clusterCpuPercentBetween(
       previousCpus,
       cpus,
@@ -319,6 +332,7 @@ export class HostMetricsSampler {
       agentClis,
       ...(forges !== undefined ? { forges } : {}),
       ...(idle ? { idle } : {}),
+      ...(agentUsage ? { agentUsage } : {}),
     };
   }
 

@@ -135,6 +135,7 @@ import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
 import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
+import { buildAgentUsagePreloadBindings } from "./ipc/handlers/agentUsage.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildTerminalWhenDonePreloadBindings } from "./ipc/handlers/terminalWhenDone.preload.js";
 import { buildComposerHoldPreloadBindings } from "./ipc/handlers/composerHold.preload.js";
@@ -1990,6 +1991,15 @@ function buildElectronApi(): ElectronAPI {
 
       onChanged: (callback: (snapshot: AgentToolbarPinsSnapshot) => void) =>
         _typedOn(CHANNELS.AGENT_TOOLBAR_PINS_CHANGED, callback),
+    },
+
+    // The sidebar's agent usage readout (#17318)
+    agentUsage: {
+      ...buildAgentUsagePreloadBindings(_unwrappingInvoke),
+
+      onChanged: (
+        callback: (snapshot: import("../shared/types/ipc/agentUsage.js").AgentUsageSnapshot) => void
+      ) => _typedOn(CHANNELS.AGENT_USAGE_CHANGED, callback),
     },
 
     // An agent's accounts (#16040)

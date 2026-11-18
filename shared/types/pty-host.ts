@@ -1408,6 +1408,12 @@ export interface PtyHostTerminalInfo {
    * sets none. Absent when the env names one that can't be resolved.
    */
   claudeConfigDir?: string;
+  /**
+   * The Codex home this terminal's launch env names: its `CODEX_HOME` (an
+   * account's folder), or `~/.codex` when it sets none (#17318). Absent when
+   * the env names one that can't be resolved. Main's alone, like the folder above.
+   */
+  codexHome?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
