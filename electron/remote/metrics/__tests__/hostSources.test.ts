@@ -406,6 +406,16 @@ describe("createHostSampleSources", () => {
       await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 5 });
     });
 
+    it("asks again for a project re-added at the same root under a new id", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await sources.projects();
+      store.projects = [{ id: "p9", path: "/p1", status: "active" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      expect(ask).toHaveBeenLastCalledWith("/p1", "p9");
+      expect(ask).toHaveBeenCalledTimes(2);
+    });
+
     it("reuses the count while the same projects stay open, whatever their order or status", async () => {
       store.projects = [
         { id: "p1", path: "/p1", status: "active" },
@@ -456,6 +466,11 @@ describe("createHostSampleSources", () => {
     });
 
     it("knows no open projects have no worktrees, with no workspace to ask", async () => {
+      workspace.client = null;
+      store.projects = [];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 0, worktreeCount: 0 });
+
+      workspace.client = { getAllStatesForProjectResultAsync: ask };
       store.projects = [{ id: "p1", path: "/p1", status: "active" }];
       await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
       workspace.client = null;
