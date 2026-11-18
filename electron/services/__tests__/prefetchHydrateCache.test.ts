@@ -39,8 +39,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
+  // Reset first, so its clearTimeout calls reach the fake timers they created.
   _resetPrefetchHydrateCacheForTests();
+  vi.useRealTimers();
 });
 
 describe("prefetchHydrateCache", () => {
@@ -167,9 +168,11 @@ describe("prefetchHydrateCache", () => {
   });
 
   describe("completed entries (#17803)", () => {
+    const at = (seconds: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds));
+
     beforeEach(() => {
       vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      vi.setSystemTime(at(0));
     });
 
     it("reuses a still-valid entry instead of rebuilding on a later hover", async () => {
@@ -199,15 +202,26 @@ describe("prefetchHydrateCache", () => {
       expect(consumePrefetchedHydrateResult("p1")).toBeUndefined();
     });
 
-    it("rebuilds once the entry has expired", async () => {
+    it("rebuilds at the original deadline even while the eviction timer is still pending", async () => {
       const build = vi.fn((id: string) => Promise.resolve(makeHydrate(id)));
 
       const first = await prefetchHydrateResult("p1", build);
-      await vi.advanceTimersByTimeAsync(31_000);
+      await vi.advanceTimersByTimeAsync(16_000);
+      await prefetchHydrateResult("p1", build);
+      // The wall clock reaches the deadline without firing timers, as after sleep.
+      vi.setSystemTime(at(30));
+      expect(_peekPrefetchCacheForTests("p1")).toBe(first);
+
+      let seenDuringBuild: HydrateResult | undefined | null = null;
+      build.mockImplementationOnce((id: string) => {
+        seenDuringBuild = _peekPrefetchCacheForTests("p1");
+        return Promise.resolve(makeHydrate(id));
+      });
       const second = await prefetchHydrateResult("p1", build);
 
       expect(build).toHaveBeenCalledTimes(2);
       expect(second).not.toBe(first);
+      expect(seenDuringBuild).toBeUndefined();
       expect(consumePrefetchedHydrateResult("p1")).toBe(second);
     });
 
@@ -234,20 +248,60 @@ describe("prefetchHydrateCache", () => {
 
       expect(build).toHaveBeenCalledTimes(100);
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      const late = await prefetchHydrateResult("late", build);
+      await vi.advanceTimersByTimeAsync(15_000);
 
       for (const id of ids) {
         expect(_peekPrefetchCacheForTests(id)).toBeUndefined();
       }
+      // Each entry goes at its own deadline, not with the first batch.
+      expect(_peekPrefetchCacheForTests("late")).toBe(late);
+
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(_peekPrefetchCacheForTests("late")).toBeUndefined();
+    });
+
+    it("cancels an entry's timer whenever the entry goes, and only that entry's", async () => {
+      const build = vi.fn((id: string) => Promise.resolve(makeHydrate(id)));
+      expect(vi.getTimerCount()).toBe(0);
+
+      await prefetchHydrateResult("p1", build);
+      expect(vi.getTimerCount()).toBe(1);
+      consumePrefetchedHydrateResult("p1");
+      expect(vi.getTimerCount()).toBe(0);
+
+      await prefetchHydrateResult("p1", build);
+      await prefetchHydrateResult("p2", build);
+      invalidatePrefetchCache("p1");
+      expect(vi.getTimerCount()).toBe(1);
+      expect(_peekPrefetchCacheForTests("p2")).toBeDefined();
+      invalidatePrefetchCache();
+      expect(vi.getTimerCount()).toBe(0);
+
+      await prefetchHydrateResult("p1", build);
+      vi.setSystemTime(at(31));
+      await prefetchHydrateResult("p1", build);
+      expect(build).toHaveBeenCalledTimes(5);
+      expect(vi.getTimerCount()).toBe(1);
+
+      _resetPrefetchHydrateCacheForTests();
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("does not let an earlier entry's expiry evict the entry that replaced it", async () => {
       const build = vi.fn((id: string) => Promise.resolve(makeHydrate(id)));
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
       await prefetchHydrateResult("p1", build);
+      const firstExpiry = setTimeoutSpy.mock.calls.at(-1)![0] as () => void;
+      setTimeoutSpy.mockRestore();
       await vi.advanceTimersByTimeAsync(10_000);
       expect(consumePrefetchedHydrateResult("p1")).toBeDefined();
       const replacement = await prefetchHydrateResult("p1", build);
+
+      // The callback checks it still owns the slot rather than trusting cancellation.
+      firstExpiry();
+      expect(_peekPrefetchCacheForTests("p1")).toBe(replacement);
 
       // Past the first entry's expiry, well inside the replacement's.
       await vi.advanceTimersByTimeAsync(25_000);
@@ -257,7 +311,7 @@ describe("prefetchHydrateCache", () => {
       expect(_peekPrefetchCacheForTests("p1")).toBeUndefined();
     });
 
-    it("still drops a build that a save overtook while an older entry was being replaced", async () => {
+    it("still drops a build that a save overtook while an expired entry was being replaced", async () => {
       let resolve: ((v: HydrateResult) => void) | null = null;
       const build = vi
         .fn((id: string) => Promise.resolve(makeHydrate(id)))
@@ -269,19 +323,24 @@ describe("prefetchHydrateCache", () => {
             })
         );
 
-      await prefetchHydrateResult("p1", build);
-      await vi.advanceTimersByTimeAsync(31_000);
+      const first = await prefetchHydrateResult("p1", build);
+      expect(_peekPrefetchCacheForTests("p1")).toBe(first);
+      vi.setSystemTime(at(31));
       const pending = prefetchHydrateResult("p1", build);
+      expect(_peekPrefetchCacheForTests("p1")).toBeUndefined();
       invalidatePrefetchCache("p1");
       resolve!(makeHydrate("p1"));
 
       expect(await pending).toBeNull();
       expect(_peekPrefetchCacheForTests("p1")).toBeUndefined();
+      // Only the overtaken build is dropped; the next one commits.
+      expect(await prefetchHydrateResult("p1", build)).not.toBeNull();
     });
   });
 
   it("does not let a build orphaned by a reset overwrite a newer entry", async () => {
     let resolveOrphan: ((v: HydrateResult) => void) | null = null;
+    let resolveFresh: ((v: HydrateResult) => void) | null = null;
     const orphan = prefetchHydrateResult(
       "p1",
       () =>
@@ -291,10 +350,24 @@ describe("prefetchHydrateCache", () => {
     );
 
     _resetPrefetchHydrateCacheForTests();
-    const fresh = await prefetchHydrateResult("p1", () => Promise.resolve(makeHydrate("p1")));
+    const freshPending = prefetchHydrateResult(
+      "p1",
+      () =>
+        new Promise<HydrateResult>((r) => {
+          resolveFresh = r;
+        })
+    );
+    // The orphan lands while the fresh build still owns the slot.
     resolveOrphan!(makeHydrate("p1"));
-
     expect(await orphan).toBeNull();
+    expect(_peekPrefetchCacheForTests("p1")).toBeUndefined();
+    expect(prefetchHydrateResult("p1", () => Promise.resolve(makeHydrate("p1")))).toBe(
+      freshPending
+    );
+
+    const fresh = makeHydrate("p1");
+    resolveFresh!(fresh);
+    expect(await freshPending).toBe(fresh);
     expect(_peekPrefetchCacheForTests("p1")).toBe(fresh);
   });
 });
