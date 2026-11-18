@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { OpenSchema, SourceDescriptionSchema, StartCloneSchema } from "../linkMethods.js";
+import {
+  ListDirectorySchema,
+  OpenSchema,
+  SourceDescriptionSchema,
+  StartCloneSchema,
+} from "../linkMethods.js";
 
 const open = {
   projectId: "p1",
@@ -56,5 +61,23 @@ describe("a project's display identity on the link", () => {
     });
     expect(parsed.success).toBe(true);
     expect(parsed.success && parsed.data.display).toBeUndefined();
+  });
+});
+
+describe("a directory listing request on the link", () => {
+  it("carries the picker's metadata mode, and needs none from an older Shell", () => {
+    expect(ListDirectorySchema.parse({ path: "/home/greg", metadata: "picker" }).metadata).toBe(
+      "picker"
+    );
+    expect(ListDirectorySchema.parse({ path: "/home/greg", showHidden: true })).toEqual({
+      path: "/home/greg",
+      showHidden: true,
+    });
+  });
+
+  it("lists in full for a mode it doesn't know instead of refusing the request", () => {
+    const parsed = ListDirectorySchema.safeParse({ path: "/home/greg", metadata: "names-only" });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.metadata).toBeUndefined();
   });
 });

@@ -186,7 +186,12 @@ export const StartPlaceWorktreeSchema: z.ZodType<PlaceWorktreePayload> = z.objec
     recipeId: z.string().min(1).max(256).nullable(),
   }),
 });
-export const ListDirectorySchema = z.object({ path: hostPath, showHidden: z.boolean().optional() });
+export const ListDirectorySchema = z.object({
+  path: hostPath,
+  showHidden: z.boolean().optional(),
+  // A mode from a newer Shell this host doesn't know lists in full rather than failing.
+  metadata: z.enum(["full", "picker"]).optional().catch(undefined),
+});
 export const BundleSendSchema = z.object({ token, sinkToken: token });
 export const BundleTokenSchema = z.object({ token });
 
