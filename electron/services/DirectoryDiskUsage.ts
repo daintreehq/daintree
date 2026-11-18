@@ -46,7 +46,9 @@ export async function measureDirectorySize(
   const { signal } = options;
   const platform = options.platform ?? process.platform;
   const resolvedRoot = path.resolve(root);
-  const exclude = nearestNestedRoots(resolvedRoot, options.exclude ?? [], platform);
+  const exclude = indexNestedRoots([resolvedRoot, ...(options.exclude ?? [])], platform)(
+    resolvedRoot
+  );
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     if (signal?.aborted) return null;
     const outcome = await measureOnce(resolvedRoot, exclude, platform, signal);
@@ -108,22 +110,46 @@ export function isStrictlyInside(parent: string, child: string, platform: Platfo
   return rel !== ".." && !rel.startsWith(`..${pathApi.sep}`);
 }
 
+const NO_NESTED_ROOTS: readonly string[] = Object.freeze([]);
+
 /**
- * The excluded roots inside `root`, collapsed to the outermost: a root nested
- * in another excluded root is already left out with its parent.
+ * Indexes `roots` by containment once, so each root's nearest nested roots
+ * (those strictly inside it and not inside another of the roots that is) are
+ * a lookup rather than a comparison against every other root. Paths compare
+ * as {@link isStrictlyInside} does: resolved, by component, ignoring case on
+ * Windows. Each nested root is listed under exactly one root, so the lists
+ * together hold at most one entry per root; a root with none nested shares one
+ * empty list.
  */
-function nearestNestedRoots(
-  root: string,
-  exclude: readonly string[],
-  platform: Platform
-): string[] {
-  const inside = exclude
-    .map((p) => path.resolve(p))
-    .filter((p) => isStrictlyInside(root, p, platform));
-  return inside.filter(
-    (candidate) =>
-      !inside.some((other) => other !== candidate && isStrictlyInside(other, candidate, platform))
-  );
+export function indexNestedRoots(
+  roots: readonly string[],
+  platform: Platform = process.platform
+): (root: string) => readonly string[] {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const resolved = new Map<string, string>();
+  for (const root of roots) {
+    const full = pathApi.resolve(root);
+    const key = comparablePath(full, platform);
+    if (!resolved.has(key)) resolved.set(key, full);
+  }
+  const nested = new Map<string, string[]>();
+  for (const full of resolved.values()) {
+    // Upward, so the first known ancestor is the nearest; `dirname` returns
+    // its argument at a filesystem, drive or UNC share root.
+    for (let child = full, dir = pathApi.dirname(full); dir !== child; ) {
+      const key = comparablePath(dir, platform);
+      if (resolved.has(key)) {
+        const list = nested.get(key);
+        if (list) list.push(full);
+        else nested.set(key, [full]);
+        break;
+      }
+      child = dir;
+      dir = pathApi.dirname(dir);
+    }
+  }
+  return (root) =>
+    nested.get(comparablePath(pathApi.resolve(root), platform)) ?? NO_NESTED_ROOTS;
 }
 
 interface Frontier {

@@ -24,7 +24,18 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
 }));
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
-vi.mock("../../../services/DirectoryDiskUsage.js", () => ({ measureDirectorySize: measureMock }));
+const indexSpy = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("../../../services/DirectoryDiskUsage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../services/DirectoryDiskUsage.js")>();
+  return {
+    ...actual,
+    measureDirectorySize: measureMock,
+    indexNestedRoots: (...args: Parameters<typeof actual.indexNestedRoots>) => {
+      indexSpy.calls += 1;
+      return actual.indexNestedRoots(...args);
+    },
+  };
+});
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../window/webContentsRegistry.js")>()),
   getProjectForWebContents: () => viewProject.id,
@@ -59,7 +70,9 @@ const states = [
   { id: "sibling", path: "/repo-worktrees/other" },
 ];
 
-const getAllStatesForProjectAsync = vi.fn(async () => states);
+const getAllStatesForProjectAsync = vi.fn(
+  async (_projectPath: string, _projectId: string): Promise<{ id: string; path: string }[]> => states
+);
 
 let cleanup: (() => void) | null = null;
 
@@ -67,6 +80,14 @@ function handler(channel: string): (...args: unknown[]) => Promise<unknown> {
   const call = (ipcMainMock.handle as Mock).mock.calls.find(([c]) => c === channel);
   if (!call) throw new Error(`${channel} was never registered`);
   return call[1] as (...args: unknown[]) => Promise<unknown>;
+}
+
+function excludeEntries(): number {
+  return measureMock.mock.calls.reduce((sum, [, options]) => sum + options.exclude.length, 0);
+}
+
+function excludeFor(root: string): readonly string[] | undefined {
+  return measureMock.mock.calls.find(([r]) => r === root)?.[1].exclude;
 }
 
 async function invoke(channel: string, sender: FakeSender, payload: unknown): Promise<unknown> {
@@ -89,6 +110,8 @@ function register(projectIdForView: string | null = PROJECT): void {
 describe("worktreeDiskUsage handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    indexSpy.calls = 0;
+    getAllStatesForProjectAsync.mockImplementation(async () => states);
     projectStoreMock.getProjectById.mockImplementation((id) =>
       id === PROJECT ? { id, path: "/repo" } : null
     );
@@ -101,7 +124,7 @@ describe("worktreeDiskUsage handlers", () => {
     cleanup = null;
   });
 
-  it("measures the worktree the sender's project lists, leaving every other root to exclusion", async () => {
+  it("measures the worktree the sender's project lists, excluding only the roots nested in it", async () => {
     const sender = new FakeSender(1);
     const result = await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, {
       sessionId: "s1",
@@ -111,7 +134,103 @@ describe("worktreeDiskUsage handlers", () => {
     expect(getAllStatesForProjectAsync).toHaveBeenCalledWith("/repo", PROJECT);
     const [root, options] = measureMock.mock.calls[0];
     expect(root).toBe("/repo");
-    expect(options.exclude).toEqual(["/repo/.worktrees/feature", "/repo-worktrees/other"]);
+    expect(options.exclude).toEqual(["/repo/.worktrees/feature"]);
+  });
+
+  it("prepares one lookup per inventory, and siblings retain no exclusions", async () => {
+    const siblings = Array.from({ length: 200 }, (_, i) => ({
+      id: `wt-${i}`,
+      path: `/repo-worktrees/wt-${i}`,
+    }));
+    getAllStatesForProjectAsync.mockImplementation(async () => siblings);
+    const sender = new FakeSender(1);
+    const results = await Promise.all(
+      siblings.map(({ id }) =>
+        invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, { sessionId: "s1", worktreeId: id })
+      )
+    );
+    expect(results.every((r) => (r as { status: string }).status === "measured")).toBe(true);
+    expect(measureMock).toHaveBeenCalledTimes(200);
+    expect(indexSpy.calls).toBe(1);
+    expect(excludeEntries()).toBe(0);
+  });
+
+  it("gives each worktree of a nested layout only its nearest nested roots", async () => {
+    const nested = [
+      { id: "main", path: "/repo" },
+      { id: "a", path: "/repo/.worktrees/a" },
+      { id: "inner", path: "/repo/.worktrees/a/inner" },
+      { id: "b", path: "/repo/.worktrees/b" },
+      { id: "sibling", path: "/repo-worktrees/c" },
+    ];
+    getAllStatesForProjectAsync.mockImplementation(async () => nested);
+    const sender = new FakeSender(1);
+    await Promise.all(
+      nested.map(({ id }) =>
+        invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, { sessionId: "s1", worktreeId: id })
+      )
+    );
+    expect(indexSpy.calls).toBe(1);
+    expect([...excludeFor("/repo")!].sort()).toEqual(["/repo/.worktrees/a", "/repo/.worktrees/b"]);
+    expect(excludeFor("/repo/.worktrees/a")).toEqual(["/repo/.worktrees/a/inner"]);
+    expect(excludeFor("/repo/.worktrees/a/inner")).toEqual([]);
+    expect(excludeFor("/repo/.worktrees/b")).toEqual([]);
+    expect(excludeFor("/repo-worktrees/c")).toEqual([]);
+    expect(excludeEntries()).toBe(3);
+  });
+
+  it("builds a fresh lookup for a newer inventory, so a moved worktree is excluded where it now is", async () => {
+    const sender = new FakeSender(1);
+    await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, {
+      sessionId: "s1",
+      worktreeId: "main",
+    });
+    expect(excludeFor("/repo")).toEqual(["/repo/.worktrees/feature"]);
+
+    getAllStatesForProjectAsync.mockImplementation(async () => [
+      { id: "main", path: "/repo" },
+      { id: "nested", path: "/repo-worktrees/feature" },
+      { id: "sibling", path: "/repo/sub/other" },
+    ]);
+    measureMock.mockClear();
+    await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, sender, {
+      sessionId: "s2",
+      worktreeId: "main",
+    });
+    expect(indexSpy.calls).toBe(2);
+    expect(excludeFor("/repo")).toEqual(["/repo/sub/other"]);
+  });
+
+  it("resolves ids against the requesting view's own project inventory", async () => {
+    const OTHER = "b".repeat(64);
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === PROJECT ? { id, path: "/repo" } : id === OTHER ? { id, path: "/other" } : null
+    );
+    const otherStates = [{ id: "theirs", path: "/other" }];
+    getAllStatesForProjectAsync.mockImplementation(async (_path, projectId) =>
+      projectId === OTHER ? otherStates : states
+    );
+    await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, new FakeSender(1), {
+      sessionId: "s1",
+      worktreeId: "main",
+    });
+    cleanup?.();
+    register(OTHER);
+    expect(
+      await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, new FakeSender(2), {
+        sessionId: "s1",
+        worktreeId: "main",
+      })
+    ).toEqual({ status: "unknown" });
+    expect(
+      await invoke(CHANNELS.WORKTREE_DISK_USAGE_MEASURE, new FakeSender(2), {
+        sessionId: "s1",
+        worktreeId: "theirs",
+      })
+    ).toEqual({ status: "measured", bytes: 2048 });
+    expect(getAllStatesForProjectAsync).toHaveBeenLastCalledWith("/other", OTHER);
+    expect(indexSpy.calls).toBe(2);
+    expect(excludeFor("/other")).toEqual([]);
   });
 
   it("answers unknown, without scanning, for a worktree its project doesn't list", async () => {

@@ -1,3 +1,4 @@
+import { indexNestedRoots } from "../../services/DirectoryDiskUsage.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import {
   disposeWorktreeDiskUsageService,
@@ -11,6 +12,7 @@ import type {
   WorktreeDiskUsageMeasureRequest,
   WorktreeDiskUsageResult,
 } from "../../../shared/types/ipc/worktreeDiskUsage.js";
+import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import { WORKTREE_DISK_USAGE_METHOD_CHANNELS } from "./worktreeDiskUsage.preload.js";
 
 const UNKNOWN: WorktreeDiskUsageResult = { status: "unknown" };
@@ -66,30 +68,58 @@ function watchOwner(ctx: IpcContext, owner: string): void {
   });
 }
 
+interface Target {
+  root: string;
+  exclude: readonly string[];
+}
+
 /**
- * The worktree's root and every other worktree's root, from the requesting
- * view's own project as its workspace host lists it — never a path the
- * renderer supplied. Every other root is passed as an exclusion; only those
- * nested inside this one take effect, so a worktree inside another is counted
- * once, in itself.
+ * Each inventory's targets by worktree id, keyed by the states array itself.
+ * The overview asks once per worktree, and WorkspaceClient hands every
+ * overlapping read the same array, so the requests of one opening share one
+ * lookup; a later read, or another project's, is a different array and gets
+ * its own. Held weakly, so a lookup lives only as long as its inventory.
+ */
+const targetsByInventory = new WeakMap<readonly WorktreeSnapshot[], ReadonlyMap<string, Target>>();
+
+/**
+ * Each worktree's root with only the roots nested directly inside it to
+ * exclude, so a worktree inside another is counted once, in itself, and a
+ * sibling costs nothing.
+ */
+function targetsOf(states: readonly WorktreeSnapshot[]): ReadonlyMap<string, Target> {
+  const cached = targetsByInventory.get(states);
+  if (cached) return cached;
+  const nestedIn = indexNestedRoots(states.flatMap((state) => (state.path ? [state.path] : [])));
+  const targets = new Map<string, Target>();
+  const seen = new Set<string>();
+  for (const state of states) {
+    // The first listing of an id wins, as a lookup by id would find it.
+    if (seen.has(state.id)) continue;
+    seen.add(state.id);
+    if (state.path) targets.set(state.id, { root: state.path, exclude: nestedIn(state.path) });
+  }
+  targetsByInventory.set(states, targets);
+  return targets;
+}
+
+/**
+ * The worktree's root and the roots nested in it, from the requesting view's
+ * own project as its workspace host lists it — never a path the renderer
+ * supplied.
  */
 async function resolveTarget(
   ctx: IpcContext,
   worktreeId: string,
   deps: HandlerDependencies
-): Promise<{ root: string; exclude: string[] } | null> {
+): Promise<Target | null> {
   const projectId = ctx.projectId;
   if (projectId === null || !deps.worktreeService) return null;
   const project = projectStore.getProjectById(projectId);
   if (!project) return null;
   try {
     const states = await deps.worktreeService.getAllStatesForProjectAsync(project.path, projectId);
-    const target = states.find((state) => state.id === worktreeId);
-    if (!target?.path) return null;
-    return {
-      root: target.path,
-      exclude: states.filter((state) => state.id !== worktreeId).map((state) => state.path),
-    };
+    return targetsOf(states).get(worktreeId) ?? null;
   } catch (error) {
     console.warn("[worktreeDiskUsage] Failed to list worktrees:", error);
     return null;

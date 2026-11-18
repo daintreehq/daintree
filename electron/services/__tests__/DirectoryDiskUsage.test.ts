@@ -12,6 +12,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 import {
   MAX_DU_OPERANDS,
+  indexNestedRoots,
   isStrictlyInside,
   measureDirectorySize,
   parseDuGrandTotal,
@@ -57,6 +58,103 @@ describe("isStrictlyInside", () => {
   it("ignores case on Windows", () => {
     expect(isStrictlyInside("C:\\Repo", "c:\\repo\\wt", "win32")).toBe(true);
     expect(isStrictlyInside("C:\\Repo", "C:\\Repo2\\wt", "win32")).toBe(false);
+  });
+});
+
+describe("indexNestedRoots", () => {
+  const sorted = (list: readonly string[]) => [...list].sort();
+
+  it("gives siblings nothing to exclude", () => {
+    const roots = Array.from({ length: 200 }, (_, i) => `/work/wt-${i}`);
+    const nestedIn = indexNestedRoots(roots, "linux");
+    expect(roots.reduce((sum, root) => sum + nestedIn(root).length, 0)).toBe(0);
+  });
+
+  it("lists only the nearest nested roots, each under one parent", () => {
+    const roots = [
+      "/repo",
+      "/repo/.worktrees/a",
+      "/repo/.worktrees/a/inner",
+      "/repo/.worktrees/a/inner/deeper",
+      "/repo/.worktrees/b",
+      "/repo/..dots",
+      "/repo-other/c",
+      "/elsewhere",
+    ];
+    const nestedIn = indexNestedRoots(roots, "linux");
+    expect(sorted(nestedIn("/repo"))).toEqual([
+      "/repo/..dots",
+      "/repo/.worktrees/a",
+      "/repo/.worktrees/b",
+    ]);
+    expect(nestedIn("/repo/.worktrees/a")).toEqual(["/repo/.worktrees/a/inner"]);
+    expect(nestedIn("/repo/.worktrees/a/inner")).toEqual(["/repo/.worktrees/a/inner/deeper"]);
+    expect(nestedIn("/repo/.worktrees/b")).toEqual([]);
+    expect(nestedIn("/repo-other/c")).toEqual([]);
+    expect(roots.reduce((sum, root) => sum + nestedIn(root).length, 0)).toBe(5);
+  });
+
+  it("resolves paths, so spellings of one root are one root", () => {
+    const nestedIn = indexNestedRoots(["/repo/", "/repo", "/repo/x/../a", "/repo/a/"], "linux");
+    expect(nestedIn("/repo")).toEqual(["/repo/a"]);
+    expect(nestedIn("/repo/a")).toEqual([]);
+  });
+
+  it("stops at the filesystem root", () => {
+    const nestedIn = indexNestedRoots(["/", "/a", "/a/b"], "linux");
+    expect(nestedIn("/")).toEqual(["/a"]);
+    expect(nestedIn("/a")).toEqual(["/a/b"]);
+  });
+
+  it("compares case-sensitively off Windows", () => {
+    const nestedIn = indexNestedRoots(["/Repo", "/repo/wt"], "linux");
+    expect(nestedIn("/Repo")).toEqual([]);
+  });
+
+  it("ignores case and separator style on Windows, and never crosses drives or shares", () => {
+    const nestedIn = indexNestedRoots(
+      [
+        "C:\\Repo",
+        "c:\\repo\\.worktrees\\A",
+        "C:/REPO/.worktrees/a/inner",
+        "C:\\Repo2\\wt",
+        "D:\\repo\\wt",
+        "\\\\server\\share",
+        "\\\\server\\share\\wt",
+        "\\\\server\\other\\wt",
+      ],
+      "win32"
+    );
+    expect(nestedIn("c:\\REPO")).toEqual(["c:\\repo\\.worktrees\\A"]);
+    expect(nestedIn("C:\\Repo\\.worktrees\\a")).toEqual(["C:\\REPO\\.worktrees\\a\\inner"]);
+    expect(nestedIn("C:\\Repo2\\wt")).toEqual([]);
+    expect(nestedIn("\\\\server\\share")).toEqual(["\\\\server\\share\\wt"]);
+    expect(nestedIn("\\\\SERVER\\Share\\")).toEqual(["\\\\server\\share\\wt"]);
+  });
+
+  it("agrees with the pairwise definition of nearest nested on generated layouts", () => {
+    let seed = 17807;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    const names = ["a", "b", "a-b", "..c", ".worktrees"];
+    for (let layout = 0; layout < 50; layout++) {
+      const roots: string[] = [];
+      for (let i = 0; i < 25; i++) {
+        const depth = 1 + Math.floor(random() * 4);
+        const parts = Array.from({ length: depth }, () => names[Math.floor(random() * names.length)]);
+        roots.push(`/${parts.join("/")}`);
+      }
+      const nestedIn = indexNestedRoots(roots, "linux");
+      for (const root of roots) {
+        const inside = [...new Set(roots)].filter((p) => isStrictlyInside(root, p, "linux"));
+        const nearest = inside.filter(
+          (candidate) => !inside.some((other) => isStrictlyInside(other, candidate, "linux"))
+        );
+        expect(sorted(nestedIn(root))).toEqual(sorted(nearest));
+      }
+    }
   });
 });
 
