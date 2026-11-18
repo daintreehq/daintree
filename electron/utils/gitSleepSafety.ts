@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "fs/promises";
+import { readdir, readFile, realpath, stat } from "fs/promises";
 import path from "path";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
 
@@ -28,31 +28,43 @@ function isMissing(error: unknown): boolean {
 }
 
 /**
- * A checkout's own git directory, read without spawning git. A main checkout
- * has a `.git` directory; a linked worktree has a `.git` *file* naming its
- * directory under the main repo's `.git/worktrees/<name>`, which is where that
- * worktree's MERGE_HEAD, rebase state and index lock live.
+ * A checkout's own git directory, read without spawning git, or undefined when
+ * the checkout has no `.git` and the caller knows it isn't a repository. A main
+ * checkout has a `.git` directory; a linked worktree has a `.git` *file* naming
+ * its directory under the main repo's `.git/worktrees/<name>`, which is where
+ * that worktree's MERGE_HEAD, rebase state and index lock live. Paths are
+ * canonical, so checkouts reached through different symlinks agree on their
+ * repository, and a relative `gitdir:` resolves from the checkout's physical
+ * location, as git resolves it.
  */
-async function resolveGitDir(checkoutPath: string): Promise<string> {
+async function resolveGitDir(
+  checkoutPath: string,
+  missingRepoIsClear: boolean
+): Promise<string | undefined> {
   const dotGit = path.join(checkoutPath, ".git");
-  const info = await stat(dotGit);
-  if (info.isDirectory()) return dotGit;
+  const info = await stat(dotGit).catch((error: unknown) => {
+    if (missingRepoIsClear && isMissing(error)) return undefined;
+    throw error;
+  });
+  if (!info) return undefined;
+  if (info.isDirectory()) return realpath(dotGit);
   if (!info.isFile()) throw new Error(".git is neither a directory nor a file");
   const content = await readFile(dotGit, "utf8");
   const match = /^gitdir:\s*(.+?)\s*$/m.exec(content);
   if (!match) throw new Error("malformed .git file");
-  return path.resolve(checkoutPath, match[1]);
+  return realpath(path.resolve(await realpath(checkoutPath), match[1]));
 }
 
 /** The repository's shared directory: a linked worktree's `commondir`, else the git dir itself. */
 async function resolveCommonDir(gitDir: string): Promise<string> {
+  let content: string;
   try {
-    const content = await readFile(path.join(gitDir, "commondir"), "utf8");
-    return path.resolve(gitDir, content.trim());
+    content = await readFile(path.join(gitDir, "commondir"), "utf8");
   } catch (error) {
     if (isMissing(error)) return gitDir;
     throw error;
   }
+  return realpath(path.resolve(gitDir, content.trim()));
 }
 
 async function subdirectories(dir: string): Promise<string[]> {
@@ -67,24 +79,34 @@ async function subdirectories(dir: string): Promise<string[]> {
   }
 }
 
+interface Walk {
+  /** Submodule directories this probe may still visit. */
+  left: number;
+  /** Common directories already walked, so a repository is walked and charged once per probe. */
+  walked: Set<string>;
+}
+
 /**
  * A repository's own git directory plus every git directory nested under it:
  * one per linked worktree (`worktrees/<name>`) and one per absorbed submodule
  * (`modules/<path>`, whose name can itself span directories, and which can
- * have worktrees and submodules of its own).
+ * have worktrees and submodules of its own). Empty when this probe already
+ * walked the repository from another of its checkouts.
  */
-async function nestedGitDirs(commonDir: string, budget: { left: number }): Promise<string[]> {
+async function nestedGitDirs(commonDir: string, walk: Walk): Promise<string[]> {
+  if (walk.walked.has(commonDir)) return [];
+  walk.walked.add(commonDir);
   const dirs = [commonDir, ...(await subdirectories(path.join(commonDir, "worktrees")))];
   const pending = await subdirectories(path.join(commonDir, "modules"));
   for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
-    if (--budget.left < 0) throw new Error("too many submodule directories");
+    if (--walk.left < 0) throw new Error("too many submodule directories");
     let isGitDir = false;
     try {
       isGitDir = (await stat(path.join(dir, "HEAD"))).isFile();
     } catch (error) {
       if (!isMissing(error)) throw error;
     }
-    if (isGitDir) dirs.push(...(await nestedGitDirs(dir, budget)));
+    if (isGitDir) dirs.push(...(await nestedGitDirs(dir, walk)));
     else pending.push(...(await subdirectories(dir)));
   }
   return dirs;
@@ -93,38 +115,21 @@ async function nestedGitDirs(commonDir: string, budget: { left: number }): Promi
 /**
  * Every git directory of the repositories these checkouts belong to, read from
  * disk rather than from any cached worktree list, so a worktree created outside
- * Daintree, or a submodule paused mid-rebase, is covered too. Linked worktrees
- * of one repository share its common directory, which is walked once, so the
- * submodule budget counts each directory once however many of them are passed.
+ * Daintree, or a submodule paused mid-rebase, is covered too. Each checkout's
+ * own git directory is kept even when its repository was already walked.
  */
-async function repositoryGitDirs(
-  checkoutPaths: readonly string[],
-  missingRepoIsClear: boolean
-): Promise<Set<string>> {
-  const gitDirs = new Set<string>();
-  const commonDirs = new Set<string>();
-  for (const checkoutPath of checkoutPaths) {
-    try {
-      const gitDir = await resolveGitDir(checkoutPath);
-      gitDirs.add(gitDir);
-      commonDirs.add(await resolveCommonDir(gitDir));
-    } catch (error) {
-      if (missingRepoIsClear && isMissing(error)) continue;
-      throw error;
-    }
-  }
-  const budget = { left: MAX_MODULE_DIRS };
-  for (const commonDir of commonDirs) {
-    for (const dir of await nestedGitDirs(commonDir, budget)) gitDirs.add(dir);
-  }
-  return gitDirs;
-}
-
 async function probe(
   checkoutPaths: readonly string[],
   missingRepoIsClear: boolean
 ): Promise<GitSleepSafety> {
-  const gitDirs = await repositoryGitDirs(checkoutPaths, missingRepoIsClear);
+  const gitDirs = new Set<string>();
+  const walk: Walk = { left: MAX_MODULE_DIRS, walked: new Set() };
+  for (const checkoutPath of checkoutPaths) {
+    const gitDir = await resolveGitDir(checkoutPath, missingRepoIsClear);
+    if (gitDir === undefined) continue;
+    gitDirs.add(gitDir);
+    for (const dir of await nestedGitDirs(await resolveCommonDir(gitDir), walk)) gitDirs.add(dir);
+  }
   for (const gitDir of gitDirs) {
     const entries = new Set(await readdir(gitDir));
     const marker = SLEEP_BLOCKING_MARKERS.find((name) => entries.has(name));

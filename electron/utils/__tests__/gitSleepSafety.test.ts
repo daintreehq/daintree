@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { probeRepositorySleepSafety } from "../gitSleepSafety.js";
@@ -114,9 +114,13 @@ describe("probeRepositorySleepSafety", () => {
     expect((await probeRepositorySleepSafety([repo, worktree])).state).toBe("unknown");
   });
 
-  it("is unknown when a .git file points nowhere", async () => {
+  it("is unknown when a .git file points nowhere, even for a folder known not to be a repository", async () => {
     const { worktree } = linkedWorktree("feature", () => `gitdir: ${path.join(root, "gone")}`);
     expect((await probeRepositorySleepSafety([worktree])).state).toBe("unknown");
+    expect(await probeRepositorySleepSafety([worktree], { missingRepoIsClear: true })).toEqual({
+      state: "unknown",
+      reason: "ENOENT",
+    });
   });
 
   it("walks a repository once however many of its checkouts are passed", async () => {
@@ -137,6 +141,40 @@ describe("probeRepositorySleepSafety", () => {
       reason: "read-failed",
     });
   });
+
+  it("shares the submodule budget across independent repositories", async () => {
+    busyRepository(0, 128);
+    const other = path.join(root, "other");
+    for (let i = 0; i < 129; i++) absorbedModule(`mod-${i}`, path.join(other, ".git"));
+    expect(await probeRepositorySleepSafety([repo, other])).toEqual({
+      state: "unknown",
+      reason: "read-failed",
+    });
+  });
+
+  it.each([
+    ["superproject first", false],
+    ["submodule checkout first", true],
+  ])(
+    "walks a submodule checkout passed beside its superproject once (%s)",
+    async (_order, moduleFirst) => {
+      const moduleDir = absorbedModule("shared");
+      for (let i = 0; i < 255; i++) absorbedModule(`inner-${i}`, moduleDir);
+      const checkout = path.join(root, "shared");
+      mkdirSync(checkout);
+      writeFileSync(path.join(checkout, ".git"), `gitdir: ${moduleDir}\n`);
+      const roots = moduleFirst ? [checkout, repo] : [repo, checkout];
+      expect(await probeRepositorySleepSafety(roots)).toEqual({ state: "clear" });
+
+      const moduleWorktree = path.join(moduleDir, "worktrees", "side");
+      mkdirSync(moduleWorktree, { recursive: true });
+      writeFileSync(path.join(moduleWorktree, "index.lock"), "");
+      expect(await probeRepositorySleepSafety(roots)).toEqual({
+        state: "busy",
+        marker: "index.lock",
+      });
+    }
+  );
 
   it("finds an operation in one worktree among many passed together", async () => {
     const { linked, roots } = busyRepository(12, 20);
@@ -172,6 +210,28 @@ describe("probeRepositorySleepSafety", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "resolves a relative gitdir from where a symlinked checkout really lives",
+    async () => {
+      const { gitDir } = linkedWorktree("wt");
+      writeFileSync(path.join(gitDir, "index.lock"), "");
+      const checkout = path.join(root, "nest", "wt");
+      mkdirSync(checkout, { recursive: true });
+      writeFileSync(path.join(checkout, ".git"), "gitdir: ../../repo/.git/worktrees/wt\n");
+      // A clean repository where the same relative path lands when read through the link.
+      const lookalike = path.join(root, "a", "repo", ".git", "worktrees", "wt");
+      mkdirSync(lookalike, { recursive: true });
+      writeFileSync(path.join(lookalike, "commondir"), "../..\n");
+      mkdirSync(path.join(root, "a", "b"));
+      const alias = path.join(root, "a", "b", "alias");
+      symlinkSync(checkout, alias, "dir");
+      expect(await probeRepositorySleepSafety([alias])).toEqual({
+        state: "busy",
+        marker: "index.lock",
+      });
+    }
+  );
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "is unknown when a submodule directory can't be read",
     async () => {
@@ -180,7 +240,7 @@ describe("probeRepositorySleepSafety", () => {
       absorbedModule("libs/vendor");
       chmodSync(unreadable, 0o000);
       try {
-        expect(await probeRepositorySleepSafety(roots)).toEqual({
+        expect(await probeRepositorySleepSafety(roots, { missingRepoIsClear: true })).toEqual({
           state: "unknown",
           reason: "EACCES",
         });
