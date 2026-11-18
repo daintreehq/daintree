@@ -28,14 +28,18 @@ describe("claudeUsageDocument (#17610)", () => {
   it("reads back what it saved, and never the pane's shell", () => {
     const readings = [
       saved({ usedPercent: 92, statement: "used", identity: "/work", configDir: "/work" }),
-      saved({ window: "5-hour limit", identity: null, configDir: "/personal" }),
-      saved({ window: "Opus limit", identity: null, configDir: null }),
+      saved({ window: "5-hour limit", usedPercent: 0, identity: null, configDir: "/personal" }),
+      saved({ window: "Opus limit", usedPercent: 100, identity: null, configDir: null }),
     ];
     const value = serializeClaudeUsageDocument(
-      readings.map((reading) => ({ ...reading, shell: "/bin/zsh" }) as SavedClaudeUsageReading)
+      readings.map(
+        (reading) =>
+          ({ ...reading, shell: "/bin/zsh", paneTitle: "Fix login" }) as SavedClaudeUsageReading
+      )
     );
 
     expect(value).not.toContain("/bin/zsh");
+    expect(value).not.toContain("Fix login");
     expect(parseClaudeUsageDocument(value, NOW)).toEqual(readings);
   });
 
@@ -110,10 +114,10 @@ describe("claudeUsageDocument (#17610)", () => {
   it("skips a time JSON can only spell as out of range", () => {
     const value = `{"version":1,"readings":[${JSON.stringify(saved({})).replace(
       /"observedAt":\d+/,
-      '"observedAt":1e999'
+      '"observedAt":-1e999'
     )}]}`;
 
-    expect(value).toContain("1e999");
+    expect(value).toContain("-1e999");
     expect(parseClaudeUsageDocument(value, NOW)).toEqual([]);
   });
 

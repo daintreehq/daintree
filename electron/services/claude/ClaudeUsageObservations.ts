@@ -1,4 +1,3 @@
-import { realpathSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import {
   CLAUDE_USAGE_WINDOWS,
@@ -74,7 +73,8 @@ interface Persistence {
   storage: ClaudeUsageStorage;
   now: () => number;
   readProfile: () => Promise<ClaudeUsageProfile>;
-  readProfileSync: () => ClaudeUsageProfile;
+  /** The profile with no filesystem call, for quit; see {@link sealClaudeUsageObservations}. */
+  readProfileNow: () => ClaudeUsageProfile;
   unsubscribe: () => void;
   /** Counts every change to what a save would write. */
   changes: number;
@@ -102,15 +102,6 @@ function folderIdentity(dir: string): string {
 export async function canonicalClaudeConfigDir(dir: string): Promise<string> {
   try {
     return folderIdentity(await realpath(dir));
-  } catch {
-    return folderIdentity(dir);
-  }
-}
-
-/** {@link canonicalClaudeConfigDir} for quit, where nothing can be awaited. */
-export function canonicalClaudeConfigDirSync(dir: string): string {
-  try {
-    return folderIdentity(realpathSync(dir));
   } catch {
     return folderIdentity(dir);
   }
@@ -194,8 +185,8 @@ function snapshot(profile: ClaudeUsageProfile, now: number): SavedClaudeUsageRea
   return [...newest.values()].filter((reading) => isRestorableClaudeUsageReading(reading, now));
 }
 
-function write(target: Persistence, profile: ClaudeUsageProfile): void {
-  const through = target.changes;
+/** Saves the whole store, crediting only the changes made by `through`. */
+function write(target: Persistence, profile: ClaudeUsageProfile, through: number): void {
   target.storage.write(serializeClaudeUsageDocument(snapshot(profile, target.now())));
   target.saved = through;
 }
@@ -204,10 +195,13 @@ async function save(target: Persistence): Promise<void> {
   if (persistence !== target) return;
   // A change from here on queues the next save, which reads it afresh.
   saveQueued = false;
+  // Counted before the profile resolves: a probe change while it does is one
+  // this save didn't place by, so it stays owed.
+  const through = target.changes;
   const profile = await target.readProfile();
   // A clear or seal while the profile resolved stops this save.
   if (persistence !== target) return;
-  write(target, profile);
+  write(target, profile, through);
 }
 
 /**
@@ -235,7 +229,6 @@ export interface RestoreClaudeUsageOptions {
   now?: () => number;
   readShellObservation?: () => ShellEnvironmentObservation | undefined;
   canonicalKey?: (dir: string) => Promise<string>;
-  canonicalKeySync?: (dir: string) => string;
 }
 
 /**
@@ -263,12 +256,28 @@ export function restoreClaudeUsageObservations(
   }
   const readShellObservation = options.readShellObservation ?? getShellEnvironmentObservation;
   const canonicalKey = options.canonicalKey ?? canonicalClaudeConfigDir;
-  const canonicalKeySync = options.canonicalKeySync ?? canonicalClaudeConfigDirSync;
+  let resolved: {
+    observation: ShellEnvironmentObservation | undefined;
+    profile: ClaudeUsageProfile;
+  } | null = null;
   persistence = {
     storage,
     now,
-    readProfile: () => readClaudeUsageProfile(readShellObservation(), canonicalKey),
-    readProfileSync: () => readClaudeUsageProfileSync(readShellObservation(), canonicalKeySync),
+    readProfile: async () => {
+      const observation = readShellObservation();
+      const profile = await readClaudeUsageProfile(observation, canonicalKey);
+      resolved = { observation, profile };
+      return profile;
+    },
+    // The last resolved profile while the probe still says the same; else the
+    // exported folder as spelled, which can fail to match a pane's resolved
+    // folder and file it as unknown, but never under another account.
+    readProfileNow: () => {
+      const observation = readShellObservation();
+      return resolved !== null && resolved.observation === observation
+        ? resolved.profile
+        : readClaudeUsageProfileSync(observation, folderIdentity);
+    },
     // A probe answering late can move this launch's readings; the saved copy follows.
     unsubscribe: subscribeShellEnvironment(() => {
       if (hasLiveRecords()) markChanged();
@@ -282,9 +291,9 @@ export function restoreClaudeUsageObservations(
 
 /**
  * For quit, before the database closes: stop saving, then write once more,
- * synchronously, if anything changed since the last save that landed, so a
- * save still resolving the profile, or one that failed, isn't lost. Nothing
- * is restored or saved after.
+ * synchronously and with no filesystem call, if anything changed since the
+ * last save that landed, so a save still resolving the profile, or one that
+ * failed, isn't lost. Nothing is restored or saved after.
  */
 export function sealClaudeUsageObservations(): void {
   sealed = true;
@@ -295,7 +304,7 @@ export function sealClaudeUsageObservations(): void {
   saveQueued = false;
   if (target.changes === target.saved) return;
   try {
-    write(target, target.readProfileSync());
+    write(target, target.readProfileNow(), target.changes);
   } catch (error) {
     logError("Couldn't save the Claude usage readings at quit", error);
   }

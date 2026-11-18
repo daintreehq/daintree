@@ -36,7 +36,7 @@ export async function readClaudeUsageProfile(
   return { dir, identity: dir ? await canonicalKey(dir) : dir, shell: observation?.shell };
 }
 
-/** {@link readClaudeUsageProfile} for quit, where nothing can be awaited. */
+/** {@link readClaudeUsageProfile} with a key that needs no await, for quit. */
 export function readClaudeUsageProfileSync(
   observation: ShellEnvironmentObservation | undefined,
   canonicalKey: (dir: string) => string

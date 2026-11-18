@@ -231,7 +231,6 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
   const OTHER = path.resolve(os.tmpdir(), "daintree-17610", "other");
   const WEEK = 7 * 24 * HOUR;
   const asIs = async (dir: string) => dir;
-  const asIsSync = (dir: string) => dir;
 
   function memoryStorage(initial: string | null = null) {
     const storage = {
@@ -429,6 +428,14 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
       ["tuesday", null],
     ]);
 
+    // Brought back while both are current, each keeps its own place.
+    clearClaudeUsageObservations();
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+    expect(readClaudeUsageRecords().map((record) => record.terminalId)).toEqual([
+      "friday",
+      "tuesday",
+    ]);
+
     // Two days on, the newer one's reset has passed and the older one's hasn't.
     clearClaudeUsageObservations();
     restoreClaudeUsageObservations(storage, { now: () => now + 2 * DAY, canonicalKey: asIs });
@@ -454,6 +461,27 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
     expect(readClaudeUsageRecords().map((record) => record.terminalId)).toEqual([
       "earlier",
       "unplaced",
+    ]);
+  });
+
+  it("saves the earlier launch's placed reading beside a newer one this launch can't place", async () => {
+    const now = Date.now();
+    const storage = memoryStorage(
+      serializeClaudeUsageDocument([savedReading({ observedAt: now - HOUR })])
+    );
+    restoreClaudeUsageObservations(storage, {
+      readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: PROFILE } }),
+      canonicalKey: asIs,
+    });
+
+    recordClaudeUsageObservation(
+      reading({ terminalId: "unplaced", configDir: WORK, observedAt: now, resetsAt: now + HOUR })
+    );
+    await settle();
+
+    expect(savedPlaces(storage.value)).toEqual([
+      ["earlier", WORK],
+      ["unplaced", null],
     ]);
   });
 
@@ -516,40 +544,69 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
     expect(storage.writes).toBe(0);
   });
 
-  it("writes at quit what a late probe moved while a save was still resolving, then nothing", async () => {
-    let finish: ((dir: string) => void) | undefined;
+  it("writes at quit what a late probe moved before its save could run, then nothing", async () => {
     const storage = memoryStorage();
     recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: PROFILE });
-    restoreClaudeUsageObservations(storage, {
-      canonicalKey: () => new Promise<string>((resolve) => (finish = resolve)),
-      canonicalKeySync: asIsSync,
-    });
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
     recordClaudeUsageObservation(
       reading({ configDir: WORK, observedAt: Date.now(), resetsAt: Date.now() + HOUR })
     );
-    await vi.waitFor(() => expect(finish).toBeDefined());
+    await settle();
+    // The profile may have moved the zsh pane off WORK.
+    expect(savedPlaces(storage.value)).toEqual([["t1", null]]);
 
-    // The save under way would file the zsh pane's reading as unknown.
+    // An answer that drops the export, with quit before its save runs.
     recordShellEnvironment("/bin/zsh", {});
     sealClaudeUsageObservations();
-    expect(storage.writes).toBe(1);
+    expect(storage.writes).toBe(2);
     expect(savedPlaces(storage.value)).toEqual([["t1", WORK]]);
 
-    finish!(PROFILE);
     recordClaudeUsageObservation(
       reading({ window: "5-hour limit", observedAt: Date.now(), resetsAt: Date.now() + HOUR })
     );
     await settle();
-    expect(storage.writes).toBe(1);
+    expect(storage.writes).toBe(2);
   });
 
-  it("writes nothing at quit when the last save already has every change", async () => {
+  it("still owes at quit a probe change that came while a save resolved the old profile", async () => {
+    const pending: ((dir: string) => void)[] = [];
     const storage = memoryStorage();
-    restoreClaudeUsageObservations(storage, { canonicalKey: asIs, canonicalKeySync: asIsSync });
+    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: PROFILE });
+    restoreClaudeUsageObservations(storage, {
+      canonicalKey: () => new Promise<string>((resolve) => pending.push(resolve)),
+    });
+    recordClaudeUsageObservation(
+      reading({ configDir: WORK, observedAt: Date.now(), resetsAt: Date.now() + HOUR })
+    );
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+
+    // The profile now exports the pane's own folder, so the pane is on it.
+    recordShellEnvironment("/bin/zsh", { CLAUDE_CONFIG_DIR: WORK });
+    pending[0]!(PROFILE);
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    expect(savedPlaces(storage.value)).toEqual([["t1", null]]);
+
+    // Quit while the corrective save still resolves the new profile.
+    sealClaudeUsageObservations();
+    expect(storage.writes).toBe(2);
+    expect(savedPlaces(storage.value)).toEqual([["t1", WORK]]);
+
+    pending[1]!(WORK);
+    await settle();
+    expect(storage.writes).toBe(2);
+  });
+
+  it("writes nothing at quit when the last save already has every change, and stops saving", async () => {
+    const storage = memoryStorage();
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
     recordClaudeUsageObservation(reading({ observedAt: Date.now(), resetsAt: Date.now() + HOUR }));
     await settle();
 
     sealClaudeUsageObservations();
+    recordClaudeUsageObservation(
+      reading({ window: "5-hour limit", observedAt: Date.now(), resetsAt: Date.now() + HOUR })
+    );
+    await settle();
 
     expect(storage.writes).toBe(1);
   });
@@ -557,14 +614,17 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
   it("retries at quit a save that failed", async () => {
     const storage = memoryStorage();
     const write = storage.write;
+    let attempts = 0;
     storage.write = () => {
+      attempts++;
       throw new Error("disk full");
     };
-    restoreClaudeUsageObservations(storage, { canonicalKey: asIs, canonicalKeySync: asIsSync });
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
     recordClaudeUsageObservation(
       reading({ configDir: WORK, observedAt: Date.now(), resetsAt: Date.now() + HOUR })
     );
     await settle();
+    expect(attempts).toBe(1);
     storage.write = write;
 
     sealClaudeUsageObservations();
@@ -585,6 +645,13 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
 
     expect(read).not.toHaveBeenCalled();
     expect(storage.writes).toBe(0);
+
+    // Sealing an open store holds as well.
+    clearClaudeUsageObservations();
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+    sealClaudeUsageObservations();
+    restoreClaudeUsageObservations(storage, { canonicalKey: asIs });
+    expect(read).toHaveBeenCalledTimes(1);
   });
 
   it("stops answering with a reading that named no reset a week after it showed", () => {
