@@ -179,8 +179,23 @@ async function listConcreteResources(
       description: "Open issues for the active project.",
     });
   }
-  if (isResourcePermitted(tier, "pulse")) {
-    const worktrees = await tryDispatchList("worktree.list", deps.dispatchAction, bindingListed);
+  // Neither listing reads the other's result, so both go out before either is
+  // awaited (#17492) and a slow renderer costs one wait rather than two. They
+  // are still awaited in listing order, so entries keep their order and, when
+  // both refuse, the client sees the worktree read's refusal as it did when
+  // they ran one after the other.
+  const worktreesRead = isResourcePermitted(tier, "pulse")
+    ? tryDispatchList("worktree.list", deps.dispatchAction, bindingListed)
+    : null;
+  const terminalsRead =
+    isResourcePermitted(tier, "scrollback") || isResourcePermitted(tier, "agentState")
+      ? tryDispatchList("terminal.list", deps.dispatchAction, bindingListed)
+      : null;
+  // A worktree refusal ends the request before this read is awaited, and its
+  // own refusal then has no one left to answer.
+  void terminalsRead?.catch(() => {});
+  if (worktreesRead) {
+    const worktrees = await worktreesRead;
     for (const wt of worktrees) {
       const id = readStringField(wt, ["id", "worktreeId"]);
       const label = readStringField(wt, ["branch", "name", "path"]) ?? id;
@@ -193,8 +208,8 @@ async function listConcreteResources(
       });
     }
   }
-  if (isResourcePermitted(tier, "scrollback") || isResourcePermitted(tier, "agentState")) {
-    const terminals = await tryDispatchList("terminal.list", deps.dispatchAction, bindingListed);
+  if (terminalsRead) {
+    const terminals = await terminalsRead;
     // The agent-state URI is addressed by agent type, so terminals running the
     // same type all name one resource; list it once, named by the type. A
     // terminal's title would claim one of them, while the read reports whichever
