@@ -595,6 +595,369 @@ describe("FileSearchService", () => {
       // pathLen. The w.length >= 3 guard suppresses these false positives.
       expect(result[0]).toBe("src/AppLayout.tsx");
     });
+
+    it("keeps exact ties in listing order across the cutoff", async () => {
+      // Every file fits fully and every path is one length, so listing order is
+      // the only thing left to rank them by. The listing is deliberately not
+      // sorted, so neither path nor directory order can stand in for it.
+      const listing = Array.from(
+        { length: 30 },
+        (_, i) => `d${String((i * 7) % 30).padStart(2, "0")}/UserProfile.tsx`
+      );
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, `${listing.join("\0")}\0`);
+
+      const service = await createService();
+      const page = await service.searchNaturalLanguage({
+        cwd: dir,
+        description: "user profile",
+        limit: 20,
+      });
+
+      expect(page).toEqual(listing.slice(0, 20));
+    });
+
+    it("lets a better file displace the earliest-listed of two tied ones last", async () => {
+      // The page fills with two equal files, then a better one arrives: the
+      // later-listed of the pair is the one that ranks lower and must go.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "d1/Profile.ts\0d2/Profile.ts\0d3/ProfilePanel.ts\0");
+      const service = await createService();
+
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "profile panel", limit: 2 })
+      ).resolves.toEqual(["d3/ProfilePanel.ts", "d1/Profile.ts"]);
+    });
+
+    it("builds its word index once per listing, on the first lookup that needs it", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "src/UserProfilePanel.tsx\0src/SettingsDialog.tsx\0");
+      const service = await createService();
+
+      // The picker and a description of nothing but stop words never need one.
+      await service.search({ cwd: dir, query: "user", limit: 5 });
+      await service.searchNaturalLanguage({ cwd: dir, description: "the file" });
+      expect(service.peekNaturalLanguageIndex(dir)).toBeUndefined();
+
+      // Two descriptions resolved together, as one dictation's file links are.
+      await expect(
+        Promise.all([
+          service.searchNaturalLanguage({ cwd: dir, description: "user profile" }),
+          service.searchNaturalLanguage({ cwd: dir, description: "settings dialog" }),
+        ])
+      ).resolves.toEqual([["src/UserProfilePanel.tsx"], ["src/SettingsDialog.tsx"]]);
+      const index = service.peekNaturalLanguageIndex(dir);
+      expect(index).toBeDefined();
+
+      await service.searchNaturalLanguage({ cwd: dir, description: "profile panel" });
+      expect(service.peekNaturalLanguageIndex(dir)).toBe(index);
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["invalidate", "invalidateUnder"] as const)(
+      "drops its word index on %s, so a changed tree is indexed afresh",
+      async (drop) => {
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, "src/UserProfilePanel.tsx\0");
+        const service = await createService();
+        await service.searchNaturalLanguage({ cwd: dir, description: "user profile" });
+        const index = service.peekNaturalLanguageIndex(dir);
+        expect(index).toBeDefined();
+
+        service[drop](dir);
+        expect(service.peekNaturalLanguageIndex(dir)).toBeUndefined();
+
+        // The rename keeps the file in the same listing slot, so only words the
+        // old name alone had can tell a fresh index from a stale one.
+        gitClientMock.raw.mockResolvedValue("src/UserProfileView.tsx\0");
+        await expect(
+          service.searchNaturalLanguage({ cwd: dir, description: "panel" })
+        ).resolves.toEqual([]);
+        await expect(
+          service.searchNaturalLanguage({ cwd: dir, description: "view" })
+        ).resolves.toEqual(["src/UserProfileView.tsx"]);
+        const rebuilt = service.peekNaturalLanguageIndex(dir);
+        expect(rebuilt).toBeDefined();
+        expect(rebuilt).not.toBe(index);
+      }
+    );
+
+    it("scores a token once per file however many of its words match it", async () => {
+      // `profile` matches both of the first file's words. Counted per matching
+      // word rather than per token, the first file would outscore the second.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "ProfileProfiles.ts\0src/ProfilePanel.ts\0");
+      const service = await createService();
+
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "profile profile panel" })
+      ).resolves.toEqual(["src/ProfilePanel.ts", "ProfileProfiles.ts"]);
+    });
+
+    it("weights a token by how often the description repeats it", async () => {
+      // At one point a token, the shorter path would win the tie.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "Panel.ts\0src/Profile.ts\0");
+      const service = await createService();
+
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "profile profile panel" })
+      ).resolves.toEqual(["src/Profile.ts", "Panel.ts"]);
+    });
+
+    it("drops only the last extension, and a dotfile's name is its extension", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, ".env\0a.\0a.b.c\0");
+      const service = await createService();
+      const lookup = (description: string) =>
+        service.searchNaturalLanguage({ cwd: dir, description });
+
+      await expect(lookup("env")).resolves.toEqual([]);
+      // `a` alone is a stop word; `_a` splits to the same token.
+      await expect(lookup("_a")).resolves.toEqual(["a.", "a.b.c"]);
+      await expect(lookup("b")).resolves.toEqual(["a.b.c"]);
+      await expect(lookup("c")).resolves.toEqual([]);
+    });
+
+    it("keeps every word of a name longer than the index's first allocation", async () => {
+      // One file sizes the word buffer at sixteen, so the seventeenth word is
+      // only found if the buffer grows, and the sixteenth only survives if the
+      // growth copies what was already written. Distinct words, so a lost copy
+      // cannot read back as the first word's id.
+      const words = Array.from({ length: 16 }, (_, i) => {
+        const letter = String.fromCharCode(97 + i);
+        return letter.toUpperCase() + letter + letter;
+      });
+      const file = `${words.join("")}Zebra.ts`;
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, `${file}\0`);
+      const service = await createService();
+
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "zebra" })
+      ).resolves.toEqual([file]);
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "ppp" })
+      ).resolves.toEqual([file]);
+    });
+
+    describe("against the per-description scan it replaced", () => {
+      function legacySplit(name: string): string[] {
+        return name
+          .replace(/([a-z])([A-Z])/g, "$1 $2")
+          .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+          .replace(/([a-zA-Z])([0-9])/g, "$1 $2")
+          .replace(/([0-9])([a-zA-Z])/g, "$1 $2")
+          .split(/[\s_\-./]+/)
+          .filter(Boolean)
+          .map((w) => w.toLowerCase());
+      }
+
+      const STOP_WORDS = new Set([
+        "component",
+        "file",
+        "the",
+        "a",
+        "an",
+        "to",
+        "for",
+        "of",
+        "and",
+        "or",
+        "in",
+        "my",
+        "this",
+      ]);
+
+      function legacyRank(files: readonly string[], description: string, limit: number): string[] {
+        const tokens = description
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((t) => t.length > 0 && !STOP_WORDS.has(t))
+          .flatMap((t) => legacySplit(t));
+        if (tokens.length === 0) return [];
+        const scored: Array<{ file: string; score: number; pathLen: number }> = [];
+        for (const file of files) {
+          if (file.endsWith("/")) continue;
+          const words = legacySplit(file.slice(file.lastIndexOf("/") + 1).replace(/\.[^.]+$/, ""));
+          let matched = 0;
+          for (const token of tokens) {
+            if (
+              words.some(
+                (w) =>
+                  w === token ||
+                  (token.length >= 3 &&
+                    w.length >= 3 &&
+                    (w.startsWith(token) || token.startsWith(w)))
+              )
+            ) {
+              matched++;
+            }
+          }
+          if (matched > 0)
+            scored.push({ file, score: matched / tokens.length, pathLen: file.length });
+        }
+        scored.sort((a, b) => b.score - a.score || a.pathLen - b.pathLen);
+        return scored.slice(0, limit).map((s) => s.file);
+      }
+
+      function seededRng(seed: number): () => number {
+        let state = seed >>> 0;
+        return () => {
+          state = (state * 1664525 + 1013904223) >>> 0;
+          return state / 2 ** 32;
+        };
+      }
+
+      const pick = <T>(rng: () => number, items: readonly T[]): T =>
+        items[Math.floor(rng() * items.length)]!;
+
+      // Few words and few directories, so most files tie on score and many on
+      // path length too, and listing order decides more than one page boundary.
+      const NAME_PARTS = [
+        "User",
+        "Profile",
+        "Panel",
+        "HTML",
+        "Parser",
+        "s3",
+        "Client",
+        "us",
+        "Set",
+        // Match the first, the thirty-second (a mask's sign bit) and the
+        // thirty-sixth distinct filler token below.
+        "Qaa",
+        "Qfb",
+        "Qjb",
+      ];
+      // Thirty-six distinct three-letter tokens, so a long description holds
+      // more distinct tokens than one 32-bit group of the scorer's masks.
+      const FILLERS = Array.from(
+        { length: 36 },
+        (_, i) =>
+          `q${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}`
+      );
+      const JOINERS = ["", "", "_", "-", "."];
+      const DIRS = ["src", "lib", "a/b", "pkg", "src/ui"];
+      const EXTENSIONS = [".ts", ".tsx", ".test.ts", "", "."];
+      const DESCRIPTION_WORDS = [
+        "user",
+        "profile",
+        "panel",
+        "html",
+        "parser",
+        "s3",
+        "client",
+        "us",
+        "set",
+        "settings",
+        "prof",
+        "the",
+        "UserProfile",
+        "file",
+        "x",
+      ];
+
+      function randomListing(rng: () => number, count: number): string[] {
+        const listing: string[] = [];
+        for (let i = 0; i < count; i++) {
+          if (rng() < 0.1) {
+            listing.push(`${pick(rng, DIRS)}/`);
+            continue;
+          }
+          const parts = 1 + Math.floor(rng() * 3);
+          let name = pick(rng, NAME_PARTS);
+          for (let p = 1; p < parts; p++) name += pick(rng, JOINERS) + pick(rng, NAME_PARTS);
+          listing.push(`${pick(rng, DIRS)}/${name}${pick(rng, EXTENSIONS)}`);
+        }
+        return listing;
+      }
+
+      it("ranks every description exactly as before, at every limit", async () => {
+        for (let seed = 1; seed <= 12; seed++) {
+          const rng = seededRng(seed);
+          const listing = randomListing(rng, 300);
+          const dir = makeTempDir();
+          tempDirs.push(dir);
+          gitRepo(dir, `${listing.join("\0")}\0`);
+          const service = await createService();
+          // The oracle reads the listing itself, so a service that listed
+          // nothing could not agree with it by returning nothing.
+          const files = [...new Set(listing)];
+
+          for (let q = 0; q < 15; q++) {
+            // One long description per listing: the fillers, then ordinary
+            // words whose tokens land past the first group.
+            const words = 1 + Math.floor(rng() * 4);
+            const description = [
+              ...(q === 0 ? FILLERS : []),
+              ...Array.from({ length: words }, () => pick(rng, DESCRIPTION_WORDS)),
+            ].join(" ");
+            for (const limit of [1, 20, 100]) {
+              const page = await service.searchNaturalLanguage({ cwd: dir, description, limit });
+              expect(page, `seed ${seed} "${description}" limit ${limit}`).toEqual(
+                legacyRank(files, description, limit)
+              );
+            }
+          }
+        }
+      });
+
+      it("keeps tokens in different groups of thirty-two apart, with their weights", async () => {
+        // Tokens 3 and 35 share a bit position in their groups, 31 is a mask's
+        // sign bit, and the description says token 35 twice.
+        expect([FILLERS[3], FILLERS[31], FILLERS[35]]).toEqual(["qda", "qfb", "qjb"]);
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, "QdaQjb.ts\0Qda.ts\0Qfb.ts\0Qjb.ts\0");
+        const service = await createService();
+
+        await expect(
+          service.searchNaturalLanguage({
+            cwd: dir,
+            description: [...FILLERS, "qjb"].join(" "),
+          })
+        ).resolves.toEqual(["QdaQjb.ts", "Qjb.ts", "Qda.ts", "Qfb.ts"]);
+      });
+
+      it("splits names into the same words as the regex passes", async () => {
+        const { splitCamelCase } = await import("../FileSearchService.js");
+        const alphabet = [
+          ..."abzABZ09 \t_-./$",
+          " ",
+          " ",
+          "﻿",
+          "　",
+          "é",
+          "É",
+          "İ",
+          "ß",
+          "Σ",
+          "😀",
+        ];
+        const rng = seededRng(7);
+        for (let n = 0; n < 20_000; n++) {
+          let name = "";
+          const length = Math.floor(rng() * 12);
+          for (let i = 0; i < length; i++) name += pick(rng, alphabet);
+          expect(splitCamelCase(name), JSON.stringify(name)).toEqual(legacySplit(name));
+        }
+        for (let code = 0; code <= 0xffff; code++) {
+          const name = `aB${String.fromCharCode(code)}Cd1e`;
+          if (JSON.stringify(splitCamelCase(name)) !== JSON.stringify(legacySplit(name))) {
+            expect(splitCamelCase(name), `U+${code.toString(16)}`).toEqual(legacySplit(name));
+          }
+        }
+      });
+    });
   });
 
   describe("cache lifecycle", () => {
