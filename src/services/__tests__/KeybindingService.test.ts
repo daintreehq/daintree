@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import {
   DEFAULT_KEYBINDINGS,
   KeybindingService,
@@ -700,6 +701,42 @@ describe("KeybindingService", () => {
 
       expect(conflict?.combo).toBe("Cmd+Alt+Shift+J");
     });
+
+    it.each(["decisions.openInbox", "decisions.openNextQuestion"])(
+      "lists %s unbound, and fires it from a binding the person gives it",
+      (actionId) => {
+        setPlatform("MacIntel");
+        const service = new KeybindingService();
+        // Unbound on every platform's table, not just the one this run loaded.
+        for (const [isWindows, isLinux] of [
+          [false, false],
+          [true, false],
+          [false, true],
+        ] as const) {
+          const rows = buildDefaultKeybindings(isWindows, isLinux).filter(
+            (b) => b.actionId === actionId
+          );
+          expect(rows.length).toBeGreaterThan(0);
+          expect(rows.map((b) => b.combo).filter((combo) => combo !== "")).toEqual([]);
+        }
+        const rows = service
+          .getAllBindingsWithEffectiveCombos()
+          .filter((b) => b.actionId === actionId);
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.map((b) => b.effectiveCombo).filter((combo) => combo !== "")).toEqual([]);
+        expect(service.findConflicts("Cmd+Alt+Shift+J")).toEqual([]);
+
+        seedOverride(service, actionId, ["Cmd+Alt+Shift+J"]);
+        const press = createKeyboardEvent({
+          key: "J",
+          code: "KeyJ",
+          metaKey: true,
+          altKey: true,
+          shiftKey: true,
+        });
+        expect(service.resolveKeybinding(press).match?.actionId).toBe(actionId);
+      }
+    );
   });
 
   describe("shortcut capture ownership", () => {
