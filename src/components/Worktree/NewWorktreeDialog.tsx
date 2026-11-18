@@ -846,10 +846,11 @@ export function NewWorktreeDialog({
   // A worktree made here in an environment can follow its box there: only
   // from a window on this machine that reaches hosts over ssh. Whether the
   // box gets a name is known only from its status once it's provisioned,
-  // whichever file or setting the environment came from.
+  // whichever file or setting the environment came from. Another host or a
+  // new cloud machine leaves the environment unused, so there's no box to follow.
   const machineHandoffOffered =
     worktreeMode !== "local" &&
-    !placementElsewhere &&
+    !setupOff &&
     !!projectId &&
     // A Retry's environment that's no longer listed has no row to show the choice in.
     usableEnvironmentKeys(resourceEnvironments).includes(worktreeMode) &&

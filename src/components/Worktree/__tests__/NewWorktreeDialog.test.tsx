@@ -4600,6 +4600,37 @@ describe("NewWorktreeDialog — open on its environment's machine (#17358)", () 
     expect(machineHandoff.open).not.toHaveBeenCalled();
   });
 
+  it("isn't offered, and does nothing, while a new cloud machine is chosen", async () => {
+    const machine = { accountId: "ca_0123456789", machineType: "small", lifetimeHours: 2 };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+
+    await act(async () => {
+      placement.onCloudChange?.({
+        accountId: machine.accountId,
+        label: "New machine · Personal",
+        homeName: "This Mac",
+        blocked: null,
+        machine: () => machine,
+      });
+    });
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+    await submit();
+    expect(actionCalls("worktree.create")[0]?.[1]).toMatchObject({
+      options: { worktreeMode: "local" },
+    });
+    expect(machineHandoff.open).not.toHaveBeenCalled();
+    expect(startCloudWorktreePlacement).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: "new-wt-id", machine })
+    );
+    expect(mockAddPendingCreation.mock.calls.at(-1)?.[1]).not.toHaveProperty("openOnMachine");
+    placement.onCloudChange = null;
+  });
+
   it("lists a settings file's environments when Project settings has none, and offers it there", async () => {
     projectSettingsFixture.value = {};
     projectSettingsFixture.hostEnvironments = { cloud: {} };
