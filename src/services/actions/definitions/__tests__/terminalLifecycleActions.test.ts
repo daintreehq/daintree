@@ -466,6 +466,8 @@ type AgentPanel = {
   removeOnExit?: boolean;
   detectedAgentId?: string;
   launchAgentId?: string;
+  everDetectedAgent?: boolean;
+  runtimeStatus?: string;
   agentState?: string;
   worktreeId?: string;
   agentPresetId?: string;
@@ -1359,6 +1361,29 @@ describe("terminal.resetModes (#17328)", () => {
     expect(terminalClientMock.resetModes).not.toHaveBeenCalled();
   });
 
+  // The pane the reset exists for: the agent it launched crashed, and the
+  // shell it left behind is the one stuck in the agent's modes.
+  it("resets a shell its agent crashed back to at once, without asking", async () => {
+    setRichPanelState({
+      focusedId: "p1",
+      panels: [
+        {
+          id: "p1",
+          location: "grid",
+          launchAgentId: "claude",
+          everDetectedAgent: true,
+          agentState: "exited",
+        },
+      ],
+    });
+    const run = setupActions();
+
+    await run("terminal.resetModes", { terminalId: "p1" });
+
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+    expect(terminalClientMock.resetModes).toHaveBeenCalledTimes(1);
+  });
+
   it("clears only its own staged confirm once it runs", async () => {
     setRichPanelState({
       focusedId: "p1",
@@ -1404,6 +1429,11 @@ describe("terminal.resetModes (#17328)", () => {
   it.each([
     ["no terminal is named or focused", null, [] as AgentPanel[]],
     ["the named terminal isn't in this project", "elsewhere", [] as AgentPanel[]],
+    [
+      "the pane's process has exited",
+      "p1",
+      [{ id: "p1", location: "grid", runtimeStatus: "exited" }] as AgentPanel[],
+    ],
     [
       "the pane is held for recovery",
       "p1",

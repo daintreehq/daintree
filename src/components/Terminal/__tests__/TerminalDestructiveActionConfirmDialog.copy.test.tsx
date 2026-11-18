@@ -563,11 +563,13 @@ describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#1732
     useAnnouncerStore.setState({ polite: null, assertive: null });
   });
 
-  it("names the pane, and what an agent still in it would lose", () => {
-    const { title, described } = open(RESET);
+  it("names the pane, and what an agent still in it would lose, without claiming one is", () => {
+    const { title, described } = open({ ...RESET, terminalTitle: "Nightly migration" });
 
-    expect(title).toContain("'Build agent'");
-    expect(described).toMatch(/loses bracketed paste/);
+    expect(title).toContain("'Nightly migration'");
+    // Asked on launch affinity too, where the agent may already have gone.
+    expect(described).toMatch(/^An agent may still be running/);
+    expect(described).toMatch(/If one is, it loses bracketed paste/);
     expect(described).toMatch(/multi-line paste can arrive as separate lines/);
   });
 
@@ -578,7 +580,9 @@ describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#1732
     expect(described).not.toMatch(/Redraw/);
   });
 
-  it("resets the named terminal on confirm, and says so once the host has", async () => {
+  it("closes at once on confirm, and says it reset only once the host has", async () => {
+    let settle: (result: { ok: boolean }) => void = () => {};
+    dispatch.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
     open(RESET);
 
     fireEvent.click(screen.getByRole("button", { name: "Reset terminal modes" }));
@@ -588,6 +592,11 @@ describe("TerminalDestructiveActionConfirmDialog — reset terminal modes (#1732
       { terminalId: "t1", confirmed: true },
       { source: "user" }
     );
+    expect(useTerminalPendingDestructiveActionStore.getState().pending).toBeNull();
+    await Promise.resolve();
+    expect(announced()).toBeNull();
+
+    settle({ ok: true });
     await vi.waitFor(() => expect(announced()).toBe("Terminal modes reset"));
   });
 

@@ -273,8 +273,17 @@ describe("terminal input from a remote view", () => {
   it("resets the modes of a terminal the endpoint's own project owns (#17328)", async () => {
     await expect(remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a")).resolves.toMatchObject({
       ok: true,
+      data: true,
     });
     expect(ptyClient.resetTerminalModesAsync).toHaveBeenCalledWith("term-a");
+  });
+
+  it("passes on the host's answer when it couldn't reset the modes", async () => {
+    ptyClient.resetTerminalModesAsync.mockResolvedValueOnce(false);
+    await expect(remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a")).resolves.toMatchObject({
+      ok: true,
+      data: false,
+    });
   });
 
   it.each([

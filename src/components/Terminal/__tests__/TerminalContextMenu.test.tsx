@@ -1788,8 +1788,15 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     );
   });
 
+  it("keeps the mode reset on a shell its agent crashed back to", () => {
+    renderMenu({ ...agentPanel, everDetectedAgent: true, agentState: "exited" });
+
+    expect(level(submenu(menuTree(), "Session"))).toContain("Reset terminal modes");
+  });
+
   it.each([
     ["has exited", { exitCode: 0 }],
+    ["has exited, by its runtime status alone", { runtimeStatus: "exited" }],
     ["is held for recovery", { restoreRecovery: { reason: "held" } }],
   ])("offers no mode reset on a pane that %s", (_name, ended) => {
     renderMenu({ ...terminal, ...ended });

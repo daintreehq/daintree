@@ -167,6 +167,17 @@ describe("TerminalProcess.resetTerminalModes (#17328)", () => {
     expect(mirror.modes.bracketedPasteMode).toBe(true);
   });
 
+  it("keeps a mode set right after the reset, queued behind it in the mirror", async () => {
+    const { terminal, output, mirror } = createHarness();
+    output("\x1b[?1000h\x1b[?2004h");
+    terminal.resetTerminalModes();
+    output("\x1b[?2004h");
+
+    await mirrorSettled(terminal);
+    expect(mirror.modes.bracketedPasteMode).toBe(true);
+    expect(mirror.modes.mouseTrackingMode).toBe("none");
+  });
+
   it.each([
     ["an exited pane", (info: Internals["terminalInfo"]) => (info.isExited = true)],
     ["a killed pane", (info: Internals["terminalInfo"]) => (info.wasKilled = true)],

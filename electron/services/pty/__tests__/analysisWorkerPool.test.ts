@@ -948,7 +948,7 @@ describe("WorkerAnalysisBackend feed accounting", () => {
     });
 
     it("refuses, and keeps reporting the program's paste mode, when the reset itself can't be posted", () => {
-      const { backend, control } = stubBackend();
+      const { backend, control, posted } = stubBackend();
       backend.handleWorkerEvent({
         type: "viewport",
         terminalId: "t1",
@@ -960,6 +960,7 @@ describe("WorkerAnalysisBackend feed accounting", () => {
       control.sendSucceeds = false;
       expect(backend.feedModeReset(RESET)).toBe(false);
 
+      expect(posted.some((m) => m.type === "prelude" && m.data === RESET)).toBe(true);
       expect(backend.isBracketedPasteMode()).toBe(true);
     });
 
