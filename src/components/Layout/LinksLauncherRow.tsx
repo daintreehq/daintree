@@ -54,8 +54,9 @@ export function LinksLauncherRow({
       {icon}
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
         {revealTitle ? (
-          // The row is the tab stop; its title is a pointer reveal only.
-          <TruncatedTooltip content={title} focusable={false}>
+          // In a row that opens, the row is the tab stop and its title a pointer
+          // reveal only; a read-only row's title is its own.
+          <TruncatedTooltip content={title} focusable={url === undefined}>
             {titleText}
           </TruncatedTooltip>
         ) : (

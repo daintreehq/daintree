@@ -273,7 +273,9 @@ export function summarizeDevServers(sessions: DevPreviewSessionState[]): string 
 
 /**
  * The launcher's section listing every dev server across this machine's
- * worktrees, with its status and its start or restart and stop (#17251).
+ * worktrees, with its status and its start or restart and stop (#17251). A
+ * running server's row opens it: its own preview when that is a panel of this
+ * view, else its address in the system browser, which it also offers outright.
  * Renders nothing when {@link hasDevServersSection} says there is nothing to
  * show, or while a first load is too young for its skeleton.
  */

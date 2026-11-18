@@ -42,9 +42,7 @@ const h = vi.hoisted(() => ({
   stop: vi.fn((_target: unknown) => Promise.resolve()),
   /** Whether a server's preview is a panel of this view. */
   devServerInView: true,
-  openDevServer: vi.fn<(session: DevPreviewSessionState) => Promise<void>>(() =>
-    Promise.resolve()
-  ),
+  openDevServer: vi.fn<(session: DevPreviewSessionState) => Promise<void>>(() => Promise.resolve()),
   openDevServerExternally: vi.fn<(url: string) => Promise<void>>(() => Promise.resolve()),
   expectHandoff: vi.fn(),
 }));
