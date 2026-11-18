@@ -291,6 +291,106 @@ describe("DaintreeLocalStore", () => {
     expect(plan.map((step) => step.detail).join("\n")).toContain("decisions_questions_status_idx");
   });
 
+  it("reads only the questions still missing a session on this host, never the linked history (#17783)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const unlinked = (over: Partial<QuestionOrigin>) =>
+      origin({ agent_kind: "codex", agent_session_id: null, ...over });
+    await store.commitNewQuestion(
+      row("open", 1, { origin: unlinked({}), local_status: "open" }),
+      item("o1", "open")
+    );
+    // A delivered question still counts: a correction can reopen it after its pane is gone.
+    await store.commitNewQuestion(
+      row("delivered", 2, {
+        origin: unlinked({ agent_kind: "claude" }),
+        local_status: "human-answered",
+        delivery_status: "terminal-delivered",
+      }),
+      item("o2", "delivered")
+    );
+    await store.commitNewQuestion(
+      row("empty", 3, { origin: unlinked({ agent_session_id: "" }) }),
+      item("o3", "empty")
+    );
+    await store.commitNewQuestion(
+      row("remote", 4, { origin: unlinked({ host_id: "host-remote" }) }),
+      item("o4", "remote")
+    );
+    await store.commitNewQuestion(
+      row("gemini", 5, { origin: unlinked({ agent_kind: "gemini" }) }),
+      item("o5", "gemini")
+    );
+    const columns = (
+      sqlite.prepare("SELECT name FROM pragma_table_info('decisions_questions')").all() as {
+        name: string;
+      }[]
+    )
+      .map((c) => c.name)
+      .filter((name) => name !== "question_id" && name !== "alias");
+    sqlite
+      .prepare(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+         INSERT INTO decisions_questions (question_id, alias, ${columns.join(", ")})
+         SELECT 'history-' || i, 100 + i, ${columns.join(", ")} FROM n, decisions_questions
+         WHERE question_id = 'open'`
+      )
+      .run();
+    // Statistics taken while all of them still waited for a session, so they
+    // overstate the index by ten thousand rows once those are linked.
+    sqlite.exec("ANALYZE");
+    // Linked, and unable even to decode: reading one would throw.
+    sqlite
+      .prepare(
+        `UPDATE decisions_questions SET agent_session_id = 'session-' || alias,
+           attachment_digests = 'not json' WHERE question_id LIKE 'history-%'`
+      )
+      .run();
+
+    let materialized = 0;
+    const prepare = sqlite.prepare.bind(sqlite);
+    const prepared: string[] = [];
+    vi.spyOn(sqlite, "prepare").mockImplementation(((source: string) => {
+      const statement = prepare(source);
+      if (!/FROM decisions_questions/.test(source)) return statement;
+      prepared.push(source);
+      const all = statement.all.bind(statement);
+      statement.all = ((...args: unknown[]) => {
+        const rows = all(...args) as unknown[];
+        materialized += rows.length;
+        return rows;
+      }) as typeof statement.all;
+      return statement;
+    }) as typeof sqlite.prepare);
+
+    const ids = async (hostId: string, kinds: string[]) =>
+      (await store.listSessionlessQuestions(hostId, kinds)).map((q) => q.question_id);
+    expect(await ids("host-local", ["claude", "codex"])).toEqual(["open", "delivered", "empty"]);
+    expect(materialized).toBe(3);
+    expect(await ids("host-local", [])).toEqual([]);
+    expect(prepared).toHaveLength(1);
+    const plan = (
+      prepare(`EXPLAIN QUERY PLAN ${prepared[0]}`).all("host-local") as {
+        detail: string;
+      }[]
+    )
+      .map((step) => step.detail)
+      .join("\n");
+    expect(plan).toContain(
+      "USING INDEX decisions_questions_missing_session_idx (origin_host_id=?)"
+    );
+    expect(plan).not.toContain("TEMP B-TREE");
+
+    expect(await ids("host-local", ["codex", "claude", "codex"])).toEqual([
+      "open",
+      "delivered",
+      "empty",
+    ]);
+    expect(prepared).toHaveLength(1);
+    expect(await ids("host-remote", ["codex"])).toEqual(["remote"]);
+    expect(await ids("host-local", ["gemini"])).toEqual(["gemini"]);
+    expect(await ids("host-local", ["it's"])).toEqual([]);
+  });
+
   it("has a question on disk, visible to another connection, by the time its commit resolves", async () => {
     const store = new DaintreeLocalStore(sqlite);
     const other = reader();

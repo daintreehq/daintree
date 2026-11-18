@@ -993,16 +993,18 @@ describe("AnswerDelivery", () => {
   it("reads only the pending index each minute while nothing waits", async () => {
     const h = setup();
     const lists = vi.spyOn(h.store, "listQuestions");
+    const sessionless = vi.spyOn(h.store, "listSessionlessQuestions");
     const pending = vi.spyOn(h.store, "hasPendingDelivery");
     h.delivery.start();
     await advance(1_000);
     const before = pending.mock.calls.length;
-    // Start looks once for sessions learned while delivery was off; the minutes after it never list.
-    expect(lists).toHaveBeenCalledTimes(1);
+    // Start looks once for sessions learned while delivery was off; the minutes after it never look.
+    expect(sessionless).toHaveBeenCalledTimes(1);
 
     await advance(3 * DELIVERY_CHECK_INTERVAL_MS, 10_000);
     expect(pending.mock.calls.length - before).toBe(3);
-    expect(lists).toHaveBeenCalledTimes(1);
+    expect(sessionless).toHaveBeenCalledTimes(1);
+    expect(lists).not.toHaveBeenCalled();
 
     // Found by the next minute's read, with nothing else asking.
     await answered(h.store, Q1, 1, "approve");
@@ -1390,6 +1392,73 @@ describe("AnswerDelivery", () => {
       await until(
         async () => (await h.question(Q1))?.origin.agent_session_id === "codex-learned-4"
       );
+      await stopped(h.delivery);
+    });
+
+    it("reads only the question missing its session after a pane signal, never the linked history (#17783)", async () => {
+      const h = setup({ resume: {}, listTerminals: true });
+      await answered(h.store, Q2, 2, "approve", {
+        delivery_status: "terminal-delivered",
+        delivered_revision: 1,
+      });
+      const columns = (
+        sqlite.prepare("SELECT name FROM pragma_table_info('decisions_questions')").all() as {
+          name: string;
+        }[]
+      )
+        .map((c) => c.name)
+        .filter((name) => name !== "question_id" && name !== "alias");
+      sqlite
+        .prepare(
+          `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+           INSERT INTO decisions_questions (question_id, alias, ${columns.join(", ")})
+           SELECT 'history-' || i, 100 + i, ${columns.join(", ")} FROM n, decisions_questions
+           WHERE question_id = ?`
+        )
+        .run(Q2);
+      const origin = { ...ORIGIN, agent_kind: "codex", agent_session_id: "" };
+      await answered(h.store, Q1, 1, "approve", {
+        origin,
+        delivery_status: "terminal-delivered",
+        delivered_revision: 1,
+      });
+      let materialized = 0;
+      const lookups: string[] = [];
+      const prepare = sqlite.prepare.bind(sqlite);
+      vi.spyOn(sqlite, "prepare").mockImplementation(((source: string) => {
+        const statement = prepare(source);
+        if (!/FROM decisions_questions/.test(source)) return statement;
+        if (source.includes("agent_session_id IS NULL")) lookups.push(source);
+        const all = statement.all.bind(statement);
+        statement.all = ((...args: unknown[]) => {
+          const rows = all(...args) as unknown[];
+          materialized += rows.length;
+          return rows;
+        }) as typeof statement.all;
+        return statement;
+      }) as typeof sqlite.prepare);
+      const lists = vi.spyOn(h.store, "listQuestions");
+
+      h.delivery.start();
+      await advance(1_000);
+      materialized = 0;
+      h.client.terminals.set(PANE, {
+        ...atPrompt(),
+        detectedAgentId: "codex",
+        agentSessionId: "codex-learned-5",
+      });
+      h.signal("session");
+      await until(
+        async () => (await h.question(Q1))?.origin.agent_session_id === "codex-learned-5"
+      );
+      expect(materialized).toBe(1);
+      expect(lists).not.toHaveBeenCalled();
+      // The agents delivery resumes are the ones the index holds: a roster change needs a migration.
+      expect(lookups).toHaveLength(1);
+      const plan = (prepare(`EXPLAIN QUERY PLAN ${lookups[0]}`).all(HOST) as { detail: string }[])
+        .map((step) => step.detail)
+        .join("\n");
+      expect(plan).toContain("USING INDEX decisions_questions_missing_session_idx");
       await stopped(h.delivery);
     });
 
