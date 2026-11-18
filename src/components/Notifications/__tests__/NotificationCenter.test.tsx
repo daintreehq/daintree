@@ -1320,6 +1320,29 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     }
   });
 
+  it("wakes a snooze that ended before it opened, so the unread count matches its rows", () => {
+    setEntries([
+      makeEntry({
+        type: "error",
+        message: "Overdue wake",
+        correlationId: "overdue-thread",
+        seenAsToast: false,
+      }),
+    ]);
+    // Mounted but closed, as during the exit animation of a reopen.
+    const { rerender } = render(<NotificationCenter open={false} onClose={vi.fn()} />);
+    const overdue = { "overdue-thread": Date.now() - 1000 };
+    act(() => {
+      useNotificationHistoryStore.setState({ snoozedThreads: overdue, unreadCount: 0 });
+    });
+    expect(useNotificationHistoryStore.getState().snoozedThreads).toEqual(overdue);
+
+    rerender(<NotificationCenter open onClose={vi.fn()} />);
+
+    expect(useNotificationHistoryStore.getState().snoozedThreads).toEqual({});
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+  });
+
   it("keeps a thread off the rail when it wakes from a snooze after aging out", () => {
     vi.useFakeTimers();
     try {

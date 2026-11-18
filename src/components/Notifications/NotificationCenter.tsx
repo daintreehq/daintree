@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -112,9 +111,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const clearAll = useNotificationHistoryStore((s) => s.clearAll);
   const dismissEntry = useNotificationHistoryStore((s) => s.dismissEntry);
   const dismissByCorrelationId = useNotificationHistoryStore((s) => s.dismissByCorrelationId);
-  const clearExpiredSnoozes = useNotificationHistoryStore((s) => s.clearExpiredSnoozes);
-
-  useSnoozeExpiryTimer(snoozedThreads, clearExpiredSnoozes);
+  // The rows read the clock, and a clock that jumped with the window focused
+  // leaves the view-lifetime snooze timer running late, so opening squares the
+  // stored unread count with what the rows show.
+  useEffect(() => {
+    if (open) useNotificationHistoryStore.getState().clearExpiredSnoozes();
+  }, [open]);
 
   const {
     notificationsEnabled,
