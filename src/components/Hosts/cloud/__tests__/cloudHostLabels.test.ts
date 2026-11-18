@@ -290,6 +290,29 @@ describe("idleClockSentence (#17357)", () => {
       `Idle since ${at(base)}. Its idle time ended ${at(base + 30 * 60_000)}.`
     );
   });
+
+  it("says the machine stops by itself only when its host says it holds a key to (#17361)", () => {
+    const idle = {
+      idleAfterMinutes: 30,
+      lastWorkAt: base,
+      busy: false,
+      idleEndsAt: base + 30 * 60_000,
+    };
+    const armed = { ...idle, stopsWhenIdle: true };
+    expect(idleClockSentence(armed, base + 60_000)).toBe(
+      `Idle since ${at(base)}. It stops by itself ${at(base + 30 * 60_000)} if it stays idle.`
+    );
+    expect(idleClockSentence(armed, base + 30 * 60_000)).toBe(
+      `Idle since ${at(base)}. Its idle time ended ${at(base + 30 * 60_000)}, so it stops by itself.`
+    );
+    expect(idleClockSentence({ ...armed, busy: true, idleEndsAt: null }, base)).toMatch(
+      /^In use now\. .*stops by itself once idle that long\.$/
+    );
+    // A host that doesn't say so keeps the clock's own words.
+    expect(idleClockSentence({ ...idle, stopsWhenIdle: false }, base + 60_000)).toBe(
+      idleClockSentence(idle, base + 60_000)
+    );
+  });
 });
 
 describe("what stopping and deleting mean for each provider (#17346)", () => {

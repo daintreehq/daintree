@@ -176,6 +176,16 @@ describe("link messages", () => {
     });
     // A newer host's extra fields are dropped, not refused.
     expect(hostSummary({ idle: { ...idle, heldBy: ["agents"] } }).idle).toEqual(idle);
+    // Whether it stops its own machine once idle (#17361).
+    expect(hostSummary({ idle: { ...idle, stopsWhenIdle: true } }).idle).toEqual({
+      ...idle,
+      stopsWhenIdle: true,
+    });
+    expect(hostSummary({ idle: { ...idle, stopsWhenIdle: false } }).idle).toEqual({
+      ...idle,
+      stopsWhenIdle: false,
+    });
+    expect(() => hostSummary({ idle: { ...idle, stopsWhenIdle: "yes" } })).toThrow();
     for (const bad of [
       { ...idle, idleAfterMinutes: 0 },
       { ...idle, busy: "no" },

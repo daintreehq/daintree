@@ -40,4 +40,9 @@ export interface HostIdleObservation {
   busy: boolean;
   /** When the idle time ends, or ended; null while busy. */
   idleEndsAt: number | null;
+  /**
+   * The host holds a key to stop its own machine once the idle time ends
+   * (#17361). Absent from a host that can't, or from before it could.
+   */
+  stopsWhenIdle?: boolean;
 }

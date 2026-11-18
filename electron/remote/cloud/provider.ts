@@ -97,6 +97,45 @@ export interface ProviderCreateRequest {
   publicKey: string | null;
 }
 
+/** A key that lets one machine act on itself, as the provider issued it. */
+export interface IssuedMachineKey {
+  keyId: string;
+  /** Shown once; Daintree hands it to the machine and never stores it here. */
+  secret: string;
+  /** When the provider turns it off by itself (epoch ms). */
+  expiresAt: number;
+}
+
+/** A key the provider issued but not as asked: never delivered, and revoked by its id. */
+export class UnusableMachineKeyError extends Error {
+  constructor(
+    readonly keyId: string,
+    /** When the provider said it expires; null when it vouched for none, so it works until revoked. */
+    readonly expiresAt: number | null,
+    message: string
+  ) {
+    super(message);
+    this.name = "UnusableMachineKeyError";
+  }
+}
+
+/**
+ * Keys a machine uses to keep itself running while its host sees work and to
+ * stop itself once idle: limited to that one machine, to reading it, moving
+ * its lifetime and a normal stop, and revocable from the account.
+ */
+export interface MachineKeyIssuer {
+  issue(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    request: { name: string; ttlDays: number }
+  ): Promise<IssuedMachineKey>;
+  /** Resolves once the key is off, including when it was already gone. */
+  revoke(credentials: ProviderCredentials, keyId: string): Promise<void>;
+  /** The ids of the account's keys with this exact name, to find one whose create lost its answer. */
+  findByName(credentials: ProviderCredentials, name: string): Promise<string[]>;
+}
+
 /**
  * One cloud provider: authentication, catalog, machine lifecycle and SSH
  * access, translated into Daintree's types. It holds no state and decides
@@ -165,6 +204,8 @@ export interface CloudProvider {
   sshAccess?(credentials: ProviderCredentials, resourceId: string): Promise<ProviderSshAccess>;
   /** A provider failure as a typed, user-facing error. */
   describeError(error: unknown): CloudHostError;
+  /** Present only for a provider whose machines can renew and stop themselves (#17361). */
+  readonly machineKeys?: MachineKeyIssuer;
 }
 
 /** A provider that can move a running machine's automatic stop. */

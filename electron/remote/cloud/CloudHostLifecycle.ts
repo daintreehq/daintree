@@ -67,6 +67,8 @@ import {
   type ProviderResource,
   type ProviderSshAccess,
 } from "./provider.js";
+import { lifetimeRenewalDue, stopUnderWay } from "./lifetimeRenewal.js";
+import type { CloudMachineKeys } from "./CloudMachineKeys.js";
 
 /** How often a machine is asked about while Daintree changes it. */
 const TRANSITION_POLL_MS = 3_000;
@@ -132,8 +134,6 @@ function startOptions(
  * "rate-limited") stay until that operation succeeds.
  */
 const INSPECTION_ERRORS: ReadonlySet<CloudHostErrorCode> = new Set(["not-found"]);
-/** A lifetime is renewed once this little of it is left (or half of it, for a short one). */
-const RENEW_MARGIN_MS = 30 * 60_000;
 /** After a failed renewal, the next try waits this long. */
 const RENEW_RETRY_MS = 2 * 60_000;
 
@@ -182,6 +182,8 @@ export interface CloudHostLifecycleDeps {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Where a tunnel's command is on this device's PATH; null when it isn't there. */
   findCommand?: (command: string) => Promise<string | null>;
+  /** The keys machines renew and stop themselves with (#17361); absent where nothing issues them. */
+  machineKeys?: Pick<CloudMachineKeys, "problemFor" | "tick" | "revokePending">;
 }
 
 const PATH_LOOKUP_MS = 5_000;
@@ -447,7 +449,10 @@ export class CloudHostLifecycle {
     void this.dropOrphanBindings();
     this.pollTimer = setInterval(() => void this.pollDue(), 5_000);
     this.pollTimer.unref?.();
-    this.keeperTimer = setInterval(() => void this.renewDue(), KEEPER_INTERVAL_MS);
+    this.keeperTimer = setInterval(() => {
+      void this.renewDue();
+      void this.deps.machineKeys?.tick();
+    }, KEEPER_INTERVAL_MS);
     this.keeperTimer.unref?.();
     this.markInterruptedCreates();
     void this.reconcileUnfinishedCreates();
@@ -564,6 +569,7 @@ export class CloudHostLifecycle {
           keptRunningAt: this.renewals.get(binding.id)?.ok
             ? this.renewals.get(binding.id)!.at
             : null,
+          selfStopProblem: this.deps.machineKeys?.problemFor(binding.id) ?? null,
         };
       });
   }
@@ -1860,6 +1866,8 @@ export class CloudHostLifecycle {
     // A binding forgotten while the request was out keeps no mark behind.
     if (!written) return false;
     this.observedTicket.set(bindingId, ticket);
+    // Whoever's read shows the deadline moved, or the run ending, settles an earlier failure to move it.
+    if (this.renewalSettled(bindingId)) this.clearRenewalError(bindingId);
     if (started && written.hostId) this.deps.onMachineStarted?.(written.hostId);
     return true;
   }
@@ -2009,6 +2017,8 @@ export class CloudHostLifecycle {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId || !binding.hostId || binding.lifetimeSeconds === null) return false;
     if (binding.intent === "stop" || this.operations.has(binding.id)) return false;
+    // A stop under way, the machine's own or anyone's, isn't undone by renewing.
+    if (stopUnderWay(binding.observation?.stop)) return false;
     if (this.deps.accounts.providerUnavailable(binding.providerId)) return false;
     // Only a deadline the provider can move: a fixed limit, an idle sleep or none has nothing to renew.
     if (!canRenewLifetime(this.deps.accounts.provider(binding.providerId))) return false;
@@ -2018,8 +2028,7 @@ export class CloudHostLifecycle {
     const deadline = Date.parse(binding.observation?.autoStopAt ?? "");
     if (!Number.isFinite(deadline)) return false;
     const now = this.now();
-    const margin = Math.min(RENEW_MARGIN_MS, (binding.lifetimeSeconds * 1000) / 2);
-    if (deadline - now > margin) return false;
+    if (!lifetimeRenewalDue(now, deadline, binding.lifetimeSeconds)) return false;
     const last = this.renewals.get(binding.id);
     return !(last && !last.ok && now - last.at < RENEW_RETRY_MS);
   }
@@ -2031,13 +2040,30 @@ export class CloudHostLifecycle {
     if (this.deps.accounts.providerUnavailable(binding.providerId)) return;
     const provider = this.deps.accounts.provider(binding.providerId);
     if (!canRenewLifetime(provider)) return;
+    let credentials: ProviderCredentials;
     try {
-      const { credentials } = await this.context(binding);
-      // A stop, a start or a new lifetime while the key was read: that wins. So
-      // does the provider leaving, or another registering in its place.
+      ({ credentials } = await this.context(binding));
+      // What the provider says now, not what was last seen: the machine's own
+      // keeper may have moved the deadline, or begun stopping it (#17361).
+      // A read that fails isn't a failed renewal: nothing was sent, and its
+      // own error (a machine not found) stays as the read recorded it.
       if (!this.renewalDue(bindingId) || !this.stillRegistered(binding.providerId, provider)) {
         return;
       }
+      await this.inspectInto(bindingId, provider, credentials);
+    } catch {
+      if (!this.disposed) this.renewals.set(bindingId, { at: this.now(), ok: false });
+      return;
+    }
+    // A stop, a start or a new lifetime meanwhile wins. So does the provider
+    // leaving, another registering in its place, or this run ending.
+    if (this.disposed || !this.stillRegistered(binding.providerId, provider)) return;
+    if (!this.renewalDue(bindingId)) {
+      // Moved, or stopped, by someone else: an earlier failure to move it is no longer news.
+      if (this.renewalSettled(bindingId)) this.clearRenewalError(bindingId);
+      return;
+    }
+    try {
       const ticket = this.ticket();
       const renewed = await provider.renewLifetime(
         credentials,
@@ -2051,20 +2077,70 @@ export class CloudHostLifecycle {
       this.observe(bindingId, renewed, ticket);
       this.renewals.set(bindingId, { at: this.now(), ok: true });
       // A renewal that failed earlier and now went through is no longer news.
-      this.deps.store.updateBinding(bindingId, (latest) =>
-        latest.lastError?.code === "lifetime-renewal" ? { ...latest, lastError: null } : latest
-      );
+      this.clearRenewalError(bindingId);
       this.deps.changed();
     } catch (error) {
       if (this.disposed || this.deps.store.binding(bindingId)?.intent === "stop") return;
       if (!this.stillRegistered(binding.providerId, provider)) return;
       this.renewals.set(bindingId, { at: this.now(), ok: false });
+      // Refused because the machine had begun stopping by itself, or someone
+      // else moved the deadline meanwhile: that is no failure to report.
+      if (await this.settledMeanwhile(bindingId, provider, credentials)) return;
       const described = provider.describeError(error);
       this.recordError(bindingId, {
         code: "lifetime-renewal",
         message: `Couldn't keep the machine running past its lifetime: ${described.message} It stops by itself at the deadline unless this succeeds.`,
         at: described.at,
       });
+    }
+  }
+
+  /**
+   * The provider last said the run is ending or over, or its deadline is well
+   * off: positive evidence only, never a state it couldn't read.
+   */
+  private renewalSettled(bindingId: string): boolean {
+    const binding = this.deps.store.binding(bindingId);
+    const observation = binding?.observation;
+    if (!binding || !observation) return false;
+    const machine = machineOf(binding);
+    if (
+      machine === "stopping" ||
+      machine === "stopped" ||
+      machine === "deleted" ||
+      stopUnderWay(observation.stop)
+    ) {
+      return true;
+    }
+    if (machine !== "running") return false;
+    const deadline = Date.parse(observation.autoStopAt ?? "");
+    return (
+      binding.lifetimeSeconds !== null &&
+      Number.isFinite(deadline) &&
+      !lifetimeRenewalDue(this.now(), deadline, binding.lifetimeSeconds)
+    );
+  }
+
+  private clearRenewalError(bindingId: string): void {
+    const binding = this.deps.store.binding(bindingId);
+    if (binding?.lastError?.code !== "lifetime-renewal") return;
+    this.deps.store.updateBinding(bindingId, (latest) =>
+      latest.lastError?.code === "lifetime-renewal" ? { ...latest, lastError: null } : latest
+    );
+    this.deps.changed();
+  }
+
+  /** After a failed renewal: whether the provider now says the run is ending, or its deadline moved well off. */
+  private async settledMeanwhile(
+    bindingId: string,
+    provider: CloudProvider,
+    credentials: ProviderCredentials
+  ): Promise<boolean> {
+    try {
+      await this.inspectInto(bindingId, provider, credentials);
+      return this.renewalSettled(bindingId);
+    } catch {
+      return false;
     }
   }
 
@@ -2124,9 +2200,11 @@ export class CloudHostLifecycle {
         this.now() - binding.createdAt > 60_000;
       if (!stranded && (binding.hostId === null || listed.has(binding.hostId))) continue;
       this.operations.get(binding.id)?.controller.abort();
+      // Its machine's own key goes with it, at the provider (#17361).
       this.deps.store.removeBinding(binding.id);
       this.renewals.delete(binding.id);
       this.observedTicket.delete(binding.id);
+      void this.deps.machineKeys?.revokePending();
       await this.deps.files.forget(this.deps.clientDir, binding.id).catch(() => {});
     }
   }

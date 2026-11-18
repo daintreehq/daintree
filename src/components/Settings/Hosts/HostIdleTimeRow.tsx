@@ -59,6 +59,8 @@ interface HostIdleTimeRowProps {
   idle: HostIdleObservation | undefined;
   /** When that summary was taken, by the host's clock. */
   sampledAt: number | null;
+  /** Why the machine can't stop itself once idle, as this device found; null when nothing stands in the way. */
+  selfStopProblem?: string | null;
 }
 
 /**
@@ -72,6 +74,7 @@ export function HostIdleTimeRow({
   connected,
   idle,
   sampledAt,
+  selfStopProblem = null,
 }: HostIdleTimeRowProps) {
   const [setting, setSetting] = useState<IdleSetting | null>(null);
   // Read since the link last came up: an older reading is shown, not edited against.
@@ -124,11 +127,16 @@ export function HostIdleTimeRow({
     void load();
   };
 
+  // Said only while the host doesn't say it holds a key: one it holds settles it.
+  const problem = selfStopProblem && !idle?.stopsWhenIdle ? selfStopProblem : null;
+  const withProblem = (text: string) =>
+    problem ? `${/[.!?]$/.test(text) ? text : `${text}.`} ${problem}` : text;
+
   if (setting?.unavailable) {
     return (
       <SettingsRow
         label={LABEL}
-        description={IDLE_TIME_COUNTED}
+        description={withProblem(IDLE_TIME_COUNTED)}
         disabled
         disabledReason={`Needs a newer Daintree on ${hostName}`}
       />
@@ -142,9 +150,9 @@ export function HostIdleTimeRow({
     return (
       <SettingsRow
         label={LABEL}
-        description={
+        description={withProblem(
           connected ? IDLE_TIME_COUNTED : `Kept on ${hostName}. Connect to see or change it`
-        }
+        )}
         error={loadError ? <span role="alert">{loadError}</span> : undefined}
         control={
           connected && loadError ? (
@@ -235,11 +243,11 @@ export function HostIdleTimeRow({
   return (
     <SettingsSelect
       label={LABEL}
-      description={
+      description={withProblem(
         connected
           ? idleClockSentence(idle, sampledAt)
           : `Kept on ${hostName}, as last read. Connect to change it`
-      }
+      )}
       value={String(leaf.minutes)}
       onValueChange={save}
       options={options}

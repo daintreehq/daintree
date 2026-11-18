@@ -342,3 +342,66 @@ describe("CloudHostStore SSH access", () => {
     }
   });
 });
+
+describe("CloudHostStore machine keys (#17361)", () => {
+  const key = (overrides: Record<string, unknown> = {}) => ({
+    id: "mk_1",
+    bindingId: "cb_abcdefgh12",
+    accountId: "ca_abcdefgh",
+    providerId: "boat" as const,
+    resourceId: "bx_23456789",
+    name: "daintree-mk_1",
+    keyId: "sak_1",
+    expiresAt: 1_800_000_000_000,
+    state: "active" as const,
+    createdAt: 1_700_000_000_000,
+    ...overrides,
+  });
+
+  it("keeps what a key needs to be revoked across a restart, and a file from before them reads as none", () => {
+    const backend = disk();
+    backend.write({ version: 1, accounts: [], bindings: [binding()] });
+    expect(new CloudHostStore(backend).machineKeys()).toEqual([]);
+    new CloudHostStore(backend).putMachineKey(key());
+    expect(new CloudHostStore(backend).machineKeys()).toEqual([key()]);
+    // Unrelated writes carry it through.
+    new CloudHostStore(backend).updateBinding("cb_abcdefgh12", (current) => ({
+      ...current,
+      intent: "stop",
+    }));
+    expect(new CloudHostStore(backend).machineKey("mk_1")).toEqual(key());
+  });
+
+  it("marks every key a removed binding's machine was given for revoking, in the same write", () => {
+    const backend = disk();
+    const store = new CloudHostStore(backend);
+    store.putBinding(binding());
+    store.putMachineKey(key());
+    store.putMachineKey(key({ id: "mk_2", state: "issuing", keyId: null }));
+    store.putMachineKey(key({ id: "mk_3", bindingId: "cb_otherother1" }));
+    let writes = 0;
+    store.onChange(() => (writes += 1));
+    store.removeBinding("cb_abcdefgh12");
+    expect(writes).toBe(1);
+    expect(store.bindings()).toEqual([]);
+    expect(store.machineKeys().map((entry) => [entry.id, entry.state])).toEqual([
+      ["mk_1", "revoke"],
+      ["mk_2", "revoke"],
+      ["mk_3", "active"],
+    ]);
+  });
+
+  it("skips a record that doesn't read, and keeps it on disk", () => {
+    const backend = disk();
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [],
+      machineKeys: [key({ state: "someday" }), key({ id: "mk_2" })],
+    });
+    const store = new CloudHostStore(backend);
+    expect(store.machineKeys().map((entry) => entry.id)).toEqual(["mk_2"]);
+    store.removeMachineKey("mk_2");
+    expect((backend.raw() as unknown as { machineKeys: unknown[] }).machineKeys).toHaveLength(1);
+  });
+});

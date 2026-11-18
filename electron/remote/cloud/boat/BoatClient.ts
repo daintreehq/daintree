@@ -3,6 +3,8 @@ import type { z } from "zod";
 import {
   BOAT_SANDBOX_ID,
   boatActionResponseSchema,
+  boatApiKeyListSchema,
+  boatApiKeySchema,
   boatCreateResponseSchema,
   boatErrorEnvelopeSchema,
   boatLimitsSchema,
@@ -11,12 +13,15 @@ import {
   boatSandboxInfoSchema,
   boatSandboxListSchema,
   boatSandboxSchema,
+  boatScopedKeyResponseSchema,
   boatSshKeyResponseSchema,
   type BoatActionResponse,
+  type BoatApiKey,
   type BoatLimits,
   type BoatMe,
   type BoatOrg,
   type BoatSandbox,
+  type BoatScopedKeyResponse,
   type BoatSshKeyResponse,
 } from "./boatSchemas.js";
 
@@ -315,8 +320,16 @@ export class BoatClient {
     );
   }
 
-  /** A normal stop: Boat saves the disk first and refuses to discard work. Never forced from here. */
-  async stopSandbox(ctx: BoatRequestContext, sandboxId: string): Promise<BoatActionResponse> {
+  /**
+   * A normal stop: Boat saves the disk first and refuses to discard work.
+   * Never forced from here. `once` sends it a single time, for a stop whose
+   * reason has to be checked again before any second try.
+   */
+  async stopSandbox(
+    ctx: BoatRequestContext,
+    sandboxId: string,
+    options: { once?: boolean } = {}
+  ): Promise<BoatActionResponse> {
     return this.call(
       ctx,
       {
@@ -324,7 +337,7 @@ export class BoatClient {
         path: `/sandboxes/${requireSandboxId(sandboxId)}/stop`,
         body: {},
         // Stop is idempotent on Boat's side: a second call joins the pending stop.
-        retry: true,
+        retry: options.once !== true,
       },
       boatActionResponseSchema
     );
@@ -381,6 +394,48 @@ export class BoatClient {
         retry: true,
       },
       boatSshKeyResponseSchema
+    );
+  }
+
+  /**
+   * Creates a key limited to what `body` names. Sent once: Boat takes no
+   * idempotency key here, and a retry after a lost answer would make a second.
+   */
+  async createScopedKey(
+    ctx: BoatRequestContext,
+    body: { name: string; ttl: string; actions: string[]; sandboxIds: string[] }
+  ): Promise<BoatScopedKeyResponse> {
+    return this.call(
+      ctx,
+      { method: "POST", path: "/api-keys/scoped", body, retry: false },
+      boatScopedKeyResponseSchema
+    );
+  }
+
+  /** The account's keys, metadata only. A key limited to some sandboxes sees none. */
+  async listKeys(ctx: BoatRequestContext): Promise<BoatApiKey[]> {
+    const result = await this.call(
+      ctx,
+      { method: "GET", path: "/api-keys", retry: true },
+      boatApiKeyListSchema
+    );
+    const keys: BoatApiKey[] = [];
+    for (const raw of result.apiKeys) {
+      const parsed = boatApiKeySchema.safeParse(raw);
+      if (parsed.success) keys.push(parsed.data);
+    }
+    return keys;
+  }
+
+  /** Turns a key off at once. Revoking one already gone answers not-found. */
+  async revokeKey(ctx: BoatRequestContext, keyId: string): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(keyId)) {
+      throw new BoatApiError("invalid-request", "Not a Boat key id", null, null, null);
+    }
+    await this.call(
+      ctx,
+      { method: "DELETE", path: `/api-keys/${encodeURIComponent(keyId)}`, retry: true },
+      null
     );
   }
 
@@ -470,11 +525,14 @@ export class BoatClient {
     }
     if (!response.ok) {
       const envelope = boatErrorEnvelopeSchema.safeParse(json);
+      const inner = envelope.success ? envelope.data.error : undefined;
       const code = envelope.success
-        ? (envelope.data.error?.code ?? envelope.data.code ?? null)
+        ? ((typeof inner === "string" ? inner : inner?.code) ?? envelope.data.code ?? null)
         : null;
       const message = envelope.success
-        ? (envelope.data.error?.message ?? envelope.data.message ?? null)
+        ? ((typeof inner === "string" ? undefined : inner?.message) ??
+          envelope.data.message ??
+          null)
         : null;
       throw new BoatApiError(
         kindForStatus(response.status),

@@ -190,6 +190,7 @@ async function setup(
     lifetime?: CloudLifetimeModel;
     sshKey?: "at-create" | "after-create";
     onMachineStarted?: (hostId: string) => void;
+    machineKeys?: ConstructorParameters<typeof CloudHostLifecycle>[0]["machineKeys"];
   } = {}
 ) {
   const state = { machine: resource(initial) };
@@ -285,6 +286,7 @@ async function setup(
       onMachineStarted: options.onMachineStarted,
       now: options.now,
       findCommand: options.findCommand,
+      machineKeys: options.machineKeys,
     });
     return { store, accounts, lifecycle };
   };
@@ -1870,6 +1872,147 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     );
   });
 
+  it("leaves a deadline the machine's own keeper already moved, reading it before writing", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+    });
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]).toMatchObject({
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+      keptRunningAt: null,
+      lastError: null,
+    });
+  });
+
+  it("never renews a machine stopping by itself, and starts nothing", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 10 * 60_000).toISOString(),
+      stop: { id: "stop_1", status: "pending", error: null },
+    });
+    await lifecycle.renewDue();
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    expect(provider.start).not.toHaveBeenCalled();
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("reports no failure for a renewal refused because the machine stopped itself meanwhile", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      state.machine = resource({ machine: "stopping", rawState: "archiving" });
+      throw new BoatApiError("conflict", "stopping", 409, "sandbox_stopping", null);
+    });
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]).toMatchObject({ machine: "stopping", lastError: null });
+    expect(provider.start).not.toHaveBeenCalled();
+  });
+
+  it("records no failed renewal when only its read before writing failed", async () => {
+    const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 10);
+    vi.mocked(provider.inspect).mockRejectedValueOnce(
+      new BoatApiError("not-found", "gone", 404, null, null)
+    );
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).not.toHaveBeenCalled();
+    // The read's own finding stays, not a renewal that was never sent.
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("not-found");
+  });
+
+  it("clears an earlier failed renewal once the machine's own keeper moved the deadline", async () => {
+    const { lifecycle, provider, state, clock } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+    });
+    clock.now = NOW + 3 * 60_000;
+    await lifecycle.renewDue();
+    expect(provider.renewLifetime).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("clears a failed renewal when any read shows the deadline moved, not only its own", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+    state.machine = resource({
+      machine: "running",
+      autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+    });
+    await lifecycle.refresh("build");
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("reports no failed renewal when the machine's own keeper moved the deadline as it failed", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      state.machine = resource({
+        machine: "running",
+        autoStopAt: new Date(NOW + 7_200_000).toISOString(),
+      });
+      throw new BoatApiError("conflict", "busy", 409, null, null);
+    });
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError).toBeNull();
+  });
+
+  it("keeps a failed renewal shown while the machine's state can't be read", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockRejectedValueOnce(
+      new BoatApiError("server", "down", 500, null, null)
+    );
+    await lifecycle.renewDue();
+    state.machine = resource({ machine: "unknown", rawState: "weird" });
+    await lifecycle.refresh("build");
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+  });
+
+  it("still reports a failed renewal when the machine is in error rather than stopping", async () => {
+    const { lifecycle, provider, state } = await keeper(
+      { connected: true, busy: true, shown: false },
+      10
+    );
+    vi.mocked(provider.renewLifetime).mockImplementationOnce(async () => {
+      state.machine = resource({ machine: "error", rawState: "error" });
+      throw new BoatApiError("server", "down", 500, null, null);
+    });
+    await lifecycle.renewDue();
+    expect(lifecycle.statuses()[0]!.lastError?.code).toBe("lifetime-renewal");
+  });
+
   it("sends a new lifetime after a renewal under way, never before it", async () => {
     const { lifecycle, provider } = await keeper({ connected: true, busy: true, shown: false }, 10);
     let release: () => void = () => {};
@@ -2110,6 +2253,48 @@ describe("CloudHostLifecycle lifetime keeper", () => {
     await expect(deleting).rejects.toThrow();
     expect(store.bindings()[0]!.intent).toBe("run");
     expect(provider.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe("CloudHostLifecycle machine keys (#17361)", () => {
+  it("revokes the keys a removed host's machine was given, and shows why one can't stop itself", async () => {
+    const machineKeys = {
+      problemFor: vi.fn((): string | null => "This machine can't stop itself when idle."),
+      tick: vi.fn(async () => {}),
+      revokePending: vi.fn(async () => {}),
+    };
+    const env = await setup({ machine: "running" }, { machineKeys });
+    env.lifecycle.start();
+    await env.lifecycle.importMachine({
+      accountId: env.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    expect(env.lifecycle.statuses()[0]!.selfStopProblem).toBe(
+      "This machine can't stop itself when idle."
+    );
+    const binding = env.store.bindings()[0]!;
+    env.store.putMachineKey({
+      id: "mk_1",
+      bindingId: binding.id,
+      accountId: binding.accountId,
+      providerId: "boat",
+      resourceId: "bx_23456789",
+      name: "daintree-mk_1",
+      keyId: "sak_1",
+      expiresAt: Date.now() + 86_400_000,
+      state: "active",
+      createdAt: Date.now(),
+    });
+    env.hosts.splice(0, env.hosts.length);
+    await (
+      env.lifecycle as unknown as { dropOrphanBindings(): Promise<void> }
+    ).dropOrphanBindings();
+    expect(env.store.machineKeys()).toEqual([
+      expect.objectContaining({ id: "mk_1", state: "revoke" }),
+    ]);
+    expect(machineKeys.revokePending).toHaveBeenCalled();
+    env.lifecycle.dispose();
   });
 });
 

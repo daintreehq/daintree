@@ -303,3 +303,55 @@ describe("HostIdleTracker (#17357)", () => {
     expect(h.tracker.observation()).toMatchObject({ busy: true, idleEndsAt: null });
   });
 });
+
+describe("HostIdleTracker.checkFresh (#17361)", () => {
+  it("waits out a read already under way, then reads afresh with the fresh reader", async () => {
+    let release: () => void = () => {};
+    let cached = 0;
+    const tracker = new HostIdleTracker({
+      read: async () => {
+        cached += 1;
+        await new Promise<void>((resolve) => (release = resolve));
+        return { agents: { active: 0, unreadable: 0 }, shellViews: false };
+      },
+      readFresh: async () => ({ agents: { active: 1, unreadable: 0 }, shellViews: false }),
+      idleAfterMinutes: () => 30,
+    });
+    const early = tracker.check();
+    const fresh = tracker.checkFresh();
+    release();
+    await Promise.all([early, fresh]);
+    expect(cached).toBe(1);
+    expect(tracker.observation().busy).toBe(true);
+    tracker.dispose();
+  });
+
+  it("waits out every read before it, fresh ones included, then reads once more itself", async () => {
+    const releases: Array<() => void> = [];
+    let fresh = 0;
+    const tracker = new HostIdleTracker({
+      read: async () => {
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return { agents: { active: 0, unreadable: 0 }, shellViews: false };
+      },
+      readFresh: async () => {
+        fresh += 1;
+        if (fresh === 1) await new Promise<void>((resolve) => releases.push(resolve));
+        return { agents: { active: fresh === 2 ? 1 : 0, unreadable: 0 }, shellViews: false };
+      },
+      idleAfterMinutes: () => 30,
+    });
+    const cached = tracker.check();
+    const first = tracker.checkFresh();
+    const second = tracker.checkFresh();
+    releases.shift()!();
+    await cached;
+    await vi.waitFor(() => expect(fresh).toBe(1));
+    releases.shift()!();
+    await Promise.all([first, second]);
+    // The second didn't share the first's read: it began after it.
+    expect(fresh).toBe(2);
+    expect(tracker.observation().busy).toBe(true);
+    tracker.dispose();
+  });
+});
