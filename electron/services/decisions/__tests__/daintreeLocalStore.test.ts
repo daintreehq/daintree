@@ -335,7 +335,9 @@ describe("DaintreeLocalStore", () => {
       )
       .run();
     sqlite
-      .prepare("UPDATE decisions_questions SET attachment_digests = 'not json' WHERE question_id LIKE 'history-%'")
+      .prepare(
+        "UPDATE decisions_questions SET attachment_digests = 'not json' WHERE question_id LIKE 'history-%'"
+      )
       .run();
 
     let materialized = 0;
@@ -360,9 +362,11 @@ describe("DaintreeLocalStore", () => {
     expect(await store.listSessionlessQuestions("host-local", [])).toEqual([]);
 
     expect(prepared).toHaveLength(1);
-    const plan = (prepare(`EXPLAIN QUERY PLAN ${prepared[0]}`).all("host-local", "claude", "codex") as {
-      detail: string;
-    }[])
+    const plan = (
+      prepare(`EXPLAIN QUERY PLAN ${prepared[0]}`).all("host-local", "claude", "codex") as {
+        detail: string;
+      }[]
+    )
       .map((step) => step.detail)
       .join("\n");
     expect(plan).toContain("USING INDEX decisions_questions_missing_session_idx");

@@ -646,10 +646,7 @@ export class DaintreeLocalStore implements LocalStore {
    * no session yet, whatever their status, in alias order. Reads
    * decisions_questions_missing_session_idx, so linked history is never read.
    */
-  listSessionlessQuestions(
-    hostId: string,
-    agentKinds: readonly string[]
-  ): Promise<QuestionRow[]> {
+  listSessionlessQuestions(hostId: string, agentKinds: readonly string[]): Promise<QuestionRow[]> {
     const kinds = [...agentKinds];
     return this.enqueue("read", () => {
       if (kinds.length === 0) return [];
