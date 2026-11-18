@@ -34,13 +34,21 @@ vi.mock("../../../services/getSoundService.js", () => ({
 
 // A git dir read that never settles, as on a stalled network mount.
 const stallGitDirRead = vi.hoisted(() => ({ on: false }));
+// A git dir read that fails outright, which proves nothing about HEAD either.
+const failGitDirRead = vi.hoisted(() => ({ on: false }));
+// A `rev-parse` that exits non-zero with nothing on stderr, as a killed one can.
+const silentRevParseFailure = { on: false };
 
 vi.mock("../../../utils/gitUtils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/gitUtils.js")>();
   return {
     ...actual,
     resolveGitDirFromFs: (cwd: string) =>
-      stallGitDirRead.on ? new Promise<never>(() => {}) : actual.resolveGitDirFromFs(cwd),
+      failGitDirRead.on
+        ? Promise.reject(new Error("git dir unreadable"))
+        : stallGitDirRead.on
+          ? new Promise<never>(() => {})
+          : actual.resolveGitDirFromFs(cwd),
   };
 });
 
@@ -78,6 +86,7 @@ let repo: string;
 let home: string;
 const savedEnv: Record<string, string | undefined> = {};
 let CHANNELS: typeof import("../../channels.js").CHANNELS;
+let batchPathsForArgv: typeof import("../../../utils/git.js").batchPathsForArgv;
 let resetRateLimits: () => void;
 
 function handler(channel: string) {
@@ -112,11 +121,15 @@ beforeAll(async () => {
     if (silentStatusFailure.on && subcommand(args[1] as string[]) === "status") {
       args = [process.execPath, ["-e", "process.exit(1)"], args[2]];
     }
+    if (silentRevParseFailure.on && subcommand(args[1] as string[]) === "rev-parse") {
+      return originalSpawn(process.execPath, ["-e", "process.exit(1)"], args[2] as never);
+    }
     return (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(...args);
   }) as typeof originalSpawn;
   syncBuiltinESMExports();
 
   ({ CHANNELS } = await import("../../channels.js"));
+  ({ batchPathsForArgv } = await import("../../../utils/git.js"));
   ({ _resetRateLimitQueuesForTest: resetRateLimits } = await import("../../utils.js"));
   const { registerGitWriteHandlers } = await import("../git-write.js");
   registerGitWriteHandlers({} as never);
@@ -212,6 +225,25 @@ describe("git-write staging handlers (real git)", () => {
     } finally {
       vi.useRealTimers();
       stallGitDirRead.on = false;
+    }
+  });
+
+  it("reads a probe that fails silently as a commit, so several files unstage without a deletion", async () => {
+    commitFiles({ "a.txt": "one\n", "b.txt": "one\n" });
+    for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(repo, name), "two\n");
+    git(repo, "add", ".");
+
+    failGitDirRead.on = true;
+    silentRevParseFailure.on = true;
+    try {
+      const mark = spawned.length;
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: ["a.txt", "b.txt"] });
+      expect(spawnedSince(mark).map(subcommand)).toEqual(["rev-parse", "status", "reset"]);
+      expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+      expect(git(repo, "ls-files")).toBe("a.txt\nb.txt\n");
+    } finally {
+      failGitDirRead.on = false;
+      silentRevParseFailure.on = false;
     }
   });
 
@@ -381,6 +413,269 @@ describe("git-write staging handlers (real git)", () => {
 
       expect(cached()).toBe("D\toriginal.txt\nA\trenamed.txt\n");
     });
+  });
+
+  describe("a selection longer than the Windows command line", () => {
+    // Windows caps a whole command line at 32,767 characters.
+    const WINDOWS_COMMAND_LINE_MAX = 32_767;
+    // Glob, magic, option and quoting lookalikes, each a literal filename here.
+    const unusual = [
+      "é space.txt",
+      "[...slug].tsx",
+      "-leading-dash.txt",
+      ...(process.platform === "win32"
+        ? []
+        : [":leading-colon.txt", "star*.txt", "new\nline.txt", 'quote".txt']),
+    ];
+    // Unselected files a glob or prefix reading of the selection would catch.
+    const decoys = ["s.tsx", "star-decoy.txt", "leading-colon.txt"];
+
+    function longSelection(): string[] {
+      const dir = `nested/${"d".repeat(40)}`;
+      const names = Array.from(
+        { length: 420 },
+        (_, i) => `${dir}/${"f".repeat(40)}-${String(i).padStart(4, "0")}.txt`
+      );
+      return [...names, ...unusual];
+    }
+
+    function writeAll(names: readonly string[], content: string): void {
+      for (const name of names) {
+        fs.mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+        fs.writeFileSync(path.join(repo, name), content);
+      }
+    }
+
+    function indexed(...args: string[]): string[] {
+      return git(repo, ...args, "-z")
+        .split("\0")
+        .filter(Boolean)
+        .sort();
+    }
+
+    // Each argument as Windows may quote it, after room for the executable's
+    // own path at the longest a classic Windows path runs.
+    function windowsCommandLineLength(args: readonly string[]): number {
+      return args.reduce((sum, arg) => sum + arg.length + 3, 260);
+    }
+
+    function expectEveryCommandLineFits(commands: string[][]): void {
+      expect(commands.length).toBeGreaterThan(0);
+      for (const args of commands) {
+        expect(windowsCommandLineLength(args)).toBeLessThan(WINDOWS_COMMAND_LINE_MAX);
+      }
+    }
+
+    async function rejection(run: Promise<unknown>): Promise<Error> {
+      const error = await run.then(
+        () => null,
+        (err: unknown) => err
+      );
+      if (!(error instanceof Error)) throw new Error("expected the write to fail");
+      return error;
+    }
+
+    it("stages exactly the selected paths", async () => {
+      commitFiles({ "keep.txt": "base\n" });
+      const selection = longSelection();
+      expect(selection.join(" ").length).toBeGreaterThan(WINDOWS_COMMAND_LINE_MAX);
+      writeAll([...selection, ...decoys], "new\n");
+
+      const mark = spawned.length;
+      await handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection });
+
+      expect(indexed("diff", "--cached", "--name-only")).toEqual([...selection].sort());
+      expectEveryCommandLineFits(spawnedSince(mark));
+    });
+
+    it("unstages exactly the selected paths", async () => {
+      const selection = longSelection();
+      writeAll([...selection, ...decoys], "base\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-q", "-m", "base");
+      writeAll([...selection, ...decoys], "changed\n");
+      git(repo, "add", ".");
+
+      const mark = spawned.length;
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: selection });
+
+      expect(indexed("diff", "--cached", "--name-only")).toEqual([...decoys].sort());
+      expectEveryCommandLineFits(spawnedSince(mark));
+    });
+
+    it("unstages exactly the selected paths on an unborn branch", async () => {
+      const selection = longSelection();
+      writeAll([...selection, ...decoys], "new\n");
+      git(repo, "add", ".");
+
+      const mark = spawned.length;
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: selection });
+
+      expect(indexed("ls-files")).toEqual([...decoys].sort());
+      expect(fs.existsSync(path.join(repo, selection[0]!))).toBe(true);
+      expectEveryCommandLineFits(spawnedSince(mark));
+    });
+
+    it("unstages both halves of a staged rename in one batch", async () => {
+      const selection = longSelection();
+      writeAll(selection, "base\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-q", "-m", "base");
+      writeAll(selection.slice(1), "changed\n");
+      git(repo, "add", ".");
+      const from = selection[0]!;
+      const to = `${from}.moved`;
+      git(repo, "mv", from, to);
+      expect(git(repo, "status", "--porcelain=v1", "--", from, to)).toContain("R  ");
+
+      const mark = spawned.length;
+      // The rename's row goes by its destination, and its source isn't asked for.
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, {
+        cwd: repo,
+        filePaths: [to, ...selection.slice(1)],
+      });
+
+      expect(indexed("diff", "--cached", "--name-only")).toEqual([]);
+      const resets = spawnedSince(mark).filter((args) => subcommand(args) === "reset");
+      expect(resets.length).toBeGreaterThanOrEqual(3);
+      const withRename = resets.filter((args) => args.includes(to));
+      expect(withRename).toHaveLength(1);
+      expect(withRename[0]).toContain(from);
+      expectEveryCommandLineFits(resets);
+    });
+
+    it("says how many paths were staged when a later batch fails", async () => {
+      commitFiles({ "keep.txt": "base\n" });
+      const selection = longSelection();
+      const batches = batchPathsForArgv(selection);
+      expect(batches.length).toBeGreaterThanOrEqual(3);
+      const missing = batches[1]![0]!;
+      writeAll(
+        selection.filter((name) => name !== missing),
+        "new\n"
+      );
+
+      const mark = spawned.length;
+      const error = await rejection(
+        handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection })
+      );
+
+      expect(error.message).toMatch(
+        new RegExp(
+          `^Staged at least ${batches[0]!.length} of ${selection.length} files before Git stopped: `
+        )
+      );
+      expect(error.message).toContain("did not match any files");
+      expect(indexed("diff", "--cached", "--name-only")).toEqual([...batches[0]!].sort());
+      expect(spawnedSince(mark).filter((args) => subcommand(args) === "add")).toHaveLength(2);
+
+      // The same selection again, once the missing file exists, stages it all.
+      writeAll([missing], "new\n");
+      await handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection });
+      expect(indexed("diff", "--cached", "--name-only")).toEqual([...selection].sort());
+    });
+
+    it("claims no more than git confirmed when a failed add still stages part of its batch", async () => {
+      commitFiles({ "keep.txt": "base\n" });
+      const selection = longSelection();
+      const batches = batchPathsForArgv(selection);
+      expect(batches.length).toBeGreaterThanOrEqual(3);
+      writeAll(selection, "new\n");
+      // An ignored path makes `add` stage the rest of its batch and exit 1.
+      const ignored = batches[1]![0]!;
+      fs.writeFileSync(path.join(repo, ".git", "info", "exclude"), `/${ignored}\n`);
+
+      const error = await rejection(
+        handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection })
+      );
+
+      expect(error.message).toMatch(
+        new RegExp(
+          `^Staged at least ${batches[0]!.length} of ${selection.length} files before Git stopped: `
+        )
+      );
+      const staged = indexed("diff", "--cached", "--name-only");
+      expect(staged).toEqual([...batches[0]!, ...batches[1]!.slice(1)].sort());
+    });
+
+    it("runs overlapping writes to one worktree one after the other", async () => {
+      const selection = longSelection();
+      const batchCount = batchPathsForArgv(selection).length;
+      expect(batchCount).toBeGreaterThanOrEqual(3);
+      writeAll(selection, "base\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-q", "-m", "base");
+      writeAll(selection, "changed\n");
+
+      const mark = spawned.length;
+      await Promise.all([
+        handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection }),
+        handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: selection }),
+      ]);
+
+      const writes = spawnedSince(mark)
+        .map(subcommand)
+        .filter((command) => command === "add" || command === "reset");
+      const run = (command: string) => Array<string>(batchCount).fill(command);
+      const stagedFirst = writes[0] === "add";
+      expect(writes).toEqual(
+        stagedFirst ? [...run("add"), ...run("reset")] : [...run("reset"), ...run("add")]
+      );
+      expect(indexed("diff", "--cached", "--name-only")).toEqual(
+        stagedFirst ? [] : [...selection].sort()
+      );
+    });
+
+    it("passes a first-batch failure through unchanged, with nothing staged", async () => {
+      commitFiles({ "keep.txt": "base\n" });
+      const selection = longSelection();
+      const missing = selection[0]!;
+      writeAll(selection.slice(1), "new\n");
+
+      const error = await rejection(
+        handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: selection })
+      );
+
+      expect(error.message).not.toContain("before Git stopped");
+      expect(error.message).toContain(`pathspec '${missing}' did not match any files`);
+      expect(indexed("diff", "--cached", "--name-only")).toEqual([]);
+    });
+
+    it("says how many paths were unstaged on an unborn branch, and replays the whole selection", async () => {
+      const selection = longSelection();
+      const batches = batchPathsForArgv(selection);
+      expect(batches.length).toBeGreaterThanOrEqual(3);
+      writeAll(selection, "indexed\n");
+      git(repo, "add", ".");
+      // Staged content that differs from both the file and HEAD: `rm --cached`
+      // refuses it, and with it the whole batch it rides in.
+      const refused = batches[1]![0]!;
+      writeAll([refused], "edited\n");
+
+      const error = await rejection(
+        handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: selection })
+      );
+
+      expect(error.message).toMatch(
+        new RegExp(
+          `^Unstaged at least ${batches[0]!.length} of ${selection.length} files before Git stopped: `
+        )
+      );
+      expect(indexed("ls-files")).toEqual(batches.slice(1).flat().sort());
+
+      writeAll([refused], "indexed\n");
+      await handler(CHANNELS.GIT_UNSTAGE_FILES)(null, { cwd: repo, filePaths: selection });
+      expect(indexed("ls-files")).toEqual([]);
+    });
+  });
+
+  it("refuses a path holding a NUL before running any git", async () => {
+    fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
+    const mark = spawned.length;
+    await expect(
+      handler(CHANNELS.GIT_STAGE_FILES)(null, { cwd: repo, filePaths: ["a.txt", "b\0.txt"] })
+    ).rejects.toThrow("Invalid file path in filePaths");
+    expect(spawnedSince(mark)).toEqual([]);
   });
 
   it("reads churn by exact path, with no root probe and no config read", async () => {

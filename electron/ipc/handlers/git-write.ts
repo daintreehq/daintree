@@ -46,6 +46,7 @@ import {
   createStrictExitGit,
 } from "../../utils/hardenedGit.js";
 import {
+  batchPathGroupsForArgv,
   getPerFileDiffStats,
   invalidateStagingDiffStatCache,
   resolveHeadOidFromGitDir,
@@ -53,6 +54,7 @@ import {
 import { resolveGitDirFromFs } from "../../utils/gitUtils.js";
 import { parsePorcelainV1Z } from "../../services/git/fileMutation.js";
 import { withTimeout } from "../../utils/withTimeout.js";
+import { runExclusive } from "../../utils/keyedMutex.js";
 import {
   resolveExistingBaseCompareTarget,
   type ExistingBaseCompareTarget,
@@ -1468,10 +1470,10 @@ async function hasHeadCommit(
 }
 
 /**
- * The paths a reset to HEAD has to name to unstage `paths`: each one, plus the
- * other half of any staged rename it names. Git resets only the paths it is
- * given, so resetting a rename's destination alone leaves its source staged for
- * deletion, and the next commit still deletes it.
+ * The paths a reset to HEAD has to name to unstage `paths`, one group for each:
+ * the path, plus the other half of any staged rename it names. Git resets only
+ * the paths it is given, so resetting a rename's destination alone leaves its
+ * source staged for deletion, and the next commit still deletes it.
  *
  * Pairs come from an unscoped status read, the one Review Hub lists rows from
  * (`status.renames` decides what is a pair): a pathspec would hide the half it
@@ -1480,7 +1482,7 @@ async function hasHeadCommit(
  * read must answer before anything is reset; an empty answer from a git that
  * died would quietly bring the half-unstage back.
  */
-async function withStagedRenamePartners(cwd: string, paths: string[]): Promise<string[]> {
+async function withStagedRenamePartners(cwd: string, paths: string[]): Promise<string[][]> {
   const git = await createStrictExitGit(cwd);
   const entries = parsePorcelainV1Z(
     await git.raw([
@@ -1491,16 +1493,23 @@ async function withStagedRenamePartners(cwd: string, paths: string[]): Promise<s
       "--ignore-submodules=dirty",
     ])
   );
-  const requested = new Set(paths);
-  const expanded = new Set(paths);
+  const partners = new Map<string, string>();
   for (const entry of entries) {
     if (entry.x !== "R" || !entry.origPath) continue;
-    if (requested.has(entry.path) || requested.has(entry.origPath)) {
-      expanded.add(entry.origPath);
-      expanded.add(entry.path);
-    }
+    partners.set(entry.path, entry.origPath);
+    partners.set(entry.origPath, entry.path);
   }
-  return [...expanded];
+  // Each path lands in one group only, even when both halves were asked for.
+  const placed = new Set<string>();
+  const groups: string[][] = [];
+  for (const requested of paths) {
+    if (placed.has(requested)) continue;
+    const partner = partners.get(requested);
+    const group = partner === undefined || placed.has(partner) ? [requested] : [requested, partner];
+    for (const p of group) placed.add(p);
+    groups.push(group);
+  }
+  return groups;
 }
 
 type DiffGit = Pick<Awaited<ReturnType<typeof createHardenedGit>>, "diff" | "raw">;
@@ -1570,7 +1579,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       await git.reset([
         "HEAD",
         "--",
-        ...(await withStagedRenamePartners(payload.cwd, [payload.filePath])),
+        ...(await withStagedRenamePartners(payload.cwd, [payload.filePath])).flat(),
       ]);
     } else {
       await git.raw(["rm", "--cached", "--", payload.filePath]);
@@ -1584,21 +1593,70 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("filePaths must be a non-empty array");
     }
     for (const p of filePaths) {
-      if (typeof p !== "string" || !p) {
+      // A NUL would fail the spawn, possibly after earlier batches had landed.
+      if (typeof p !== "string" || !p || p.includes("\0")) {
         throw new Error("Invalid file path in filePaths");
       }
     }
     return filePaths as string[];
   };
 
+  /**
+   * One git write per batch of pathspecs, so a large selection never overflows
+   * the OS command line. Batches run in order and stop at the first failure.
+   * The batches before it have landed, so the error names how many paths git
+   * confirmed; "at least", because a failed `add` can still stage some of its
+   * own batch. A failure before any batch landed passes through unchanged.
+   *
+   * Plural writes to one worktree run one at a time: two interleaving their
+   * batches could leave an index that neither order of the two would. Each
+   * picks its write command once its turn comes, from the repository as it is
+   * then.
+   */
+  const writeInBatches = (
+    cwd: string,
+    paths: string[],
+    verb: "Staged" | "Unstaged",
+    prepare: () => Promise<{
+      write: (batch: string[]) => Promise<unknown>;
+      /** What to write, each group kept in one batch; `paths` one at a time when absent. */
+      groups?: string[][];
+    }>
+  ): Promise<void> =>
+    runExclusive(`git-index-batches:${path.resolve(cwd)}`, async () => {
+      const requested = new Set(paths);
+      let confirmed = 0;
+      try {
+        const { write, groups = paths.map((p) => [p]) } = await prepare();
+        for (const batch of batchPathGroupsForArgv(groups)) {
+          try {
+            await write(batch);
+          } catch (err) {
+            if (confirmed === 0) throw err;
+            const reason = formatErrorMessage(err, "Git failed without a message");
+            throw new Error(
+              `${verb} at least ${confirmed} of ${paths.length} files before Git stopped: ${reason}`,
+              { cause: err }
+            );
+          }
+          // Paths a group added beside a requested one aren't part of the count.
+          confirmed += batch.filter((p) => requested.has(p)).length;
+        }
+      } finally {
+        invalidateStagingDiffStatCache(cwd);
+      }
+    });
+
   const handleStageFiles = async (payload: { cwd: string; filePaths: string[] }): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_STAGE_FILES, 10, 10_000);
     validateCwd(payload?.cwd);
     const paths = validateFilePaths(payload?.filePaths);
 
-    const git = await createHardenedGit(payload.cwd);
-    await git.add(["--", ...paths]);
-    invalidateStagingDiffStatCache(payload.cwd);
+    await writeInBatches(payload.cwd, paths, "Staged", async () => {
+      // Strict exit: a batch only counts as confirmed when git exits 0.
+      const git = await createStrictExitGit(payload.cwd);
+      return { write: (batch) => git.add(["--", ...batch]) };
+    });
   };
   handlers.push(typedHandle(CHANNELS.GIT_STAGE_FILES, handleStageFiles));
 
@@ -1610,14 +1668,26 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(payload?.cwd);
     const paths = validateFilePaths(payload?.filePaths);
 
-    const git = await createHardenedGit(payload.cwd);
-
-    if (await hasHeadCommit(git, payload.cwd)) {
-      await git.reset(["HEAD", "--", ...(await withStagedRenamePartners(payload.cwd, paths))]);
-    } else {
-      await git.raw(["rm", "--cached", "--", ...paths]);
-    }
-    invalidateStagingDiffStatCache(payload.cwd);
+    await writeInBatches(payload.cwd, paths, "Unstaged", async () => {
+      // The probe keeps the default client, where a probe that dies silently
+      // reads as a commit: `reset` then fails loudly on a truly unborn branch,
+      // where taking `rm --cached` on a born one would stage deletions.
+      const hasHead = await hasHeadCommit(await createHardenedGit(payload.cwd), payload.cwd);
+      const git = await createStrictExitGit(payload.cwd);
+      // Both forms replay cleanly over paths an earlier, partly failed run
+      // already unstaged: `reset` matches nothing silently, and `rm` is told to.
+      if (!hasHead) {
+        return {
+          write: (batch) => git.raw(["rm", "--cached", "--ignore-unmatch", "-q", "--", ...batch]),
+        };
+      }
+      // A staged rename's halves share a batch: a failure between them would
+      // leave the source staged for deletion, and a replay could no longer pair it.
+      return {
+        groups: await withStagedRenamePartners(payload.cwd, paths),
+        write: (batch) => git.reset(["HEAD", "--", ...batch]),
+      };
+    });
   };
   handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_FILES, handleUnstageFiles));
 

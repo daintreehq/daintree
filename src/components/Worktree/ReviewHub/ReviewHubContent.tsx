@@ -1171,6 +1171,7 @@ export function ReviewHubContent({
     refresh,
     derivedStaged,
     derivedUnstaged,
+    unstaged: status?.unstaged ?? null,
     selectedPaths,
     selectionSection,
     setActionError,
