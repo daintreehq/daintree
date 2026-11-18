@@ -772,9 +772,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
           )}
         </div>
 
-        <div className="relative h-1">
-          {showProgress && <ProgressBar label={openingText} />}
-        </div>
+        <div className="relative h-1">{showProgress && <ProgressBar label={openingText} />}</div>
 
         {roots && roots.roots.length > 0 && (
           <div className="-mt-1 flex flex-wrap items-center gap-1" aria-label="Places">
