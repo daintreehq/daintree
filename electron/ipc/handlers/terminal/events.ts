@@ -41,6 +41,45 @@ import {
 } from "./spawnConfirmation.js";
 import type { HandlerDependencies } from "../../types.js";
 
+/**
+ * Hands each project view the pause-duration entries and clears for its own
+ * terminals, in one envelope: an older renderer reads each envelope as its
+ * project's whole snapshot. Held samples repeat every tick, so a frozen view
+ * may skip them; a tick that clears anything reaches frozen views too, since
+ * nothing says a clear twice.
+ */
+function relayPauseDurationGauge(
+  payload: TerminalReliabilityMetricPayload,
+  projectOf: (terminalId: string) => string | null
+): void {
+  const { perTerminalHeld, clearedTerminalIds, ...envelope } = payload;
+  const entries: Record<string, number | null> = {};
+  for (const entry of perTerminalHeld ?? []) entries[entry.terminalId] = entry.heldDurationMs;
+  for (const terminalId of clearedTerminalIds ?? []) entries[terminalId] = null;
+  broadcastSlicedToProjectRenderers(
+    CHANNELS.EVENTS_PUSH,
+    entries,
+    projectOf,
+    (slice) => {
+      const held: Array<{ terminalId: string; heldDurationMs: number }> = [];
+      const cleared: string[] = [];
+      for (const [terminalId, heldDurationMs] of Object.entries(slice)) {
+        if (heldDurationMs === null) cleared.push(terminalId);
+        else held.push({ terminalId, heldDurationMs });
+      }
+      return {
+        name: "terminal:reliability-metric",
+        payload: {
+          ...envelope,
+          perTerminalHeld: held,
+          ...(cleared.length > 0 ? { clearedTerminalIds: cleared } : {}),
+        },
+      };
+    },
+    { includeFrozenViews: (clearedTerminalIds?.length ?? 0) > 0, ownersOnly: true }
+  );
+}
+
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
   if (!ptyClient) {
@@ -309,9 +348,16 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Backpressure/suspend transitions. The only consumer is the owning pane's
   // stall watchdog, so it goes to that project's views like terminal:status.
+  // A pause-duration gauge is one shard's batch under the synthetic
+  // "resource-governor" id, so each of its entries goes to its own terminal's
+  // project instead (#17575).
   const unsubReliabilityMetric = events.on(
     "terminal:reliability-metric",
     (payload: TerminalReliabilityMetricPayload) => {
+      if (payload.metricType === "pause-duration-gauge") {
+        relayPauseDurationGauge(payload, (id) => ptyClient.getTerminalProjectId(id));
+        return;
+      }
       broadcastToProjectRenderers(
         ptyClient.getTerminalProjectId(payload.terminalId),
         CHANNELS.EVENTS_PUSH,

@@ -89,7 +89,7 @@ export function enqueueFlowStatusUpdate(
  */
 export function enqueueHeldDurationUpdate(terminalId: string, heldDurationMs: number): void {
   // Non-null patches do not clobber a pending null for the same terminal —
-  // a `null` from a fresh tick (terminal no longer in the gauge) wins
+  // a `null` from a fresh tick (terminal cleared from the gauge) wins
   // because the host has already stopped emitting it. Without this guard
   // a stale non-null entry from a previous tick could resurrect a value
   // for a terminal that's already resumed.
@@ -195,7 +195,9 @@ export function flushPanelStatusBuffer(): void {
       for (const [id, patch] of held) {
         const terminal = nextById[id];
         if (!terminal || !isPtyPanel(terminal)) continue;
-        if (terminal.heldDurationMs === patch.heldDurationMs) continue;
+        // A clear for a panel that holds no duration (a gauge clear after
+        // `pause-end` already cleared it) changes nothing, so it writes nothing.
+        if (terminal.heldDurationMs === (patch.heldDurationMs ?? undefined)) continue;
         nextById[id] = {
           ...terminal,
           // `null` clears the field via destructuring-rest; a number sets it.
@@ -234,4 +236,22 @@ export function cancelPanelStatusBuffer(): void {
 export function cancelTerminalFlowState(terminalId: string): void {
   flowStatusBuffer.delete(terminalId);
   heldDurationBuffer.delete(terminalId);
+}
+
+/**
+ * Forget every held duration, buffered or committed, at a gap in the host's
+ * events: the gauge that named a hold as over may be among those missed
+ * (#17575). Samples after the gap set them again, for holds still running.
+ */
+export function dropAllHeldDurations(): void {
+  heldDurationBuffer.clear();
+  usePanelStore.setState((state) => {
+    let nextById: typeof state.panelsById | null = null;
+    for (const [id, panel] of Object.entries(state.panelsById)) {
+      if (!panel || !isPtyPanel(panel) || panel.heldDurationMs === undefined) continue;
+      nextById ??= { ...state.panelsById };
+      nextById[id] = { ...panel, heldDurationMs: undefined };
+    }
+    return nextById ? { panelsById: nextById } : state;
+  });
 }

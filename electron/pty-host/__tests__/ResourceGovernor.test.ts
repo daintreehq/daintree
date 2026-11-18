@@ -875,6 +875,35 @@ describe("ResourceGovernor", () => {
 
       governor.dispose();
     });
+
+    it("names each terminal that left the gauge once, on the tick it left (#17575)", () => {
+      let held: Array<{ terminalId: string; heldDurationMs: number }> = [];
+      const deps = createMockDeps({ getPausedDurationsSnapshot: vi.fn(() => held) });
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      const sendEvent = deps.sendEvent as ReturnType<typeof vi.fn>;
+      const tick = (next: typeof held) => {
+        held = next;
+        sendEvent.mockClear();
+        vi.advanceTimersByTime(2000);
+        return sendEvent.mock.calls
+          .map((c: unknown[]) => (c[0] as { payload?: Record<string, unknown> }).payload)
+          .filter((p) => p?.metricType === "pause-duration-gauge")
+          .map((p) => ({ held: p!.perTerminalHeld, cleared: p!.clearedTerminalIds }));
+      };
+      const t1 = { terminalId: "t1", heldDurationMs: 2000 };
+      const t2 = { terminalId: "t2", heldDurationMs: 1000 };
+
+      expect(tick([t1, t2])).toEqual([{ held: [t1, t2], cleared: undefined }]);
+      expect(tick([t2])).toEqual([{ held: [t2], cleared: ["t1"] }]);
+      expect(tick([])).toEqual([{ held: [], cleared: ["t2"] }]);
+      expect(tick([])).toEqual([]);
+      expect(tick([t1])).toEqual([{ held: [t1], cleared: undefined }]);
+      // A terminal that pauses again is cleared again when that hold ends.
+      expect(tick([])).toEqual([{ held: [], cleared: ["t1"] }]);
+
+      governor.dispose();
+    });
   });
 
   describe("queue-depth-gauge", () => {

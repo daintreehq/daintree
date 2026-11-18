@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { bridgePtyEvent } from "../PtyEventsBridge.js";
 import { events } from "../../events.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
+import type { PtyHostEvent } from "../../../../shared/types/pty-host.js";
 import {
   clearClaudeUsageObservations,
   readClaudeUsageRecords,
@@ -539,5 +540,92 @@ describe("bridgePtyEvent", () => {
   it("returns false for unhandled event types", () => {
     const handled = bridgePtyEvent({ type: "unknown-event" } as never);
     expect(handled).toBe(false);
+  });
+});
+
+describe("bridgePtyEvent — pause-duration gauge ownership (#17575)", () => {
+  afterEach(() => events.removeAllListeners());
+
+  function collect() {
+    const seen: unknown[] = [];
+    events.on("terminal:reliability-metric", (payload) => seen.push(payload));
+    return seen;
+  }
+
+  const gauge = {
+    type: "terminal-reliability-metric",
+    payload: {
+      terminalId: "resource-governor",
+      metricType: "pause-duration-gauge",
+      timestamp: 1,
+      perTerminalHeld: [
+        { terminalId: "own-1", heldDurationMs: 2000 },
+        { terminalId: "moved-1", heldDurationMs: 3000 },
+      ],
+      clearedTerminalIds: ["own-2", "moved-2"],
+    },
+  } satisfies PtyHostEvent;
+  const isForeignTerminal = (id: string) => id.startsWith("moved-");
+
+  it("drops entries and clears for terminals another shard owns", () => {
+    const seen = collect();
+
+    bridgePtyEvent(structuredClone(gauge), { isForeignTerminal });
+
+    expect(seen).toEqual([
+      {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: 1,
+        perTerminalHeld: [{ terminalId: "own-1", heldDurationMs: 2000 }],
+        clearedTerminalIds: ["own-2"],
+      },
+    ]);
+  });
+
+  it("drops a clear list made only of another shard's terminals", () => {
+    const seen = collect();
+    const event = structuredClone(gauge);
+    event.payload.clearedTerminalIds = ["moved-2"];
+
+    bridgePtyEvent(event, { isForeignTerminal });
+
+    expect(seen).toEqual([
+      {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: 1,
+        perTerminalHeld: [{ terminalId: "own-1", heldDurationMs: 2000 }],
+      },
+    ]);
+  });
+
+  it("emits nothing when every entry belongs to another shard", () => {
+    const seen = collect();
+
+    const handled = bridgePtyEvent(structuredClone(gauge), { isForeignTerminal: () => true });
+
+    expect(handled).toBe(true);
+    expect(seen).toEqual([]);
+  });
+
+  it("passes the gauge through untouched without an ownership check", () => {
+    const seen = collect();
+
+    bridgePtyEvent(structuredClone(gauge));
+
+    expect(seen).toEqual([gauge.payload]);
+  });
+
+  it("leaves other metrics alone even when they name a foreign terminal", () => {
+    const seen = collect();
+    const pauseEnd = {
+      type: "terminal-reliability-metric",
+      payload: { terminalId: "moved-1", metricType: "pause-end", timestamp: 1, durationMs: 5 },
+    } satisfies PtyHostEvent;
+
+    bridgePtyEvent(structuredClone(pauseEnd), { isForeignTerminal });
+
+    expect(seen).toEqual([pauseEnd.payload]);
   });
 });

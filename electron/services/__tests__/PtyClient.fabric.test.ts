@@ -1022,6 +1022,74 @@ describe("PtyClient fabric", () => {
     });
   });
 
+  describe("pause-duration gauge ownership (#17575)", () => {
+    const gaugeEvent = (held: string[], cleared?: string[]) => ({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: 1,
+        perTerminalHeld: held.map((terminalId) => ({ terminalId, heldDurationMs: 1000 })),
+        ...(cleared ? { clearedTerminalIds: cleared } : {}),
+      },
+    });
+
+    // From the post-`resetModules` graph, the bus PtyClient emits on.
+    const collectGauges = async () => {
+      const { events } = await import("../events.js");
+      const seen: Array<{ held: string[]; cleared: string[] | undefined }> = [];
+      events.on("terminal:reliability-metric", (payload) => {
+        if (payload.metricType !== "pause-duration-gauge") return;
+        seen.push({
+          held: (payload.perTerminalHeld ?? []).map((entry) => entry.terminalId),
+          cleared: payload.clearedTerminalIds,
+        });
+      });
+      return seen;
+    };
+
+    it("drops a former shard's word on a terminal that moved, keeps the new owner's", async () => {
+      const seen = await collectGauges();
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      client.spawn("t2", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      const shardB = projectShard("project-b");
+      shardB.child.emit("message", { type: "ready" });
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+      client.spawn("t1", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+
+      shardA.child.emit("message", gaugeEvent([], ["t1"]));
+      shardB.child.emit("message", gaugeEvent(["t1", "t2"]));
+
+      expect(seen).toEqual([{ held: ["t1", "t2"], cleared: undefined }]);
+      client.dispose();
+    });
+
+    it("clears every live terminal a crashed shard owned, and none of a sibling's", async () => {
+      const seen = await collectGauges();
+      const client = createFabricClient();
+      client.spawn("t0", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t3", { cwd: "/tmp", cols: 80, rows: 24 });
+      client.spawn("t4", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      // Exited but kept on the shard: its own exit already cleared it.
+      shardA.child.emit("message", { type: "exit", id: "t0", exitCode: 0, preserved: true });
+      // Killed, with the exit the crash swallows still to come.
+      client.kill("t4");
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(seen).toEqual([{ held: [], cleared: ["t1", "t2", "t4"] }]);
+      client.dispose();
+    });
+  });
+
   describe("window port routing", () => {
     it("routes a window's port to its active project's shard and disconnects the previous shard", () => {
       const client = createFabricClient();

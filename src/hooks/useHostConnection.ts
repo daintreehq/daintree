@@ -159,6 +159,10 @@ export interface ResyncFromHostOptions {
  */
 export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
+  safeFireAndForget(
+    import("@/store/panelStatusBuffer").then(({ dropAllHeldDurations }) => dropAllHeldDurations()),
+    { context: "Dropping held pause durations after missed host events" }
+  );
   if (options.freshSession) {
     resyncProjectStateOwed = true;
     // The host forgot which plugin views this one shows; without them it would
