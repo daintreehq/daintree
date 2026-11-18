@@ -16,6 +16,7 @@ vi.mock("@/clients/operationsClient", () => ({ mintRemoteOperationId: () => unde
 
 import { useReviewHubCommitAndPush } from "../useReviewHubCommitAndPush";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
+import { useGitPushConfirmStore, type GitPushConfirmResult } from "@/store/gitPushConfirmStore";
 
 const PATH = "/repo";
 const DESTINATION = { remote: "origin", branch: "feature/x" };
@@ -227,5 +228,226 @@ describe("useReviewHubCommitAndPush — tip moves (#17196)", () => {
       await result.current.confirmPullRebase();
     });
     expect(headMoved).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useReviewHubCommitAndPush — first commit (#17588)", () => {
+  const ROOT: GitCommitResult = { ...COMMITTED, parentOids: [] };
+  // Not the root commit's OID: what is pushed is what the review approved,
+  // which may include a commit that landed before the review read the branch.
+  const FIRST_PUSH = {
+    branch: "main",
+    headOid: "b".repeat(40),
+    destination: { remote: "origin", branch: "main" },
+  };
+  const APPROVED: GitPushConfirmResult = { confirmed: true, review: FIRST_PUSH };
+  const DECLINED: GitPushConfirmResult = { confirmed: false, review: null };
+  const originalRequestConfirmation = useGitPushConfirmStore.getState().requestConfirmation;
+
+  afterEach(() => {
+    useGitPushConfirmStore.setState({ requestConfirmation: originalRequestConfirmation });
+    // A failed assertion must not leave a review pending for the next test.
+    useGitPushConfirmStore.getState().resolveConfirmation(null);
+  });
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => (resolve = res));
+    return { promise, resolve };
+  }
+
+  function stubReview(answer: () => Promise<GitPushConfirmResult>) {
+    const requestConfirmation = vi.fn((_cwd: string, _options?: { yieldToPending?: boolean }) =>
+      answer()
+    );
+    useGitPushConfirmStore.setState({ requestConfirmation });
+    return requestConfirmation;
+  }
+
+  function renderFirstPushHook(refresh: () => Promise<void> = () => Promise.resolve()) {
+    return renderHook(
+      ({ path }: { path: string }) =>
+        useReviewHubCommitAndPush({
+          worktreePath: path,
+          refresh,
+          setActionError: () => {},
+          debouncedBgRefreshRef: { current: null },
+          onCommitted: () => {},
+          onHeadMoved: headMoved,
+        }),
+      { initialProps: { path: PATH } }
+    );
+  }
+
+  it("asks for the push review only after the commit and the refresh both land", async () => {
+    const landed = deferred<GitCommitResult>();
+    const refreshed = deferred<void>();
+    commit.mockReturnValue(landed.promise);
+    const requestConfirmation = stubReview(async () => APPROVED);
+    const { result } = renderFirstPushHook(() => refreshed.promise);
+
+    let done!: Promise<void>;
+    act(() => {
+      done = result.current.handleCommitThenReviewPush("Initial commit");
+    });
+    await act(async () => {});
+    expect(commit).toHaveBeenCalledWith(PATH, "Initial commit");
+    expect(requestConfirmation).not.toHaveBeenCalled();
+
+    await act(async () => landed.resolve(ROOT));
+    expect(requestConfirmation).not.toHaveBeenCalled();
+
+    await act(async () => {
+      refreshed.resolve();
+      await done;
+    });
+    expect(requestConfirmation).toHaveBeenCalledWith(PATH, { yieldToPending: true });
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push).toHaveBeenCalledWith(PATH, undefined, undefined, FIRST_PUSH);
+    expect(push).toHaveBeenCalledWith(
+      PATH,
+      undefined,
+      undefined,
+      expect.objectContaining({ headOid: "b".repeat(40) })
+    );
+  });
+
+  it("keeps the commit and pushes nothing when the review is declined", async () => {
+    commit.mockResolvedValue(ROOT);
+    const requestConfirmation = stubReview(async () => DECLINED);
+    const { result } = renderFirstPushHook();
+
+    await act(() => result.current.handleCommitThenReviewPush("Initial commit"));
+
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(requestConfirmation).toHaveBeenCalledTimes(1);
+    expect(push).not.toHaveBeenCalled();
+    expect(result.current.pushError).toBeNull();
+  });
+
+  it("asks for no review when the commit fails", async () => {
+    commit.mockRejectedValue(new Error("nothing to commit"));
+    const requestConfirmation = stubReview(async () => APPROVED);
+    const { result } = renderFirstPushHook();
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.handleCommitThenReviewPush("Initial commit").then(
+        () => "resolved",
+        (err: unknown) => err
+      );
+    });
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect(requestConfirmation).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  // The composer stays mounted on this flag: a commit that empties the tree
+  // must not take away the place the push's progress shows.
+  it("stays in flight through the review and the push, until the push settles", async () => {
+    commit.mockResolvedValue(ROOT);
+    const review = deferred<GitPushConfirmResult>();
+    const pushed = deferred<void>();
+    stubReview(() => review.promise);
+    push.mockReturnValue(pushed.promise);
+    const { result } = renderFirstPushHook();
+
+    let done!: Promise<void>;
+    act(() => {
+      done = result.current.handleCommitThenReviewPush("Initial commit");
+    });
+    await act(async () => {});
+    expect(result.current.isCommitPushInFlight).toBe(true);
+    expect(push).not.toHaveBeenCalled();
+
+    await act(async () => review.resolve(APPROVED));
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(result.current.isCommitPushInFlight).toBe(true);
+
+    await act(async () => {
+      pushed.resolve();
+      await done;
+    });
+    expect(result.current.isCommitPushInFlight).toBe(false);
+  });
+
+  // The push confirm holds one request app-wide. A hub that closed or moved
+  // on while its commit ran would cancel whatever review is open by then.
+  it.each([
+    [
+      "closed",
+      (hook: ReturnType<typeof renderFirstPushHook>) => act(() => hook.result.current.reset()),
+    ],
+    [
+      "moved to another worktree",
+      (hook: ReturnType<typeof renderFirstPushHook>) => hook.rerender({ path: "/other" }),
+    ],
+  ])("leaves the review alone when the hub %s while the commit ran", async (_, leave) => {
+    const landed = deferred<GitCommitResult>();
+    commit.mockReturnValue(landed.promise);
+    const requestConfirmation = stubReview(async () => APPROVED);
+    const hook = renderFirstPushHook();
+
+    let done!: Promise<void>;
+    act(() => {
+      done = hook.result.current.handleCommitThenReviewPush("Initial commit");
+    });
+    await act(async () => {});
+    leave(hook);
+    await act(async () => {
+      landed.resolve(ROOT);
+      await done;
+    });
+
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(requestConfirmation).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("never takes over a push review opened elsewhere while the commit ran", async () => {
+    const landed = deferred<GitCommitResult>();
+    commit.mockReturnValue(landed.promise);
+    const { result } = renderFirstPushHook();
+    let done!: Promise<void>;
+    act(() => {
+      done = result.current.handleCommitThenReviewPush("Initial commit");
+    });
+    await act(async () => {});
+    let other: GitPushConfirmResult | null = null;
+    void useGitPushConfirmStore
+      .getState()
+      .requestConfirmation("/other")
+      .then((answer) => (other = answer));
+
+    await act(async () => landed.resolve(ROOT));
+    expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe("/other");
+    await act(() => done);
+
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe("/other");
+    expect(other).toBeNull();
+    expect(push).not.toHaveBeenCalled();
+    act(() => useGitPushConfirmStore.getState().resolveConfirmation(null));
+  });
+
+  it("leaves the review alone when the hub unmounts while the commit ran", async () => {
+    const landed = deferred<GitCommitResult>();
+    commit.mockReturnValue(landed.promise);
+    const requestConfirmation = stubReview(async () => APPROVED);
+    const hook = renderFirstPushHook();
+
+    let done!: Promise<void>;
+    act(() => {
+      done = hook.result.current.handleCommitThenReviewPush("Initial commit");
+    });
+    await act(async () => {});
+    hook.unmount();
+    await act(async () => {
+      landed.resolve(ROOT);
+      await done;
+    });
+
+    expect(requestConfirmation).not.toHaveBeenCalled();
   });
 });

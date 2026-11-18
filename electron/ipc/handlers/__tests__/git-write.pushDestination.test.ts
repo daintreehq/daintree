@@ -1090,6 +1090,64 @@ describe("git:get-staging-status — push and pull destinations", () => {
     ]);
     expect(status.repoState).toBe("CLEAN");
   });
+
+  // #17588: only git's own porcelain v2 statement makes a branch unborn.
+  describe("unborn branch", () => {
+    const UNREADABLE_HEAD = vi.fn(async (args: string[]) => {
+      if (args[0] === "--git-dir") return ".git\n";
+      throw new Error("fatal: ambiguous argument 'HEAD'");
+    });
+
+    function withPorcelain(answer: () => Promise<string>): FakeGit {
+      return makeGit({
+        revparse: UNREADABLE_HEAD,
+        raw: vi.fn(async (args: string[]) => {
+          if (args[0] === "status") return answer();
+          if (args[0] === "for-each-ref") return "";
+          return "";
+        }),
+      });
+    }
+
+    it("says so when git reports this branch with no commit", async () => {
+      createHardenedGitMock.mockResolvedValue(
+        withPorcelain(async () => "# branch.oid (initial)\n# branch.head topic\n1 A. N...\n")
+      );
+
+      const status = await getStagingStatus();
+
+      expect(status.isUnbornBranch).toBe(true);
+      expect(status.pushDestination).toBeNull();
+    });
+
+    it.each([
+      [
+        "git reports a commit",
+        async () => "# branch.oid 0123456789abcdef0123456789abcdef01234567\n# branch.head topic\n",
+      ],
+      ["git reports another branch", async () => "# branch.oid (initial)\n# branch.head other\n"],
+      ["git reports only the commit", async () => "# branch.oid (initial)\n"],
+      ["the probe fails", () => Promise.reject(new Error("fatal: index file corrupt"))],
+    ])("stays silent when %s", async (_, answer) => {
+      createHardenedGitMock.mockResolvedValue(withPorcelain(answer));
+
+      const status = await getStagingStatus();
+
+      expect(status.currentBranch).toBe("topic");
+      expect(status.isUnbornBranch).toBeUndefined();
+    });
+
+    it("never asks on a branch whose HEAD reads as a commit", async () => {
+      const git = makeGit();
+      createHardenedGitMock.mockResolvedValue(git);
+
+      const status = await getStagingStatus();
+
+      expect(status.isUnbornBranch).toBeUndefined();
+      const asked = git.raw!.mock.calls.map((c) => c[0] as string[]);
+      expect(asked.filter((args) => args[0] === "status")).toEqual([]);
+    });
+  });
 });
 
 describe("git push as an operation", () => {

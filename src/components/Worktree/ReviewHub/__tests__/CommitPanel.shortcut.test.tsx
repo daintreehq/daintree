@@ -49,6 +49,7 @@ function renderPanel(overrides: Partial<ComponentProps<typeof CommitPanel>> = {}
     onCommitMessageChange: vi.fn(),
     onCommit: vi.fn().mockResolvedValue(undefined),
     onCommitAndPush: vi.fn().mockResolvedValue(undefined),
+    onCommitThenReviewPush: vi.fn().mockResolvedValue(undefined),
     onFocusBlocker: vi.fn(),
     isPushing: false,
     pushProgress: new Map(),
