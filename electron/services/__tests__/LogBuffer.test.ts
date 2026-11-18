@@ -209,6 +209,26 @@ describe("LogBuffer", () => {
       expect(buffer.getAll().map((e) => e.timestamp)).toEqual([1, 2, 100]);
     });
 
+    it("a search whose context serializer appends mid-filter sees the original snapshot", () => {
+      const buffer = new LogBuffer(3);
+      const reentrant = {
+        toJSON() {
+          buffer.push({ timestamp: 100, level: "info", message: "E" });
+          buffer.push({ timestamp: 101, level: "info", message: "F" });
+          return { hit: "needle" };
+        },
+      };
+      buffer.push({ timestamp: 1, level: "info", message: "A" });
+      buffer.push({ timestamp: 2, level: "info", message: "B", context: reentrant });
+      buffer.push({ timestamp: 3, level: "info", message: "C" });
+      buffer.push({ timestamp: 4, level: "info", message: "D" });
+
+      const results = buffer.getFiltered({ search: "needle" });
+
+      expect(results.map((e) => e.message)).toEqual(["B"]);
+      expect(buffer.getAll().map((e) => e.message)).toEqual(["D", "E", "F"]);
+    });
+
     it("clear empties a wrapped ring and later pushes start a fresh chronological run", () => {
       const buffer = new LogBuffer(3);
       push(buffer, 8);
