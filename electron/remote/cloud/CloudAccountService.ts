@@ -329,7 +329,10 @@ export class CloudAccountService {
   }
 
   /** The agreed consent still names the plugin's declarations as they are now. */
-  private requireSameConsent(providerId: CloudProviderId, agreed: StoredProviderConsent | undefined): void {
+  private requireSameConsent(
+    providerId: CloudProviderId,
+    agreed: StoredProviderConsent | undefined
+  ): void {
     if (agreed) this.requireConsent(providerId, agreed.fingerprint);
   }
 

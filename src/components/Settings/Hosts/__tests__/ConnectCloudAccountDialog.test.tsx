@@ -148,9 +148,9 @@ describe("ConnectCloudAccountDialog for a plugin's provider", () => {
     const consent = screen.getByTestId("cloud-provider-consent-dialog");
     expect(consent.textContent).toContain("Acme Clouds");
     expect(consent.textContent).toContain("acme.clouds");
-    const terms = [...screen.getByTestId("cloud-provider-consent-terms").querySelectorAll("li")].map(
-      (item) => item.textContent
-    );
+    const terms = [
+      ...screen.getByTestId("cloud-provider-consent-terms").querySelectorAll("li"),
+    ].map((item) => item.textContent);
     expect(terms).toHaveLength(3);
     expect(terms[0]).toMatch(/credentials you enter/);
     expect(terms[1]).toMatch(/machines Daintree connects to.*vouches for their identity/);

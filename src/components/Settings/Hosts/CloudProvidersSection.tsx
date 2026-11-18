@@ -72,7 +72,9 @@ export function CloudProvidersSection() {
     : null;
   const reviewingProvider = reviewing ? providerFor(reviewing) : null;
   const reviewingPlugin =
-    reviewingProvider?.plugin && !reviewingProvider.plugin.granted ? reviewingProvider.plugin : null;
+    reviewingProvider?.plugin && !reviewingProvider.plugin.granted
+      ? reviewingProvider.plugin
+      : null;
 
   const clearRowError = (accountId: string) =>
     setRowErrors((errors) => {

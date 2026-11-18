@@ -95,9 +95,7 @@ describe("CloudProvidersSection", () => {
       "stay paused until you allow it"
     );
     fireEvent.click(screen.getByRole("button", { name: "Allow access" }));
-    await waitFor(() =>
-      expect(screen.queryByTestId("cloud-provider-consent-dialog")).toBeNull()
-    );
+    await waitFor(() => expect(screen.queryByTestId("cloud-provider-consent-dialog")).toBeNull());
     expect(client.allowAccountProvider).toHaveBeenCalledWith("ca_0123456789", "fp-2");
   });
 

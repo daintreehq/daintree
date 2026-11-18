@@ -714,7 +714,10 @@ describe("CloudAccountService and a plugin's provider", () => {
 
     // An update that changes its capabilities: the account stays, unusable, and says why.
     declared.fingerprint = "fp-2";
-    expect(accounts.providerInfos()[0]!.plugin).toMatchObject({ fingerprint: "fp-2", granted: false });
+    expect(accounts.providerInfos()[0]!.plugin).toMatchObject({
+      fingerprint: "fp-2",
+      granted: false,
+    });
     expect(accounts.summaries()[0]!.providerUnavailable).toContain("changed what it asks for");
     expect(() => accounts.provider("acme.clouds.ec2")).toThrow(AppError);
     await expect(accounts.validate(summary.id)).rejects.toMatchObject({ code: "UNSUPPORTED" });
@@ -767,9 +770,9 @@ describe("CloudAccountService and a plugin's provider", () => {
       code: "PERMISSION",
     });
     expect(provider.checkCredentials).not.toHaveBeenCalled();
-    await expect(accounts.replaceCredentials("ca_acmeplugin", fresh, "fp-1")).resolves.toMatchObject(
-      { id: "ca_acmeplugin", providerUnavailable: null }
-    );
+    await expect(
+      accounts.replaceCredentials("ca_acmeplugin", fresh, "fp-1")
+    ).resolves.toMatchObject({ id: "ca_acmeplugin", providerUnavailable: null });
     expect(provider.checkCredentials).toHaveBeenCalledTimes(1);
     expect(vault.sets.get("ca_acmeplugin")).toEqual(fresh);
     expect(store.providerConsent("acme.clouds")!.fingerprint).toBe("fp-1");
@@ -806,9 +809,9 @@ describe("CloudAccountService and a plugin's provider", () => {
     const provider = fieldsProvider("acme.clouds.ec2", TWO_SECRETS);
     const { accounts, vault } = service({ provider });
     expect(accounts.providerInfos()[0]!.plugin).toMatchObject({ granted: false, fingerprint: "" });
-    await expect(
-      accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "" })
-    ).rejects.toMatchObject({ code: "PERMISSION" });
+    await expect(accounts.addAccount({ ...PLUGIN_ACCOUNT, consent: "" })).rejects.toMatchObject({
+      code: "PERMISSION",
+    });
     expect(provider.checkCredentials).not.toHaveBeenCalled();
     expect(vault.sets.size).toBe(0);
   });
@@ -817,7 +820,11 @@ describe("CloudAccountService and a plugin's provider", () => {
     const { accounts } = service();
     expect(accounts.providerInfos()[0]!.plugin).toBeUndefined();
     await expect(
-      accounts.addAccount({ providerId: "boat", credentials: { apiKey: "boat_live_0123456789abcd" }, scopeId: "team_1" })
+      accounts.addAccount({
+        providerId: "boat",
+        credentials: { apiKey: "boat_live_0123456789abcd" },
+        scopeId: "team_1",
+      })
     ).resolves.toMatchObject({ providerUnavailable: null });
   });
 

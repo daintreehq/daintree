@@ -346,7 +346,11 @@ describe("consent to a plugin's cloud providers", () => {
   }
 
   it("names the plugin, by its id when it has no display name, with one fingerprint for all its providers", () => {
-    publishPluginCloudProviders("acme.clouds", [contribution(), contribution({ id: "gce" })], "Acme");
+    publishPluginCloudProviders(
+      "acme.clouds",
+      [contribution(), contribution({ id: "gce" })],
+      "Acme"
+    );
     const declared = listPluginCloudProviders();
     expect(declared.map((entry) => entry.pluginName)).toEqual(["Acme", "Acme"]);
     expect(declared[0]!.consentFingerprint).toMatch(/^[0-9a-f]{64}$/);

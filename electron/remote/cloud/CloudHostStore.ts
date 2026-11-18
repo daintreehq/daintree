@@ -558,7 +558,12 @@ export class CloudHostStore {
 
   private raw(): RawCloudHosts {
     const value = this.backend.get("cloudHosts") as
-      | { accounts?: unknown; bindings?: unknown; machineKeys?: unknown; providerConsents?: unknown }
+      | {
+          accounts?: unknown;
+          bindings?: unknown;
+          machineKeys?: unknown;
+          providerConsents?: unknown;
+        }
       | undefined;
     return {
       accounts: Array.isArray(value?.accounts) ? value.accounts : [],
