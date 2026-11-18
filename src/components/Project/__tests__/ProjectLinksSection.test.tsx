@@ -58,6 +58,9 @@ afterEach(() => {
   cleanup();
   cleanupProjectSettingsStore();
   vi.clearAllMocks();
+  // clearAllMocks keeps queued one-shot answers, so one a test never took would land in the next.
+  changeMock.mockReset();
+  getSettingsMock.mockReset();
 });
 
 describe("ProjectLinksSection (#17091)", () => {
@@ -184,6 +187,165 @@ describe("ProjectLinksSection (#17091)", () => {
     expect(queryByText("Couldn't load the links")).toBeNull();
   });
 
+  describe("focus when a row changes mode (#17504)", () => {
+    const ci: ProjectLink = { id: "b", title: "CI", url: "http://10.0.0.5:8080/" };
+
+    beforeEach(() => {
+      useProjectSettingsStore.setState({
+        projectId: "proj-1",
+        settings: { runCommands: [], links: [staging, ci] },
+      });
+    });
+
+    // The editor's title field is the third input: the add row's two come first.
+    const EDIT_TITLE = 2;
+    const EDIT_URL = 3;
+
+    function openEditor(
+      getByRole: (role: string, o: { name: string }) => HTMLElement,
+      title: string
+    ) {
+      const edit = getByRole("button", { name: `Edit ${title}` });
+      edit.focus();
+      fireEvent.click(edit);
+    }
+
+    it("moves focus into the title field when Edit opens the editor", () => {
+      const { container, getByRole, queryByRole } = render(
+        <ProjectLinksSection projectId="proj-1" />
+      );
+
+      openEditor(getByRole, "CI");
+
+      expect(queryByRole("button", { name: "Edit CI" })).toBeNull();
+      expect(document.activeElement).toBe(input(container, EDIT_TITLE));
+      expect(input(container, EDIT_TITLE).value).toBe("CI");
+    });
+
+    it.each(["Staging", "CI"])(
+      "returns focus to %s's own Edit button when its editor is cancelled",
+      (title) => {
+        const { getByRole, queryByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+        openEditor(getByRole, title);
+
+        fireEvent.click(getByRole("button", { name: "Cancel" }));
+
+        expect(queryByRole("button", { name: "Save" })).toBeNull();
+        expect(document.activeElement).toBe(getByRole("button", { name: `Edit ${title}` }));
+        expect(changeMock).not.toHaveBeenCalled();
+      }
+    );
+
+    it("returns focus to the Edit button after a save from the Save button", async () => {
+      const renamed: ProjectLink = { ...staging, title: "Staging EU" };
+      mainAnswers([renamed, ci], renamed);
+      const { container, getByRole, queryByRole } = render(
+        <ProjectLinksSection projectId="proj-1" />
+      );
+      openEditor(getByRole, "Staging");
+      fireEvent.change(input(container, EDIT_TITLE), { target: { value: "Staging EU" } });
+      const save = getByRole("button", { name: "Save" });
+      save.focus();
+
+      await act(async () => {
+        fireEvent.click(save);
+      });
+
+      expect(queryByRole("button", { name: "Save" })).toBeNull();
+      expect(document.activeElement).toBe(getByRole("button", { name: "Edit Staging EU" }));
+    });
+
+    it("returns focus to the Edit button after a save from Enter in a field", async () => {
+      mainAnswers([staging, ci], ci);
+      const { container, getByRole, queryByRole } = render(
+        <ProjectLinksSection projectId="proj-1" />
+      );
+      openEditor(getByRole, "CI");
+      expect(document.activeElement).toBe(input(container, EDIT_TITLE));
+
+      await act(async () => {
+        fireEvent.keyDown(input(container, EDIT_TITLE), { key: "Enter" });
+      });
+
+      expect(changeMock).toHaveBeenCalledWith({
+        projectId: "proj-1",
+        actor: "user",
+        change: { op: "update", id: "b", title: "CI", url: ci.url },
+      });
+      expect(queryByRole("button", { name: "Save" })).toBeNull();
+      expect(document.activeElement).toBe(getByRole("button", { name: "Edit CI" }));
+    });
+
+    it("keeps focus on the field main refused, with the editor still open", async () => {
+      changeMock.mockResolvedValueOnce({
+        saved: false,
+        code: "invalid-url",
+        message: "The URL must use http:// or https://",
+      });
+      const { container, getByRole, getByText, queryByRole } = render(
+        <ProjectLinksSection projectId="proj-1" />
+      );
+      openEditor(getByRole, "CI");
+      fireEvent.change(input(container, EDIT_URL), { target: { value: "ftp://ci.example.com" } });
+      const save = getByRole("button", { name: "Save" });
+      save.focus();
+
+      await act(async () => {
+        fireEvent.click(save);
+      });
+
+      expect(getByText("The URL must use http:// or https://")).toBeTruthy();
+      expect(queryByRole("button", { name: "Edit CI" })).toBeNull();
+      expect(document.activeElement).toBe(input(container, EDIT_URL));
+    });
+
+    it("keeps focus on the title field when main refuses the name", async () => {
+      changeMock.mockResolvedValueOnce({
+        saved: false,
+        code: "invalid-title",
+        message: "Give the link a name",
+      });
+      const { container, getByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+      openEditor(getByRole, "CI");
+      fireEvent.change(input(container, EDIT_TITLE), { target: { value: " " } });
+      input(container, EDIT_URL).focus();
+
+      await act(async () => {
+        fireEvent.keyDown(input(container, EDIT_URL), { key: "Enter" });
+      });
+
+      expect(document.activeElement).toBe(input(container, EDIT_TITLE));
+    });
+
+    it("leaves focus where the user moved it while a save was out", async () => {
+      let answer!: () => void;
+      changeMock.mockImplementationOnce(
+        (payload: ProjectLinksChangePayload) =>
+          new Promise((resolve) => {
+            answer = () => {
+              patchCachedProjectLinks(payload.projectId, [staging, ci]);
+              resolve({ saved: true, links: [staging, ci], link: ci });
+            };
+          })
+      );
+      const { container, getByRole, queryByRole } = render(
+        <ProjectLinksSection projectId="proj-1" />
+      );
+      openEditor(getByRole, "CI");
+      await act(async () => {
+        fireEvent.keyDown(input(container, EDIT_TITLE), { key: "Enter" });
+      });
+      const elsewhere = input(container, 0);
+      elsewhere.focus();
+
+      await act(async () => answer());
+
+      expect(queryByRole("button", { name: "Save" })).toBeNull();
+      expect(queryByRole("button", { name: "Edit CI" })).not.toBeNull();
+      expect(document.activeElement).toBe(elsewhere);
+    });
+  });
+
   describe("focus after removing a row", () => {
     const ci: ProjectLink = { id: "b", title: "CI", url: "http://10.0.0.5:8080/" };
     const docs: ProjectLink = { id: "c", title: "Docs", url: "https://docs.example.com/" };
@@ -220,6 +382,18 @@ describe("ProjectLinksSection (#17091)", () => {
       const { getByRole, queryByRole } = render(<ProjectLinksSection projectId="proj-1" />);
       await removeLink(getByRole, queryByRole, ci, [staging, docs]);
       expect(document.activeElement).toBe(getByRole("button", { name: "Remove Docs" }));
+    });
+
+    it("finds the next row's remove button when its id reads like an Edit button's key", async () => {
+      // Staging's Edit button registers as "edit:a", the same string as Odd's id.
+      const odd: ProjectLink = { id: "edit:a", title: "Odd", url: "https://odd.example.com/" };
+      useProjectSettingsStore.setState({
+        projectId: "proj-1",
+        settings: { runCommands: [], links: [ci, odd, staging] },
+      });
+      const { getByRole, queryByRole } = render(<ProjectLinksSection projectId="proj-1" />);
+      await removeLink(getByRole, queryByRole, ci, [odd, staging]);
+      expect(document.activeElement).toBe(getByRole("button", { name: "Remove Odd" }));
     });
 
     it("moves focus to the row before when the last row goes", async () => {

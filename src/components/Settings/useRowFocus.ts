@@ -44,9 +44,14 @@ export function useRowFocus() {
     fallback.current = el;
   }, []);
 
-  /** Focus the row registered under `key` once it has rendered, or the fallback if none is. */
+  /**
+   * Focus the row registered under `key` once it has rendered, or the fallback if none is.
+   * `onlyIfStranded` is for a move that follows a save: it holds back when the user
+   * has put focus somewhere else while the save was out.
+   */
   const focusRow = useCallback(
-    (key: string) => setPending({ keys: [key], onlyIfStranded: false }),
+    (key: string, options?: { onlyIfStranded?: boolean }) =>
+      setPending({ keys: [key], onlyIfStranded: options?.onlyIfStranded ?? false }),
     []
   );
 
