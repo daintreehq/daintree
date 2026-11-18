@@ -1686,6 +1686,97 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    describe("semantic buffer search (#17517)", () => {
+      const match = (terminalId: string) => ({
+        terminalId,
+        line: "token here",
+        matchStart: 0,
+        matchEnd: 5,
+      });
+
+      it("reports a search every shard answered as complete", async () => {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const shardA = projectShard("project-a");
+        shardA.child.emit("message", { type: "ready" });
+
+        const promise = client.searchSemanticBuffersAsync("token", false);
+        const defaultReq = messagesOfType(defaultShard().child, "search-semantic-buffers")[0];
+        const shardAReq = messagesOfType(shardA.child, "search-semantic-buffers")[0];
+        defaultShard().child.emit("message", {
+          type: "semantic-search-result",
+          requestId: defaultReq.requestId,
+          matches: [match("t0")],
+        });
+        shardA.child.emit("message", {
+          type: "semantic-search-result",
+          requestId: shardAReq.requestId,
+          matches: [match("t1")],
+        });
+
+        const result = await promise;
+        expect(result.complete).toBe(true);
+        expect(result.matches.map((m) => m.terminalId).sort()).toEqual(["t0", "t1"]);
+        client.dispose();
+      });
+
+      it("does not let a host that hasn't announced ready vouch for a complete search", async () => {
+        // Flag off: the lone host is the fallback target even before it is ready,
+        // and an answer from it may predate its terminals' replay.
+        const client = new PtyClientClass({ fabric: false });
+
+        const promise = client.searchSemanticBuffersAsync("token", false);
+        const req = messagesOfType(defaultShard().child, "search-semantic-buffers")[0];
+        defaultShard().child.emit("message", {
+          type: "semantic-search-result",
+          requestId: req.requestId,
+          matches: [],
+        });
+
+        await expect(promise).resolves.toEqual({ matches: [], complete: false });
+        client.dispose();
+      });
+
+      it("keeps the answering shard's matches but reports a shard that went away as incomplete", async () => {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const shardA = projectShard("project-a");
+        shardA.child.emit("message", { type: "ready" });
+
+        const promise = client.searchSemanticBuffersAsync("token", false);
+        const defaultReq = messagesOfType(defaultShard().child, "search-semantic-buffers")[0];
+        expect(messagesOfType(shardA.child, "search-semantic-buffers")).toHaveLength(1);
+        defaultShard().child.emit("message", {
+          type: "semantic-search-result",
+          requestId: defaultReq.requestId,
+          matches: [match("t0")],
+        });
+        shardA.child.emit("exit", 1);
+
+        await expect(promise).resolves.toEqual({ matches: [match("t0")], complete: false });
+        client.dispose();
+      });
+
+      it("counts a shard that was never asked because it is still booting as unsearched", async () => {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const shardA = projectShard("project-a");
+        // Deliberately never ready.
+
+        const promise = client.searchSemanticBuffersAsync("token", false);
+        const defaultReq = messagesOfType(defaultShard().child, "search-semantic-buffers")[0];
+        defaultShard().child.emit("message", {
+          type: "semantic-search-result",
+          requestId: defaultReq.requestId,
+          matches: [],
+        });
+
+        expect(messagesOfType(shardA.child, "search-semantic-buffers")).toHaveLength(0);
+        await expect(promise).resolves.toEqual({ matches: [], complete: false });
+        client.dispose();
+      });
+    });
+
     // #13501: a fleet read must not take an unanswered inventory for an empty one.
     it("lets a strict caller tell an unanswered project inventory from an empty one", async () => {
       const client = createFabricClient();

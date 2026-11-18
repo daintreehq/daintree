@@ -1179,8 +1179,15 @@ describe("terminal:search-semantic-buffers", () => {
     { terminalId: "mine", line: "token here", matchStart: 0, matchEnd: 5 },
     { terminalId: "theirs", line: "token there", matchStart: 0, matchEnd: 5 },
     { terminalId: "nobodys", line: "token", matchStart: 0, matchEnd: 5 },
+    { terminalId: "daintree-throwaway-probe", line: "token", matchStart: 0, matchEnd: 5 },
   ];
-  const owners: Record<string, string | null> = { mine: "proj-1", theirs: "proj-2", nobodys: null };
+  const visibleLocally = matches.slice(0, 3);
+  const owners: Record<string, string | null> = {
+    mine: "proj-1",
+    theirs: "proj-2",
+    nobodys: null,
+    "daintree-throwaway-probe": "proj-1",
+  };
 
   function remoteView(projectId: string | null): ClientEndpoint {
     return {
@@ -1203,7 +1210,12 @@ describe("terminal:search-semantic-buffers", () => {
   };
 
   const ptyClient = {
-    searchSemanticBuffersAsync: vi.fn(async () => matches),
+    searchSemanticBuffersAsync: vi.fn(
+      async (): Promise<{ matches: typeof matches; complete: boolean }> => ({
+        matches,
+        complete: true,
+      })
+    ),
     getTerminalProjectId: (id: string) => owners[id] ?? null,
   };
   let dispose: (() => void) | undefined;
@@ -1232,13 +1244,63 @@ describe("terminal:search-semantic-buffers", () => {
       ["token", false]
     );
     if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
-    expect(envelope.data).toEqual([matches[0]]);
+    expect(envelope.data).toEqual({ matches: [matches[0]], complete: true });
+  });
+
+  it("filters by the project the view is bound to when the search answers", async () => {
+    let answer: (r: { matches: typeof matches; complete: boolean }) => void = () => {};
+    ptyClient.searchSemanticBuffersAsync.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    const endpoint = remoteView("proj-1");
+    const pending = getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    await vi.waitFor(() => expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalled());
+    (endpoint as { projectId: string | null }).projectId = "proj-2";
+    answer({ matches, complete: true });
+
+    const envelope = await pending;
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    expect(envelope.data).toEqual({ matches: [matches[1]], complete: true });
+  });
+
+  it("answers a remote view with no project without searching any shard", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockClear();
     const none = await getIpcDispatcher().invokeForEndpoint(
       { endpoint: remoteView(null), client },
       CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
       ["token", false]
     );
-    expect(none.ok && none.data).toEqual([]);
+    expect(none.ok && none.data).toEqual({ matches: [], complete: true });
+    expect(ptyClient.searchSemanticBuffersAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps a partial answer's matches and passes on that it was incomplete", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockResolvedValueOnce({ matches, complete: false });
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    expect(envelope.data).toEqual({ matches: [matches[0]], complete: false });
+  });
+
+  it("reports a search that threw as incomplete rather than as no matches", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockRejectedValueOnce(new Error("host gone"));
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    expect(envelope.data).toEqual({ matches: [], complete: false });
   });
 
   it("finds every terminal for this machine's own window", async () => {
@@ -1255,7 +1317,26 @@ describe("terminal:search-semantic-buffers", () => {
       (result as { ok?: boolean; data?: unknown }).ok !== undefined
         ? (result as { data: unknown }).data
         : result;
-    expect(data).toEqual(matches);
+    expect(data).toEqual({ matches: visibleLocally, complete: true });
+  });
+
+  it("searches a 500-character query but refuses a longer one without fanning out", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockClear();
+    const atCap = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["t".repeat(500), false]
+    );
+    expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalledTimes(1);
+    expect(atCap.ok && atCap.data).toEqual({ matches: [matches[0]], complete: true });
+
+    const overCap = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["t".repeat(501), false]
+    );
+    expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalledTimes(1);
+    expect(overCap.ok && overCap.data).toEqual({ matches: [], complete: true });
   });
 });
 

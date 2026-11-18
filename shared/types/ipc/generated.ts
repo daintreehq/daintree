@@ -4856,7 +4856,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "terminal:search-semantic-buffers": {
     args: [query: string, isRegex: boolean];
-    result: import("./terminal.js").SemanticSearchMatch[];
+    result: import("./terminal.js").SemanticSearchResult;
   };
   "terminal:spawn": {
     args: [

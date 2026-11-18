@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactElement } from "react";
+import { useCallback, useMemo, useRef, type ReactElement } from "react";
 import { Checkbox, CheckboxGlyph } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
@@ -8,9 +8,9 @@ import { Button } from "@/components/ui/button";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { KbdChord } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, RefreshCw } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useEscapeStack } from "@/hooks";
+import { useDohertyGate, useEscapeStack } from "@/hooks";
 import {
   FALLBACK_GROUP_ID,
   FALLBACK_GROUP_NAME,
@@ -80,6 +80,8 @@ export function FleetPickerContent({
     groupedVisible,
     isSingleWorktree,
     snippetMap,
+    outputSearchStatus,
+    retryOutputSearch,
     handleToggleId,
     handleListKeyDown,
     handleConfirm,
@@ -94,6 +96,32 @@ export function FleetPickerContent({
   // the consumer's outer escape stack and closes the picker. Same idiom the
   // dialog used.
   useEscapeStack(query !== "", clearSearch);
+
+  const outputSearchIncomplete = outputSearchStatus === "incomplete";
+  // Until the output search answers, an empty list can't be called "no match".
+  // A short wait shows nothing; past the Doherty gate it says what it awaits.
+  const awaitingOutputSearch =
+    outputSearchStatus === "pending" &&
+    visibleTerminals.length === 0 &&
+    eligibleTerminals.length > 0;
+  const showSearchingOutput = useDohertyGate(awaitingOutputSearch);
+
+  // Retry goes away when its answer lands (or the list changes under it). If it
+  // held focus as it left, hand focus to the search field rather than <body>,
+  // and only while the picker is still mounted.
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const retryRef = useCallback((el: HTMLButtonElement | null) => {
+    if (el === null) return;
+    return () => {
+      // Ref cleanup runs before the node is removed, so focus is still readable.
+      if (document.activeElement !== el) return;
+      queueMicrotask(() => {
+        const input = searchInputRef.current;
+        const active = document.activeElement;
+        if (input?.isConnected && (active === null || active === document.body)) input.focus();
+      });
+    };
+  }, []);
 
   // Row refs live in the hook so its keydown handler can move DOM focus on
   // ArrowUp/Down (matches the tree's roving-tabindex pattern).
@@ -158,6 +186,7 @@ export function FleetPickerContent({
           hosts still read as the same surface. */}
       <div className="px-3 pt-2 pb-2 border-b border-border-strong shrink-0">
         <AppPaletteDialog.Input
+          inputRef={searchInputRef}
           autoFocus={autoFocusSearch}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -167,6 +196,20 @@ export function FleetPickerContent({
           data-testid={`${testIdPrefix}-search`}
         />
         {headerSlot}
+        {outputSearchIncomplete && visibleTerminals.length > 0 && (
+          <div
+            className="mt-2 flex items-center justify-between gap-2"
+            data-testid={`${testIdPrefix}-output-search-incomplete`}
+          >
+            <span className="text-xs text-text-secondary">{OUTPUT_SEARCH_INCOMPLETE}</span>
+            <RetryOutputSearchButton
+              size="xs"
+              onRetry={retryOutputSearch}
+              buttonRef={retryRef}
+              testIdPrefix={testIdPrefix}
+            />
+          </div>
+        )}
       </div>
 
       <div
@@ -193,6 +236,31 @@ export function FleetPickerContent({
             title="Open a terminal in the grid to arm it"
             className="h-full min-h-[120px]"
           />
+        ) : visibleTerminals.length === 0 && outputSearchIncomplete ? (
+          // Output that was never searched can't vouch for "no match".
+          <EmptyState
+            variant="filtered-empty"
+            scale="popover"
+            title={OUTPUT_SEARCH_INCOMPLETE}
+            action={
+              <RetryOutputSearchButton
+                size="sm"
+                onRetry={retryOutputSearch}
+                buttonRef={retryRef}
+                testIdPrefix={testIdPrefix}
+              />
+            }
+            className="h-full min-h-[120px]"
+          />
+        ) : awaitingOutputSearch ? (
+          showSearchingOutput ? (
+            <EmptyState
+              variant="filtered-empty"
+              scale="popover"
+              title={SEARCHING_OUTPUT}
+              className="h-full min-h-[120px]"
+            />
+          ) : null
         ) : visibleTerminals.length === 0 ? (
           <EmptyState
             variant="filtered-empty"
@@ -239,9 +307,44 @@ export function FleetPickerContent({
           ? "No terminals to arm"
           : query.trim() === ""
             ? `${eligibleTerminals.length} terminals`
-            : `${visibleTerminals.length} of ${eligibleTerminals.length} terminals match`}
+            : awaitingOutputSearch
+              ? showSearchingOutput
+                ? SEARCHING_OUTPUT
+                : ""
+              : `${visibleTerminals.length} of ${eligibleTerminals.length} terminals match${
+                  outputSearchIncomplete ? `. ${OUTPUT_SEARCH_INCOMPLETE}` : ""
+                }`}
       </span>
     </div>
+  );
+}
+
+const OUTPUT_SEARCH_INCOMPLETE = "Recent output search is incomplete";
+const SEARCHING_OUTPUT = "Searching recent output…";
+
+function RetryOutputSearchButton({
+  size,
+  onRetry,
+  buttonRef,
+  testIdPrefix,
+}: {
+  size: "xs" | "sm";
+  onRetry: () => void;
+  buttonRef: React.RefCallback<HTMLButtonElement>;
+  testIdPrefix: string;
+}): ReactElement {
+  return (
+    <Button
+      ref={buttonRef}
+      variant="subtle"
+      size={size}
+      onClick={onRetry}
+      aria-label="Retry output search"
+      data-testid={`${testIdPrefix}-retry-output-search`}
+    >
+      <RefreshCw aria-hidden="true" />
+      Retry
+    </Button>
   );
 }
 

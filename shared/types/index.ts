@@ -145,6 +145,7 @@ export type {
   TerminalInfoPayload,
   TerminalLocation,
   SemanticSearchMatch,
+  SemanticSearchResult,
   // CopyTree IPC types
   CopyTreeOptions,
   CopyTreeGeneratePayload,

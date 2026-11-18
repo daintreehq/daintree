@@ -1616,7 +1616,7 @@ describe("FleetArmingRibbon", () => {
       Object.assign(window, {
         electron: {
           terminal: {
-            searchSemanticBuffers: vi.fn().mockResolvedValue([]),
+            searchSemanticBuffers: vi.fn().mockResolvedValue({ matches: [], complete: true }),
           },
         },
       });
