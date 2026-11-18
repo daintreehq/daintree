@@ -1199,6 +1199,31 @@ describe("registerPluginHandlers", () => {
       expect(service.removePluginAccounts).toHaveBeenCalledWith("acme.clouds", ["ca_acmeplugin1"]);
     });
 
+    it("answers only once the removal has finished, with its failure", async () => {
+      let fail: (error: Error) => void = () => {};
+      const { service } = cloud({
+        removePluginAccounts: vi.fn(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              fail = reject;
+            })
+        ),
+      });
+      let settled = false;
+      const answer = (
+        getHandler("plugin:uninstall")({}, "acme.clouds", false, [
+          "ca_acmeplugin1",
+        ]) as Promise<void>
+      ).finally(() => {
+        settled = true;
+      });
+      await vi.waitFor(() => expect(service.removePluginAccounts).toHaveBeenCalled());
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      fail(new Error("Work is still on this device"));
+      await expect(answer).rejects.toThrow("Work is still on this device");
+    });
+
     it("keeps every account when none is named, and when the uninstall fails", async () => {
       const { service } = cloud();
       await getHandler("plugin:uninstall")({}, "acme.clouds", true);

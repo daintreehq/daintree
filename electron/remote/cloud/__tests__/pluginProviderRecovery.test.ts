@@ -127,9 +127,7 @@ afterEach(async () => {
  * the plugin service would: published and bound while it is on, withdrawn
  * otherwise, and its reasons worded by state.
  */
-function runtime(
-  options: { backend?: { value: unknown }; impl?: Partial<CloudProviderImpl> } = {}
-) {
+function runtime(options: { backend?: { value: unknown }; hosts?: HostDescriptor[] } = {}) {
   const backend = options.backend ?? { value: undefined };
   const plugin = { state: "uninstalled" as PluginState };
   setPluginCloudProviderRuntime({
@@ -149,7 +147,10 @@ function runtime(
     validate: vi.fn(async () => ({ identity: "octocat" })),
     catalog: vi.fn(),
     list: vi.fn(async () => [current]),
-    inspect: vi.fn(async (_credentials: unknown, _resourceId: string) => current),
+    inspect: vi.fn(async (_credentials: unknown, resourceId: string) => ({
+      ...current,
+      resourceId,
+    })),
     create: vi.fn(),
     start: vi.fn(async () => current),
     stop: vi.fn(async () => current),
@@ -160,8 +161,7 @@ function runtime(
       endpoint: { host: "203.0.113.9", port: 22 },
       hostKey: null,
     })),
-    ...options.impl,
-  } as unknown as CloudProviderImpl & Record<string, ReturnType<typeof vi.fn>>;
+  };
 
   const store = new CloudHostStore({
     get: () => backend.value,
@@ -189,7 +189,8 @@ function runtime(
     unavailableReason: (id) => watch.unavailableReason(id),
     pluginProviderLabel: (id) => watch.label(id),
   });
-  const hosts: HostDescriptor[] = [];
+  // The host list lives in its own store, so a restart finds the hosts it had.
+  const hosts: HostDescriptor[] = options.hosts ?? [];
   const forget = vi.fn(async (hostId: string) => {
     const index = hosts.findIndex((host) => host.id === hostId);
     if (index >= 0) hosts.splice(index, 1);
@@ -233,7 +234,7 @@ function runtime(
     plugin.state = state;
     if (state === "enabled") {
       publishPluginCloudProviders(PLUGIN, [contribution()], "Acme Clouds");
-      bindPluginCloudProvider(PLUGIN, "ec2", impl);
+      bindPluginCloudProvider(PLUGIN, "ec2", impl as unknown as CloudProviderImpl);
     } else {
       withdrawPluginCloudProviders(PLUGIN);
     }
@@ -288,6 +289,30 @@ async function connectedWithHost(env: ReturnType<typeof runtime>) {
     name: "build",
   });
   return hostId;
+}
+
+/** Another account kept beside the first, with its own credentials. */
+async function anotherAccount(
+  env: ReturnType<typeof runtime>,
+  id: string,
+  displayName: string,
+  providerId: string = PROVIDER
+) {
+  env.store.putAccount({
+    id,
+    providerId,
+    displayName,
+    identity: null,
+    scope: { kind: "personal", id: "personal", name: "Personal" },
+    apiUrl: "https://ec2.example.com",
+    keyHint: null,
+    credentialRevision: "rev-1",
+    addedAt: NOW,
+    validation: { status: "valid", checkedAt: NOW },
+    lastProvisioning: null,
+    pluginProvider: null,
+  });
+  await env.vault.put(id, CREDENTIALS);
 }
 
 const LABEL = {
@@ -348,8 +373,13 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
     clearPluginCloudProviders();
 
     // The next start: the blocklist keeps the plugin from loading, so nothing ever declares its provider.
-    const restarted = runtime({ backend: env.backend });
+    const restarted = runtime({ backend: env.backend, hosts: env.hosts });
     restarted.set("blocked");
+    // Its first pass drops bindings whose host is gone: this one's host is still listed.
+    restarted.lifecycle.start();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(restarted.store.bindings()).toHaveLength(1);
+    expect(restarted.hosts.map((host) => host.id)).toEqual([hostId]);
     expect(restarted.accounts.summaries()).toEqual([
       expect.objectContaining({
         id: ACCOUNT,
@@ -394,7 +424,14 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
 
   it("removes the accounts and their hosts on uninstall when asked, deleting the sealed credentials and touching no machine", async () => {
     const env = runtime();
-    await connectedWithHost(env);
+    const hostId = await connectedWithHost(env);
+    // Another account of the same plugin that the uninstall didn't list.
+    await anotherAccount(env, "ca_acmeplugin3", "Spare");
+    const { hostId: spareHost } = await env.lifecycle.importMachine({
+      accountId: "ca_acmeplugin3",
+      resourceId: "i-0000000003",
+      name: "spare",
+    });
     const file = path.join(root, "cloud-credentials.json");
     expect(await fs.readFile(file, "utf-8")).toContain(ACCOUNT);
     env.set("uninstalled");
@@ -402,18 +439,19 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
     env.cloudHosts.requirePluginAccounts(PLUGIN, [ACCOUNT]);
     await env.cloudHosts.removePluginAccounts(PLUGIN, [ACCOUNT]);
 
-    expect(env.forget).toHaveBeenCalledTimes(1);
-    expect(env.hosts).toEqual([]);
-    expect(env.store.bindings()).toEqual([]);
-    expect(env.store.accounts()).toEqual([]);
+    expect(env.forget.mock.calls).toEqual([[hostId]]);
+    expect(env.hosts.map((host) => host.id)).toEqual([spareHost]);
+    expect(env.store.bindings().map((binding) => binding.accountId)).toEqual(["ca_acmeplugin3"]);
+    expect(env.store.accounts().map((account) => account.id)).toEqual(["ca_acmeplugin3"]);
     expect(await env.vault.get(ACCOUNT)).toBeNull();
+    expect(await env.vault.get("ca_acmeplugin3")).toEqual(CREDENTIALS);
     // Read back from disk by a fresh vault: the sealed set is gone, not just forgotten in memory.
     const reopened = new KeychainCloudCredentialVault(file, fakeCipher());
     expect(await reopened.get(ACCOUNT)).toBeNull();
+    expect(await reopened.get("ca_acmeplugin3")).toEqual(CREDENTIALS);
     expect(await fs.readFile(file, "utf-8")).not.toContain(ACCOUNT);
     expect(env.impl.stop).not.toHaveBeenCalled();
     expect(env.impl.delete).not.toHaveBeenCalled();
-    expect(env.cloudHosts.pluginCloudAccounts().size).toBe(0);
     env.dispose();
   });
 
@@ -433,42 +471,76 @@ describe("a plugin's cloud accounts and machines when the plugin goes", () => {
       lastProvisioning: null,
       pluginProvider: null,
     });
-    expect(() => env.cloudHosts.requirePluginAccounts(PLUGIN, ["ca_builtin0001"])).toThrow(
-      expect.objectContaining({ userMessage: expect.stringContaining("doesn't belong") })
-    );
+    await env.vault.put("ca_builtin0001", CREDENTIALS);
+    await anotherAccount(env, "ca_otherplug01", "Theirs", "other.clouds.ec2");
+    for (const foreign of ["ca_builtin0001", "ca_otherplug01"]) {
+      expect(() => env.cloudHosts.requirePluginAccounts(PLUGIN, [foreign])).toThrow(
+        expect.objectContaining({ userMessage: expect.stringContaining("doesn't belong") })
+      );
+    }
     // An id already gone is nothing to refuse.
     expect(() => env.cloudHosts.requirePluginAccounts(PLUGIN, ["ca_gonegone01"])).not.toThrow();
-    await env.cloudHosts.removePluginAccounts(PLUGIN, ["ca_builtin0001"]);
-    expect(env.store.account("ca_builtin0001")).not.toBeNull();
+    // Nor does a removal asked for directly ever reach past the plugin's own namespace.
+    await env.cloudHosts.removePluginAccounts(PLUGIN, ["ca_builtin0001", "ca_otherplug01"]);
+    expect(env.store.accounts().map((account) => account.id)).toEqual([
+      "ca_builtin0001",
+      "ca_otherplug01",
+    ]);
+    expect(await env.vault.get("ca_builtin0001")).toEqual(CREDENTIALS);
+    expect(await env.vault.get("ca_otherplug01")).toEqual(CREDENTIALS);
     env.dispose();
   });
 
   it("names each account a removal couldn't finish, and still removes the rest", async () => {
     const env = runtime();
     await connectedWithHost(env);
-    env.store.putAccount({
-      ...env.store.account(ACCOUNT)!,
-      id: "ca_acmeplugin2",
-      displayName: "Spare",
-    });
-    await env.vault.put("ca_acmeplugin2", CREDENTIALS);
+    await anotherAccount(env, "ca_acmeplugin2", "Spare");
+    await anotherAccount(env, "ca_acmeplugin4", "Old");
     env.set("uninstalled");
     const remove = env.accounts.removeAccount.bind(env.accounts);
     vi.spyOn(env.accounts, "removeAccount").mockImplementation(async (id) => {
       if (id === ACCOUNT) throw new Error("the keychain is locked");
+      if (id === "ca_acmeplugin2") throw new Error("a machine key may still work");
       return remove(id);
     });
 
-    await expect(
-      env.cloudHosts.removePluginAccounts(PLUGIN, [ACCOUNT, "ca_acmeplugin2"])
-    ).rejects.toMatchObject({
-      userMessage: expect.stringMatching(
-        /uninstalled, but this cloud account is still on this device: Work \(the keychain is locked\)/
-      ),
-    });
-    expect(env.store.account("ca_acmeplugin2")).toBeNull();
-    expect(await env.vault.get("ca_acmeplugin2")).toBeNull();
+    const failure = await env.cloudHosts
+      .removePluginAccounts(PLUGIN, [ACCOUNT, "ca_acmeplugin2", "ca_acmeplugin4"])
+      .then(
+        () => null,
+        (error: { userMessage?: string }) => error.userMessage ?? ""
+      );
+    expect(failure).toContain("uninstalled, but these cloud accounts are still on this device");
+    expect(failure).toContain("Work (the keychain is locked)");
+    expect(failure).toContain("Spare (a machine key may still work)");
+    expect(failure).not.toContain("Old");
+    expect(env.store.account("ca_acmeplugin4")).toBeNull();
+    expect(await env.vault.get("ca_acmeplugin4")).toBeNull();
     expect(await env.vault.get(ACCOUNT)).toEqual(CREDENTIALS);
+    expect(await env.vault.get("ca_acmeplugin2")).toEqual(CREDENTIALS);
+    env.dispose();
+  });
+
+  it("registers the provider anyway when what it's called can't be written", async () => {
+    const env = runtime();
+    await anotherAccount(env, ACCOUNT, "Work");
+    const saved = env.backend.value;
+    // A settings file: each read is a fresh copy, so a write that failed changed nothing.
+    Object.defineProperty(env.backend, "value", {
+      get: () => JSON.parse(JSON.stringify(saved)),
+      set: () => {
+        throw new Error("disk full");
+      },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => env.set("enabled")).not.toThrow();
+    expect(env.registry.has(PROVIDER)).toBe(true);
+    expect(env.accounts.summaries()[0]).toMatchObject({
+      providerUnavailable: null,
+      pluginProvider: null,
+    });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
     env.dispose();
   });
 });

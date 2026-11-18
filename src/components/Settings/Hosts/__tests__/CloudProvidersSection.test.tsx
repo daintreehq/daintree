@@ -275,6 +275,38 @@ describe("CloudProvidersSection", () => {
     expect(systemClient.openExternal).toHaveBeenCalledWith("https://cloud.example.com/droplets");
   });
 
+  it("reads what the provider last said, and offers neither Check nor a console it doesn't know", () => {
+    const unavailable =
+      "Its cloud provider comes from the acme.droplets plugin, which is turned off.";
+    cloud.snapshot = {
+      providers: [BOAT_PROVIDER],
+      accounts: [account({ providerUnavailable: unavailable, hostCount: 2 })],
+      hosts: [
+        {
+          hostId: "host-1",
+          providerId: PLUGIN.id,
+          providerUnavailable: unavailable,
+          accountId: "ca_0123456789",
+          machineName: "build",
+          machine: "running",
+          // A stop this device was in the middle of: not something the provider said.
+          operation: { id: "op-1", kind: "stopping", startedAt: 1, stage: null },
+          dataExpired: false,
+          asleep: false,
+          lastError: null,
+          observedAt: 0,
+        } as CloudHostStatus,
+      ],
+    };
+    render(<CloudProvidersSection />);
+    // No label kept: the provider goes by its id.
+    expect(screen.getByText(new RegExp(PLUGIN.id.replace(/\./g, "\\.")))).toBeTruthy();
+    const row = screen.getByRole("list", { name: "Machines on Team droplets" }).textContent;
+    expect(row).toMatch(/build.*Running.*Check time unknown/);
+    expect(screen.queryByRole("button", { name: "Check Team droplets" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /console/ })).toBeNull();
+  });
+
   it("lists no machines and links no console while the provider is there", () => {
     cloud.snapshot = {
       providers: [PLUGIN],

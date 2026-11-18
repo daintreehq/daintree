@@ -20,7 +20,6 @@ export function PluginUninstallCloudAccounts({
   disabled: boolean;
 }) {
   const hostCount = accounts.reduce((count, account) => count + account.hosts.length, 0);
-  const providers = [...new Set(accounts.map((account) => account.providerName))].join(", ");
   return (
     <div className="mb-3 space-y-2" data-testid="plugin-uninstall-cloud-accounts">
       <ul className="space-y-1 text-xs text-text-secondary">
@@ -60,10 +59,17 @@ export function PluginUninstallCloudAccounts({
               ? `Deletes their credentials from this device and removes ${pluralize(hostCount, "host")} from the list`
               : "Deletes their credentials from this device"
           }
+          details={
+            hostCount > 0
+              ? "Windows on those hosts return to this machine, and their plugin permissions, history and browser data on this device are cleared."
+              : undefined
+          }
         />
       </RadioChoiceGroup>
       <p className="text-xs text-text-secondary">
-        {`Either way, the machines these accounts created keep running in your ${providers} account, and can keep billing there. Stop or delete them in its console when you no longer need them.`}
+        Either way, nothing is stopped or deleted at the provider: every machine stays in its
+        provider account, and one that's running keeps running and can keep billing there until you
+        stop or delete it in the provider's console.
       </p>
     </div>
   );

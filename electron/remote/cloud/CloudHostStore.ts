@@ -16,6 +16,7 @@ import {
 } from "../../../shared/types/cloudHosts.js";
 import { isValidRemoteHostId, type HostId } from "../../../shared/types/remoteHosts.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
+import { isPrivateOrLoopbackHostname } from "../../schemas/pluginIdentifiers.js";
 import { normalizeHostKey } from "./sshEndpoint.js";
 
 /**
@@ -254,13 +255,20 @@ function readScope(raw: unknown): CloudBillingScope | null {
 const MAX_LABEL_LENGTH = 128;
 const MAX_URL_LENGTH = 2048;
 
+/** One plain line, cut short rather than refused: a long name still names the provider. */
 function labelText(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const text = displaySafeText(value).trim();
-  return text.length > 0 && text.length <= MAX_LABEL_LENGTH ? text : null;
+  const points = [...displaySafeText(value).trim()];
+  if (points.length === 0) return null;
+  return points.length > MAX_LABEL_LENGTH
+    ? `${points
+        .slice(0, MAX_LABEL_LENGTH - 1)
+        .join("")
+        .trimEnd()}…`
+    : points.join("");
 }
 
-/** A link this device opens in the browser: public https with no sign-in in it, as a manifest must declare it. */
+/** A link this device opens in the browser: public https with no sign-in in it, as the manifest rules require. */
 export function readConsoleUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length > MAX_URL_LENGTH || value.includes("*")) {
     return null;
@@ -268,7 +276,8 @@ export function readConsoleUrl(value: unknown): string | null {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.username || url.password) return null;
-    return url.hostname.includes(".") ? value : null;
+    if (!url.hostname.includes(".") || isPrivateOrLoopbackHostname(url.hostname)) return null;
+    return value;
   } catch {
     return null;
   }

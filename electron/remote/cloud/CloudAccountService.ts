@@ -437,7 +437,15 @@ export class CloudAccountService {
       // Read as it will be read back, so a declared name that needed cleaning isn't rewritten each time.
       const label = readPluginProviderLabel(labelFor(account.providerId));
       if (!label || sameLabel(account.pluginProvider, label)) continue;
-      this.deps.store.putAccount({ ...account, pluginProvider: label });
+      // A label that can't be kept now is kept next time; it never stands in the way of what called this.
+      try {
+        this.deps.store.putAccount({ ...account, pluginProvider: label });
+      } catch (error) {
+        console.warn(
+          `[CloudHosts] Couldn't keep what ${account.providerId} is called for its account:`,
+          error
+        );
+      }
     }
   }
 

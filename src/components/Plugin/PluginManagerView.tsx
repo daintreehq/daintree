@@ -1368,7 +1368,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isOpen={pm.pendingUninstall !== null}
         onClose={pm.closeUninstall}
         title={pm.pendingUninstall ? `Uninstall '${pluginLabel(pm.pendingUninstall)}'?` : ""}
-        description="Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below."
+        description={`Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below.${pm.pendingUninstall?.cloudAccounts?.length ? " Its cloud accounts follow the choice below." : ""}`}
         confirmLabel="Uninstall plugin"
         cancelLabel="Keep plugin"
         onConfirm={() => void pm.confirmUninstall()}

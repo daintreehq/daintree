@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   app: { isPackaged: true, getPath: () => "/nonexistent/daintree-cloud-init-test" },
@@ -7,6 +7,62 @@ vi.mock("electron", () => ({
 vi.mock("../CloudCredentialVault.js", () => ({ KeychainCloudCredentialVault: class {} }));
 
 import { initCloudHosts } from "../initCloudHosts.js";
+import {
+  clearPluginCloudProviders,
+  publishPluginCloudProviders,
+  withdrawPluginCloudProviders,
+} from "../../../services/plugin/pluginCloudProviders.js";
+import type { CloudProviderContribution } from "../../../../shared/types/pluginCloudProvider.js";
+
+afterEach(() => clearPluginCloudProviders());
+
+function ec2(name = "EC2"): CloudProviderContribution {
+  return {
+    id: "ec2",
+    name,
+    description: "Machines on your AWS account.",
+    apiUrl: "https://ec2.example.com",
+    apiKeyUrl: "https://console.example.com/keys",
+    dashboardUrl: "https://console.example.com/ec2",
+    docsUrl: "https://docs.example.com",
+    credentialFields: [
+      { id: "key", label: "Key", secret: true, input: "single-line", required: true, help: null },
+    ],
+    capabilities: {
+      persistence: {
+        kept: "Its disk",
+        lost: "Memory",
+        retentionDays: null,
+        saveRetryBilled: false,
+        stoppedComputeBilled: false,
+        stoppedStorageBilled: true,
+      },
+      typicalStartSeconds: 90,
+      lifetime: { kind: "none" },
+      sshTrust: "confirm-on-first-connect",
+      transport: "direct",
+      tunnel: null,
+      provisioning: { location: "none", image: "none", network: "none", sshKey: "at-create" },
+      deletion: true,
+    },
+  };
+}
+
+function pluginAccount(apiUrl = "https://ec2.example.com") {
+  return {
+    id: "ca_acmeplugin1",
+    providerId: "acme.clouds.ec2",
+    displayName: "Work",
+    identity: null,
+    scope: { kind: "personal", id: "personal", name: "Personal" },
+    apiUrl,
+    keyHint: null,
+    credentialRevision: "rev-1",
+    addedAt: 1,
+    validation: { status: "valid", checkedAt: 1 },
+    lastProvisioning: null,
+  };
+}
 
 describe("initCloudHosts", () => {
   it("offers Google Cloud beside Boat, pinned to Google's own API in a packaged build", () => {
@@ -28,6 +84,46 @@ describe("initCloudHosts", () => {
       );
       // Nothing was asked of any provider, and nothing written, before an account exists.
       expect(stored).toBeUndefined();
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it("names a plugin's provider on its accounts at startup and whenever it registers again (#17353)", () => {
+    let stored: unknown = {
+      version: 1,
+      accounts: [pluginAccount(), pluginAccount("https://elsewhere.example.com")].map(
+        (account, index) => ({ ...account, id: `ca_acmeplugin${index + 1}` })
+      ),
+      bindings: [],
+    };
+    const label = () =>
+      (stored as { accounts: Array<{ id: string; pluginProvider?: unknown }> }).accounts.map(
+        (account) => account.pluginProvider ?? null
+      );
+    // Already loaded when the cloud side starts: named straight away.
+    publishPluginCloudProviders("acme.clouds", [ec2()], "Acme Clouds");
+    const runtime = initCloudHosts({
+      backend: {
+        get: () => stored,
+        set: (_key, value) => {
+          stored = JSON.parse(JSON.stringify(value));
+        },
+      },
+      emit: vi.fn(),
+    });
+    try {
+      const first = {
+        pluginName: "Acme Clouds",
+        providerName: "EC2",
+        dashboardUrl: "https://console.example.com/ec2",
+      };
+      // Only the account connected against the origin the provider registered at is spoken for.
+      expect(label()).toEqual([first, null]);
+      withdrawPluginCloudProviders("acme.clouds");
+      expect(label()).toEqual([first, null]);
+      publishPluginCloudProviders("acme.clouds", [ec2("EC2 Classic")], "Acme Clouds");
+      expect(label()).toEqual([{ ...first, providerName: "EC2 Classic" }, null]);
     } finally {
       runtime.dispose();
     }

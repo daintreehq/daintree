@@ -455,6 +455,25 @@ describe("CloudHostStore accounts", () => {
     });
   });
 
+  it("cuts a long name short rather than losing the label and its console link", () => {
+    const backend = disk();
+    new CloudHostStore(backend).putAccount({
+      ...account,
+      providerId: "acme.clouds.ec2",
+      credentialRevision: null,
+      lastProvisioning: null,
+      pluginProvider: {
+        pluginName: "A".repeat(200),
+        providerName: "EC2",
+        dashboardUrl: "https://console.example.com/ec2",
+      },
+    });
+    const label = new CloudHostStore(backend).account(account.id)?.pluginProvider;
+    expect([...label!.pluginName]).toHaveLength(128);
+    expect(label!.pluginName.endsWith("…")).toBe(true);
+    expect(label!.dashboardUrl).toBe("https://console.example.com/ec2");
+  });
+
   it("drops a kept console link that isn't a public https URL, and a label missing a name", () => {
     const backend = disk();
     const label = (id: string, overrides: Record<string, unknown>) => ({
@@ -492,6 +511,11 @@ describe("CloudHostStore accounts", () => {
       "https://*.example.com",
       "file:///etc/passwd",
       `https://example.com/${"a".repeat(2048)}`,
+      "https://127.0.0.1/console",
+      "https://10.0.0.5/console",
+      "https://192.168.1.20/console",
+      "https://[::1]/console",
+      "https://169.254.169.254/latest",
       42,
     ]) {
       expect(readConsoleUrl(value)).toBeNull();

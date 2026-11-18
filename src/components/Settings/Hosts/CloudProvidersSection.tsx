@@ -61,11 +61,14 @@ function LastKnownMachines({ hosts, label }: { hosts: CloudHostStatus[]; label: 
       {hosts.map((host) => (
         <li key={host.hostId}>
           <span className="text-text-primary">{host.machineName ?? "Unnamed machine"}</span>{" "}
-          <FactSeparator /> {cloudStateWord(host)} <FactSeparator />{" "}
-          {host.observedAt !== null && host.observedAt > 0 ? (
+          {/* What the provider last said, never what this device was in the middle of asking. */}
+          <FactSeparator /> {cloudStateWord({ ...host, operation: null })} <FactSeparator />{" "}
+          {host.observedAt === null ? (
+            "Never checked"
+          ) : host.observedAt > 0 ? (
             <TimeAgo prefix="Last checked " timestamp={host.observedAt} />
           ) : (
-            "Never checked"
+            "Check time unknown"
           )}
         </li>
       ))}

@@ -94,9 +94,14 @@ export function CloudMachineSection({
   const stale =
     status.machine !== "unknown" &&
     (isObservationStale(status, now) ||
-      (status.providerUnavailable !== null && status.resourceId !== null));
+      (status.providerUnavailable !== null &&
+        status.resourceId !== null &&
+        status.operation === null));
+  // A zero time is a reading whose time a Retry cleared: known state, unknown when.
   const checkedAt =
-    status.observedAt !== null ? clockTime(new Date(status.observedAt).toISOString()) : null;
+    status.observedAt !== null && status.observedAt > 0
+      ? clockTime(new Date(status.observedAt).toISOString())
+      : null;
   const provider = cloudProviderFor(snapshot.providers, status);
   const providerName = cloudProviderName(provider, status);
   // A plugin's provider that's gone still names where its machines can be seen.

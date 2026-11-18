@@ -1147,6 +1147,7 @@ describe("PluginManagerView", () => {
           { hostId: "host-2", name: "spare" },
         ],
       },
+      { id: "ca_acmeplugin2", name: "Personal", providerName: "EC2", hosts: [] },
     ];
 
     async function armUninstall() {
@@ -1165,7 +1166,9 @@ describe("PluginManagerView", () => {
       const choice = screen.getByTestId("plugin-uninstall-cloud-accounts");
       expect(choice.textContent).toContain("Work");
       expect(choice.textContent).toContain("build, spare");
-      expect(choice.textContent).toMatch(/keep running in your EC2 account/);
+      expect(choice.textContent).toContain("Personal");
+      expect(choice.textContent).toMatch(/nothing is stopped or deleted at the provider/);
+      expect(choice.textContent).toMatch(/running keeps running/);
       const keep = screen.getByRole("radio", { name: "Keep cloud accounts" }) as HTMLInputElement;
       expect(keep.checked).toBe(true);
       expect(
@@ -1203,7 +1206,36 @@ describe("PluginManagerView", () => {
       await waitFor(() =>
         expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false, [
           "ca_acmeplugin1",
+          "ca_acmeplugin2",
         ])
+      );
+    });
+
+    it("starts a re-armed uninstall at Keep after another window's change closed the last one", async () => {
+      let provenanceChanged: () => void = () => {};
+      (window.electron.plugin.onProvenanceChanged as ReturnType<typeof vi.fn>).mockImplementation(
+        (listener: () => void) => {
+          provenanceChanged = listener;
+          return () => {};
+        }
+      );
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ cloudAccounts }),
+      ]);
+      renderDialog();
+      await selectPlugin();
+      await armUninstall();
+      fireEvent.click(screen.getByRole("radio", { name: "Remove cloud accounts" }));
+      act(() => provenanceChanged());
+      await waitFor(() => expect(screen.queryByText("Uninstall 'Acme Demo'?")).toBeNull());
+
+      await armUninstall();
+      expect(
+        (screen.getByRole("radio", { name: "Keep cloud accounts" }) as HTMLInputElement).checked
+      ).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false)
       );
     });
 
