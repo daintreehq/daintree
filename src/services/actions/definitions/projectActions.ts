@@ -418,6 +418,25 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       runProjectAction("project.sleep", args, ctx, callbacks),
   }));
 
+  actions.set("project.sleepAll", () => ({
+    id: "project.sleepAll",
+    title: "Sleep all projects",
+    description:
+      "Stop the terminals of every open project, after the user confirms a preview naming each one. The user can choose to sleep at once, or to wait until every agent is observed idle or at its prompt, optionally asking working agents to pause first. Layout, scrollback and agent sessions come back on reopen. Only available to the user.",
+    paletteDescription:
+      "Sleep every open project now, or once its agents are observed idle",
+    category: "project",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Stops the terminals and agent processes of every open project. Layout and sessions are kept for the reopen, but anything still running in them is lost.",
+    nonRepeatable: true,
+    keywords: ["shutdown", "reboot", "restart computer", "pack up", "pause"],
+    scope: "renderer",
+    run: (args: unknown, ctx: ActionContext) =>
+      runProjectAction("project.sleepAll", args, ctx, callbacks),
+  }));
+
   actions.set("project.restart", () => ({
     id: "project.restart",
     title: "Restart project…",

@@ -618,7 +618,6 @@ export function useProjectSwitcherPalette({
   const isConfirming =
     projectMutations.stopConfirmProjectId !== null ||
     projectMutations.removeConfirmProject !== null ||
-    projectMutations.sleepConfirmProject !== null ||
     scratchMutations.deleteScratchConfirm !== null ||
     scratchMutations.deleteAllScratchesConfirm !== null ||
     scratchMutations.saveAsProjectConfirm !== null;

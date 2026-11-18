@@ -22,11 +22,6 @@ export interface ProjectSwitcherConfirmState {
   onRemoveConfirmClose?: () => void;
   onConfirmRemove?: () => void;
   isRemovingProject?: boolean;
-  /** Frozen snapshot of the project pending a Sleep confirm, or null. */
-  sleepConfirmProject?: SearchableProject | null;
-  onSleepConfirmClose?: () => void;
-  onConfirmSleep?: () => void;
-  isSleepingProject?: boolean;
   /**
    * Target of a pending single-scratch delete confirmation, frozen when it
    * opened. Surfaced as a top-level ConfirmDialog above the palette.
@@ -148,10 +143,6 @@ export function ProjectSwitcherConfirmDialogs({
   onRemoveConfirmClose,
   onConfirmRemove,
   isRemovingProject = false,
-  sleepConfirmProject,
-  onSleepConfirmClose,
-  onConfirmSleep,
-  isSleepingProject = false,
   deleteScratchConfirm,
   onDismissDeleteScratchConfirm,
   onConfirmDeleteScratch,
@@ -263,61 +254,6 @@ export function ProjectSwitcherConfirmDialogs({
                       ? "Its clone is still running: removing it cancels the clone and discards the partly cloned folder."
                       : "The folder itself isn't touched, and recipes kept in the repository under .daintree/recipes/ stay."
                   }`}
-            </div>
-          </div>
-        </ConfirmDialog>
-      )}
-      {sleepConfirmProject && onSleepConfirmClose && onConfirmSleep && (
-        <ConfirmDialog
-          isOpen={true}
-          onClose={onSleepConfirmClose}
-          title={`Sleep '${sleepConfirmProject.name}'?`}
-          zIndex="nested"
-          confirmLabel="Sleep project"
-          cancelLabel="Cancel"
-          onConfirm={onConfirmSleep}
-          isConfirmLoading={isSleepingProject}
-          variant="default"
-        >
-          <div className="space-y-3">
-            <div>
-              <div className="font-medium text-sm">{sleepConfirmProject.name}</div>
-              <div className="text-xs text-text-secondary font-mono mt-1">
-                {sleepConfirmProject.path}
-              </div>
-            </div>
-            {(sleepConfirmProject.processCount > 0 ||
-              sleepConfirmProject.activeAgentCount > 0 ||
-              sleepConfirmProject.waitingAgentCount > 0) && (
-              <Callout severity="warning" title="Running processes will be stopped">
-                <div>
-                  {sleepConfirmProject.processCount > 0 && (
-                    <div>
-                      •{" "}
-                      {pluralize(
-                        sleepConfirmProject.processCount,
-                        "running process",
-                        "running processes"
-                      )}
-                    </div>
-                  )}
-                  {sleepConfirmProject.activeAgentCount > 0 && (
-                    <div>• {pluralize(sleepConfirmProject.activeAgentCount, "active agent")}</div>
-                  )}
-                  {sleepConfirmProject.waitingAgentCount > 0 && (
-                    <div>• {pluralize(sleepConfirmProject.waitingAgentCount, "waiting agent")}</div>
-                  )}
-                </div>
-              </Callout>
-            )}
-            {sleepConfirmProject.isActive && (
-              <div className="text-xs text-text-secondary">
-                This window returns to the project picker
-              </div>
-            )}
-            <div className="text-xs text-text-secondary">
-              The layout, terminal scrollback, and agent sessions come back when you reopen the
-              project.
             </div>
           </div>
         </ConfirmDialog>
@@ -443,10 +379,6 @@ export type ProjectSwitcherConfirmSource = Pick<
   | "setRemoveConfirmProject"
   | "confirmRemoveProject"
   | "isRemovingProject"
-  | "sleepConfirmProject"
-  | "setSleepConfirmProject"
-  | "confirmSleep"
-  | "isSleepingProject"
   | "deleteScratchConfirm"
   | "dismissDeleteScratchConfirm"
   | "confirmDeleteScratch"
@@ -481,10 +413,6 @@ export function ProjectSwitcherConfirmHost({
       onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
       onConfirmRemove={() => void projectSwitcher.confirmRemoveProject()}
       isRemovingProject={projectSwitcher.isRemovingProject}
-      sleepConfirmProject={projectSwitcher.sleepConfirmProject}
-      onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
-      onConfirmSleep={() => void projectSwitcher.confirmSleep()}
-      isSleepingProject={projectSwitcher.isSleepingProject}
       deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
       onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
       onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
