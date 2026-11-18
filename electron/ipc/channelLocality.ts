@@ -1341,6 +1341,7 @@ export const CHANNEL_LOCALITY = {
   "terminal:release-worker-ingest-port": "host",
   "terminal:replay-history": "host",
   "terminal:request-worker-ingest-port": "host",
+  "terminal:reset-modes": "host",
   "terminal:resize": "host",
   "terminal:resource-metrics": "host",
   "terminal:restart-service": "host",

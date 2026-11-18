@@ -438,6 +438,7 @@ export type PtyHostRequest =
   | { type: "get-terminals-for-project"; projectId: string; requestId: string }
   | { type: "get-terminal"; id: string; requestId: string; submissionToken?: string }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }
+  | { type: "reset-terminal-modes"; id: string; requestId: string }
   | { type: "get-serialized-state"; id: string; requestId: string; tailRows?: number }
   | {
       type: "init-buffers";
@@ -1006,6 +1007,7 @@ export type PtyHostEvent =
   | { type: "terminals-for-project"; requestId: string; terminalIds: string[] }
   | { type: "terminal-info"; requestId: string; terminal: PtyHostTerminalInfo | null }
   | { type: "replay-history-result"; requestId: string; replayed: number }
+  | { type: "reset-terminal-modes-result"; requestId: string; reset: boolean }
   | {
       type: "serialized-state";
       requestId: string;

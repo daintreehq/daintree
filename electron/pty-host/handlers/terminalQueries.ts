@@ -94,6 +94,14 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
       });
     },
 
+    "reset-terminal-modes": (msg) => {
+      sendEvent({
+        type: "reset-terminal-modes-result",
+        requestId: msg.requestId,
+        reset: ptyManager.resetTerminalModes(msg.id),
+      });
+    },
+
     "replay-history": (msg) => {
       const replayed = ptyManager.replayHistory(msg.id, msg.maxLines);
       sendEvent({

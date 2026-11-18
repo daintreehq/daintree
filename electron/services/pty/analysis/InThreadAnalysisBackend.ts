@@ -249,6 +249,13 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     }
   }
 
+  // The scheduler queues every headless write per terminal, so the reset
+  // already parses behind each chunk fed before it.
+  feedModeReset(data: string): boolean {
+    this.feedPrelude(data);
+    return true;
+  }
+
   feedPrelude(prelude: string): void {
     const terminal = this.terminalInfo;
     if (terminal.headlessTerminal) {

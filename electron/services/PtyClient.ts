@@ -3019,6 +3019,17 @@ export class PtyClient extends EventEmitter {
     };
   }
 
+  /** Whether the host wrote the mode reset; false for a terminal it can't reach. */
+  async resetTerminalModesAsync(id: string): Promise<boolean> {
+    const shard = this.shardForTerminal(id);
+    const promise = sendPtyHostRpc<boolean>(shard, `reset-modes-${id}`, (requestId) => ({
+      type: "reset-terminal-modes",
+      id,
+      requestId,
+    }));
+    return promise.catch(() => false);
+  }
+
   /** Replay terminal history */
   async replayHistoryAsync(id: string, maxLines: number = 100): Promise<number> {
     const shard = this.shardForTerminal(id);

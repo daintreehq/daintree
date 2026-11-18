@@ -43,6 +43,13 @@ export interface AnalysisBackend {
   feedChunk(data: string, flags: AnalysisChunkFlags): void;
   /** Pooled-shell prelude replay: headless write only, no monitor feed. */
   feedPrelude(data: string): void;
+  /**
+   * A mode reset Daintree writes as its own output (#17328): a headless write
+   * behind every chunk fed before it, with no monitor feed. False when a live
+   * mirror couldn't take it in that order; nothing was written, and the caller
+   * must not send the renderer bytes the mirror never saw.
+   */
+  feedModeReset(data: string): boolean;
   /** Headless resize + monitor resize suppression + temperature reset. */
   resize(cols: number, rows: number): void;
   /**

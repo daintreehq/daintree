@@ -4929,6 +4929,10 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: { token: string } | null;
   };
+  "terminal:reset-modes": {
+    args: [id: string];
+    result: boolean;
+  };
   "terminal:restart-service": {
     args: [];
     result: void;

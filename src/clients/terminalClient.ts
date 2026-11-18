@@ -1132,6 +1132,11 @@ export const terminalClient = {
     return window.electron.terminal.forceResume(id);
   },
 
+  /** Reset the input modes a dead program left on, without writing to the process. */
+  resetModes: (id: string): Promise<boolean> => {
+    return window.electron.terminal.resetModes(id);
+  },
+
   /**
    * Listen for terminal status changes (flow control state).
    *

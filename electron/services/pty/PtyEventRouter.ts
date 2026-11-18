@@ -326,6 +326,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.replayed ?? 0);
       return true;
 
+    case "reset-terminal-modes-result":
+      broker.resolve(event.requestId, event.reset === true);
+      return true;
+
     case "available-terminals":
       broker.resolve(event.requestId, event.terminals ?? []);
       return true;
