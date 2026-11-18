@@ -7,7 +7,9 @@ import {
   buildHunkPatch,
   findHunk,
   formatHunk,
+  hasNoContext,
   hunksWithin,
+  isPlainModification,
   parseFilePatch,
   sameHunkBody,
 } from "../patchHunks.js";
@@ -96,6 +98,13 @@ describe("parseFilePatch", () => {
     expect(formatHunk(patch!.hunks[0]!)).toBe(text.slice(0, -1));
   });
 
+  it("reads an empty line inside a hunk as the blank context line it stands for", () => {
+    const suppressed = parseFilePatch("@@ -1,3 +1,3 @@\n-a\n+b\n\n c\n");
+    const plain = parseFilePatch("@@ -1,3 +1,3 @@\n-a\n+b\n \n c\n");
+    expect(suppressed?.hunks[0]?.lines).toEqual(["-a", "+b", " ", " c"]);
+    expect(sameHunkBody(suppressed!.hunks[0]!, plain!.hunks[0]!)).toBe(true);
+  });
+
   it("reads a line that looks like a hunk header as content when the counts say so", () => {
     const patch = parseFilePatch("@@ -1,2 +1,2 @@\n-x\n+@@ -9 +9 @@\n y\n");
     expect(patch?.hunks).toHaveLength(1);
@@ -122,18 +131,71 @@ describe("findHunk", () => {
     expect(findHunk(patch, read)).toBe(1);
   });
 
-  it("follows a body that moved only when nothing else could be it", () => {
+  it("never takes the same body at another old start", () => {
     const moved = parseFilePatch("@@ -17,2 +17,2 @@\n-x\n+y\n z\n")!.hunks[0]!;
-    expect(findHunk(patch, moved)).toBe(2);
-    const twin = parseFilePatch("@@ -5,2 +5,2 @@\n-a\n+b\n c\n")!.hunks[0]!;
-    expect(findHunk(patch, twin)).toBeNull();
-    expect(findHunk(patch, twin, new Set([0]))).toBe(1);
+    expect(findHunk(patch, moved)).toBeNull();
+  });
+
+  it("refuses the surviving twin once the hunk that was read is rewritten", () => {
+    const read = parseFilePatch("@@ -1,2 +1,2 @@\n-a\n+b\n c\n")!.hunks[0]!;
+    const rewritten = parseFilePatch(
+      "@@ -1,2 +1,2 @@\n-a\n+q\n c\n@@ -10,2 +10,2 @@\n-a\n+b\n c\n"
+    )!;
+    expect(findHunk(rewritten, read)).toBeNull();
+  });
+
+  it("skips a hunk an earlier request already took", () => {
+    const read = parseFilePatch("@@ -10,2 +10,2 @@\n-a\n+b\n c\n")!.hunks[0]!;
+    expect(findHunk(patch, read, new Set([1]))).toBeNull();
   });
 
   it("finds nothing once the lines were rewritten", () => {
     const rewritten = parseFilePatch("@@ -20,2 +20,2 @@\n-x\n+q\n z\n")!.hunks[0]!;
     expect(findHunk(patch, rewritten)).toBeNull();
     expect(sameHunkBody(patch.hunks[2]!, rewritten)).toBe(false);
+  });
+});
+
+describe("isPlainModification", () => {
+  const header = (...extra: string[]): string[] => [
+    "diff --git a/f b/f",
+    ...extra,
+    "--- a/f",
+    "+++ b/f",
+  ];
+
+  it("takes a regular file changed in place, with or without an executable-bit change", () => {
+    expect(isPlainModification(header("index 1a..2b 100644"))).toBe(true);
+    expect(isPlainModification(header("old mode 100644", "new mode 100755", "index 1a..2b"))).toBe(
+      true
+    );
+  });
+
+  it("refuses new, deleted, renamed, symlink and submodule entries", () => {
+    expect(
+      isPlainModification([
+        "diff --git a/f b/f",
+        "new file mode 100644",
+        "index 0..2b",
+        "--- /dev/null",
+        "+++ b/f",
+      ])
+    ).toBe(false);
+    expect(
+      isPlainModification(["diff --git a/f b/f", "index 1a..0", "--- a/f", "+++ /dev/null"])
+    ).toBe(false);
+    expect(
+      isPlainModification(
+        header("similarity index 90%", "rename from e", "rename to f", "index 1a..2b 100644")
+      )
+    ).toBe(false);
+    expect(isPlainModification(header("index 1a..2b 120000"))).toBe(false);
+    expect(isPlainModification(header("index 1a..2b 160000"))).toBe(false);
+  });
+
+  it("refuses a header missing its file lines or repeating one", () => {
+    expect(isPlainModification(["diff --git a/f b/f", "index 1a..2b 100644"])).toBe(false);
+    expect(isPlainModification(header("index 1a..2b 100644", "index 1a..2b 100644"))).toBe(false);
   });
 });
 
@@ -243,6 +305,53 @@ describe("buildHunkPatch against real git", () => {
 
     expect(indexBlob(dir)).toBe(
       `${[...base.slice(0, 20), "line 21 changed", ...base.slice(21)].join("\n")}\n`
+    );
+  });
+
+  it("stages what git add -p stages for the same choice", () => {
+    const viaPatch = repoWith(`${base.join("\n")}\n`);
+    const viaAddP = repoWith(`${base.join("\n")}\n`);
+    for (const dir of [viaPatch, viaAddP]) {
+      fs.writeFileSync(path.join(dir, "f.txt"), `${edited.join("\n")}\n`);
+    }
+    const patch = parseFilePatch(git(viaPatch, ["diff", "--", "f.txt"]))!;
+    git(viaPatch, ["apply", "--cached", "-"], buildHunkPatch(patch, new Set([1]), "forward"));
+    git(viaAddP, ["add", "-p", "--", "f.txt"], "n\ny\n");
+
+    expect(indexBlob(viaPatch)).toBe(indexBlob(viaAddP));
+  });
+
+  it("unstages what git reset -p unstages for the same choice", () => {
+    const viaPatch = repoWith(`${base.join("\n")}\n`);
+    const viaResetP = repoWith(`${base.join("\n")}\n`);
+    for (const dir of [viaPatch, viaResetP]) {
+      fs.writeFileSync(path.join(dir, "f.txt"), `${edited.join("\n")}\n`);
+      git(dir, ["add", "f.txt"]);
+    }
+    const patch = parseFilePatch(git(viaPatch, ["diff", "--cached", "--", "f.txt"]))!;
+    git(viaPatch, ["apply", "--cached", "-R", "-"], buildHunkPatch(patch, new Set([1]), "reverse"));
+    git(viaResetP, ["reset", "-p", "--", "f.txt"], "n\ny\n");
+
+    expect(indexBlob(viaPatch)).toBe(indexBlob(viaResetP));
+  });
+
+  it("lands a zero-context insertion at its own line past a skipped deletion", () => {
+    const dir = repoWith(`${base.join("\n")}\n`);
+    git(dir, ["config", "diff.context", "0"]);
+    const lines = [...base.slice(0, 2), ...base.slice(6, 20), "inserted", ...base.slice(20)];
+    fs.writeFileSync(path.join(dir, "f.txt"), `${lines.join("\n")}\n`);
+    const patch = parseFilePatch(git(dir, ["diff", "--", "f.txt"]))!;
+    expect(patch.hunks).toHaveLength(2);
+    expect(hasNoContext(patch.hunks[1]!)).toBe(true);
+
+    git(
+      dir,
+      ["apply", "--cached", "--unidiff-zero", "-"],
+      buildHunkPatch(patch, new Set([1]), "forward")
+    );
+
+    expect(indexBlob(dir)).toBe(
+      `${[...base.slice(0, 20), "inserted", ...base.slice(20)].join("\n")}\n`
     );
   });
 

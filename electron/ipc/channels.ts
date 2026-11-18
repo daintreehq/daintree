@@ -437,6 +437,8 @@ export const CHANNELS = {
   GIT_UNSTAGE_FILE: "git:unstage-file",
   GIT_STAGE_FILES: "git:stage-files",
   GIT_UNSTAGE_FILES: "git:unstage-files",
+  GIT_STAGE_HUNKS: "git:stage-hunks",
+  GIT_UNSTAGE_HUNKS: "git:unstage-hunks",
   GIT_STAGE_ALL: "git:stage-all",
   GIT_UNSTAGE_ALL: "git:unstage-all",
   GIT_COMMIT: "git:commit",

@@ -4,8 +4,11 @@
  *
  * Lines are framed on `\n` only and kept verbatim, so a CRLF file's `\r` and
  * git's `\ No newline at end of file` markers survive a round trip byte for
- * byte. A hunk's extent comes from the counts in its header, never from the
- * prefix of the next line, which is how git itself reads a patch.
+ * byte. The one rewrite is an empty line inside a hunk, which
+ * `diff.suppressBlankEmpty` prints for a blank context line: it becomes the
+ * `" "` git prints otherwise, so two reads under either setting compare equal.
+ * A hunk's extent comes from the counts in its header, never from the prefix
+ * of the next line, which is how git itself reads a patch.
  *
  * Renderer-safe: no Node.js built-ins, no Electron deps.
  */
@@ -17,7 +20,7 @@ export interface PatchHunk {
   newLines: number;
   /** What follows the closing `@@`: git's function context, leading space included. */
   section: string;
-  /** Every line after the header, verbatim, `\` markers included. */
+  /** Every line after the header, verbatim but for blank context, `\` markers included. */
   lines: string[];
 }
 
@@ -65,8 +68,9 @@ export function parseFilePatch(text: string): FilePatch | null {
     let oldLeft = hunk.oldLines;
     let newLeft = hunk.newLines;
     while (oldLeft > 0 || newLeft > 0) {
-      const line = lines[i];
-      if (line === undefined) return null;
+      const raw = lines[i];
+      if (raw === undefined) return null;
+      const line = raw === "" ? " " : raw;
       const prefix = line[0];
       if (prefix === " ") {
         oldLeft--;
@@ -104,22 +108,24 @@ export function sameHunkBody(a: PatchHunk, b: PatchHunk): boolean {
 }
 
 /**
- * The hunk of `patch` that is `read`, or null when none is, or when more than
- * one could be and nothing tells them apart. A matching body at the same old
- * start wins; a body that moved is taken only when it is the only one left.
+ * The hunk of `patch` that is `read`: the same lines, at the same old start.
+ *
+ * The old side is what the hunk applies to (the index for an unstaged hunk,
+ * HEAD for a staged one), so an edit elsewhere on the new side moves only the
+ * new start, and the hunk is still found. A body that turns up at another old
+ * start is never taken for it: when the hunk the user read was rewritten, an
+ * identical one elsewhere in the file is a different change, and staging it
+ * would put in lines nobody chose.
  */
 export function findHunk(
   patch: FilePatch,
   read: PatchHunk,
   taken: ReadonlySet<number> = new Set()
 ): number | null {
-  const candidates: number[] = [];
-  patch.hunks.forEach((hunk, index) => {
-    if (!taken.has(index) && sameHunkBody(hunk, read)) candidates.push(index);
-  });
-  const inPlace = candidates.find((index) => patch.hunks[index]!.oldStart === read.oldStart);
-  if (inPlace !== undefined) return inPlace;
-  return candidates.length === 1 ? candidates[0]! : null;
+  const index = patch.hunks.findIndex(
+    (hunk, i) => !taken.has(i) && hunk.oldStart === read.oldStart && sameHunkBody(hunk, read)
+  );
+  return index === -1 ? null : index;
 }
 
 function formatRange(start: number, count: number): string {
@@ -155,11 +161,44 @@ export function buildHunkPatch(
     const newStart = direction === "forward" ? hunk.newStart + delta : hunk.newStart;
     if (oldStart < 0 || newStart < 0) throw new Error("Hunk offset fell before the file start");
     out.push(
-      `@@ -${formatRange(oldStart, hunk.oldLines)} +${formatRange(newStart, hunk.newLines)} @@${hunk.section}`,
-      ...hunk.lines
+      `@@ -${formatRange(oldStart, hunk.oldLines)} +${formatRange(newStart, hunk.newLines)} @@${hunk.section}`
     );
+    // One push per line: spreading a hunk of many short lines into one call
+    // can pass the engine's argument limit.
+    for (const line of hunk.lines) out.push(line);
   });
   return `${out.join("\n")}\n`;
+}
+
+const REGULAR_MODE = "(?:100644|100755)";
+const PLAIN_HEADER_RULES: ReadonlyArray<{ pattern: RegExp; required: boolean }> = [
+  { pattern: /^diff --git /, required: true },
+  { pattern: new RegExp(`^index [0-9a-f]+\\.\\.[0-9a-f]+(?: ${REGULAR_MODE})?$`), required: true },
+  { pattern: new RegExp(`^old mode ${REGULAR_MODE}$`), required: false },
+  { pattern: new RegExp(`^new mode ${REGULAR_MODE}$`), required: false },
+  { pattern: /^--- (?!\/dev\/null$)/, required: true },
+  { pattern: /^\+\+\+ (?!\/dev\/null$)/, required: true },
+];
+
+/**
+ * Whether a patch header describes a regular text file changed in place, the
+ * only shape that stages by hunk. Each line must be one of these, at most
+ * once: a new, deleted, renamed, copied, binary, symlink or submodule entry
+ * carries a line or a mode that isn't.
+ */
+export function isPlainModification(header: readonly string[]): boolean {
+  const seen = new Set<number>();
+  for (const line of header) {
+    const rule = PLAIN_HEADER_RULES.findIndex(({ pattern }) => pattern.test(line));
+    if (rule === -1 || seen.has(rule)) return false;
+    seen.add(rule);
+  }
+  return PLAIN_HEADER_RULES.every(({ required }, rule) => !required || seen.has(rule));
+}
+
+/** Whether a hunk changes lines with none of the file around them, as `-U0` prints. */
+export function hasNoContext(hunk: PatchHunk): boolean {
+  return !hunk.lines.some((line) => line.startsWith(" "));
 }
 
 /** One hunk as text, header line first, the form a renderer sends back to Main. */

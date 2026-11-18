@@ -19,6 +19,31 @@ export interface GitGetFileDiffPayload {
 }
 
 /**
+ * Git's hunks of one side of a file's diff, as the diff pane read them, to stage
+ * (from the unstaged side) or unstage (from the staged side) (#17331).
+ */
+export interface GitHunkStagingPayload {
+  /** Working directory (worktree path) */
+  cwd: string;
+  /** Path to the file relative to worktree root, as its diff was read */
+  filePath: string;
+  /** Each hunk's `@@` header line and body, cut from the diff that was read */
+  hunks: string[];
+}
+
+/**
+ * What a hunk stage or unstage did. Every outcome but `applied` wrote nothing.
+ * - `stale`: a hunk is no longer in that side's diff as it was read, so the
+ *   pane reloads rather than stage lines nobody has seen.
+ * - `unsupported`: the file can't be staged by hunk (not a regular file, or
+ *   not UTF-8 text), so only the whole file can be.
+ */
+export type GitHunkStagingResult =
+  | { status: "applied" }
+  | { status: "stale" }
+  | { status: "unsupported" };
+
+/**
  * A byte-bounded window over a file's diff (#11531).
  *
  * An oversized diff is readable by walking `nextOffset` rather than being refused
