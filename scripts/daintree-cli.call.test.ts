@@ -138,15 +138,13 @@ async function startFixture(options: { jsonResponse?: boolean } = {}): Promise<F
     const sessionId = header("mcp-session-id");
     let transport = sessionId ? sessions.get(sessionId) : undefined;
     if (sessionId && !transport) {
-      res
-        .writeHead(404, { "Content-Type": "application/json" })
-        .end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            error: { code: -32001, message: "Session not found" },
-            id: null,
-          })
-        );
+      res.writeHead(404, { "Content-Type": "application/json" }).end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "Session not found" },
+          id: null,
+        })
+      );
       return;
     }
     if (!transport) {
