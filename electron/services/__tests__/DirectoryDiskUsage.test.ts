@@ -94,10 +94,14 @@ describe("indexNestedRoots", () => {
     expect(roots.reduce((sum, root) => sum + nestedIn(root).length, 0)).toBe(5);
   });
 
-  it("resolves paths, so spellings of one root are one root", () => {
-    const nestedIn = indexNestedRoots(["/repo/", "/repo", "/repo/x/../a", "/repo/a/"], "linux");
-    expect(nestedIn("/repo")).toEqual(["/repo/a"]);
-    expect(nestedIn("/repo/a")).toEqual([]);
+  it("resolves paths, so spellings of one root are one root, named as first given", () => {
+    const nestedIn = indexNestedRoots(
+      ["/repo/", "/repo", "/repo/x/../a", "/repo/a/", "/repo/a/b"],
+      "linux"
+    );
+    expect(nestedIn("/repo")).toEqual(["/repo/x/../a"]);
+    expect(nestedIn("/repo/a")).toEqual(["/repo/a/b"]);
+    expect(nestedIn("/repo/a/b")).toEqual([]);
   });
 
   it("stops at the filesystem root", () => {
@@ -126,7 +130,7 @@ describe("indexNestedRoots", () => {
       "win32"
     );
     expect(nestedIn("c:\\REPO")).toEqual(["c:\\repo\\.worktrees\\A"]);
-    expect(nestedIn("C:\\Repo\\.worktrees\\a")).toEqual(["C:\\REPO\\.worktrees\\a\\inner"]);
+    expect(nestedIn("C:\\Repo\\.worktrees\\a")).toEqual(["C:/REPO/.worktrees/a/inner"]);
     expect(nestedIn("C:\\Repo2\\wt")).toEqual([]);
     expect(nestedIn("\\\\server\\share")).toEqual(["\\\\server\\share\\wt"]);
     expect(nestedIn("\\\\SERVER\\Share\\")).toEqual(["\\\\server\\share\\wt"]);
