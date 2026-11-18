@@ -118,10 +118,16 @@ export function sameHunkBody(a: PatchHunk, b: PatchHunk): boolean {
  * new start, and the hunk is still found. A body that turns up at another old
  * start is never taken for it: when the hunk the user read was rewritten, an
  * identical one elsewhere in the file is a different change, and staging it
- * would put in lines nobody chose. Candidates are looked up by old start
- * rather than scanned for, so a large selection costs one pass.
+ * would put in lines nobody chose. With `matchNewStart`, for an unstage, the
+ * new start must match as well: that side is the index the reverse apply
+ * writes, and nothing but another index write moves it. Candidates are looked
+ * up by old start rather than scanned for, so a large selection costs one pass.
  */
-export function matchHunks(patch: FilePatch, read: readonly PatchHunk[]): Set<number> | null {
+export function matchHunks(
+  patch: FilePatch,
+  read: readonly PatchHunk[],
+  { matchNewStart = false }: { matchNewStart?: boolean } = {}
+): Set<number> | null {
   const byOldStart = new Map<number, number[]>();
   patch.hunks.forEach((hunk, index) => {
     const at = byOldStart.get(hunk.oldStart);
@@ -132,7 +138,12 @@ export function matchHunks(patch: FilePatch, read: readonly PatchHunk[]): Set<nu
   for (const hunk of read) {
     const index = byOldStart
       .get(hunk.oldStart)
-      ?.find((candidate) => !matched.has(candidate) && sameHunkBody(patch.hunks[candidate]!, hunk));
+      ?.find(
+        (candidate) =>
+          !matched.has(candidate) &&
+          (!matchNewStart || patch.hunks[candidate]!.newStart === hunk.newStart) &&
+          sameHunkBody(patch.hunks[candidate]!, hunk)
+      );
     if (index === undefined) return null;
     matched.add(index);
   }

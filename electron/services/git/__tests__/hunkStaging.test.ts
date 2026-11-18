@@ -279,31 +279,27 @@ describe("applyReadHunks (real git)", () => {
     expect(indexBlob()).toBe(text(BASE));
   });
 
-  it("stages a hunk read through a replaced index blob only where the real blob agrees", async () => {
+  it("refuses a zero-context hunk the pane placed through a replaced index blob", async () => {
     commit(BASE);
-    write(BOTH);
+    git(repo, "config", "diff.context", "0");
+    write([...BASE.slice(0, 20), "inserted", ...BASE.slice(20)]);
     const real = git(repo, "rev-parse", ":f.txt").trim();
     const replacement = execFileSync("git", ["hash-object", "-w", "--stdin"], {
       cwd: repo,
       env: GIT_ENV,
-      input: text([...BASE.slice(0, 9), "line 10 replaced", ...BASE.slice(10)]),
+      input: text(["replaced extra", ...BASE]),
       encoding: "utf8",
     }).trim();
     git(repo, "replace", real, replacement);
-    // Plain git, as the pane reads, shows the replacement's line 10 as a hunk
-    // between the two edits; the index holds no such line.
-    const read = readHunks("unstaged");
-    expect(read).toHaveLength(3);
+    // Plain git, as the pane reads, puts the insertion one line further down,
+    // past a line the real index doesn't hold; with no context to check, only
+    // its start says where it goes.
+    const [, insertion] = readHunks("unstaged");
 
-    expect(await applyReadHunks(repo, "f.txt", parseReadHunks([read[1]!]), "stage")).toEqual({
-      status: "stale",
-    });
-    expect(await applyReadHunks(repo, "f.txt", parseReadHunks([read[2]!]), "stage")).toEqual({
-      status: "applied",
-    });
-    expect(git(repo, "--no-replace-objects", "show", ":f.txt")).toBe(
-      text([...BASE.slice(0, 25), "line 26 changed", ...BASE.slice(26)])
-    );
+    const result = await applyReadHunks(repo, "f.txt", parseReadHunks([insertion!]), "stage");
+
+    expect(result).toEqual({ status: "stale" });
+    expect(git(repo, "--no-replace-objects", "show", ":f.txt")).toBe(text(BASE));
   });
 
   it("refuses a hunk read with a replacement character, which could stand for other bytes", async () => {

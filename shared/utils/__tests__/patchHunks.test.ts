@@ -145,6 +145,14 @@ describe("matchHunks", () => {
     expect(matchHunks(patch, [first, hunk("@@ -20,2 +20,2 @@\n-x\n+q\n z\n")])).toBeNull();
   });
 
+  it("pins the new start too for an unstage, whose new side is the index it writes", () => {
+    const shifted = hunk("@@ -10,2 +14,2 @@\n-a\n+b\n c\n");
+    expect(matchHunks(patch, [shifted], { matchNewStart: true })).toBeNull();
+    expect([
+      ...matchHunks(patch, [hunk("@@ -10,2 +10,2 @@\n-a\n+b\n c\n")], { matchNewStart: true })!,
+    ]).toEqual([1]);
+  });
+
   it("never takes the same body at another old start", () => {
     expect(matchHunks(patch, [hunk("@@ -17,2 +17,2 @@\n-x\n+y\n z\n")])).toBeNull();
   });

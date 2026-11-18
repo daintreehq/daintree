@@ -160,7 +160,7 @@ export function applyReadHunks(
       return { status: "stale" };
     }
 
-    const selected = matchHunks(fresh, read);
+    const selected = matchHunks(fresh, read, { matchNewStart: direction === "unstage" });
     if (selected === null) return { status: "stale" };
 
     const patch = buildHunkPatch(fresh, selected, direction === "stage" ? "forward" : "reverse");
