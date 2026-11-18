@@ -283,7 +283,8 @@ export function HostConnectionBanner() {
 
   if (variant === "version-mismatch") {
     // The way out is the update the host chip and Settings → Hosts offer, of
-    // whichever side is behind.
+    // whichever side is behind. A host updated (or rolled back) from elsewhere
+    // leaves this link parked on its old answer, so Retry asks it again.
     return (
       <InlineStatusBanner
         title={title}
@@ -301,6 +302,13 @@ export function HostConnectionBanner() {
                   label: updateActionLabel(mismatch, hostName),
                   variant: "primary",
                   onClick: () => runHostUpdate(updateTargetFor(mismatch), hostId),
+                },
+                {
+                  id: "reconnect",
+                  label: "Retry",
+                  icon: RefreshCw,
+                  variant: "dismiss",
+                  onClick: reconnectHost,
                 },
               ]
         }

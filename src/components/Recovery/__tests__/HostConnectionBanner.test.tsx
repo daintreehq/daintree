@@ -307,6 +307,7 @@ describe("HostConnectionBanner", () => {
     const { unmount } = render(<HostConnectionBanner />);
     expect(screen.getByText(/^This machine runs an older version of Daintree/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Update this machine" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     unmount();
 
     seed({
@@ -317,17 +318,64 @@ describe("HostConnectionBanner", () => {
     render(<HostConnectionBanner />);
     expect(screen.getByText("studio-01 runs an older version of Daintree")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Update studio-01" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("rechecks a host updated outside this window and lets the obsolete mismatch go once it connects", () => {
+    const behind = {
+      status: "version-mismatch",
+      mismatch: { kind: "protocol", local: 5, remote: 4 },
+      remote: { ...HANDSHAKE, protocolVersion: 4 },
+    } as const;
+    seed(behind);
+    const { container } = render(<HostConnectionBanner />);
+    expect(screen.getByRole("button", { name: "Update studio-01" })).toBeTruthy();
+    // A fresh handshake, not another installation.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
+
+    // The dial leaves the mismatch; still behind, the same answer comes back,
+    // and so does the way to recheck it.
+    act(() => {
+      seed({ status: "connecting", attempt: 1 });
+    });
+    // Held behind the settle window like any other drop.
+    expect(container.firstChild).toBeNull();
+    act(() => {
+      seed(behind);
+    });
+    expect(screen.getByText("studio-01 runs an older version of Daintree")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+    act(() => {
+      seed({ status: "connected", rttMs: 20, handshake: { ...HANDSHAKE, protocolVersion: 5 } });
+    });
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("rechecks when this machine is the one behind too: the host may have been rolled back", () => {
+    seed({
+      status: "version-mismatch",
+      mismatch: { kind: "protocol", local: 4, remote: 5 },
+      remote: { ...HANDSHAKE, protocolVersion: 5 },
+    });
+    render(<HostConnectionBanner />);
+    expect(screen.getByRole("button", { name: "Update this machine" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
   });
 
   it("calls builds a commit apart different, not older, and still offers the update", () => {
     seed({
       status: "version-mismatch",
       mismatch: { kind: "commit", local: "a", remote: "b" },
-      remote: HANDSHAKE,
+      remote: { ...HANDSHAKE, commit: "b" },
     });
     render(<HostConnectionBanner />);
     expect(screen.getByText("studio-01 runs a different build of Daintree")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Update studio-01" })).toBeTruthy();
+    // The host may already have been rebuilt to match.
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("says it is checking with the host while an unanswered mutation is resolved", () => {
