@@ -1479,6 +1479,46 @@ export class ProjectStore {
   }
 
   /**
+   * Every project as host metrics read it, in `getAllProjects()` order (#17798).
+   *
+   * Not `getAllProjects()`, for the reason `getProjectSummaries()` gives: the
+   * five-second sample would demote every remote activation it read. Nothing is
+   * written. The current project reads as active, as the repair would leave it,
+   * so a stored status that disagrees with the pointer doesn't change which
+   * projects count as open.
+   */
+  getProjectInventory(): Array<{ id: string; name: string; path: string; status: string | null }> {
+    const currentProjectId = this.getCurrentProjectId();
+    const rows = getSharedDb()
+      .select({
+        id: projectsTable.id,
+        name: projectsTable.name,
+        path: projectsTable.path,
+        status: projectsTable.status,
+        frecencyScore: projectsTable.frecencyScore,
+        lastAccessedAt: projectsTable.lastAccessedAt,
+        lastOpened: projectsTable.lastOpened,
+      })
+      .from(projectsTable)
+      // The same pre-order `getAllProjects()` sorts from, so ties fall the same way.
+      .orderBy(desc(projectsTable.frecencyScore), desc(projectsTable.lastOpened))
+      .all();
+    const now = Date.now();
+    return rows
+      .map((row) => ({
+        row,
+        score: decayFrecencyScore(row.frecencyScore ?? 0, row.lastAccessedAt ?? 0, now),
+      }))
+      .sort((a, b) => b.score - a.score || (b.row.lastOpened ?? 0) - (a.row.lastOpened ?? 0))
+      .map(({ row }) => ({
+        id: row.id,
+        name: row.name,
+        path: row.path,
+        status: row.id === currentProjectId ? "active" : row.status,
+      }));
+  }
+
+  /**
    * A project opened here from another machine's window: status and the same
    * frecency bump a local switch gives it, so "Most used" counts remote use.
    * The global current-project pointer names this machine's own window and is

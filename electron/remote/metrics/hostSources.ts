@@ -30,7 +30,7 @@ import { DriveLeaseHolderSchema } from "../link/schemas.js";
 import { getRemoteService } from "../runtime.js";
 import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
 
-type ProjectInventory = ReturnType<typeof projectStore.getAllProjects>;
+type ProjectInventory = ReturnType<typeof projectStore.getProjectInventory>;
 
 const COMMAND_TIMEOUT_MS = 2_000;
 const WORKTREE_COUNT_TTL_MS = 30_000;
@@ -68,7 +68,7 @@ async function listDir(path: string): Promise<string[]> {
 }
 
 /** Projects with a live workspace on this host: what "open" means here. */
-export function openProjects(projects: ProjectInventory = projectStore.getAllProjects()) {
+export function openProjects(projects: ProjectInventory = projectStore.getProjectInventory()) {
   return projects.filter(
     (project) => project.status === "active" || project.status === "background"
   );
@@ -98,7 +98,7 @@ export async function observeAgents(
   const pty = getPtyClient();
   if (!pty) return null;
   const projectIds = [
-    ...(options.projectIds ?? projectStore.getAllProjects().map((p) => p.id)),
+    ...(options.projectIds ?? projectStore.getProjectInventory().map((p) => p.id)),
     ...scratchStore.getAllScratches().map((s) => s.id),
   ];
   const { terminals, degraded } = await (options.readTerminals
@@ -202,7 +202,7 @@ async function countWorktrees(
  * moves or grace to what {@link currentDriver}'s reads already do.
  */
 function currentDrivers(
-  projects: () => ProjectInventory = () => projectStore.getAllProjects()
+  projects: () => ProjectInventory = () => projectStore.getProjectInventory()
 ): HostDriverObservation[] {
   const lease = peekDriveLeaseService();
   if (!lease) return [];
@@ -219,7 +219,7 @@ function currentDrivers(
  * the link carries) is passed over, or the whole summary would be.
  */
 function currentDriver(
-  projects: () => ProjectInventory = () => projectStore.getAllProjects()
+  projects: () => ProjectInventory = () => projectStore.getProjectInventory()
 ): DriveLeaseHolder | null {
   const lease = peekDriveLeaseService();
   if (!lease) return null;
@@ -287,7 +287,7 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
       const inventory = (): ProjectInventory => {
         if (!read) {
           try {
-            read = { projects: projectStore.getAllProjects() };
+            read = { projects: projectStore.getProjectInventory() };
           } catch (error) {
             read = { error };
           }

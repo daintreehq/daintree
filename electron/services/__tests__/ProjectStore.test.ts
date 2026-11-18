@@ -384,6 +384,29 @@ describe("ProjectStore.getAllProjects reconciliation", () => {
     expect(invalidRow?.status).toBe("closed");
   });
 
+  it("reads the host inventory as the repair would leave the open set, writing nothing (#17798)", () => {
+    const txSpy = vi.spyOn(db, "transaction");
+    const updateSpy = vi.spyOn(db, "update");
+
+    const inventory = store.getProjectInventory();
+
+    expect(txSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+    const statusOf = (id: string) => inventory.find((p) => p.id === id)?.status;
+    // The pointer's project counts as open though its row says closed; the
+    // other active row stays active rather than demoted.
+    expect(statusOf(currentProjectId)).toBe("active");
+    expect(statusOf(staleActiveId)).toBe("active");
+    expect(statusOf(invalidStatusId)).toBe("bogus-status");
+    const rowStatus = (id: string) =>
+      db.select().from(schema.projects).where(eq(schema.projects.id, id)).get()?.status;
+    expect(rowStatus(currentProjectId)).toBe("closed");
+    expect(rowStatus(staleActiveId)).toBe("active");
+    expect(rowStatus(invalidStatusId)).toBe("bogus-status");
+    txSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
   it("runs reconciliation inside an IMMEDIATE transaction", () => {
     const spy = vi.spyOn(db, "transaction");
     store.getAllProjects();
@@ -1188,6 +1211,36 @@ describe("ProjectStore.setCurrentProject MRU lastOpened bump", () => {
     expect(summaries.map((project) => project.id).sort()).toEqual(
       [alphaId, betaId, gammaId].sort()
     );
+  });
+
+  it("lists the host inventory without repairing the status a remote switch wrote (#17798)", () => {
+    store.recordRemoteActivation(betaId);
+    const txSpy = vi.spyOn(db, "transaction");
+    const updateSpy = vi.spyOn(db, "update");
+    const changesBefore = sqlite.prepare("SELECT total_changes() AS n").get() as { n: number };
+
+    const inventory = store.getProjectInventory();
+
+    expect(txSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(sqlite.prepare("SELECT total_changes() AS n").get()).toEqual(changesBefore);
+    const row = db.select().from(schema.projects).where(eq(schema.projects.id, betaId)).get()!;
+    expect(row.status).toBe("active");
+    expect(store.getCurrentProjectId()).toBe(alphaId);
+    // Both live projects count as open, the remote one included.
+    const open = inventory.filter((p) => p.status === "active" || p.status === "background");
+    expect(open.map((p) => p.id).sort()).toEqual([alphaId, betaId, gammaId].sort());
+    expect(inventory.find((p) => p.id === betaId)).toEqual({
+      id: betaId,
+      name: "Beta",
+      path: row.path,
+      status: "active",
+    });
+    txSpy.mockRestore();
+    updateSpy.mockRestore();
+
+    // The worktree list stops at a cap in this order, so it is the app's own.
+    expect(inventory.map((p) => p.id)).toEqual(store.getAllProjects().map((p) => p.id));
   });
 });
 
