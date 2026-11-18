@@ -134,6 +134,51 @@ function nearestNestedRoots(
   );
 }
 
+const NO_NESTED_ROOTS: readonly string[] = Object.freeze([]);
+
+/**
+ * Indexes `roots` by containment once, so each root's nearest nested roots
+ * (those strictly inside it and not inside another of the roots that is) are
+ * a lookup rather than a comparison against every other root. Paths compare
+ * as {@link isStrictlyInside} does: resolved, by component, ignoring case on
+ * Windows. Nested roots come back spelled as given (the first spelling of
+ * each), each listed under exactly one root, so the lists together hold at
+ * most one entry per root; a root with none nested shares one empty list.
+ */
+export function indexNestedRoots(
+  roots: readonly string[],
+  platform: Platform = process.platform
+): (root: string) => readonly string[] {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const keyOf = (resolved: string) => comparablePath(resolved, platform);
+  const known = new Map<string, { resolved: string; given: string }>();
+  for (const given of roots) {
+    const resolved = pathApi.resolve(given);
+    const key = keyOf(resolved);
+    if (!known.has(key)) known.set(key, { resolved, given });
+  }
+  const nested = new Map<string, string[]>();
+  for (const { resolved, given } of known.values()) {
+    // Upward, so the first known ancestor is the nearest. Each ancestor is
+    // resolved as the roots were (`dirname` keeps the slash that `resolve`
+    // drops from `\\?\C:\`), and is its own parent at a filesystem, drive or
+    // share root.
+    const up = (dir: string) => pathApi.resolve(pathApi.dirname(dir));
+    for (let child = resolved, dir = up(resolved); dir !== child;) {
+      const key = keyOf(dir);
+      if (known.has(key)) {
+        const list = nested.get(key);
+        if (list) list.push(given);
+        else nested.set(key, [given]);
+        break;
+      }
+      child = dir;
+      dir = up(dir);
+    }
+  }
+  return (root) => nested.get(keyOf(pathApi.resolve(root))) ?? NO_NESTED_ROOTS;
+}
+
 interface Frontier {
   /** Disjoint paths whose subtrees make up the root minus the excluded roots. */
   operands: string[];
