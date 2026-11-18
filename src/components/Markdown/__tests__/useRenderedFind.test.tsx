@@ -49,7 +49,10 @@ function watchObservers() {
   const observe = vi.spyOn(MutationObserver.prototype, "observe");
   const disconnect = vi.spyOn(MutationObserver.prototype, "disconnect");
   return {
-    all: () => observe.mock.contexts as MutationObserver[],
+    all: () =>
+      observe.mock.contexts.filter(
+        (observer): observer is MutationObserver => observer instanceof MutationObserver
+      ),
     connected: (observer: MutationObserver | undefined) =>
       observer !== undefined && !disconnect.mock.contexts.includes(observer),
   };
