@@ -524,6 +524,27 @@ describe("watchPluginCloudProviders", () => {
     expect(providers.has("acme.clouds.ec2")).toBe(false);
   });
 
+  it("names a registered provider and its plugin for its accounts to keep, and nothing once it's gone", () => {
+    const providers = new CloudProviderRegistry();
+    publishPluginCloudProviders("acme.clouds", [contribution()], "Acme Clouds");
+    const watch = watchPluginCloudProviders({ providers, statusChanged: () => {} });
+    expect(watch.label("acme.clouds.ec2")).toEqual({
+      pluginName: "Acme Clouds",
+      providerName: "EC2",
+      dashboardUrl: "https://console.example.com",
+    });
+    expect(watch.label("boat")).toBeNull();
+    withdrawPluginCloudProviders("acme.clouds");
+    expect(watch.label("acme.clouds.ec2")).toBeNull();
+    // A plugin published without a display name goes by its id.
+    publishPluginCloudProviders("acme.clouds", [contribution({ name: "EC2 v2" })]);
+    expect(watch.label("acme.clouds.ec2")).toMatchObject({
+      pluginName: "acme.clouds",
+      providerName: "EC2 v2",
+    });
+    watch.dispose();
+  });
+
   it("takes away a provider whose plugin fails to start, with why, and brings it back once it starts", () => {
     const providers = new CloudProviderRegistry();
     let failure: string | null = null;

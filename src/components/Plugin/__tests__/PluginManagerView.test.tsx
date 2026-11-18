@@ -1136,6 +1136,84 @@ describe("PluginManagerView", () => {
     );
   });
 
+  describe("a plugin with cloud accounts (#17353)", () => {
+    const cloudAccounts = [
+      {
+        id: "ca_acmeplugin1",
+        name: "Work",
+        providerName: "EC2",
+        hosts: [
+          { hostId: "host-1", name: "build" },
+          { hostId: "host-2", name: "spare" },
+        ],
+      },
+    ];
+
+    async function armUninstall() {
+      fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
+      await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+    }
+
+    it("asks whether to keep its cloud accounts, keeps them by default, and says the machines keep running", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ cloudAccounts }),
+      ]);
+      renderDialog();
+      await selectPlugin();
+      await armUninstall();
+
+      const choice = screen.getByTestId("plugin-uninstall-cloud-accounts");
+      expect(choice.textContent).toContain("Work");
+      expect(choice.textContent).toContain("build, spare");
+      expect(choice.textContent).toMatch(/keep running in your EC2 account/);
+      const keep = screen.getByRole("radio", { name: "Keep cloud accounts" }) as HTMLInputElement;
+      expect(keep.checked).toBe(true);
+      expect(
+        screen.getByRole("radio", { name: "Remove cloud accounts" }).getAttribute("aria-describedby")
+      ).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false)
+      );
+    });
+
+    it("removes exactly the accounts it listed when asked, and forgets the choice on cancel", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ cloudAccounts }),
+      ]);
+      renderDialog();
+      await selectPlugin();
+
+      await armUninstall();
+      fireEvent.click(screen.getByRole("radio", { name: "Remove cloud accounts" }));
+      expect(screen.getByTestId("plugin-uninstall-cloud-accounts").textContent).toContain(
+        "removes 2 hosts from the list"
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Keep plugin" }));
+
+      await armUninstall();
+      expect(
+        (screen.getByRole("radio", { name: "Keep cloud accounts" }) as HTMLInputElement).checked
+      ).toBe(true);
+      fireEvent.click(screen.getByRole("radio", { name: "Remove cloud accounts" }));
+      fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false, [
+          "ca_acmeplugin1",
+        ])
+      );
+    });
+
+    it("asks nothing about cloud accounts for a plugin without any", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+      renderDialog();
+      await selectPlugin();
+      await armUninstall();
+      expect(screen.queryByTestId("plugin-uninstall-cloud-accounts")).toBeNull();
+    });
+  });
+
   it("resets the secrets checkbox after cancelling and re-arming uninstall", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
