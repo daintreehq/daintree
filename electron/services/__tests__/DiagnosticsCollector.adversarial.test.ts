@@ -1151,10 +1151,14 @@ describe("DiagnosticsCollector adversarial", () => {
       flowControl: (call: number) => Promise<FlowReading>;
     }
 
-    const flowRow = (terminalId: string, pausedDurationMs: number | null = null) => ({
+    const flowRow = (
+      terminalId: string,
+      pausedDurationMs: number | null = null,
+      heldTokens: string[] = pausedDurationMs === null ? [] : ["ipc-queue"]
+    ) => ({
       terminalId,
       flowStatus: null,
-      heldTokens: pausedDurationMs === null ? [] : ["ipc-queue"],
+      heldTokens,
       isSuspended: false,
       activityTier: "VISIBLE",
       pausedDurationMs,
@@ -1222,12 +1226,17 @@ describe("DiagnosticsCollector adversarial", () => {
       flowControl: { terminals: unknown[]; totalPendingBytes: number } | { error: string };
       whySlow: {
         focusThrottle: unknown;
-        pty: { terminalCount: number; totalPendingBytes: number; pausedCount: number } | null;
+        pty: {
+          terminalCount: number;
+          totalPendingBytes: number;
+          pausedCount: number;
+          memoryPausedCount: number;
+        } | null;
       };
     };
 
     it("ONE_INVENTORY_AND_ONE_FLOW_SNAPSHOT_PER_SHARD_PER_EXPORT", async () => {
-      // Terminal a2 exits after the first reading: a second read would leave
+      // Terminal a2 is gone from the second reading: a second read would leave
       // counts disagreeing with the exported rows.
       const { client, requests } = createShardedPtyClient([
         {
@@ -1241,7 +1250,10 @@ describe("DiagnosticsCollector adversarial", () => {
               : [{ id: "a1", kind: "agent", agentState: "working", hasPty: true }],
           flowControl: async (call) =>
             call === 1
-              ? { terminals: [flowRow("a1"), flowRow("a2", 500)], totalPendingBytes: 10 }
+              ? {
+                  terminals: [flowRow("a1"), flowRow("a2", 500, ["resource-governor"])],
+                  totalPendingBytes: 10,
+                }
               : { terminals: [flowRow("a1")], totalPendingBytes: 0 },
         },
         {
@@ -1267,11 +1279,17 @@ describe("DiagnosticsCollector adversarial", () => {
         byAgentState: { working: 1, none: 1, waiting: 1 },
       });
       expect(payload.flowControl).toMatchObject({ totalPendingBytes: 15 });
-      expect((payload.flowControl as { terminals: unknown[] }).terminals).toHaveLength(3);
+      const exportedRows = (payload.flowControl as { terminals: Array<{ heldTokens: unknown }> })
+        .terminals;
+      expect(exportedRows).toHaveLength(3);
+      // The export redacts its copy of the shared reading; Why Slow summarised
+      // the raw rows, so it still tells a memory-governor hold apart.
+      expect(exportedRows[1].heldTokens).toBe("<redacted>");
       expect(payload.whySlow.pty).toMatchObject({
         terminalCount: 3,
         totalPendingBytes: 15,
         pausedCount: 1,
+        memoryPausedCount: 1,
       });
     });
 
@@ -1319,6 +1337,76 @@ describe("DiagnosticsCollector adversarial", () => {
       expect(payload.whySlow.focusThrottle).toBeDefined();
     });
 
+    it("SILENT_SHARD_AT_THE_BROKER_DEADLINE_STILL_EXPORTS_THE_PARTIAL_READING", async () => {
+      // The pty-host broker rejects a silent shard's RPC after 5 s, the same
+      // instant as the section deadline. Its timer is armed when the read
+      // dispatches, before the section's own, so the partial reading must win.
+      const brokerTimeout = () =>
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("pty-host RPC timed out")), 5_000)
+        );
+      const { client, requests } = createShardedPtyClient([
+        {
+          key: "ok",
+          terminals: async () => [{ id: "ok1", kind: "agent", agentState: "idle" }],
+          flowControl: async () => ({ terminals: [flowRow("ok1")], totalPendingBytes: 1 }),
+        },
+        { key: "silent", terminals: brokerTimeout, flowControl: brokerTimeout },
+      ]);
+
+      const pending = diagnostics.collectDiagnostics(depsFor(client));
+      await vi.advanceTimersByTimeAsync(5_000);
+      const payload = (await pending) as SharedPayload;
+
+      expect(requests).toEqual({
+        ok: { terminals: 1, flowControl: 1 },
+        silent: { terminals: 1, flowControl: 1 },
+      });
+      expect((payload.terminals as Array<{ id: string }>).map((t) => t.id)).toEqual(["ok1"]);
+      expect(payload.counts.terminals).toEqual({ total: 1, byAgentState: { idle: 1 } });
+      expect(payload.flowControl).toMatchObject({ totalPendingBytes: 1 });
+      expect(payload.whySlow.pty).toBeNull();
+    });
+
+    it("READS_HELD_PAST_THE_SECTION_DEADLINE_TIME_OUT_PER_SECTION", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const client = {
+        getAllTerminalsAsync: vi.fn(async () => {
+          await held;
+          return [{ id: "late", kind: "terminal" }];
+        }),
+        getFlowControlSnapshotAsync: vi.fn(async () => {
+          await held;
+          return { terminals: [flowRow("late")], totalPendingBytes: 0 };
+        }),
+      };
+
+      const pending = diagnostics.collectDiagnostics(depsFor(client));
+      await vi.advanceTimersByTimeAsync(5_000);
+      const payload = (await pending) as SharedPayload;
+      release();
+
+      expect(client.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
+      expect(client.getFlowControlSnapshotAsync).toHaveBeenCalledTimes(1);
+      expect(payload.terminals).toEqual({ error: "timed out" });
+      expect(payload.counts).toEqual({ error: "timed out" });
+      expect(payload.flowControl).toEqual({ error: "timed out" });
+      expect(payload.whySlow.pty).toBeNull();
+      expect(payload.whySlow.focusThrottle).toBeDefined();
+    });
+
+    it("NO_PTY_CLIENT_KEEPS_EVERY_SECTION_FALLBACK", async () => {
+      const payload = (await diagnostics.collectDiagnostics(depsFor(undefined))) as SharedPayload;
+
+      expect(payload.terminals).toEqual([]);
+      expect(payload.counts.terminals).toEqual({ total: 0, byAgentState: {} });
+      expect(payload.flowControl).toEqual({ error: "PtyClient not available" });
+      expect(payload.whySlow.pty).toBeNull();
+    });
+
     it("SHARED_READ_FAILURE_FALLS_BACK_PER_SECTION", async () => {
       const client = {
         getAllTerminalsAsync: vi.fn(() => {
@@ -1340,24 +1428,32 @@ describe("DiagnosticsCollector adversarial", () => {
     });
 
     it("EACH_EXPORT_AND_EACH_LIVE_WHY_SLOW_PULL_READS_FRESH", async () => {
+      // Each reading reports one more terminal than the last, so a reused
+      // reading shows up in the result, not only in the call count.
+      let flowReads = 0;
       const client = {
         getAllTerminalsAsync: vi.fn(async () => [{ id: "t1", kind: "agent" }]),
-        getFlowControlSnapshotAsync: vi.fn(async () => ({
-          terminals: [flowRow("t1")],
-          totalPendingBytes: 0,
-        })),
+        getFlowControlSnapshotAsync: vi.fn(async () => {
+          flowReads++;
+          return {
+            terminals: Array.from({ length: flowReads }, (_, i) => flowRow(`t${i}`)),
+            totalPendingBytes: 0,
+          };
+        }),
       };
       const deps = depsFor(client);
 
-      await diagnostics.collectDiagnostics(deps);
-      await diagnostics.collectDiagnostics(deps);
+      for (const expected of [1, 2]) {
+        const payload = (await diagnostics.collectDiagnostics(deps)) as SharedPayload;
+        expect(payload.whySlow.pty).toMatchObject({ terminalCount: expected });
+      }
       expect(client.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
       expect(client.getFlowControlSnapshotAsync).toHaveBeenCalledTimes(2);
 
-      for (let i = 0; i < 2; i++) {
+      for (const expected of [3, 4]) {
         const pending = diagnostics.collectWhySlowSnapshot(deps);
         await vi.advanceTimersByTimeAsync(4_000);
-        expect((await pending).pty).toMatchObject({ terminalCount: 1 });
+        expect((await pending).pty).toMatchObject({ terminalCount: expected });
       }
       expect(client.getFlowControlSnapshotAsync).toHaveBeenCalledTimes(4);
       expect(client.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
