@@ -6,9 +6,10 @@ import {
 
 /**
  * The saved form of the Claude Code usage readings (#17610): one versioned
- * JSON document, Main-only like the readings themselves. A reading names the
- * folder the launch that saw it decided it was for, not the pane's own folder
- * and shell, so no later launch has to place it again.
+ * JSON document, Main-only like the readings themselves. A reading carries
+ * the folder the launch that saw it decided it was for, so no later launch has
+ * to place it again, and the pane's own folder, which keeps apart readings
+ * from different folders that no launch could place. Never the shell.
  */
 const DOCUMENT_VERSION = 1;
 
@@ -18,6 +19,8 @@ export const UNDATED_CLAUDE_USAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export interface SavedClaudeUsageReading extends ClaudeUsageObservation {
   /** The canonical folder the reading was for; null when it couldn't be told. */
   identity: string | null;
+  /** The pane's canonical launch folder; null when it couldn't be resolved. */
+  configDir: string | null;
 }
 
 interface ClaudeUsageDocument {
@@ -30,6 +33,9 @@ const STATEMENTS = new Set<unknown>(CLAUDE_USAGE_STATEMENTS);
 
 const isTime = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
+
+const isFolder = (value: unknown): value is string | null =>
+  value === null || (typeof value === "string" && value !== "");
 
 /**
  * Still current while the app runs: a reading with no reset goes stale a week
@@ -62,7 +68,8 @@ export function isRestorableClaudeUsageReading(
 function parseReading(value: unknown): SavedClaudeUsageReading | null {
   if (typeof value !== "object" || value === null) return null;
   const entry = value as Record<string, unknown>;
-  const { window, statement, usedPercent, resetsAt, terminalId, observedAt, identity } = entry;
+  const { window, statement, usedPercent, resetsAt, terminalId, observedAt, identity, configDir } =
+    entry;
   if (
     !WINDOWS.has(window) ||
     !STATEMENTS.has(statement) ||
@@ -70,7 +77,8 @@ function parseReading(value: unknown): SavedClaudeUsageReading | null {
     !(resetsAt === null || isTime(resetsAt)) ||
     typeof terminalId !== "string" ||
     !isTime(observedAt) ||
-    !(identity === null || (typeof identity === "string" && identity !== ""))
+    !isFolder(identity) ||
+    !isFolder(configDir)
   ) {
     return null;
   }
@@ -81,7 +89,8 @@ function parseReading(value: unknown): SavedClaudeUsageReading | null {
     resetsAt: resetsAt as number | null,
     terminalId,
     observedAt,
-    identity: identity as string | null,
+    identity,
+    configDir,
   };
 }
 
@@ -114,7 +123,7 @@ export function serializeClaudeUsageDocument(readings: SavedClaudeUsageReading[]
   return JSON.stringify({
     version: DOCUMENT_VERSION,
     readings: readings.map(
-      ({ window, statement, usedPercent, resetsAt, terminalId, observedAt, identity }) => ({
+      ({
         window,
         statement,
         usedPercent,
@@ -122,6 +131,16 @@ export function serializeClaudeUsageDocument(readings: SavedClaudeUsageReading[]
         terminalId,
         observedAt,
         identity,
+        configDir,
+      }) => ({
+        window,
+        statement,
+        usedPercent,
+        resetsAt,
+        terminalId,
+        observedAt,
+        identity,
+        configDir,
       })
     ),
   } satisfies ClaudeUsageDocument);

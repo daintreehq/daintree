@@ -243,6 +243,11 @@ const scheduleOsJobMock = vi.hoisted(() => ({
 }));
 vi.mock("../../services/scheduledRuns/scheduleOsJobLive.js", () => scheduleOsJobMock);
 
+const claudeUsageSaveMock = vi.hoisted(() => ({
+  settleClaudeUsageSaves: vi.fn((_budgetMs: number) => Promise.resolve()),
+}));
+vi.mock("../../services/claude/ClaudeUsageObservations.js", () => claudeUsageSaveMock);
+
 const vadDrainMock = vi.hoisted(() => ({
   waitForRetiringVadProcesses: vi.fn((_budgetMs: number) => Promise.resolve(0)),
 }));
@@ -1455,6 +1460,26 @@ describe("registerShutdownHandler", () => {
       });
 
       expect(callOrder).toEqual(["scheduler-stop", "closeSharedDb"]);
+    });
+
+    it("lets a Claude usage save under way land before closeSharedDb (#17610)", async () => {
+      const callOrder: string[] = [];
+      claudeUsageSaveMock.settleClaudeUsageSaves.mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        callOrder.push("usage-settled");
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementation(() => {
+        callOrder.push("closeSharedDb");
+      });
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(callOrder).toEqual(["usage-settled", "closeSharedDb"]);
     });
 
     it("lets a rewrite of the schedules' OS job finish before the app exits", async () => {

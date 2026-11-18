@@ -12,6 +12,7 @@ import {
   readClaudeUsageRecords,
   recordClaudeUsageObservation,
   restoreClaudeUsageObservations,
+  settleClaudeUsageSaves,
   type ClaudeUsageRecord,
 } from "../ClaudeUsageObservations.js";
 import {
@@ -251,6 +252,7 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
     terminalId: "earlier",
     observedAt: Date.now() - HOUR,
     identity: WORK,
+    configDir: WORK,
     ...overrides,
   });
 
@@ -304,7 +306,12 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
     const storage = memoryStorage(
       serializeClaudeUsageDocument([
         savedReading({ terminalId: "work" }),
-        savedReading({ terminalId: "unknown", window: "5-hour limit", identity: null }),
+        savedReading({
+          terminalId: "unknown",
+          window: "5-hour limit",
+          identity: null,
+          configDir: PROFILE,
+        }),
         savedReading({ terminalId: "reset", window: "Opus limit", resetsAt: Date.now() - 1 }),
       ])
     );
@@ -320,7 +327,7 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
       ])
     ).toEqual([
       ["work", WORK, WORK, null],
-      ["unknown", null, null, null],
+      ["unknown", null, PROFILE, null],
     ]);
     // Nothing of this launch's own to save yet.
     expect(storage.writes).toBe(0);
@@ -378,6 +385,44 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
         observedAt: now - 1_000,
       },
     ]);
+  });
+
+  it("keeps unplaced readings from different folders apart, so one outlives the other's reset", async () => {
+    const now = Date.now();
+    const DAY = 24 * HOUR;
+    const storage = memoryStorage();
+    restoreClaudeUsageObservations(storage, {
+      readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: PROFILE } }),
+      canonicalKey: asIs,
+    });
+    // Neither zsh pane was on the profile's folder, so neither can be placed.
+    recordClaudeUsageObservation(
+      reading({
+        terminalId: "friday",
+        configDir: WORK,
+        observedAt: now - 2 * HOUR,
+        resetsAt: now + 4 * DAY,
+      })
+    );
+    recordClaudeUsageObservation(
+      reading({
+        terminalId: "tuesday",
+        configDir: null,
+        observedAt: now - HOUR,
+        resetsAt: now + DAY,
+      })
+    );
+    await settle();
+    expect(savedPlaces(storage.value)).toEqual([
+      ["friday", null],
+      ["tuesday", null],
+    ]);
+
+    // Two days on, the newer one's reset has passed and the older one's hasn't.
+    clearClaudeUsageObservations();
+    restoreClaudeUsageObservations(storage, { now: () => now + 2 * DAY, canonicalKey: asIs });
+
+    expect(readClaudeUsageRecords().map((record) => record.terminalId)).toEqual(["friday"]);
   });
 
   it("never lets a sighting it can't place replace a saved one it could", () => {
@@ -450,6 +495,45 @@ describe("ClaudeUsageObservations across launches (#17610)", () => {
     await vi.waitFor(() => expect(finish).toBeDefined());
 
     clearClaudeUsageObservations();
+    finish!(PROFILE);
+    await settle();
+
+    expect(storage.writes).toBe(0);
+  });
+
+  it("lets a save under way land at quit, then starts none", async () => {
+    let finish: ((dir: string) => void) | undefined;
+    const storage = memoryStorage();
+    restoreClaudeUsageObservations(storage, {
+      readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: PROFILE } }),
+      canonicalKey: () => new Promise<string>((resolve) => (finish = resolve)),
+    });
+    recordClaudeUsageObservation(reading({ observedAt: Date.now(), resetsAt: Date.now() + HOUR }));
+    await vi.waitFor(() => expect(finish).toBeDefined());
+
+    const settled = settleClaudeUsageSaves(60_000);
+    finish!(PROFILE);
+    await settled;
+    expect(storage.writes).toBe(1);
+
+    recordClaudeUsageObservation(
+      reading({ window: "5-hour limit", observedAt: Date.now(), resetsAt: Date.now() + HOUR })
+    );
+    await settle();
+    expect(storage.writes).toBe(1);
+  });
+
+  it("gives up on a stalled save at quit without writing it later", async () => {
+    let finish: ((dir: string) => void) | undefined;
+    const storage = memoryStorage();
+    restoreClaudeUsageObservations(storage, {
+      readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: PROFILE } }),
+      canonicalKey: () => new Promise<string>((resolve) => (finish = resolve)),
+    });
+    recordClaudeUsageObservation(reading({ observedAt: Date.now(), resetsAt: Date.now() + HOUR }));
+    await vi.waitFor(() => expect(finish).toBeDefined());
+
+    await settleClaudeUsageSaves(1);
     finish!(PROFILE);
     await settle();
 

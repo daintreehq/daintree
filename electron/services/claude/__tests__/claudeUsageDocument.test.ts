@@ -17,6 +17,7 @@ const saved = (overrides: Partial<SavedClaudeUsageReading>): SavedClaudeUsageRea
   terminalId: "t1",
   observedAt: NOW - 60_000,
   identity: "/home/me/.claude",
+  configDir: "/home/me/.claude",
   ...overrides,
 });
 
@@ -24,13 +25,12 @@ const document = (readings: unknown[], version: unknown = 1) =>
   JSON.stringify({ version, readings });
 
 describe("claudeUsageDocument (#17610)", () => {
-  it("reads back what it saved, and nothing but the reading's own fields", () => {
-    const reading = saved({ usedPercent: 92, statement: "used", identity: null });
+  it("reads back what it saved, and never the pane's shell", () => {
+    const reading = saved({ usedPercent: 92, statement: "used", identity: null, configDir: null });
     const value = serializeClaudeUsageDocument([
-      { ...reading, configDir: "/somewhere", shell: "/bin/zsh" } as SavedClaudeUsageReading,
+      { ...reading, shell: "/bin/zsh" } as SavedClaudeUsageReading,
     ]);
 
-    expect(value).not.toContain("/somewhere");
     expect(value).not.toContain("/bin/zsh");
     expect(parseClaudeUsageDocument(value, NOW)).toEqual([reading]);
   });
@@ -82,11 +82,13 @@ describe("claudeUsageDocument (#17610)", () => {
       { ...good, window: "fortnightly limit" },
       { ...good, statement: "nearly" },
       { ...good, usedPercent: "92" },
-      { ...good, resetsAt: Number.NaN },
+      { ...good, resetsAt: "soon" },
       { ...good, terminalId: 7 },
       { ...good, observedAt: null },
       { ...good, identity: "" },
       { ...good, identity: 3 },
+      { ...good, configDir: "" },
+      { ...good, configDir: undefined },
       null,
       "reading",
       good,

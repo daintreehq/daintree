@@ -54,8 +54,8 @@ export interface ClaudeUsageStorage {
  * shell is part of the key because it decides whether the folder is certain:
  * a reading that is couldn't be replaced by one that isn't. An earlier
  * launch's readings sit under keys of their own, by the folder that launch
- * settled on, so a sighting this launch can't place never replaces one it
- * could. A reading whose reset has passed is still what a pane showed, and its
+ * settled on and the pane's own, so a sighting this launch can't place never
+ * replaces one it could. A reading whose reset has passed is still what a pane showed, and its
  * own times say how old it is; one that named no reset goes stale after a
  * week. Keys keep the order they were first seen in.
  */
@@ -63,7 +63,7 @@ const latest = new Map<string, Map<ClaudeUsageWindow, ClaudeUsageRecord>>();
 
 function sourceKey(record: ClaudeUsageRecord): string {
   return record.savedIdentity !== undefined
-    ? JSON.stringify(["saved", record.savedIdentity])
+    ? JSON.stringify(["saved", record.savedIdentity, record.configDir])
     : JSON.stringify(["live", record.configDir, record.shell]);
 }
 let generation = 0;
@@ -142,8 +142,10 @@ function hasLiveRecords(): boolean {
 }
 
 /**
- * Each folder's newest current reading per limit, with this launch's own
- * readings placed by the probe as it is now: what Settings would show.
+ * The newest current reading per placed folder, pane folder and limit, with
+ * this launch's own readings placed by the probe as it is now. A placed
+ * folder's pane folder is the same folder; readings no launch could place
+ * stay apart by theirs, since one may outlive another's reset.
  */
 function snapshot(profile: ClaudeUsageProfile, now: number): SavedClaudeUsageReading[] {
   const newest = new Map<string, SavedClaudeUsageReading>();
@@ -154,7 +156,7 @@ function snapshot(profile: ClaudeUsageProfile, now: number): SavedClaudeUsageRea
         record.savedIdentity !== undefined
           ? record.savedIdentity
           : placeClaudeUsageRecord(record, profile);
-      const key = JSON.stringify([identity, record.window]);
+      const key = JSON.stringify([identity, record.configDir, record.window]);
       const kept = newest.get(key);
       if (kept === undefined || record.observedAt > kept.observedAt) {
         const { window, statement, usedPercent, resetsAt, terminalId, observedAt } = record;
@@ -166,6 +168,7 @@ function snapshot(profile: ClaudeUsageProfile, now: number): SavedClaudeUsageRea
           terminalId,
           observedAt,
           identity,
+          configDir: record.configDir,
         });
       }
     }
@@ -224,8 +227,8 @@ export function restoreClaudeUsageObservations(
     logError("Couldn't read the saved Claude usage readings", error);
     return;
   }
-  for (const { identity, ...observation } of saved) {
-    keep({ ...observation, configDir: identity, shell: null, savedIdentity: identity });
+  for (const { identity, ...rest } of saved) {
+    keep({ ...rest, shell: null, savedIdentity: identity });
   }
   const readShellObservation = options.readShellObservation ?? getShellEnvironmentObservation;
   const canonicalKey = options.canonicalKey ?? canonicalClaudeConfigDir;
@@ -281,6 +284,30 @@ export function readClaudeUsageObservations(): ClaudeUsageObservation[] {
     const { terminalId, statement, usedPercent, resetsAt, observedAt } = record;
     return [{ window, statement, usedPercent, resetsAt, terminalId, observedAt }];
   });
+}
+
+/**
+ * For quit: let the save already under way land, within `budgetMs`, then
+ * stop saving, so nothing writes once the database has closed. A probe that
+ * answered just before quit leaves a save that moves readings to "unknown",
+ * and the next launch would otherwise file them under the pane's folder.
+ */
+export async function settleClaudeUsageSaves(budgetMs: number): Promise<void> {
+  const target = persistence;
+  if (target === null) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    saves,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, budgetMs);
+    }),
+  ]);
+  clearTimeout(timer);
+  if (persistence === target) {
+    target.unsubscribe();
+    persistence = null;
+    saveQueued = false;
+  }
 }
 
 /** Forget every reading and stop saving, saved copy untouched: for tests. */
