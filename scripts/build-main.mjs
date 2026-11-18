@@ -17,14 +17,19 @@ import {
 import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "./main-build-entries.mjs";
 import { runProjectSync } from "./typecheck.mjs";
 import canopyReaderModel from "./lib/canopyReaderModel.cjs";
+import {
+  BUILD_READY_FILE,
+  removeBuildReadyMarker,
+  startWatchBuild,
+  writeBuildReadyMarker,
+} from "./lib/build-ready-gate.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
 
 const isWatch = process.argv.includes("--watch");
 const isProd = process.env.NODE_ENV === "production";
-const buildReadyFile = path.join(root, "dist-electron/.build-ready.js");
-let buildReadyTimer = null;
+const buildReadyFile = path.join(root, BUILD_READY_FILE);
 
 const external = MAIN_EXTERNAL;
 
@@ -116,28 +121,6 @@ function commonOptions({ production }) {
         : {}),
     },
   };
-}
-
-function removeBuildReadyMarker() {
-  if (fs.existsSync(buildReadyFile)) {
-    fs.rmSync(buildReadyFile, { force: true });
-  }
-}
-
-function writeBuildReadyMarker() {
-  fs.mkdirSync(path.dirname(buildReadyFile), { recursive: true });
-  fs.writeFileSync(buildReadyFile, `// build ready ${Date.now()}\n`, "utf8");
-}
-
-function scheduleBuildReadyMarker() {
-  if (buildReadyTimer) {
-    clearTimeout(buildReadyTimer);
-  }
-
-  buildReadyTimer = setTimeout(() => {
-    writeBuildReadyMarker();
-    buildReadyTimer = null;
-  }, 100);
 }
 
 /**
@@ -378,8 +361,7 @@ export function findMissingCorePickerAssets(distRoot) {
 
 /**
  * Same severity model as `validateCopiedPluginAssets`: a warning under watch,
- * where a cold build may not have emitted the bundle yet, and a hard failure
- * otherwise.
+ * where it runs once the first build is ready, and a hard failure otherwise.
  */
 function validateGuestAssets() {
   const missing = findMissingCorePickerAssets(path.join(root, "dist-electron"));
@@ -534,7 +516,6 @@ export function mainEsmConfig({ production, watch = false }) {
       // Keeps the chunks Main, the pty host and its analysis workers load one
       // byte per character in V8, which a regex literal's glyph undoes (#17023).
       ...(production && !watch ? [asciiOnlyOutputPlugin()] : []),
-      ...(watch ? [createReadyMarkerPlugin()] : []),
     ],
     // The import is aliased because the banner is raw text esbuild never renames
     // around: a bundled ESM module that imports `createRequire` itself (fflate's
@@ -542,19 +523,6 @@ export function mainEsmConfig({ production, watch = false }) {
     // in one chunk, and that chunk fails to load.
     banner: {
       js: `import { createRequire as __daintreeCreateRequire } from 'module'; const require = __daintreeCreateRequire(import.meta.url);`,
-    },
-  };
-}
-
-function createReadyMarkerPlugin() {
-  return {
-    name: "build-ready-marker",
-    setup(buildApi) {
-      buildApi.onEnd((result) => {
-        if (result.errors.length === 0) {
-          scheduleBuildReadyMarker();
-        }
-      });
     },
   };
 }
@@ -596,7 +564,7 @@ export async function runWithCanopyModel({ watch, prepare, startBuild, warn = co
 
 async function run() {
   console.log(`[Build] Starting build in ${isWatch ? "watch" : "single"} mode...`);
-  removeBuildReadyMarker();
+  removeBuildReadyMarker(buildReadyFile);
 
   // Gate the build on valid plugin manifests before cleaning or emitting any
   // output, so an invalid `plugin.json` neither wipes the prior build nor ships
@@ -639,7 +607,6 @@ async function run() {
     outdir: "dist-electron/electron",
     format: "cjs",
     outExtension: { ".js": ".cjs" },
-    plugins: isWatch ? [createReadyMarkerPlugin()] : [],
   };
 
   const guestConfigs = CORE_PICKER_GUEST_ASSETS.map((asset) =>
@@ -650,32 +617,44 @@ async function run() {
 
   const startBuild = async () => {
     if (isWatch) {
-      // Armed before its first sync, so an edit made while that runs is not
-      // lost, and synced before esbuild can publish `.build-ready.js`. The
-      // first sync is rechecked like any later pass, which covers an edit made
-      // since the startup gates ran.
-      watchPluginAssets({
-        srcRoot: PLUGIN_SRC_ROOT,
-        destRoot: PLUGIN_DIST_ROOT,
-        initialSync: true,
-        onChange: recheckSyncedPluginAssets,
-      });
-      validateCopiedPluginAssets();
-
-      const ctxEsm = await context(esmConfig);
-      const ctxCjs = await context(cjsConfig);
-      const ctxSdk = await context(sdkConfig);
-      const ctxGuests = await Promise.all(guestConfigs.map((config) => context(config)));
-
       // Every guest bundle gets its own watch context, so editing a guest's
-      // source rebuilds its asset in place.
-      await Promise.all([
-        ctxEsm.watch(),
-        ctxCjs.watch(),
-        ctxSdk.watch(),
-        ...ctxGuests.map((c) => c.watch()),
-      ]);
-      validateGuestAssets();
+      // source rebuilds its asset in place. All of them gate the ready marker
+      // `npm run dev` waits on before it starts Electron.
+      await startWatchBuild({
+        configs: {
+          main: esmConfig,
+          preload: cjsConfig,
+          sdk: sdkConfig,
+          ...Object.fromEntries(
+            CORE_PICKER_GUEST_ASSETS.map((asset, index) => [
+              `guest:${asset.id}`,
+              guestConfigs[index],
+            ])
+          ),
+        },
+        readyFile: buildReadyFile,
+        copyAssets: () => {
+          // Armed before its first sync, so an edit made while that runs is
+          // not lost, and synced before the gate can publish `.build-ready.js`.
+          // The first sync is rechecked like any later pass, which covers an
+          // edit made since the startup gates ran.
+          watchPluginAssets({
+            srcRoot: PLUGIN_SRC_ROOT,
+            destRoot: PLUGIN_DIST_ROOT,
+            initialSync: true,
+            onChange: recheckSyncedPluginAssets,
+          });
+        },
+        onFirstReady: () => {
+          validateCopiedPluginAssets();
+          validateGuestAssets();
+        },
+        onError: (error) => {
+          console.error("[Build] Failed:", error);
+          process.exit(1);
+        },
+        createContext: context,
+      });
       console.log("[Build] Watching for changes...");
     } else {
       await Promise.all([
@@ -688,7 +667,7 @@ async function run() {
       syncAllPluginAssets();
       validateCopiedPluginAssets();
       validateGuestAssets();
-      writeBuildReadyMarker();
+      writeBuildReadyMarker(buildReadyFile);
       console.log("[Build] Complete.");
     }
   };
