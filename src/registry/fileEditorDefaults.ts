@@ -11,7 +11,7 @@ import {
   type ProjectSurfaceSlotKey,
   type ProjectSurfaceSlotState,
 } from "@shared/types/plugin";
-import { matchesFileEditorGlob, relativeFilePath } from "@/registry/fileEditorGlob";
+import { extensionOf, matchesFileEditorGlob, relativeFilePath } from "@/registry/fileEditorGlob";
 import { useProjectStore } from "@/store/projectStore";
 import { selectViewProject } from "@/store/viewWorkspace";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -222,4 +222,34 @@ export function currentFileEditorDefault(filePath: string): FileEditorDefault | 
     rootPath,
     filePath,
   });
+}
+
+/**
+ * Whether a plugin viewer claims the file for Rendered (#17336), read once
+ * outside React for an opener deciding what mode to ask for: true when an
+ * enabled plugin's `mode: "view"` editor matches it from the root its panel
+ * will read through, false when none does, null while the hosted-view snapshot
+ * hasn't landed. The size check is the pane's, once it has read the file.
+ */
+export function currentFileViewerClaim(filePath: string): boolean | null {
+  const hosted = usePluginHostedViewsStore.getState();
+  hosted.init();
+  if (hosted.views === null) return null;
+  const rootPath = patternRoot(filePath);
+  if (rootPath === null) return false;
+  const disabled = usePluginRuntimeStore.getState().disabledPluginIds;
+  const ext = extensionOf(filePath);
+  const relative = relativeFilePath(rootPath, filePath);
+  return hosted.views.some(
+    (view) =>
+      view.location === "fileEditor" &&
+      !disabled.has(view.pluginId) &&
+      (view.fileEditors ?? []).some(
+        (editor) =>
+          editor.mode === "view" &&
+          ((ext !== null && editor.extensions.includes(ext)) ||
+            (relative !== null &&
+              editor.paths.some((pattern) => matchesFileEditorGlob(relative, pattern))))
+      )
+  );
 }

@@ -15,7 +15,8 @@ import {
   UNSUPPORTED_AUDIO_MESSAGE,
   UNSUPPORTED_VIDEO_MESSAGE,
 } from "@/components/FileViewer/filePreviewKinds";
-import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
+import { refusedFileSize, toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
+import { utf8ByteLength } from "@shared/utils/folderUpload";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 
@@ -72,6 +73,14 @@ export interface FileLoad {
   htmlPreviewUrl: string | null;
   reloadNonce: number;
   byteFacts: FileByteFacts;
+  /**
+   * The file's size as the latest settled text read of this file saw it: the
+   * bytes it loaded, or the size a too-large refusal reported. Kept through a
+   * refresh, so a viewer offered for the file stays offered while it re-reads;
+   * null before the first read settles, after a failure that says nothing
+   * about size, and for a file read some other way (media, images).
+   */
+  observedBytes: number | null;
   canonicalFilePath: string | null;
   loadFile: (intent: FileLoadIntent) => void;
   handleMediaPlayingChange: (playing: boolean) => void;
@@ -122,6 +131,14 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
   // What `files:read` observed about the bytes behind `content` — set with it,
   // so the strip never pairs one read's text with another read's encoding.
   const [byteFacts, setByteFacts] = useState<FileByteFacts>({});
+  // Keyed to the file it describes, so the first render for a new file never
+  // reads the last file's size before the reset below has run.
+  const identity = filePath === undefined ? null : `${effectiveRootPath}\u0000${filePath}`;
+  const [observedSize, setObservedSize] = useState<{ identity: string; bytes: number } | null>(
+    null
+  );
+  const observedBytes =
+    observedSize !== null && observedSize.identity === identity ? observedSize.bytes : null;
   // The strip names a BOM, so the source view needn't draw it: CodeMirror
   // paints U+FEFF as a special-character dot ahead of the first token, the
   // one mark the editor's own decode already strips. Display only — copying
@@ -150,6 +167,15 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
     lastGoodStateRef.current = null;
     lastContentRef.current = null;
   }, [filePath, effectiveRootPath]);
+
+  const observe = useCallback((forIdentity: string, bytes: number | null) => {
+    setObservedSize((previous) => {
+      if (bytes === null) return previous === null ? previous : null;
+      return previous !== null && previous.identity === forIdentity && previous.bytes === bytes
+        ? previous
+        : { identity: forIdentity, bytes };
+    });
+  }, []);
 
   const loadFile = useCallback(
     (intent: FileLoadIntent) => {
@@ -261,6 +287,7 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
         return;
       }
 
+      const requestIdentity = `${effectiveRootPath}\u0000${filePath}`;
       // Nothing may skip a tick on the strength of a read that is still being
       // repeated: the answer this one brings back is the one that counts.
       setCanonicalFilePath(null);
@@ -280,6 +307,7 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
           }) => {
             if (requestRef.current !== requestId) return;
             setCanonicalFilePath(pathIsCanonical === true ? filePath : null);
+            observe(requestIdentity, byteLength ?? utf8ByteLength(fileContent));
             // SVG is text on disk but a picture on screen: sanitize it and check
             // it parses before it is drawn, and surface a rejection as a load
             // error rather than silently rendering nothing.
@@ -348,6 +376,11 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
         .catch((error: unknown) => {
           if (requestRef.current !== requestId) return;
           const code = isClientAppError(error) ? toFileReadErrorCode(error.code) : "INVALID_PATH";
+          // A size refusal is news about the file even when the failure is
+          // swallowed below: a file that grew past every viewer's cap must
+          // stop being offered to them while Source keeps the last good text.
+          const refusedBytes = refusedFileSize(error);
+          if (refusedBytes !== null) observe(requestIdentity, refusedBytes);
           // Silent background refreshes keep showing the last good content on
           // transient failures, but a permanently-gone file (deleted, perms
           // revoked) must surface rather than display stale text forever.
@@ -364,12 +397,13 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
             setLoadState(lastGoodStateRef.current);
             return;
           }
+          if (refusedBytes === null) observe(requestIdentity, null);
           setErrorCode(code);
           setErrorMessage(null);
           setLoadState("error");
         });
     },
-    [filePath, effectiveRootPath]
+    [filePath, effectiveRootPath, observe]
   );
 
   const failPreview = useCallback((code: FilePaneErrorCode, message?: string) => {
@@ -388,6 +422,7 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
     htmlPreviewUrl,
     reloadNonce,
     byteFacts,
+    observedBytes,
     canonicalFilePath,
     loadFile,
     handleMediaPlayingChange,

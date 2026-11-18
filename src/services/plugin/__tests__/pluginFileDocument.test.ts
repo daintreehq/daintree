@@ -267,6 +267,30 @@ describe("pluginFileDocument (#13809)", () => {
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
   });
 
+  it("tells a view whose first read was refused once the file reads again", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "unavailable" });
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await expect(handle.document.read()).resolves.toEqual({ status: "unavailable" });
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    bridge.read.mockResolvedValue({ status: "ok", text: "a,b", revision: REV_A });
+    await handle.notifyDiskChange();
+    await handle.notifyDiskChange();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_A });
+  });
+
+  it("stays quiet on a disk change before anything was read", async () => {
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+    bridge.read.mockResolvedValue({ status: "ok", text: "a,b", revision: REV_A });
+    await handle.notifyDiskChange();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("releases a clean record on unmount even with a conflict reported", () => {
     const handle = openPluginFileDocument(target());
     const release = handle.retain();

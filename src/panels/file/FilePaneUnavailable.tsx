@@ -89,6 +89,8 @@ export function FilePaneUnavailable({
   openTarget,
   canOpenInDefaultApp,
   remote,
+  renderedBy = null,
+  onShowRendered,
   onRetry,
   onExternal,
 }: {
@@ -100,6 +102,10 @@ export function FilePaneUnavailable({
   openTarget: FileOpenTarget;
   canOpenInDefaultApp: boolean;
   remote: RemoteFileContext | null;
+  /** The plugin viewer that still shows a file too large for Source, by name. */
+  renderedBy?: string | null;
+  /** Switches the pane to Rendered, where that viewer is. */
+  onShowRendered?: () => void;
   onRetry: () => void;
   /** Resolves true once the hand-off succeeded; the pane reports a failure. */
   onExternal: (target: ExternalTarget) => Promise<boolean>;
@@ -114,7 +120,12 @@ export function FilePaneUnavailable({
       />
     );
   }
-  const shared = unavailableCopy(reason, errorMessage ?? "", remote);
+  const shared = unavailableCopy(
+    reason,
+    errorMessage ?? "",
+    remote,
+    onShowRendered ? renderedBy : null
+  );
   // Refreshing this pane can't turn a folder into something it can show; the
   // file manager can.
   const copy =
@@ -149,6 +160,11 @@ export function FilePaneUnavailable({
       data-testid="file-pane-unavailable"
       action={
         <div className="flex flex-wrap items-center justify-center gap-2">
+          {copy.action === "rendered" && onShowRendered && (
+            <Button variant="subtle" size="sm" onClick={onShowRendered}>
+              Show in Rendered
+            </Button>
+          )}
           {copy.action === "save" && <SaveHostFileButton hostPath={filePath} />}
           {openVia !== null && (
             <Button variant="subtle" size="sm" onClick={() => void onExternal(openVia)}>

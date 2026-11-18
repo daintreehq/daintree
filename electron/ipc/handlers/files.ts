@@ -253,6 +253,7 @@ export function registerFilesHandlers(): () => void {
         message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
         userMessage: "This file is too large to preview.",
         context: { filePath, size: stat.size, limit: FILE_PREVIEW_MAX_BYTES },
+        details: { code: "FILE_TOO_LARGE", sizeBytes: stat.size },
       });
     }
 
@@ -294,6 +295,7 @@ export function registerFilesHandlers(): () => void {
           message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
           userMessage: "This file is too large to preview.",
           context: { filePath, size: opened.size, limit: FILE_PREVIEW_MAX_BYTES },
+          details: { code: "FILE_TOO_LARGE", sizeBytes: opened.size },
         });
       }
       if (String(opened.ino) !== String(stat.ino) || String(opened.dev) !== String(stat.dev)) {

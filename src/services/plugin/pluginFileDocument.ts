@@ -127,8 +127,10 @@ async function read(record: DocumentRecord): Promise<PluginFileDocumentReadResul
       filePath: record.filePath,
       maxBytes: record.maxBytes,
     });
+    // A refused read is an observation too, so the next disk change that makes
+    // the file readable again reaches a view still showing the refusal.
+    record.observedState = result.status === "ok" ? result.revision : `status:${result.status}`;
     if (result.status === "ok") {
-      record.observedState = result.revision;
       if (record.draft === null) {
         record.revision = result.revision;
         if (record.hostConflict) {
@@ -344,11 +346,12 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
       } catch {
         return;
       }
-      if (state === live.observedState) return;
+      const previous = live.observedState;
+      if (state === previous) return;
       live.observedState = state;
-      // Nothing read yet means nothing to be stale against; the view's first
-      // read sees whatever is there now.
-      if (live.revision === null || state === live.revision) return;
+      // Nothing observed yet means nothing to be stale against; the view's
+      // first read sees whatever is there now.
+      if (previous === null || state === live.revision) return;
       if (live.draft !== null && !live.hostConflict) {
         live.hostConflict = true;
         publish(live);

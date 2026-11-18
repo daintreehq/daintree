@@ -227,6 +227,12 @@ export function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined
     const tools = pickRequiredPluginTools(raw.tools);
     return tools === undefined ? undefined : { code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE", tools };
   }
+  if (raw.code === "FILE_TOO_LARGE") {
+    const { sizeBytes } = raw;
+    return typeof sizeBytes === "number" && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0
+      ? { code: "FILE_TOO_LARGE", sizeBytes }
+      : undefined;
+  }
   if (raw.code === "HOST_SWITCH_ON_SCREEN") {
     const switchId = pickDetailString(raw.switchId);
     return switchId === undefined ? undefined : { code: "HOST_SWITCH_ON_SCREEN", switchId };

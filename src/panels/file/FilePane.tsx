@@ -342,6 +342,7 @@ export function FilePane({
     htmlPreviewUrl,
     reloadNonce,
     byteFacts,
+    observedBytes,
     canonicalFilePath,
     loadFile,
     handleMediaPlayingChange,
@@ -369,10 +370,18 @@ export function FilePane({
     pluginEditorsAllowed: location !== "dialog" && isInsideGovernedRoot,
     isRenderable,
     loadedBytes: loadState === "loaded" ? contentBytes : null,
+    fileBytes: observedBytes,
     pinnedEditor,
   });
-  const { fileDefault, editOptions, builtinEditor, pluginEditor, pluginViewer, setEditorChoice } =
-    editorChoice;
+  const {
+    fileDefault,
+    editOptions,
+    builtinEditor,
+    pluginEditor,
+    pluginViewer,
+    hasBuiltinViewer,
+    setEditorChoice,
+  } = editorChoice;
 
   // Edit joins the toggle for a file an editor claims, inside a governed
   // root, and only in the panel (the file viewer dialog stays read-only).
@@ -384,7 +393,9 @@ export function FilePane({
   // edit (binary, oversized, undecodable) itself.
   // While another screen drives the project, only what is already open keeps
   // it (see useFileEditLock).
-  const requestedMode = panel?.fileViewMode ?? "source";
+  // An unset mode opens what a viewer that ships with Daintree shows (a CSV's
+  // table, #17336) and Source otherwise; a mode anyone chose is kept.
+  const requestedMode = panel?.fileViewMode ?? (hasBuiltinViewer ? "rendered" : "source");
   const canEdit =
     (builtinEditor !== null || pluginEditor !== null) &&
     location !== "dialog" &&
@@ -874,10 +885,12 @@ export function FilePane({
                 <FilePanePicker
                   rootPath={pickerRoot}
                   // The pane has shown no file yet, so the picked one opens in
-                  // its type's own mode, as it would in the file browser.
-                  onOpen={(absolutePath) =>
-                    setFilePanelPath(id, absolutePath, defaultFileViewMode(absolutePath))
-                  }
+                  // its type's own mode, as it would in the file browser. Source
+                  // is left unset, so a built-in viewer can still claim it.
+                  onOpen={(absolutePath) => {
+                    const mode = defaultFileViewMode(absolutePath);
+                    setFilePanelPath(id, absolutePath, mode === "source" ? null : mode);
+                  }}
                 />
               )}
             </div>
@@ -911,6 +924,12 @@ export function FilePane({
                 openTarget={openTarget}
                 canOpenInDefaultApp={isInsideGovernedRoot}
                 remote={remoteFile}
+                renderedBy={!isRenderable ? (pluginViewer?.pluginName ?? null) : null}
+                onShowRendered={
+                  availableModes.includes("rendered")
+                    ? () => handleViewModeChange("rendered")
+                    : undefined
+                }
                 onRetry={() => loadFile("explicit")}
                 onExternal={handleOpenExternal}
               />
@@ -1023,7 +1042,7 @@ export function FilePane({
           {filePath && showPluginViewer && pluginViewer && (
             <Suspense fallback={<EditorLoadingSkeleton />}>
               <LazyPluginFileEditorHost
-                key={`${pluginViewer.choiceId}\u0000${filePath}`}
+                key={`${pluginViewer.choiceId}\u0000${effectiveRootPath}\u0000${filePath}`}
                 panelId={id}
                 projectId={projectId}
                 filePath={filePath}
@@ -1031,6 +1050,7 @@ export function FilePane({
                 rootPath={effectiveRootPath}
                 candidate={pluginViewer}
                 changeTick={changeTick}
+                refreshEpoch={imageRefreshEpoch}
               />
             </Suspense>
           )}

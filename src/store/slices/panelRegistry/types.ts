@@ -387,11 +387,14 @@ export interface PanelRegistrySlice {
     id: string,
     position: { url: string; scrollY: number } | undefined
   ) => void;
-  /** Swap a file panel's file; `viewMode`, when given, is written with it in one update. */
+  /**
+   * Swap a file panel's file; `viewMode`, when given, is written with it in one
+   * update, and `null` leaves the new file's mode unset for the pane to decide.
+   */
   setFilePanelPath: (
     id: string,
     filePath: string,
-    viewMode?: import("@shared/types/panel.js").FileViewMode
+    viewMode?: import("@shared/types/panel.js").FileViewMode | null
   ) => void;
   setFileViewMode: (id: string, viewMode: import("@shared/types/panel.js").FileViewMode) => void;
   /** Pin the editor a file panel's Edit mode opens with, as an "Edit with…" answer. */
