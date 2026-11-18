@@ -4510,6 +4510,43 @@ describe("restore provenance and the plugin hold (#14017)", () => {
     });
   });
 
+  it("keeps what was seen at the stop only while the pane stays held", () => {
+    const stopped = {
+      ...claudePane,
+      agentSessionId: "sess-c",
+      lastAgentObservation: { agentState: "waiting", at: 4_500 },
+      stopObservation: { agentState: "working", at: 4_000 },
+    };
+    // A launched pane will be stopped again by whatever ends it.
+    expect(respawn(stopped).stopObservation).toBeUndefined();
+
+    const held = respawn(stopped, { resumeOnRestart: "never" });
+    expect(held.stopObservation).toEqual({ agentState: "working", at: 4_000 });
+    const saved = serializePtyPanel({
+      ...claudePane,
+      ...held,
+      cols: 80,
+      rows: 24,
+    } as PtyPanelData);
+    expect(saved.stopObservation).toEqual({ agentState: "working", at: 4_000 });
+    // Once it runs, the next stop is Main's to record.
+    const started = serializePtyPanel({
+      ...claudePane,
+      ...held,
+      restoreRecovery: undefined,
+      cols: 80,
+      rows: 24,
+    } as PtyPanelData);
+    expect(started).not.toHaveProperty("stopObservation");
+
+    expect(
+      respawn(
+        { ...stopped, stopObservation: { agentState: "directing", at: 4_000 } },
+        { resumeOnRestart: "never" }
+      ).stopObservation
+    ).toBeUndefined();
+  });
+
   it("takes the newer observation once a resumed pane has run again", () => {
     const result = respawn(
       {

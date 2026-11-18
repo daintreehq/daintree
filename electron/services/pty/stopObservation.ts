@@ -23,15 +23,16 @@ const MAX_REQUEST_ENTRIES = 1_000;
  *
  * An agent the user's Sleep request found working keeps that reading, unless
  * another run of an agent has taken the pane since: a Sleep that waited for it
- * to settle must not turn it into one that was idle all along. `undefined`
- * marks an agent whose reading is unusable, so an older record goes.
+ * to settle must not turn it into one that was idle all along. An agent with no
+ * usable reading gets none; the restore that reads a record consumes it, so
+ * there is no older one to correct.
  */
 export function stopObservationsFor(
   terminals: Iterable<StoppedTerminal>,
   workingAtRequest: readonly SleepRequestWorking[] = []
-): Map<string, TerminalAgentObservation | undefined> {
+): Map<string, TerminalAgentObservation> {
   const requested = new Map(workingAtRequest.map((entry) => [entry.terminalId, entry]));
-  const observations = new Map<string, TerminalAgentObservation | undefined>();
+  const observations = new Map<string, TerminalAgentObservation>();
   for (const terminal of terminals) {
     if (!terminal.launchAgentId) continue;
     const request = requested.get(terminal.id);
@@ -39,37 +40,30 @@ export function stopObservationsFor(
       request !== undefined &&
       (request.agentIncarnation === undefined ||
         request.agentIncarnation === terminal.agentIncarnation);
-    observations.set(
-      terminal.id,
-      sameRun
-        ? readLastSeen("working", request.at)
-        : readLastSeen(terminal.agentState, terminal.lastStateChange)
-    );
+    const observation = sameRun
+      ? readLastSeen("working", request.at)
+      : readLastSeen(terminal.agentState, terminal.lastStateChange);
+    if (observation) observations.set(terminal.id, observation);
   }
   return observations;
 }
 
 /**
  * Write each observation onto the saved snapshot of the same pane, in place.
- * Panes with no entry are left as they are. Returns whether anything changed.
+ * Returns whether any pane was found to write it on.
  */
 export function applyStopObservations(
   snapshots: ReadonlyArray<{ id: string; stopObservation?: TerminalAgentObservation }>,
-  observations: ReadonlyMap<string, TerminalAgentObservation | undefined>
+  observations: ReadonlyMap<string, TerminalAgentObservation>
 ): boolean {
-  let changed = false;
+  let written = false;
   for (const snapshot of snapshots) {
-    if (!observations.has(snapshot.id)) continue;
     const observation = observations.get(snapshot.id);
-    if (observation) {
-      snapshot.stopObservation = observation;
-      changed = true;
-    } else if (snapshot.stopObservation !== undefined) {
-      delete snapshot.stopObservation;
-      changed = true;
-    }
+    if (!observation) continue;
+    snapshot.stopObservation = observation;
+    written = true;
   }
-  return changed;
+  return written;
 }
 
 /** Read the renderer's list of agents its Sleep request found working; untrusted. */

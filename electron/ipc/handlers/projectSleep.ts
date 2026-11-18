@@ -5,10 +5,7 @@ import { loadProjectPluginWorkReader } from "../../services/plugin/projectPlugin
 import { installPanelRecoveryStateListener } from "../../services/panelRecoveryQuery.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies } from "../types.js";
-import type {
-  ProjectSleepOptions,
-  ProjectSleepResult,
-} from "../../../shared/types/ipc/project.js";
+import type { ProjectSleepOptions, ProjectSleepResult } from "../../../shared/types/ipc/project.js";
 import { sanitizeWorkingAtRequest } from "../../services/pty/stopObservation.js";
 
 /**

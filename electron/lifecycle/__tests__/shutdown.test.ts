@@ -2889,6 +2889,43 @@ describe("registerShutdownHandler", () => {
       vi.useRealTimers();
     });
 
+    it("records what each agent was doing before the quit's kill, captured id or not (#17886)", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { id: "proj-1" },
+        { id: "asleep" },
+      ] as never);
+      const ptyClient = makePtyClient({
+        // Read before the kill; the quit keys move the agents on afterwards.
+        getAllTerminalsAsync: vi.fn(async () => [
+          { ...agentTerminal, agentState: "working", lastStateChange: 40 },
+          { ...agentTerminal, id: "t2", agentState: "completed", lastStateChange: 30 },
+          { ...agentTerminal, id: "assistant", isAssistantTerminal: true, agentState: "working" },
+          { id: "shell", projectId: "proj-1", cwd: "/repo", agentState: "idle" },
+        ]),
+        // Neither pane reported back before the deadline: both still go with the app.
+        gracefulKillByProject: vi.fn(async () => []),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      // A project with nothing running is left as it was saved.
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledTimes(1);
+      const [projectId, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      expect(projectId).toBe("proj-1");
+      const state = {
+        terminals: [{ id: "t1" }, { id: "t2" }, { id: "assistant" }, { id: "shell" }],
+      };
+      expect(updater(state)).toBe(state);
+      expect(state.terminals).toEqual([
+        { id: "t1", stopObservation: { agentState: "working", at: 40 } },
+        { id: "t2", stopObservation: { agentState: "completed", at: 30 } },
+        { id: "assistant" },
+        { id: "shell" },
+      ]);
+    });
+
     it("writes nothing for a project that outran the deadline with no streamed captures", async () => {
       vi.useFakeTimers();
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);

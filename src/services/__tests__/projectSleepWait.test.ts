@@ -421,8 +421,48 @@ describe("startSleepWait", () => {
     keepWaiting();
     expect(run()?.phase).toBe("waiting");
     await advance(SLEEP_WAIT_POLL_MS * 2);
-    expect(sleepProjectMock).toHaveBeenCalledWith("a");
+    // It was working when asked, however long it took to settle.
+    expect(sleepProjectMock).toHaveBeenCalledWith("a", {
+      workingAtRequest: [{ terminalId: "a1", at: SPAWNED + 10 }],
+    });
     expect(submitNoteMock).not.toHaveBeenCalled();
+  });
+
+  it("tells each project's sleep which agents were working when it was asked (#17886)", async () => {
+    terminals = [
+      agent("a1", "a", { agentState: "working", lastStateChange: 2_000, agentIncarnation: 3 }),
+      agent("a2", "a"),
+      agent("b1", "b"),
+    ];
+    await startSleepWait(["a", "b"], { pauseNote: true });
+    expect(submitNoteMock.mock.calls.map(([id]) => id)).toEqual(["a1"]);
+    // The pause note did its job: everything settles, and only then sleeps.
+    terminals = [
+      agent("a1", "a", { lastStateChange: 150_000, agentIncarnation: 3 }),
+      agent("a2", "a"),
+      agent("b1", "b"),
+    ];
+    await advance(SLEEP_WAIT_DWELL_MS + 3 * SLEEP_WAIT_POLL_MS);
+
+    expect(sleepProjectMock.mock.calls).toEqual([
+      ["a", { workingAtRequest: [{ terminalId: "a1", at: 2_000, agentIncarnation: 3 }] }],
+      ["b"],
+    ]);
+  });
+
+  it("keeps what the request saw for Sleep now and for a retry of what failed", async () => {
+    terminals = [agent("a1", "a", { agentState: "working", lastStateChange: 2_000 })];
+    sleepProjectMock.mockRejectedValueOnce(new Error("boom"));
+    await startSleepWait(["a"], { pauseNote: false });
+    await sleepWaitingNow();
+    const asked = ["a", { workingAtRequest: [{ terminalId: "a1", at: 2_000 }] }];
+    expect(sleepProjectMock.mock.calls).toEqual([asked]);
+
+    // Retried after the agent settled: it was still working when first asked.
+    terminals = [agent("a1", "a")];
+    const call = notifyMock.mock.calls.find(([n]) => n.title === "Couldn't sleep project");
+    await call![0].actions[0].onClick();
+    expect(sleepProjectMock.mock.calls).toEqual([asked, asked]);
   });
 
   it("reports a project that failed to sleep, and its retry waits for the agents again", async () => {

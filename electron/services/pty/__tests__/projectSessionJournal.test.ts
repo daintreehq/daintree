@@ -47,6 +47,9 @@ interface FakeTerminal {
   trashExpiresAt?: number;
   isAssistantTerminal?: boolean;
   spawnedAt: number;
+  agentState?: string;
+  lastStateChange?: number;
+  agentIncarnation?: number;
 }
 
 function makePtyClient(config: {
@@ -635,6 +638,106 @@ describe("gracefulTeardownAndJournalProject", () => {
       });
 
       expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+    });
+
+    it("records what each agent it stopped was doing before the kill, captured id or not", async () => {
+      const { client } = makePtyClient({
+        terminals: [
+          {
+            id: "working",
+            projectId: "proj",
+            launchAgentId: "claude",
+            cwd: "/w",
+            spawnedAt: 1,
+            agentState: "working",
+            lastStateChange: 40,
+          },
+          {
+            id: "idle",
+            projectId: "proj",
+            launchAgentId: "codex",
+            cwd: "/i",
+            spawnedAt: 1,
+            agentState: "idle",
+            lastStateChange: 30,
+          },
+          // A plain shell has no agent to have been doing anything.
+          { id: "shell", projectId: "proj", cwd: "/s", spawnedAt: 1, agentState: "idle" },
+          // Read before the kill, but the host never reported tearing it down.
+          {
+            id: "survivor",
+            projectId: "proj",
+            launchAgentId: "claude",
+            cwd: "/v",
+            spawnedAt: 1,
+            agentState: "working",
+            lastStateChange: 20,
+          },
+        ],
+        outcome: {
+          confirmed: true,
+          sessions: [
+            { id: "working", agentSessionId: null },
+            { id: "idle", agentSessionId: "s-idle" },
+            { id: "shell", agentSessionId: null },
+          ],
+        },
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      const state = {
+        terminals: [{ id: "working" }, { id: "idle" }, { id: "shell" }, { id: "survivor" }],
+      };
+      expect(updater(state)).toBe(state);
+      expect(state.terminals).toEqual([
+        { id: "working", stopObservation: { agentState: "working", at: 40 } },
+        { id: "idle", agentSessionId: "s-idle", stopObservation: { agentState: "idle", at: 30 } },
+        { id: "shell" },
+        { id: "survivor" },
+      ]);
+    });
+
+    it("keeps the working reading the Sleep request took for an agent that has settled since", async () => {
+      const settled = (id: string, agentIncarnation: number) => ({
+        id,
+        projectId: "proj",
+        launchAgentId: "claude",
+        cwd: `/${id}`,
+        spawnedAt: 1,
+        agentState: "waiting",
+        lastStateChange: 50,
+        agentIncarnation,
+      });
+      const { client } = makePtyClient({
+        terminals: [settled("paused", 2), settled("replaced", 3), settled("unasked", 1)],
+        outcome: {
+          confirmed: true,
+          sessions: ["paused", "replaced", "unasked"].map((id) => ({ id, agentSessionId: null })),
+        },
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+        workingAtRequest: [
+          { terminalId: "paused", at: 10, agentIncarnation: 2 },
+          // Another run of an agent took the pane after the request.
+          { terminalId: "replaced", at: 10, agentIncarnation: 2 },
+          { terminalId: "elsewhere", at: 10 },
+        ],
+      });
+
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      const state = { terminals: [{ id: "paused" }, { id: "replaced" }, { id: "unasked" }] };
+      updater(state);
+      expect(state.terminals).toEqual([
+        { id: "paused", stopObservation: { agentState: "working", at: 10 } },
+        { id: "replaced", stopObservation: { agentState: "waiting", at: 50 } },
+        { id: "unasked", stopObservation: { agentState: "waiting", at: 50 } },
+      ]);
     });
 
     it("bails out of the updater when the scope has no saved terminals", async () => {
