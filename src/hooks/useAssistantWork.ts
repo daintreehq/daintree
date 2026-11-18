@@ -51,12 +51,14 @@ function onlyAsked(readings: Readings, key: string): Readings {
  * `active` and held between reads. `ownHostId` is read through this machine's
  * own handler, every other host through its link. Passive: nothing is
  * started, watched or read off a screen to answer it. Nothing is read while
- * the view can't be seen; it reads at once when it can again.
+ * the view can't be seen; it reads again when it can, at once if its next
+ * read is already due.
  *
  * Each host is read on its own cadence and shown as soon as it answers, so a
  * slow link holds back only its own host (#17794). A host has at most one
- * read out at a time: one still out when the view hides, or the hosts change,
- * is waited on rather than sent again.
+ * read out at a time, and keeps its cadence when the view hides or the hosts
+ * change: a read still out is waited on rather than sent again, and one not
+ * yet due waits for its time.
  */
 export function useAssistantWork(
   hostIds: readonly HostId[],
@@ -64,7 +66,8 @@ export function useAssistantWork(
   active: boolean
 ): Readings {
   const [readings, setReadings] = useState(NO_READINGS);
-  const outstanding = useRef(new Map<string, Promise<AssistantWorkReading>>());
+  const outstanding = useRef(new Map<HostId, Promise<AssistantWorkReading>>());
+  const shownAt = useRef(new Map<HostId, number>());
   const key = hostIds.join("\u0000");
   const observable = useSyncExternalStore(
     subscribeProjectViewObservability,
@@ -76,25 +79,24 @@ export function useAssistantWork(
     const ids = key.split("\u0000");
     const asked: ReadonlySet<HostId> = new Set(ids);
     const out = outstanding.current;
+    const shown = shownAt.current;
     let live = true;
     const timers = new Map<HostId, ReturnType<typeof setTimeout>>();
     const readOne = (hostId: HostId): Promise<AssistantWorkReading> => {
-      const own = hostId === ownHostId;
-      const slot = `${own ? "own" : "link"}\u0000${hostId}`;
-      const pending = out.get(slot);
+      const pending = out.get(hostId);
       if (pending) return pending;
       const sent = (async () => {
         try {
-          return await (own
+          return await (hostId === ownHostId
             ? window.electron.canopy.readAssistantWork()
             : canopyHostClient.readAssistantWork(hostId));
         } catch {
           return unreadAssistantWork("unreachable");
         }
       })();
-      out.set(slot, sent);
+      out.set(hostId, sent);
       void sent.then(() => {
-        if (out.get(slot) === sent) out.delete(slot);
+        if (out.get(hostId) === sent) out.delete(hostId);
       });
       return sent;
     };
@@ -102,13 +104,29 @@ export function useAssistantWork(
       void readOne(hostId).then((fresh) => {
         if (!live) return;
         setReadings((held) => withReading(held, hostId, fresh, asked));
+        shown.set(hostId, Date.now());
         timers.set(
           hostId,
           setTimeout(() => read(hostId), AGENT_DIRECTORY_POLL_MS)
         );
       });
     };
-    for (const id of ids) read(id);
+    for (const id of ids) {
+      const last = shown.get(id);
+      // Capped, so a clock set back never stalls a host.
+      const wait =
+        last === undefined || out.has(id)
+          ? 0
+          : Math.min(last + AGENT_DIRECTORY_POLL_MS - Date.now(), AGENT_DIRECTORY_POLL_MS);
+      if (wait > 0) {
+        timers.set(
+          id,
+          setTimeout(() => read(id), wait)
+        );
+      } else {
+        read(id);
+      }
+    }
     return () => {
       live = false;
       for (const timer of timers.values()) clearTimeout(timer);
