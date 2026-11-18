@@ -24,6 +24,7 @@ import { CloudHosts } from "./CloudHosts.js";
 import { CloudProviderRegistry } from "./CloudProviderRegistry.js";
 import { watchPluginCloudProviders } from "./pluginCloudProviderRegistrations.js";
 import { setPluginCloudConsentForgetter } from "../../services/plugin/pluginCloudProviders.js";
+import { events } from "../../services/events.js";
 
 export interface CloudHostsRuntime {
   cloudHosts: CloudHosts;
@@ -124,6 +125,8 @@ export function initCloudHosts(params: {
     cloudHosts.providersChanged();
   });
   accounts.rememberPluginProviders();
+  // A hand edit picked up by Reload configuration reaches whoever acts on the store, as a write would.
+  const stopWatchingReload = events.on("sys:config:reload", () => store.reloaded());
   // A plugin that failed to load, or finished loading, rewords its accounts' reasons;
   // with no plugin account there is nothing to reword.
   pluginStatusChanged = () => {
@@ -143,6 +146,7 @@ export function initCloudHosts(params: {
     providers,
     dispose() {
       stopWatchingProviders();
+      stopWatchingReload();
       setPluginCloudConsentForgetter(null);
       pluginProviders.dispose();
       unregister();

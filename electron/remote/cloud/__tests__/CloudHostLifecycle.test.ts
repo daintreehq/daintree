@@ -2578,6 +2578,8 @@ describe("CloudHostLifecycle background timers (#17795)", () => {
     env: Awaited<ReturnType<typeof quiet>>,
     state: "revoke" | "issuing" | "active"
   ) {
+    // An issue is recorded before the provider is asked: no key id or expiry yet.
+    const issued = state !== "issuing";
     env.store.putMachineKey({
       id: "mk_1",
       bindingId: env.store.bindings()[0]?.id ?? "gone",
@@ -2585,8 +2587,8 @@ describe("CloudHostLifecycle background timers (#17795)", () => {
       providerId: "boat",
       resourceId: "bx_23456789",
       name: "daintree-mk_1",
-      keyId: "sak_1",
-      expiresAt: Date.now() + 86_400_000,
+      keyId: issued ? "sak_1" : null,
+      expiresAt: issued ? Date.now() + 86_400_000 : null,
       state,
       createdAt: Date.now(),
     });
@@ -2642,12 +2644,63 @@ describe("CloudHostLifecycle background timers (#17795)", () => {
       resourceId: "bx_23456789",
       name: "build",
     });
+    const polls = vi.spyOn(env.lifecycle as unknown as { pollDue(): Promise<void> }, "pollDue");
     const bindingId = env.store.bindings()[0]!.id;
-    for (let second = 0; second < 120; second += 10) {
+    // Every 2 seconds, more often than either pass: one restarted by a write would never come.
+    for (let second = 0; second < 120; second += 2) {
       env.store.updateBinding(bindingId, (binding) => ({ ...binding }));
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(2_000);
     }
+    expect(polls).toHaveBeenCalledTimes(24);
     expect(env.machineKeys.tick).toHaveBeenCalledTimes(2);
+    env.lifecycle.dispose();
+  });
+
+  it("watches only a binding with both its machine and its host", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const { id, hostId, resourceId } = env.store.bindings()[0]!;
+    env.store.updateBinding(id, (binding) => ({ ...binding, hostId: null }));
+    expect(vi.getTimerCount()).toBe(0);
+    // What was found about the machine goes; the binding that stays is kept.
+    expect(env.guestPowerOff.forgetRemoved).toHaveBeenCalledWith([
+      expect.objectContaining({ id, hostId: null }),
+    ]);
+    env.store.updateBinding(id, (binding) => ({ ...binding, hostId, resourceId: null }));
+    expect(vi.getTimerCount()).toBe(0);
+    env.store.updateBinding(id, (binding) => ({ ...binding, resourceId }));
+    expect(vi.getTimerCount()).toBe(2);
+    env.lifecycle.dispose();
+  });
+
+  it("starts the keeper alone when a key is marked for revoking, not for one in use", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    pendingKey(env, "active");
+    expect(vi.getTimerCount()).toBe(0);
+    env.store.updateMachineKey("mk_1", (key) => ({ ...key, state: "revoke" }));
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.machineKeys.tick).toHaveBeenCalledTimes(1);
+    env.lifecycle.dispose();
+  });
+
+  it("picks up a key left to revoke that a hand edit restored, once settings reload", async () => {
+    const env = await quiet();
+    env.lifecycle.start();
+    pendingKey(env, "revoke");
+    const edited = env.backend.get();
+    env.store.removeMachineKey("mk_1");
+    expect(vi.getTimerCount()).toBe(0);
+    env.backend.set("cloudHosts", edited as CloudHostsValue);
+    expect(vi.getTimerCount()).toBe(0);
+    env.store.reloaded();
+    expect(vi.getTimerCount()).toBe(1);
     env.lifecycle.dispose();
   });
 
@@ -2686,7 +2739,7 @@ describe("CloudHostLifecycle background timers (#17795)", () => {
       pendingKey(env, state);
       const next = env.restart(env.lifecycle);
       expect(vi.getTimerCount()).toBe(1);
-      // An issue left behind is looked for only once it is old enough, with no write to say so.
+      // An issue left behind becomes the keeper's to look for once it is old enough, with no write to say so.
       await vi.advanceTimersByTimeAsync(11 * 60_000);
       expect(env.machineKeys.tick).toHaveBeenCalledTimes(11);
       next.lifecycle.dispose();
@@ -2715,13 +2768,16 @@ describe("CloudHostLifecycle background timers (#17795)", () => {
 
   it("clears its timers on dispose and arms nothing after", async () => {
     const env = await quiet();
+    const listeners = (env.store as unknown as { listeners: Set<unknown> }).listeners;
     env.lifecycle.start();
+    expect(listeners.size).toBe(1);
     await env.lifecycle.importMachine({
       accountId: env.account.id,
       resourceId: "bx_23456789",
       name: "build",
     });
     env.lifecycle.dispose();
+    expect(listeners.size).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
     pendingKey(env, "revoke");
     expect(vi.getTimerCount()).toBe(0);

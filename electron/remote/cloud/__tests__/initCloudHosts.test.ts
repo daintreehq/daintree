@@ -7,6 +7,7 @@ vi.mock("electron", () => ({
 vi.mock("../CloudCredentialVault.js", () => ({ KeychainCloudCredentialVault: class {} }));
 
 import { initCloudHosts } from "../initCloudHosts.js";
+import { events } from "../../../services/events.js";
 import {
   clearPluginCloudProviders,
   publishPluginCloudProviders,
@@ -88,6 +89,29 @@ describe("initCloudHosts", () => {
     } finally {
       runtime.dispose();
     }
+  });
+
+  it("passes Reload configuration on to the store's listeners until disposed", () => {
+    let stored: unknown;
+    const runtime = initCloudHosts({
+      backend: {
+        get: () => stored,
+        set: (_key, value) => {
+          stored = value;
+        },
+      },
+      emit: vi.fn(),
+    });
+    const changed = vi.fn();
+    runtime.store.onChange(changed);
+    try {
+      events.emit("sys:config:reload");
+      expect(changed).toHaveBeenCalledTimes(1);
+    } finally {
+      runtime.dispose();
+    }
+    events.emit("sys:config:reload");
+    expect(changed).toHaveBeenCalledTimes(1);
   });
 
   it("names a plugin's provider on its accounts at startup and whenever it registers again (#17353)", () => {
