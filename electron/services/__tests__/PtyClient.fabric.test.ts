@@ -562,6 +562,7 @@ describe("PtyClient fabric", () => {
       // its reply lands, the id respawns on the project's newly created shard.
       const client = createFabricClient();
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24 });
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24 });
       defaultShard().child.emit("message", { type: "ready" });
       defaultShard().child.emit("message", {
         type: "exit",
@@ -572,13 +573,18 @@ describe("PtyClient fabric", () => {
 
       const promise = client.getProjectTerminalsAsync("project-a");
       const [request] = messagesOfType(defaultShard().child, "get-project-terminals");
+      const stayed = { id: "t2", projectId: "project-a", kind: "terminal", hasPty: true };
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       const shardA = projectShard("project-a");
       shardA.child.emit("message", { type: "ready" });
       defaultShard().child.emit("message", {
         type: "project-terminals",
         requestId: request.requestId,
-        terminals: [{ id: "t1", projectId: undefined, kind: "terminal", hasPty: false }],
+        terminals: [
+          // The registry stamps the project it inferred onto the record.
+          { id: "t1", projectId: "project-a", kind: "terminal", hasPty: false },
+          stayed,
+        ],
       });
       await vi.waitFor(() => expect(messagesOfType(shardA.child, "get-terminal")).toHaveLength(1));
       const [read] = messagesOfType(shardA.child, "get-terminal");
@@ -589,7 +595,37 @@ describe("PtyClient fabric", () => {
         terminal: current,
       });
 
-      await expect(promise).resolves.toEqual([current]);
+      await expect(promise).resolves.toEqual([current, stayed]);
+      client.dispose();
+    });
+
+    it("drops a moved id whose owner now holds a projectless record", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      defaultShard().child.emit("message", { type: "ready" });
+      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, preserved: true });
+      client.spawn("t1", { cwd: "/b", cols: 80, rows: 24 });
+
+      const promise = client.getProjectTerminalsAsync("project-a");
+      const [request] = messagesOfType(shardA.child, "get-project-terminals");
+      shardA.child.emit("message", {
+        type: "project-terminals",
+        requestId: request.requestId,
+        terminals: [{ id: "t1", projectId: "project-a", kind: "terminal", hasPty: false }],
+      });
+      await vi.waitFor(() =>
+        expect(messagesOfType(defaultShard().child, "get-terminal")).toHaveLength(1)
+      );
+      const [read] = messagesOfType(defaultShard().child, "get-terminal");
+      defaultShard().child.emit("message", {
+        type: "terminal-info",
+        requestId: read.requestId,
+        terminal: { id: "t1", kind: "terminal", hasPty: true },
+      });
+
+      await expect(promise).resolves.toEqual([]);
       client.dispose();
     });
 

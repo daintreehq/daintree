@@ -2752,9 +2752,9 @@ export class PtyClient extends EventEmitter {
    *
    * Each record is read from the shard that owns its id, where every id-based
    * call for it goes, as the per-id read did. An id that moved to another
-   * shard while the host answered is read again from its owner, and left out
-   * when it now belongs to another project: a preserved exit lingers on its
-   * old shard after the id respawns elsewhere (#16811).
+   * shard while the host answered is read again from its owner, and kept only
+   * when that record names this project: a preserved exit lingers on its old
+   * shard after the id respawns elsewhere (#16811).
    */
   async getProjectTerminalsAsync(projectId: string): Promise<TerminalInfoResponse[]> {
     const shard = this.shardForProjectQuery(projectId);
@@ -2770,8 +2770,7 @@ export class PtyClient extends EventEmitter {
       terminals.map(async (terminal) => {
         if (this.shardForTerminal(terminal.id) === shard) return terminal;
         const moved = await this.getTerminalAsync(terminal.id);
-        if (moved?.projectId !== undefined && moved.projectId !== projectId) return null;
-        return moved;
+        return moved?.projectId === projectId ? moved : null;
       })
     );
     return owned.filter((terminal) => terminal !== null);
