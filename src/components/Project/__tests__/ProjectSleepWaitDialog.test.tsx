@@ -67,13 +67,38 @@ describe("ProjectSleepWaitDialog", () => {
     expect(el.textContent).toContain("Waiting to sleep 2 projects");
     const rows = Array.from(el.querySelectorAll("[data-sleep-wait-agent]"), (n) => n.textContent);
     expect(rows).toEqual([
-      "ClaudeWorking · pause note sent",
+      "ClaudeWorking · asked to pause",
       "CodexWaiting for approval",
       "GeminiWaiting for input",
     ]);
     expect(el.querySelector('[data-sleep-wait-project="b"]')?.textContent).toContain("Left open");
     expect(el.textContent).not.toMatch(/safe/i);
     expect(button(el, "Keep waiting")).toBeUndefined();
+    expect(el.querySelector("[data-sleep-wait-announce]")?.textContent).toBe("");
+  });
+
+  it("locks every choice once sleeping has begun, Escape included", async () => {
+    useProjectSleepWaitStore.getState().setRun(runWith({ phase: "sleeping" }));
+    render(<ProjectSleepWaitDialog />);
+    const el = await dialog();
+    expect(el.textContent).toContain("Sleeping 2 projects");
+    await act(async () => {
+      fireEvent.click(button(el, "Sleep now")!);
+      fireEvent.click(button(el, "Cancel")!);
+      fireEvent.keyDown(el, { key: "Escape" });
+    });
+    expect(sleepNowMock).not.toHaveBeenCalled();
+    expect(cancelMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels the wait on Escape while it is still waiting", async () => {
+    useProjectSleepWaitStore.getState().setRun(runWith());
+    render(<ProjectSleepWaitDialog />);
+    const el = await dialog();
+    await act(async () => {
+      fireEvent.keyDown(el, { key: "Escape" });
+    });
+    expect(cancelMock).toHaveBeenCalledTimes(1);
   });
 
   it("follows the run as agents settle", async () => {
@@ -120,9 +145,13 @@ describe("ProjectSleepWaitDialog", () => {
     const el = await dialog();
     expect(el.textContent).toContain("Still waiting to sleep 2 projects");
     expect(el.textContent).toContain("Nothing sleeps until you choose");
+    expect(el.querySelector("[data-sleep-wait-announce]")?.textContent).toContain(
+      "Still waiting"
+    );
     await act(async () => {
       fireEvent.click(button(el, "Keep waiting")!);
     });
     expect(keepWaitingMock).toHaveBeenCalledTimes(1);
+    expect(sleepNowMock).not.toHaveBeenCalled();
   });
 });

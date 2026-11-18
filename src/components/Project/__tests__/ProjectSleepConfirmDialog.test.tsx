@@ -252,6 +252,28 @@ describe("ProjectSleepConfirmDialog", () => {
       expect(await answer).toEqual({ when: "idle", pauseNote: true });
     });
 
+    it("starts a superseding request from Sleep now with the note off", async () => {
+      render(<ProjectSleepConfirmDialog />);
+      const first = openChoice({ kind: "project", offerWhenIdle: true, projects: [project("a")] });
+      let el = await dialog();
+      act(() => {
+        fireEvent.click(radio(el, "idle"));
+      });
+      act(() => {
+        fireEvent.click(noteBox(el));
+      });
+      void openChoice({ kind: "project", offerWhenIdle: true, projects: [project("b")] });
+      expect(await first).toBeNull();
+      await waitFor(() =>
+        expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+          "Sleep 'Project b'?"
+        )
+      );
+      el = await dialog();
+      expect(radio(el, "now").checked).toBe(true);
+      expect(noteBox(el).getAttribute("data-state")).toBe("unchecked");
+    });
+
     it("leaves the pause note off unless it is ticked", async () => {
       render(<ProjectSleepConfirmDialog />);
       const answer = openChoice({

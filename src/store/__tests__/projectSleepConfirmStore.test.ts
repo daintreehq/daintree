@@ -62,6 +62,13 @@ describe("projectSleepConfirmStore choices", () => {
     expect(await first).toBeNull();
     store.resolveConfirmation(false);
     expect(await second).toBeNull();
+    expect(useProjectSleepConfirmStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("answers a boolean request false when cancelled", async () => {
+    const answer = useProjectSleepConfirmStore.getState().requestConfirmation(request("a"));
+    useProjectSleepConfirmStore.getState().resolveChoice(null);
+    expect(await answer).toBe(false);
   });
 
   it("answers a boolean request true for a sleep now", async () => {

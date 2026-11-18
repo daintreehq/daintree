@@ -150,8 +150,11 @@ describe("startSleepWait", () => {
     terminals = [agent("a1", "a"), agent("b1", "b", { agentState: "working" })];
     await startSleepWait(["a", "b"], { pauseNote: false });
     expect(statusOf("a")).toBe("waiting");
+    // One reading after another isn't the dwell.
+    await advance(SLEEP_WAIT_POLL_MS);
+    expect(statusOf("a")).toBe("waiting");
 
-    await advance(SLEEP_WAIT_DWELL_MS + SLEEP_WAIT_POLL_MS);
+    await advance(SLEEP_WAIT_DWELL_MS);
     // Alpha has settled, Beta hasn't: the barrier holds Alpha too.
     expect(statusOf("a")).toBe("ready");
     expect(statusOf("b")).toBe("waiting");
@@ -165,14 +168,15 @@ describe("startSleepWait", () => {
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
-  it("sleeps the project this view shows last", async () => {
-    storeState.currentProject = { id: "a" };
-    shown = [{ projectId: "a", state: "foreground" }];
-    terminals = [agent("a1", "a"), agent("b1", "b")];
-    await startSleepWait(["a", "b"], { pauseNote: false });
+  it("sleeps the project this view shows last, the rest in order", async () => {
+    storeState.projects.push({ id: "c", name: "Gamma", path: "/c", status: "background" });
+    storeState.currentProject = { id: "b" };
+    shown = [{ projectId: "b", state: "foreground" }];
+    terminals = [agent("a1", "a"), agent("b1", "b"), agent("c1", "c")];
+    await startSleepWait(["a", "b", "c"], { pauseNote: false });
     await advance(SLEEP_WAIT_DWELL_MS + 2 * SLEEP_WAIT_POLL_MS);
 
-    expect(sleepProjectMock.mock.calls.map(([id]) => id)).toEqual(["b", "a"]);
+    expect(sleepProjectMock.mock.calls.map(([id]) => id)).toEqual(["a", "c", "b"]);
   });
 
   it("never sleeps when, between readings, an idle agent hits a prompt and a new one is seeded", async () => {
@@ -206,19 +210,33 @@ describe("startSleepWait", () => {
     expect(statusOf("a")).toBe("waiting");
   });
 
-  it("holds a project whose pushed counts show a working agent the read missed", async () => {
-    useProjectStatsStore.setState({
-      stats: { a: stats({ activeAgentCount: 1, processCount: 1 }) },
-    });
+  it.each([
+    ["working", { activeAgentCount: 1, processCount: 1 }],
+    ["blocked", { blockedAgentCount: 1, processCount: 1 }],
+  ])("holds a project whose pushed counts show a %s agent the read missed", async (_, counts) => {
+    useProjectStatsStore.setState({ stats: { a: stats(counts) } });
     terminals = [agent("a1", "a")];
     await startSleepWait(["a"], { pauseNote: false });
     await advance(SLEEP_WAIT_DWELL_MS * 3);
 
+    expect(statusOf("a")).toBe("waiting");
     expect(sleepProjectMock).not.toHaveBeenCalled();
   });
 
-  it("reads a project with terminals by its counts but none in the read as unavailable", async () => {
-    useProjectStatsStore.setState({ stats: { a: stats({ processCount: 2 }) } });
+  it("sleeps a project whose only process is one the terminal list never shows", async () => {
+    // A dev preview counts as a process but isn't a terminal.
+    useProjectStatsStore.setState({ stats: { a: stats({ processCount: 1 }) } });
+    terminals = [];
+    await startSleepWait(["a"], { pauseNote: false });
+    await advance(SLEEP_WAIT_DWELL_MS + 2 * SLEEP_WAIT_POLL_MS);
+
+    expect(sleepProjectMock).toHaveBeenCalledWith("a");
+  });
+
+  it("reads a project with agents by its counts but none in the read as unavailable", async () => {
+    useProjectStatsStore.setState({
+      stats: { a: stats({ processCount: 1, waitingAgentCount: 1 }) },
+    });
     terminals = [];
     await startSleepWait(["a"], { pauseNote: false });
     await advance(SLEEP_WAIT_DWELL_MS * 3);
@@ -227,18 +245,25 @@ describe("startSleepWait", () => {
     expect(sleepProjectMock).not.toHaveBeenCalled();
   });
 
-  it("treats a failed reading as unavailable, not as settled", async () => {
-    getAllMock.mockRejectedValue(new Error("host gone"));
+  it("treats a failed reading as unavailable, and starts the dwell over after it", async () => {
+    terminals = [agent("a1", "a")];
     await startSleepWait(["a"], { pauseNote: false });
-    await advance(SLEEP_WAIT_DWELL_MS * 3);
-
+    await advance(SLEEP_WAIT_DWELL_MS - SLEEP_WAIT_POLL_MS);
+    getAllMock.mockRejectedValueOnce(new Error("host gone"));
+    await advance(SLEEP_WAIT_POLL_MS);
     expect(statusOf("a")).toBe("unavailable");
+    // Had the earlier dwell survived, this reading would sleep it.
+    await advance(SLEEP_WAIT_POLL_MS);
     expect(sleepProjectMock).not.toHaveBeenCalled();
   });
 
-  it("leaves a project the user comes back to open, and sleeps the rest", async () => {
+  it("leaves a project the user comes back to open, in any window, and sleeps the rest", async () => {
     terminals = [agent("a1", "a", { agentState: "working" }), agent("b1", "b")];
     await startSleepWait(["a", "b"], { pauseNote: false });
+    presenceMock.mockImplementation(async () => ({
+      thisWindow: [],
+      otherWindows: shown.map((e) => ({ ...e, windowId: 2 })),
+    }));
     shown = [{ projectId: "a", state: "foreground" }];
     await advance(SLEEP_WAIT_POLL_MS);
     expect(statusOf("a")).toBe("left-open");
@@ -261,6 +286,19 @@ describe("startSleepWait", () => {
     await advance(SLEEP_WAIT_DWELL_MS + 2 * SLEEP_WAIT_POLL_MS);
 
     expect(sleepProjectMock).toHaveBeenCalledWith("a");
+  });
+
+  it("leaves a project open when its agents moved at all since they earned the dwell", async () => {
+    terminals = [agent("a1", "a"), agent("b1", "b")];
+    sleepProjectMock.mockImplementation(async (id: string) => {
+      // Worked and settled again while Alpha slept: settled, but not the reading that qualified.
+      if (id === "a") terminals = [agent("b1", "b", { lastStateChange: 150_000 })];
+      return {};
+    });
+    await startSleepWait(["a", "b"], { pauseNote: false });
+    await advance(SLEEP_WAIT_DWELL_MS + 2 * SLEEP_WAIT_POLL_MS);
+
+    expect(sleepProjectMock.mock.calls.map(([id]) => id)).toEqual(["a"]);
   });
 
   it("leaves a project open when an agent starts again before its turn", async () => {
@@ -302,6 +340,27 @@ describe("startSleepWait", () => {
     expect(run()).toBeNull();
   });
 
+  it("spares a project the user came back to since the last reading, even on Sleep now", async () => {
+    terminals = [agent("a1", "a", { agentState: "working" }), agent("b1", "b")];
+    await startSleepWait(["a", "b"], { pauseNote: false });
+    shown = [{ projectId: "a", state: "foreground" }];
+
+    await sleepWaitingNow();
+
+    expect(sleepProjectMock.mock.calls.map(([id]) => id)).toEqual(["b"]);
+  });
+
+  it("doesn't sleep on Sleep now a project already slept elsewhere, or call it left open", async () => {
+    terminals = [agent("a1", "a", { agentState: "working" })];
+    await startSleepWait(["a"], { pauseNote: false });
+    storeState.projects = [{ ...storeState.projects[0]!, status: "closed" }];
+
+    await sleepWaitingNow();
+
+    expect(sleepProjectMock).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
   it("stops at the timeout and asks instead of sleeping, until told to keep waiting", async () => {
     terminals = [agent("a1", "a", { agentState: "working" })];
     await startSleepWait(["a"], { pauseNote: false });
@@ -317,18 +376,28 @@ describe("startSleepWait", () => {
     expect(run()?.phase).toBe("waiting");
     await advance(SLEEP_WAIT_POLL_MS * 2);
     expect(sleepProjectMock).toHaveBeenCalledWith("a");
+    expect(submitNoteMock).not.toHaveBeenCalled();
   });
 
-  it("reports a project that failed to sleep with a retry", async () => {
-    terminals = [agent("a1", "a")];
+  it("reports a project that failed to sleep, and its retry waits for the agents again", async () => {
+    terminals = [agent("a1", "a"), agent("b1", "b")];
     sleepProjectMock.mockRejectedValueOnce(new Error("boom"));
-    await startSleepWait(["a"], { pauseNote: false });
+    await startSleepWait(["a", "b"], { pauseNote: false });
     await advance(SLEEP_WAIT_DWELL_MS + 2 * SLEEP_WAIT_POLL_MS);
+    expect(sleepProjectMock.mock.calls.map(([id]) => id)).toEqual(["a", "b"]);
 
     const call = notifyMock.mock.calls.find(([n]) => n.title === "Couldn't sleep project");
     expect(call).toBeDefined();
+    // The agent went back to work since: the retry must not stop it.
+    terminals = [agent("a1", "a", { agentState: "working" })];
     await call![0].actions[0].onClick();
+    expect(run()?.projects.map((p) => p.id)).toEqual(["a"]);
+    await advance(SLEEP_WAIT_DWELL_MS * 2);
     expect(sleepProjectMock).toHaveBeenCalledTimes(2);
+
+    terminals = [agent("a1", "a", { lastStateChange: 120_000 })];
+    await advance(SLEEP_WAIT_DWELL_MS + 2 * SLEEP_WAIT_POLL_MS);
+    expect(sleepProjectMock.mock.calls.map(([id]) => id)).toEqual(["a", "b", "a"]);
   });
 
   it("drops a project slept elsewhere from the run", async () => {
@@ -362,13 +431,30 @@ describe("pause note", () => {
     expect(run()?.projects[0]!.agents.find((a) => a.terminalId === "a1")?.note).toBe("sent");
   });
 
-  it("marks a refused note on its agent and keeps waiting", async () => {
+  it("marks a refused note on its agent, keeps waiting, and never sends it again", async () => {
     submitNoteMock.mockRejectedValue(new Error("choice dialog"));
     terminals = [agent("a1", "a", { agentState: "working" })];
     await startSleepWait(["a"], { pauseNote: true });
 
     expect(run()?.projects[0]!.agents[0]!.note).toBe("refused");
     expect(statusOf("a")).toBe("waiting");
+    await advance(SLEEP_WAIT_POLL_MS * 4);
+    expect(submitNoteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing once the user chose Sleep now", async () => {
+    terminals = [agent("a1", "a", { agentState: "working" })];
+    let release!: (value: BackendTerminalInfo[]) => void;
+    getAllMock.mockImplementationOnce(
+      () => new Promise<BackendTerminalInfo[]>((resolve) => (release = resolve))
+    );
+    const started = startSleepWait(["a"], { pauseNote: true });
+    await sleepWaitingNow();
+    release(terminals);
+    await started;
+
+    expect(sleepProjectMock).toHaveBeenCalledWith("a");
+    expect(submitNoteMock).not.toHaveBeenCalled();
   });
 
   it("sends nothing when not chosen", async () => {

@@ -198,6 +198,8 @@ vi.mock("@/hooks/useCopyWithFeedback", () => ({
 }));
 
 import { actionService } from "@/services/ActionService";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
+import { useProjectSleepWaitStore } from "@/store/projectSleepWaitStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -976,6 +978,42 @@ describe("useProjectSwitcherPalette", () => {
       });
       expect(dispatch).toHaveBeenCalledTimes(2);
       dispatch.mockRestore();
+    });
+
+    it("won't open over the app-level Sleep dialog or a Sleep waiting on agents", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      let answer!: Promise<boolean>;
+      act(() => {
+        answer = useProjectSleepConfirmStore.getState().requestConfirmation({
+          kind: "project",
+          projects: [],
+        });
+      });
+      act(() => {
+        result.current.toggle();
+      });
+      expect(result.current.isOpen).toBe(false);
+      act(() => {
+        useProjectSleepConfirmStore.getState().resolveConfirmation(false);
+      });
+      await answer;
+
+      act(() => {
+        useProjectSleepWaitStore
+          .getState()
+          .setRun({ id: 1, phase: "waiting", projects: [], pauseNote: false });
+      });
+      act(() => {
+        result.current.open();
+      });
+      expect(result.current.isOpen).toBe(false);
+      act(() => {
+        useProjectSleepWaitStore.getState().setRun(null);
+      });
+      act(() => {
+        result.current.open();
+      });
+      expect(result.current.isOpen).toBe(true);
     });
 
     it("does nothing for a project no longer in the list", async () => {

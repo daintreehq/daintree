@@ -176,9 +176,14 @@ function observeProject(
     .join("|");
   // A host shard that didn't answer reads as no terminals, which must not pass
   // for a quiet project; nor may a working agent the read missed, which the
-  // pushed counts still carry.
+  // pushed counts still carry. Agents, not processes: a dev preview counts as
+  // a process but is never in the terminal list.
   const stats = useProjectStatsStore.getState().stats[id];
-  if ((stats?.processCount ?? 0) > 0 && own.length === 0) {
+  const countedAgents =
+    (stats?.activeAgentCount ?? 0) +
+    (stats?.waitingAgentCount ?? 0) +
+    (stats?.blockedAgentCount ?? 0);
+  if (countedAgents > 0 && own.length === 0) {
     return { status: "unavailable", agents, settled: false, signature };
   }
   const settled =
@@ -242,16 +247,31 @@ async function tick(run: ActiveRun): Promise<void> {
   run.timer = setTimeout(() => void tick(run), SLEEP_WAIT_POLL_MS);
 }
 
-/** Right before a project's own turn: still settled, and not come back to. */
-async function stillSettled(run: ActiveRun, id: string): Promise<boolean> {
+/**
+ * Right before a project's own turn. A forced sleep still spares a project the
+ * user came back to; otherwise it must read exactly as it did when it earned
+ * its dwell, so an agent that worked and settled again, a new one, or a reading
+ * that recovered since all leave it open.
+ */
+async function turnVerdict(
+  run: ActiveRun,
+  id: string,
+  force: boolean
+): Promise<"sleep" | "left-open" | "gone"> {
   let reading: Reading;
   try {
     reading = await readLive();
   } catch {
-    return false;
+    return force ? "sleep" : "left-open";
   }
   const observed = observeProject(run, id, reading);
-  return typeof observed === "object" && observed.status === "waiting" && observed.settled;
+  if (observed === "left-open" || observed === "gone") return observed;
+  if (force) return "sleep";
+  const unchanged =
+    observed.status === "waiting" &&
+    observed.settled &&
+    observed.signature === run.trackers.get(id)!.signature;
+  return unchanged ? "sleep" : "left-open";
 }
 
 /** The project this view shows goes last: sleeping it drops the view to the picker. */
@@ -267,8 +287,9 @@ async function commit(run: ActiveRun, force: boolean): Promise<void> {
   publish(run, { phase: "sleeping" });
   const ids = inSleepOrder(view.projects.filter((p) => isPendingStatus(p.status)).map((p) => p.id));
   for (const id of ids) {
-    if (!force && !(await stillSettled(run, id))) {
-      setProjectStatus(run, id, "left-open");
+    const verdict = await turnVerdict(run, id, force);
+    if (verdict !== "sleep") {
+      setProjectStatus(run, id, verdict);
       continue;
     }
     setProjectStatus(run, id, "sleeping");
@@ -292,7 +313,10 @@ function finish(run: ActiveRun): void {
   if (!view) return;
   const leftOpen = view.projects.filter((p) => p.status === "left-open");
   const failed = view.projects.filter((p) => p.status === "failed");
-  if (failed.length > 0) notifySleepFailed(failed);
+  // A retry waits again: the user chose to sleep these only once their agents settle.
+  if (failed.length > 0) {
+    notifySleepFailed(failed, (ids) => startSleepWait(ids, { pauseNote: false }));
+  }
   if (leftOpen.length > 0) {
     notify({
       type: "info",
@@ -302,13 +326,18 @@ function finish(run: ActiveRun): void {
         leftOpen.length === 1 ? "wasn't" : "weren't"
       } put to sleep: you came back to ${
         leftOpen.length === 1 ? "it" : "them"
-      }, or an agent there started working again before its turn.`,
+      }, an agent there started again, or ${
+        leftOpen.length === 1 ? "its" : "their"
+      } terminals couldn't be read before ${leftOpen.length === 1 ? "its" : "their"} turn.`,
       context: { eventKind: "uiFeedback" },
     });
   }
 }
 
-function notifySleepFailed(failed: ReadonlyArray<{ id: string; name: string }>): void {
+function notifySleepFailed(
+  failed: ReadonlyArray<{ id: string; name: string }>,
+  retry: (ids: string[]) => Promise<unknown>
+): void {
   notify({
     type: "error",
     priority: "high",
@@ -324,7 +353,7 @@ function notifySleepFailed(failed: ReadonlyArray<{ id: string; name: string }>):
         label: "Try again",
         variant: "primary",
         onClick: async () => {
-          await sleepProjectsInOrder(failed.map((p) => p.id));
+          await retry(failed.map((p) => p.id));
         },
       },
     ],
@@ -350,7 +379,7 @@ export async function sleepProjectsInOrder(ids: readonly string[]): Promise<numb
       failed.push({ id, name });
     }
   }
-  if (failed.length > 0) notifySleepFailed(failed);
+  if (failed.length > 0) notifySleepFailed(failed, sleepProjectsInOrder);
   return slept;
 }
 
@@ -372,10 +401,18 @@ async function sendPauseNotes(run: ActiveRun, ids: ReadonlySet<string>): Promise
       t.detectedAgentId !== undefined &&
       observeAgent(t) === "working"
   );
-  if (recipients.length === 0 || active !== run) return;
-  // Loaded on use: the fleet's send path is heavy, and most sleeps send nothing.
-  const { submitNoteToAgent } = await import("@/components/Fleet/fleetExecution");
-  if (active !== run) return;
+  // Nothing goes out once the run has ended or started sleeping.
+  const live = () => viewOf(run)?.phase === "waiting";
+  if (recipients.length === 0 || !live()) return;
+  let submitNoteToAgent: (terminalId: string, text: string) => Promise<void>;
+  try {
+    // Loaded on use: the fleet's send path is heavy, and most sleeps send nothing.
+    ({ submitNoteToAgent } = await import("@/components/Fleet/fleetExecution"));
+  } catch {
+    for (const t of recipients) run.notes.set(t.id, "refused");
+    return;
+  }
+  if (!live()) return;
   await Promise.all(
     recipients.map(async (t) => {
       try {

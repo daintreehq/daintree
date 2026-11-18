@@ -48,8 +48,8 @@ function AgentRow({ agent }: { agent: SleepWaitAgent }) {
       <span className="min-w-0 truncate text-text-primary">{agent.title}</span>
       <span className="shrink-0 text-text-secondary" data-observation={agent.observation}>
         {OBSERVATION_LABEL[agent.observation]}
-        {agent.note === "sent" && " · pause note sent"}
-        {agent.note === "refused" && " · pause note not sent"}
+        {agent.note === "sent" && " · asked to pause"}
+        {agent.note === "refused" && " · pause note refused"}
       </span>
     </li>
   );
@@ -106,16 +106,24 @@ function ProjectSleepWaitDialogInner() {
       }
       hint={
         timedOut
-          ? `Not every agent has settled after ${minutes} minutes. Nothing sleeps until you choose.`
+          ? `Not every project has read as settled after ${minutes} minutes. Nothing sleeps until you choose.`
           : undefined
       }
     >
       <div className="space-y-3">
         <div className="text-xs text-text-secondary">
-          {single ? "It sleeps" : "They sleep"} once every agent has been observed idle or at its
-          prompt for a few seconds. An agent waiting on an approval or a question holds{" "}
+          {single ? "It sleeps" : "They sleep"} once every agent has been observed idle or waiting
+          for input for a few seconds. An agent waiting on an approval or a question holds{" "}
           {single ? "it" : "them"} open. Sleep now stops whatever is still running; Cancel sleeps
           nothing.
+        </div>
+        {/* The footer's choices change with the phase; say so to someone not looking at them. */}
+        <div className="sr-only" aria-live="polite" data-sleep-wait-announce="">
+          {timedOut
+            ? "Still waiting. Nothing sleeps until you choose Sleep now, Keep waiting or Cancel."
+            : sleeping
+              ? "Sleeping projects"
+              : ""}
         </div>
         <ul data-sleep-wait-projects="" className="max-h-80 space-y-3 overflow-y-auto">
           {run.projects.map((project) => (

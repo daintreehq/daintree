@@ -146,7 +146,7 @@ function WhenToSleepChoice({
           checked={when === "idle"}
           onChange={() => onWhen("idle")}
           label="Sleep when agents are idle"
-          description="Waits until every agent is observed idle or at its prompt. An agent waiting on an approval or a question holds it open."
+          description="Waits until every agent is observed idle or waiting for input. An agent waiting on an approval or a question holds it open."
         />
         <div className={cn("flex items-start gap-2 px-3 pb-2.5", CHOICE_LABEL_INSET)}>
           <Checkbox

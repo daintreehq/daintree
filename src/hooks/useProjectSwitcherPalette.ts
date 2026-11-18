@@ -9,6 +9,8 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
+import { useProjectSleepWaitStore } from "@/store/projectSleepWaitStore";
 import { notify } from "@/lib/notify";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { classifyAssistantActivity } from "@/lib/projectAssistantActivity";
@@ -614,8 +616,13 @@ export function useProjectSwitcherPalette({
   // Every confirm the switcher raises sits in the modal layer above where the
   // switcher opens, so opening it under one would hand the palette focus and
   // Escape while the dialog on screen waits (#16919). The confirm is answered
-  // first.
+  // first. Sleep's and Restart's are the app-level sleep dialogs, and so is a
+  // Sleep waiting on its agents (#17882).
+  const sleepDialogOpen = useProjectSleepConfirmStore((s) => s.pendingConfirm !== null);
+  const sleepWaitOpen = useProjectSleepWaitStore((s) => s.run !== null);
   const isConfirming =
+    sleepDialogOpen ||
+    sleepWaitOpen ||
     projectMutations.stopConfirmProjectId !== null ||
     projectMutations.removeConfirmProject !== null ||
     scratchMutations.deleteScratchConfirm !== null ||
