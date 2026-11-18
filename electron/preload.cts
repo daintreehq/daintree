@@ -58,6 +58,7 @@ import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.
 import { buildDroppedFilePathsBinding } from "./utils/droppedFilePaths.js";
 import { captureInputBlockingSnapshot } from "./utils/inputBlockingSnapshot.js";
 import { buildGitFetchPreloadBindings } from "./ipc/handlers/gitFetch.preload.js";
+import { buildGitHunksPreloadBindings } from "./ipc/handlers/gitHunks.preload.js";
 import {
   buildFilesTrashPreloadBindings,
   buildGitDiscardPreloadBindings,
@@ -2247,6 +2248,8 @@ function buildElectronApi(): ElectronAPI {
       ...buildGitFetchPreloadBindings(_unwrappingInvoke),
 
       ...buildGitDiscardPreloadBindings(_unwrappingInvoke),
+
+      ...buildGitHunksPreloadBindings(_unwrappingInvoke),
 
       forcePushWithLease: (cwd: string, branchName: string, leaseSha: string) =>
         _unwrappingInvoke(CHANNELS.GIT_FORCE_PUSH_WITH_LEASE, { cwd, branchName, leaseSha }),

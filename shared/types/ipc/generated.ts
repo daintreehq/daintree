@@ -2417,6 +2417,14 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "git:stage-hunks": {
+    args: [payload: { cwd: string; filePath: string; hunks: string[] }];
+    result: import("./git.js").GitHunkStagingResult;
+  };
+  "git:unstage-hunks": {
+    args: [payload: { cwd: string; filePath: string; hunks: string[] }];
+    result: import("./git.js").GitHunkStagingResult;
+  };
   "global-env:get": {
     args: [];
     result: Record<string, string>;

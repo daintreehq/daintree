@@ -233,8 +233,10 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `git.retryAuthFetch` | Retry suspended fetches | safe | — |
 | `git.stageAll` | Stage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.stageFile` | Stage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.stageHunk` | Stage hunk | safe | `filePath`, `hunks`, `worktreeId?`, `worktreePath?` |
 | `git.unstageAll` | Unstage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.unstageFile` | Unstage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.unstageHunk` | Unstage hunk | safe | `filePath`, `hunks`, `worktreeId?`, `worktreePath?` |
 
 ## help
 

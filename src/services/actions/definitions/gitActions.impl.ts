@@ -39,7 +39,7 @@ import { projectPulseForAction } from "@shared/utils/pulseProjection";
 import { z } from "zod";
 import { mintRemoteOperationId } from "@/clients/operationsClient";
 import { runHostOperation } from "@/hooks/useHostConnection";
-import { fileMutationArgsSchema } from "./gitActionArgs";
+import { fileMutationArgsSchema, hunkStagingArgsSchema } from "./gitActionArgs";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value) || min, min), max);
@@ -478,6 +478,26 @@ export const gitActionRuns = {
   "git.unstageFile": async (args: unknown, ctx: ActionContext) => {
     const { filePath, ...location } = args as WorktreeLocationArgs & { filePath: string };
     await window.electron.git.unstageFile(requireWorktreePath(location, ctx), filePath);
+  },
+  "git.stageHunk": async (args: unknown, ctx: ActionContext) => {
+    const { filePath, hunks, ...location } = hunkStagingArgsSchema.parse(args);
+    const result = await window.electron.git.stageHunks({
+      cwd: requireWorktreePath(location, ctx),
+      filePath,
+      hunks,
+    });
+    if (result.status === "applied") await refreshWorktree(location, ctx);
+    return result;
+  },
+  "git.unstageHunk": async (args: unknown, ctx: ActionContext) => {
+    const { filePath, hunks, ...location } = hunkStagingArgsSchema.parse(args);
+    const result = await window.electron.git.unstageHunks({
+      cwd: requireWorktreePath(location, ctx),
+      filePath,
+      hunks,
+    });
+    if (result.status === "applied") await refreshWorktree(location, ctx);
+    return result;
   },
   "git.discardFileChanges": async (args: unknown, ctx: ActionContext) => {
     const { filePath, ...location } = fileMutationArgsSchema.parse(args);

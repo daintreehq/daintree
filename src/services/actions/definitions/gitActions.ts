@@ -16,7 +16,11 @@ import {
   GIT_PAGE_LIMIT_MAX,
 } from "@shared/config/gitReadLimits";
 import { z } from "zod";
-import { fileMutationArgsSchema } from "./gitActionArgs";
+import {
+  fileMutationArgsSchema,
+  hunkStagingArgsSchema,
+  hunkStagingResultSchema,
+} from "./gitActionArgs";
 import type { GitActionRunId } from "./gitActions.impl";
 import { notify } from "@/lib/notify";
 
@@ -289,6 +293,44 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     scope: "renderer",
     argsSchema: withWorktreeLocation({ filePath: z.string() }, { legacy: ["cwd"] }),
     run: (args: unknown, ctx: ActionContext) => runGitAction("git.unstageFile", args, ctx),
+  }));
+
+  // The hunk pair (#17331) writes only the index, like the file pair, and each
+  // is the other's inverse from the opposite side of the diff. Off the palette
+  // and the MCP surface: the hunks are lines a person read in the diff pane,
+  // which is the only place that has them, and agents stage with their own git.
+  actions.set("git.stageHunk", () => ({
+    id: "git.stageHunk",
+    title: "Stage hunk",
+    description:
+      "Stage hunks of one file's unstaged diff, as read. Refused as stale when those lines changed since, so nothing unseen is staged.",
+    category: "git",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    palette: { mode: "hidden" },
+    mcpVisibility: "hidden",
+    nonRepeatable: true,
+    argsSchema: hunkStagingArgsSchema,
+    resultSchema: hunkStagingResultSchema,
+    run: (args: unknown, ctx: ActionContext) => runGitAction("git.stageHunk", args, ctx),
+  }));
+
+  actions.set("git.unstageHunk", () => ({
+    id: "git.unstageHunk",
+    title: "Unstage hunk",
+    description:
+      "Unstage hunks of one file's staged diff, as read, leaving the working tree untouched. Refused as stale when those lines changed since.",
+    category: "git",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    palette: { mode: "hidden" },
+    mcpVisibility: "hidden",
+    nonRepeatable: true,
+    argsSchema: hunkStagingArgsSchema,
+    resultSchema: hunkStagingResultSchema,
+    run: (args: unknown, ctx: ActionContext) => runGitAction("git.unstageHunk", args, ctx),
   }));
 
   actions.set("git.discardFileChanges", () => ({

@@ -39,6 +39,7 @@ import { registerNotificationSoundsHandlers } from "./handlers/notificationSound
 import { registerMenuHandlers } from "./handlers/menu.js";
 import { registerFilesHandlers } from "./handlers/files.js";
 import { registerFileMutationHandlers } from "./handlers/fileMutation.js";
+import { registerGitHunkHandlers } from "./handlers/gitHunks.js";
 import { registerFileDocumentHandlers } from "./handlers/fileDocument.js";
 import { registerDiffMediaHandlers } from "./handlers/diffMedia.js";
 import { registerFileBrowserHandlers } from "./handlers/fileBrowser.js";
@@ -197,6 +198,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerTerminalHandlers(deps));
     register(() => registerFilesHandlers());
     register(() => registerFileMutationHandlers());
+    register(() => registerGitHunkHandlers());
     register(() => registerFileDocumentHandlers());
     register(() => registerDiffMediaHandlers());
     register(() => registerFileBrowserHandlers(deps));
