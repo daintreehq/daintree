@@ -18,8 +18,11 @@ export type HunkStagingDirection = "stage" | "unstage";
 const GIT_TIMEOUT_MS = 30_000;
 const SMALL_OUTPUT_BYTES = 64 * 1024;
 const REGULAR_INDEX_ENTRY = /^(100644|100755) [0-9a-f]+ 0\t/;
-// Object resolution as the pane's own diff read has it, replace refs included,
-// or a replaced HEAD would show one preimage there and another here.
+// The re-read resolves objects as the pane's own diff read does, replace refs
+// included, or a replaced HEAD would show one preimage there and another
+// here. The apply never does: it would take a replaced index blob as the
+// preimage and write the replacement's other lines into the index. Without
+// them, a hunk read off a replaced blob fails to apply and is refused.
 const AS_THE_PANE_READS = { honorReplaceObjects: true } as const;
 
 /**
@@ -56,7 +59,6 @@ async function readRegularIndexEntry(cwd: string, gitPath: string): Promise<stri
   const { stdout } = await runGitForBytes(cwd, ["ls-files", "-s", "-z", "--", gitPath], {
     timeoutMs: GIT_TIMEOUT_MS,
     maxStdoutBytes: SMALL_OUTPUT_BYTES,
-    ...AS_THE_PANE_READS,
   });
   const entries = stdout.toString("utf8").split("\0").filter(Boolean);
   if (entries.length !== 1) return null;
@@ -188,7 +190,6 @@ export function applyReadHunks(
           // A user's `apply.ignoreWhitespace` would let a hunk match lines
           // that differ from the ones it was checked against.
           config: [["apply.ignoreWhitespace", "no"]],
-          ...AS_THE_PANE_READS,
         }
       );
     } catch (error) {

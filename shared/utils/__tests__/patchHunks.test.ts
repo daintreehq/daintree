@@ -237,13 +237,15 @@ describe("hunksWithin", () => {
   });
 
   it("places a zero-count change after the line its header names", () => {
-    // `-40,0` sits between old lines 40 and 41: a range ending at 40 doesn't hold it.
-    expect(hunksWithin(patch, { oldStart: 38, oldLines: 3, newStart: 38, newLines: 2 })).toEqual(
-      []
-    );
-    expect(hunksWithin(patch, { oldStart: 39, oldLines: 3, newStart: 39, newLines: 3 })).toEqual([
+    // `-40,0` sits between old lines 40 and 41, so a rendered range opening on
+    // old line 41 holds it, and one opening on 42 doesn't. The new side holds
+    // the inserted line in both.
+    expect(hunksWithin(patch, { oldStart: 41, oldLines: 3, newStart: 40, newLines: 4 })).toEqual([
       2,
     ]);
+    expect(hunksWithin(patch, { oldStart: 42, oldLines: 3, newStart: 40, newLines: 4 })).toEqual(
+      []
+    );
   });
 
   it("maps a hunk merged by expanded context to every git hunk inside it", () => {

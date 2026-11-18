@@ -15,19 +15,17 @@ import { GIT_FILE_DIFF_MAX_BYTES } from "../../../shared/config/gitReadLimits.js
 import type { GitHunkStagingResult } from "../../../shared/types/ipc/git.js";
 import { GIT_HUNKS_METHOD_CHANNELS } from "./gitHunks.preload.js";
 
-/**
- * A worktree-relative path git could list: no root (a drive, a UNC share or a
- * leading separator of either kind), no climbing out, no NUL.
- */
+// A backslash is a separator, and so a root, only on Windows; elsewhere a
+// name may start with one.
+const ROOTED = process.platform === "win32" ? /^(?:[\\/]|[A-Za-z]:)/ : /^\//;
+
+/** A worktree-relative path git could list: no root, no climbing out, no NUL. */
 const relativeGitPath = z
   .string()
   .min(1)
   .refine(
     (value) =>
-      !value.includes("\0") &&
-      !/^[\\/]/.test(value) &&
-      !/^[A-Za-z]:/.test(value) &&
-      !value.split(/[\\/]+/).includes(".."),
+      !value.includes("\0") && !ROOTED.test(value) && !value.split(/[\\/]+/).includes(".."),
     "Invalid file path"
   );
 

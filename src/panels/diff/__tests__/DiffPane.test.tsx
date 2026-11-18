@@ -2897,18 +2897,23 @@ describe("DiffPane — hunk staging (#17331)", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Stage hunk" })[0]!);
     expect(await screen.findByText("Couldn't stage hunk")).toBeTruthy();
 
+    // A reload that read a different patch, still stageable.
     useDiffContentMock.mockReturnValue({
-      content: TWO_HUNKS,
+      content: TWO_HUNKS.replace("+Y", "+Z"),
       stale: false,
-      ignoreWhitespace: true,
+      ignoreWhitespace: false,
       retry: vi.fn(),
     });
     rerender(paneElement());
 
     expect(screen.queryByText("Couldn't stage hunk")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Stage hunk" })).toHaveLength(2);
   });
 
-  /** Clicks Stage hunk, moves the pane with `move`, then answers the write as stale. */
+  /**
+   * Clicks Stage hunk, moves the pane with `move`, answers the write as stale,
+   * then steps back: an answer for a target the pane had left is never kept.
+   */
   async function answerAfterMoving(move: () => void): Promise<void> {
     let answer!: (value: Awaited<ReturnType<Dispatch>>) => void;
     dispatchSpy = vi.spyOn(actionService, "dispatch").mockReturnValue(
@@ -2923,17 +2928,20 @@ describe("DiffPane — hunk staging (#17331)", () => {
     await act(async () => {
       answer({ ok: true, result: { status: "stale" } });
     });
+    expect(screen.queryByText("Hunk changed since this diff loaded")).toBeNull();
+
+    seedTwin("unstaged");
+    rerender(paneElement());
+    expect(screen.queryByText("Hunk changed since this diff loaded")).toBeNull();
   }
 
   it("reports nothing on the twin the pane stepped to before the answer came", async () => {
     seedTwin("unstaged");
     await answerAfterMoving(() => seedTwin("staged"));
-    expect(screen.queryByText("Hunk changed since this diff loaded")).toBeNull();
   });
 
   it("reports nothing on another file the pane stepped to before the answer came", async () => {
     seedTwin("unstaged");
     await answerAfterMoving(() => seedTwin("unstaged", TWO_HUNKS, "b.ts"));
-    expect(screen.queryByText("Hunk changed since this diff loaded")).toBeNull();
   });
 });

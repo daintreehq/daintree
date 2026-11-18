@@ -170,15 +170,19 @@ describe("applyReadHunks (real git)", () => {
     git(repo, "config", "diff.context", "0");
     write([...BASE.slice(0, 20), "inserted", ...BASE.slice(20)]);
     const [insertion] = readHunks("unstaged");
-    // The same insertion staged by someone else, just before the apply.
+    // The same insertion staged by someone else after the hunk was checked,
+    // just before the apply.
+    const ran: Array<string | undefined> = [];
     let listed = 0;
     onSpawn = (args) => {
+      ran.push(subcommand(args));
       if (subcommand(args) === "ls-files" && ++listed === 2) git(repo, "add", "f.txt");
     };
 
     const result = await applyReadHunks(repo, "f.txt", parseReadHunks([insertion!]), "stage");
 
     expect(result).toEqual({ status: "stale" });
+    expect(ran).toEqual(["ls-files", "diff", "ls-files"]);
     expect(indexBlob()).toBe(text([...BASE.slice(0, 20), "inserted", ...BASE.slice(20)]));
   });
 
@@ -273,6 +277,29 @@ describe("applyReadHunks (real git)", () => {
       status: "unsupported",
     });
     expect(indexBlob()).toBe(text(BASE));
+  });
+
+  it("reads through a replaced index blob as the pane does, but writes only the real blob's lines", async () => {
+    commit(BASE);
+    write(BOTH);
+    const real = git(repo, "rev-parse", ":f.txt").trim();
+    const replacement = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: repo,
+      env: GIT_ENV,
+      input: text([...BASE.slice(0, 9), "line 10 replaced", ...BASE.slice(10)]),
+      encoding: "utf8",
+    }).trim();
+    git(repo, "replace", real, replacement);
+    // The pane shows the replacement's line 10 as a hunk between the two edits.
+    const read = readHunks("unstaged");
+    expect(read).toHaveLength(3);
+
+    const result = await applyReadHunks(repo, "f.txt", parseReadHunks([read[2]!]), "stage");
+
+    expect(result).toEqual({ status: "applied" });
+    expect(git(repo, "--no-replace-objects", "show", ":f.txt")).toBe(
+      text([...BASE.slice(0, 25), "line 26 changed", ...BASE.slice(26)])
+    );
   });
 
   it("refuses a hunk read with a replacement character, which could stand for other bytes", async () => {
