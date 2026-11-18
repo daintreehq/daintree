@@ -2935,6 +2935,22 @@ describe("DiffPane — hunk staging (#17331)", () => {
     expect(screen.queryByText("Hunk changed since this diff loaded")).toBeNull();
   }
 
+  it("keeps a refusal's notice on the diff it was about, not the twin the pane steps to", async () => {
+    seedTwin("unstaged");
+    stubDispatch({ ok: true, result: { status: "stale" } });
+    const { rerender } = renderPane();
+    fireEvent.click(screen.getAllByRole("button", { name: "Stage hunk" })[0]!);
+    expect(await screen.findByText("Hunk changed since this diff loaded")).toBeTruthy();
+
+    seedTwin("staged");
+    rerender(paneElement());
+    expect(screen.queryByText("Hunk changed since this diff loaded")).toBeNull();
+
+    seedTwin("unstaged");
+    rerender(paneElement());
+    expect(screen.getByText("Hunk changed since this diff loaded")).toBeTruthy();
+  });
+
   it("reports nothing on the twin the pane stepped to before the answer came", async () => {
     seedTwin("unstaged");
     await answerAfterMoving(() => seedTwin("staged"));

@@ -18,12 +18,6 @@ export type HunkStagingDirection = "stage" | "unstage";
 const GIT_TIMEOUT_MS = 30_000;
 const SMALL_OUTPUT_BYTES = 64 * 1024;
 const REGULAR_INDEX_ENTRY = /^(100644|100755) [0-9a-f]+ 0\t/;
-// The re-read resolves objects as the pane's own diff read does, replace refs
-// included, or a replaced HEAD would show one preimage there and another
-// here. The apply never does: it would take a replaced index blob as the
-// preimage and write the replacement's other lines into the index. Without
-// them, a hunk read off a replaced blob fails to apply and is refused.
-const AS_THE_PANE_READS = { honorReplaceObjects: true } as const;
 
 /**
  * The path git knows a file by. A backslash is a separator only on Windows;
@@ -73,7 +67,11 @@ async function readRegularIndexEntry(cwd: string, gitPath: string): Promise<stri
  * `diff.noprefix` or `diff.mnemonicPrefix` can't change how `git apply` reads
  * the paths. Context width, algorithm and the rest of the user's diff config
  * stay as they are: they decide where git's hunks start and end, and the
- * hunks have to come out the same as the ones the pane showed. Null when the
+ * hunks have to come out the same as the ones the pane showed. Objects are
+ * read as they are, never through replace refs (`runGitForBytes`), as the
+ * apply reads them: a hunk the pane saw through a replacement then matches only
+ * where the real object agrees, and is refused anywhere else rather than
+ * placed by lines the index doesn't hold. Null when the
  * output isn't UTF-8: a lossy decode could make two different lines compare
  * equal, and would write the replacement characters into the index.
  */
@@ -96,11 +94,7 @@ async function readSideDiff(
       "--",
       gitPath,
     ],
-    {
-      timeoutMs: GIT_TIMEOUT_MS,
-      maxStdoutBytes: GIT_FILE_DIFF_MAX_PATCH_BYTES,
-      ...AS_THE_PANE_READS,
-    }
+    { timeoutMs: GIT_TIMEOUT_MS, maxStdoutBytes: GIT_FILE_DIFF_MAX_PATCH_BYTES }
   );
   try {
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(stdout);

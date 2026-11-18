@@ -279,7 +279,7 @@ describe("applyReadHunks (real git)", () => {
     expect(indexBlob()).toBe(text(BASE));
   });
 
-  it("reads through a replaced index blob as the pane does, but writes only the real blob's lines", async () => {
+  it("stages a hunk read through a replaced index blob only where the real blob agrees", async () => {
     commit(BASE);
     write(BOTH);
     const real = git(repo, "rev-parse", ":f.txt").trim();
@@ -290,13 +290,17 @@ describe("applyReadHunks (real git)", () => {
       encoding: "utf8",
     }).trim();
     git(repo, "replace", real, replacement);
-    // The pane shows the replacement's line 10 as a hunk between the two edits.
+    // Plain git, as the pane reads, shows the replacement's line 10 as a hunk
+    // between the two edits; the index holds no such line.
     const read = readHunks("unstaged");
     expect(read).toHaveLength(3);
 
-    const result = await applyReadHunks(repo, "f.txt", parseReadHunks([read[2]!]), "stage");
-
-    expect(result).toEqual({ status: "applied" });
+    expect(await applyReadHunks(repo, "f.txt", parseReadHunks([read[1]!]), "stage")).toEqual({
+      status: "stale",
+    });
+    expect(await applyReadHunks(repo, "f.txt", parseReadHunks([read[2]!]), "stage")).toEqual({
+      status: "applied",
+    });
     expect(git(repo, "--no-replace-objects", "show", ":f.txt")).toBe(
       text([...BASE.slice(0, 25), "line 26 changed", ...BASE.slice(26)])
     );
