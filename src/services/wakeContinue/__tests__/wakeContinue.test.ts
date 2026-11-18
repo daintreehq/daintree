@@ -247,7 +247,7 @@ describe("sendWakeContinueNotes", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(deliveries.map((d) => targetOf(d.options))).toEqual(["a", "b", "c", "d"]);
     const a = useWakeContinueStore.getState().offer!.entries.find((e) => e.terminalId === "a");
-    expect(a?.delivery?.status).toBe("queued");
+    expect(a?.delivery?.status).toBe("starting");
 
     // Back at a prompt that has held: it goes again.
     setPane("a", { lastStateChange: 50 });
@@ -313,7 +313,7 @@ describe("sendWakeContinueNotes", () => {
       status: "failed",
       message: "Agent a didn't reach its prompt",
     });
-    expect(entries.find((e) => e.terminalId === "b")?.delivery?.status).toBe("queued");
+    expect(entries.find((e) => e.terminalId === "b")?.delivery?.status).toBe("starting");
   });
 
   it("refuses a pane written in, sent to, or restarted after it resumed", async () => {

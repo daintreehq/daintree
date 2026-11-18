@@ -1,12 +1,15 @@
 import { create } from "zustand";
 import type { DeliveryState } from "@/services/agentRequests/deliveryState";
 import type { WakeCandidate } from "@/services/wakeContinue/wakeCandidate";
+import type { WakeSkipReason } from "@/services/wakeContinue/wakeContinue";
 
 export interface WakeContinueEntry extends WakeCandidate {
   /** The pane's last composer send when the offer was made; a later one is the user's. */
   composerSendSeq?: number;
   /** Where its note got to, once sending started; absent while it waits its turn. */
   delivery?: DeliveryState;
+  /** Why sending left it out, as read when sending started. */
+  skippedAs?: WakeSkipReason;
 }
 
 export interface WakeContinueOffer {
@@ -24,6 +27,7 @@ interface WakeContinueState {
   setDialogOpen: (open: boolean) => void;
   setPhase: (offerId: string, phase: WakeContinueOffer["phase"]) => void;
   setDelivery: (offerId: string, terminalId: string, delivery: DeliveryState) => void;
+  markSkipped: (offerId: string, skipped: Readonly<Record<string, WakeSkipReason>>) => void;
 }
 
 /**
@@ -46,6 +50,20 @@ export const useWakeContinueStore = create<WakeContinueState>((set) => ({
           ...state.offer,
           entries: state.offer.entries.map((entry) =>
             entry.terminalId === terminalId ? { ...entry, delivery } : entry
+          ),
+        },
+      };
+    }),
+  markSkipped: (offerId, skipped) =>
+    set((state) => {
+      if (state.offer?.id !== offerId) return state;
+      return {
+        offer: {
+          ...state.offer,
+          entries: state.offer.entries.map((entry) =>
+            Object.hasOwn(skipped, entry.terminalId)
+              ? { ...entry, skippedAs: skipped[entry.terminalId] }
+              : entry
           ),
         },
       };

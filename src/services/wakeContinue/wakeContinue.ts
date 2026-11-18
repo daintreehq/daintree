@@ -80,6 +80,41 @@ export function liveWakeOutcome(
 }
 
 /**
+ * Why an offered pane won't get the note: its restore outcome, or something
+ * done to it since that sending would refuse — a composer message, or a draft
+ * waiting in its input. Raw typing in the pty is only readable at delivery.
+ */
+export type WakeSkipReason = Exclude<WakeLiveOutcome, "resumed"> | "messaged" | "drafted";
+export type WakeRowOutcome = WakeLiveOutcome | "messaged" | "drafted";
+
+/**
+ * The one reading the dialog's preview, its count and sending all share. The
+ * composer's last send and the pane's draft come in as arguments, so a caller
+ * rendering it re-reads when either changes.
+ */
+export function wakeEntryOutcome(
+  entry: Pick<WakeContinueEntry, "restoredAt" | "outcome" | "heldSessionId" | "composerSendSeq">,
+  panel: PanelInstance | undefined,
+  lastSendSeq: number | undefined,
+  draft: string
+): WakeRowOutcome {
+  const live = liveWakeOutcome(entry, panel);
+  if (live !== "resumed") return live;
+  if (lastSendSeq !== entry.composerSendSeq) return "messaged";
+  if (draft.trim() !== "") return "drafted";
+  return "resumed";
+}
+
+function currentWakeOutcome(entry: WakeContinueEntry, projectId: string): WakeRowOutcome {
+  return wakeEntryOutcome(
+    entry,
+    usePanelStore.getState().panelsById[entry.terminalId],
+    getLastComposerSend(entry.terminalId)?.seq,
+    useTerminalInputStore.getState().getDraftInput(entry.terminalId, projectId)
+  );
+}
+
+/**
  * Offer a continue note for the agents a restore just relaunched, replacing
  * any offer an earlier restore of this view made. Nothing is sent until the
  * user asks. A restore with nothing that can take a note (no agent resumed,
@@ -171,9 +206,19 @@ export async function sendWakeContinueNotes(note: string): Promise<void> {
   const setDelivery = useWakeContinueStore.getState().setDelivery;
 
   const startedAt = Date.now();
-  const waiting: Waiting[] = offer.entries
-    .filter((entry) => liveWakeOutcome(entry, panelOf(entry.terminalId)) === "resumed")
-    .map((entry) => ({ entry, deadline: startedAt + WAKE_CONTINUE_READY_TIMEOUT_MS }));
+  // The panes the dialog counted, by the same reading; the rest keep the
+  // reason they were left out, so the report doesn't drift as panes change.
+  const skipped: Record<string, WakeSkipReason> = {};
+  const waiting: Waiting[] = [];
+  for (const entry of offer.entries) {
+    const outcome = currentWakeOutcome(entry, offer.projectId);
+    if (outcome === "resumed") {
+      waiting.push({ entry, deadline: startedAt + WAKE_CONTINUE_READY_TIMEOUT_MS });
+    } else {
+      skipped[entry.terminalId] = outcome;
+    }
+  }
+  store.markSkipped(offer.id, skipped);
   const slots = Array.from({ length: WAKE_CONTINUE_MAX_IN_FLIGHT }, () => ({
     busy: false,
     freeAt: 0,
@@ -196,7 +241,17 @@ export async function sendWakeContinueNotes(note: string): Promise<void> {
       }
       if (verdict === "admit") {
         const slot = slots.find((candidate) => !candidate.busy && candidate.freeAt <= now);
-        if (!slot) continue;
+        if (!slot) {
+          // At its prompt with every slot busy or cooling: waiting its turn, not its prompt.
+          const shown = useWakeContinueStore
+            .getState()
+            .offer?.entries.find((entry) => entry.terminalId === item.entry.terminalId)
+            ?.delivery?.status;
+          if (shown !== "queued") {
+            setDelivery(offer.id, item.entry.terminalId, { status: "queued" });
+          }
+          continue;
+        }
         waiting.splice(waiting.indexOf(item), 1);
         const panel = panelOf(item.entry.terminalId);
         const incarnation = panel && isPtyPanel(panel) ? panel.agentIncarnation : undefined;
@@ -250,7 +305,7 @@ function assess(
   item: Waiting,
   panel: PanelInstance | undefined,
   now: number
-): "admit" | { wait: "queued" | "needs-you" } | { failed: string } {
+): "admit" | { wait: "starting" | "needs-you" } | { failed: string } {
   const { entry } = item;
   const outcome = liveWakeOutcome(entry, panel);
   if (outcome === "closed") return { failed: `${entry.title} was closed — no note sent` };
@@ -273,8 +328,16 @@ function assess(
   } else {
     item.promptSince = undefined;
   }
-  if (now >= item.deadline) return { failed: `${entry.title} didn't reach its prompt` };
-  return { wait: readiness === "needs-you" ? "needs-you" : "queued" };
+  if (now >= item.deadline) {
+    // Keep what held it up: a pane still asking the user is worth opening.
+    return {
+      failed:
+        readiness === "needs-you"
+          ? `${entry.title} was still waiting on you — no note sent`
+          : `${entry.title} didn't reach its prompt`,
+    };
+  }
+  return { wait: readiness === "needs-you" ? "needs-you" : "starting" };
 }
 
 /** What the scheduler saw when it let a note go: the process, and the prompt it timed. */
