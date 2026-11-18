@@ -1538,4 +1538,86 @@ describe("ProjectPulseService", () => {
       }
     );
   });
+
+  describe("heatmap past 20,000 commits in the window (#17455)", () => {
+    // 2,000 commits on each of the last ten days plus one 100 days ago: 20,001
+    // in a 180-day window. The stub ignores --since, so a row 200 days back
+    // reaches the parser and checks that rows outside the grid stay out of the
+    // totals. Newest first, as `git log` prints them, and the stub applies
+    // --max-count= so a ceiling cuts the read where git would.
+    function buildBusyRepo() {
+      vi.setSystemTime(new Date(2025, 0, 15, 12, 0, 0));
+      const at = (daysAgo: number, second: number) =>
+        Math.floor(new Date(2025, 0, 15 - daysAgo, 10, 0, second).getTime() / 1000);
+      const timestamps: number[] = [];
+      for (let day = 0; day < 10; day++) {
+        for (let i = 0; i < 2_000; i++) timestamps.push(at(day, 2_000 - i));
+      }
+      timestamps.push(at(100, 0));
+      timestamps.push(at(200, 0));
+
+      const raw = vi.fn(async (args: string[]) => {
+        const cmd = args[0];
+        if (cmd === "rev-parse" && args[1] === "--verify") return "deadbeef\n";
+        if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
+        if (cmd === "rev-parse" && args.includes("--is-shallow-repository")) return "false\n";
+        if (cmd === "rev-list" && args.includes("--max-parents=0")) {
+          return `${Math.floor(new Date(2020, 0, 1).getTime() / 1000)} rootsha\n`;
+        }
+        if (cmd === "log") {
+          const maxArg = args.find((a) => a.startsWith("--max-count="));
+          const max = maxArg ? Number(maxArg.slice("--max-count=".length)) : Infinity;
+          return timestamps.slice(0, max).join("\n");
+        }
+        return "";
+      });
+      return raw;
+    }
+
+    async function loadPulse(raw: (args: string[]) => Promise<string>) {
+      vi.doMock("../../utils/hardenedGit.js", () => ({
+        createHardenedGit: () => createGitStub(raw),
+      }));
+      const { ProjectPulseService } = await import("../ProjectPulseService.js");
+      return new ProjectPulseService().getPulse({
+        worktreePath: "/repo",
+        worktreeId: "wt-busy",
+        mainBranch: "main",
+        rangeDays: 180 as const,
+        includeDelta: false,
+        includeRecentCommits: false,
+      });
+    }
+
+    it("counts every commit in the window, not the first 20,000", async () => {
+      const pulse = await loadPulse(buildBusyRepo());
+
+      expect(pulse.commitsInRange).toBe(20_001);
+      expect(pulse.activeDays).toBe(11);
+      expect(pulse.heatmap.reduce((sum, cell) => sum + cell.count, 0)).toBe(20_001);
+    });
+
+    it("shows the oldest busy day as active rather than quiet", async () => {
+      const pulse = await loadPulse(buildBusyRepo());
+
+      const counts = pulse.heatmap.map((cell) => cell.count);
+      // 179 days back is the first cell; the old commit sits 100 days back.
+      expect(counts[179 - 100]).toBe(1);
+      expect(counts.slice(-10)).toEqual(Array(10).fill(2_000));
+      expect(counts.slice(179 - 99, -10).every((count) => count === 0)).toBe(true);
+    });
+
+    it("reads the window without a commit ceiling", async () => {
+      // 20,001 commits only rule out a ceiling at 20,000; any fixed ceiling
+      // leaves a busier window undercounted the same way.
+      const raw = buildBusyRepo();
+      await loadPulse(raw);
+
+      const windowReads = raw.mock.calls
+        .map(([args]) => args)
+        .filter((args) => args[0] === "log" && args.some((a) => a.startsWith("--since=")));
+      expect(windowReads).toHaveLength(1);
+      expect(windowReads[0].some((a) => /^(--max-count\b|-n|-\d)/.test(a))).toBe(false);
+    });
+  });
 });
