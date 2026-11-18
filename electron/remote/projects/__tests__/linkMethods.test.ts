@@ -66,9 +66,9 @@ describe("a project's display identity on the link", () => {
 
 describe("a directory listing request on the link", () => {
   it("carries the picker's metadata mode, and needs none from an older Shell", () => {
-    expect(ListDirectorySchema.parse({ path: "/home/greg", metadata: "picker" }).metadata).toBe(
-      "picker"
-    );
+    for (const metadata of ["picker", "full"] as const) {
+      expect(ListDirectorySchema.parse({ path: "/home/greg", metadata }).metadata).toBe(metadata);
+    }
     expect(ListDirectorySchema.parse({ path: "/home/greg", showHidden: true })).toEqual({
       path: "/home/greg",
       showHidden: true,
