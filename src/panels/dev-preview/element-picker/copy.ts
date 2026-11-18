@@ -93,6 +93,10 @@ export const WORKSPACE_FAILURE_COPY: Record<WorkspaceFailure, { strip: string; t
     strip: "The dev server runs from another worktree",
     title: "The dev server runs from another worktree",
   },
+  "served-elsewhere": {
+    strip: "This page is served from another worktree",
+    title: "This page is served from another worktree",
+  },
 };
 
 /** The modes, as every surface and message says them: the control's own labels. */
@@ -101,16 +105,16 @@ export const BROWSE_COPY = "Browsing — switch to Inspect to pick an element";
 export const INSPECT_IDLE_COPY = "Click an element to ask an agent about it";
 
 export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
-  requested: "Disconnected from the dev preview",
-  "guest-destroyed": "The dev preview was closed",
-  rebound: "Another Element Picker took over this preview",
+  requested: "Disconnected from the page",
+  "guest-destroyed": "The page was closed",
+  rebound: "Another Element Picker took over this page",
   "install-failed": "Couldn't start the Element Picker inside the page",
-  "debugger-detached": "Disconnected — DevTools may have taken over the preview",
+  "debugger-detached": "Disconnected — DevTools may have taken over the page",
   "guest-flooding": "Disconnected — the page sent too many invalid messages",
   // Unreachable in practice: the view this would be addressed to is the one
   // that went away. Present because the reason is part of the wire contract.
-  "subscriber-destroyed": "Disconnected from the dev preview",
-  "host-shutdown": "Disconnected from the dev preview",
+  "subscriber-destroyed": "Disconnected from the page",
+  "host-shutdown": "Disconnected from the page",
 };
 
 /**

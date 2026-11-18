@@ -8,7 +8,9 @@ import { readDevServerCommand } from "@/utils/devServerCommand";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { isDevPreviewPanel } from "@shared/types/panel";
+import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
+import { isPickablePageUrl } from "@shared/elementPicker/originPolicy";
+import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import type {
   DevPreviewToolContext,
@@ -44,13 +46,19 @@ function firstAbsolutePath(...candidates: Array<string | undefined>): string | u
  */
 function devPreviewToolContext(panelId: string, ctx: ActionContext): DevPreviewToolContext {
   const panel = usePanelStore.getState().panelsById[panelId];
-  const worktreeId = (panel && isDevPreviewPanel(panel) ? panel.worktreeId : undefined) ?? null;
+  const hosts = panel !== undefined && (isDevPreviewPanel(panel) || isBrowserPanel(panel));
+  const worktreeId = (hosts ? panel.worktreeId : undefined) ?? null;
   return {
     panelId,
     projectId: ctx.projectId ?? null,
     worktreeId,
     worktreePath: (worktreeId ? readActiveWorktreePath(worktreeId) : undefined) ?? null,
-    url: (panel && isDevPreviewPanel(panel) ? (panel.browserUrl ?? panel.devServerUrl) : "") ?? "",
+    url:
+      (panel && isDevPreviewPanel(panel)
+        ? (panel.browserUrl ?? panel.devServerUrl)
+        : panel && isBrowserPanel(panel)
+          ? panel.browserUrl
+          : "") ?? "",
     isWebviewReady: false,
   };
 }
@@ -83,16 +91,55 @@ async function refuseUnlessToolApplies(
 }
 
 /**
+ * Switch a tool on or off in a browser panel: only ever the one named or
+ * focused, since a browser is somewhere the user went, not something a command
+ * opens. Switching on needs the page the panel last recorded to be one the
+ * picker installs into; switching off is always allowed.
+ */
+async function toggleBrowserTool(
+  tool: DevPreviewToolDefinition,
+  panelId: string,
+  ctx: ActionContext,
+  source: NonNullable<ActionContext["dispatchSource"]>
+): Promise<{ panelId: string; active: boolean }> {
+  const store = useDevPreviewToolStore.getState();
+  if (store.activeByPanel[panelId] !== tool.id) {
+    const context = devPreviewToolContext(panelId, ctx);
+    if (!isPickablePageUrl(context.url)) {
+      throw new Error(
+        `${tool.label} works only on a page at a local address, and this browser panel isn't showing one`
+      );
+    }
+    // A worktree-less browser (a global one in the dock) has no checkout to
+    // trace into and no agents of its own to hand a selection to.
+    if (context.worktreeId === null) {
+      throw new Error(`${tool.label} needs a browser panel that belongs to a worktree`);
+    }
+    await refuseUnlessToolApplies(tool, panelId, ctx);
+    seedDevPreviewToolContext(devPreviewToolContext(panelId, ctx));
+  }
+  useDevPreviewToolStore.getState().toggle(panelId, tool.id);
+  const active = useDevPreviewToolStore.getState().activeByPanel[panelId] === tool.id;
+  if (active) void actionService.dispatch("panel.focus", { panelId }, { source });
+  return { panelId, active };
+}
+
+/**
  * Switch a tool on or off in a dev preview of the active worktree — the one
  * named, else the focused one, else the first open one — opening a preview when
  * the worktree has none. Returns the panel it acted on and what the store now
  * says, never what was asked.
+ *
+ * With `browserPanels`, a browser panel counts too, ahead of any preview: the
+ * one named, or the focused one, since the page in front of the user is the
+ * one they mean.
  */
 export async function toggleDevPreviewTool(
   toolId: string,
   requestedPanelId: string | undefined,
   ctx: ActionContext,
-  focusedId: string | null
+  focusedId: string | null,
+  options: { browserPanels?: boolean } = {}
 ): Promise<{ panelId: string | null; active: boolean }> {
   // A command can switch a tool on before any preview pane has mounted —
   // the pane is what normally starts the session manager — and the tool
@@ -107,21 +154,50 @@ export async function toggleDevPreviewTool(
     const panel = panels.panelsById[id];
     return panel !== undefined && isDevPreviewPanel(panel) && panel.location !== "trash";
   };
-  const inWorktree = (id: string): boolean =>
-    isLivePreview(id) &&
-    (ctx.activeWorktreeId === undefined ||
-      panels.panelsById[id]?.worktreeId === ctx.activeWorktreeId);
+  const isLiveBrowser = (id: string): boolean => {
+    if (options.browserPanels !== true) return false;
+    const panel = panels.panelsById[id];
+    return panel !== undefined && isBrowserPanel(panel) && panel.location !== "trash";
+  };
+  const inActiveWorktree = (id: string): boolean =>
+    ctx.activeWorktreeId === undefined ||
+    panels.panelsById[id]?.worktreeId === ctx.activeWorktreeId;
+  const inWorktree = (id: string): boolean => isLivePreview(id) && inActiveWorktree(id);
+  // Nested dispatches keep the caller's source, so an agent's call isn't
+  // recorded as the user's last action.
+  const source = ctx.dispatchSource ?? "user";
+  if (requestedPanelId !== undefined && isLiveBrowser(requestedPanelId)) {
+    return toggleBrowserTool(tool, requestedPanelId, ctx, source);
+  }
   if (requestedPanelId !== undefined && !isLivePreview(requestedPanelId)) {
-    throw new Error("That panel is not an open dev preview");
+    throw new Error(
+      options.browserPanels === true
+        ? "That panel is not an open dev preview or browser"
+        : "That panel is not an open dev preview"
+    );
+  }
+  // The dock's own rule for a focused browser: a global one in the dock is
+  // visible in every worktree, so it is the one in front of the user.
+  const focusedBrowser = focusedId ? panels.panelsById[focusedId] : undefined;
+  if (
+    requestedPanelId === undefined &&
+    focusedId &&
+    focusedBrowser &&
+    isLiveBrowser(focusedId) &&
+    (ctx.activeWorktreeId === undefined ||
+      panelMatchesWorktreeScope(
+        focusedBrowser.worktreeId,
+        ctx.activeWorktreeId,
+        focusedBrowser.location === "dock" ? "dock" : "grid"
+      ))
+  ) {
+    return toggleBrowserTool(tool, focusedId, ctx, source);
   }
   let panelId =
     requestedPanelId ??
     (focusedId && inWorktree(focusedId) ? focusedId : undefined) ??
     panels.panelIds.find(inWorktree);
   const store = useDevPreviewToolStore.getState();
-  // Nested dispatches keep the caller's source, so an agent's call isn't
-  // recorded as the user's last action.
-  const source = ctx.dispatchSource ?? "user";
   if (!panelId) {
     // Same context as this dispatch, so the preview opens in the worktree
     // the caller targeted rather than whichever one is live by then.

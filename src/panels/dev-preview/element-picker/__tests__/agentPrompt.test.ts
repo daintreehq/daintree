@@ -797,3 +797,19 @@ describe("page-made values in a source claim", () => {
     expect(data(sourceLines(prompt)[0]!)[0]).toBe(`src/${hostile}.tsx:2:3`);
   });
 });
+
+describe("a page another worktree serves", () => {
+  it("names that worktree beside this one, and only when main saw it", () => {
+    const elements = [{ observation: observation({ sourceCandidates: [] }), resolutions: [] }];
+    const served = buildAgentTaskPrompt(input(elements, { servedFrom: "/repo/.worktrees/b" }))
+      .split("\n")
+      .map((line) => line.trimStart());
+    const worktree = served.indexOf("- Worktree: /repo");
+    expect(worktree).toBeGreaterThan(-1);
+    expect(served[worktree + 1]).toMatch(/^- Served from: \/repo\/\.worktrees\/b — /);
+
+    for (const servedFrom of [null, undefined]) {
+      expect(buildAgentTaskPrompt(input(elements, { servedFrom }))).not.toContain("Served from");
+    }
+  });
+});

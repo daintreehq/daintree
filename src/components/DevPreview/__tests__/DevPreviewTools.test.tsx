@@ -318,6 +318,69 @@ describe("dev preview tool availability", () => {
   });
 });
 
+describe("a host that offers some of the tools, on some pages", () => {
+  function OtherButton({ active, onToggle }: DevPreviewToolButtonProps) {
+    return (
+      <button type="button" aria-pressed={active} onClick={onToggle}>
+        Other
+      </button>
+    );
+  }
+
+  function pickerOnly(): DevPreviewToolDefinition[] {
+    return (builtIn.tools as DevPreviewToolDefinition[]).filter((tool) => tool.id === TOOL);
+  }
+
+  function Browser({ pageQualifies }: { pageQualifies: boolean }) {
+    const props = { ...host, tools: pickerOnly(), pageQualifies };
+    return (
+      <>
+        <DevPreviewToolButtons {...props} />
+        <DevPreviewToolToolbar {...props} />
+        <DevPreviewToolDrawer {...props} />
+      </>
+    );
+  }
+
+  beforeEach(() => {
+    register({ id: "other", label: "Other", Button: OtherButton, Toolbar, Drawer });
+  });
+
+  it("offers only the tools it hosts", () => {
+    render(<Browser pageQualifies />);
+    expect(screen.getByRole("button", { name: "Picker" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Other" })).toBeNull();
+  });
+
+  it("mounts no surface for a tool it does not host, even one the store says is on", () => {
+    useDevPreviewToolStore.setState({ activeByPanel: { [host.panelId]: "other" } });
+    render(<Browser pageQualifies />);
+    expect(screen.queryByRole("toolbar", { name: "Picker strip" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Picker drawer" })).toBeNull();
+  });
+
+  it("hides a toggle that is off on a page that doesn't qualify", () => {
+    render(<Browser pageQualifies={false} />);
+    expect(screen.queryByRole("button", { name: "Picker" })).toBeNull();
+  });
+
+  it("keeps a tool that is on reachable, with its surfaces, after the page stops qualifying", () => {
+    const view = render(<Browser pageQualifies />);
+    fireEvent.click(screen.getByRole("button", { name: "Picker" }));
+    view.rerender(<Browser pageQualifies={false} />);
+    expect(screen.getByRole("button", { name: "Picker" }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(screen.getByRole("toolbar", { name: "Picker strip" })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "Picker drawer" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Picker" }));
+    expect(screen.queryByRole("button", { name: "Picker" })).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "Picker strip" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Picker drawer" })).toBeNull();
+  });
+});
+
 describe("dev preview tool drawer chrome", () => {
   beforeEach(() => {
     useDevPreviewToolStore.getState().setDrawerWidth(360);
