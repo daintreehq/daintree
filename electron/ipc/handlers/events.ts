@@ -126,6 +126,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:tasks-changed": "external",
   "plugin:panel-menus-changed": "external",
   "plugin:provenance-changed": "external",
+  // The catalog sources handlers broadcast it themselves (#17434).
+  "plugin:catalog-sources-changed": "external",
   // PluginService sends this itself, scoped like runtime status below.
   "plugin:settings-changed": "external",
   // PluginService sends this itself, scoped to the owning project for a

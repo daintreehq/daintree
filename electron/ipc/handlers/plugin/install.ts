@@ -22,7 +22,10 @@ import {
   isPrivateOrLoopbackHostname,
   isRequestablePluginVersion,
 } from "../../../schemas/pluginIdentifiers.js";
-import { describePluginInstallSource } from "../../../../shared/utils/pluginInstallSource.js";
+import {
+  describeCatalogSource,
+  describePluginInstallSource,
+} from "../../../../shared/utils/pluginInstallSource.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { displaySafeText } from "../../../../shared/utils/displaySafeText.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
@@ -48,10 +51,14 @@ import type {
   PluginCatalogInstallRequest,
   PluginCatalogProvenance,
   PluginCatalogBrowseResult,
+  PluginCatalogBrowseRequest,
+  PluginCatalogsBrowseResult,
+  PluginCatalogSourceBrowse,
 } from "../../../../shared/types/plugin.js";
 import type { PluginCatalogEntry } from "../../../services/plugin/pluginCatalogSchema.js";
 import type { IpcContext } from "../../types.js";
 import { getPluginService } from "./service.js";
+import { isRemoteCaller } from "./senderScope.js";
 
 export async function handleList(): Promise<LoadedPluginInfo[]> {
   // Same init-race guard as `handleToolbarButtons` (#9285): a mount-time pull
@@ -360,7 +367,7 @@ export async function handlePreviewFromCatalogOp(
   jobId?: string
 ): Promise<PluginUrlInstallPreviewResult> {
   return withInstallJob(ctx, jobId, catalogJobLabel(request), (id) =>
-    handlePreviewFromCatalog(request, id)
+    handlePreviewFromCatalog(request, id, catalogAuthority(ctx))
   );
 }
 
@@ -371,7 +378,7 @@ export async function handleInstallFromCatalogOp(
   jobId?: string
 ): Promise<PluginInstallResult> {
   return withInstallJob(ctx, jobId, catalogJobLabel(request), (id) =>
-    handleInstallFromCatalog(request, id)
+    handleInstallFromCatalog(request, id, catalogAuthority(ctx))
   );
 }
 
@@ -742,23 +749,64 @@ async function previewArchive(
 type CatalogFailure = Extract<PluginInstallResult, { status: "failed" }>;
 
 /**
+ * Who checks that a request's catalog is one the person added (#17434). The
+ * list lives on the machine they sit at: a local window's is this machine's
+ * own, and a remote window's machine checked its list before forwarding the
+ * call here (`electron/remote/hybrid/splits.ts`), since this host's settings
+ * say nothing about whom that person trusts.
+ */
+export type CatalogAuthority = "local" | "forwarded";
+
+function catalogAuthority(ctx: IpcContext): CatalogAuthority {
+  return isRemoteCaller(ctx) ? "forwarded" : "local";
+}
+
+/** Whether `sourceUrl` (canonical; undefined is Daintree's own) may be read for `authority`. */
+async function isAuthorizedCatalog(
+  sourceUrl: string | undefined,
+  authority: CatalogAuthority
+): Promise<boolean> {
+  if (sourceUrl === undefined || authority === "forwarded") return true;
+  const { isAddedPluginCatalogSource } =
+    await import("../../../services/plugin/pluginCatalogSources.js");
+  return isAddedPluginCatalogSource(sourceUrl);
+}
+
+function unknownCatalog(sourceUrl: string): PluginDownloadFailure {
+  return downloadFailed(
+    "catalog_source_unknown",
+    `${describeCatalogSource(sourceUrl)} isn't one of your plugin catalogs, so nothing was installed. Add it in Settings > Plugins if you trust whoever curates it, then try again.`
+  );
+}
+
+/** How a catalog is named at the start of a refusal. */
+function catalogLabel(sourceUrl: string | undefined): string {
+  return sourceUrl === undefined
+    ? "The plugin catalog"
+    : `The catalog at ${describeCatalogSource(sourceUrl)}`;
+}
+
+/**
  * Find a release in a catalog fetched for this call, the way every catalog
  * install reads it: a cached copy is never used, and each way it can't be
- * found fails closed with its own reason (#16779).
+ * found fails closed with its own reason (#16779). `sourceUrl` names the
+ * catalog (#17434); undefined is Daintree's own.
  */
 async function resolveCatalogRelease(
   pluginId: string,
-  version: string | undefined
+  version: string | undefined,
+  sourceUrl: string | undefined
 ): Promise<{ ok: true; entry: PluginCatalogEntry } | { ok: false; failure: CatalogFailure }> {
   // Lazy: the catalog client and its schema cost nothing until a catalog
   // install asks for them.
   const { getPluginCatalogService } =
     await import("../../../services/plugin/PluginCatalogService.js");
-  const lookup = await getPluginCatalogService().lookup(pluginId, version);
+  const lookup = await getPluginCatalogService(sourceUrl).lookup(pluginId, version);
   const fail = (code: PluginInstallError["code"], message: string) => ({
     ok: false as const,
     failure: { status: "failed" as const, errors: [{ code, message }] },
   });
+  const catalog = catalogLabel(sourceUrl);
   switch (lookup.status) {
     case "listed":
       return { ok: true, entry: lookup.entry };
@@ -766,57 +814,116 @@ async function resolveCatalogRelease(
       return fail(
         "catalog_not_listed",
         version === undefined
-          ? `The plugin catalog doesn't list "${pluginId}", so nothing was installed. It may have been removed, or the link may be wrong.`
-          : `The plugin catalog doesn't list version ${version} of "${pluginId}", so nothing was installed. It may have been removed, or the link may be wrong.`
+          ? `${catalog} doesn't list "${pluginId}", so nothing was installed. It may have been removed, or the link may be wrong.`
+          : `${catalog} doesn't list version ${version} of "${pluginId}", so nothing was installed. It may have been removed, or the link may be wrong.`
       );
     case "stale":
       return fail(
         "catalog_stale",
-        "The plugin catalog couldn't be refreshed, and an older copy isn't used for installs, so nothing was installed. Check your connection and open the link again."
+        `${catalog} couldn't be refreshed, and an older copy isn't used for installs, so nothing was installed. Check your connection and open the link again.`
       );
     case "unavailable":
       return fail(
         "catalog_unavailable",
         lookup.failure === "not-published"
-          ? "The plugin catalog isn't published yet, so nothing can be installed from it."
+          ? sourceUrl === undefined
+            ? "The plugin catalog isn't published yet, so nothing can be installed from it."
+            : `${catalog} wasn't found, so nothing was installed. Check the address in Settings > Plugins.`
           : lookup.failure === "invalid"
-            ? "The plugin catalog couldn't be read, so nothing was installed. Try again later."
-            : "Couldn't reach the plugin catalog, so nothing was installed. Check your connection and open the link again."
+            ? `${catalog} couldn't be read, so nothing was installed. Try again later.`
+            : `Couldn't reach ${sourceUrl === undefined ? "the plugin catalog" : describeCatalogSource(sourceUrl)}, so nothing was installed. Check your connection and open the link again.`
       );
   }
 }
 
 /**
- * The catalog as the plugin manager's Browse view lists it (#16782). Only that
- * view asks, so opening the manager or starting the app fetches nothing.
+ * The catalogs as the plugin manager's Browse view lists them (#16782,
+ * #17434): Daintree's own first, then each one the person added, every one
+ * read on its own so one that fails never hides another. Only that view
+ * asks, so opening the manager or starting the app fetches nothing. A local
+ * window reads this machine's list; a remote one's machine sends its own.
  */
-export async function handleBrowseCatalog(): Promise<PluginCatalogBrowseResult> {
-  const { getPluginCatalogService } =
-    await import("../../../services/plugin/PluginCatalogService.js");
-  return getPluginCatalogService().browse();
+export async function handleBrowseCatalog(
+  ctx: IpcContext,
+  request?: PluginCatalogBrowseRequest
+): Promise<PluginCatalogsBrowseResult> {
+  const [{ getPluginCatalogService, forgetPluginCatalogSourcesExcept }, sourceUrls] =
+    await Promise.all([
+      import("../../../services/plugin/PluginCatalogService.js"),
+      browseSourceUrls(catalogAuthority(ctx), request),
+    ]);
+  const read = async (sourceUrl: string | undefined): Promise<PluginCatalogSourceBrowse> => {
+    let result: PluginCatalogBrowseResult;
+    try {
+      result = await getPluginCatalogService(sourceUrl).browse();
+    } catch {
+      result = { status: "unavailable", failure: "unreachable" };
+    }
+    return sourceUrl === undefined ? { result } : { sourceUrl, result };
+  };
+  const catalogs = await Promise.all([undefined, ...sourceUrls].map(read));
+  await forgetPluginCatalogSourcesExcept(sourceUrls);
+  return { catalogs };
 }
 
-/** A catalog id and optional version from IPC, checked before anything is fetched. */
-function parseCatalogRequest(
+async function browseSourceUrls(
+  authority: CatalogAuthority,
+  request: PluginCatalogBrowseRequest | undefined
+): Promise<string[]> {
+  if (authority === "local") {
+    const { getPluginCatalogSources } =
+      await import("../../../services/plugin/pluginCatalogSources.js");
+    return getPluginCatalogSources();
+  }
+  const { PLUGIN_CATALOG_SOURCES_MAX } = await import("../../../../shared/config/pluginCatalog.js");
+  const { canonicalCatalogSourceUrl } =
+    await import("../../../services/plugin/pluginCatalogSourceUrl.js");
+  const raw: unknown = (request as { sourceUrls?: unknown } | undefined)?.sourceUrls;
+  if (!Array.isArray(raw)) return [];
+  const sourceUrls: string[] = [];
+  for (const value of raw.slice(0, PLUGIN_CATALOG_SOURCES_MAX)) {
+    const result = canonicalCatalogSourceUrl(value);
+    if (result.ok && !sourceUrls.includes(result.url)) sourceUrls.push(result.url);
+  }
+  return sourceUrls;
+}
+
+/**
+ * A catalog id, optional version and optional catalog from IPC, checked before
+ * anything is fetched. `sourceUrl` comes back canonical, undefined for
+ * Daintree's own catalog in any spelling.
+ */
+async function parseCatalogRequest(
   request: unknown
-): { pluginId: string; version: string | undefined } | null {
+): Promise<{ pluginId: string; version: string | undefined; sourceUrl: string | undefined } | null> {
   if (typeof request !== "object" || request === null) return null;
-  const { pluginId, version } = request as Record<string, unknown>;
+  const { pluginId, version, sourceUrl: rawSource } = request as Record<string, unknown>;
   if (typeof pluginId !== "string" || !isCommunityPluginId(pluginId)) return null;
-  if (version === undefined) return { pluginId, version: undefined };
+  const { catalogSourceOf } = await import("../../../services/plugin/pluginCatalogSourceUrl.js");
+  const sourceUrl = catalogSourceOf(rawSource);
+  if (sourceUrl === null) return null;
+  if (version === undefined) return { pluginId, version: undefined, sourceUrl };
   if (typeof version !== "string" || !isRequestablePluginVersion(version)) return null;
-  return { pluginId, version };
+  return { pluginId, version, sourceUrl };
 }
 
 function malformedCatalogRequest(): PluginDownloadFailure {
   return downloadFailed(
     "catalog_not_listed",
-    "That isn't a plugin id or version the catalog can list, so nothing was installed."
+    "That isn't a plugin id, version or catalog a catalog can list, so nothing was installed."
   );
 }
 
-function provenanceOf(entry: PluginCatalogEntry): PluginCatalogProvenance {
-  return { id: entry.id, version: entry.version, repo: entry.repo };
+function provenanceOf(
+  entry: PluginCatalogEntry,
+  sourceUrl: string | undefined
+): PluginCatalogProvenance {
+  return {
+    id: entry.id,
+    version: entry.version,
+    repo: entry.repo,
+    ...(sourceUrl === undefined ? {} : { sourceUrl }),
+  };
 }
 
 /**
@@ -824,16 +931,23 @@ function provenanceOf(entry: PluginCatalogEntry): PluginCatalogProvenance {
  * fetched catalog (the newest release when no version is given), download the
  * entry's URL, and refuse it unless the bytes are the entry's reviewed digest
  * and name the entry's plugin and version. Only main ever chooses what is
- * fetched.
+ * fetched. The catalog must be Daintree's own or one the person added
+ * (#17434), and a preview that would replace a copy installed from another
+ * catalog says which.
  */
 export async function handlePreviewFromCatalog(
   request: PluginCatalogPreviewRequest,
-  jobId?: string
+  jobId?: string,
+  authority: CatalogAuthority = "local"
 ): Promise<PluginUrlInstallPreviewResult> {
-  const parsed = parseCatalogRequest(request);
+  const parsed = await parseCatalogRequest(request);
   if (parsed === null) return malformedCatalogRequest();
+  const { sourceUrl } = parsed;
+  if (sourceUrl !== undefined && !(await isAuthorizedCatalog(sourceUrl, authority))) {
+    return unknownCatalog(sourceUrl);
+  }
   pluginInstallJobs.setPhase(jobId, "downloading");
-  const resolved = await resolveCatalogRelease(parsed.pluginId, parsed.version);
+  const resolved = await resolveCatalogRelease(parsed.pluginId, parsed.version, sourceUrl);
   // The catalog fetch is shared with other callers, so a cancel can't abort it;
   // it can still stop the download from starting.
   if (pluginInstallJobs.signal(jobId)?.aborted === true) return { status: "cancelled" };
@@ -841,14 +955,37 @@ export async function handlePreviewFromCatalog(
   const { entry } = resolved;
   const target = parsePluginDownloadUrl(entry.url);
   if (target === null) return { status: "invalid-url" };
-  return withDownloadedArchive(target, jobId, (archivePath) =>
+  const result = await withDownloadedArchive(target, jobId, (archivePath) =>
     previewArchive(archivePath, target.trimmed, jobId, {
       sha256: entry.sha256,
       mismatch:
-        "The downloaded archive isn't the one the plugin catalog reviewed, so nothing was installed.",
-      catalog: provenanceOf(entry),
+        sourceUrl === undefined
+          ? "The downloaded archive isn't the one the plugin catalog reviewed, so nothing was installed."
+          : "The downloaded archive isn't the one its catalog reviewed, so nothing was installed.",
+      catalog: provenanceOf(entry, sourceUrl),
     })
   );
+  if (result.status !== "preview" || !result.preview.installedOnDisk) return result;
+  const [service, { replacedCatalogOf }] = await Promise.all([
+    getPluginService(),
+    import("../../../services/plugin/pluginCatalogSourceUrl.js"),
+  ]);
+  const replaced = replacedCatalogOf(service.getInstalledCatalog(entry.id), sourceUrl);
+  return replaced === null
+    ? result
+    : { ...result, preview: { ...result.preview, replacesCatalog: replaced } };
+}
+
+/** The catalog another copy came from, as a request names it; null when malformed. */
+async function parseReplacedCatalog(
+  raw: unknown
+): Promise<{ sourceUrl?: string } | null | "malformed"> {
+  if (raw === undefined) return null;
+  if (typeof raw !== "object" || raw === null) return "malformed";
+  const { catalogSourceOf } = await import("../../../services/plugin/pluginCatalogSourceUrl.js");
+  const sourceUrl = catalogSourceOf((raw as { sourceUrl?: unknown }).sourceUrl);
+  if (sourceUrl === null) return "malformed";
+  return sourceUrl === undefined ? {} : { sourceUrl };
 }
 
 /**
@@ -857,15 +994,33 @@ export async function handlePreviewFromCatalog(
  * newest", and refused unless it is still listed from the reviewed repository
  * with the reviewed digest. The download URL and the recorded provenance come
  * from that entry, and the installer is held to its digest.
+ *
+ * An update (`intent: "update"`) must come from the catalog the installed copy
+ * was installed from, listed or not (#17434); any other install must come from
+ * Daintree's catalog or one the person added, and is refused if the installed
+ * copy changed catalogs since the preview said what it replaces.
  */
 export async function handleInstallFromCatalog(
   request: PluginCatalogInstallRequest,
-  jobId?: string
+  jobId?: string,
+  authority: CatalogAuthority = "local"
 ): Promise<PluginInstallResult> {
-  const parsed = parseCatalogRequest(request);
-  const { repo, expected: rawExpected } = (request ?? {}) as Partial<PluginCatalogInstallRequest>;
+  const parsed = await parseCatalogRequest(request);
+  const {
+    repo,
+    expected: rawExpected,
+    intent,
+    replacesCatalog: rawReplaced,
+  } = (request ?? {}) as Partial<PluginCatalogInstallRequest>;
   const expected = rawExpected === undefined ? null : parseInstallExpectation(rawExpected);
-  if (parsed === null || parsed.version === undefined || typeof repo !== "string") {
+  const reviewedReplacement = await parseReplacedCatalog(rawReplaced);
+  if (
+    parsed === null ||
+    parsed.version === undefined ||
+    typeof repo !== "string" ||
+    (intent !== undefined && intent !== "update") ||
+    reviewedReplacement === "malformed"
+  ) {
     return malformedCatalogRequest();
   }
   if (expected === null || expected.pluginId !== parsed.pluginId) {
@@ -874,15 +1029,33 @@ export async function handleInstallFromCatalog(
       "The install's digest binding was malformed, so nothing was installed."
     );
   }
+  const { sourceUrl } = parsed;
+  if (intent === "update") {
+    const service = await getPluginService();
+    const installed = service.getInstalledCatalog(parsed.pluginId);
+    if (
+      expected.kind !== "update" ||
+      reviewedReplacement !== null ||
+      installed === null ||
+      installed.sourceUrl !== sourceUrl
+    ) {
+      return downloadFailed(
+        "catalog_mismatch",
+        "This update doesn't come from the catalog the plugin was installed from, so nothing was installed. Check for updates again."
+      );
+    }
+  } else if (sourceUrl !== undefined && !(await isAuthorizedCatalog(sourceUrl, authority))) {
+    return unknownCatalog(sourceUrl);
+  }
   pluginInstallJobs.setPhase(jobId, "downloading");
-  const resolved = await resolveCatalogRelease(parsed.pluginId, parsed.version);
+  const resolved = await resolveCatalogRelease(parsed.pluginId, parsed.version, sourceUrl);
   if (pluginInstallJobs.signal(jobId)?.aborted === true) return { status: "cancelled" };
   if (!resolved.ok) return resolved.failure;
   const { entry } = resolved;
   if (entry.sha256 !== expected.archiveHash || entry.repo !== repo) {
     return downloadFailed(
       "catalog_mismatch",
-      "The catalog's listing of this release changed since you reviewed it, so nothing was installed. Open the link again to review it."
+      `${catalogLabel(sourceUrl)}'s listing of this release changed since you reviewed it, so nothing was installed. Open the link again to review it.`
     );
   }
   const target = parsePluginDownloadUrl(entry.url);
@@ -890,7 +1063,8 @@ export async function handleInstallFromCatalog(
   return installDownloadedArchive(target, jobId, {
     source: "catalog",
     originalUrl: target.trimmed,
-    catalog: provenanceOf(entry),
+    catalog: provenanceOf(entry, sourceUrl),
+    catalogReplaces: reviewedReplacement,
     expected:
       expected.kind === "update"
         ? { kind: "update", pluginId: entry.id, archiveHash: entry.sha256 }

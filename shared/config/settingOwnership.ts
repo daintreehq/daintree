@@ -203,6 +203,9 @@ export const SETTING_CATALOG = {
       projectPluginSetupSkips: hostPerProject,
       projectPluginAccountBindings: hostPerProject,
       pluginNotificationSilences: hostGlobalOrProject,
+      // Catalogs are the person's own choice of whom to trust, so they stay on
+      // the machine they sit at; a host window's Browse carries them along.
+      pluginCatalogSources: device,
       hiddenSearchProviders: hostGlobalOrProject,
       pluginContextProvidersOff: hostGlobalOrProject,
       pluginWorktreeDeleteNoteMutes: hostGlobalOrProject,

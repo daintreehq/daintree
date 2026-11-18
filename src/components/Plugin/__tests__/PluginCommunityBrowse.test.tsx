@@ -6,6 +6,7 @@ import type {
   PluginCatalogBrowseResult,
   PluginCatalogFailure,
   PluginCatalogListing,
+  PluginCatalogsBrowseResult,
 } from "@shared/types/plugin";
 import { PluginCommunityBrowse } from "../PluginCommunityBrowse";
 import { CAPABILITY_META } from "../capabilityMeta";
@@ -33,7 +34,10 @@ const LINEAR: PluginCatalogListing = {
   capabilities: [],
 };
 
-function available(
+const ADDED = "https://plugins.example.org/catalog.json";
+const ADDED_LABEL = "plugins.example.org/catalog.json";
+
+function catalog(
   listings: PluginCatalogListing[] = [LINEAR, SESSION],
   staleBecause?: PluginCatalogFailure
 ): PluginCatalogBrowseResult {
@@ -41,6 +45,23 @@ function available(
   return staleBecause === undefined
     ? { status: "available", listings, fetchedAt, stale: false }
     : { status: "available", listings, fetchedAt, stale: true, failure: staleBecause };
+}
+
+/** Daintree's own catalog alone: the answer when no catalog was added. */
+function available(
+  listings: PluginCatalogListing[] = [LINEAR, SESSION],
+  staleBecause?: PluginCatalogFailure
+): PluginCatalogsBrowseResult {
+  return { catalogs: [{ result: catalog(listings, staleBecause) }] };
+}
+
+function unavailable(failure: PluginCatalogFailure): PluginCatalogsBrowseResult {
+  return { catalogs: [{ result: { status: "unavailable", failure } }] };
+}
+
+/** A listing as an added catalog's client stamps it. */
+function fromAdded(listing: PluginCatalogListing): PluginCatalogListing {
+  return { ...listing, sourceUrl: ADDED };
 }
 
 function deferred<T>() {
@@ -51,12 +72,22 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-const browseCatalog = vi.fn<() => Promise<PluginCatalogBrowseResult>>();
+const browseCatalog = vi.fn<() => Promise<PluginCatalogsBrowseResult | PluginCatalogBrowseResult>>();
+const sourcesChanged = vi.hoisted(() => ({ listener: null as null | (() => void) }));
+const onCatalogSourcesChanged = vi.fn((listener: () => void) => {
+  sourcesChanged.listener = listener;
+  return () => {
+    sourcesChanged.listener = null;
+  };
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
   browseCatalog.mockReset();
-  window.electron = { plugin: { browseCatalog } } as unknown as typeof window.electron;
+  sourcesChanged.listener = null;
+  window.electron = {
+    plugin: { browseCatalog, onCatalogSourcesChanged },
+  } as unknown as typeof window.electron;
 });
 
 function renderBrowse(props: Partial<Parameters<typeof PluginCommunityBrowse>[0]> = {}): ReturnType<
@@ -69,7 +100,7 @@ function renderBrowse(props: Partial<Parameters<typeof PluginCommunityBrowse>[0]
   const onViewInstalled = vi.fn();
   const view = render(
     <PluginCommunityBrowse
-      installedVersions={new Map()}
+      installed={new Map()}
       installDisabled={false}
       onInstall={onInstall}
       onViewInstalled={onViewInstalled}
@@ -79,11 +110,15 @@ function renderBrowse(props: Partial<Parameters<typeof PluginCommunityBrowse>[0]
   return Object.assign(view, { onInstall, onViewInstalled });
 }
 
-function listingCard(id: string): HTMLElement {
+function listingCards(id: string): HTMLElement[] {
   const list = screen.getByRole("list", { name: "Community plugins" });
-  const card = within(list)
+  return within(list)
     .getAllByRole("listitem")
-    .find((item) => item.getAttribute("aria-labelledby") && item.textContent?.includes(id));
+    .filter((item) => item.getAttribute("aria-labelledby") && item.textContent?.includes(id));
+}
+
+function listingCard(id: string): HTMLElement {
+  const card = listingCards(id)[0];
   if (!card) throw new Error(`No listing for ${id}`);
   return card;
 }
@@ -136,9 +171,9 @@ describe("PluginCommunityBrowse", () => {
   it("marks an installed plugin, with its version when it differs, and offers to view it", async () => {
     browseCatalog.mockResolvedValue(available());
     const { onViewInstalled } = renderBrowse({
-      installedVersions: new Map([
-        [SESSION.id, "0.1.0"],
-        [LINEAR.id, "2.0.0"],
+      installed: new Map([
+        [SESSION.id, { version: "0.1.0", catalog: {} }],
+        [LINEAR.id, { version: "2.0.0", catalog: null }],
       ]),
     });
     await screen.findByRole("list", { name: "Community plugins" });
@@ -235,9 +270,7 @@ describe("PluginCommunityBrowse", () => {
   ] as const)(
     "says why a %s catalog can't be browsed, and retries on request",
     async (failure, title, description) => {
-      browseCatalog
-        .mockResolvedValueOnce({ status: "unavailable", failure })
-        .mockResolvedValueOnce(available());
+      browseCatalog.mockResolvedValueOnce(unavailable(failure)).mockResolvedValueOnce(available());
       renderBrowse();
 
       expect(await screen.findByText(title)).toBeTruthy();
@@ -259,7 +292,7 @@ describe("PluginCommunityBrowse", () => {
   });
 
   it("keeps a stale catalog's listings until a retry replaces them", async () => {
-    const refreshed = deferred<PluginCatalogBrowseResult>();
+    const refreshed = deferred<PluginCatalogsBrowseResult>();
     browseCatalog
       .mockResolvedValueOnce(available([SESSION], "unreachable"))
       .mockReturnValueOnce(refreshed.promise);
@@ -297,10 +330,8 @@ describe("PluginCommunityBrowse", () => {
   });
 
   it("asks once per retry, holding Retry until the answer lands", async () => {
-    const retried = deferred<PluginCatalogBrowseResult>();
-    browseCatalog
-      .mockResolvedValueOnce({ status: "unavailable", failure: "unreachable" })
-      .mockReturnValueOnce(retried.promise);
+    const retried = deferred<PluginCatalogsBrowseResult>();
+    browseCatalog.mockResolvedValueOnce(unavailable("unreachable")).mockReturnValueOnce(retried.promise);
     renderBrowse();
     const retry = await screen.findByRole("button", { name: "Retry" });
 
@@ -315,5 +346,135 @@ describe("PluginCommunityBrowse", () => {
       await retried.promise;
     });
     expect(screen.getByText(LINEAR.id)).toBeTruthy();
+  });
+
+  it("lists an older host's answer, which holds Daintree's catalog alone", async () => {
+    browseCatalog.mockResolvedValue(catalog([SESSION]));
+    renderBrowse();
+    await screen.findByRole("list", { name: "Community plugins" });
+    expect(listingCard(SESSION.id).textContent).toMatch(/community listing/i);
+  });
+
+  describe("catalogs the person added (#17434)", () => {
+    it("names an added catalog's curator on its listings, and lists one plugin once per catalog", async () => {
+      browseCatalog.mockResolvedValue({
+        catalogs: [
+          { result: catalog([SESSION]) },
+          { sourceUrl: ADDED, result: catalog([fromAdded(SESSION), fromAdded(LINEAR)]) },
+        ],
+      });
+      const { onInstall } = renderBrowse();
+      await screen.findByRole("list", { name: "Community plugins" });
+
+      const [own, added] = listingCards(SESSION.id);
+      expect(own.textContent).toMatch(/not a Daintree endorsement/i);
+      expect(added.textContent).toContain(`Listed by ${ADDED_LABEL}`);
+      expect(added.textContent).toMatch(/reviewed by its curator/i);
+      expect(added.textContent).toMatch(/not reviewed by Daintree/i);
+      expect(added.textContent).not.toMatch(/community listing/i);
+
+      // Install hands back the listing with its catalog, so the preview reads that one.
+      fireEvent.click(within(added).getByRole("button", { name: `Install ${SESSION.id}` }));
+      expect(onInstall).toHaveBeenCalledWith(fromAdded(SESSION));
+    });
+
+    it("finds a listing by the catalog that lists it", async () => {
+      browseCatalog.mockResolvedValue({
+        catalogs: [
+          { result: catalog([SESSION]) },
+          { sourceUrl: ADDED, result: catalog([fromAdded(LINEAR)]) },
+        ],
+      });
+      renderBrowse();
+      fireEvent.change(await screen.findByRole("searchbox", { name: "Search community plugins" }), {
+        target: { value: "plugins.example.org" },
+      });
+      expect(screen.queryByText(SESSION.id)).toBeNull();
+      expect(screen.getByText(LINEAR.id)).toBeTruthy();
+    });
+
+    it("offers to replace a copy installed from another catalog, and views the one from this catalog", async () => {
+      browseCatalog.mockResolvedValue({
+        catalogs: [
+          { result: catalog([SESSION]) },
+          { sourceUrl: ADDED, result: catalog([fromAdded(SESSION)]) },
+        ],
+      });
+      const { onInstall, onViewInstalled } = renderBrowse({
+        installed: new Map([[SESSION.id, { version: "0.1.1", catalog: { sourceUrl: ADDED } }]]),
+      });
+      await screen.findByRole("list", { name: "Community plugins" });
+      const [own, added] = listingCards(SESSION.id);
+
+      expect(within(own).getByText(`Installed v0.1.1 from ${ADDED_LABEL}`)).toBeTruthy();
+      fireEvent.click(
+        within(own).getByRole("button", {
+          name: `Replace installed ${SESSION.id} with the listing from Daintree's catalog`,
+        })
+      );
+      expect(onInstall).toHaveBeenCalledWith(SESSION);
+
+      expect(within(added).getByText("Installed")).toBeTruthy();
+      fireEvent.click(within(added).getByRole("button", { name: `View installed ${SESSION.id}` }));
+      expect(onViewInstalled).toHaveBeenCalledWith(SESSION.id);
+    });
+
+    it("keeps the other catalogs' listings when one can't be read, and says which", async () => {
+      browseCatalog.mockResolvedValue({
+        catalogs: [
+          { result: { status: "unavailable", failure: "unreachable" } },
+          { sourceUrl: ADDED, result: catalog([fromAdded(LINEAR)]) },
+        ],
+      });
+      renderBrowse();
+      await screen.findByRole("list", { name: "Community plugins" });
+      expect(screen.getByText(LINEAR.id)).toBeTruthy();
+      expect(screen.getByText("Couldn't reach the community catalog.")).toBeTruthy();
+    });
+
+    it("names an added catalog that couldn't be read above the listings the others gave", async () => {
+      browseCatalog.mockResolvedValue({
+        catalogs: [
+          { result: catalog([SESSION]) },
+          { sourceUrl: ADDED, result: { status: "unavailable", failure: "invalid" } },
+        ],
+      });
+      renderBrowse();
+      await screen.findByRole("list", { name: "Community plugins" });
+      expect(
+        screen.getByText(`Couldn't read ${ADDED_LABEL}. It isn't a valid plugin catalog.`)
+      ).toBeTruthy();
+    });
+
+    it("says so when none of the catalogs can be read", async () => {
+      browseCatalog.mockResolvedValue({
+        catalogs: [
+          { result: { status: "unavailable", failure: "unreachable" } },
+          { sourceUrl: ADDED, result: { status: "unavailable", failure: "not-published" } },
+        ],
+      });
+      renderBrowse();
+      expect(await screen.findByText(/None of your plugin catalogs could be read/)).toBeTruthy();
+    });
+
+    it("reads the catalogs again when the person's list changes", async () => {
+      browseCatalog
+        .mockResolvedValueOnce(available([SESSION]))
+        .mockResolvedValueOnce({
+          catalogs: [
+            { result: catalog([SESSION]) },
+            { sourceUrl: ADDED, result: catalog([fromAdded(LINEAR)]) },
+          ],
+        });
+      renderBrowse();
+      await screen.findByText(SESSION.id);
+      expect(screen.queryByText(LINEAR.id)).toBeNull();
+
+      await act(async () => {
+        sourcesChanged.listener?.();
+      });
+      expect(await screen.findByText(LINEAR.id)).toBeTruthy();
+      expect(browseCatalog).toHaveBeenCalledTimes(2);
+    });
   });
 });

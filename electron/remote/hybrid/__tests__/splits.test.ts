@@ -218,6 +218,17 @@ describe("hybrid split registry", () => {
     // The picker split's host leg (pickers.ts) is admitted here too.
     expect(HYBRID_HOST_LEGS).toContain(CHANNELS.SCRATCH_SAVE_AS_PROJECT);
   });
+
+  it("splits Browse and catalog installs, carrying this machine's catalogs to the host (#17434)", () => {
+    for (const channel of [
+      CHANNELS.PLUGIN_BROWSE_CATALOG,
+      CHANNELS.PLUGIN_PREVIEW_FROM_CATALOG,
+      CHANNELS.PLUGIN_INSTALL_FROM_CATALOG,
+    ]) {
+      expect(HYBRID_SPLITS[channel], channel).toBeTypeOf("function");
+      expect(HYBRID_HOST_LEGS, channel).toContain(channel);
+    }
+  });
 });
 
 describe("log level overrides", () => {

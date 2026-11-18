@@ -1,10 +1,12 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import * as semver from "semver";
 
 import {
   PLUGIN_CATALOG_URL,
   PLUGIN_CATALOG_CACHE_FILENAME,
+  PLUGIN_CATALOG_SOURCE_CACHE_DIR,
   PLUGIN_CATALOG_BROWSE_TTL_MS,
   PLUGIN_CATALOG_FETCH_TIMEOUT_MS,
   PLUGIN_CATALOG_MAX_BYTES,
@@ -16,6 +18,11 @@ import type {
 } from "../../../shared/types/plugin.js";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { createLogger } from "../../utils/logger.js";
+import {
+  createManualRedirectFetch,
+  type ManualRedirectFetch,
+} from "../../utils/netManualRedirectFetch.js";
+import { fetchWithPrivateHostGuard } from "../../utils/pluginDownloadPolicy.js";
 import {
   parsePluginCatalog,
   type PluginCatalog,
@@ -92,10 +99,24 @@ export interface PluginCatalogUpdateSource {
 type CatalogFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 export interface PluginCatalogDeps {
-  /** Defaults to `userData/plugin-catalog.json`; `null` disables the disk cache. */
+  /**
+   * The catalog the person added that this client reads (#17434), as its
+   * canonical URL; absent for Daintree's own.
+   */
+  sourceUrl?: string;
+  /**
+   * Defaults to `userData/plugin-catalog.json` for Daintree's own catalog and
+   * `userData/plugin-catalogs/<sha256 of the URL>.json` for an added one;
+   * `null` disables the disk cache.
+   */
   cachePath?: string | null;
-  /** Defaults to Electron's `net.fetch`. */
+  /** Daintree's own catalog only. Defaults to Electron's `net.fetch`. */
   fetchImpl?: CatalogFetch;
+  /**
+   * An added catalog only: the fetch each guarded hop makes. Defaults to a
+   * manual-redirect fetch on Electron's `net.request`.
+   */
+  manualFetch?: ManualRedirectFetch;
   now?: () => number;
 }
 
@@ -114,12 +135,15 @@ type RemoteOutcome =
 
 interface DiskPayload {
   fetchedAt: number;
+  /** An added catalog's URL, checked on read so a cache file can't stand in for another. */
+  sourceUrl?: string;
   catalog: unknown;
 }
 
 /**
- * Fetches, validates and caches the community plugin catalog (#16777,
- * `docs/plugins/catalog.md`). Nothing happens until a caller asks: the
+ * Fetches, validates and caches one plugin catalog (#16777,
+ * `docs/plugins/catalog.md`): Daintree's own, or one the person added
+ * (#17434), held to the same schema. Nothing happens until a caller asks: the
  * constructor does no I/O, and the disk cache is read on the first request.
  * Concurrent callers share one fetch, but each gets the answer its own mode
  * allows, so a browse caller never decides what an install caller may use.
@@ -178,6 +202,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
     const result = await this.getCatalog("browse");
     if (result.status !== "available") return { status: "unavailable", failure: result.failure };
     const listings: PluginCatalogListing[] = [];
+    const { sourceUrl } = this.deps;
     for (const releases of releasesById(result.catalog.entries).values()) {
       const newest = newestRelease(releases);
       if (!newest) continue;
@@ -186,6 +211,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
         version: newest.version,
         repo: newest.repo,
         capabilities: [...newest.capabilities],
+        ...(sourceUrl === undefined ? {} : { sourceUrl }),
       });
     }
     listings.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -278,16 +304,15 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
   }
 
   private async fetchRemote(): Promise<RemoteOutcome> {
-    const fetchImpl = this.deps.fetchImpl ?? (await loadNetFetch());
-    if (!fetchImpl) return { ok: false, failure: "unreachable" };
-
-    const response = await fetchImpl(PLUGIN_CATALOG_URL, {
+    const init: RequestInit = {
       // Covers the body read as well as the headers.
       signal: AbortSignal.timeout(PLUGIN_CATALOG_FETCH_TIMEOUT_MS),
       cache: "no-store",
       credentials: "omit",
       headers: { Accept: "application/json" },
-    });
+    };
+    const response = await this.request(init);
+    if (!response) return { ok: false, failure: "unreachable" };
     if (response.status === 404) {
       await discardBody(response);
       logger.debug("Catalog not published");
@@ -319,6 +344,28 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
     return { ok: true, snapshot: { catalog: parsed.catalog, fetchedAt: this.now() } };
   }
 
+  /**
+   * Daintree's own catalog is a constant on its own CDN. An added one is a URL
+   * the person typed, so it is held to what a URL install is (#17434): every
+   * redirect hop is checked for https and a public host, by name and by what
+   * the name resolves to, before anything connects.
+   */
+  private async request(init: RequestInit): Promise<Response | null> {
+    const { sourceUrl } = this.deps;
+    if (sourceUrl === undefined) {
+      const fetchImpl = this.deps.fetchImpl ?? (await loadNetFetch());
+      return fetchImpl ? fetchImpl(PLUGIN_CATALOG_URL, init) : null;
+    }
+    const manualFetch = this.deps.manualFetch ?? (await loadManualFetch());
+    if (!manualFetch) return null;
+    const guarded = await fetchWithPrivateHostGuard(manualFetch, sourceUrl, init);
+    if (!guarded.ok) {
+      logger.warn("Added catalog fetch refused", { reason: guarded.reason });
+      return null;
+    }
+    return guarded.response;
+  }
+
   /** The cache is revalidated on every read: a local file is no trust root. */
   private async readDisk(): Promise<CatalogSnapshot | null> {
     const cachePath = await this.resolveCachePath();
@@ -333,6 +380,7 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
       return null;
     }
     if (typeof payload?.fetchedAt !== "number" || !Number.isFinite(payload.fetchedAt)) return null;
+    if (payload.sourceUrl !== this.deps.sourceUrl) return null;
     const parsed = parsePluginCatalog(payload.catalog);
     if (!parsed.ok) {
       logger.warn("Catalog cache rejected", { error: parsed.error });
@@ -345,7 +393,12 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
   private async writeDisk(snapshot: CatalogSnapshot): Promise<void> {
     const cachePath = await this.resolveCachePath();
     if (!cachePath) return;
-    const payload: DiskPayload = { fetchedAt: snapshot.fetchedAt, catalog: snapshot.catalog };
+    const { sourceUrl } = this.deps;
+    const payload: DiskPayload = {
+      fetchedAt: snapshot.fetchedAt,
+      ...(sourceUrl === undefined ? {} : { sourceUrl }),
+      catalog: snapshot.catalog,
+    };
     try {
       await fs.mkdir(path.dirname(cachePath), { recursive: true });
       await resilientAtomicWriteFile(cachePath, JSON.stringify(payload));
@@ -357,12 +410,12 @@ export class PluginCatalogService implements PluginCatalogUpdateSource {
   private resolveCachePath(): Promise<string | null> {
     this.cachePath ??= (async () => {
       if (this.deps.cachePath !== undefined) return this.deps.cachePath;
-      try {
-        const { app } = await import("electron");
-        return path.join(app.getPath("userData"), PLUGIN_CATALOG_CACHE_FILENAME);
-      } catch {
-        return null;
-      }
+      const userData = await loadUserDataPath();
+      if (userData === null) return null;
+      const { sourceUrl } = this.deps;
+      return sourceUrl === undefined
+        ? path.join(userData, PLUGIN_CATALOG_CACHE_FILENAME)
+        : path.join(userData, PLUGIN_CATALOG_SOURCE_CACHE_DIR, sourceCacheFileName(sourceUrl));
     })();
     return this.cachePath;
   }
@@ -428,11 +481,66 @@ function releasesById(entries: readonly PluginCatalogEntry[]): Map<string, Plugi
 }
 
 let sharedService: PluginCatalogService | null = null;
+const addedSourceServices = new Map<string, PluginCatalogService>();
 
-/** The process-wide service, built by its first caller rather than at startup. */
-export function getPluginCatalogService(): PluginCatalogService {
-  sharedService ??= new PluginCatalogService();
-  return sharedService;
+/**
+ * The process-wide client for one catalog, built by its first caller rather
+ * than at startup: Daintree's own when `sourceUrl` is omitted, otherwise the
+ * added catalog at that canonical URL (#17434). Callers pass a URL already
+ * through `pluginCatalogSourceUrl`, so one catalog never gets two clients.
+ */
+export function getPluginCatalogService(sourceUrl?: string): PluginCatalogService {
+  if (sourceUrl === undefined) {
+    sharedService ??= new PluginCatalogService();
+    return sharedService;
+  }
+  let service = addedSourceServices.get(sourceUrl);
+  if (!service) {
+    service = new PluginCatalogService({ sourceUrl });
+    addedSourceServices.set(sourceUrl, service);
+  }
+  return service;
+}
+
+/**
+ * Let go of the added catalogs a Browse no longer names (#17434): their
+ * clients, and their cache files on disk. A host serves whatever list each
+ * attached machine sends, so without this every catalog anyone ever browsed
+ * would stay held for good. An install from a catalog dropped here still
+ * checks it for updates: those reads always fetch afresh and build a new
+ * client on demand.
+ */
+export async function forgetPluginCatalogSourcesExcept(
+  keep: readonly string[],
+  cacheDir?: string | null
+): Promise<void> {
+  for (const sourceUrl of [...addedSourceServices.keys()]) {
+    if (!keep.includes(sourceUrl)) addedSourceServices.delete(sourceUrl);
+  }
+  const dir =
+    cacheDir === undefined
+      ? await loadUserDataPath().then((userData) =>
+          userData === null ? null : path.join(userData, PLUGIN_CATALOG_SOURCE_CACHE_DIR)
+        )
+      : cacheDir;
+  if (dir === null) return;
+  const kept = new Set(keep.map(sourceCacheFileName));
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .filter((name) => name.endsWith(".json") && !kept.has(name))
+      .map((name) => fs.rm(path.join(dir, name), { force: true }).catch(() => {}))
+  );
+}
+
+/** One file per catalog URL, named so no URL can reach outside the folder. */
+function sourceCacheFileName(sourceUrl: string): string {
+  return `${createHash("sha256").update(sourceUrl).digest("hex")}.json`;
 }
 
 /**
@@ -483,6 +591,25 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+}
+
+async function loadUserDataPath(): Promise<string | null> {
+  try {
+    const { app } = await import("electron");
+    return app.getPath("userData");
+  } catch {
+    return null;
+  }
+}
+
+async function loadManualFetch(): Promise<ManualRedirectFetch | null> {
+  try {
+    const { net } = await import("electron");
+    if (typeof net?.request !== "function") return null;
+    return createManualRedirectFetch((options) => net.request(options));
+  } catch {
+    return null;
+  }
 }
 
 async function loadNetFetch(): Promise<CatalogFetch | null> {

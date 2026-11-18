@@ -848,6 +848,16 @@ export interface StoreSchema {
   pluginNotificationSilences?: string[];
 
   /**
+   * Plugin catalogs the person added beside Daintree's own (#17434), as
+   * normalized `https://` URLs in the order they were added. This machine's
+   * own settings, never a repository's, so a pull can't add one. Read and
+   * written only through `services/plugin/pluginCatalogSources.ts`, which
+   * checks each value again on every read. Same additive-key convention as
+   * above.
+   */
+  pluginCatalogSources?: string[];
+
+  /**
    * Plugin search providers the user turned off in the quick switcher
    * (#13792), as `{pluginId}.{provider id}` keys. One list serves both scopes:
    * a project plugin's instance id already names its project, so its key is
@@ -1258,6 +1268,7 @@ const storeOptions = {
     projectPluginSetupSkips: {},
     projectPluginAccountBindings: {},
     pluginNotificationSilences: [],
+    pluginCatalogSources: [],
     hiddenSearchProviders: [],
     pluginContextProvidersOff: [],
     pluginWorktreeDeleteNoteMutes: [],

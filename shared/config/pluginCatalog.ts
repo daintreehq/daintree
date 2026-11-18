@@ -11,6 +11,19 @@ export const PLUGIN_CATALOG_URL = "https://updates.daintree.org/plugins/catalog.
 export const PLUGIN_CATALOG_CACHE_FILENAME = "plugin-catalog.json";
 
 /**
+ * Folder under `app.getPath("userData")` holding one cache per catalog the user
+ * added (#17434), named by the SHA-256 of its URL. Daintree's own keeps
+ * {@link PLUGIN_CATALOG_CACHE_FILENAME}.
+ */
+export const PLUGIN_CATALOG_SOURCE_CACHE_DIR = "plugin-catalogs";
+
+/** How many catalogs a person can add beside Daintree's own. */
+export const PLUGIN_CATALOG_SOURCES_MAX = 8;
+
+/** The longest catalog URL accepted, before and after it is normalized. */
+export const PLUGIN_CATALOG_SOURCE_URL_MAX_LENGTH = 2048;
+
+/**
  * How long browsing reuses a fetched catalog without asking again. Installing
  * or updating never reuses one: it always revalidates, since a cached copy may
  * still list a release that was pulled.

@@ -24,3 +24,17 @@ export function describePluginInstallSource(pathOrUrl: string): string {
 export function describeCatalogRepo(repo: string): string {
   return repo.replace(/^https:\/\//i, "");
 }
+
+/**
+ * A catalog's URL as Browse and the install preview name its curator (#17434):
+ * host and path, the scheme dropped like the banner's URLs, and the query and
+ * fragment dropped since a link can carry a token there.
+ */
+export function describeCatalogSource(sourceUrl: string): string {
+  try {
+    const url = new URL(sourceUrl);
+    return `${url.host}${url.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return sourceUrl;
+  }
+}
