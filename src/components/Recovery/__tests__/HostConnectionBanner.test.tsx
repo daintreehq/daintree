@@ -400,6 +400,7 @@ function machine(overrides: Partial<CloudHostStatus> = {}): CloudHostsSnapshot {
         vcpu: 4,
         memoryGB: 8,
         hourlyDollars: 0.036,
+        lifetime: { kind: "renewable" },
         autoStopAt: null,
         lifetimeSeconds: 7200,
         stoppedAt: null,
