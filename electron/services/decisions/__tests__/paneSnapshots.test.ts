@@ -143,7 +143,9 @@ function setup(options: { allowed?: boolean; rows?: QuestionRow[]; meta?: string
     getPtyClient: () => pane.client,
     watchPanes,
     store: {
-      listQuestions: vi.fn(async () => rows),
+      listQuestions: vi.fn(async (filter?: { status?: QuestionRow["local_status"][] }) =>
+        filter?.status ? rows.filter((r) => filter.status!.includes(r.local_status)) : rows
+      ),
       getQuestion: vi.fn(async (id: string) => rows.find((r) => r.question_id === id) ?? null),
       getMeta: vi.fn(async (key: string) => meta.get(key) ?? null),
       setMeta: vi.fn(async (key: string, value: string) => {

@@ -400,7 +400,8 @@ export class PaneSnapshots {
     this.settledOnBridge.clear();
     for (const asking of this.asking.values()) asking.sent = null;
     this.enqueue(async () => {
-      const rows = await this.o.store.listQuestions();
+      // Only rows that can still ask; a closed question's clear comes from the shared record.
+      const rows = await this.o.store.listQuestions({ status: ["queued", "open"] });
       const shared = await this.loadShared();
       if (this.bridge !== bridge) return;
       this.observe(rows);
