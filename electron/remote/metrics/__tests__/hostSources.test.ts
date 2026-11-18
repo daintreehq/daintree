@@ -445,6 +445,37 @@ describe("createHostSampleSources", () => {
       clock += 1_000;
       await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: null });
       expect(ask).toHaveBeenCalledTimes(2);
+
+      ask.mockImplementation(async (projectPath: string, projectId: string) => ({
+        status: "ok",
+        projectId,
+        states: Array.from({ length: STATES[projectPath] ?? 0 }, () => ({})),
+      }));
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: 4 });
+    });
+
+    it("knows no open projects have no worktrees, with no workspace to ask", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      workspace.client = null;
+      store.projects = [{ id: "p1", path: "/p1", status: "closed" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 0, worktreeCount: 0 });
+    });
+
+    it("keys a sample's own project list the same way", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.beginSample!().projects()).resolves.toEqual({
+        projectCount: 1,
+        worktreeCount: 3,
+      });
+      store.projects = [{ id: "p2", path: "/p2", status: "background" }];
+      clock += 1_000;
+      await expect(sources.beginSample!().projects()).resolves.toEqual({
+        projectCount: 1,
+        worktreeCount: 1,
+      });
     });
   });
 
