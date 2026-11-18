@@ -10,11 +10,7 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import type { PluggableList } from "unified";
-import type {
-  Element as HastElement,
-  Nodes as HastNodes,
-  RootContent as HastContent,
-} from "hast";
+import type { Element as HastElement, Nodes as HastNodes, RootContent as HastContent } from "hast";
 import type { GitStatus } from "@shared/types/git";
 import {
   MarkdownImageCacheBust,
@@ -463,7 +459,9 @@ function DiffBlock({
   const content = definitions ? `${body}\n\n${definitions}` : body;
   const rehypePlugins = useMemo<PluggableList>(
     () =>
-      ranges.length ? [inlineRangePlugin(ranges, expectedText, kind), ALERTS_PLUGIN] : [ALERTS_PLUGIN],
+      ranges.length
+        ? [inlineRangePlugin(ranges, expectedText, kind), ALERTS_PLUGIN]
+        : [ALERTS_PLUGIN],
     [ranges, expectedText, kind]
   );
 
