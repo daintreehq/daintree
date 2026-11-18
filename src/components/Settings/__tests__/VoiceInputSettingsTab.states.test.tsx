@@ -151,6 +151,30 @@ describe("dictationBlockers", () => {
     expect(grok.join(" ")).toContain("xAI API key");
   });
 
+  it("asks for the on-device model, never a key, when transcribing on this computer", () => {
+    const local = {
+      transcriptionProvider: "local",
+      openaiApiKey: "",
+      deepgramApiKey: "",
+      xaiApiKey: "",
+    } as const;
+    const status = (state: "absent" | "ready" | "unsupported" | "downloading") => ({
+      state,
+      totalBytes: 10,
+      receivedBytes: 0,
+    });
+    expect(dictationBlockers(local, "granted", status("absent"))).toEqual([
+      "download the on-device model",
+    ]);
+    expect(dictationBlockers(local, "granted", status("downloading"))).toEqual([
+      "download the on-device model",
+    ]);
+    expect(dictationBlockers(local, "granted", status("ready"))).toEqual([]);
+    expect(dictationBlockers(local, "granted", status("unsupported"))).toEqual([
+      "choose another provider",
+    ]);
+  });
+
   it("reports nothing it cannot observe: a present key and an undecided mic are not blockers", () => {
     for (const mic of ["granted", "not-determined", "unknown"] as const) {
       expect(

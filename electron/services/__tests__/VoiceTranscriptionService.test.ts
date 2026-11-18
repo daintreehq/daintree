@@ -160,6 +160,16 @@ function latestVadWorker(): MockVadWorker {
   return worker;
 }
 
+// The on-device model, never downloaded here.
+vi.mock("../voice/localSpeech.js", () => ({
+  getLocalSpeechModels: () => ({ readyDir: async () => null, invalidate: () => {} }),
+  getLocalSpeechHost: () => ({
+    acquire: async () => {
+      throw new Error("no model");
+    },
+  }),
+}));
+
 // Import AFTER vi.mock so the providers use the mocked `ws`.
 const { VoiceTranscriptionService } = await import("../VoiceTranscriptionService.js");
 type VoiceTranscriptionServiceInstance = InstanceType<typeof VoiceTranscriptionService>;
@@ -204,6 +214,12 @@ const GROK_SETTINGS: VoiceInputSettings = {
   openaiApiKey: "",
   xaiApiKey: "xai-test",
   transcriptionProvider: "grok",
+};
+
+const LOCAL_SETTINGS: VoiceInputSettings = {
+  ...OPENAI_SETTINGS,
+  openaiApiKey: "",
+  transcriptionProvider: "local",
 };
 
 function latestInstance(): MockWebSocket {
@@ -290,6 +306,25 @@ describe("VoiceTranscriptionService (coordinator)", () => {
     expect(service.keytermsNeededToConnect(DEEPGRAM_SETTINGS)).toBe(true);
     expect(service.keytermsNeededToConnect(GROK_SETTINGS)).toBe(true);
     expect(service.keytermsNeededToConnect(OPENAI_SETTINGS)).toBe(false);
+    expect(service.keytermsNeededToConnect(LOCAL_SETTINGS)).toBe(false);
+  });
+
+  it("transcribes on device with no key and no socket, and says when the model is missing", async () => {
+    const service = new VoiceTranscriptionService();
+    const events: VoiceSessionEvent[] = [];
+    service.onEvent((event) => events.push(event));
+    const before = instances.length;
+    const result = await service.start(LOCAL_SETTINGS, "session-local");
+    expect(result).toMatchObject({ ok: false });
+    expect(instances.length).toBe(before);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        sessionId: "session-local",
+        error: expect.objectContaining({ code: "local_model_missing" }),
+      })
+    );
+    service.stop();
   });
 
   it("hands the OpenAI provider its pending keyterms", async () => {

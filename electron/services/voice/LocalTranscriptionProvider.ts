@@ -102,8 +102,15 @@ export class LocalTranscriptionProvider implements TranscriptionProvider {
   }
 
   private async open(generation: number, settings: VoiceInputSettings): Promise<void> {
-    const models = this.deps.models();
-    const dir = await models.readyDir().catch(() => null);
+    let models: ReturnType<LocalTranscriptionDeps["models"]>;
+    let dir: string | null;
+    try {
+      models = this.deps.models();
+      dir = await models.readyDir();
+    } catch {
+      models = { readyDir: async () => null, invalidate: () => {} };
+      dir = null;
+    }
     if (generation !== this.generation) return;
     if (!dir) {
       this.fail(generation, {

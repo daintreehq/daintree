@@ -339,3 +339,62 @@ describe("onSpokenSend (#17031)", () => {
     expect(runtime.getSpokenSendHandler("panel-1", undefined)).toBeUndefined();
   });
 });
+
+describe("startVoiceRecordingRuntime with on-device transcription (#17338)", () => {
+  const LOCAL = { enabled: true, transcriptionProvider: "local", openaiApiKey: "" } as const;
+
+  function stubLocalModel(state: "absent" | "ready") {
+    const stub = stubVoiceInput(LOCAL as unknown as StoredSettings);
+    let push: ((status: { state: string; totalBytes: number; receivedBytes: number }) => void) | null =
+      null;
+    const voiceInput = stub.voiceInput as unknown as Record<string, unknown>;
+    // Main's status: what a read answers, and what a push announces.
+    let current: string = state;
+    voiceInput.getLocalModel = vi.fn(async () => ({
+      state: current,
+      totalBytes: 10,
+      receivedBytes: 0,
+    }));
+    voiceInput.onLocalModelStatus = vi.fn((callback: typeof push) => {
+      push = callback;
+      return () => {};
+    });
+    return {
+      ...stub,
+      push: (next: "ready") => {
+        current = next;
+        push?.({ state: next, totalBytes: 10, receivedBytes: 10 });
+      },
+    };
+  }
+
+  it("loads the service with no key once the model is ready", async () => {
+    stubLocalModel("ready");
+    const runtime = await loadRuntime();
+    runtime.startVoiceRecordingRuntime();
+    await vi.waitFor(() => expect(runtime.getLoadedVoiceRecordingService()).not.toBeNull());
+  });
+
+  it("waits for the model, and loads once a download in any view finishes it", async () => {
+    const { push } = stubLocalModel("absent");
+    const runtime = await loadRuntime();
+    runtime.startVoiceRecordingRuntime();
+    await settle();
+    expect(fake.imports).toBe(0);
+
+    push("ready");
+    await vi.waitFor(() => expect(runtime.getLoadedVoiceRecordingService()).not.toBeNull());
+  });
+
+  it("counts a keyed provider by its key whatever the model says", async () => {
+    const runtime = await loadRuntime();
+    const keyless = { ...ON, openaiApiKey: "" } as VoiceInputSettings;
+    expect(runtime.isVoiceInputConfigured(keyless, true)).toBe(false);
+    expect(runtime.isVoiceInputConfigured({ ...keyless, transcriptionProvider: "local" }, true)).toBe(
+      true
+    );
+    expect(
+      runtime.isVoiceInputConfigured({ ...keyless, transcriptionProvider: "local" }, false)
+    ).toBe(false);
+  });
+});

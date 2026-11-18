@@ -293,9 +293,14 @@ export function startVoiceRecordingRuntime(): () => void {
   };
   window.addEventListener(VOICE_INPUT_SETTINGS_CHANGED_EVENT, handleSettingsChanged);
   // A model downloaded from any view makes on-device dictation ready here too.
+  // Only the change counts: this view's own reads publish the status as well.
+  let localModelReady = isLocalModelReady();
   unsubscribers.push(
     subscribeLocalModelStatus((status) => {
-      if (status.state === "ready") handleSettingsChanged();
+      const ready = status.state === "ready";
+      if (ready === localModelReady) return;
+      localModelReady = ready;
+      if (ready) handleSettingsChanged();
     })
   );
   unsubscribers.push(() =>
