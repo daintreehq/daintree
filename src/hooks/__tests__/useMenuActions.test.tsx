@@ -26,13 +26,13 @@ describe("useMenuActions", () => {
 
   const setup = () => {
     let handler:
-      | ((payload: { actionId: string; args?: unknown; portalActionId?: string }) => void)
+      | ((payload: { actionId: string; args?: unknown }) => void)
       | undefined;
     Object.defineProperty(window, "electron", {
       value: {
         app: {
           onMenuAction: (
-            cb: (payload: { actionId: string; args?: unknown; portalActionId?: string }) => void
+            cb: (payload: { actionId: string; args?: unknown }) => void
           ) => {
             handler = cb;
             return () => {};
@@ -59,12 +59,6 @@ describe("useMenuActions", () => {
       await handler?.(null as unknown as { actionId: string });
     }).not.toThrow();
     expect(dispatchMock).not.toHaveBeenCalled();
-  });
-
-  it("dispatches the terminal-cycle action even when main names a portal one", async () => {
-    const { handler } = setup();
-    await handler?.({ actionId: "terminal.focusNext", portalActionId: "portal.nextTab" });
-    expect(dispatchMock).toHaveBeenCalledWith("terminal.focusNext", undefined, { source: "menu" });
   });
 
   it("dispatches directly when payload has actionId and args", async () => {

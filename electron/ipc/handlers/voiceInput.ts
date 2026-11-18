@@ -434,8 +434,7 @@ export function getLiveVoiceSession(): {
  * session it was meant to show. The view on screen there may be on another
  * host than the owner's, so it is told the host as well as the workspace
  * (#14773). An owner already on screen takes the keyboard from any other view
- * in its window, a browser panel or a portal tab, which its own focus moves
- * can't reach; a switch focuses the view it brings in.
+ * in its window or a browser panel, which its own focus moves can't reach; a switch focuses the view it brings in.
  */
 function showSessionWindow(session: VoiceSession): void {
   const win = getWindowForWebContents(session.sender);
@@ -475,7 +474,7 @@ export function requestLiveSessionStop(sessionId?: string, returnToTarget = fals
 
 /**
  * Whether a focused page that isn't an app view (a browser or dev-preview
- * guest, a portal tab) takes this keystroke from the page. The dictation key
+ * guest) takes this keystroke from the page. The dictation key
  * stops dictation running in any view, as it would from an app view; a held
  * key's repeats go with it. With nothing running it stays the page's (#14601).
  */

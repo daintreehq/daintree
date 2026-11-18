@@ -223,7 +223,6 @@ async function initWorkspaceClient(opts: { prewarmPath?: string }): Promise<Work
 const WINDOW_SCOPED_DEPS = [
   "mainWindow",
   "eventBuffer",
-  "portalManager",
   "projectSwitchService",
   "projectViewManager",
 ] as const satisfies readonly (keyof HandlerDependencies)[];

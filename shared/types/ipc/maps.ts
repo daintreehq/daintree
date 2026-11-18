@@ -1076,7 +1076,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Portal channels
   // Keybinding channels
   "keybinding:get-overrides": {
     args: [];
@@ -2061,12 +2060,6 @@ export interface IpcEventMap {
   // Power policy changed — battery, focus, visibility, or screen lock (#12515)
   "system:power-policy-changed": import("../powerPolicy.js").PowerPolicySnapshot;
 
-  // Portal events
-  "portal:nav-event": import("../portal.js").PortalNavEvent;
-  "portal:focus": void;
-  "portal:blur": void;
-  "portal:tab-evicted": { tabId: string };
-
   // System Sleep events
   "system-sleep:on-suspend": void;
   "system-sleep:on-wake": number;
@@ -2076,7 +2069,7 @@ export interface IpcEventMap {
   "os-dnd:state-changed": import("./osDnd.js").OsDndState;
 
   // Menu events
-  "menu:action": { actionId: string; args?: unknown; portalActionId?: string };
+  "menu:action": { actionId: string; args?: unknown };
 
   // Window events
   "window:fullscreen-change": boolean;
@@ -2098,7 +2091,6 @@ export interface IpcEventMap {
     availableMb: number;
     writesSuppressed: boolean;
   };
-  "portal:tabs-evicted": { tabIds: string[] };
 
   // Sound events (main → renderer)
   "sound:trigger": { soundFile: string; detune?: number; volume?: number };

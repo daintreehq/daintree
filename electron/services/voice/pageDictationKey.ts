@@ -1,6 +1,6 @@
 /**
- * Lets a focused page that isn't an app view (a browser or dev-preview guest,
- * a portal tab) hand the dictation key to the live session. The voice input
+ * Lets a focused page that isn't an app view (a browser or dev-preview guest)
+ * hand the dictation key to the live session. The voice input
  * handlers register the claim; the page key hooks only call it, so they never
  * load the voice handlers' module graph.
  */

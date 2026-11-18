@@ -556,17 +556,6 @@ export type {
   SpawnErrorCode,
 } from "./pty-host.js";
 
-// Portal types: main's PortalManager and its IPC contract (#17257)
-export type {
-  PortalBounds,
-  PortalNavEvent,
-  PortalTabHistory,
-  PortalCreatePayload,
-  PortalShowPayload,
-  PortalCloseTabPayload,
-  PortalNavigatePayload,
-} from "./portal.js";
-
 // A project's own links (#17091)
 export type {
   DeclaredProjectLink,

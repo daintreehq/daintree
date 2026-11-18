@@ -72,8 +72,8 @@ export function runActionsGetSchema(request: ViewlessActionRequest): ActionDispa
 /**
  * What a view would report as open, with none attached (#14139): the project,
  * the worktree its saved layout last selected, and the panels a view would
- * hydrate. Nothing is focused and no portal is open, because nothing draws
- * them, so those fields are left out rather than guessed.
+ * hydrate. Nothing is focused, because nothing draws it, so the focus fields
+ * are left out rather than guessed.
  */
 export async function runActionsGetContext(
   request: ViewlessActionRequest,

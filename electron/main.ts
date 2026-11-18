@@ -29,7 +29,10 @@ import { getOsToAppBootMs, markPerformance } from "./utils/performance.js";
 import { getCompileCacheMeta } from "./utils/hostPerformance.js";
 import { startPerformanceTraceIfEnabled } from "./utils/performanceTrace.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
-import { startSessionCacheTracking } from "./services/sessionCacheCleaner.js";
+import {
+  clearRetiredPortalPartitions,
+  startSessionCacheTracking,
+} from "./services/sessionCacheCleaner.js";
 import { setupHtmlPreviewSession } from "./setup/htmlPreviewSession.js";
 import {
   registerAppProtocol,
@@ -1536,8 +1539,8 @@ if (!gotTheLock) {
     canShowDialogs: () => !headlessOzone,
   });
 
-  // Before whenReady so the eagerly created persist:daintree / persist:portal
-  // sessions are recorded for Settings → Clear cache (#12562).
+  // Before whenReady so the eagerly created persist:daintree session is
+  // recorded for Settings → Clear cache (#12562).
   startSessionCacheTracking();
 
   app.whenReady().then(async () => {
@@ -1557,6 +1560,20 @@ if (!gotTheLock) {
         markPerformance(PERF_MARKS.EARLY_PATH_REFRESH_COMPLETE);
       });
       setupPermissionLockdown();
+      // Nothing opens the retired Portal sessions, so wiping their sign-ins
+      // needn't hold startup (#17257). A smoke run skips it: it holds no
+      // single-instance lock, so a running older build may still use them.
+      if (!isSmokeTest) {
+        void clearRetiredPortalPartitions()
+          .then(({ cleared, failed }) => {
+            if (cleared > 0 || failed > 0) {
+              console.log(`[MAIN] Retired Portal sessions: ${cleared} cleared, ${failed} failed`);
+            }
+          })
+          .catch((error: unknown) => {
+            console.warn("[MAIN] Failed to clear retired Portal sessions:", error);
+          });
+      }
       registerDeepLinkProtocolClient();
       registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();

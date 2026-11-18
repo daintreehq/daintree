@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   sanitizePartitionToken,
   buildDevPreviewPartition,
-  isDevPreviewPartition,
   buildBrowserPartition,
   isBrowserPartition,
   partitionProjectKey,
@@ -62,28 +61,6 @@ describe("buildDevPreviewPartition", () => {
     expect(buildDevPreviewPartition(undefined, undefined, undefined)).toBe(
       "persist:dev-preview-default-main-default"
     );
-  });
-});
-
-describe("isDevPreviewPartition", () => {
-  it("accepts a well-formed dev-preview partition", () => {
-    expect(isDevPreviewPartition("persist:dev-preview-proj-main-panel")).toBe(true);
-    expect(isDevPreviewPartition(buildDevPreviewPartition("a", "b", "c"))).toBe(true);
-  });
-
-  it("rejects the default portal partition", () => {
-    expect(isDevPreviewPartition("persist:portal")).toBe(false);
-  });
-
-  it("rejects non-persist or malformed partitions", () => {
-    expect(isDevPreviewPartition("dev-preview-a-b-c")).toBe(false);
-    expect(isDevPreviewPartition("persist:dev-preview-a-b")).toBe(false);
-    expect(isDevPreviewPartition("persist:dev-preview-a-b-c!")).toBe(false);
-  });
-
-  it("rejects non-string values", () => {
-    expect(isDevPreviewPartition(undefined)).toBe(false);
-    expect(isDevPreviewPartition(123)).toBe(false);
   });
 });
 

@@ -226,7 +226,7 @@ export interface VoiceRevealRequest {
 
 /**
  * The dictation key stopping the live session from outside its view: another
- * view's key, or a page (a browser panel, a portal tab) handing it over. Sent
+ * view's key, or a page (a browser panel) handing it over. Sent
  * by the other view to main, and by main on to the owner. `returnToTarget`
  * takes the person back to the dictation's pane once it stops (#14791): main
  * brings the owner's window and workspace forward, and the owner puts the

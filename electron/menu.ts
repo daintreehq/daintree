@@ -717,10 +717,9 @@ export function createApplicationMenu(
       label: "Terminal",
       submenu: [
         {
-          // Renderer-owned so scoped bindings win: the portal binds
-          // portal.newTab on the same Cmd+T at higher priority — without
-          // per-event suppression the native accelerator would fire
-          // terminal.duplicate regardless of portal focus.
+          // Renderer-owned so a scoped binding on the same key can win:
+          // without per-event suppression the native accelerator would fire
+          // terminal.duplicate whatever has focus.
           label: "Duplicate Panel",
           accelerator: rendererMenuAccelerator("terminal.duplicate"),
           click: (_item, browserWindow) =>

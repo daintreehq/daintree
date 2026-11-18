@@ -44,7 +44,7 @@ export function trackSession(ses: Electron.Session): void {
  * session enumeration API, and `session.fromPartition()` permanently creates a
  * BrowserContext, so this registry is the only safe way to know which
  * partitions have an open disk-cache backend. Must run before `app.whenReady`
- * so the eagerly created `persist:daintree` / `persist:portal` sessions are seen.
+ * so the eagerly created `persist:daintree` session is seen.
  */
 export function startSessionCacheTracking(): () => void {
   if (stopTracking) return stopTracking;
@@ -202,9 +202,10 @@ async function clearPartitionDir(
 }
 
 /**
- * The partition directory names a host's browser, dev-preview and portal
- * sessions use. The prefix ends at the host part's closing `__`, which no host
- * part holds, so one host's partitions never match another's.
+ * The partition directory names a host's browser and dev-preview sessions use
+ * (and the Portal session its windows had before #17257). The prefix ends at
+ * the host part's closing `__`, which no host part holds, so one host's
+ * partitions never match another's.
  */
 export function isHostPartitionDirName(name: string, hostId: string): boolean {
   const prefix = remotePartitionKeyPrefix(hostId);
@@ -217,7 +218,39 @@ export function isHostPartitionDirName(name: string, hostId: string): boolean {
  * through the Session API; one not open this run has its directory removed,
  * detached first so a session opening meanwhile starts empty.
  */
-export async function clearHostPartitions(hostId: string): Promise<ClearSessionCachesResult> {
+export function clearHostPartitions(hostId: string): Promise<ClearSessionCachesResult> {
+  return wipePartitionDirs((name) => isHostPartitionDirName(name, hostId));
+}
+
+/**
+ * The retired Portal's sessions (#17257), as whole directory names: this
+ * machine's `persist:portal`, and the `persist:browser-remote__<host>__-portal`
+ * a window attached to a host used, its host part escaped or hashed as
+ * `partitionPart` wrote it. No browser panel's partition ends `__-portal`, since
+ * a project part is an escape (no `-`) or `-` and hex. A name may carry the
+ * suffix of an earlier detach whose removal failed.
+ */
+const RETIRED_PORTAL_DIR_PATTERN =
+  /^(?:portal|browser-remote__(?:(?:[a-z0-9]|_[0-9a-f]{4})+|-[0-9a-f]+)__-portal)(?:\.daintree-clearing-[0-9a-f]{12})*$/;
+
+export function isRetiredPortalPartitionDirName(name: string): boolean {
+  return RETIRED_PORTAL_DIR_PATTERN.test(name);
+}
+
+/**
+ * Wipe the retired Portal sessions, which still hold web-chat sign-ins
+ * (#17257). Nothing opens them any more, so a directory still present is one
+ * no launch has cleared yet: the first launch after upgrading removes them,
+ * and later launches find nothing to do, or finish what an earlier one could
+ * not. Every other partition is left alone.
+ */
+export function clearRetiredPortalPartitions(): Promise<ClearSessionCachesResult> {
+  return wipePartitionDirs(isRetiredPortalPartitionDirName);
+}
+
+async function wipePartitionDirs(
+  matches: (dirName: string) => boolean
+): Promise<ClearSessionCachesResult> {
   const result: ClearSessionCachesResult = { cleared: 0, failed: 0 };
   const partitionsRoot = path.join(app.getPath("sessionData"), "Partitions");
   let entries: fs.Dirent[];
@@ -233,7 +266,7 @@ export async function clearHostPartitions(hostId: string): Promise<ClearSessionC
   for (const entry of entries) {
     const isSymlink = entry.isSymbolicLink();
     if (!entry.isDirectory() && !isSymlink) continue;
-    if (!isHostPartitionDirName(entry.name, hostId)) continue;
+    if (!matches(entry.name)) continue;
     const partitionDir = path.join(partitionsRoot, entry.name);
     const live = findLiveSession(partitionDir);
     if (!live && isSymlink) {

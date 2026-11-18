@@ -344,10 +344,6 @@ function keyMatches(
 }
 
 const TERMINAL_CYCLE_ACTIONS = ["terminal.focusNext", "terminal.focusPrevious"] as const;
-const PORTAL_TAB_FOR_TERMINAL_CYCLE: Record<string, string> = {
-  "terminal.focusNext": "portal.nextTab",
-  "terminal.focusPrevious": "portal.prevTab",
-};
 
 /**
  * The terminal-cycle action a Tab keystroke triggers, resolved against the
@@ -355,34 +351,14 @@ const PORTAL_TAB_FOR_TERMINAL_CYCLE: Record<string, string> = {
  * too. Main takes only Tab combos before the page (Ctrl+Tab did not reliably
  * reach the renderer on Windows); a cycle rebound to any other key is left to
  * the renderer, which owns text fields, terminals, recording and chords.
- *
- * `portalActionId` is set when the same keystroke is also the portal's tab
- * key, so the renderer can give it to the portal while the portal has focus.
  */
-export function findTerminalCycleAction(
-  input: Electron.Input
-): { actionId: string; portalActionId?: string } | undefined {
+export function findTerminalCycleAction(input: Electron.Input): { actionId: string } | undefined {
   const isTab = (acc: ParsedAccelerator) => acc.key === "Tab";
   const actionId = findActionForInput(input, TERMINAL_CYCLE_ACTIONS, "global", isTab);
-  if (!actionId) return undefined;
-  const portalActionId = PORTAL_TAB_FOR_TERMINAL_CYCLE[actionId]!;
-  return findActionForInput(input, [portalActionId], "portal") === portalActionId
-    ? { actionId, portalActionId }
-    : { actionId };
+  return actionId ? { actionId } : undefined;
 }
 
 /** Whether this keystroke is the dictation key as the person has it bound. */
 export function isDictationKey(input: Electron.Input): boolean {
   return findActionForInput(input, ["voiceInput.toggle"], "global") !== undefined;
-}
-
-/**
- * Portal tab keys a focused portal page hands to the portal. Only combos held
- * with Cmd/Ctrl qualify: a bare or Shift-only key is the page's own typing.
- */
-export function findPortalPageAction(
-  input: Electron.Input,
-  actionIds: readonly string[]
-): string | undefined {
-  return findActionForInput(input, actionIds, "portal", (acc) => acc.primary || acc.ctrl);
 }

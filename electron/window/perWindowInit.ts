@@ -12,7 +12,6 @@ import {
 import { getFocusedPanelTracker } from "../services/FocusedPanelTracker.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
 import { startFrozenViewProjectsPublisher } from "./frozenViewProjects.js";
-import { resolveInitialCanvasBackgroundColor } from "./skeletonCss.js";
 import { PtyClient } from "../services/PtyClient.js";
 import { startTerminalLifecycleObserver } from "../services/pty/TerminalLifecycleObserver.js";
 import { startScheduledRunFacts } from "../services/scheduledRuns/index.js";
@@ -20,7 +19,6 @@ import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogC
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
 import { AgentModelCatalogService } from "../services/AgentModelCatalogService.js";
-import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu, rebuildApplicationMenuIfStale } from "../menu.js";
@@ -102,7 +100,7 @@ function buildsUnfocusedMenu(
  * `setupWindowServices` call: the per-window CLI deferred task,
  * deferred-queue arming, NotificationService wire-up, first-window-only
  * critical-services boot (PtyClient), and per-window service
- * objects (EventBuffer, PortalManager, ProjectSwitchService, ctx.cleanup).
+ * objects (EventBuffer, ProjectSwitchService, ctx.cleanup).
  *
  * Returns a partially-populated `HandlerDependencies` for the caller to extend
  * with `worktreeService`, `worktreePortBroker`, and `projectViewManager` once
@@ -252,12 +250,6 @@ export async function initPerWindowServices(
   // bus so early-boot events (migrations, PTY init, hydration) reach the
   // inspector. Deferring would drop those events.
   ctx.services.eventBuffer.start();
-  // Match the main app view's background color so portal WebContentsView's
-  // first paint blends with the window chrome instead of flashing white when a
-  // tab is created or returned to after an overlay (#9207). Resolved with the
-  // custom schemes, so a custom light theme doesn't get a dark built-in canvas.
-  const portalBackgroundColor = resolveInitialCanvasBackgroundColor();
-  ctx.services.portalManager = new PortalManager(win, portalBackgroundColor);
   // OS foreground for the plugin focus tracker (#13221). The window's own
   // focus/blur, because a child view's webContents doesn't reliably blur when
   // the window deactivates.
@@ -288,14 +280,13 @@ export async function initPerWindowServices(
     mainWindow: win,
     ptyClient,
     eventBuffer: ctx.services.eventBuffer,
-    portalManager: ctx.services.portalManager,
     cliAvailabilityService,
     agentVersionService: getAgentVersionService() ?? undefined,
     isDemoMode,
     windowRegistry,
   } as HandlerDependencies);
 
-  // Per-window cleanup: ports, portalManager, eventBuffer
+  // Per-window cleanup: ports, eventBuffer
   ctx.cleanup.add(
     toDisposable(() => {
       if (!win.isDestroyed()) {
@@ -342,10 +333,6 @@ export async function initPerWindowServices(
         }
         ctx.services.activePtyHostPort = undefined;
       }
-      if (ctx.services.portalManager) {
-        ctx.services.portalManager.destroy();
-        ctx.services.portalManager = undefined;
-      }
       if (ctx.services.eventBuffer) {
         ctx.services.eventBuffer.stop();
         ctx.services.eventBuffer = undefined;
@@ -362,7 +349,6 @@ export async function initPerWindowServices(
     mainWindow: win,
     ptyClient,
     eventBuffer: ctx.services.eventBuffer,
-    portalManager: ctx.services.portalManager,
     cliAvailabilityService,
     agentVersionService: getAgentVersionService() ?? undefined,
     isDemoMode,

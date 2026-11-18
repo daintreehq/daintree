@@ -4,7 +4,7 @@ import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 
 export { getDaintreeAppCSP };
 
-export type WebviewPartitionType = "browser" | "dev-preview" | "portal" | "project" | "unknown";
+export type WebviewPartitionType = "browser" | "dev-preview" | "project" | "unknown";
 
 /**
  * Checks if a partition is a valid dev-preview partition.
@@ -21,9 +21,6 @@ export function isDevPreviewPartition(value: string): boolean {
 export function classifyPartition(partition: string): WebviewPartitionType {
   if (isBrowserPartition(partition)) {
     return "browser";
-  }
-  if (partition === "persist:portal") {
-    return "portal";
   }
   if (isDevPreviewPartition(partition)) {
     return "dev-preview";

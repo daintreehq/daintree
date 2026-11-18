@@ -51,8 +51,8 @@ describe("webviewCsp", () => {
       expect(classifyPartition("persist:browserish")).toBe("unknown");
     });
 
-    it("identifies portal partition", () => {
-      expect(classifyPartition("persist:portal")).toBe("portal");
+    it("gives the retired persist:portal no class of its own", () => {
+      expect(classifyPartition("persist:portal")).toBe("unknown");
     });
 
     it("identifies dev-preview partition", () => {
