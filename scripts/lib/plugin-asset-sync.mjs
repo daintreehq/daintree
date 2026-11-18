@@ -26,8 +26,12 @@ export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set([
   "review",
 ]);
 
-// Lower-cased: on a case-insensitive filesystem `Main/` names `main/`.
-function isReservedName(name) {
+/**
+ * Whether a plugin directory entry is one the asset sync never copies, and
+ * never touches in the output. Lower-cased: on a case-insensitive filesystem
+ * `Main/` names `main/`.
+ */
+export function isReservedAssetDir(name) {
   return PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(name.toLowerCase());
 }
 
@@ -84,6 +88,32 @@ function listDirNames(dir) {
 }
 
 /**
+ * What a source entry ships as. A symlink ships as a copy of the file it names,
+ * and only when that file is inside the plugin; a link to a directory or to
+ * anything outside ships nothing.
+ */
+function sourceKind(file, entry, pluginRealDir) {
+  if (entry.isDirectory()) return "dir";
+  if (entry.isFile()) return "file";
+  if (!entry.isSymbolicLink()) return null;
+  try {
+    const real = fs.realpathSync(file);
+    return isInsideDir(real, pluginRealDir) && fs.statSync(real).isFile() ? "file" : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * An output entry's kind as found, without following links: a symlink matches
+ * nothing the sync wants, so it is removed rather than written through.
+ */
+function outputKind(entry) {
+  if (entry.isDirectory()) return "dir";
+  return entry.isFile() ? "file" : "other";
+}
+
+/**
  * The files a manifest ships beside itself: each `./` command or arg naming a
  * file directly in the plugin directory. A nested path ships with its
  * directory, or not at all under a reserved one, where it could not be told
@@ -107,18 +137,33 @@ function manifestSiblingFiles(srcPluginDir, manifestText) {
   return names;
 }
 
-function entryKind(entry) {
-  return entry.isDirectory() ? "dir" : "file";
+/**
+ * Staged beside the destination and renamed over it, so an interrupted copy
+ * never leaves a truncated asset and a read-only copy can still be replaced. A
+ * staged file a crash leaves behind is pruned by the next sync.
+ */
+function replaceFile(src, dest, mode) {
+  const staged = `${dest}.sync-${process.pid}`;
+  try {
+    fs.copyFileSync(src, staged);
+    fs.chmodSync(staged, mode);
+    try {
+      fs.renameSync(staged, dest);
+    } catch (error) {
+      // Windows won't rename over a read-only file.
+      if (error.code !== "EPERM" && error.code !== "EACCES") throw error;
+      fs.rmSync(dest, { force: true });
+      fs.renameSync(staged, dest);
+    }
+  } finally {
+    fs.rmSync(staged, { force: true });
+  }
 }
 
 function copyIfChanged(src, dest) {
   const srcStat = fs.statSync(src);
-  let destStat = null;
-  try {
-    destStat = fs.statSync(dest);
-  } catch {
-    // Absent: copy it.
-  }
+  const destStat = fs.lstatSync(dest, { throwIfNoEntry: false });
+  // An executable bit flipped on an unchanged script still has to reach the copy.
   const mode = srcStat.mode & 0o777;
   if (
     destStat?.isFile() &&
@@ -128,30 +173,29 @@ function copyIfChanged(src, dest) {
   ) {
     return false;
   }
-  fs.copyFileSync(src, dest);
-  // An executable bit flipped on an unchanged script still has to reach the copy.
-  fs.chmodSync(dest, mode);
+  replaceFile(src, dest, mode);
   return true;
 }
 
 /** Make `destDir` hold exactly what `srcDir` holds, recording each change under `rel`. */
-function mirrorDir(srcDir, destDir, rel, changes) {
+function mirrorDir(srcDir, destDir, rel, pluginRealDir, changes) {
   const wanted = new Map();
   for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    if (entry.isDirectory() || entry.isFile()) wanted.set(entry.name, entryKind(entry));
+    const kind = sourceKind(path.join(srcDir, entry.name), entry, pluginRealDir);
+    if (kind) wanted.set(entry.name, kind);
   }
   fs.mkdirSync(destDir, { recursive: true });
   // Prune before copying, so a case-only rename on a case-insensitive
   // filesystem never deletes the fresh copy.
   for (const entry of fs.readdirSync(destDir, { withFileTypes: true })) {
-    if (wanted.get(entry.name) === entryKind(entry)) continue;
+    if (wanted.get(entry.name) === outputKind(entry)) continue;
     fs.rmSync(path.join(destDir, entry.name), { recursive: true, force: true });
     changes.removed.push(`${rel}/${entry.name}`);
   }
   for (const [name, kind] of wanted) {
     const src = path.join(srcDir, name);
     const dest = path.join(destDir, name);
-    if (kind === "dir") mirrorDir(src, dest, `${rel}/${name}`, changes);
+    if (kind === "dir") mirrorDir(src, dest, `${rel}/${name}`, pluginRealDir, changes);
     else if (copyIfChanged(src, dest)) changes.copied.push(`${rel}/${name}`);
   }
 }
@@ -168,36 +212,46 @@ function mirrorDir(srcDir, destDir, rel, changes) {
  * is removed when its source is gone, so a renamed script or a deleted asset
  * does not outlive a restart of the watcher; a plugin without a manifest keeps
  * nothing. Reserved names are never touched, which leaves esbuild's `main/`
- * output in place. Returns the paths it copied and removed, relative to the
- * plugin directory.
+ * output in place. Records the paths it copied and removed, relative to the
+ * plugin directory, in `changes`, which keeps what was done before a failure.
  */
-export function syncPluginAssets(srcPluginDir, destPluginDir) {
+export function syncPluginAssets(
+  srcPluginDir,
+  destPluginDir,
+  changes = { copied: [], removed: [] }
+) {
   const src = path.resolve(srcPluginDir);
   const dest = path.resolve(destPluginDir);
-  const changes = { copied: [], removed: [] };
   const manifestText = readIfPresent(path.join(src, "plugin.json"));
 
   const wanted = new Map();
   let keepUnlistedFiles = false;
+  let pluginRealDir = src;
   if (manifestText !== null) {
+    pluginRealDir = fs.realpathSync(src);
     wanted.set("plugin.json", "file");
     for (const name of listDirNames(src)) {
-      if (!isReservedName(name)) wanted.set(name, "dir");
+      if (!isReservedAssetDir(name)) wanted.set(name, "dir");
     }
     const siblings = manifestSiblingFiles(src, manifestText);
     keepUnlistedFiles = siblings === null;
     for (const name of siblings ?? []) {
-      if (wanted.has(name) || isReservedName(name)) continue;
-      if (fs.statSync(path.join(src, name), { throwIfNoEntry: false })?.isFile()) {
-        wanted.set(name, "file");
-      }
+      if (wanted.has(name) || isReservedAssetDir(name)) continue;
+      const file = path.join(src, name);
+      const entry = fs.lstatSync(file, { throwIfNoEntry: false });
+      if (entry && sourceKind(file, entry, pluginRealDir) === "file") wanted.set(name, "file");
     }
   }
 
-  if (fs.existsSync(dest)) {
+  const destStat = fs.lstatSync(dest, { throwIfNoEntry: false });
+  if (destStat && !destStat.isDirectory()) {
+    // Never sync through a link: replace whatever stands in for the directory.
+    fs.rmSync(dest, { force: true });
+    changes.removed.push(".");
+  } else if (destStat) {
     for (const entry of fs.readdirSync(dest, { withFileTypes: true })) {
-      if (isReservedName(entry.name)) continue;
-      const kind = entryKind(entry);
+      if (isReservedAssetDir(entry.name)) continue;
+      const kind = outputKind(entry);
       if (wanted.get(entry.name) === kind) continue;
       if (keepUnlistedFiles && kind === "file" && !wanted.has(entry.name)) continue;
       fs.rmSync(path.join(dest, entry.name), { recursive: true, force: true });
@@ -208,8 +262,10 @@ export function syncPluginAssets(srcPluginDir, destPluginDir) {
 
   fs.mkdirSync(dest, { recursive: true });
   for (const [name, kind] of wanted) {
-    if (kind === "dir") mirrorDir(path.join(src, name), path.join(dest, name), name, changes);
-    else if (copyIfChanged(path.join(src, name), path.join(dest, name))) changes.copied.push(name);
+    const from = path.join(src, name);
+    const to = path.join(dest, name);
+    if (kind === "dir") mirrorDir(from, to, name, pluginRealDir, changes);
+    else if (copyIfChanged(from, to)) changes.copied.push(name);
   }
   return changes;
 }
@@ -232,19 +288,25 @@ export function syncPluginTier(srcTierDir, destTierDir) {
   return changed;
 }
 
+// A POSIX file name may contain a backslash, so split only where the platform does.
+const PATH_SEPARATOR = process.platform === "win32" ? /[\\/]/ : /\//;
+
 /**
  * Keep the copied plugin assets current while the development watcher runs.
- * A recursive `fs.watch` on each source tier marks the plugin an event names
- * (or the whole tier, for a plugin directory itself or an event with no name)
- * and a short debounce syncs what it marked. Passes never overlap: edits that
- * land while one runs, including while `onChange` awaits, are drained by the
- * next. A periodic rescan of every tier backs up the watcher, which can miss an
- * edit (Linux's recursive watch keeps the old inode after an atomic save) or
- * fail outright, and covers a tier that did not exist when it started.
+ * A recursive `fs.watch` on each source tier marks the plugin an event names,
+ * and a short debounce syncs what it marked. An event naming no current plugin
+ * directory (the tier itself, a `.` path, a Windows short name, no name at all)
+ * rescans its whole tier instead. Passes never overlap: edits that land while
+ * one runs, including while `onChange` awaits, are drained by the next. A
+ * periodic rescan of every tier backs up the watcher, which can miss an edit
+ * (Linux's recursive watch keeps the old inode after an atomic save) or fail
+ * outright, and covers a tier that did not exist when it started.
  *
- * `onChange` receives `{ tier, name, copied, removed }` for each plugin a pass
- * changed. `close()` stops the watcher and resolves once any pass in flight has
- * finished.
+ * `initialSync` mirrors every tier before this returns and reports what it
+ * changed through `onChange` like any later pass, so an edit made between the
+ * caller's own checks and this sync is still rechecked. `onChange` receives
+ * `{ tier, name, copied, removed }` for each plugin a pass changed. `close()`
+ * stops the watcher and resolves once any pass in flight has finished.
  */
 export function watchPluginAssets({
   srcRoot,
@@ -252,31 +314,26 @@ export function watchPluginAssets({
   tiers = PLUGIN_TIERS,
   debounceMs = 100,
   rescanMs = 2000,
+  initialSync = false,
   onChange = async () => {},
   onError = (error) => console.warn("[Build] Plugin asset watcher:", error),
+  watch = fs.watch,
 }) {
   const dirtyTiers = new Set();
   const dirtyPlugins = new Map();
   const watchers = [];
+  let pending = [];
   let debounceTimer = null;
   let draining = null;
   let closed = false;
 
-  function markTier(tier) {
-    dirtyTiers.add(tier);
-  }
-
   function onEvent(tier, filename) {
     if (closed) return;
-    const parts = filename ? String(filename).split(/[\\/]/).filter(Boolean) : [];
-    if (parts.length <= 1) {
-      markTier(tier);
-    } else if (isReservedName(parts[1])) {
-      // esbuild owns these sources (or they are dev-only), and the sync never copies them.
-      return;
-    } else {
-      dirtyPlugins.set(`${tier}/${parts[0]}`, { tier, name: parts[0] });
-    }
+    const parts = filename ? String(filename).split(PATH_SEPARATOR).filter(Boolean) : [];
+    // esbuild owns these sources (or they are dev-only), and the sync never copies them.
+    if (parts.length >= 2 && isReservedAssetDir(parts[1])) return;
+    if (parts.length >= 2) dirtyPlugins.set(`${tier}/${parts[0]}`, { tier, name: parts[0] });
+    else dirtyTiers.add(tier);
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
@@ -285,36 +342,60 @@ export function watchPluginAssets({
   }
 
   function takeBatch() {
-    const targets = new Map(dirtyPlugins);
-    for (const tier of dirtyTiers) {
-      const names = new Set([
-        ...listDirNames(path.join(srcRoot, tier)),
-        ...listDirNames(path.join(destRoot, tier)),
-      ]);
-      for (const name of names) targets.set(`${tier}/${name}`, { tier, name });
-    }
+    const plugins = [...dirtyPlugins.values()];
+    const scanTiers = new Set(dirtyTiers);
     dirtyTiers.clear();
     dirtyPlugins.clear();
+    const tierNames = new Map();
+    const namesIn = (tier) => {
+      if (!tierNames.has(tier)) {
+        let names = new Set();
+        try {
+          names = new Set([
+            ...listDirNames(path.join(srcRoot, tier)),
+            ...listDirNames(path.join(destRoot, tier)),
+          ]);
+        } catch (error) {
+          // The rescan tries the tier again.
+          onError(error);
+        }
+        tierNames.set(tier, names);
+      }
+      return tierNames.get(tier);
+    };
+    const targets = new Map();
+    for (const { tier, name } of plugins) {
+      if (namesIn(tier).has(name)) targets.set(`${tier}/${name}`, { tier, name });
+      else scanTiers.add(tier);
+    }
+    for (const tier of scanTiers) {
+      for (const name of namesIn(tier)) targets.set(`${tier}/${name}`, { tier, name });
+    }
     return [...targets.values()];
   }
 
-  async function runPasses() {
-    while (!closed && (dirtyTiers.size > 0 || dirtyPlugins.size > 0)) {
-      const changed = [];
-      for (const { tier, name } of takeBatch()) {
-        try {
-          const { copied, removed } = syncPluginAssets(
-            path.join(srcRoot, tier, name),
-            path.join(destRoot, tier, name)
-          );
-          if (copied.length > 0 || removed.length > 0)
-            changed.push({ tier, name, copied, removed });
-        } catch (error) {
-          // A file can vanish mid-save; the event that follows syncs it again.
-          onError(error);
-        }
+  function syncDirty() {
+    for (const { tier, name } of takeBatch()) {
+      const changes = { copied: [], removed: [] };
+      try {
+        syncPluginAssets(path.join(srcRoot, tier, name), path.join(destRoot, tier, name), changes);
+      } catch (error) {
+        // A file can vanish mid-save; the event that follows, or the rescan, syncs it again.
+        onError(error);
       }
-      if (changed.length === 0 || closed) continue;
+      // Kept from a pass that failed partway, so a manifest it copied is still rechecked.
+      if (changes.copied.length > 0 || changes.removed.length > 0) {
+        pending.push({ tier, name, ...changes });
+      }
+    }
+  }
+
+  async function runPasses() {
+    while (!closed) {
+      syncDirty();
+      if (pending.length === 0) return;
+      const changed = pending;
+      pending = [];
       try {
         await onChange(changed);
       } catch (error) {
@@ -334,7 +415,7 @@ export function watchPluginAssets({
     const dir = path.join(srcRoot, tier);
     if (!fs.existsSync(dir)) continue;
     try {
-      const watcher = fs.watch(dir, { recursive: true }, (_event, filename) =>
+      const watcher = watch(dir, { recursive: true }, (_event, filename) =>
         onEvent(tier, filename)
       );
       // The rescan keeps the output current without it.
@@ -345,8 +426,14 @@ export function watchPluginAssets({
     }
   }
 
+  if (initialSync) {
+    for (const tier of tiers) dirtyTiers.add(tier);
+    syncDirty();
+    drain();
+  }
+
   const rescanTimer = setInterval(() => {
-    for (const tier of tiers) markTier(tier);
+    for (const tier of tiers) dirtyTiers.add(tier);
     drain();
   }, rescanMs);
   rescanTimer.unref();

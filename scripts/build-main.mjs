@@ -10,6 +10,7 @@ import {
   PLUGIN_TIERS,
   collectRelativeAssetPaths,
   isInsideDir,
+  isReservedAssetDir,
   syncPluginTier,
   watchPluginAssets,
 } from "./lib/plugin-asset-sync.mjs";
@@ -347,7 +348,12 @@ export function findMissingPluginAssets(distPluginsRoot) {
           continue;
         }
         if (!fs.existsSync(resolved)) {
-          missing.push(`${tier}/${entry.name}: "${relPath}" not found in built output`);
+          const [topDir] = path.relative(pluginDir, resolved).split(path.sep);
+          const hint =
+            topDir !== path.basename(resolved) && isReservedAssetDir(topDir)
+              ? ` (the build never copies ${topDir}/: move it into a directory such as bin/, or beside plugin.json)`
+              : "";
+          missing.push(`${tier}/${entry.name}: "${relPath}" not found in built output${hint}`);
         }
       }
     }
@@ -644,14 +650,16 @@ async function run() {
 
   const startBuild = async () => {
     if (isWatch) {
-      // Armed before the first sync, so an edit made while it runs is not
-      // lost, and synced before esbuild can publish `.build-ready.js`.
+      // Armed before its first sync, so an edit made while that runs is not
+      // lost, and synced before esbuild can publish `.build-ready.js`. The
+      // first sync is rechecked like any later pass, which covers an edit made
+      // since the startup gates ran.
       watchPluginAssets({
         srcRoot: PLUGIN_SRC_ROOT,
         destRoot: PLUGIN_DIST_ROOT,
+        initialSync: true,
         onChange: recheckSyncedPluginAssets,
       });
-      syncAllPluginAssets();
       validateCopiedPluginAssets();
 
       const ctxEsm = await context(esmConfig);

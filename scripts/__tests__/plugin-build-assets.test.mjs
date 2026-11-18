@@ -144,13 +144,33 @@ describe("findMissingPluginAssets", () => {
 
   it("reads a manifest whose contributions have the wrong shape without throwing", () => {
     writeManifest("sample", "half-edited", {
-      contributes: { agents: {}, mcpServers: [{ command: "./mcp/absent.mjs", args: "x" }] },
+      contributes: { agents: {}, mcpServers: [{ command: "./mcp/absent.mjs", args: { 0: "x" } }] },
+    });
+    writeManifest("sample", "servers-object", {
+      contributes: { agents: [{ command: "./bin/absent.mjs" }], mcpServers: {} },
+    });
+
+    const missing = findMissingPluginAssets(workDir).sort();
+
+    expect(missing).toHaveLength(2);
+    expect(missing[0]).toContain("sample/half-edited");
+    expect(missing[0]).toContain("./mcp/absent.mjs");
+    expect(missing[1]).toContain("sample/servers-object");
+    expect(missing[1]).toContain("./bin/absent.mjs");
+  });
+
+  it("says why a path under a reserved directory is missing", () => {
+    writeManifest("builtin", "reserved", {
+      contributes: {
+        mcpServers: [{ command: "node", args: ["./main/helper.mjs", "./bin/x.mjs"] }],
+      },
     });
 
     const missing = findMissingPluginAssets(workDir);
 
-    expect(missing).toHaveLength(1);
-    expect(missing[0]).toContain("./mcp/absent.mjs");
+    expect(missing).toHaveLength(2);
+    expect(missing.find((m) => m.includes("./main/helper.mjs"))).toContain("never copies main/");
+    expect(missing.find((m) => m.includes("./bin/x.mjs"))).not.toContain("never copies");
   });
 });
 
@@ -258,15 +278,22 @@ describe("findTypeScriptCommandHandlers", () => {
     expect(findTypeScriptCommandHandlers(workDir)).toEqual([]);
   });
 
-  it("skips commands that are not a list instead of throwing", () => {
+  it("skips commands that are not a list and keeps scanning", () => {
     writeManifest(
       "sample",
       "half-edited",
       { contributes: { commands: { id: "greet" } } },
       { "src/greet.ts": "x\n" }
     );
+    writeManifest("sample", "numeric", { contributes: { commands: 3 } }, { "src/greet.ts": "x\n" });
+    writeManifest(
+      "sample",
+      "valid",
+      { contributes: { commands: [{ id: "greet" }] } },
+      { "src/greet.ts": "x\n" }
+    );
 
-    expect(findTypeScriptCommandHandlers(workDir)).toEqual([]);
+    expect(findTypeScriptCommandHandlers(workDir)).toEqual(["sample/valid: src/greet.ts"]);
   });
 });
 
