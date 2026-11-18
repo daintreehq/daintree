@@ -1,4 +1,4 @@
-import { readdir, readFile, realpath, stat } from "fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "fs/promises";
 import path from "path";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
 
@@ -27,6 +27,26 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === "ENOENT";
 }
 
+/** Nothing at all at `target`, as opposed to a symlink whose target is missing. */
+async function isAbsent(target: string): Promise<boolean> {
+  try {
+    await lstat(target);
+    return false;
+  } catch (error) {
+    if (isMissing(error)) return true;
+    throw error;
+  }
+}
+
+/**
+ * A path a git pointer file names, resolved as git resolves it: from `base`,
+ * following each symlink before any `..` after it rather than collapsing `..`
+ * lexically first.
+ */
+function resolvePointer(base: string, target: string): Promise<string> {
+  return realpath(path.isAbsolute(target) ? target : `${base}${path.sep}${target}`);
+}
+
 /**
  * A checkout's own git directory, read without spawning git, or undefined when
  * the checkout has no `.git` and the caller knows it isn't a repository. A main
@@ -42,8 +62,8 @@ async function resolveGitDir(
   missingRepoIsClear: boolean
 ): Promise<string | undefined> {
   const dotGit = path.join(checkoutPath, ".git");
-  const info = await stat(dotGit).catch((error: unknown) => {
-    if (missingRepoIsClear && isMissing(error)) return undefined;
+  const info = await stat(dotGit).catch(async (error: unknown) => {
+    if (missingRepoIsClear && isMissing(error) && (await isAbsent(dotGit))) return undefined;
     throw error;
   });
   if (!info) return undefined;
@@ -52,7 +72,7 @@ async function resolveGitDir(
   const content = await readFile(dotGit, "utf8");
   const match = /^gitdir:\s*(.+?)\s*$/m.exec(content);
   if (!match) throw new Error("malformed .git file");
-  return realpath(path.resolve(await realpath(checkoutPath), match[1]));
+  return resolvePointer(await realpath(checkoutPath), match[1]);
 }
 
 /** The repository's shared directory: a linked worktree's `commondir`, else the git dir itself. */
@@ -64,7 +84,7 @@ async function resolveCommonDir(gitDir: string): Promise<string> {
     if (isMissing(error)) return gitDir;
     throw error;
   }
-  return realpath(path.resolve(gitDir, content.trim()));
+  return resolvePointer(gitDir, content.trim());
 }
 
 async function subdirectories(dir: string): Promise<string[]> {
@@ -90,14 +110,16 @@ interface Walk {
  * A repository's own git directory plus every git directory nested under it:
  * one per linked worktree (`worktrees/<name>`) and one per absorbed submodule
  * (`modules/<path>`, whose name can itself span directories, and which can
- * have worktrees and submodules of its own). Empty when this probe already
- * walked the repository from another of its checkouts.
+ * have worktrees and submodules of its own). A submodule initialized from a
+ * linked worktree lives under that worktree's own `modules/`. Empty when this
+ * probe already walked the repository from another of its checkouts.
  */
 async function nestedGitDirs(commonDir: string, walk: Walk): Promise<string[]> {
   if (walk.walked.has(commonDir)) return [];
   walk.walked.add(commonDir);
   const dirs = [commonDir, ...(await subdirectories(path.join(commonDir, "worktrees")))];
-  const pending = await subdirectories(path.join(commonDir, "modules"));
+  const pending: string[] = [];
+  for (const dir of dirs) pending.push(...(await subdirectories(path.join(dir, "modules"))));
   for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
     if (--walk.left < 0) throw new Error("too many submodule directories");
     let isGitDir = false;

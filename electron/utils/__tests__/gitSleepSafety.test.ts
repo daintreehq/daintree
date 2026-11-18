@@ -135,7 +135,9 @@ describe("probeRepositorySleepSafety", () => {
   });
 
   it("is unknown when a repository really has more submodule directories than the budget", async () => {
-    busyRepository(0, 257);
+    // One namespace directory, one module inside it and 255 modules inside that: 257 directories.
+    const outer = absorbedModule("ns/outer");
+    for (let i = 0; i < 255; i++) absorbedModule(`inner-${i}`, outer);
     expect(await probeRepositorySleepSafety([repo])).toEqual({
       state: "unknown",
       reason: "read-failed",
@@ -195,6 +197,19 @@ describe("probeRepositorySleepSafety", () => {
     });
   });
 
+  it("finds an operation in a submodule initialized from a linked worktree", async () => {
+    // `git submodule update --init` in a linked worktree keeps the module under that worktree's git dir.
+    const { linked, roots } = busyRepository(2, 20);
+    const moduleDir = absorbedModule("dep", linked[1]!.gitDir);
+    writeFileSync(path.join(moduleDir, "index.lock"), "");
+    for (const checkouts of [[repo], roots]) {
+      expect(await probeRepositorySleepSafety(checkouts)).toEqual({
+        state: "busy",
+        marker: "index.lock",
+      });
+    }
+  });
+
   it("keeps a worktree's own git directory when its repository was already walked", async () => {
     // Admin directory outside `.git/worktrees`, so only the checkout's own .git file reaches it.
     const gitDir = path.join(root, "admin", "detached");
@@ -232,23 +247,81 @@ describe("probeRepositorySleepSafety", () => {
     }
   );
 
-  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "is unknown when a submodule directory can't be read",
+  it.skipIf(process.platform === "win32")(
+    "agrees on a repository whichever symlink each checkout reaches it through",
     async () => {
-      const { roots } = busyRepository(2, 3);
-      const unreadable = path.join(repo, ".git", "modules", "libs");
-      absorbedModule("libs/vendor");
-      chmodSync(unreadable, 0o000);
-      try {
-        expect(await probeRepositorySleepSafety(roots, { missingRepoIsClear: true })).toEqual({
-          state: "unknown",
-          reason: "EACCES",
-        });
-      } finally {
-        chmodSync(unreadable, 0o755);
-      }
+      const moduleDir = absorbedModule("shared");
+      for (let i = 0; i < 255; i++) absorbedModule(`inner-${i}`, moduleDir);
+      const alias = path.join(root, "alias");
+      symlinkSync(repo, alias, "dir");
+      const gitLink = path.join(root, "git-link");
+      symlinkSync(path.join(repo, ".git"), gitLink, "dir");
+      const { worktree, gitDir } = linkedWorktree("wt");
+      writeFileSync(path.join(gitDir, "commondir"), `${gitLink}\n`);
+      const moduleLink = path.join(root, "module-link");
+      symlinkSync(moduleDir, moduleLink, "dir");
+      const moduleCheckout = path.join(root, "shared");
+      mkdirSync(moduleCheckout);
+      writeFileSync(path.join(moduleCheckout, ".git"), `gitdir: ${moduleLink}\n`);
+      expect(await probeRepositorySleepSafety([alias, worktree, moduleCheckout])).toEqual({
+        state: "clear",
+      });
     }
   );
+
+  it.skipIf(process.platform === "win32")(
+    "follows a symlink in a relative gitdir before the .. after it, as git does",
+    async () => {
+      const checkout = path.join(root, "checkout");
+      mkdirSync(checkout);
+      mkdirSync(path.join(root, "deep", "x"), { recursive: true });
+      symlinkSync(path.join(root, "deep", "x"), path.join(checkout, "hop"), "dir");
+      writeFileSync(path.join(checkout, ".git"), "gitdir: hop/../admin\n");
+      const admin = path.join(root, "deep", "admin");
+      mkdirSync(admin);
+      writeFileSync(path.join(admin, "commondir"), `${path.join(repo, ".git")}\n`);
+      writeFileSync(path.join(admin, "index.lock"), "");
+      // Where `hop/../admin` lands when the .. is collapsed before following the link.
+      const lexical = path.join(checkout, "admin");
+      mkdirSync(lexical);
+      writeFileSync(path.join(lexical, "commondir"), `${path.join(repo, ".git")}\n`);
+      expect(await probeRepositorySleepSafety([checkout])).toEqual({
+        state: "busy",
+        marker: "index.lock",
+      });
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "is unknown for a dangling .git symlink, even for a folder known not to be a repository",
+    async () => {
+      const folder = path.join(root, "unmounted");
+      mkdirSync(folder);
+      symlinkSync(path.join(root, "volume", ".git"), path.join(folder, ".git"), "dir");
+      expect(await probeRepositorySleepSafety([folder], { missingRepoIsClear: true })).toEqual({
+        state: "unknown",
+        reason: "ENOENT",
+      });
+    }
+  );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
+    ["neither listed nor searched", 0o000],
+    ["searched but not listed", 0o111],
+  ])("is unknown when a submodule directory can't be read (%s)", async (_access, mode) => {
+    const { roots } = busyRepository(2, 3);
+    const unreadable = path.join(repo, ".git", "modules", "libs");
+    absorbedModule("libs/vendor");
+    chmodSync(unreadable, mode);
+    try {
+      expect(await probeRepositorySleepSafety(roots, { missingRepoIsClear: true })).toEqual({
+        state: "unknown",
+        reason: "EACCES",
+      });
+    } finally {
+      chmodSync(unreadable, 0o755);
+    }
+  });
 
   it("is unknown for a folder with no .git unless it is known not to be a repository", async () => {
     const folder = path.join(root, "plain");
