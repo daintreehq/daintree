@@ -25,12 +25,15 @@ import { makeTempDir, openSessionPair, removeTempDir, waitFor } from "./linkTest
 
 let dir: string;
 const sessions: LinkSession[] = [];
+/** Undone after each test, even one that timed out: held reads let go, spies restored. */
+const cleanups: Array<() => void> = [];
 
 beforeEach(async () => {
   dir = await makeTempDir();
 });
 
 afterEach(async () => {
+  for (const undo of cleanups.splice(0).reverse()) undo();
   for (const s of sessions.splice(0)) s.close("test done");
   await removeTempDir(dir);
 });
@@ -272,25 +275,32 @@ describe("bulk transfer", () => {
 
   /**
    * Counts what happens to `file`'s handles. `opened` runs before the handle is
-   * handed back (a slow open), and `afterRead` after each read returns.
+   * handed back (a slow open), `afterStat` once its stat returns, and
+   * `afterRead` after each read returns.
    */
   function watchFile(
     file: string,
-    hooks: { opened?: () => Promise<void>; afterRead?: (reads: number) => void } = {}
+    hooks: {
+      opened?: () => Promise<void>;
+      afterStat?: () => void;
+      afterRead?: (reads: number) => void;
+    } = {}
   ) {
     const counts = { opens: 0, stats: 0, reads: 0, closes: 0 };
     const realOpen = fs.open.bind(fs);
     const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      if (args[0] !== file) return handle;
+      if (args[0] !== file) return realOpen(...args);
       counts.opens += 1;
+      const handle = await realOpen(...args);
       const stat = handle.stat.bind(handle) as (...statArgs: unknown[]) => Promise<unknown>;
       const read = handle.read.bind(handle) as (...readArgs: unknown[]) => Promise<unknown>;
       const close = handle.close.bind(handle);
       Object.assign(handle, {
-        stat: (...statArgs: unknown[]) => {
+        stat: async (...statArgs: unknown[]) => {
           counts.stats += 1;
-          return stat(...statArgs);
+          const result = await stat(...statArgs);
+          hooks.afterStat?.();
+          return result;
         },
         read: async (...readArgs: unknown[]) => {
           counts.reads += 1;
@@ -306,26 +316,45 @@ describe("bulk transfer", () => {
       await hooks.opened?.();
       return handle;
     });
-    return { counts, restore: () => spy.mockRestore() };
+    cleanups.push(() => spy.mockRestore());
+    return counts;
   }
 
   it("stops hashing a file once its signal aborts, issuing no further reads and closing it", async () => {
     const file = path.join(dir, "cancelled.bin");
     await fs.writeFile(file, crypto.randomBytes(BULK_CHUNK_BYTES * 3));
     const controller = new AbortController();
-    const watched = watchFile(file, {
+    const counts = watchFile(file, {
       afterRead: (reads) => {
         if (reads === 1) controller.abort();
       },
     });
-    try {
-      await expect(fileTransferSource(file, controller.signal)).rejects.toMatchObject({
-        name: "AbortError",
-      });
-      expect(watched.counts).toEqual({ opens: 1, stats: 1, reads: 1, closes: 1 });
-    } finally {
-      watched.restore();
-    }
+    await expect(fileTransferSource(file, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(counts).toEqual({ opens: 1, stats: 1, reads: 1, closes: 1 });
+  });
+
+  it("hands back no source when the abort lands on the last read", async () => {
+    const file = path.join(dir, "one-chunk.bin");
+    await fs.writeFile(file, crypto.randomBytes(BULK_CHUNK_BYTES));
+    const controller = new AbortController();
+    const counts = watchFile(file, { afterRead: () => controller.abort() });
+    await expect(fileTransferSource(file, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(counts).toEqual({ opens: 1, stats: 1, reads: 1, closes: 1 });
+  });
+
+  it("reads nothing when the abort lands while the file is being sized", async () => {
+    const file = path.join(dir, "sizing.bin");
+    await fs.writeFile(file, crypto.randomBytes(BULK_CHUNK_BYTES * 2));
+    const controller = new AbortController();
+    const counts = watchFile(file, { afterStat: () => controller.abort() });
+    await expect(fileTransferSource(file, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(counts).toEqual({ opens: 1, stats: 1, reads: 0, closes: 1 });
   });
 
   it("closes a file whose open finished after the abort, without touching it", async () => {
@@ -334,18 +363,14 @@ describe("bulk transfer", () => {
     const controller = new AbortController();
     let finishOpen = () => {};
     const openHeld = new Promise<void>((resolve) => (finishOpen = resolve));
-    const watched = watchFile(file, { opened: () => openHeld });
-    try {
-      const preparing = fileTransferSource(file, controller.signal);
-      await waitFor(() => watched.counts.opens === 1);
-      controller.abort();
-      finishOpen();
-      await expect(preparing).rejects.toMatchObject({ name: "AbortError" });
-      expect(watched.counts).toEqual({ opens: 1, stats: 0, reads: 0, closes: 1 });
-    } finally {
-      finishOpen();
-      watched.restore();
-    }
+    cleanups.push(() => finishOpen());
+    const counts = watchFile(file, { opened: () => openHeld });
+    const preparing = fileTransferSource(file, controller.signal);
+    await waitFor(() => counts.opens === 1);
+    controller.abort();
+    finishOpen();
+    await expect(preparing).rejects.toMatchObject({ name: "AbortError" });
+    expect(counts).toEqual({ opens: 1, stats: 0, reads: 0, closes: 1 });
   });
 
   it("opens nothing for a signal that has already aborted", async () => {
@@ -353,15 +378,11 @@ describe("bulk transfer", () => {
     await fs.writeFile(file, crypto.randomBytes(16));
     const controller = new AbortController();
     controller.abort();
-    const watched = watchFile(file);
-    try {
-      await expect(fileTransferSource(file, controller.signal)).rejects.toMatchObject({
-        name: "AbortError",
-      });
-      expect(watched.counts.opens).toBe(0);
-    } finally {
-      watched.restore();
-    }
+    const counts = watchFile(file);
+    await expect(fileTransferSource(file, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(counts.opens).toBe(0);
   });
 
   it("treats a second TRANSFER_END as a protocol violation", async () => {
