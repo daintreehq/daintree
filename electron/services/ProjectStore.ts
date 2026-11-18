@@ -326,6 +326,10 @@ export class ProjectStore {
     // manager — so this one routes both kinds by id shape (#11821) rather than
     // a second observer replacing this one.
     this.stateManager.setStatePersistedObserver((workspaceId, state) => {
+      // The pre-write invalidation can't fence a hover that starts while the
+      // write is out, since reads still return the replaced state until now,
+      // and a stop clears state without saving any.
+      invalidatePrefetchCache(workspaceId);
       this.persistResumableAgentCount(workspaceId, state);
       this.notifyStatePersistedListeners(workspaceId, state);
     });
@@ -1208,6 +1212,8 @@ export class ProjectStore {
       { behavior: "immediate" }
     );
     if (removed.changes > 0) this.notifyRegistryListeners();
+    // Adding the same folder back gives it the same id.
+    invalidatePrefetchCache(projectId);
     // A launch still waiting to spawn would register a run for a project that's gone.
     cancelScheduledLaunches({ projectId });
     // Those runs, open ones included, will never end now.

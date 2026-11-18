@@ -267,6 +267,12 @@ import {
 import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 import { getMruProjects } from "../../../shared/utils/projectMru.js";
 import { events } from "../events.js";
+import {
+  prefetchHydrateResult,
+  consumePrefetchedHydrateResult,
+  _resetPrefetchHydrateCacheForTests,
+} from "../prefetchHydrateCache.js";
+import type { HydrateResult } from "../../../shared/types/ipc/app.js";
 
 describe("ProjectStore.getAllProjects reconciliation", () => {
   let store: ProjectStore;
@@ -1930,6 +1936,20 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
 
     await store.removeProject(beta.id);
     expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a removed project's hover prefetch, so adding the folder back can't consume it", async () => {
+    const beta = await store.addProject(betaDir);
+    const payload = { project: { id: beta.id } } as unknown as HydrateResult;
+    try {
+      await prefetchHydrateResult(beta.id, async () => payload);
+
+      await store.removeProject(beta.id);
+
+      expect(consumePrefetchedHydrateResult(beta.id)).toBeUndefined();
+    } finally {
+      _resetPrefetchHydrateCacheForTests();
+    }
   });
 
   it("removes a project's scheduled-run history with it, and only its own", async () => {

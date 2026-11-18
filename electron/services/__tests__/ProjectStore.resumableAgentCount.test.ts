@@ -119,6 +119,12 @@ vi.mock("../projectQuarantineCleanup.js", () => ({
 }));
 
 import { ProjectStore } from "../ProjectStore.js";
+import {
+  prefetchHydrateResult,
+  consumePrefetchedHydrateResult,
+  _resetPrefetchHydrateCacheForTests,
+} from "../prefetchHydrateCache.js";
+import type { HydrateResult } from "../../../shared/types/ipc/app.js";
 
 function agentPanel(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -461,6 +467,41 @@ describe("ProjectStore resumable agent count", () => {
       expect(after).toHaveBeenCalledTimes(1);
       expect(storedCount()).toBe(1);
       errorSpy.mockRestore();
+    });
+  });
+
+  describe("dropping a hover prefetch the write superseded (#17803)", () => {
+    const payload = { project: { id: "hovered" } } as unknown as HydrateResult;
+
+    afterEach(() => {
+      _resetPrefetchHydrateCacheForTests();
+    });
+
+    it("drops a completed prefetch once a save or a clear lands", async () => {
+      expect(await prefetchHydrateResult(projectId, async () => payload)).toBe(payload);
+      observerSlot.current?.(projectId, { terminals: [agentPanel("a")] });
+      expect(consumePrefetchedHydrateResult(projectId)).toBeUndefined();
+
+      expect(await prefetchHydrateResult(projectId, async () => payload)).toBe(payload);
+      observerSlot.current?.(projectId, null);
+      expect(consumePrefetchedHydrateResult(projectId)).toBeUndefined();
+    });
+
+    it("drops a prefetch that started while the write was still out", async () => {
+      let resolve: ((v: HydrateResult) => void) | null = null;
+      const pending = prefetchHydrateResult(
+        projectId,
+        () =>
+          new Promise<HydrateResult>((r) => {
+            resolve = r;
+          })
+      );
+
+      observerSlot.current?.(projectId, { terminals: [] });
+      resolve!(payload);
+
+      expect(await pending).toBeNull();
+      expect(consumePrefetchedHydrateResult(projectId)).toBeUndefined();
     });
   });
 
