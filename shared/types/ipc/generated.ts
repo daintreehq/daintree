@@ -3680,7 +3680,11 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginTourDescriptor[];
   };
   "plugin:uninstall": {
-    args: [pluginId: string, deleteSettings?: boolean | undefined];
+    args: [
+      pluginId: string,
+      deleteSettings?: boolean | undefined,
+      removeCloudAccountIds?: string[] | undefined,
+    ];
     result: void;
   };
   "plugin:unsaved-panels-get": {

@@ -46,6 +46,7 @@ function setup() {
     addedAt: 0,
     validation: { status: "unknown", checkedAt: null, detail: null },
     lastProvisioning: null,
+    pluginProvider: null,
   });
   store.putBinding({
     id: BINDING,

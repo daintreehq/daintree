@@ -8,6 +8,7 @@ import {
   type CloudAccountSummary,
   type CloudCatalog,
   type CloudCredentialValues,
+  type CloudPluginProviderLabel,
   type CloudProviderId,
   type CloudProviderInfo,
   type CloudProviderPluginConsent,
@@ -19,10 +20,11 @@ import {
 } from "../../../shared/types/cloudHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { CloudCredentialVault } from "./CloudCredentialVault.js";
-import type {
-  CloudHostStore,
-  StoredCloudAccount,
-  StoredProviderConsent,
+import {
+  readPluginProviderLabel,
+  type CloudHostStore,
+  type StoredCloudAccount,
+  type StoredProviderConsent,
 } from "./CloudHostStore.js";
 import { cloudCredentialHint, normalizeCloudCredentials } from "./cloudCredentials.js";
 import type { CloudProvider, ProviderCatalog, ProviderCredentials } from "./provider.js";
@@ -169,6 +171,17 @@ export interface CloudAccountServiceDeps {
   pluginConsent?(providerId: CloudProviderId): PluginConsentSubject | null;
   /** A plugin's providers were allowed: their accounts' waiting work can go on. */
   onConsentGranted?(): void;
+  /** What a registered plugin provider is called, kept with its accounts for when it's gone; null for any other. */
+  pluginProviderLabel?(providerId: CloudProviderId): CloudPluginProviderLabel | null;
+}
+
+function sameLabel(a: CloudPluginProviderLabel | null, b: CloudPluginProviderLabel): boolean {
+  return (
+    a !== null &&
+    a.pluginName === b.pluginName &&
+    a.providerName === b.providerName &&
+    a.dashboardUrl === b.dashboardUrl
+  );
 }
 
 /** The provider's check result, carried on as exactly the declared shape and nothing else. */
@@ -408,12 +421,41 @@ export class CloudAccountService {
     return provider;
   }
 
+  /**
+   * Keeps each plugin account's record of what its provider is called up to
+   * date with the provider registered now (#17353), so the account still names
+   * it, and links its console, once the plugin is gone. Only a provider
+   * registered at the origin the account was connected against speaks for it,
+   * and a record already current is left unwritten.
+   */
+  rememberPluginProviders(): void {
+    const labelFor = this.deps.pluginProviderLabel;
+    if (!labelFor) return;
+    for (const account of this.deps.store.accounts()) {
+      if (cloudProviderNamespace(account.providerId)?.kind !== "plugin") continue;
+      if (this.deps.apiUrlFor(account.providerId) !== account.apiUrl) continue;
+      // Read as it will be read back, so a declared name that needed cleaning isn't rewritten each time.
+      const label = readPluginProviderLabel(labelFor(account.providerId));
+      if (!label || sameLabel(account.pluginProvider, label)) continue;
+      // A label that can't be kept now is kept next time; it never stands in the way of what called this.
+      try {
+        this.deps.store.putAccount({ ...account, pluginProvider: label });
+      } catch (error) {
+        console.warn(
+          `[CloudHosts] Couldn't keep what ${account.providerId} is called for its account:`,
+          error
+        );
+      }
+    }
+  }
+
   summaries(): CloudAccountSummary[] {
     const bindings = this.deps.store.bindings();
     return this.deps.store.accounts().map((account) => ({
       id: account.id,
       providerId: account.providerId,
       providerUnavailable: this.providerUnavailable(account.providerId),
+      pluginProvider: account.pluginProvider,
       displayName: account.displayName,
       identity: account.identity,
       billingScope: account.scope,
@@ -580,6 +622,7 @@ export class CloudAccountService {
       addedAt: this.now(),
       validation: { status: "valid", checkedAt: this.now() },
       lastProvisioning: null,
+      pluginProvider: readPluginProviderLabel(this.deps.pluginProviderLabel?.(request.providerId)),
     };
     await this.deps.vault.put(id, credentials);
     let wasGranted: boolean;

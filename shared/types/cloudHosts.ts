@@ -59,6 +59,12 @@ export function pluginCloudProviderId(
 
 export { isValidCloudBindingId } from "./remoteHosts.js";
 
+const CLOUD_ACCOUNT_ID = /^ca_[a-z0-9]{8,32}$/;
+
+export function isValidCloudAccountId(id: unknown): id is string {
+  return typeof id === "string" && CLOUD_ACCOUNT_ID.test(id);
+}
+
 /**
  * What a stop keeps and loses, in the provider's own terms. The UI words every
  * promise about a stopped machine from this, never from what one provider does.
@@ -269,12 +275,28 @@ export type CloudAccountValidation =
   | { status: "invalid"; checkedAt: number; detail: string }
   | { status: "unknown"; checkedAt: number | null; detail: string | null };
 
+/**
+ * What a plugin's cloud provider was last known as (#17353), kept with each of
+ * its accounts so they still name it, and link its console, once the plugin is
+ * turned off, blocked or uninstalled and its manifest can't be read.
+ */
+export interface CloudPluginProviderLabel {
+  /** The plugin's display name. */
+  pluginName: string;
+  /** The provider's own name, as its manifest declared it. */
+  providerName: string;
+  /** The provider's console; null when what was kept doesn't read as a public https URL. */
+  dashboardUrl: string | null;
+}
+
 /** A connected provider account, as the renderer sees it: never its key. */
 export interface CloudAccountSummary {
   id: string;
   providerId: CloudProviderId;
   /** Null while its provider is registered; otherwise why it can't be used now. The account is kept either way. */
   providerUnavailable: string | null;
+  /** What its plugin's provider was last known as; absent or null for a built-in, or before it was ever seen. */
+  pluginProvider?: CloudPluginProviderLabel | null;
   displayName: string;
   /** Who the key signs in as, as the provider reports it. */
   identity: string | null;
@@ -612,6 +634,8 @@ export interface CloudHostStatus {
   providerId: CloudProviderId;
   /** Null while its provider is registered; otherwise why the machine can't be reached now. The host is kept either way. */
   providerUnavailable: string | null;
+  /** Its account's {@link CloudAccountSummary.pluginProvider}. */
+  pluginProvider?: CloudPluginProviderLabel | null;
   accountId: string;
   accountName: string;
   /** Null before the machine exists (a saved draft or a create still under way). */
@@ -730,6 +754,18 @@ export interface CloudHostsSnapshot {
   providers: CloudProviderInfo[];
   accounts: CloudAccountSummary[];
   hosts: CloudHostStatus[];
+}
+
+/**
+ * A cloud account whose provider comes from a plugin, as that plugin's
+ * uninstall asks about it (#17353): the account, and the hosts that would
+ * leave this device with it. Their machines are never touched either way.
+ */
+export interface PluginCloudAccountInfo {
+  id: string;
+  name: string;
+  providerName: string;
+  hosts: Array<{ hostId: string; name: string }>;
 }
 
 export type CloudHostsEvent = { type: "changed"; snapshot: CloudHostsSnapshot };

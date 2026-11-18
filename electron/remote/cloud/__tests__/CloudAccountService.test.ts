@@ -620,6 +620,7 @@ describe("CloudAccountService and a plugin's provider", () => {
       addedAt: 1,
       validation: { status: "valid", checkedAt: 1 },
       lastProvisioning: null,
+      pluginProvider: null,
     });
   }
 
@@ -1613,6 +1614,7 @@ describe("CloudAccountService with declared credential sets", () => {
       keyHint: "abcd",
       credentialRevision: null,
       lastProvisioning: null,
+      pluginProvider: null,
       addedAt: 1,
       validation: { status: "unknown", checkedAt: null, detail: null },
     });

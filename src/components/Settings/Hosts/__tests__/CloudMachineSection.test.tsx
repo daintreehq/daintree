@@ -756,3 +756,65 @@ describe("CloudMachineSection while its provider is missing", () => {
     expect(alert).toContain("didn't confirm the machine");
   });
 });
+
+describe("CloudMachineSection while its plugin's provider is gone (#17353)", () => {
+  const DEADLINE = new Date(Date.now() + 90 * 60_000).toISOString();
+  const lifetimeText = () => screen.getByTestId("cloud-machine-lifetime").textContent ?? "";
+  const gone = (overrides: Partial<CloudHostStatus> = {}) =>
+    status({
+      providerId: "acme.droplets.droplets",
+      providerUnavailable:
+        "Its cloud provider comes from the acme.droplets plugin, which isn't installed.",
+      pluginProvider: {
+        pluginName: "Acme Droplets",
+        providerName: "Droplets",
+        dashboardUrl: "https://cloud.example.com/droplets",
+      },
+      resourceId: "dr_23456789",
+      machine: "running",
+      operation: null,
+      observedAt: Date.now(),
+      ...overrides,
+    });
+
+  it("names the provider and its plugin, reads even a fresh reading as the last one, and links the console", () => {
+    openExternal.mockClear();
+    show(gone());
+    expect(screen.getByTestId("cloud-machine-state").textContent).toMatch(/^Last reported running/);
+    expect(screen.getByText(/Droplets from the Acme Droplets plugin · Personal/)).toBeTruthy();
+    const consoles = screen.getAllByRole("button", { name: "Open Droplets console" });
+    expect(consoles).toHaveLength(1);
+    fireEvent.click(consoles[0]!);
+    expect(openExternal).toHaveBeenCalledWith("https://cloud.example.com/droplets");
+  });
+
+  it("offers the console once beside a cleanup that names it, and never a time it doesn't know", () => {
+    show(
+      gone({
+        observedAt: 0,
+        createdFor: {
+          hostId: null,
+          projectId: "0f1e2d3c",
+          worktreeId: "/Users/me/code/app-worktrees/feature-login",
+          projectName: "app",
+          worktreeName: "feature/login",
+          hostName: null,
+        },
+        worktreeCleanup: { choice: "delete", phase: "failed", worktreeHostId: null, error: null },
+      })
+    );
+    expect(screen.getAllByRole("button", { name: "Open Droplets console" })).toHaveLength(1);
+    expect(screen.getByTestId("cloud-machine-state").textContent).not.toMatch(/checked|1970/);
+  });
+
+  it("never dates a deadline by a reading whose time was cleared", () => {
+    show(gone({ observedAt: 0, autoStopAt: DEADLINE, lifetime: null }));
+    expect(lifetimeText()).not.toContain("As last reported");
+    expect(lifetimeText()).toContain("as last reported");
+  });
+
+  it("shows a stop under way as what it is, not as the provider's last word", () => {
+    show(gone({ operation: { id: "op", kind: "stopping", startedAt: 1, stage: "Stopping" } }));
+    expect(screen.getByTestId("cloud-machine-state").textContent).toMatch(/^Stopping/);
+  });
+});

@@ -447,6 +447,7 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
         addedAt: NOW,
         validation: { status: "valid", checkedAt: NOW },
         lastProvisioning: null,
+        pluginProvider: null,
       },
       { pluginId: "acme.clouds", fingerprint: "fp-1", approvedAt: NOW }
     );

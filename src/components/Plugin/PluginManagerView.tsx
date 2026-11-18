@@ -62,6 +62,7 @@ import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager, type InstallOutcome } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
 import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
+import { PluginUninstallCloudAccounts } from "./PluginUninstallCloudAccounts";
 import { containTab, handFocusBack, isFocusStranded } from "./pluginManagerFocus";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
 import { PluginInstallConfirmDialog } from "./PluginInstallConfirmDialog";
@@ -1367,7 +1368,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isOpen={pm.pendingUninstall !== null}
         onClose={pm.closeUninstall}
         title={pm.pendingUninstall ? `Uninstall '${pluginLabel(pm.pendingUninstall)}'?` : ""}
-        description="Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below."
+        description={`Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below.${pm.pendingUninstall?.cloudAccounts?.length ? " Its cloud accounts follow the choice below." : ""}`}
         confirmLabel="Uninstall plugin"
         cancelLabel="Keep plugin"
         onConfirm={() => void pm.confirmUninstall()}
@@ -1376,6 +1377,14 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         zIndex="nested"
       >
         <UnsavedPanelsCallout verb="Uninstalling" panels={pm.uninstallPanels} className="mb-3" />
+        {pm.pendingUninstall?.cloudAccounts && pm.pendingUninstall.cloudAccounts.length > 0 && (
+          <PluginUninstallCloudAccounts
+            accounts={pm.pendingUninstall.cloudAccounts}
+            remove={pm.removeCloudAccounts}
+            onRemoveChange={pm.setRemoveCloudAccounts}
+            disabled={pm.isUninstalling}
+          />
+        )}
         <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
           <Checkbox
             checked={pm.deleteSettings}
@@ -1390,6 +1399,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           Covers every project on this machine, secrets included, and signs the plugin out.
           Databases and files the plugin created are kept, as are settings under a repository's
           .daintree/.
+          {pm.pendingUninstall?.cloudAccounts && pm.pendingUninstall.cloudAccounts.length > 0
+            ? " Cloud accounts follow the choice above."
+            : null}
         </p>
         {/* A failed uninstall leaves this dialog open and sets the error, which
             the master column no longer renders while the dialog owns it — so

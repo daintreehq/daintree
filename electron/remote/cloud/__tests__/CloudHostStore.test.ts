@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CloudHostCreatedFor } from "../../../../shared/types/cloudHosts.js";
 import {
   CloudHostStore,
+  readConsoleUrl,
   type CloudHostsValue,
   type StoredCloudBinding,
 } from "../CloudHostStore.js";
@@ -381,6 +382,7 @@ describe("CloudHostStore accounts", () => {
       ...account,
       credentialRevision: "0011223344556677",
       lastProvisioning: null,
+      pluginProvider: null,
     });
     store.putBinding(binding({ accountId: account.id }));
     store.removeBinding("cb_abcdefgh12");
@@ -398,6 +400,7 @@ describe("CloudHostStore accounts", () => {
       apiUrl: "https://compute.googleapis.com/compute/v1",
       credentialRevision: "0011223344556677",
       lastProvisioning: null,
+      pluginProvider: null,
     };
     new CloudHostStore(backend).putAccount(project);
     expect(new CloudHostStore(backend).account(account.id)?.scope).toEqual(project.scope);
@@ -416,6 +419,7 @@ describe("CloudHostStore accounts", () => {
       ...aws,
       credentialRevision: null,
       lastProvisioning: null,
+      pluginProvider: null,
     });
     expect(new CloudHostStore(backend).account(aws.id)?.scope).toEqual(aws.scope);
   });
@@ -426,7 +430,96 @@ describe("CloudHostStore accounts", () => {
     expect(new CloudHostStore(backend).account(account.id)).toMatchObject({
       keyHint: "abcd",
       credentialRevision: null,
+      pluginProvider: null,
     });
+  });
+
+  it("keeps what a plugin's provider was called across a restart, as one plain line each (#17353)", () => {
+    const backend = disk();
+    const plugin = {
+      ...account,
+      providerId: "acme.clouds.ec2",
+      credentialRevision: null,
+      lastProvisioning: null,
+      pluginProvider: {
+        pluginName: "Acme\u202e Clouds\n",
+        providerName: "EC2",
+        dashboardUrl: "https://console.example.com/ec2",
+      },
+    };
+    new CloudHostStore(backend).putAccount(plugin);
+    expect(new CloudHostStore(backend).account(account.id)?.pluginProvider).toEqual({
+      pluginName: "Acme Clouds",
+      providerName: "EC2",
+      dashboardUrl: "https://console.example.com/ec2",
+    });
+  });
+
+  it("cuts a long name short rather than losing the label and its console link", () => {
+    const backend = disk();
+    new CloudHostStore(backend).putAccount({
+      ...account,
+      providerId: "acme.clouds.ec2",
+      credentialRevision: null,
+      lastProvisioning: null,
+      pluginProvider: {
+        // Outside the BMP: cut by code point, never through a surrogate pair.
+        pluginName: "😀".repeat(200),
+        providerName: "EC2",
+        dashboardUrl: "https://console.example.com/ec2",
+      },
+    });
+    const label = new CloudHostStore(backend).account(account.id)?.pluginProvider;
+    expect(label!.pluginName).toBe(`${"😀".repeat(127)}…`);
+    expect(label!.dashboardUrl).toBe("https://console.example.com/ec2");
+  });
+
+  it("drops a kept console link that isn't a public https URL, and a label missing a name", () => {
+    const backend = disk();
+    const label = (id: string, overrides: Record<string, unknown>) => ({
+      ...account,
+      id,
+      providerId: "acme.clouds.ec2",
+      pluginProvider: { pluginName: "Acme Clouds", providerName: "EC2", ...overrides },
+    });
+    backend.write({
+      version: 1,
+      accounts: [
+        label("ca_link000001", { dashboardUrl: "javascript:alert(1)" }),
+        label("ca_link000002", { dashboardUrl: "https://user:pw@console.example.com" }),
+        label("ca_link000003", { providerName: "  " }),
+      ],
+      bindings: [],
+    });
+    const store = new CloudHostStore(backend);
+    expect(store.account("ca_link000001")?.pluginProvider).toEqual({
+      pluginName: "Acme Clouds",
+      providerName: "EC2",
+      dashboardUrl: null,
+    });
+    expect(store.account("ca_link000002")?.pluginProvider?.dashboardUrl).toBeNull();
+    expect(store.account("ca_link000003")?.pluginProvider).toBeNull();
+  });
+
+  it("opens only a public https link with a dotted host", () => {
+    expect(readConsoleUrl("https://console.example.com/ec2")).toBe(
+      "https://console.example.com/ec2"
+    );
+    for (const value of [
+      "http://console.example.com",
+      "https://intranet/console",
+      "https://*.example.com",
+      "file:///etc/passwd",
+      `https://example.com/${"a".repeat(2048)}`,
+      "https://127.0.0.1/console",
+      "https://10.0.0.5/console",
+      "https://192.168.1.20/console",
+      "https://[::1]/console",
+      "https://169.254.169.254/latest",
+      42,
+    ]) {
+      expect(readConsoleUrl(value)).toBeNull();
+    }
   });
 });
 

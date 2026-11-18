@@ -327,6 +327,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // wiping them. Reset whenever a new uninstall is armed so a prior tick can't
   // carry over to the next plugin.
   const [deleteSettings, setDeleteSettings] = useState(false);
+  // Keep by default: the credentials stay sealed and a reinstall brings the accounts back (#17353).
+  const [removeCloudAccounts, setRemoveCloudAccounts] = useState(false);
   const [isUninstalling, setIsUninstalling] = useState(false);
   // What the open uninstall and update confirms would discard (#15031), read
   // when each opens and again on confirm. Keyed by plugin so a read that lands
@@ -359,12 +361,14 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const armUninstall = (plugin: LoadedPluginInfo) => {
     setError(null);
     setDeleteSettings(false);
+    setRemoveCloudAccounts(false);
     setPendingUninstall(plugin);
   };
 
   const closeUninstall = () => {
     setPendingUninstall(null);
     setDeleteSettings(false);
+    setRemoveCloudAccounts(false);
     setUninstallUnsaved(null);
   };
   const [showUrlDialog, setShowUrlDialog] = useState(false);
@@ -673,6 +677,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setUpToDateId(null);
     setPendingUninstall(null);
     setDeleteSettings(false);
+    setRemoveCloudAccounts(false);
     setPendingUpdate(null);
     setPendingHttpUrl(null);
     setPendingHttpFromReinstall(false);
@@ -1467,9 +1472,17 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       setIsUninstalling(false);
       return;
     }
+    // Only the accounts the dialog listed, so one connected since is never removed unseen.
+    const cloudAccountIds = removeCloudAccounts
+      ? (pendingUninstall.cloudAccounts ?? []).map((account) => account.id)
+      : [];
     try {
       setError(null);
-      await window.electron.plugin.uninstall(id, deleteSettings);
+      if (cloudAccountIds.length > 0) {
+        await window.electron.plugin.uninstall(id, deleteSettings, cloudAccountIds);
+      } else {
+        await window.electron.plugin.uninstall(id, deleteSettings);
+      }
       closeUninstall();
       // Re-pull the authoritative list rather than splicing the closure (#5087).
       setRefreshKey((k) => k + 1);
@@ -1852,6 +1865,8 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     uninstallPanels,
     deleteSettings,
     setDeleteSettings,
+    removeCloudAccounts,
+    setRemoveCloudAccounts,
     isUninstalling,
     armUninstall,
     closeUninstall,

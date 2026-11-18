@@ -26,6 +26,8 @@ import { describePluginInstallSource } from "../../../../shared/utils/pluginInst
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { displaySafeText } from "../../../../shared/utils/displaySafeText.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
+import { getRemoteService } from "../../../remote/runtime.js";
+import { isValidCloudAccountId } from "../../../../shared/types/cloudHosts.js";
 import {
   ARCHIVE_HASH_PATTERN,
   parseInstallExpectation,
@@ -58,8 +60,17 @@ export async function handleList(): Promise<LoadedPluginInfo[]> {
   // the renderer until the next provenance broadcast.
   const pluginService = await getPluginService();
   await pluginService.waitForCatalog();
-  return pluginService.listPlugins();
+  const plugins = pluginService.listPlugins();
+  // What an uninstall asks to keep or remove, on the machine the plugin runs on (#17353).
+  const cloudAccounts = getRemoteService("cloudHosts")?.pluginCloudAccounts();
+  if (!cloudAccounts || cloudAccounts.size === 0) return plugins;
+  return plugins.map((plugin) => {
+    const owned = plugin.origin === "global" ? cloudAccounts.get(plugin.instanceId) : undefined;
+    return owned ? { ...plugin, cloudAccounts: owned } : plugin;
+  });
 }
+
+const MAX_REMOVED_CLOUD_ACCOUNTS = 16;
 
 export async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<void> {
   // A toggle arriving mid-init finds both `plugins` and `disabledPlugins`
@@ -903,7 +914,17 @@ function previewErrorDetail(err: unknown): string {
     : points.join("");
 }
 
-export async function handleUninstall(pluginId: string, deleteSettings?: boolean): Promise<void> {
+/**
+ * Uninstalls a plugin. `removeCloudAccountIds` names the cloud accounts of the
+ * plugin's providers the person chose to remove with it (#17353), as its
+ * uninstall listed them; left out, every one is kept, credentials sealed, for
+ * a reinstall to pick up. Either way, no machine is stopped or deleted.
+ */
+export async function handleUninstall(
+  pluginId: string,
+  deleteSettings?: boolean,
+  removeCloudAccountIds?: string[]
+): Promise<void> {
   if (typeof pluginId !== "string" || pluginId.trim().length === 0) {
     throw new Error("uninstall: pluginId must be a non-empty string");
   }
@@ -917,7 +938,24 @@ export async function handleUninstall(pluginId: string, deleteSettings?: boolean
   if (deleteSettings !== undefined && typeof deleteSettings !== "boolean") {
     throw new Error("uninstall: deleteSettings must be a boolean");
   }
+  if (
+    removeCloudAccountIds !== undefined &&
+    (!Array.isArray(removeCloudAccountIds) ||
+      removeCloudAccountIds.length > MAX_REMOVED_CLOUD_ACCOUNTS ||
+      !removeCloudAccountIds.every(isValidCloudAccountId))
+  ) {
+    throw new Error("uninstall: removeCloudAccountIds must be a list of cloud account ids");
+  }
+  const removing = [...new Set(removeCloudAccountIds ?? [])];
+  const cloud = removing.length > 0 ? getRemoteService("cloudHosts") : undefined;
+  if (removing.length > 0 && !cloud) {
+    throw new Error("uninstall: there are no cloud accounts on this machine to remove");
+  }
+  // Checked before the plugin goes, so nothing is uninstalled for a removal that can't be done.
+  cloud?.requirePluginAccounts(pluginId, removing);
   await (await getPluginService()).uninstallPlugin(pluginId, deleteSettings);
+  // Only once the plugin is gone: a failed uninstall leaves its accounts as they were.
+  await cloud?.removePluginAccounts(pluginId, removing);
 }
 
 export async function handleCheckForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {

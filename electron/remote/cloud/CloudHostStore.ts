@@ -1,18 +1,22 @@
 import {
   CLOUD_PROVISIONING_DIMENSIONS,
   isCloudProviderId,
+  isValidCloudAccountId,
   isValidCloudBindingId,
   type CloudAccountValidation,
   type CloudBillingScope,
   type CloudHostCreatedFor,
   type CloudHostError,
   type CloudHostProvisioning,
+  type CloudPluginProviderLabel,
   type CloudWorktreeRef,
   type CloudProviderId,
   type CloudProvisioningPick,
   type CloudProvisioningSelection,
 } from "../../../shared/types/cloudHosts.js";
 import { isValidRemoteHostId, type HostId } from "../../../shared/types/remoteHosts.js";
+import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
+import { isPrivateOrLoopbackHostname } from "../../schemas/pluginIdentifiers.js";
 import { normalizeHostKey } from "./sshEndpoint.js";
 
 /**
@@ -45,6 +49,12 @@ export interface StoredCloudAccount {
   validation: CloudAccountValidation;
   /** What this account's last create named, offered first next time; null before its first. */
   lastProvisioning: CloudProvisioningSelection | null;
+  /**
+   * What its plugin's provider was called, and where its console was, when it
+   * was last registered (#17353); null for a built-in's account, or one whose
+   * provider hasn't been seen since this was kept.
+   */
+  pluginProvider: CloudPluginProviderLabel | null;
 }
 
 /** A create that may have reached the provider: kept until its outcome is known. */
@@ -205,11 +215,7 @@ export interface CloudHostsStoreBackend {
   set(key: "cloudHosts", value: CloudHostsValue): void;
 }
 
-const ACCOUNT_ID = /^ca_[a-z0-9]{8,32}$/;
-
-export function isValidCloudAccountId(id: unknown): id is string {
-  return typeof id === "string" && ACCOUNT_ID.test(id);
-}
+export { isValidCloudAccountId };
 
 function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
@@ -244,6 +250,47 @@ function readScope(raw: unknown): CloudBillingScope | null {
   }
   if (typeof value.id !== "string" || value.id.length === 0) return null;
   return { kind: value.kind, id: value.id, name: str(value.name) ?? value.id };
+}
+
+const MAX_LABEL_LENGTH = 128;
+const MAX_URL_LENGTH = 2048;
+
+/** One plain line, cut short rather than refused: a long name still names the provider. */
+function labelText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const points = [...displaySafeText(value).trim()];
+  if (points.length === 0) return null;
+  return points.length > MAX_LABEL_LENGTH
+    ? `${points
+        .slice(0, MAX_LABEL_LENGTH - 1)
+        .join("")
+        .trimEnd()}…`
+    : points.join("");
+}
+
+/** A link this device opens in the browser: public https with no sign-in in it, as the manifest rules require. */
+export function readConsoleUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > MAX_URL_LENGTH || value.includes("*")) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    if (!url.hostname.includes(".") || isPrivateOrLoopbackHostname(url.hostname)) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+/** Kept text from a manifest no one may be able to read again: shown as one plain line, and never a bad link. */
+export function readPluginProviderLabel(raw: unknown): CloudPluginProviderLabel | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object") return null;
+  const pluginName = labelText(value.pluginName);
+  const providerName = labelText(value.providerName);
+  if (!pluginName || !providerName) return null;
+  return { pluginName, providerName, dashboardUrl: readConsoleUrl(value.dashboardUrl) };
 }
 
 function optionalId(value: unknown): string | null | undefined {
@@ -312,6 +359,7 @@ function readAccount(raw: unknown): StoredCloudAccount | null {
     addedAt: num(value.addedAt) ?? 0,
     validation: readValidation(value.validation),
     lastProvisioning: readProvisioningSelection(value.lastProvisioning),
+    pluginProvider: readPluginProviderLabel(value.pluginProvider),
   };
 }
 

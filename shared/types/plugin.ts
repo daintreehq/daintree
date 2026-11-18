@@ -130,6 +130,7 @@ import type {
   PluginApplicationDescriptor,
   ProjectApplicationState,
 } from "./plugin/projectApplication.js";
+import type { PluginCloudAccountInfo } from "./cloudHosts.js";
 export {
   PLUGIN_APPLICATION_DESTINATIONS,
   PLUGIN_APPLICATION_ARRANGEMENTS,
@@ -4799,6 +4800,12 @@ export interface LoadedPluginInfo {
   instanceMode?: "project";
   /** Project ids the package is enabled in. Present exactly when `instanceMode` is. */
   enabledInProjects?: string[];
+  /**
+   * Cloud accounts connected on the machine listing it for a provider in this
+   * plugin's namespace (#17353): what its uninstall asks to keep or remove.
+   * Absent when there are none.
+   */
+  cloudAccounts?: PluginCloudAccountInfo[];
 }
 
 export interface PluginIpcContext {

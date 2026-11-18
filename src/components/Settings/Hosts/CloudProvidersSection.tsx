@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { ExternalLink, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,11 +13,21 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { InlineError } from "@/components/ui/field";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
-import { credentialsNoun, sentenceCase } from "@/components/Hosts/cloud/cloudHostLabels";
+import { systemClient } from "@/clients/systemClient";
+import {
+  cloudProviderName,
+  cloudStateWord,
+  credentialsNoun,
+  sentenceCase,
+} from "@/components/Hosts/cloud/cloudHostLabels";
 import { useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { pluralize } from "@/lib/pluralize";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
-import type { CloudAccountSummary, CloudProviderInfo } from "@shared/types/cloudHosts";
+import type {
+  CloudAccountSummary,
+  CloudHostStatus,
+  CloudProviderInfo,
+} from "@shared/types/cloudHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { CloudProviderConsentDialog } from "./CloudProviderConsentDialog";
@@ -39,6 +49,31 @@ function removeDescription(provider: CloudProviderInfo | null): string {
 
 function scopeLabel(account: CloudAccountSummary): string {
   return account.billingScope.kind === "personal" ? "Personal" : account.billingScope.name;
+}
+
+/**
+ * The machines an account's hosts are, as last seen, while its provider can't
+ * be asked (#17353): they may well still be running, and billing, there.
+ */
+function LastKnownMachines({ hosts, label }: { hosts: CloudHostStatus[]; label: string }) {
+  return (
+    <ul className="mt-1.5 space-y-0.5" aria-label={label}>
+      {hosts.map((host) => (
+        <li key={host.hostId}>
+          <span className="text-text-primary">{host.machineName ?? "Unnamed machine"}</span>{" "}
+          {/* What the provider last said, never what this device was in the middle of asking. */}
+          <FactSeparator /> {cloudStateWord({ ...host, operation: null })} <FactSeparator />{" "}
+          {host.observedAt === null ? (
+            "Never checked"
+          ) : host.observedAt > 0 ? (
+            <TimeAgo prefix="Last checked " timestamp={host.observedAt} />
+          ) : (
+            "Check time unknown"
+          )}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /**
@@ -225,6 +260,15 @@ export function CloudProvidersSection() {
         ) : (
           accounts.map((account) => {
             const provider = providerFor(account);
+            const providerName = cloudProviderName(provider, account);
+            // Paused until the person allows the plugin behind it as it is declared now.
+            const needsReview = provider?.plugin !== undefined && !provider.plugin.granted;
+            // A paused account's provider is still here to ask; only a gone one leaves the last known state.
+            const unavailable = account.providerUnavailable !== null && !needsReview;
+            const lastKnown = unavailable
+              ? snapshot.hosts.filter((host) => host.accountId === account.id)
+              : [];
+            const consoleUrl = unavailable ? (account.pluginProvider?.dashboardUrl ?? null) : null;
             const noun = credentialsNoun(provider);
             const Noun = sentenceCase(noun);
             const validation = account.validation;
@@ -232,15 +276,16 @@ export function CloudProvidersSection() {
               rowErrors[account.id] ??
               account.providerUnavailable ??
               (validation.status === "invalid" ? validation.detail : undefined);
-            // Paused until the person allows the plugin behind it as it is declared now.
-            const needsReview = provider?.plugin !== undefined && !provider.plugin.granted;
             return (
               <SettingsRow
                 key={account.id}
                 label={account.displayName}
                 description={
                   <>
-                    {provider?.name ?? account.providerId} <FactSeparator /> {scopeLabel(account)}
+                    {account.pluginProvider
+                      ? `${providerName} from the ${account.pluginProvider.pluginName} plugin`
+                      : providerName}{" "}
+                    <FactSeparator /> {scopeLabel(account)}
                     {/* The sign-in, unless the row is already named after it. */}
                     {account.identity && account.identity !== account.displayName && (
                       <>
@@ -272,6 +317,12 @@ export function CloudProvidersSection() {
                     ) : (
                       "Not checked yet"
                     )}
+                    {lastKnown.length > 0 && (
+                      <LastKnownMachines
+                        hosts={lastKnown}
+                        label={`Machines on ${account.displayName}`}
+                      />
+                    )}
                   </>
                 }
                 error={rowError ? <span role="alert">{rowError}</span> : undefined}
@@ -290,15 +341,29 @@ export function CloudProvidersSection() {
                         Review access
                       </Button>
                     )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      loading={checking.has(account.id)}
-                      aria-label={`Check ${account.displayName}`}
-                      onClick={() => check(account)}
-                    >
-                      Check
-                    </Button>
+                    {/* Nothing can check the credentials without the provider; its console still lists the machines. */}
+                    {consoleUrl ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void systemClient.openExternal(consoleUrl)}
+                      >
+                        <ExternalLink aria-hidden="true" />
+                        Open {providerName} console
+                      </Button>
+                    ) : (
+                      !unavailable && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          loading={checking.has(account.id)}
+                          aria-label={`Check ${account.displayName}`}
+                          onClick={() => check(account)}
+                        >
+                          Check
+                        </Button>
+                      )
+                    )}
                     {provider && (
                       <Button
                         variant="outline"
