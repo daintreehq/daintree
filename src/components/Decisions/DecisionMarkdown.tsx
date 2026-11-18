@@ -1,9 +1,11 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
+import { MarkdownBlockquote, rehypeMarkdownAlerts } from "@/components/Markdown/markdownAlerts";
 import "@/components/Markdown/MarkdownDocument.css";
 
 const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS = [rehypeMarkdownAlerts];
 
 /** No URL survives: nothing an agent wrote can fetch, navigate or point at a file. */
 const NO_URLS = () => "";
@@ -16,6 +18,7 @@ const NO_URLS = () => "";
 const COMPONENTS: Components = {
   a: ({ children }) => <span className="underline decoration-dotted">{children}</span>,
   img: ({ alt }) => (alt ? <span className="text-text-secondary">[{alt}]</span> : null),
+  blockquote: MarkdownBlockquote,
 };
 
 /**
@@ -31,6 +34,7 @@ export function DecisionMarkdown({ text, className }: { text: string; className?
     >
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
         urlTransform={NO_URLS}
         components={COMPONENTS}
         skipHtml

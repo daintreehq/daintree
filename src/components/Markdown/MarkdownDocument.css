@@ -94,6 +94,65 @@
   overflow-wrap: anywhere;
 }
 
+/* GitHub alerts (markdownAlerts.tsx): a titled box in the tone GitHub gives
+   each type. The tone is the author's markup, not a status Daintree reports,
+   so TIP keeps GitHub's green and IMPORTANT its purple (#17333). As on Callout,
+   the tone paints the edge, the tint and the glyph, and the words stay on the
+   text ramp, where the contrast floor is. */
+.markdown-document :where(.markdown-alert) {
+  --markdown-alert-tone: var(--color-status-info);
+  margin-block: 1.25em;
+  padding: 0.5em 1em;
+  border-inline-start: 0.25em solid var(--markdown-alert-tone);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--markdown-alert-tone) 10%, transparent);
+}
+
+.markdown-document :where(.markdown-alert[data-markdown-alert="tip"]) {
+  --markdown-alert-tone: var(--color-status-success);
+}
+
+.markdown-document :where(.markdown-alert[data-markdown-alert="important"]) {
+  --markdown-alert-tone: var(--color-category-purple);
+}
+
+.markdown-document :where(.markdown-alert[data-markdown-alert="warning"]) {
+  --markdown-alert-tone: var(--color-status-warning);
+}
+
+.markdown-document :where(.markdown-alert[data-markdown-alert="caution"]) {
+  --markdown-alert-tone: var(--color-status-danger);
+}
+
+.markdown-document :where(.markdown-alert-title) {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.markdown-document :where(.markdown-alert-glyph) {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  color: var(--markdown-alert-tone);
+}
+
+/* Outranks the block rhythm `.markdown-message` sets further down, which
+   would otherwise open a gap above the title. */
+.markdown-document .markdown-alert > * {
+  margin-block: 0.5em;
+}
+
+.markdown-document .markdown-alert > :first-child {
+  margin-top: 0;
+}
+
+.markdown-document .markdown-alert > :last-child {
+  margin-bottom: 0;
+}
+
 /* kbd: chip treatment; kills the plugin's --tw-prose-kbd-shadows box-shadow,
    the one prose token that can't take a theme color (it wants an RGB triplet). */
 .markdown-document :where(kbd) {
@@ -472,7 +531,7 @@
   font-size: 1em;
 }
 
-.markdown-message :where(p, ul, ol, blockquote) {
+.markdown-message :where(p, ul, ol, blockquote, .markdown-alert) {
   margin-top: 0.75em;
   margin-bottom: 0.75em;
 }
