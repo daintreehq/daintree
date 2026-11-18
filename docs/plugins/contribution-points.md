@@ -44,6 +44,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `tours` | Allowed — a project plugin's tours are offered only in its own project |
 | `themes` | Rejected — the app theme is one machine-wide selection painted into every window, with no per-project theme to narrow to |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
+| `cloudProviders` | Rejected — a cloud provider creates machines on the person's own accounts, so only a plugin they installed may contribute one, never a repository they opened |
 | `projectTemplates` | Rejected — a template is offered while a new project folder is being created, before any project exists for a project plugin to belong to. Ship the template from an installed plugin |
 | `canopyViews` | Rejected — the Canopy window spans every project and belongs to none, so a project's plugin has no project to run its view in there. An `"instanceMode": "project"` package is refused for the same reason |
 | `fileEditors` | Allowed, view-backed only — editors apply only in the plugin's own project and may also match project-relative `paths`, and an Edit editor may be the `default` for them. A `slot` is built-in only |
@@ -2027,6 +2028,76 @@ Adds the plugin's notes to a worktree's delete confirmation: things the plugin k
 Declaring the check is what lets a delete confirmation find the plugin before its code has run. When a delete is confirmed (the delete dialog, bulk remove, an agent's request over MCP, or the confirmation put to someone when no window is open), every plugin with a check that the project shows is asked about the worktree, activating it first if it isn't running. The dialogs open straight away and fill in each plugin's notes as they arrive; the no-window confirmation is sent once every plugin has answered or run out of time. A plugin that hasn't answered within 3 seconds, activation included, or that fails, is shown as "<plugin> didn't answer".
 
 Notes only annotate. They never cancel a delete, change its confirmation tier or alter its typed confirmation. The user can turn a plugin's notes off from its Permissions tab, and the plugin is then not asked. No capability is needed.
+
+## Cloud providers — _Shipped_
+
+A cloud provider an installed plugin runs in its worker: Daintree creates, starts, stops and deletes machines on the person's own cloud account through it, and uses them as hosts. Each entry is registered as `{pluginId}.{id}` beside the built-in providers. The full authoring guide, with every method's contract, is [Implementing a cloud provider](./cloud-provider.md).
+
+```json
+{
+  "contributes": {
+    "cloudProviders": [
+      {
+        "id": "ec2",
+        "name": "EC2",
+        "description": "Machines on your own AWS account.",
+        "apiUrl": "https://ec2.amazonaws.com",
+        "apiKeyUrl": "https://console.aws.amazon.com/iam/home#/security_credentials",
+        "dashboardUrl": "https://console.aws.amazon.com/ec2/home",
+        "docsUrl": "https://docs.aws.amazon.com/ec2/",
+        "credentialFields": [
+          {
+            "id": "accessKeyId",
+            "label": "Access key ID",
+            "secret": false,
+            "input": "single-line",
+            "required": true
+          },
+          {
+            "id": "secretAccessKey",
+            "label": "Secret access key",
+            "secret": true,
+            "input": "single-line",
+            "required": true
+          }
+        ],
+        "capabilities": {
+          "persistence": {
+            "kept": "Its EBS volume",
+            "lost": "Instance store and memory",
+            "retentionDays": null,
+            "saveRetryBilled": false,
+            "stoppedComputeBilled": false
+          },
+          "typicalStartSeconds": 45,
+          "lifetime": { "kind": "none" },
+          "sshTrust": "confirm-on-first-connect",
+          "transport": "direct",
+          "tunnel": null,
+          "provisioning": {
+            "location": "required",
+            "image": "required",
+            "network": "optional",
+            "sshKey": "at-create"
+          },
+          "deletion": true
+        }
+      }
+    ]
+  }
+}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Lowercase letters and digits joined by single hyphens, at most 32 characters. Must match the `id` passed to [`host.registerCloudProvider`](./host-api.md#registercloudprovider) in `activate()`. |
+| `name`, `description` | yes | Shown wherever the provider, its accounts and machines are named. |
+| `apiUrl` | yes | The https origin the provider's API calls go to; an account is tied to the origin it connected with. |
+| `apiKeyUrl`, `dashboardUrl`, `docsUrl` | yes | https links opened in the system browser. |
+| `credentialFields` | yes | 1 to 16 values an account's credentials are made of, each `{ id, label, secret, input, required, help? }`. |
+| `capabilities` | yes | What a stop keeps and bills, how a machine stops by itself, how its SSH server is reached and trusted, what a create names, and whether machines can be deleted. See [the guide](./cloud-provider.md#manifest-entry). |
+
+At most 8 per plugin. The provider is listed, and its accounts and machines named, from the manifest before any plugin code runs; each call activates the plugin if it isn't running and has 30 seconds, activation included. A crash, a timeout or a plugin that didn't start is a provider error on that account, and while the plugin is turned off, blocked, failed to load or uninstalled, its accounts and machines stay listed as unavailable with the reason. Until Daintree asks consent before handing a plugin credentials (#17352), a plugin's provider is not offered in **Connect account**. Rejected under `scope: "project"`. No capability is needed.
 
 ## Setup checklist — _Shipped_
 

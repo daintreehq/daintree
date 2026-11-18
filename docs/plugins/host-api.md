@@ -189,6 +189,9 @@ interface PluginHostApi {
     }
   ): Promise<() => void>;
 
+  // A cloud provider declared in contributes.cloudProviders
+  registerCloudProvider(descriptor: { id: string }, impl: CloudProviderImpl): Promise<() => void>;
+
   // Work done for each new worktree, after the project's setup script
   registerWorktreeSetupStep(
     stepId: string,
@@ -337,7 +340,7 @@ Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-
 
 Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous exceptions are `logger` (its `info`/`warn`/`error` calls return `void`), `pluginInfo` and `panelKindId` (static data), a database handle's `onDidChange`, which returns its disposer directly, and `hasListeners` / `onDidChangeListeners`, which answer and return their disposer synchronously and throw at the call on an invalid channel or callback.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `registerWorktreeDeleteNotesProvider`, `registerWorktreeSetupStep`, `registerSearchProvider`, `registerContextProvider`, `registerService`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangeTerminalLifecycle`, `onDidChangeAllAgents`, `onDidChangeFocusedPanel`, `onDidChangeProjectPresence`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange` and `storage.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. Everything else is deliberately NOT revoke-guarded — `postToPanel`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `setToolbarButtonBadge`, `setToolbarButtonState`, `setContext`, `setWorktreeCardStatus`, `setWorktreeReviewChecks`, `setPanelMenuItems`, `reloadPanel`, `restartWorker`, the worktree and agent reads, `invalidateFileDecorations`, `showToast`, `notify`, `tasks.start` and its handles, the prompts, `dispatch`, `actions.*`, `sendToActiveAgent`, `sendToAgent`, `agents.list`, `agents.listAll`, `terminals.readScreen`, `services.call`/`status`, `settings.get`/`set`/`open`/`missingRequired`, `storage.get`/`set`/`delete`, `db.*` (including a handle's `onDidChange`), `process.spawn`, `fs.*` (including `watch`), `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `logger`. Plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op or an empty answer after unload (`dispatch` resolves `{ ok: false }` with `PLUGIN_UNLOADED`; in process, `settings.get` and `set` have no liveness check and keep working) — except the ones that act on disk or on a process, which reject: new `fs.*`, `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `db.*` calls with a `PLUGIN_UNLOADED:` message, `process.spawn` and `settings.open` with a plain "plugin is no longer loaded" one. A database handle the host closed at unload rejects `DB_CLOSED`, and in a worker any call still outstanding when the worker is torn down rejects "Plugin dev worker disposed" (see [Worker and in-process differences](#worker-and-in-process-differences)). `pluginId`, `pluginInfo` and `panelKindId` are static data and keep working even after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `registerWorktreeDeleteNotesProvider`, `registerCloudProvider`, `registerWorktreeSetupStep`, `registerSearchProvider`, `registerContextProvider`, `registerService`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangeTerminalLifecycle`, `onDidChangeAllAgents`, `onDidChangeFocusedPanel`, `onDidChangeProjectPresence`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange` and `storage.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. Everything else is deliberately NOT revoke-guarded — `postToPanel`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `setToolbarButtonBadge`, `setToolbarButtonState`, `setContext`, `setWorktreeCardStatus`, `setWorktreeReviewChecks`, `setPanelMenuItems`, `reloadPanel`, `restartWorker`, the worktree and agent reads, `invalidateFileDecorations`, `showToast`, `notify`, `tasks.start` and its handles, the prompts, `dispatch`, `actions.*`, `sendToActiveAgent`, `sendToAgent`, `agents.list`, `agents.listAll`, `terminals.readScreen`, `services.call`/`status`, `settings.get`/`set`/`open`/`missingRequired`, `storage.get`/`set`/`delete`, `db.*` (including a handle's `onDidChange`), `process.spawn`, `fs.*` (including `watch`), `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `logger`. Plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op or an empty answer after unload (`dispatch` resolves `{ ok: false }` with `PLUGIN_UNLOADED`; in process, `settings.get` and `set` have no liveness check and keep working) — except the ones that act on disk or on a process, which reject: new `fs.*`, `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `db.*` calls with a `PLUGIN_UNLOADED:` message, `process.spawn` and `settings.open` with a plain "plugin is no longer loaded" one. A database handle the host closed at unload rejects `DB_CLOSED`, and in a worker any call still outstanding when the worker is torn down rejects "Plugin dev worker disposed" (see [Worker and in-process differences](#worker-and-in-process-differences)). `pluginId`, `pluginInfo` and `panelKindId` are static data and keep working even after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
 
 **Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. In a worker only the shape and revoke checks throw there; the deeper checks fail the activation by name ([Worker and in-process differences](#worker-and-in-process-differences)). `broadcastToRenderer` is in that group and throws at the call for a channel that is not a string or contains a colon (an empty one is accepted), a payload over the push cap, or one structured clone refuses (`PLUGIN_PAYLOAD_UNCLONEABLE` in process, `DataCloneError` in a worker). The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `setPanelMenuItems`, `invalidateFileDecorations`) instead reject the returned Promise rather than throwing synchronously — `postToPanel` on an invalid channel, an empty-string `panelId`, an oversize or uncloneable payload — so handle their validation errors with `await` + `.catch()` (the exception is the synchronous `hasListeners` / `onDidChangeListeners`, which throw on an invalid channel):
 
@@ -449,7 +452,7 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 
 `agent:invoke` and `socket:connect` gate no host call, and `network:fetch` gates only `artifacts.download` and `artifacts.upload`: they are disclosure and danger input only (see [Manifest → `capabilities`](./manifest.md#capabilities)).
 
-No capability: `settings`, `storage`, a `"local"` database, `logger`, `showToast`, `notify` without `os`, `tasks`, the prompts, `postToPanel`, `broadcastToRenderer`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `setPanelMenuItems`, `reloadPanel`, `restartWorker`, `onDidChangePanelLifecycle`, `onDidWake`, the worktree reads and subscriptions, `registerAction` and `registerHandler` (beyond their own `requires`), `registerForgeProvider`, `registerFileDecorationProvider` / `invalidateFileDecorations`, `registerWorktreeDeleteNotesProvider`, `registerWorktreeSetupStep` (the user allows each step per project instead), `registerSearchProvider`, `registerContextProvider`, `registerService` and `services` (a provider's own capabilities still gate what it does), `dispatch` (the action's own `danger` still applies) and `actions`. How capabilities raise an action's effective danger is in the [trust model](./trust-model.md).
+No capability: `settings`, `storage`, a `"local"` database, `logger`, `showToast`, `notify` without `os`, `tasks`, the prompts, `postToPanel`, `broadcastToRenderer`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `setPanelMenuItems`, `reloadPanel`, `restartWorker`, `onDidChangePanelLifecycle`, `onDidWake`, the worktree reads and subscriptions, `registerAction` and `registerHandler` (beyond their own `requires`), `registerForgeProvider`, `registerFileDecorationProvider` / `invalidateFileDecorations`, `registerWorktreeDeleteNotesProvider`, `registerCloudProvider`, `registerWorktreeSetupStep` (the user allows each step per project instead), `registerSearchProvider`, `registerContextProvider`, `registerService` and `services` (a provider's own capabilities still gate what it does), `dispatch` (the action's own `danger` still applies) and `actions`. How capabilities raise an action's effective danger is in the [trust model](./trust-model.md).
 
 ## Identity — `pluginId`, `pluginInfo`, `panelKindId`
 
@@ -1198,6 +1201,59 @@ The host calls `provideNotes` whenever a delete of a worktree you can see is con
 - **The user can turn your notes off** from your plugin's Permissions tab ("Show notes when deleting a worktree"). You are then not asked, or activated, at all.
 - Revoke-guarded — call it during `activate()`. `descriptor.id` must match the manifest entry, or the call throws. Returns a disposer; re-registering the same id replaces the binding and makes the older disposer inert. The binding goes when your plugin unloads or its worker is disposed, and comes back on the next activation.
 - `createMockHost` records bindings in `registeredWorktreeDeleteNotesProviders`, so a test can call `provideNotes` itself. It skips the manifest-declaration check.
+
+## `registerCloudProvider`
+
+Binds the implementation of a cloud provider declared in [`contributes.cloudProviders`](./contribution-points.md#cloud-providers--shipped): the calls Daintree makes to check an account's credentials, read its catalog, and create, start, stop, rename and delete machines and reach their SSH servers. [Implementing a cloud provider](./cloud-provider.md) is the full guide.
+
+```ts
+await host.registerCloudProvider(
+  { id: "ec2" },
+  {
+    async checkCredentials(values, apiUrl, signal) {
+      /* … */
+    },
+    async validate(credentials) {
+      /* … */
+    },
+    async catalog(credentials) {
+      /* … */
+    },
+    async list(credentials, { label }) {
+      /* … */
+    },
+    async inspect(credentials, resourceId) {
+      /* … */
+    },
+    async create(credentials, request) {
+      /* … */
+    },
+    async start(credentials, resourceId, { lifetimeSeconds }) {
+      /* … */
+    },
+    async stop(credentials, resourceId) {
+      /* … */
+    },
+    async rename(credentials, resourceId, name) {
+      /* … */
+    },
+    async delete(credentials, resourceId) {
+      /* … */
+    },
+    async sshAccess(credentials, resourceId) {
+      /* … */
+    },
+  }
+);
+```
+
+**Rules:**
+
+- **30 seconds a call, activation included.** A plugin that isn't running is activated for the call. `credentials.signal` (the third argument of `checkCredentials`) aborts when Daintree stops waiting.
+- **Throw with a `code`** (a `CloudHostErrorCode` such as `credential-invalid` or `capacity`) to say what went wrong; any other throw reads as `failed`. A crash or a missed deadline is reported on the account as `provider-unreachable`.
+- **The impl must have what the declaration needs**: `renewLifetime` for a renewable lifetime, `authorizeSsh` for `sshKey: "after-create"`, `sshAccess` for `"at-create"`. A missing one fails the registration, and with it the plugin's activation.
+- Revoke-guarded — call it during `activate()`. `descriptor.id` must match a manifest entry, or the call throws. Returns a disposer; re-registering the same id replaces the binding and makes the older disposer inert. The binding goes when the worker stops or the plugin unloads, and comes back on the next activation.
+- `createMockHost` records bindings in `registeredCloudProviders`, so a test can call the impl itself. It skips the manifest checks.
 
 ## `mcp.registerTools`
 
@@ -2866,7 +2922,7 @@ It has no manifest model and no processes behind it, so a test that passes again
 - **Settings and storage.** `settings.set` neither refuses an undeclared key nor checks that the value survives JSON (`NaN` is kept as `NaN`), and `onDidChange` fires when the new value is not `Object.is` the old one rather than when the stored JSON changes. A `secret` is held in plain memory, not encrypted, so a keychain failure is never simulated.
 - **`clipboard` and `system`** check no capability and no containment; `system` records paths and opens nothing, and the clipboard starts empty with no option to seed it.
 - **Snapshots** you pass in (worktrees, agent state) are handed back as they are, not frozen, so a plugin that mutates one passes here and throws in an in-process host.
-- **Registration gates.** `registerHandler` checks only the channel name, refusing a colon as the host does: the typed overload discards the schema, so nothing validates a payload against it. `broadcastToRenderer` rejects a bad channel where the real host throws at the call. `registerForgeProvider`, `registerFileDecorationProvider`, `registerWorktreeDeleteNotesProvider`, `registerWorktreeSetupStep`, `registerSearchProvider`, `registerContextProvider`, `registerService` and `mcp.registerTools` skip the manifest-declaration gates (a bound setup step is in `registeredWorktreeSetupSteps`, for a test to call with a context of its own); `mcp.registerTools` neither enforces the roster budget nor compiles the schemas, and does not reject a tool's `annotations`, including a read-only or other safety claim; `invalidateFileDecorations` accepts any non-empty scope.
+- **Registration gates.** `registerHandler` checks only the channel name, refusing a colon as the host does: the typed overload discards the schema, so nothing validates a payload against it. `broadcastToRenderer` rejects a bad channel where the real host throws at the call. `registerForgeProvider`, `registerFileDecorationProvider`, `registerWorktreeDeleteNotesProvider`, `registerCloudProvider`, `registerWorktreeSetupStep`, `registerSearchProvider`, `registerContextProvider`, `registerService` and `mcp.registerTools` skip the manifest-declaration gates (a bound setup step is in `registeredWorktreeSetupSteps`, for a test to call with a context of its own); `mcp.registerTools` neither enforces the roster budget nor compiles the schemas, and does not reject a tool's `annotations`, including a read-only or other safety claim; `invalidateFileDecorations` accepts any non-empty scope.
 - **Services.** `host.services` reaches only the providers you pass as `options.services` (each `{ version?, capabilities?, methods }`), and answers `unavailable` for any other name; it never answers `not-declared` or `incompatible`, runs no deadline and enforces no size cap. Arguments and results are copied, and cancelling settles the call at once, as in production. Calls are recorded in `serviceCalls`, and bindings made with `registerService` in `registeredServices`.
 - **Subscriptions.** Nothing is replayed on subscribe except `onDidChangeFocusedPanel`'s current focus and `onDidChangeProjectPresence`'s open projects, a throwing listener is never quarantined, and nothing is coalesced: the mock records the window each subscription would get (`subscriptionOptions`) but delivers every simulated event synchronously. A database handle's `onDidChange` is the exception, since `host.db` runs the production handle code.
 - **Transport limits.** No invoke deadline runs, and no payload cap or clone snapshot applies to handlers, results or pushes; `postToPanelCalls` holds the payload object you passed. Push batching and ordering are not modelled. Test a large payload's path against the caps in `shared/config/pluginBudgets.ts` yourself.

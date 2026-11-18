@@ -67,7 +67,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [plugins/project-local.md](./plugins/project-local.md) | Plugins a project ships in its own repository — on-disk layout, the committed `dist/` contract, the trust gate, hot reload, contribution scoping. |
 | [plugins/agent-brief.md](./plugins/agent-brief.md) | The brief to hand an AI agent that is writing a project plugin — the rules that decide whether it loads, and a skeleton that needs no build tooling. |
 
-The plugin sub-index links onward to getting-started, the manifest reference, contribution points, the host API, agent extensions, forge providers, distribution, the dev loop, the trust model, and the plugin architecture.
+The plugin sub-index links onward to getting-started, the manifest reference, contribution points, the host API, agent extensions, forge providers, cloud providers, distribution, the dev loop, the trust model, and the plugin architecture.
 
 ## Themes
 

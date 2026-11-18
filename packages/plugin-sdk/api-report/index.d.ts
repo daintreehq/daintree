@@ -2117,9 +2117,6 @@ interface PluginArtifactSource {
     size: number;
 }
 
-/** Notification type */
-type NotificationType = "info" | "success" | "error" | "warning";
-
 declare const BUILT_IN_AGENT_IDS: readonly ["claude", "opencode", "aider", "gemini", "antigravity", "codex", "grok", "cursor", "copilot", "goose", "amp", "crush", "qwen", "kimi", "interpreter", "mistral", "kiro"];
 type BuiltInAgentId = (typeof BUILT_IN_AGENT_IDS)[number];
 type AgentKeyAction = `agent.${BuiltInAgentId}`;
@@ -2501,6 +2498,390 @@ interface PluginActionManifestEntry {
  *   `RESTRICTED` / `NOT_FOUND`.
  */
 type PluginCanDispatchResult = "ok" | "confirm" | "restricted";
+
+/**
+ * What a stop keeps and loses, in the provider's own terms. The UI words every
+ * promise about a stopped machine from this, never from what one provider does.
+ */
+interface CloudProviderPersistence {
+    /** What a stop keeps, as a plural noun phrase: "Files in its home folder". */
+    kept: string;
+    /** What a stop loses, as a plural noun phrase: "/tmp, caches and memory". */
+    lost: string;
+    /** The least number of days a stopped machine's disk is kept; null when kept until deleted. */
+    retentionDays: number | null;
+    /** Whether the time a failed save is retried, with the machine still up, is billed. */
+    saveRetryBilled: boolean;
+    /** Whether a stopped machine still bills for compute, not only for its disk. */
+    stoppedComputeBilled: boolean;
+    /**
+     * Whether a stopped machine's disk keeps billing on its own, so stopping
+     * cuts the bill to storage rather than ending it.
+     */
+    stoppedStorageBilled: boolean;
+    /**
+     * For one that bills a stopped machine for compute, what a stopped machine
+     * bills, as one sentence in the provider's own terms; the general wording
+     * when absent.
+     */
+    stoppedBilling?: string;
+}
+/**
+ * Whether and how a machine stops by itself, without Daintree asking.
+ * - `none`: it runs until someone stops it.
+ * - `fixed-at-create`: a runtime limit chosen at create, which can't be moved while it runs;
+ *   some providers let it change while the machine is stopped.
+ * - `renewable`: a deadline that can be moved forward while the machine is in use.
+ * - `idle-sleep`: the provider sleeps it once it has been idle for a while.
+ */
+type CloudLifetimeModel = {
+    kind: "none";
+} | {
+    kind: "fixed-at-create";
+    canChangeWhileStopped: boolean;
+} | {
+    kind: "renewable";
+} | {
+    kind: "idle-sleep";
+    /** How long the machine is idle before the provider sleeps it; null when the provider doesn't say. */
+    idleSeconds: number | null;
+};
+/**
+ * Where the trust in a machine's SSH server key comes from.
+ * - `pinned-from-api`: the provider's authenticated API returns it, so it is pinned before any dial.
+ * - `confirm-on-first-connect`: nothing vouches for it; the person confirms its fingerprint once.
+ * - `api-or-confirm`: the provider's authenticated API reports the key when it can (EC2's console
+ *   output, which can lag boot); that report is trusted for a first connect when the machine
+ *   presents exactly it, and otherwise the person confirms the fingerprint once. Direct only.
+ * - `provider-tunnel`: the provider's own tunnel authenticates the machine, whose key may change
+ *   when it is rebuilt or moved.
+ */
+type CloudSshTrust = "pinned-from-api" | "confirm-on-first-connect" | "api-or-confirm" | "provider-tunnel";
+/**
+ * How the desktop reaches the machine's sshd: straight to an address, or
+ * through a command the provider supplies (an ssh `ProxyCommand`).
+ */
+type CloudSshTransport = "direct" | "provider-command";
+/**
+ * The command a `provider-command` transport runs as ssh's `ProxyCommand`:
+ * the provider's own CLI, which the person installs and signs in to.
+ */
+interface CloudSshTunnelCommand {
+    /** The executable's bare name, looked up on this device's PATH: "agent37". */
+    command: string;
+    /** Its arguments: plain words, or exactly one of ssh's tokens %h, %p, %r or %n. */
+    args: string[];
+    /** Where the person gets the command; https only. */
+    installUrl: string;
+}
+/** Whether a create takes a value: never, when the person chooses to, or always. */
+type CloudProvisioningInput = "none" | "optional" | "required";
+/** What a create names beyond the machine's name and type. */
+interface CloudProvisioning {
+    /** The region or zone it runs in. */
+    location: CloudProvisioningInput;
+    /** The disk image it boots. */
+    image: CloudProvisioningInput;
+    /** The network, subnet or firewall it joins. */
+    network: CloudProvisioningInput;
+    /**
+     * When Daintree's SSH public key reaches the machine: with the create
+     * itself, or through the provider's API once the machine exists.
+     */
+    sshKey: "at-create" | "after-create";
+}
+/** What a provider can do, as semantics rather than a bare "supports start". */
+interface CloudProviderCapabilities {
+    persistence: CloudProviderPersistence;
+    /** About how long a start or create takes to running, for progress copy; null when unknown. */
+    typicalStartSeconds: number | null;
+    lifetime: CloudLifetimeModel;
+    sshTrust: CloudSshTrust;
+    transport: CloudSshTransport;
+    /** The tunnel a `provider-command` transport runs; null for a direct one. */
+    tunnel: CloudSshTunnelCommand | null;
+    provisioning: CloudProvisioning;
+    /** Machines can be deleted from Daintree. */
+    deletion: boolean;
+}
+/**
+ * One value an account's credentials are made of, as the provider declares
+ * it: an API key, an access key id and its secret, a service-account key file.
+ */
+interface CloudCredentialField {
+    /** The key the value is kept and handed to the provider under: "apiKey", "secretAccessKey". */
+    id: string;
+    label: string;
+    /** Masked as it's typed, kept only in the OS keychain, and never shown again. */
+    secret: boolean;
+    /** One line of text, text over several lines, or the contents of a file chosen from disk. */
+    input: "single-line" | "multi-line" | "key-file";
+    required: boolean;
+    /** A short hint shown with the field; null for none. */
+    help: string | null;
+}
+/**
+ * What a person entered for an account's credentials, keyed by the provider's
+ * declared field ids. It travels to main once, when credentials are checked,
+ * connected or replaced, and never comes back.
+ */
+type CloudCredentialValues = Record<string, string>;
+/**
+ * What an account bills: the person's own wallet, an organization they belong
+ * to, the one workspace a provider binds each key to, a cloud project (Google
+ * Cloud's unit of billing and access), or the provider's account itself (an
+ * AWS account), with no wallet to choose.
+ */
+interface CloudBillingScope {
+    kind: "personal" | "organization" | "workspace" | "project" | "account";
+    /** The provider's id for it: what every request names. */
+    id: string;
+    name: string;
+}
+/** The scopes a key can bill, offered when an account is connected. */
+interface CloudAccountScopeChoice {
+    scope: CloudBillingScope;
+    /** The provider marks this the account's active wallet. */
+    active: boolean;
+}
+interface CloudAccountCheckResult {
+    identity: string | null;
+    scopes: CloudAccountScopeChoice[];
+}
+/**
+ * The machine as the provider reports it, normalised. Separate from the
+ * link's state: a machine can run with nobody connected, and a link can be
+ * down while the machine runs.
+ */
+type CloudMachineState = "not-created" | "starting" | "running" | "stopping" | "stopped" | "error" | "deleted" | "unknown";
+interface CloudMachineType {
+    id: string;
+    label: string;
+    vcpu: number | null;
+    memoryGB: number | null;
+    /** Price per running hour at list price; null when the provider didn't say. */
+    hourlyDollars: number | null;
+    available: boolean;
+    /** Why it isn't available, in the provider's words. */
+    reason: string | null;
+}
+/** The three things a create may name beyond its size, in the order a person picks them. */
+type CloudProvisioningDimension = "location" | "image" | "network";
+/** One region, image or network an account may create a machine with. */
+interface CloudProvisioningChoice {
+    /** The provider's own id for it, opaque to Daintree. */
+    id: string;
+    label: string;
+    /** A short line about it ("Ubuntu 24.04 LTS, x86-64"); null for none. */
+    description: string | null;
+    available: boolean;
+    /** Why it isn't available, in the provider's words. */
+    reason: string | null;
+    /**
+     * The location ids an image or network is offered in: null for every
+     * location, [] for none. Always null on a location.
+     */
+    locations: string[] | null;
+}
+/** What a provider offers for one dimension of a create. */
+interface CloudProvisioningOptions {
+    /** What the provider calls it: "Region", "Zone", "AMI", "Subnet". */
+    label: string;
+    choices: CloudProvisioningChoice[];
+    /**
+     * The provider's suggestion. For an optional dimension null means the
+     * provider decides; for a required one, that it suggests nothing.
+     */
+    defaultId: string | null;
+}
+/**
+ * The ids a create names. Null is "not named": the provider decides, which
+ * only an optional dimension (or one the provider doesn't take) allows.
+ */
+interface CloudProvisioningSelection {
+    location: string | null;
+    image: string | null;
+    network: string | null;
+}
+type CloudHostErrorCode = "credential-invalid" | "permission" | "billing" | "rate-limited" | "capacity" | "not-found" | "data-expired" | "stop-failing" | "ssh-authorization" | "ssh-tunnel-command-missing" | "provider-unreachable" | "outcome-unknown" | "unsupported" | "lifetime-renewal"
+/** The provider turned the request down as it was made (a size its region lacks, a limit reached); nothing changed. */
+ | "refused" | "failed";
+
+/**
+ * The cloud provider contract as a plugin implements it (#17351): the same
+ * calls Daintree makes of a built-in provider, minus the two it answers
+ * itself (what the provider is, from the manifest, and how its failures read).
+ */
+/** A machine as a provider reports it, normalised. */
+interface CloudProviderResource {
+    resourceId: string;
+    name: string;
+    machine: CloudMachineState;
+    rawState: string;
+    machineType: string | null;
+    vcpu: number | null;
+    memoryGB: number | null;
+    autoStopAt: string | null;
+    lifetimeSeconds: number | null;
+    stoppedAt: string | null;
+    createdAt: string | null;
+    stop: {
+        id: string;
+        status: "pending" | "failing" | "completed" | "superseded" | "unknown";
+        error: string | null;
+    } | null;
+    lastSnapshotAt: string | null;
+    dataExpired: boolean;
+    /** Snapshots were turned off at create: a stop erases the disk. */
+    snapshotsDisabled: boolean;
+    labels: Record<string, string>;
+    /** This account may see the machine but not start or reach it. */
+    restricted: boolean;
+    /** The provider's word on why it is stopped or failed. */
+    error: string | null;
+    /** Stopped because the provider slept it on idle; a request to it would wake it. Absent: not asleep. */
+    asleep?: boolean;
+    /**
+     * Whether this machine sleeps by itself when idle, and after how long, as
+     * the provider reports it for this machine; absent when it doesn't say per
+     * machine, and the provider's declared lifetime holds.
+     */
+    idleSleep?: {
+        enabled: boolean;
+        idleSeconds: number | null;
+    };
+}
+/** How to reach the machine's sshd right now, as the provider's authenticated API said. */
+interface CloudProviderSshAccess {
+    user: string;
+    /** A DNS name, an IPv4 address, or an IPv6 address without brackets, and its port. */
+    endpoint: {
+        host: string;
+        port: number;
+    };
+    /**
+     * The server's public key, `type base64`. Null when the provider doesn't
+     * vouch for one: its tunnel does (`sshTrust: "provider-tunnel"`), or the
+     * person confirms the key the machine presents (`"confirm-on-first-connect"`).
+     * Under `"api-or-confirm"` it is the key the API reports when it has one yet,
+     * and null when it doesn't, leaving the first key to the person.
+     */
+    hostKey: string | null;
+}
+interface CloudProviderCatalog {
+    machineTypes: CloudMachineType[];
+    canStart: boolean;
+    includedHoursRemaining: number | null;
+    startsRemaining: number | null;
+    savedSnapshotDayDollars: number | null;
+    /**
+     * The regions, images and networks this account may create with, for each
+     * dimension the provider's capabilities say a create takes. One left out
+     * reads as offering nothing; one the provider doesn't take is ignored.
+     */
+    provisioning?: Partial<Record<CloudProvisioningDimension, CloudProvisioningOptions>>;
+}
+interface CloudProviderCreateRequest {
+    name: string;
+    machineType: string;
+    /** The runtime limit, for a provider whose create takes one; always null for the rest. */
+    lifetimeSeconds: number | null;
+    /** What the person chose, checked against the catalog; the same on every retry of this create. */
+    provisioning: CloudProvisioningSelection;
+    /** Non-secret identifiers that let a lost create be found again. */
+    labels: Record<string, string>;
+    idempotencyKey: string;
+    /**
+     * The account's SSH public key, `type base64 comment`, for a provider whose
+     * `provisioning.sshKey` is "at-create"; null for one that authorizes it after.
+     * A retried create carries the same key.
+     */
+    publicKey: string | null;
+}
+/** What one call needs to act for one account. Never kept past the call. */
+interface CloudProviderCallCredentials {
+    /** The account's whole credential set, keyed by the declared field ids. */
+    values: Readonly<CloudCredentialValues>;
+    /** The billing scope every request names. */
+    scopeId: string;
+    /** The API origin the account was connected against: the manifest's `apiUrl`. */
+    apiUrl: string;
+    /** Aborted when Daintree stops waiting: its deadline passed, or the person cancelled. */
+    signal: AbortSignal;
+}
+type Answer<T> = Promise<T> | T;
+/**
+ * A cloud provider bound with `host.registerCloudProvider` (#17351). Every
+ * method may be asked at any time, with no state kept between calls, and each
+ * has 30 seconds, the plugin's activation included.
+ *
+ * A failure the provider can name throws an `Error` whose `code` is a
+ * `CloudHostErrorCode`: `credential-invalid`,
+ * `permission`, `billing`, `rate-limited` and `capacity` tell Daintree that
+ * nothing was done, so a refused create is retried with a fresh key. Any
+ * other throw reads as `failed`.
+ */
+interface CloudProviderImpl {
+    /**
+     * Checks credentials the person entered, already normalised against the
+     * declared fields, and lists the scopes they may bill.
+     */
+    checkCredentials(values: Readonly<CloudCredentialValues>, apiUrl: string, signal: AbortSignal): Answer<CloudAccountCheckResult>;
+    validate(credentials: CloudProviderCallCredentials): Answer<{
+        identity: string | null;
+    }>;
+    catalog(credentials: CloudProviderCallCredentials): Answer<CloudProviderCatalog>;
+    /** Every machine in the scope; with `label`, only those carrying that `key=value`. */
+    list(credentials: CloudProviderCallCredentials, options: {
+        label?: string;
+    }): Answer<CloudProviderResource[]>;
+    inspect(credentials: CloudProviderCallCredentials, resourceId: string): Answer<CloudProviderResource>;
+    /** Must be idempotent on `request.idempotencyKey`: a lost answer is retried with the same key. */
+    create(credentials: CloudProviderCallCredentials, request: CloudProviderCreateRequest): Answer<CloudProviderResource>;
+    /** Starts a stopped machine; `lifetimeSeconds` is absent when it keeps the limit it has. */
+    start(credentials: CloudProviderCallCredentials, resourceId: string, options: {
+        lifetimeSeconds?: number | null;
+    }): Answer<CloudProviderResource | null>;
+    /** A normal, saving stop. Never forced. */
+    stop(credentials: CloudProviderCallCredentials, resourceId: string): Answer<CloudProviderResource | null>;
+    /** Required, and only called, when `capabilities.lifetime.kind` is "renewable". */
+    renewLifetime?(credentials: CloudProviderCallCredentials, resourceId: string, lifetimeSeconds: number | null): Answer<CloudProviderResource>;
+    rename(credentials: CloudProviderCallCredentials, resourceId: string, name: string): Answer<void>;
+    /** Called only while `capabilities.deletion` is true. */
+    delete(credentials: CloudProviderCallCredentials, resourceId: string): Answer<void>;
+    /** Required, and only called, when `capabilities.provisioning.sshKey` is "after-create". */
+    authorizeSsh?(credentials: CloudProviderCallCredentials, resourceId: string, publicKey: string): Answer<CloudProviderSshAccess>;
+    /** Required, and only called, when `capabilities.provisioning.sshKey` is "at-create". */
+    sshAccess?(credentials: CloudProviderCallCredentials, resourceId: string): Answer<CloudProviderSshAccess>;
+}
+/** Passed to `host.registerCloudProvider` alongside the impl; `id` names the manifest entry. */
+interface CloudProviderDescriptor {
+    id: string;
+}
+type CloudProviderMethod = keyof CloudProviderImpl;
+/**
+ * `contributes.cloudProviders` entry (#17351). Everything Daintree shows about
+ * the provider comes from here, so it is listed, and its accounts and machines
+ * are named, before any of the plugin's code runs.
+ */
+interface CloudProviderContribution {
+    /** The provider's name inside the plugin: registered as `{pluginId}.{id}`. */
+    id: string;
+    name: string;
+    description: string;
+    /** The https origin the plugin's API calls go to; an account is tied to the one it connected with. */
+    apiUrl: string;
+    /** Where to create an account or an API key; opened in the system browser. */
+    apiKeyUrl: string;
+    dashboardUrl: string;
+    docsUrl: string;
+    /** What connecting an account asks for, in order. */
+    credentialFields: CloudCredentialField[];
+    capabilities: CloudProviderCapabilities;
+}
+
+/** Notification type */
+type NotificationType = "info" | "success" | "error" | "warning";
 
 /**
  * What a terminal's input box held when its screen was read (#16189): nothing,
@@ -5199,6 +5580,14 @@ interface PluginManifest {
          * schema's `.default([])`, like `launchEntries`.
          */
         worktreeDeleteNotes?: WorktreeDeleteNotesContribution[];
+        /**
+         * Cloud providers an installed plugin runs in its worker (#17351), each
+         * registered as `{pluginId}.{id}`. Optional in the type but always
+         * materialized by the manifest schema's `.default([])`. Refused for a
+         * project plugin: a repository must never add a provider that creates
+         * machines.
+         */
+        cloudProviders?: CloudProviderContribution[];
         /**
          * Plugin-contributed file editors (#12323): an extra, writable mode on the
          * host's file panel for the declared extensions. Built-in plugins only in
@@ -8299,6 +8688,30 @@ interface PluginActivationApi {
      */
     registerWorktreeDeleteNotesProvider(descriptor: WorktreeDeleteNotesProviderDescriptor, impl: WorktreeDeleteNotesProviderImpl): Promise<() => void>;
     /**
+     * Bind the implementation of a cloud provider the manifest declares in
+     * `contributes.cloudProviders` (#17351). Daintree lists the provider, and
+     * names its accounts and machines, from the manifest; every call it makes
+     * of the provider (checking credentials, the catalog, creating, starting,
+     * stopping and deleting machines, SSH access) comes to `impl` here. A
+     * plugin that isn't running is activated for the call.
+     *
+     * Each call has 30 seconds, activation included. A late answer, a crash or
+     * a throw is a provider error on that account; a throw whose `code` is a
+     * `CloudHostErrorCode` keeps that code. The impl must have every method the
+     * declared capabilities need: `renewLifetime` for a renewable lifetime,
+     * `authorizeSsh` or `sshAccess` for the declared SSH key timing.
+     *
+     * Returns a disposer that unbinds the impl; the binding also goes when the
+     * plugin's worker stops or the plugin unloads. Must be called during
+     * `activate()`. Calling it again with the same id replaces the binding, and
+     * the older disposer becomes inert.
+     *
+     * @throws {Error} If called after activation resolves or times out, with an
+     *   id `contributes.cloudProviders` does not declare, or with an impl
+     *   missing a method the declaration needs.
+     */
+    registerCloudProvider(descriptor: CloudProviderDescriptor, impl: CloudProviderImpl): Promise<() => void>;
+    /**
      * Subscribe to active-worktree changes. The callback fires with the new
      * active snapshot (or `null` when none is active). Returns a disposer;
      * calling it more than once is a no-op. All subscriptions are automatically
@@ -9805,4 +10218,4 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
 export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
-export type { ActionDanger, ActionDispatchError, ActionDispatchResult, ActionDispatchSuccess, ActionError, ActionErrorCode, ActionExample, ActionHandler, ActionId, ActionKind, AgentContextDataTransfer, AgentContextDragData, AgentContextDragPayload, AgentContextReferenceDragPayload, AgentState, AnyForgeProviderImpl, AssistantKnowledgeContribution, AssistantKnowledgeEntry, AuthValidation, AutoMergeCapability, BuiltInActionId, BuiltInPluginCapability, CIStatus, CanopyViewContribution, CheckRun, CheckRunConclusion, CheckRunStatus, ChecksCapability, ContextMenuContribution, ContextMenuLocation, ContextProviderCallOptions, ContextProviderContent, ContextProviderContribution, ContextProviderDescriptor, ContextProviderImpl, ContextProviderItem, CreateIssueInput, CredentialImportCandidate, CredentialImportCapability, CredentialImportExpected, CredentialImportFailureReason, CredentialImportPreview, CredentialImportUnavailable, Credentials, Deployment, DeploymentState, DeploymentTarget, DeploymentsCapability, DisableAutoMergeResult, ElementPickerDetectionKind, ElementPickerDetectionRule, ElementPickerProviderContribution, EnableAutoMergeInput, EnableAutoMergeResult, FetchOptions, FileDecoration, FileDecorationContribution, FileDecorationProviderDescriptor, FileDecorationProviderImpl, FileEditorContribution, FileEditorMode, ForgeCodeProviderImpl, ForgeIssueProviderImpl, ForgeLabel, ForgeNumberReference, ForgeProviderBaseImpl, ForgeProviderContribution, ForgeProviderDescriptor, ForgeProviderImpl, ForgeProviderKind, ForgeProviderRole, ForgeUser, Issue, KeybindingContribution, ListOptions, McpServerContribution, MenuItemContribution, MenuItemLocation, NormalizedIssueState, NormalizedPRState, PR, PRCommitSummary, PRMergeIntent, PRMergeMethod, PRMergeStatus, Page, PanelContribution, PanelMenuItemContribution, PanelReloadResult, PanelViewProps, PluginAccountAccessToken, PluginAccountApi, PluginAccountContribution, PluginAccountIdentity, PluginAccountKind, PluginAccountRef, PluginAccountState, PluginAccountTest, PluginActionContext, PluginActionContribution, PluginActionManifestEntry, PluginActionResultSchema, PluginActivate, PluginActivationApi, PluginAgentInputOptions, PluginAgentInputResult, PluginAgentInterruptResult, PluginAgentKeysInput, PluginAgentKeysResult, PluginAgentMcpContribution, PluginAgentMcpServerSource, PluginAgentMcpServerSourceTool, PluginAgentMcpToolGroup, PluginAgentMcpToolGroupAccess, PluginAgentPane, PluginAgentPaneObservation, PluginAgentRun, PluginAgentSnapshot, PluginAgentsApi, PluginAllAgentsSnapshot, PluginApplicationDescriptor, PluginApplicationDestination, PluginApplicationNavigation, PluginApplicationNavigationApi, PluginApplicationNavigationParam, PluginApplicationSection, PluginApplicationTourRef, PluginArtifact, PluginArtifactApi, PluginArtifactCreateOptions, PluginArtifactDownloadOptions, PluginArtifactDownloadRequest, PluginArtifactImportSource, PluginArtifactListOptions, PluginArtifactProgress, PluginArtifactSource, PluginArtifactUploadOptions, PluginArtifactUploadRequest, PluginArtifactUploadResult, PluginAuthor, PluginCanDispatchResult, PluginCapability, PluginChannelSchema, PluginClipboardApi, PluginConfirmOptions, PluginConnectionContribution, PluginContextValue, PluginDatabase, PluginDatabaseApi, PluginDatabaseBackupResult, PluginDatabaseChangeEvent, PluginDatabaseColumn, PluginDatabaseContribution, PluginDatabaseLocation, PluginDatabaseLocationKind, PluginDatabaseOpenOptions, PluginDatabaseParams, PluginDatabaseQueryContribution, PluginDatabaseQueryParam, PluginDatabaseQueryParamFormat, PluginDatabaseQueryParamType, PluginDatabaseRunResult, PluginDatabaseStatements, PluginDispatchOptions, PluginDocumentsApi, PluginDuplexProcessHandle, PluginDuplexProcessSpawnOptions, PluginEventRoute, PluginEventRouteEvent, PluginEventRouteWake, PluginFileDocument, PluginFileDocumentChange, PluginFileDocumentReadResult, PluginFileDocumentSaveResult, PluginFocusedPanel, PluginFocusedPanelKind, PluginFsApi, PluginFsDirEntry, PluginFsReadFilesEncoding, PluginFsReadFilesEntry, PluginFsReadFilesErrorCode, PluginFsReadFilesOptions, PluginFsReadWithRevisionResult, PluginFsScope, PluginFsStat, PluginFsWalkEntry, PluginFsWalkOptions, PluginFsWalkResult, PluginFsWatchOptions, PluginGitApi, PluginGitCommitOptions, PluginGitCommitResult, PluginGitStatus, PluginGitStatusFile, PluginHandlerOptions, PluginHostActionsApi, PluginHostApi, PluginHostCallOptions, PluginHostSubscriptionOptions, PluginIdentity, PluginInputBoxOptions, PluginInvokeOrigin, PluginIpcContext, PluginIpcHandler, PluginLocalSocketScope, PluginLogger, PluginManifest, PluginManifestScopes, PluginMcpApi, PluginMcpCaller, PluginMcpJsonSchema, PluginMcpToolAnnotations, PluginMcpToolDefinition, PluginNavigationIntent, PluginNavigationLocation, PluginNavigationParamValue, PluginNavigationRefusal, PluginNavigationResult, PluginNetworkScope, PluginNotifyAction, PluginNotifyOptions, PluginNotifyResult, PluginNotifyTarget, PluginPanelActivity, PluginPanelActivityState, PluginPanelBadge, PluginPanelBadgeColor, PluginPanelLifecycleEvent, PluginPanelLifecyclePhase, PluginPanelToolbarItemState, PluginPdfMargins, PluginPdfPageSize, PluginProcessApi, PluginProcessDataChunk, PluginProcessHandle, PluginProcessMode, PluginProcessSpawnOptions, PluginProcessStreamEvent, PluginProjectPresence, PluginProjectPresenceState, PluginPromptCallOptions, PluginPtyProcessHandle, PluginPtyProcessSpawnOptions, PluginQuickPickItem, PluginQuickPickOptions, PluginRemoteHost, PluginRemoteHostProject, PluginRemoteHostsApi, PluginRenderPdfOptions, PluginRenderPdfResult, PluginRunRecipeOptions, PluginRunRecipeRefusalReason, PluginRunRecipeResult, PluginSearchContext, PluginSearchProvider, PluginSearchProviderContribution, PluginSearchResult, PluginSearchResultTarget, PluginSendToAgentOptions, PluginSendToAgentRefusalReason, PluginSendToAgentResult, PluginServiceCallContext, PluginServiceCallOptions, PluginServiceCaller, PluginServiceContract, PluginServiceFailureReason, PluginServiceHandlers, PluginServiceProvideContribution, PluginServiceProviderInfo, PluginServiceRequireContribution, PluginServiceResult, PluginServiceStatus, PluginServicesApi, PluginServicesContribution, PluginSettingsPageContribution, PluginSettingsScope, PluginSettingsViewContext, PluginSettingsViewFocus, PluginSetupStepAction, PluginSetupStepContribution, PluginSetupStepDone, PluginStorageScope, PluginSystemApi, PluginSystemWakeEvent, PluginTaskApi, PluginTaskHandle, PluginTaskProgress, PluginTaskResult, PluginTaskStartOptions, PluginTerminalKind, PluginTerminalLifecycleEvent, PluginTerminalLifecycleEventBase, PluginTerminalLifecycleEventType, PluginTerminalReadScreenOptions, PluginTerminalScreenResult, PluginTerminalStatus, PluginTerminalsApi, PluginToastOptions, PluginToolbarButtonRuntimeState, PluginTypedIpcHandler, PluginViewHostContext, PluginViewHostKind, PluginWorktreeCardStatus, PluginWorktreeDeleteNote, PluginWorktreeFileState, PluginWorktreeGitOperation, PluginWorktreeLinked, PluginWorktreeLinkedIssue, PluginWorktreeLinkedPR, PluginWorktreeReviewCheck, PluginWorktreeSetup, PluginWorktreeSetupStage, PluginWorktreeSetupState, PluginWorktreeSetupStepContext, PluginWorktreeSetupStepHandler, PluginWorktreeSnapshot, PluginWorktreeStatus, PluginWorktreeStatusFile, PluginWorktreesChange, PluginWorktreesResult, PluginWorktreesUnavailableReason, ProjectTemplateContribution, RateLimitInfo, RepoMergeSettings, RepoMetadata, RepoRef, ResourceRef, SettingDefinition, SettingFieldType, SettingsApi, StorageApi, SyncedCollection, SyncedCollectionDelta, SyncedCollectionHost, SyncedCollectionOptions, SyncedCollectionSnapshot, TerminalInputLine, TerminalInputLineState, TerminalLinkContribution, TerminalLinkPatternArgs, TerminalLinkSubject, TerminalLinkUrlArgs, TerminalLinkUrlContribution, ToolbarButtonContribution, ToolbarButtonPopover, ViewContribution, ViewLocation, WaitingReason, WorkerRestartResult, WorktreeDeleteNotesContribution, WorktreeDeleteNotesProviderDescriptor, WorktreeDeleteNotesProviderImpl, WorktreeSetupStepContribution };
+export type { ActionDanger, ActionDispatchError, ActionDispatchResult, ActionDispatchSuccess, ActionError, ActionErrorCode, ActionExample, ActionHandler, ActionId, ActionKind, AgentContextDataTransfer, AgentContextDragData, AgentContextDragPayload, AgentContextReferenceDragPayload, AgentState, AnyForgeProviderImpl, AssistantKnowledgeContribution, AssistantKnowledgeEntry, AuthValidation, AutoMergeCapability, BuiltInActionId, BuiltInPluginCapability, CIStatus, CanopyViewContribution, CheckRun, CheckRunConclusion, CheckRunStatus, ChecksCapability, CloudAccountCheckResult, CloudAccountScopeChoice, CloudBillingScope, CloudCredentialField, CloudCredentialValues, CloudHostErrorCode, CloudLifetimeModel, CloudMachineState, CloudMachineType, CloudProviderCallCredentials, CloudProviderCapabilities, CloudProviderCatalog, CloudProviderContribution, CloudProviderCreateRequest, CloudProviderDescriptor, CloudProviderImpl, CloudProviderMethod, CloudProviderPersistence, CloudProviderResource, CloudProviderSshAccess, CloudProvisioning, CloudProvisioningChoice, CloudProvisioningDimension, CloudProvisioningInput, CloudProvisioningOptions, CloudProvisioningSelection, CloudSshTransport, CloudSshTrust, CloudSshTunnelCommand, ContextMenuContribution, ContextMenuLocation, ContextProviderCallOptions, ContextProviderContent, ContextProviderContribution, ContextProviderDescriptor, ContextProviderImpl, ContextProviderItem, CreateIssueInput, CredentialImportCandidate, CredentialImportCapability, CredentialImportExpected, CredentialImportFailureReason, CredentialImportPreview, CredentialImportUnavailable, Credentials, Deployment, DeploymentState, DeploymentTarget, DeploymentsCapability, DisableAutoMergeResult, ElementPickerDetectionKind, ElementPickerDetectionRule, ElementPickerProviderContribution, EnableAutoMergeInput, EnableAutoMergeResult, FetchOptions, FileDecoration, FileDecorationContribution, FileDecorationProviderDescriptor, FileDecorationProviderImpl, FileEditorContribution, FileEditorMode, ForgeCodeProviderImpl, ForgeIssueProviderImpl, ForgeLabel, ForgeNumberReference, ForgeProviderBaseImpl, ForgeProviderContribution, ForgeProviderDescriptor, ForgeProviderImpl, ForgeProviderKind, ForgeProviderRole, ForgeUser, Issue, KeybindingContribution, ListOptions, McpServerContribution, MenuItemContribution, MenuItemLocation, NormalizedIssueState, NormalizedPRState, PR, PRCommitSummary, PRMergeIntent, PRMergeMethod, PRMergeStatus, Page, PanelContribution, PanelMenuItemContribution, PanelReloadResult, PanelViewProps, PluginAccountAccessToken, PluginAccountApi, PluginAccountContribution, PluginAccountIdentity, PluginAccountKind, PluginAccountRef, PluginAccountState, PluginAccountTest, PluginActionContext, PluginActionContribution, PluginActionManifestEntry, PluginActionResultSchema, PluginActivate, PluginActivationApi, PluginAgentInputOptions, PluginAgentInputResult, PluginAgentInterruptResult, PluginAgentKeysInput, PluginAgentKeysResult, PluginAgentMcpContribution, PluginAgentMcpServerSource, PluginAgentMcpServerSourceTool, PluginAgentMcpToolGroup, PluginAgentMcpToolGroupAccess, PluginAgentPane, PluginAgentPaneObservation, PluginAgentRun, PluginAgentSnapshot, PluginAgentsApi, PluginAllAgentsSnapshot, PluginApplicationDescriptor, PluginApplicationDestination, PluginApplicationNavigation, PluginApplicationNavigationApi, PluginApplicationNavigationParam, PluginApplicationSection, PluginApplicationTourRef, PluginArtifact, PluginArtifactApi, PluginArtifactCreateOptions, PluginArtifactDownloadOptions, PluginArtifactDownloadRequest, PluginArtifactImportSource, PluginArtifactListOptions, PluginArtifactProgress, PluginArtifactSource, PluginArtifactUploadOptions, PluginArtifactUploadRequest, PluginArtifactUploadResult, PluginAuthor, PluginCanDispatchResult, PluginCapability, PluginChannelSchema, PluginClipboardApi, PluginConfirmOptions, PluginConnectionContribution, PluginContextValue, PluginDatabase, PluginDatabaseApi, PluginDatabaseBackupResult, PluginDatabaseChangeEvent, PluginDatabaseColumn, PluginDatabaseContribution, PluginDatabaseLocation, PluginDatabaseLocationKind, PluginDatabaseOpenOptions, PluginDatabaseParams, PluginDatabaseQueryContribution, PluginDatabaseQueryParam, PluginDatabaseQueryParamFormat, PluginDatabaseQueryParamType, PluginDatabaseRunResult, PluginDatabaseStatements, PluginDispatchOptions, PluginDocumentsApi, PluginDuplexProcessHandle, PluginDuplexProcessSpawnOptions, PluginEventRoute, PluginEventRouteEvent, PluginEventRouteWake, PluginFileDocument, PluginFileDocumentChange, PluginFileDocumentReadResult, PluginFileDocumentSaveResult, PluginFocusedPanel, PluginFocusedPanelKind, PluginFsApi, PluginFsDirEntry, PluginFsReadFilesEncoding, PluginFsReadFilesEntry, PluginFsReadFilesErrorCode, PluginFsReadFilesOptions, PluginFsReadWithRevisionResult, PluginFsScope, PluginFsStat, PluginFsWalkEntry, PluginFsWalkOptions, PluginFsWalkResult, PluginFsWatchOptions, PluginGitApi, PluginGitCommitOptions, PluginGitCommitResult, PluginGitStatus, PluginGitStatusFile, PluginHandlerOptions, PluginHostActionsApi, PluginHostApi, PluginHostCallOptions, PluginHostSubscriptionOptions, PluginIdentity, PluginInputBoxOptions, PluginInvokeOrigin, PluginIpcContext, PluginIpcHandler, PluginLocalSocketScope, PluginLogger, PluginManifest, PluginManifestScopes, PluginMcpApi, PluginMcpCaller, PluginMcpJsonSchema, PluginMcpToolAnnotations, PluginMcpToolDefinition, PluginNavigationIntent, PluginNavigationLocation, PluginNavigationParamValue, PluginNavigationRefusal, PluginNavigationResult, PluginNetworkScope, PluginNotifyAction, PluginNotifyOptions, PluginNotifyResult, PluginNotifyTarget, PluginPanelActivity, PluginPanelActivityState, PluginPanelBadge, PluginPanelBadgeColor, PluginPanelLifecycleEvent, PluginPanelLifecyclePhase, PluginPanelToolbarItemState, PluginPdfMargins, PluginPdfPageSize, PluginProcessApi, PluginProcessDataChunk, PluginProcessHandle, PluginProcessMode, PluginProcessSpawnOptions, PluginProcessStreamEvent, PluginProjectPresence, PluginProjectPresenceState, PluginPromptCallOptions, PluginPtyProcessHandle, PluginPtyProcessSpawnOptions, PluginQuickPickItem, PluginQuickPickOptions, PluginRemoteHost, PluginRemoteHostProject, PluginRemoteHostsApi, PluginRenderPdfOptions, PluginRenderPdfResult, PluginRunRecipeOptions, PluginRunRecipeRefusalReason, PluginRunRecipeResult, PluginSearchContext, PluginSearchProvider, PluginSearchProviderContribution, PluginSearchResult, PluginSearchResultTarget, PluginSendToAgentOptions, PluginSendToAgentRefusalReason, PluginSendToAgentResult, PluginServiceCallContext, PluginServiceCallOptions, PluginServiceCaller, PluginServiceContract, PluginServiceFailureReason, PluginServiceHandlers, PluginServiceProvideContribution, PluginServiceProviderInfo, PluginServiceRequireContribution, PluginServiceResult, PluginServiceStatus, PluginServicesApi, PluginServicesContribution, PluginSettingsPageContribution, PluginSettingsScope, PluginSettingsViewContext, PluginSettingsViewFocus, PluginSetupStepAction, PluginSetupStepContribution, PluginSetupStepDone, PluginStorageScope, PluginSystemApi, PluginSystemWakeEvent, PluginTaskApi, PluginTaskHandle, PluginTaskProgress, PluginTaskResult, PluginTaskStartOptions, PluginTerminalKind, PluginTerminalLifecycleEvent, PluginTerminalLifecycleEventBase, PluginTerminalLifecycleEventType, PluginTerminalReadScreenOptions, PluginTerminalScreenResult, PluginTerminalStatus, PluginTerminalsApi, PluginToastOptions, PluginToolbarButtonRuntimeState, PluginTypedIpcHandler, PluginViewHostContext, PluginViewHostKind, PluginWorktreeCardStatus, PluginWorktreeDeleteNote, PluginWorktreeFileState, PluginWorktreeGitOperation, PluginWorktreeLinked, PluginWorktreeLinkedIssue, PluginWorktreeLinkedPR, PluginWorktreeReviewCheck, PluginWorktreeSetup, PluginWorktreeSetupStage, PluginWorktreeSetupState, PluginWorktreeSetupStepContext, PluginWorktreeSetupStepHandler, PluginWorktreeSnapshot, PluginWorktreeStatus, PluginWorktreeStatusFile, PluginWorktreesChange, PluginWorktreesResult, PluginWorktreesUnavailableReason, ProjectTemplateContribution, RateLimitInfo, RepoMergeSettings, RepoMetadata, RepoRef, ResourceRef, SettingDefinition, SettingFieldType, SettingsApi, StorageApi, SyncedCollection, SyncedCollectionDelta, SyncedCollectionHost, SyncedCollectionOptions, SyncedCollectionSnapshot, TerminalInputLine, TerminalInputLineState, TerminalLinkContribution, TerminalLinkPatternArgs, TerminalLinkSubject, TerminalLinkUrlArgs, TerminalLinkUrlContribution, ToolbarButtonContribution, ToolbarButtonPopover, ViewContribution, ViewLocation, WaitingReason, WorkerRestartResult, WorktreeDeleteNotesContribution, WorktreeDeleteNotesProviderDescriptor, WorktreeDeleteNotesProviderImpl, WorktreeSetupStepContribution };

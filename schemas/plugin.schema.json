@@ -1847,6 +1847,345 @@
             "additionalProperties": false
           }
         },
+        "cloudProviders": {
+          "default": [],
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 32,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 280
+              },
+              "apiUrl": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "apiKeyUrl": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "dashboardUrl": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "docsUrl": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "credentialFields": {
+                "minItems": 1,
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+                    },
+                    "label": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "secret": {
+                      "type": "boolean"
+                    },
+                    "input": {
+                      "type": "string",
+                      "enum": [
+                        "single-line",
+                        "multi-line",
+                        "key-file"
+                      ]
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "help": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 280
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "secret",
+                    "input",
+                    "required"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "persistence": {
+                    "type": "object",
+                    "properties": {
+                      "kept": {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      "lost": {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      "retentionDays": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 3650
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "saveRetryBilled": {
+                        "type": "boolean"
+                      },
+                      "stoppedComputeBilled": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "kept",
+                      "lost",
+                      "retentionDays",
+                      "saveRetryBilled",
+                      "stoppedComputeBilled"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "typicalStartSeconds": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 31536000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lifetime": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "none"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "fixed-at-create"
+                          },
+                          "canChangeWhileStopped": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "canChangeWhileStopped"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "renewable"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "idle-sleep"
+                          },
+                          "idleSeconds": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 31536000
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "idleSeconds"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "sshTrust": {
+                    "type": "string",
+                    "enum": [
+                      "pinned-from-api",
+                      "confirm-on-first-connect",
+                      "provider-tunnel"
+                    ]
+                  },
+                  "transport": {
+                    "type": "string",
+                    "enum": [
+                      "direct",
+                      "provider-command"
+                    ]
+                  },
+                  "tunnel": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "command": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "args": {
+                            "maxItems": 16,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "maxLength": 128
+                            }
+                          },
+                          "installUrl": {
+                            "type": "string",
+                            "maxLength": 2048
+                          }
+                        },
+                        "required": [
+                          "command",
+                          "args",
+                          "installUrl"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "provisioning": {
+                    "type": "object",
+                    "properties": {
+                      "location": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "optional",
+                          "required"
+                        ]
+                      },
+                      "image": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "optional",
+                          "required"
+                        ]
+                      },
+                      "network": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "optional",
+                          "required"
+                        ]
+                      },
+                      "sshKey": {
+                        "type": "string",
+                        "enum": [
+                          "at-create",
+                          "after-create"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "location",
+                      "image",
+                      "network",
+                      "sshKey"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "deletion": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "persistence",
+                  "typicalStartSeconds",
+                  "lifetime",
+                  "sshTrust",
+                  "transport",
+                  "tunnel",
+                  "provisioning",
+                  "deletion"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "description",
+              "apiUrl",
+              "apiKeyUrl",
+              "dashboardUrl",
+              "docsUrl",
+              "credentialFields",
+              "capabilities"
+            ],
+            "additionalProperties": false
+          }
+        },
         "fileEditors": {
           "default": [],
           "maxItems": 10,
