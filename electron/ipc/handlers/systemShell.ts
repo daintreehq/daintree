@@ -137,7 +137,9 @@ async function assertPathAllowed(
     assertExtensionAllowed(targetPath);
   }
 
-  const projectRoots = [...new Set(projectStore.getAllProjects().map((p) => p.path))];
+  // The identity projection, not getAllProjects(): a containment check needs
+  // every registered root, never the status repair or ranking that comes with it.
+  const projectRoots = [...new Set(projectStore.getAllProjectIdentities().map((p) => p.path))];
   const baseRoots = [...projectRoots, app.getPath("userData")];
 
   let realTarget: string;

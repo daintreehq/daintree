@@ -42,6 +42,8 @@ const fsMock = vi.hoisted(() => ({
 vi.mock("fs", () => ({ default: fsMock, ...fsMock }));
 
 const projectStoreMock = vi.hoisted(() => ({
+  getAllProjectIdentities: vi.fn<() => Array<{ path: string }>>(() => []),
+  // Only here to catch a return to the status-repairing, ranked project list.
   getAllProjects: vi.fn<() => Array<{ path: string }>>(() => []),
   // Typed to the real settings shape, not to the null default, so a test can
   // hand back an actual editor preference.
@@ -211,7 +213,7 @@ describe("system:open-path containment", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fsMock.promises.realpath.mockImplementation(realpathEcho);
-    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
     resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
@@ -226,6 +228,9 @@ describe("system:open-path containment", () => {
     const sourcePath = path.join(PROJECT_ROOT, "src", "index.ts");
     await handler(fakeEvent, { path: sourcePath });
     expect(shellMock.openPath).toHaveBeenCalledWith(sourcePath);
+    // Opening a file must not reconcile project statuses: that repair would
+    // demote a project another host just activated.
+    expect(projectStoreMock.getAllProjects).not.toHaveBeenCalled();
   });
 
   it("opens a path contained in the userData dir (crash logs)", async () => {
@@ -308,7 +313,7 @@ describe("system:open-in-editor containment", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fsMock.promises.realpath.mockImplementation(realpathEcho);
-    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
     resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
@@ -494,7 +499,7 @@ describe("system:show-item-in-folder containment", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fsMock.promises.realpath.mockImplementation(realpathEcho);
-    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
     resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
@@ -574,7 +579,7 @@ describe("system path-allowlist: tracked worktree roots", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fsMock.promises.realpath.mockImplementation(realpathEcho);
-    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
     resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
@@ -788,7 +793,7 @@ describe("system path-allowlist: tracked worktree roots", () => {
     const otherRoot = path.join(TEST_ROOT, "Users", "me", "other-project");
     const failing = vi.fn(() => Promise.reject(new Error("not a git repository")));
     const healthy = vi.fn(() => Promise.resolve([worktreeRecord(UNPREDICTED_WORKTREE)]));
-    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }, { path: otherRoot }]);
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([{ path: PROJECT_ROOT }, { path: otherRoot }]);
     gitServiceCacheMock.getGitService.mockImplementation((root: string) => {
       if (root === PROJECT_ROOT) return { listWorktrees: failing };
       if (root === otherRoot) return { listWorktrees: healthy };
@@ -803,6 +808,7 @@ describe("system path-allowlist: tracked worktree roots", () => {
     expect(failing).toHaveBeenCalled();
     expect(healthy).toHaveBeenCalled();
     expect(shellMock.openPath).toHaveBeenCalledWith(filePath);
+    expect(projectStoreMock.getAllProjects).not.toHaveBeenCalled();
   });
 
   // Enumeration shells out to git, so it must stay off the common path where
@@ -833,7 +839,7 @@ describe("system:show-item-in-folder-unconfined (out-of-root reveal recovery)", 
     vi.clearAllMocks();
     fsMock.promises.realpath.mockImplementation(realpathEcho);
     fsMock.promises.stat.mockResolvedValue({ isFile: () => true, isDirectory: () => false });
-    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
     resetGitMocks();
     cleanup = registerSystemShellHandlers({} as HandlerDependencies);
