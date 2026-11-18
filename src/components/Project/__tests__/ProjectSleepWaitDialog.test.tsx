@@ -145,9 +145,7 @@ describe("ProjectSleepWaitDialog", () => {
     const el = await dialog();
     expect(el.textContent).toContain("Still waiting to sleep 2 projects");
     expect(el.textContent).toContain("Nothing sleeps until you choose");
-    expect(el.querySelector("[data-sleep-wait-announce]")?.textContent).toContain(
-      "Still waiting"
-    );
+    expect(el.querySelector("[data-sleep-wait-announce]")?.textContent).toContain("Still waiting");
     await act(async () => {
       fireEvent.click(button(el, "Keep waiting")!);
     });
