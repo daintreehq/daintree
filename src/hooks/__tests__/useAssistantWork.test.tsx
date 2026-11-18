@@ -110,4 +110,122 @@ describe("useAssistantWork", () => {
     await nextPoll();
     expect(result.current).toBe(stale);
   });
+
+  it("publishes and refreshes the hosts that answer while another host's read is still out", async () => {
+    let answerFar: (value: AssistantWorkReading) => void = () => {};
+    own.mockImplementation(async () => reading(++clock));
+    remote.mockImplementation((hostId) =>
+      hostId === "far"
+        ? new Promise<AssistantWorkReading>((resolve) => {
+            answerFar = resolve;
+          })
+        : Promise.resolve(reading(++clock))
+    );
+    const { result } = renderHook(() => useAssistantWork([...HOSTS, "far"], "local", true));
+    await act(async () => {});
+    expect(result.current.get("local")?.coverage).toBe("ok");
+    expect(result.current.get("studio")?.coverage).toBe("ok");
+    expect(result.current.has("far")).toBe(false);
+
+    remote.mockImplementation((hostId) =>
+      hostId === "far"
+        ? new Promise<AssistantWorkReading>(() => {})
+        : Promise.resolve(reading(++clock, [{ terminalId: "w1" }]))
+    );
+    await nextPoll();
+    expect(own).toHaveBeenCalledTimes(2);
+    expect(remote.mock.calls.filter(([hostId]) => hostId === "studio")).toHaveLength(2);
+    expect(remote.mock.calls.filter(([hostId]) => hostId === "far")).toHaveLength(1);
+    expect(result.current.get("studio")?.workers).toHaveLength(1);
+
+    await act(async () => {
+      answerFar(reading(++clock, [{ terminalId: "w9" }]));
+    });
+    expect(result.current.get("far")?.workers).toEqual([{ terminalId: "w9" }]);
+    expect(result.current.get("studio")?.workers).toHaveLength(1);
+  });
+
+  it("drops a removed host's late answer and its reading", async () => {
+    let answerFar: (value: AssistantWorkReading) => void = () => {};
+    own.mockImplementation(async () => reading(++clock));
+    remote.mockImplementation((hostId) =>
+      hostId === "far"
+        ? new Promise<AssistantWorkReading>((resolve) => {
+            answerFar = resolve;
+          })
+        : Promise.resolve(reading(++clock))
+    );
+    const { result, rerender } = renderHook(
+      ({ hosts }: { hosts: string[] }) => useAssistantWork(hosts, "local", true),
+      { initialProps: { hosts: [...HOSTS, "far"] } }
+    );
+    await act(async () => {});
+    rerender({ hosts: HOSTS });
+    await act(async () => {});
+    await act(async () => {
+      answerFar(reading(++clock, [{ terminalId: "w9" }]));
+    });
+    expect(result.current.has("far")).toBe(false);
+    expect([...result.current.keys()].sort()).toEqual(["local", "studio"]);
+  });
+
+  it("publishes nothing a host answers after the view is hidden", async () => {
+    let answerStudio: (value: AssistantWorkReading) => void = () => {};
+    own.mockImplementation(async () => reading(++clock));
+    remote.mockImplementation(
+      () =>
+        new Promise<AssistantWorkReading>((resolve) => {
+          answerStudio = resolve;
+        })
+    );
+    const { result } = renderHook(() => useAssistantWork(HOSTS, "local", true));
+    await act(async () => {});
+    const shown = result.current;
+
+    Object.defineProperty(document, "hidden", { value: true, configurable: true });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(async () => {
+      answerStudio(reading(++clock, [{ terminalId: "w1" }]));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AGENT_DIRECTORY_POLL_MS * 3);
+    });
+    expect(result.current).toBe(shown);
+    expect(result.current.has("studio")).toBe(false);
+    expect(own).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a host no second read while its first is still out across a hide and show", async () => {
+    let answerStudio: (value: AssistantWorkReading) => void = () => {};
+    own.mockImplementation(async () => reading(++clock));
+    remote.mockImplementation(
+      () =>
+        new Promise<AssistantWorkReading>((resolve) => {
+          answerStudio = resolve;
+        })
+    );
+    const { result } = renderHook(() => useAssistantWork(HOSTS, "local", true));
+    await act(async () => {});
+
+    Object.defineProperty(document, "hidden", { value: true, configurable: true });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    Object.defineProperty(document, "hidden", { value: false, configurable: true });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(own).toHaveBeenCalledTimes(2);
+    expect(remote).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      answerStudio(reading(++clock, [{ terminalId: "w1" }]));
+    });
+    expect(result.current.get("studio")?.workers).toEqual([{ terminalId: "w1" }]);
+
+    await nextPoll();
+    expect(remote).toHaveBeenCalledTimes(2);
+  });
 });
