@@ -3,7 +3,7 @@
  */
 import { StrictMode } from "react";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, act } from "@testing-library/react";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(() => Promise.resolve({ ok: true })) },
@@ -36,18 +36,19 @@ vi.mock("../reviewHubRunOrder", async (importOriginal) => {
   return joins;
 });
 
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { ReviewHubContext } from "../ReviewHubContext";
 
 const NOW = Date.now();
 
-function run(id: string, observedAt: number) {
+function run(id: string, observedAt: number, message = `said ${id}`) {
   return {
     id,
     kind: "terminal",
     title: `Agent ${id}`,
     location: "grid",
     worktreeId: "wt-1",
-    lastHandback: { message: `said ${id}`, observedAt, truncated: false },
+    lastHandback: { message, observedAt, truncated: false },
   };
 }
 
@@ -83,19 +84,40 @@ beforeEach(() => {
   for (const k of Object.keys(panelsById)) delete panelsById[k];
   worktrees.set("wt-1", { id: "wt-1", path: "/repo/wt" });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  act(() => usePreferencesStore.setState({ showAgentTaskTitles: true }));
+});
 
 describe("ReviewHubContext visit order", () => {
   it("opens newest first and appends a run that arrives after it, whatever its age", () => {
-    panelsById.a = run("a", NOW - 2_000);
     panelsById.b = run("b", NOW - 3_000);
+    panelsById.a = run("a", NOW - 2_000);
     const { container, rerender } = render(ui());
     expect(order(container)).toEqual(["a", "b"]);
 
-    panelsById.c = run("c", NOW);
     panelsById.d = run("d", NOW - 9_000);
+    panelsById.c = run("c", NOW);
     rerender(ui());
     expect(order(container)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("keeps an earlier arrival ahead of a later one, however much newer the later is", () => {
+    panelsById.a = run("a", NOW - 3_000);
+    panelsById.b = run("b", NOW - 4_000);
+    const { container, rerender } = render(ui());
+
+    panelsById.c = run("c", NOW - 2_000);
+    rerender(ui());
+    expect(order(container)).toEqual(["a", "b", "c"]);
+
+    panelsById.d = run("d", NOW);
+    rerender(ui());
+    expect(order(container)).toEqual(["a", "b", "c", "d"]);
+
+    panelsById.e = run("e", NOW + 1_000);
+    rerender(ui());
+    expect(order(container)).toEqual(["a", "b", "c", "d", "e"]);
   });
 
   it("does not move a row when a handback lands on another run", () => {
@@ -103,10 +125,12 @@ describe("ReviewHubContext visit order", () => {
     panelsById.b = run("b", NOW - 3_000);
     const { container, rerender } = render(ui());
 
-    panelsById.b = run("b", NOW);
+    panelsById.b = run("b", NOW, "a later summary");
     rerender(ui());
     expect(order(container)).toEqual(["a", "b"]);
     expect(expanded(container)).toEqual({ a: true, b: false });
+    expect(container.textContent).toContain("a later summary");
+    expect(container.textContent).not.toContain("said b");
   });
 
   it("gives a run that leaves and comes back its old place", () => {
@@ -160,6 +184,25 @@ describe("ReviewHubContext visit order", () => {
     expect(expanded(container)).toEqual({ a: false, b: true, c: false });
   });
 
+  it("remembers a row closed by hand while it is away", () => {
+    panelsById.a = run("a", NOW - 1_000);
+    panelsById.b = run("b", NOW - 2_000);
+    const { container, rerender } = render(ui());
+
+    fireEvent.click(toggleOf(container, "a"));
+    expect(expanded(container)).toEqual({ a: false, b: false });
+
+    const a = panelsById.a!;
+    delete panelsById.a;
+    rerender(ui());
+    expect(expanded(container)).toEqual({ b: true });
+
+    panelsById.a = a;
+    rerender(ui());
+    expect(order(container)).toEqual(["a", "b"]);
+    expect(expanded(container)).toEqual({ a: false, b: false });
+  });
+
   it("keeps the hand-set rows and the visit's order through a departure with an arrival, under StrictMode", () => {
     panelsById.a = run("a", NOW - 1_000);
     panelsById.b = run("b", NOW - 2_000);
@@ -211,11 +254,14 @@ describe("ReviewHubContext derived rows", () => {
     longVisit(200);
     const { container } = render(ui());
     expect(deriveChrome).toHaveBeenCalledTimes(200);
+    expect(joins.appendArrivals).toHaveBeenCalled();
+    expect(joins.orderRuns).toHaveBeenCalled();
     deriveChrome.mockClear();
     joins.appendArrivals.mockClear();
     joins.orderRuns.mockClear();
 
     fireEvent.click(toggleOf(container, "r5"));
+    expect(expanded(container).r5).toBe(true);
     fireEvent.click(toggleOf(container, "r5"));
     expect(expanded(container).r5).toBe(false);
     expect(deriveChrome).not.toHaveBeenCalled();
@@ -226,6 +272,8 @@ describe("ReviewHubContext derived rows", () => {
   it("reuses the rows and the order when the panels haven't changed", () => {
     longVisit(50);
     const { rerender } = render(ui());
+    expect(joins.appendArrivals).toHaveBeenCalled();
+    expect(joins.orderRuns).toHaveBeenCalled();
     deriveChrome.mockClear();
     joins.appendArrivals.mockClear();
     joins.orderRuns.mockClear();
@@ -241,10 +289,28 @@ describe("ReviewHubContext derived rows", () => {
     const { container, rerender } = render(ui());
     deriveChrome.mockClear();
 
-    panelsById.r3 = run("r3", NOW);
+    panelsById.r3 = run("r3", NOW, "a fresh summary");
     rerender(ui());
     expect(deriveChrome).toHaveBeenCalledTimes(50);
     expect(order(container)).toHaveLength(50);
     expect(order(container).slice(0, 5)).toEqual(["r0", "r1", "r2", "r3", "r4"]);
+    expect(container.textContent).toContain("a fresh summary");
+  });
+
+  it("rebuilds the titles when the task-title preference changes", () => {
+    panelsById.a = {
+      ...run("a", NOW),
+      detectedAgentId: "claude",
+      agentState: "working",
+      lastObservedTitle: "Fix the login bug",
+    };
+    const { container } = render(ui());
+    const label = () =>
+      container.querySelector('[aria-label^="Go to terminal: "]')?.getAttribute("aria-label");
+    expect(label()).toContain("Fix the login bug");
+
+    act(() => usePreferencesStore.setState({ showAgentTaskTitles: false }));
+    expect(label()).toBeTruthy();
+    expect(label()).not.toContain("Fix the login bug");
   });
 });
