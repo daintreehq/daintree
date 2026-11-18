@@ -894,6 +894,116 @@ describe("ScheduledRunScheduler", () => {
     expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
   });
 
+  describe("when the project list couldn't be read (#17801)", () => {
+    function listing(failures: number): { calls: () => number } {
+      const base = deps();
+      let calls = 0;
+      scheduler = new ScheduledRunScheduler({
+        ...base,
+        listProjectIds: () => {
+          calls += 1;
+          if (calls <= failures) throw new Error("SQLITE_BUSY");
+          return base.listProjectIds();
+        },
+      });
+      return { calls: () => calls };
+    }
+
+    it("lists the projects again, calls what came due before then missed, and launches it once", async () => {
+      setClock(at(9, 0, 10));
+      commit("project-1", [schedule({ updatedAt: at(8) })]);
+      const list = listing(1);
+      await scheduler!.start();
+      await scheduler!.idle();
+      expect(launches).toEqual([]);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await elapse(MINUTE);
+      expect(list.calls()).toBe(2);
+      expect(origins()).toEqual([
+        expect.objectContaining({
+          trigger: "catch-up",
+          dueAt: at(9),
+          coalesced: expect.objectContaining({ after: at(8) }),
+        }),
+      ]);
+
+      scheduler!.resume();
+      await settle();
+      scheduler!.check();
+      await settle();
+      expect(launches).toHaveLength(1);
+      expect(list.calls()).toBe(2);
+
+      await elapse(HOUR);
+      expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
+        ["catch-up", at(9)],
+        ["scheduled", at(10)],
+      ]);
+    });
+
+    it("records one skip for what came due before the list was read when missed runs are skipped", async () => {
+      setClock(at(9, 0, 10));
+      const skipping = schedule({ updatedAt: at(8) });
+      commit("project-1", [
+        { ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } },
+      ]);
+      listing(1);
+      await scheduler!.start();
+      await scheduler!.idle();
+
+      await elapse(MINUTE);
+      expect(launches).toEqual([]);
+      expect(recorder.listBySchedule("schedule-1")).toEqual([
+        expect.objectContaining({
+          origin: expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
+          settlement: expect.objectContaining({ outcome: "skipped" }),
+        }),
+      ]);
+    });
+
+    it("keeps listing while the list fails, backing off to once a minute", async () => {
+      const list = listing(Number.POSITIVE_INFINITY);
+      await scheduler!.start();
+      await scheduler!.idle();
+
+      await elapse(MINUTE);
+      const firstMinute = list.calls();
+      expect(firstMinute).toBeGreaterThan(2);
+      await elapse(10 * MINUTE);
+      const settled = list.calls();
+      await elapse(10 * MINUTE);
+      expect(list.calls() - settled).toBe(10);
+    });
+
+    it("lists once and keeps no timer when the list is read and holds no project", async () => {
+      projects.clear();
+      const list = listing(0);
+      await scheduler!.start();
+      await scheduler!.idle();
+
+      expect(vi.getTimerCount()).toBe(0);
+      await elapse(2 * HOUR);
+      expect(list.calls()).toBe(1);
+    });
+
+    it("calls what came due before a change first delivered a project missed", async () => {
+      setClock(at(8, 59, 50));
+      listing(Number.POSITIVE_INFINITY);
+      await scheduler!.start();
+      await scheduler!.idle();
+
+      // Awake throughout, so only the late delivery can make it missed.
+      await elapse(30_000);
+      commit("project-1", [
+        schedule({ updatedAt: at(8) }),
+        schedule({ id: "schedule-2", updatedAt: at(9, 0, 20) }),
+      ]);
+      await scheduler!.idle();
+      expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
+    });
+  });
+
   it("calls a due time missed when the clock jumped past it while a pass waited", async () => {
     commit("project-1", [schedule()]);
     await start();
