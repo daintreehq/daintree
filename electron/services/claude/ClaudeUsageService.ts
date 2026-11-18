@@ -76,7 +76,11 @@ export function defaultClaudeConfigDir(
   return resolveLaunchClaudeConfigDir(named ?? {});
 }
 
-function accountKey(identity: string | null): string {
+/**
+ * The opaque key a login's readings are grouped under, from the folder's
+ * canonical identity: what a live pane's folder is matched by (#17318).
+ */
+export function claudeUsageAccountKey(identity: string | null): string {
   return createHash("sha256")
     .update(identity === null ? "unknown\0" : `folder\0${identity}`)
     .digest("hex")
@@ -184,7 +188,7 @@ export async function readClaudeUsageAccounts(
   );
 
   return ordered.map((group) => ({
-    key: accountKey(group.identity),
+    key: claudeUsageAccountKey(group.identity),
     kind: group.kind,
     accountNames: group.accountNames,
     accountIds: group.accountIds,
@@ -204,6 +208,14 @@ export async function readClaudeUsageAccounts(
         };
       }),
   }));
+}
+
+/**
+ * The same groups without asking any pane host for titles, for the sidebar's
+ * readout (#17318), which names the login and never the pane.
+ */
+export function readClaudeUsageAccountsWithoutPanes(): Promise<ClaudeUsageAccount[]> {
+  return readClaudeUsageAccounts({ ...defaultDeps(), describePane: async () => null });
 }
 
 function nonEmpty(value: unknown): string | null {

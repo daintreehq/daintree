@@ -1,3 +1,4 @@
+import type { AgentUsageReading } from "./ipc/agentUsage.js";
 import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
 import type { HostWakeSetup } from "./hostWake.js";
 import type { HostIdleObservation } from "./hostIdle.js";
@@ -686,6 +687,12 @@ export interface HostMetricsSummary {
    * listening as a host.
    */
   idle?: HostIdleObservation;
+  /**
+   * The tightest usage window of each agent's accounts with an agent running
+   * on the Host now (#17318), at most one per agent, times by its own clock.
+   * Absent from a host that doesn't report it; empty when it has none.
+   */
+  agentUsage?: AgentUsageReading[];
 }
 
 /**

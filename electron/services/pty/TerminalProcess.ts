@@ -41,6 +41,7 @@ import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackD
 import { reportRunHandback } from "./runHandback.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { resolveLaunchClaudeConfigDir } from "../claude/claudeConfigDir.js";
+import { resolveLaunchCodexHome } from "../codex/codexLaunchHome.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
@@ -421,6 +422,8 @@ export class TerminalProcess {
       // shell inherits the same env. Read off the env the PTY really got, so an
       // account's folder and Daintree's own override both land here (#16269).
       claudeConfigDir: resolveLaunchClaudeConfigDir(spawnContext.env),
+      // Likewise for Codex: which account's home an agent here reads quota from (#17318).
+      codexHome: resolveLaunchCodexHome(spawnContext.env),
       worktreeId: options.worktreeId,
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
@@ -1036,6 +1039,7 @@ export class TerminalProcess {
       hasPty,
       agentSessionId: t.agentSessionId,
       claudeConfigDir: t.claudeConfigDir,
+      codexHome: t.codexHome,
       agentLaunchFlags: t.agentLaunchFlags,
       agentModelId: t.agentModelId,
       scheduledRun: t.scheduledRun,

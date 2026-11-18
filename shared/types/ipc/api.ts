@@ -1160,6 +1160,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (snapshot: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot) => void
     ): () => void;
   };
+  // setFollowing comes from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  agentUsage: GeneratedElectronAPI["agentUsage"] & {
+    onChanged(
+      callback: (snapshot: import("./agentUsage.js").AgentUsageSnapshot) => void
+    ): () => void;
+  };
   // start / getJob / stop / retry come from GeneratedElectronAPI; onJobUpdated is a renderer-only subscription.
   projectClone: GeneratedElectronAPI["projectClone"] & {
     onJobUpdated(

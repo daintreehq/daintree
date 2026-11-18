@@ -200,6 +200,36 @@ describe("installHostMetricsHostWith", () => {
     dispose();
   });
 
+  it("watches this host's agent usage only while it samples for a Shell (#17318)", async () => {
+    const server = new FakeServer();
+    const release = vi.fn();
+    const watchAgentUsage = vi.fn(() => release);
+    let listener: ((summary: HostMetricsSummary) => void) | null = null;
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({
+        watchAgentUsage,
+        loop: {
+          subscribe: (next) => {
+            listener = next;
+            return () => (listener = null);
+          },
+          latest: () => null,
+        },
+      })
+    );
+    expect(watchAgentUsage).not.toHaveBeenCalled();
+    const p = await pair();
+    server.attach(p.host, "shell");
+    expect(watchAgentUsage).toHaveBeenCalledTimes(1);
+    // The last Shell gone, the next sample stops the loop and lets the watch go.
+    server.sessions = [];
+    listener!(summary(1));
+    expect(release).toHaveBeenCalledTimes(1);
+    dispose();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("hands a Shell that attaches later the latest summary straight away", async () => {
     const server = new FakeServer();
     const latest = summary(42);

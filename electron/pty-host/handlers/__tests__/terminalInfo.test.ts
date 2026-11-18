@@ -121,6 +121,15 @@ describe("mapTerminalInfo", () => {
     expect(mapTerminalInfo(makeTerminal(), ctx).claudeConfigDir).toBeUndefined();
   });
 
+  it("reports the Codex home the launch env named, so main can tell which account an agent is on", () => {
+    // #17318: the sidebar's usage readout reads quota only for homes an agent runs in.
+    const ctx = createCtx();
+    expect(mapTerminalInfo(makeTerminal({ codexHome: "/accounts/codex-work" }), ctx).codexHome).toBe(
+      "/accounts/codex-work"
+    );
+    expect(mapTerminalInfo(makeTerminal(), ctx).codexHome).toBeUndefined();
+  });
+
   it("reports a terminal whose agent a graceful shutdown is quitting as closing, though it still has a PTY", () => {
     const ctx = createCtx();
     (ctx.ptyManager.isClosing as ReturnType<typeof vi.fn>).mockImplementation(

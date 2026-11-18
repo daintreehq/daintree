@@ -411,6 +411,41 @@ export function refreshCodexQuotaProfiles(): Promise<CodexQuotaProfile[]> {
   return readProfiles(true);
 }
 
+/** One readable home's reading, keyed by its realpath'd identity. Main's alone. */
+export interface CodexHomeQuota {
+  homeKey: string;
+  isDefault: boolean;
+  accountNames: string[];
+  presetNames: string[];
+  result: CodexQuotaResult;
+}
+
+/**
+ * The quota of only the profiles whose home is in `homeKeys` (#17318), behind
+ * the same cache and queue as every other read: a home with no agent in it is
+ * never asked about. A home no profile names (a project's own `CODEX_HOME`) is
+ * not read either, as Settings doesn't read it. Never rejects.
+ */
+export async function readCodexQuotaForHomes(
+  homeKeys: ReadonlySet<string>
+): Promise<CodexHomeQuota[]> {
+  if (homeKeys.size === 0) return [];
+  const targets = await foldBySameDirectory(resolveCodexQuotaProfiles(await readCodexSettings()));
+  const readings: CodexHomeQuota[] = [];
+  for (const target of targets) {
+    if (!homeKeys.has(target.homeKey) || (await unreadableReason(target))) continue;
+    const { result } = await readTarget(target, target.homeKey, false);
+    readings.push({
+      homeKey: target.homeKey,
+      isDefault: target.isDefault,
+      accountNames: target.accountNames ?? [],
+      presetNames: target.presetNames,
+      result,
+    });
+  }
+  return readings;
+}
+
 /** The queue is kept: a read still running from before the reset must still finish first. */
 export function resetCodexQuotaCacheForTests(): void {
   cacheByHome = new Map();

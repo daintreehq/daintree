@@ -126,6 +126,7 @@ import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { AgentDefaultsSnapshot } from "./agentDefaults.js";
 import type { AgentToolbarPinsSnapshot } from "./agentToolbarPins.js";
+import type { AgentUsageSnapshot } from "./agentUsage.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
@@ -2339,6 +2340,7 @@ export interface IpcEventMap {
 
   // This machine's toolbar agent pins changed (#14702)
   "agent-toolbar-pins:changed": AgentToolbarPinsSnapshot;
+  "agent-usage:changed": AgentUsageSnapshot;
   /** Which copy of an agent's CLI launches changed on the machine the agents run on. */
   "agent-cli-copies:changed": { agentId: string };
   "help:global-assistant-changed": import("./help.js").GlobalAssistantView;

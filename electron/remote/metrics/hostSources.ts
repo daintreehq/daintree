@@ -28,6 +28,7 @@ import { createForgeObserver } from "./hostForges.js";
 import { nameLeases } from "./driverObservations.js";
 import { DriveLeaseHolderSchema } from "../link/schemas.js";
 import { getRemoteService } from "../runtime.js";
+import { peekAgentUsageWatch } from "../../services/agentUsage/AgentUsageWatch.js";
 import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
 
 type ProjectInventory = ReturnType<typeof projectStore.getProjectInventory>;
@@ -334,6 +335,8 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
       return list;
     },
     forges,
+    // What the watch already holds: a sample never builds it or waits on a read.
+    agentUsage: () => peekAgentUsageWatch()?.latest() ?? null,
     // Looked up on every sample: the loop can outlive one listener and predate the next.
     idle: () => {
       const observation = getRemoteService("hostIdle")?.observation() ?? null;

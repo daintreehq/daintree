@@ -2,6 +2,11 @@ import { z } from "zod";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../../shared/types/terminal.js";
 import { MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
+import {
+  CLAUDE_USAGE_STATEMENTS,
+  CLAUDE_USAGE_WINDOWS,
+} from "../../../shared/types/ipc/agentQuota.js";
+import type { AgentUsageReading } from "../../../shared/types/ipc/agentUsage.js";
 import { BULK_CHUNK_BYTES, Lane, type LinkFrame } from "./frames.js";
 import {
   BulkKind,
@@ -140,6 +145,42 @@ const count = z.number().int().min(0);
 const coreCount = z.number().int().min(1);
 const percent = z.number().finite().min(0).max(100);
 
+const usageAccountNames = z.array(z.string().max(256)).max(32);
+
+const AgentUsageReadingSchema = z.discriminatedUnion("agentId", [
+  z.object({
+    agentId: z.literal("codex"),
+    accountNames: usageAccountNames,
+    isDefault: z.boolean(),
+    windowDurationMins: z.number().int().positive(),
+    usedPercent: percent,
+    resetsAt: epochMs.nullable(),
+    observedAt: epochMs,
+  }),
+  z.object({
+    agentId: z.literal("claude"),
+    accountNames: usageAccountNames,
+    isDefault: z.boolean(),
+    window: z.enum(CLAUDE_USAGE_WINDOWS),
+    statement: z.enum(CLAUDE_USAGE_STATEMENTS),
+    usedPercent: percent.nullable(),
+    resetsAt: epochMs.nullable(),
+    observedAt: epochMs,
+  }),
+]);
+
+// Each reading on its own: an agent or a limit a later build reports is left
+// out rather than failing this Shell's whole summary.
+const AgentUsageSchema = z
+  .array(z.unknown())
+  .max(16)
+  .transform((items) =>
+    items.flatMap((item): AgentUsageReading[] => {
+      const parsed = AgentUsageReadingSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    })
+  );
+
 const HostSummarySchema = z.object({
   hostId: id,
   sampledAt: epochMs,
@@ -201,6 +242,7 @@ const HostSummarySchema = z.object({
       stopsWhenIdle: z.boolean().optional(),
     })
     .optional(),
+  agentUsage: AgentUsageSchema.optional(),
 });
 
 const GoodbyeSchema = z.object({ reason: shortText });

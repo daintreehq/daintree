@@ -73,6 +73,10 @@ export const CHANNEL_LOCALITY = {
   "agent-toolbar-pins:changed": "shell",
   "agent-toolbar-pins:get": "shell",
   "agent-toolbar-pins:set": "shell",
+  // This machine's agents plus every linked host's (#17318): one set per Shell,
+  // whichever host a window shows.
+  "agent-usage:changed": "shell",
+  "agent-usage:set-following": "shell",
   "app-agent:confirmation-response": "host",
   "app-agent:dispatch-action-response": "host",
   "app-agent:get-config": "host",
