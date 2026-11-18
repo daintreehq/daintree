@@ -60,16 +60,503 @@ get_version() {
   echo "unknown"
 }
 
+# >>> daintree call >>>
+# `daintree call`: one call to one of Daintree's MCP tools, as the caller. Inside
+# an agent pane that has Daintree MCP, that is the pane's own bearer, which the
+# launch puts in DAINTREE_MCP_TOKEN beside DAINTREE_MCP_URL; elsewhere, a
+# Settings API key exported by hand. It adds no tools: tiers, ownership and the
+# audit are the server's, as for any MCP client. Each call opens a session and
+# closes it again, so a script never spends the pane's session cap, and a pane
+# bearer's ownership belongs to the pane, so a later call can drive what an
+# earlier one launched. Self-contained (the AppImage wrapper embeds this block)
+# and limited to bash 3.2, curl and POSIX awk: no jq, python or node.
+
+daintree_call_usage() {
+  cat <<'USAGE'
+Usage: daintree call <tool> [--arg key=value]... [--json]
+       daintree call <tool> --args '<json object>' [--json]
+
+Call one of Daintree's MCP tools from a script or a git hook, with the access
+the caller already has.
+
+In an agent pane of a project with Daintree MCP on, the pane's own credential is
+used (DAINTREE_MCP_URL and DAINTREE_MCP_TOKEN), so one call can send to an agent
+an earlier call launched. Anywhere else, export both from Settings > MCP server
+for a one-shot call: that key owns nothing once its call returns.
+
+Options:
+  --arg key=value   A string argument (repeatable; the value may contain '=')
+  --args <json>     All arguments as one JSON object, for numbers, booleans,
+                    arrays and objects
+  --json            Print the whole tool result as JSON
+  -h, --help        Show this help message
+
+Exit status:
+  0  the tool succeeded; its text is on stdout
+  1  the tool reported an error (on stderr), or Daintree refused the call
+  2  usage error
+  3  no answer: Daintree isn't reachable, or the reply wasn't understood. A
+     call that was already sent may have run, so check before repeating it
+  4  no usable credential: DAINTREE_MCP_URL or DAINTREE_MCP_TOKEN is missing,
+     malformed, or refused
+
+Examples:
+  daintree call actions.search --arg 'query=send to an owned terminal'
+  daintree call actions.getSchema --arg actionId=terminal.sendCommandOwned
+  daintree call terminal.list --json
+USAGE
+}
+
+daintree_call_fail() {
+  echo "daintree call: $2" >&2
+  exit "$1"
+}
+
+# The JSON string literal for $1, in DTC_QUOTED: no subshell per argument.
+daintree_call_quote() {
+  local s=$1 oct ch hex
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  if [[ $s == *[$'\001'-$'\037']* ]]; then
+    for oct in 001 002 003 004 005 006 007 010 013 014 016 017 020 021 022 023 024 025 026 027 030 031 032 033 034 035 036 037; do
+      printf -v ch "\\$oct"
+      printf -v hex '\\u%04x' "$((8#$oct))"
+      s=${s//$ch/$hex}
+    done
+  fi
+  DTC_QUOTED="\"$s\""
+}
+
+# One request to the endpoint. Run in the background and waited on, so a
+# signal reaches the trap while curl is still out instead of after it returns.
+# The bearer and the body go through files: argv is visible to other users.
+daintree_call_request() {
+  local method=$1 body=$2 max_time=$3 rc=0
+  rm -f "$DTC_TMP/reply" "$DTC_TMP/reply-headers" "$DTC_TMP/status"
+  if [[ -n $body ]]; then
+    curl -q -sS --noproxy '*' --proto =http --connect-timeout 3 ${max_time:+--max-time "$max_time"} \
+      -H @"$DTC_TMP/headers" --data-binary @"$body" \
+      -o "$DTC_TMP/reply" -D "$DTC_TMP/reply-headers" -w '%{http_code}' \
+      "$DTC_ENDPOINT" > "$DTC_TMP/status" 2> "$DTC_TMP/curl-error" &
+  else
+    curl -q -sS --noproxy '*' --proto =http --connect-timeout 3 ${max_time:+--max-time "$max_time"} \
+      -X "$method" -H @"$DTC_TMP/headers" \
+      -o "$DTC_TMP/reply" -D "$DTC_TMP/reply-headers" -w '%{http_code}' \
+      "$DTC_ENDPOINT" > "$DTC_TMP/status" 2> "$DTC_TMP/curl-error" &
+  fi
+  DTC_CURL=$!
+  wait "$DTC_CURL" || rc=$?
+  DTC_CURL=""
+  DTC_STATUS=$(cat "$DTC_TMP/status" 2>/dev/null || true)
+  return "$rc"
+}
+
+daintree_call_curl_error() {
+  local detail
+  detail=$(LC_ALL=C tr -d '\000-\010\013-\037' < "$DTC_TMP/curl-error" 2>/dev/null | head -c 300 || true)
+  printf '%s' "${detail:-curl failed}"
+}
+
+# What a refusal's body says, cut short and stripped of control characters.
+daintree_call_reply_excerpt() {
+  LC_ALL=C tr -d '\000-\010\013-\037' < "$DTC_TMP/reply" 2>/dev/null | head -c 300 || true
+}
+
+daintree_call_cleanup() {
+  if [[ -n ${DTC_CURL:-} ]]; then
+    kill "$DTC_CURL" 2>/dev/null || true
+    wait "$DTC_CURL" 2>/dev/null || true
+    DTC_CURL=""
+  fi
+  if [[ -n ${DTC_SESSION:-} && -n ${DTC_TMP:-} ]]; then
+    # Best effort, bounded: a refused DELETE must not read as a failed call.
+    curl -q -sS --noproxy '*' --proto =http --connect-timeout 2 --max-time 2 \
+      -X DELETE -H @"$DTC_TMP/headers" -o /dev/null "$DTC_ENDPOINT" > /dev/null 2>&1 || true
+    DTC_SESSION=""
+  fi
+  if [[ -n ${DTC_TMP:-} ]]; then
+    rm -rf "$DTC_TMP"
+    DTC_TMP=""
+  fi
+}
+
+daintree_call_signal() {
+  trap - INT TERM HUP
+  exit "$1"
+}
+
+daintree_call() {
+  local tool="" args_json="" pairs="" keys=" " as_json=0 arg key value
+  LC_ALL=C
+  export LC_ALL
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        daintree_call_usage
+        exit 0
+        ;;
+      --json) as_json=1 ;;
+      --arg|--arg=*)
+        if [[ $1 == --arg ]]; then
+          [[ $# -ge 2 ]] || daintree_call_fail 2 "--arg needs key=value"
+          shift
+          arg=$1
+        else
+          arg=${1#--arg=}
+        fi
+        [[ $arg == *=* ]] || daintree_call_fail 2 "--arg needs key=value, got '$arg'"
+        key=${arg%%=*}
+        value=${arg#*=}
+        [[ $key =~ ^[A-Za-z0-9_.-]+$ ]] || daintree_call_fail 2 "--arg key '$key' must be letters, digits, '_', '.' or '-' (use --args for anything else)"
+        case "$keys" in
+          *" $key "*) daintree_call_fail 2 "--arg $key is given twice" ;;
+        esac
+        keys="$keys$key "
+        daintree_call_quote "$value"
+        pairs="${pairs:+$pairs,}\"$key\":$DTC_QUOTED"
+        ;;
+      --args|--args=*)
+        [[ -z $args_json ]] || daintree_call_fail 2 "--args is given twice"
+        if [[ $1 == --args ]]; then
+          [[ $# -ge 2 ]] || daintree_call_fail 2 "--args needs a JSON object"
+          shift
+          args_json=$1
+        else
+          args_json=${1#--args=}
+        fi
+        [[ -n $args_json ]] || daintree_call_fail 2 "--args needs a JSON object"
+        ;;
+      -*) daintree_call_fail 2 "unknown option '$1' (see daintree call --help)" ;;
+      *)
+        [[ -z $tool ]] || daintree_call_fail 2 "expected one tool name, got '$tool' and '$1'"
+        tool=$1
+        ;;
+    esac
+    shift
+  done
+
+  [[ -n $tool ]] || daintree_call_fail 2 "missing the tool to call (see daintree call --help)"
+  if [[ -n $args_json && -n $pairs ]]; then
+    daintree_call_fail 2 "use --arg or --args, not both"
+  fi
+
+  local url=${DAINTREE_MCP_URL:-} token=${DAINTREE_MCP_TOKEN:-}
+  if [[ -z $url || -z $token ]]; then
+    daintree_call_fail 4 "DAINTREE_MCP_URL and DAINTREE_MCP_TOKEN are not set. Run it in an agent pane of a project with Daintree MCP on, or export both from Settings > MCP server for a one-shot call."
+  fi
+  # Loopback only, so the bearer never leaves the machine whatever the env
+  # says. Claude's Assistant pane is handed the legacy /sse URL; the same
+  # listener and bearer serve Streamable HTTP at /mcp.
+  if [[ $url =~ ^http://(127\.0\.0\.1|localhost):([0-9]{1,5})(/mcp|/sse)?/?$ ]] &&
+    ((10#${BASH_REMATCH[2]} >= 1 && 10#${BASH_REMATCH[2]} <= 65535)); then
+    DTC_ENDPOINT="http://${BASH_REMATCH[1]}:$((10#${BASH_REMATCH[2]}))/mcp"
+  else
+    daintree_call_fail 4 "DAINTREE_MCP_URL must be Daintree's local endpoint, like http://127.0.0.1:45454/mcp"
+  fi
+  if [[ $token == *[$'\001'-$'\037'$'\177']* || $token == *" "* ]]; then
+    daintree_call_fail 4 "DAINTREE_MCP_TOKEN is malformed"
+  fi
+  command -v curl > /dev/null 2>&1 || daintree_call_fail 3 "curl is required"
+
+  local awk_program
+  IFS= read -r -d '' awk_program <<'AWK' || true
+# Reads one reply body, plain JSON or an SSE stream, and finds the JSON-RPC
+# response whose id is `want`. Mode `object` instead checks that the input is
+# exactly one JSON object.
+function fail(msg) { if (perr == "") perr = msg; return 0 }
+function ws() { while (p <= n && (C[p] == " " || C[p] == "\t" || C[p] == "\n" || C[p] == "\r")) p++ }
+function str() {
+  p++; sb = p
+  while (p <= n) {
+    if (C[p] == "\\") { p += 2; continue }
+    if (C[p] == "\"") { se = p - 1; p++; return 1 }
+    p++
+  }
+  return fail("unterminated string")
+}
+function val(path, depth,   c, k, i, start, lit) {
+  if (depth > 200) return fail("nested too deep")
+  ws()
+  if (p > n) return fail("unexpected end of input")
+  c = C[p]; start = p
+  if (c == "{") {
+    T[path] = "object"; S[path] = p; p++; ws()
+    if (p <= n && C[p] == "}") { p++; E[path] = p - 1; return 1 }
+    for (;;) {
+      ws()
+      if (p > n || C[p] != "\"") return fail("expected a key")
+      if (!str()) return 0
+      k = substr(s, sb, se - sb + 1)
+      ws()
+      if (p > n || C[p] != ":") return fail("expected a colon")
+      p++
+      if (!val(path SUBSEP k, depth + 1)) return 0
+      ws()
+      if (p <= n && C[p] == ",") { p++; continue }
+      if (p <= n && C[p] == "}") { p++; E[path] = p - 1; return 1 }
+      return fail("expected a comma or a closing brace")
+    }
+  }
+  if (c == "[") {
+    T[path] = "array"; S[path] = p; p++; ws(); i = 0
+    if (p <= n && C[p] == "]") { p++; E[path] = p - 1; N[path] = 0; return 1 }
+    for (;;) {
+      if (!val(path SUBSEP i, depth + 1)) return 0
+      i++; ws()
+      if (p <= n && C[p] == ",") { p++; continue }
+      if (p <= n && C[p] == "]") { p++; E[path] = p - 1; N[path] = i; return 1 }
+      return fail("expected a comma or a closing bracket")
+    }
+  }
+  if (c == "\"") {
+    if (!str()) return 0
+    T[path] = "string"; S[path] = sb; E[path] = se
+    return 1
+  }
+  while (p <= n && index(" \t\r\n,]}:", C[p]) == 0) p++
+  lit = substr(s, start, p - start)
+  if (lit == "true" || lit == "false" || lit == "null") T[path] = lit
+  else if (lit ~ /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/) T[path] = "number"
+  else return fail("unexpected " substr(lit, 1, 20))
+  S[path] = start; E[path] = p - 1
+  return 1
+}
+function parse(text) {
+  split("", T); split("", S); split("", E); split("", N); split("", C)
+  s = text; n = split(s, C, ""); p = 1; perr = ""
+  if (!val("$", 0)) return 0
+  ws()
+  if (p <= n) return fail("unexpected data after the value")
+  return 1
+}
+function raw(path) { return substr(s, S[path], E[path] - S[path] + 1) }
+function put(x) { if (toerr) printf "%s", x > "/dev/stderr"; else printf "%s", x }
+function hexval(h,   i, v, d) {
+  v = 0
+  for (i = 1; i <= 4; i++) {
+    d = index("0123456789abcdef", tolower(substr(h, i, 1)))
+    if (d == 0) return -1
+    v = v * 16 + d - 1
+  }
+  return v
+}
+function emitcp(cp) {
+  if (cp == 0) return
+  if (cp < 128 || wide) put(sprintf("%c", cp))
+  else if (cp < 2048) put(sprintf("%c%c", 192 + int(cp / 64), 128 + cp % 64))
+  else if (cp < 65536) put(sprintf("%c%c%c", 224 + int(cp / 4096), 128 + int(cp / 64) % 64, 128 + cp % 64))
+  else put(sprintf("%c%c%c%c", 240 + int(cp / 262144), 128 + int(cp / 4096) % 64, 128 + int(cp / 64) % 64, 128 + cp % 64))
+}
+# Writes a string value decoded. Split on the backslash it stays linear: an
+# empty part is an escaped backslash, and the part after one is literal.
+function emitstr(path,   r, parts, m, i, part, c, cp, lo) {
+  r = raw(path)
+  m = split(r, parts, "\\")
+  put(parts[1])
+  for (i = 2; i <= m; i++) {
+    part = parts[i]
+    if (part == "" && i < m) { put("\\" parts[i + 1]); i++; continue }
+    c = substr(part, 1, 1)
+    if (c == "u") {
+      cp = hexval(substr(part, 2, 4))
+      if (cp < 0) { put("\\" part); continue }
+      part = substr(part, 6)
+      if (cp >= 55296 && cp < 56320 && part == "" && i < m && substr(parts[i + 1], 1, 1) == "u") {
+        lo = hexval(substr(parts[i + 1], 2, 4))
+        if (lo >= 56320 && lo < 57344) {
+          cp = 65536 + (cp - 55296) * 1024 + (lo - 56320)
+          i++; part = substr(parts[i], 6)
+        }
+      }
+      if (cp >= 55296 && cp < 57344) cp = 65533
+      emitcp(cp)
+      put(part)
+      continue
+    }
+    if (c == "n") put("\n")
+    else if (c == "t") put("\t")
+    else if (c == "r") put("\r")
+    else if (c == "b") put("\b")
+    else if (c == "f") put("\f")
+    else put(c)
+    put(substr(part, 2))
+  }
+}
+function event(data) {
+  if (found || data == "") return
+  if (!parse(data)) return
+  if (T["$"] != "object" || T["$" SUBSEP "id"] != "number" || raw("$" SUBSEP "id") != want) return
+  if (!((("$" SUBSEP "result") in T) || (("$" SUBSEP "error") in T))) return
+  found = 1
+}
+BEGIN { wide = (sprintf("%c", 233) == "\303\251") }
+{ sub(/\r$/, ""); lines[++nl] = $0 }
+END {
+  if (mode == "object") {
+    body = ""
+    for (i = 1; i <= nl; i++) body = body (i > 1 ? "\n" : "") lines[i]
+    if (!parse(body)) { print perr > "/dev/stderr"; exit 1 }
+    if (T["$"] != "object") { print "not a JSON object" > "/dev/stderr"; exit 1 }
+    exit 0
+  }
+  sse = 0
+  for (i = 1; i <= nl; i++) if (lines[i] ~ /^(data|event|id|retry):/) { sse = 1; break }
+  if (!sse) {
+    body = ""
+    for (i = 1; i <= nl; i++) body = body (i > 1 ? "\n" : "") lines[i]
+    event(body)
+  } else {
+    data = ""; has = 0
+    for (i = 1; i <= nl && !found; i++) {
+      line = lines[i]
+      if (line == "") { if (has) event(data); data = ""; has = 0; continue }
+      if (line ~ /^data:/) {
+        sub(/^data: ?/, "", line)
+        data = has ? data "\n" line : line; has = 1
+      }
+    }
+    if (!found && has) event(data)
+  }
+  if (!found) exit 5
+  er = "$" SUBSEP "error"
+  if (er in T) {
+    toerr = 1
+    if (T[er SUBSEP "message"] == "string") emitstr(er SUBSEP "message"); else put("JSON-RPC error")
+    if (T[er SUBSEP "code"] == "number") put(" (code " raw(er SUBSEP "code") ")")
+    put("\n")
+    exit 4
+  }
+  rs = "$" SUBSEP "result"
+  failed = T[rs SUBSEP "isError"] == "true"
+  if (mode == "init") {
+    pv = rs SUBSEP "protocolVersion"
+    if (T[pv] == "string" && index(raw(pv), "\\") == 0) print raw(pv)
+    exit 0
+  }
+  if (mode == "json") { print raw(rs); exit failed ? 1 : 0 }
+  toerr = failed
+  shown = 0
+  ct = rs SUBSEP "content"
+  for (i = 0; i < N[ct] + 0; i++) {
+    item = ct SUBSEP i
+    if (T[item SUBSEP "type"] != "string") continue
+    if (raw(item SUBSEP "type") == "text" && T[item SUBSEP "text"] == "string") {
+      emitstr(item SUBSEP "text")
+      put("\n")
+      shown++
+    } else {
+      printf "daintree call: %s content not shown; use --json to see it\n", raw(item SUBSEP "type") > "/dev/stderr"
+    }
+  }
+  if (shown == 0) put(raw(rs) "\n")
+  exit failed ? 1 : 0
+}
+AWK
+
+  local arguments="{$pairs}"
+  umask 077
+  DTC_TMP=$(mktemp -d "${TMPDIR:-/tmp}/daintree-call.XXXXXX") || daintree_call_fail 3 "could not create a private temporary directory"
+  DTC_SESSION=""
+  DTC_CURL=""
+  trap daintree_call_cleanup EXIT
+  trap 'daintree_call_signal 130' INT
+  trap 'daintree_call_signal 143' TERM
+  trap 'daintree_call_signal 129' HUP
+
+  if [[ -n $args_json ]]; then
+    printf '%s' "$args_json" > "$DTC_TMP/args"
+    if ! awk -v mode=object "$awk_program" < "$DTC_TMP/args" 2> "$DTC_TMP/args-error"; then
+      daintree_call_fail 2 "--args must be one JSON object: $(head -c 200 "$DTC_TMP/args-error")"
+    fi
+    arguments=$args_json
+  fi
+
+  {
+    printf 'Authorization: Bearer %s\n' "$token"
+    printf 'Content-Type: application/json\n'
+    printf 'Accept: application/json, text/event-stream\n'
+    printf 'Expect:\n'
+  } > "$DTC_TMP/headers"
+
+  printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"daintree-cli","version":"1.0.0"}}}' > "$DTC_TMP/initialize"
+  if ! daintree_call_request POST "$DTC_TMP/initialize" 10; then
+    daintree_call_fail 3 "could not reach Daintree at $DTC_ENDPOINT: $(daintree_call_curl_error)"
+  fi
+  # Filed before anything else can fail, so the exit trap closes it.
+  DTC_SESSION=$(awk '{ sub(/\r$/, ""); i = index($0, ":"); if (i > 1 && tolower(substr($0, 1, i - 1)) == "mcp-session-id") { v = substr($0, i + 1); sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); id = v } } END { print id }' "$DTC_TMP/reply-headers" 2>/dev/null || true)
+  if [[ -n $DTC_SESSION && ! $DTC_SESSION =~ ^[!-~]+$ ]]; then
+    DTC_SESSION=""
+    daintree_call_fail 3 "Daintree answered with a malformed session id"
+  fi
+  case "$DTC_STATUS" in
+    200) ;;
+    401) daintree_call_fail 4 "Daintree refused DAINTREE_MCP_TOKEN (HTTP 401). A pane's credential ends with its agent; outside a pane, use the key from Settings > MCP server." ;;
+    *) daintree_call_fail 3 "Daintree refused the session (HTTP ${DTC_STATUS:-none}): $(daintree_call_reply_excerpt)" ;;
+  esac
+  [[ -n $DTC_SESSION ]] || daintree_call_fail 3 "Daintree opened no session"
+  local version rc=0
+  version=$(awk -v mode=init -v want=1 "$awk_program" < "$DTC_TMP/reply" 2> "$DTC_TMP/init-error") || rc=$?
+  if [[ $rc -ne 0 || -z $version ]]; then
+    daintree_call_fail 3 "Daintree's reply to initialize wasn't understood $(head -c 200 "$DTC_TMP/init-error")"
+  fi
+  {
+    printf 'Mcp-Session-Id: %s\n' "$DTC_SESSION"
+    printf 'MCP-Protocol-Version: %s\n' "$version"
+  } >> "$DTC_TMP/headers"
+
+  printf '%s' '{"jsonrpc":"2.0","method":"notifications/initialized"}' > "$DTC_TMP/initialized"
+  if ! daintree_call_request POST "$DTC_TMP/initialized" 10; then
+    daintree_call_fail 3 "lost Daintree while opening the session: $(daintree_call_curl_error)"
+  fi
+  case "$DTC_STATUS" in
+    200|202|204) ;;
+    *) daintree_call_fail 3 "Daintree refused the session (HTTP ${DTC_STATUS:-none}): $(daintree_call_reply_excerpt)" ;;
+  esac
+
+  daintree_call_quote "$tool"
+  printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":%s,"arguments":%s}}' "$DTC_QUOTED" "$arguments" > "$DTC_TMP/call"
+  # No time limit: a call can wait on an approval dialog or on an agent.
+  if ! daintree_call_request POST "$DTC_TMP/call" ""; then
+    daintree_call_fail 3 "the call to $tool was sent, but its answer was lost ($(daintree_call_curl_error)); it may have run"
+  fi
+  if [[ $DTC_STATUS != 200 ]]; then
+    daintree_call_fail 3 "Daintree didn't answer the call to $tool (HTTP ${DTC_STATUS:-none}): $(daintree_call_reply_excerpt)"
+  fi
+  rc=0
+  if [[ $as_json -eq 1 ]]; then
+    awk -v mode=json -v want=2 "$awk_program" < "$DTC_TMP/reply" || rc=$?
+  else
+    awk -v mode=text -v want=2 "$awk_program" < "$DTC_TMP/reply" || rc=$?
+  fi
+  case "$rc" in
+    0) exit 0 ;;
+    1|4) exit 1 ;;
+    5) daintree_call_fail 3 "the call to $tool was sent, but no answer to it was found in Daintree's reply; it may have run" ;;
+    *) daintree_call_fail 3 "the reply to $tool couldn't be read (awk exited $rc); it may have run" ;;
+  esac
+}
+# <<< daintree call <<<
+
 # --- Handle flags before directory resolution ---
 case "${1:-}" in
   --help|-h)
     cat <<'USAGE'
 Usage: daintree [directory]
+       daintree call <tool> [options]
 
-Open a directory as a project in Daintree.
+Open a directory as a project in Daintree, or call one of its tools from a
+script.
 
 Arguments:
-  directory    Path to open (defaults to current directory)
+  directory    Path to open (defaults to current directory). To open a
+               folder named "call", write it as ./call
+
+Commands:
+  call <tool>  Call a Daintree MCP tool (see daintree call --help)
 
 Options:
   -h, --help       Show this help message
@@ -79,8 +566,13 @@ Options:
 Examples:
   daintree .             Open the current directory
   daintree ~/projects/my-app   Open a specific project
+  daintree call terminal.list  List terminals, from an agent pane
 USAGE
     exit 0
+    ;;
+  call)
+    shift
+    daintree_call "$@"
     ;;
   --version|-v)
     echo "daintree $(get_version)"
