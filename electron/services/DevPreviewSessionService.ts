@@ -1716,14 +1716,20 @@ export class DevPreviewSessionService {
   ): Promise<DevPreviewDestructivePreviewSizes> {
     validateSessionRequest(request);
     const cwd = this.resolveSessionCwd(request);
+    // Each tier shows one figure, so only that one is measured: a large .next
+    // would otherwise delay the reinstall preview, and node_modules/.vite would
+    // be walked once as a cache root and again inside node_modules.
     const skipNodeModules = request.skipNodeModules === true;
+    const skipCacheDirs = request.skipCacheDirs === true;
     const [cacheDirEntries, nodeModulesSizeBytes] = await Promise.all([
-      Promise.all(
-        CACHE_DIRS.map(async (relPath) => {
-          const size = await computeDirSize(path.join(cwd, relPath));
-          return [relPath, size] as const;
-        })
-      ),
+      skipCacheDirs
+        ? Promise.resolve([])
+        : Promise.all(
+            CACHE_DIRS.map(async (relPath) => {
+              const size = await computeDirSize(path.join(cwd, relPath));
+              return [relPath, size] as const;
+            })
+          ),
       skipNodeModules ? Promise.resolve(null) : computeDirSize(path.join(cwd, "node_modules")),
     ]);
     return {

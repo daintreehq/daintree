@@ -273,6 +273,59 @@ describe("DevPreviewSessionService — destructive preview", () => {
       expect(sizes.nodeModulesSizeBytes).toBeNull();
       expect(typeof sizes.cacheDirSizes[".next"]).toBe("number");
     });
+
+    describe("scan scoping", () => {
+      function seed() {
+        mkdirSync(path.join(tmpDir, "node_modules", ".vite"), { recursive: true });
+        writeFileSync(path.join(tmpDir, "node_modules", ".vite", "deps.js"), "x".repeat(2048));
+        writeFileSync(path.join(tmpDir, "node_modules", "index.js"), "y".repeat(2048));
+        mkdirSync(path.join(tmpDir, ".next"), { recursive: true });
+        writeFileSync(path.join(tmpDir, ".next", "out"), "z".repeat(2048));
+      }
+
+      // computeDirSize stats its target before walking, so one stat per scanned root.
+      function scannedRoots() {
+        const statSpy = vi.spyOn(fsPromises, "stat");
+        return {
+          roots: () =>
+            statSpy.mock.calls
+              .map(([p]) => path.relative(tmpDir, String(p)))
+              .filter((rel) => rel !== "" && !rel.startsWith("..")),
+        };
+      }
+
+      it("reinstall scan measures only node_modules", async () => {
+        seed();
+        await service.ensure(ensureRequest());
+        const { roots } = scannedRoots();
+        const sizes = await service.getDestructivePreviewSizes({
+          ...request(),
+          skipCacheDirs: true,
+        });
+
+        expect(roots()).toEqual(["node_modules"]);
+        expect(sizes.cacheDirSizes).toEqual({});
+        expect(sizes.nodeModulesSizeBytes).toBeGreaterThan(0);
+      });
+
+      it("cache scan measures every cache dir once and never node_modules", async () => {
+        seed();
+        await service.ensure(ensureRequest());
+        const { roots } = scannedRoots();
+        const sizes = await service.getDestructivePreviewSizes({
+          ...request(),
+          skipNodeModules: true,
+        });
+
+        const scanned = roots();
+        expect(scanned).not.toContain("node_modules");
+        expect(scanned.filter((r) => r === path.join("node_modules", ".vite"))).toHaveLength(1);
+        expect(scanned).toHaveLength(7);
+        expect(sizes.nodeModulesSizeBytes).toBeNull();
+        expect(sizes.cacheDirSizes[".next"]).toBeGreaterThan(0);
+        expect(sizes.cacheDirSizes[path.join("node_modules", ".vite")]).toBeGreaterThan(0);
+      });
+    });
   });
 });
 
