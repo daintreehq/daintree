@@ -45,7 +45,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -86,7 +86,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -164,7 +164,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -241,7 +241,7 @@ describe("ProjectPulseService", () => {
       });
 
       vi.doMock("../../utils/hardenedGit.js", () => ({
-        createHardenedGit: () => createGitStub(raw),
+        createStrictExitGit: () => createGitStub(raw),
       }));
 
       const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -289,7 +289,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -331,7 +331,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -374,7 +374,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -412,7 +412,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -457,7 +457,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -476,17 +476,24 @@ describe("ProjectPulseService", () => {
     expect(pulse.currentStreakDays).toBe(3);
   });
 
-  it("returns empty heatmap on git log error", async () => {
+  // The zero a failed read used to fabricate stays reserved for a read that
+  // succeeded and found nothing in range (failures: historyFailure.test.ts).
+  it("reports zero activity when the log succeeds with no commits in range", async () => {
+    // History exists, all of it older than the window.
+    const oldCommit = String(Math.floor(new Date("2024-06-01T12:00:00.000Z").getTime() / 1000));
     const raw = vi.fn(async (args: string[]) => {
       const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") throw new Error("no commits");
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
       if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "HEAD\n";
-      if (cmd === "log") throw new Error("fatal");
+      if (cmd === "rev-parse" && args[1] === "--is-shallow-repository") return "false\n";
+      if (cmd === "rev-list") return `${oldCommit} rootsha\n`;
+      if (cmd === "log" && args.some((a) => a.startsWith("--since="))) return "";
+      if (cmd === "log") return `${oldCommit}\n`;
       return "";
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -502,7 +509,12 @@ describe("ProjectPulseService", () => {
     });
 
     expect(pulse.heatmap).toHaveLength(60);
+    expect(pulse.heatmap.every((cell) => cell.count === 0)).toBe(true);
     expect(pulse.commitsInRange).toBe(0);
+    expect(pulse.activeDays).toBe(0);
+    expect(pulse.currentStreakDays).toBe(0);
+    // Not the unborn-repository pulse: the project predates the window.
+    expect(pulse.projectAgeDays).toBe(60);
     expect(pulse.branch).toBeUndefined();
   });
 
@@ -522,7 +534,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -552,7 +564,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -592,7 +604,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -644,7 +656,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -688,7 +700,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -739,7 +751,7 @@ describe("ProjectPulseService", () => {
         return "";
       });
       vi.doMock("../../utils/hardenedGit.js", () => ({
-        createHardenedGit: () => createGitStub(raw),
+        createStrictExitGit: () => createGitStub(raw),
       }));
 
       const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -779,7 +791,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -821,7 +833,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: (_cwd: string, signal?: AbortSignal) => {
+      createStrictExitGit: (_cwd: string, signal?: AbortSignal) => {
         capturedSignal = signal;
         return createGitStub(raw);
       },
@@ -870,7 +882,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: (_cwd: string, signal?: AbortSignal) => {
+      createStrictExitGit: (_cwd: string, signal?: AbortSignal) => {
         capturedSignal = signal;
         return createGitStub(raw);
       },
@@ -912,7 +924,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -988,7 +1000,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -1031,7 +1043,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -1072,7 +1084,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -1092,6 +1104,7 @@ describe("ProjectPulseService", () => {
 
     // Second call within TTL: probe also throws no-commits → null === null → serve cached.
     const second = await svc.getPulse(opts);
+    expect(second).toBe(first);
 
     expect(second.commitsInRange).toBe(0);
     expect(second.heatmap).toEqual(first.heatmap);
@@ -1110,7 +1123,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -1162,7 +1175,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -1216,7 +1229,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -1256,7 +1269,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -1301,7 +1314,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
+      createStrictExitGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -1367,7 +1380,7 @@ describe("ProjectPulseService", () => {
     });
 
     vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: (_cwd: string, signal?: AbortSignal) => {
+      createStrictExitGit: (_cwd: string, signal?: AbortSignal) => {
         capturedSignal = signal;
         return createGitStub(raw);
       },
@@ -1393,10 +1406,8 @@ describe("ProjectPulseService", () => {
 
     expect(capturedSignal!.aborted).toBe(true);
 
-    // allSettled absorbs the abort, so the promise resolves with fallback values.
-    // The cache guard must prevent writing the fallback result.
-    const pulse = await pulsePromise;
-    expect(pulse.commitsInRange).toBe(0);
+    // The aborted heatmap read rejects as a cancellation, never as zero commits.
+    await expect(pulsePromise).rejects.toThrow("Project pulse read was cancelled");
 
     const cache = (svc as any).cache as Map<string, unknown>;
     expect(cache.size).toBe(0);
@@ -1438,7 +1449,7 @@ describe("ProjectPulseService", () => {
       });
 
       vi.doMock("../../utils/hardenedGit.js", () => ({
-        createHardenedGit: () => createGitStub(raw),
+        createStrictExitGit: () => createGitStub(raw),
       }));
 
       const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -1576,7 +1587,7 @@ describe("ProjectPulseService", () => {
 
     async function loadPulse(raw: (args: string[]) => Promise<string>) {
       vi.doMock("../../utils/hardenedGit.js", () => ({
-        createHardenedGit: () => createGitStub(raw),
+        createStrictExitGit: () => createGitStub(raw),
       }));
       const { ProjectPulseService } = await import("../ProjectPulseService.js");
       return new ProjectPulseService().getPulse({
@@ -1619,5 +1630,52 @@ describe("ProjectPulseService", () => {
       expect(windowReads).toHaveLength(1);
       expect(windowReads[0].some((a) => /^(--max-count\b|-n|-\d)/.test(a))).toBe(false);
     });
+  });
+
+  it("does not cache a complete pulse whose computation was invalidated", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const day = String(Math.floor(new Date("2025-01-14T12:00:00.000Z").getTime() / 1000));
+
+    const raw = vi.fn(async (args: string[]) => {
+      const cmd = args[0];
+      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
+      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "feature\n";
+      if (cmd === "log" && args.some((a) => a.startsWith("--since="))) return `${day}\n`;
+      // The streak read finishes only after invalidate(), and finishes cleanly.
+      if (cmd === "log") {
+        await new Promise<void>((resolve) => {
+          capturedSignal?.addEventListener("abort", () => resolve());
+        });
+        return `${day}\n`;
+      }
+      return "";
+    });
+
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createStrictExitGit: (_cwd: string, signal?: AbortSignal) => {
+        capturedSignal = signal;
+        return createGitStub(raw);
+      },
+    }));
+
+    const { ProjectPulseService } = await import("../ProjectPulseService.js");
+    const svc = new ProjectPulseService();
+    const opts = {
+      worktreePath: "/repo",
+      worktreeId: "wt-1",
+      mainBranch: "main",
+      rangeDays: 60 as const,
+      includeDelta: false,
+      includeRecentCommits: false,
+    };
+
+    const pulsePromise = svc.getPulse(opts);
+    await vi.advanceTimersByTimeAsync(0);
+    svc.invalidate("wt-1");
+
+    const pulse = await pulsePromise;
+    expect(pulse.commitsInRange).toBe(1);
+    expect(pulse.currentStreakDays).toBe(1);
+    expect(((svc as any).cache as Map<string, unknown>).size).toBe(0);
   });
 });
