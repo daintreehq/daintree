@@ -21,7 +21,9 @@ describe("PluginFocusedPanelKind", () => {
     expectTypeOf<ReportedPluginFocusedPanelKind>().toEqualTypeOf<
       Exclude<PluginFocusedPanelKind, "portal">
     >();
-    expectTypeOf(toPluginFocusedPanelKind).returns.toEqualTypeOf<ReportedPluginFocusedPanelKind | null>();
+    expectTypeOf(
+      toPluginFocusedPanelKind
+    ).returns.toEqualTypeOf<ReportedPluginFocusedPanelKind | null>();
   });
 });
 
