@@ -475,6 +475,12 @@ describe("a plugin's cloud provider over the worker port", () => {
       error: null,
     });
     const nan = await provider.inspect(credentials(), "dbx-9").catch((e: unknown) => e);
+    plugin.machines.set("dbx-9", {
+      ...plugin.machines.get("dbx-9")!,
+      lifetimeSeconds: new Number(Infinity) as unknown as number,
+    });
+    const boxed = await provider.inspect(credentials(), "dbx-9").catch((e: unknown) => e);
+    expect(provider.describeError(boxed).code).toBe("failed");
     expect(provider.describeError(nan)).toMatchObject({
       code: "failed",
       message: "Its answer was too large or couldn't be sent.",

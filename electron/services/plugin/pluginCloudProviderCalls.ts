@@ -117,7 +117,8 @@ export function encodeCloudProviderAnswer(
   }
   // JSON writes NaN and the infinities as null, which a reader would take for "unknown".
   const json = JSON.stringify(answer, (_key, value: unknown) => {
-    if (typeof value === "number" && !Number.isFinite(value)) {
+    const number = value instanceof Number ? value.valueOf() : value;
+    if (typeof number === "number" && !Number.isFinite(number)) {
       throw new Error("the provider's answer holds a number that isn't finite");
     }
     return value;

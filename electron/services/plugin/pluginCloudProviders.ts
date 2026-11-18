@@ -107,6 +107,11 @@ export function withdrawPluginCloudProviders(pluginId: string): void {
   if (had) notify();
 }
 
+/** Whether `pluginId`'s loaded manifest declares any cloud provider. */
+export function pluginDeclaresCloudProviders(pluginId: string): boolean {
+  return DECLARATIONS.has(pluginId);
+}
+
 export function listPluginCloudProviders(): PluginCloudProviderDeclaration[] {
   return [...DECLARATIONS.values()].flat();
 }

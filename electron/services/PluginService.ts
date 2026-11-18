@@ -281,6 +281,7 @@ import {
 import { unregisterWorktreeDeleteNotesBinding } from "./plugin/worktreeDeleteNotesRegistry.js";
 import {
   pluginCloudProviderStatusChanged,
+  pluginDeclaresCloudProviders,
   setPluginCloudProviderRuntime,
   unbindPluginCloudProviders,
 } from "./plugin/pluginCloudProviders.js";
@@ -5829,7 +5830,12 @@ export class PluginService {
     this.emitRuntimeStatus(pluginId);
     // A worker that failed to start leaves its cloud providers unavailable, until it starts
     // again; a failure reworded (activation failed, then crash loop) rewords them too.
-    if (state === "failed" || prior?.state === "failed") pluginCloudProviderStatusChanged();
+    if (
+      (state === "failed" || prior?.state === "failed") &&
+      pluginDeclaresCloudProviders(pluginId)
+    ) {
+      pluginCloudProviderStatusChanged();
+    }
 
     // A crash reports as `starting` + `crashed` while the supervisor decides
     // whether to respawn, so it warns alongside an outright failure.
