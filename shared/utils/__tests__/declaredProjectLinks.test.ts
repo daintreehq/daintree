@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { DeclaredProjectLinkSource } from "../../types/projectLinks.js";
 import {
   declaredLinksFromBackstageCatalog,
   declaredLinksFromCargoToml,
@@ -193,17 +194,23 @@ describe("declaredLinksFromPyproject (#17254)", () => {
   });
 
   it("names a link on one line, within a saved link's name length", () => {
-    const long = `Docs ${"x".repeat(200)}`;
-    const [link] = declaredLinksFromPyproject({
-      project: { urls: { [`Release\nnotes`]: "https://acme.dev/a", [long]: "https://acme.dev/b" } },
-    });
-    expect(link?.title).toBe("Release notes");
+    const titleOf = (label: string) =>
+      declaredLinksFromPyproject({ project: { urls: { [label]: "https://acme.dev/a" } } })[0]
+        ?.title;
+    expect(titleOf(`Release${String.fromCharCode(10)}notes`)).toBe("Release notes");
+    expect(titleOf(`Bug${String.fromCharCode(1)}tracker${String.fromCharCode(0x7f)}`)).toBe(
+      "Bug tracker"
+    );
+    expect(titleOf(`Docs ${"x".repeat(200)}`)).toBe(`Docs ${"x".repeat(74)}\u2026`);
+    // A cut never leaves half of a surrogate pair behind.
+    expect(titleOf(`${"a".repeat(78)}\u{1F600}x`)).toBe(`${"a".repeat(78)}\u2026`);
+  });
+
+  it("names a link from the start of a very long label without reading all of it", () => {
     const title = declaredLinksFromPyproject({
-      project: { urls: { [long]: "https://acme.dev/b" } },
+      project: { urls: { [`Docs ${"x".repeat(100_000)}`]: "https://acme.dev/a" } },
     })[0]?.title;
-    expect(title?.length).toBe(80);
-    expect(title?.endsWith("…")).toBe(true);
-    expect(long.startsWith(title!.slice(0, -1))).toBe(true);
+    expect(title).toBe(`Docs ${"x".repeat(74)}\u2026`);
   });
 
   it("lists an address two labels share once, under the first", () => {
@@ -264,6 +271,17 @@ describe("declaredLinksFromCargoToml (#17254)", () => {
       { source: "Cargo.toml", title: "Homepage", url: "https://acme.dev/" },
       { source: "Cargo.toml", title: "Repository", url: "https://github.com/acme/widget" },
     ]);
+  });
+
+  it("reads a pre-2024 crate's [project] table as its package", () => {
+    expect(
+      declaredLinksFromCargoToml({
+        project: { name: "widget", homepage: "https://widget.acme.dev" },
+        workspace: {
+          package: { homepage: "https://acme.dev", documentation: "https://d.acme.dev" },
+        },
+      })
+    ).toEqual([{ source: "Cargo.toml", title: "Homepage", url: "https://widget.acme.dev/" }]);
   });
 
   it("reads a virtual workspace's shared fields, since its root has no package", () => {
@@ -351,6 +369,24 @@ describe("declaredLinksFromBackstageCatalog (#17254)", () => {
     ).toEqual([{ source: "catalog-info.yaml", title: "acme.dev", url: "https://acme.dev/ok" }]);
   });
 
+  it("names an untitled link by its host, within a saved link's name length", () => {
+    const host = `${"a".repeat(40)}.${"b".repeat(40)}.dev`;
+    const [link] = declaredLinksFromBackstageCatalog([
+      { metadata: { links: [{ url: `https://${host}/x` }] } },
+    ]);
+    expect(link?.title).toBe(`${host.slice(0, 79)}\u2026`);
+  });
+
+  it("lists a link repeated across entities once, under its first title", () => {
+    const shared = { url: "https://acme.dev/runbook", title: "Runbook" };
+    expect(
+      declaredLinksFromBackstageCatalog([
+        { metadata: { links: [shared, { url: "https://acme.dev/runbook", title: "Again" }] } },
+        { metadata: { links: [shared] } },
+      ])
+    ).toEqual([{ source: "catalog-info.yaml", title: "Runbook", url: "https://acme.dev/runbook" }]);
+  });
+
   it("reads nothing from an empty file", () => {
     expect(declaredLinksFromBackstageCatalog([])).toEqual([]);
     expect(declaredLinksFromBackstageCatalog([undefined])).toEqual([]);
@@ -358,7 +394,7 @@ describe("declaredLinksFromBackstageCatalog (#17254)", () => {
 });
 
 describe("mergeDeclaredLinks (#17254)", () => {
-  const link = (source: "package.json" | "pyproject.toml", url: string, title = "Link") => ({
+  const link = (source: DeclaredProjectLinkSource, url: string, title = "Link") => ({
     source,
     title,
     url,
@@ -380,12 +416,18 @@ describe("mergeDeclaredLinks (#17254)", () => {
   });
 
   it("caps each manifest's own links, counting only those no earlier manifest listed", () => {
-    const many = Array.from({ length: MAX_DECLARED_LINKS_PER_MANIFEST + 5 }, (_, i) =>
-      link("pyproject.toml", `https://acme.dev/${i}`)
+    const fresh = Array.from({ length: MAX_DECLARED_LINKS_PER_MANIFEST + 1 }, (_, i) =>
+      link("pyproject.toml", `https://acme.dev/${i + 1}`)
     );
-    const merged = mergeDeclaredLinks([[link("package.json", "https://acme.dev/0")], many]);
-    expect(merged.filter((l) => l.source === "pyproject.toml")).toEqual(
-      many.slice(1, MAX_DECLARED_LINKS_PER_MANIFEST + 1)
-    );
+    const merged = mergeDeclaredLinks([
+      [link("package.json", "https://acme.dev/0")],
+      [link("pyproject.toml", "https://acme.dev/0"), ...fresh],
+      [link("Cargo.toml", "https://later.acme.dev/")],
+    ]);
+    expect(merged).toEqual([
+      link("package.json", "https://acme.dev/0"),
+      ...fresh.slice(0, MAX_DECLARED_LINKS_PER_MANIFEST),
+      link("Cargo.toml", "https://later.acme.dev/"),
+    ]);
   });
 });

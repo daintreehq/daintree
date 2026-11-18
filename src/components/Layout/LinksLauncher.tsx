@@ -70,25 +70,24 @@ const LINKS_LABEL = "Links";
 export const PROJECT_LINKS_HEADING = "Project links";
 export const GLOBAL_LINKS_HEADING = "Your links";
 
-/** The manifests' sections, in the order they show. */
-const DECLARED_SOURCES: readonly DeclaredProjectLinkSource[] = [
-  "package.json",
-  "pyproject.toml",
-  "Cargo.toml",
-  "catalog-info.yaml",
-];
-
 interface DeclaredLinkGroup {
   source: DeclaredProjectLinkSource;
   links: readonly DeclaredProjectLink[];
 }
 
-/** The declared links, one group per manifest that names any. */
+/**
+ * The declared links, one group per manifest, in the order Main lists the
+ * manifests. A manifest this build doesn't know (a newer Remote Host's) still
+ * shows, under its own file name.
+ */
 function declaredLinkGroups(links: readonly DeclaredProjectLink[]): DeclaredLinkGroup[] {
-  return DECLARED_SOURCES.flatMap((source) => {
-    const own = links.filter((link) => link.source === source);
-    return own.length > 0 ? [{ source, links: own }] : [];
-  });
+  const groups = new Map<DeclaredProjectLinkSource, DeclaredProjectLink[]>();
+  for (const link of links) {
+    const group = groups.get(link.source);
+    if (group) group.push(link);
+    else groups.set(link.source, [link]);
+  }
+  return Array.from(groups, ([source, own]) => ({ source, links: own }));
 }
 
 function declaredLinksHeading(source: DeclaredProjectLinkSource): string {

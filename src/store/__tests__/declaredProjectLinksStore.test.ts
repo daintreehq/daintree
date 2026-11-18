@@ -148,6 +148,17 @@ describe("refreshDeclaredProjectLinks (#17252)", () => {
     expect(useDeclaredProjectLinksStore.getState().links).toEqual([moved]);
   });
 
+  it("shows a link the file renamed, at the same address (#17254)", async () => {
+    const first = refreshDeclaredProjectLinks("p1");
+    h.pending[0]!.resolve([HOMEPAGE]);
+    await first;
+    const renamed: DeclaredProjectLink = { ...HOMEPAGE, title: "Website" };
+    const second = refreshDeclaredProjectLinks("p1");
+    h.pending[1]!.resolve([renamed]);
+    await second;
+    expect(useDeclaredProjectLinksStore.getState().links).toEqual([renamed]);
+  });
+
   it("shows a link that now comes from another manifest (#17254)", async () => {
     const first = refreshDeclaredProjectLinks("p1");
     h.pending[0]!.resolve([HOMEPAGE]);

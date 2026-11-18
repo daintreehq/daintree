@@ -64,6 +64,10 @@ function closeLater(handle: Promise<FileHandle> | FileHandle): void {
 // Most YAML never uses an alias, and the reader only looks up a few keys.
 const MAX_YAML_ALIASES = 100;
 
+// A 64-bit integer elsewhere in the file (a build id under `[tool]`) is
+// valid TOML; read as a number it would throw and lose the file's links.
+const TOML_OPTIONS = { integersAsBigInt: "asNeeded" } as const;
+
 type LinksFromText = (text: string) => DeclaredProjectLink[];
 
 /**
@@ -77,14 +81,14 @@ const MANIFESTS: readonly (readonly [DeclaredProjectLinkSource, () => Promise<Li
     "pyproject.toml",
     async () => {
       const { parse } = await import("smol-toml");
-      return (text) => declaredLinksFromPyproject(parse(text));
+      return (text) => declaredLinksFromPyproject(parse(text, TOML_OPTIONS));
     },
   ],
   [
     "Cargo.toml",
     async () => {
       const { parse } = await import("smol-toml");
-      return (text) => declaredLinksFromCargoToml(parse(text));
+      return (text) => declaredLinksFromCargoToml(parse(text, TOML_OPTIONS));
     },
   ],
   [

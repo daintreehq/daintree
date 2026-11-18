@@ -309,34 +309,58 @@ describe("links launcher button", () => {
   it("lists each manifest's links under a heading of its own, saying which file declares them (#17254)", async () => {
     h.links = {
       projectLinks: [],
-      declaredLinks: [CATALOG_DASHBOARD, HOMEPAGE, CARGO_DOCS, PYPROJECT_DOCS],
+      declaredLinks: [HOMEPAGE, REPOSITORY, PYPROJECT_DOCS, CARGO_DOCS, CATALOG_DASHBOARD],
       globalLinks: [],
     };
     render(<LinksLauncherToolbarButton />);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    });
-    await flush();
+    const open = async () => {
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Links" }));
+      });
+      await flush();
+    };
+    await open();
 
-    expect(headings()).toEqual([
-      "From package.json",
-      "From pyproject.toml",
-      "From Cargo.toml",
-      "From catalog-info.yaml",
-    ]);
-    expect(rows().map(describeRow)).toEqual([
+    const sections = screen.getAllByRole("region").map((region) => ({
+      heading: region.getAttribute("aria-labelledby")
+        ? document.getElementById(region.getAttribute("aria-labelledby")!)?.textContent
+        : null,
+      rows: Array.from(region.querySelectorAll<HTMLElement>("li > button")).map(describeRow),
+    }));
+    expect(sections).toEqual([
       {
-        name: "Homepage",
-        description: "widget.example.dev, declared in the project's package.json",
+        heading: "From package.json",
+        rows: [
+          {
+            name: "Homepage",
+            description: "widget.example.dev, declared in the project's package.json",
+          },
+          { name: "Repository", description: "github.com, declared in the project's package.json" },
+        ],
       },
       {
-        name: "Documentation",
-        description: "widget.readthedocs.io, declared in the project's pyproject.toml",
+        heading: "From pyproject.toml",
+        rows: [
+          {
+            name: "Documentation",
+            description: "widget.readthedocs.io, declared in the project's pyproject.toml",
+          },
+        ],
       },
-      { name: "Documentation", description: "docs.rs, declared in the project's Cargo.toml" },
       {
-        name: "Dashboard",
-        description: "grafana.example.dev, declared in the project's catalog-info.yaml",
+        heading: "From Cargo.toml",
+        rows: [
+          { name: "Documentation", description: "docs.rs, declared in the project's Cargo.toml" },
+        ],
+      },
+      {
+        heading: "From catalog-info.yaml",
+        rows: [
+          {
+            name: "Dashboard",
+            description: "grafana.example.dev, declared in the project's catalog-info.yaml",
+          },
+        ],
       },
     ]);
 
@@ -345,7 +369,38 @@ describe("links launcher button", () => {
       fireEvent.click(rows()[2]!, { detail: 1 });
     });
     await flush();
-    expect(h.openLinkUrl).toHaveBeenCalledWith("https://docs.rs/widget");
+    await open();
+    await act(async () => {
+      fireEvent.click(rows()[3]!, { detail: 1 });
+    });
+    await flush();
+    expect(h.openLinkUrl.mock.calls.map(([url]) => url)).toEqual([
+      "https://widget.readthedocs.io/",
+      "https://docs.rs/widget",
+    ]);
+  });
+
+  it("shows the links of a manifest this build doesn't know under that file's name (#17254)", async () => {
+    // A newer Remote Host may read a manifest this Shell has never heard of.
+    const fromComposer = {
+      source: "composer.json",
+      title: "Support",
+      url: "https://support.example.dev/",
+    } as unknown as DeclaredProjectLink;
+    h.links = { projectLinks: [], declaredLinks: [fromComposer], globalLinks: [] };
+    render(<LinksLauncherToolbarButton />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Links" }));
+    });
+    await flush();
+
+    expect(headings()).toEqual(["From composer.json"]);
+    expect(rows().map(describeRow)).toEqual([
+      {
+        name: "Support",
+        description: "support.example.dev, declared in the project's composer.json",
+      },
+    ]);
   });
 
   it("shows a project whose only links are declared ones without the empty state", async () => {
@@ -1156,7 +1211,7 @@ describe("links in the `…` menu", () => {
   it("gives each manifest's links a group of their own, saying which file declares them (#17254)", async () => {
     h.links = {
       projectLinks: [],
-      declaredLinks: [HOMEPAGE, PYPROJECT_DOCS, CARGO_DOCS],
+      declaredLinks: [HOMEPAGE, PYPROJECT_DOCS, CARGO_DOCS, REPOSITORY, CATALOG_DASHBOARD],
       globalLinks: [],
     };
     render(<OverflowMenu />);
@@ -1164,13 +1219,25 @@ describe("links in the `…` menu", () => {
 
     const groups = screen.getAllByRole("group");
     expect(
-      groups.map((group) =>
-        Array.from(group.querySelectorAll('[role="menuitem"]')).map((item) => item.textContent)
-      )
+      groups.map((group) => [
+        group.firstElementChild?.textContent,
+        ...Array.from(group.querySelectorAll('[role="menuitem"]')).map((item) => item.textContent),
+      ])
     ).toEqual([
-      ["Homepagewidget.example.dev, declared in the project's package.json"],
-      ["Documentationwidget.readthedocs.io, declared in the project's pyproject.toml"],
-      ["Documentationdocs.rs, declared in the project's Cargo.toml"],
+      [
+        "From package.json",
+        "Homepagewidget.example.dev, declared in the project's package.json",
+        "Repositorygithub.com, declared in the project's package.json",
+      ],
+      [
+        "From pyproject.toml",
+        "Documentationwidget.readthedocs.io, declared in the project's pyproject.toml",
+      ],
+      ["From Cargo.toml", "Documentationdocs.rs, declared in the project's Cargo.toml"],
+      [
+        "From catalog-info.yaml",
+        "Dashboardgrafana.example.dev, declared in the project's catalog-info.yaml",
+      ],
     ]);
 
     await act(async () => {

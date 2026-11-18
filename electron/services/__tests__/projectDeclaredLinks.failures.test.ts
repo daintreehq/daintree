@@ -148,6 +148,37 @@ describe("readDeclaredProjectLinks when the disk misbehaves (#17252)", () => {
     }
   );
 
+  it("rejects when the project folder itself fails in a way that may pass", async () => {
+    const root = freshRoot();
+    fsMock.realpath.mockImplementation(async (path) => {
+      if (path === root) throw errno("EIO");
+      return path;
+    });
+    await expect(readDeclaredProjectLinks(root)).rejects.toMatchObject({ code: "EIO" });
+    expect(fsMock.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects when a parser can't load, rather than reading its file as malformed (#17254)", async () => {
+    vi.doMock("smol-toml", () => {
+      throw new Error("parser chunk missing");
+    });
+    try {
+      fsMock.realpath.mockImplementation(async (path) => {
+        if (/[\\/](Cargo\.toml|catalog-info\.yaml)$/.test(path)) throw errno("ENOENT");
+        return path;
+      });
+      fsMock.open.mockImplementation(async (path) =>
+        path.endsWith("package.json")
+          ? textHandle(JSON.stringify({ homepage: "https://widget.example.dev" }))
+          : textHandle('[project.urls]\nDocs = "https://docs.example.dev"\n')
+      );
+      await expect(readDeclaredProjectLinks(freshRoot())).rejects.toThrow();
+      expect(fsMock.open).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.doUnmock("smol-toml");
+    }
+  });
+
   it("rejects when a later manifest fails in a way that may pass, rather than dropping its links (#17254)", async () => {
     const packageJson = textHandle(JSON.stringify({ homepage: "https://widget.example.dev" }));
     fsMock.realpath.mockImplementation(async (path) => {

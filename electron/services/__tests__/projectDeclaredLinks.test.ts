@@ -199,15 +199,59 @@ describe("readDeclaredProjectLinks across manifests (#17254)", () => {
     await expect(readDeclaredProjectLinks(root)).resolves.toEqual(CARGO_LINKS);
   });
 
+  const EVERY_MANIFEST = {
+    "package.json": MANIFEST,
+    "pyproject.toml": PYPROJECT,
+    "Cargo.toml": CARGO,
+    "catalog-info.yaml": CATALOG,
+  };
+  const EVERY_LINK = [...ALL_THREE, ...PYPROJECT_LINKS, ...CARGO_LINKS, ...CATALOG_LINKS];
+
+  // Each starts with a link of its own, so a file read up to its error would show it.
   it.each([
-    ["pyproject.toml", "[project.urls\nHomepage = 'https://widget.example.dev'"],
-    ["Cargo.toml", 'package = "widget"\npackage = "again"'],
-    ["catalog-info.yaml", "metadata:\n  links: [\n"],
+    ["pyproject.toml", '[project.urls]\nUnique = "https://unique.example.dev"\n[project.urls\n'],
+    [
+      "Cargo.toml",
+      '[package]\nhomepage = "https://unique.example.dev"\nhomepage = "https://again.example.dev"\n',
+    ],
+    ["catalog-info.yaml", "metadata:\n  links:\n    - url: https://unique.example.dev\n  x: [\n"],
     // One bad entity spoils the file: a parser can't say where it went wrong.
     ["catalog-info.yaml", `${CATALOG}---\nmetadata: {links: [\n`],
   ])("declares nothing for a malformed %s, while the others still count", async (name, text) => {
-    const root = await makeManifests({ "package.json": MANIFEST, [name]: text });
-    await expect(readDeclaredProjectLinks(root)).resolves.toEqual(ALL_THREE);
+    const root = await makeManifests({ ...EVERY_MANIFEST, [name]: text });
+    await expect(readDeclaredProjectLinks(root)).resolves.toEqual(
+      EVERY_LINK.filter((link) => link.source !== name)
+    );
+  });
+
+  it("reads a TOML manifest that holds a 64-bit integer elsewhere", async () => {
+    const root = await makeManifests({
+      "pyproject.toml": `${PYPROJECT}\n[tool.example]\nbuild_id = 9007199254740993\n`,
+      "Cargo.toml": `${CARGO}\n[package.metadata.example]\nbuild_id = 9007199254740993\n`,
+    });
+    await expect(readDeclaredProjectLinks(root)).resolves.toEqual([
+      { source: "pyproject.toml", title: "Homepage", url: "https://widget.example.dev/" },
+      ...PYPROJECT_LINKS,
+      {
+        source: "pyproject.toml",
+        title: "Bug Tracker",
+        url: "https://github.com/acme/widget/issues",
+      },
+      ...CARGO_LINKS,
+    ]);
+  });
+
+  it("reads a link a catalog names through an alias", async () => {
+    const root = await makeManifests({
+      "catalog-info.yaml": `x: &runbook {url: https://runbooks.example.dev/widget, title: Runbook}\nmetadata:\n  links:\n    - *runbook\n`,
+    });
+    await expect(readDeclaredProjectLinks(root)).resolves.toEqual([
+      {
+        source: "catalog-info.yaml",
+        title: "Runbook",
+        url: "https://runbooks.example.dev/widget",
+      },
+    ]);
   });
 
   it("declares nothing for a catalog that leans on more aliases than a person writes", async () => {
@@ -220,15 +264,30 @@ describe("readDeclaredProjectLinks across manifests (#17254)", () => {
   });
 
   it("follows edits to each file", async () => {
-    const root = await makeManifests({ "Cargo.toml": CARGO, "catalog-info.yaml": CATALOG });
-    await expect(readDeclaredProjectLinks(root)).resolves.toEqual([
-      ...CARGO_LINKS,
-      ...CATALOG_LINKS,
-    ]);
+    const root = await makeManifests({
+      "pyproject.toml": PYPROJECT,
+      "Cargo.toml": CARGO,
+      "catalog-info.yaml": CATALOG,
+    });
+    await expect(readDeclaredProjectLinks(root)).resolves.toHaveLength(8);
+    await writeFile(
+      join(root, "pyproject.toml"),
+      PYPROJECT.replace("docs.example.dev/widget", "docs.example.dev/widget/v2")
+    );
     await writeFile(join(root, "Cargo.toml"), "[package]\nname = 'widget'\n");
+    await writeFile(
+      join(root, "catalog-info.yaml"),
+      CATALOG.replace("grafana.example.dev/d/widget", "grafana.example.dev/d/widget-v2")
+    );
+    const links = await readDeclaredProjectLinks(root);
+    expect(links.map(({ source, url }) => `${source} ${url}`)).toEqual([
+      "pyproject.toml https://widget.example.dev/",
+      "pyproject.toml https://docs.example.dev/widget/v2",
+      "pyproject.toml https://github.com/acme/widget/issues",
+      "catalog-info.yaml https://grafana.example.dev/d/widget-v2",
+      "catalog-info.yaml https://api.example.dev/docs",
+    ]);
     await rm(join(root, "catalog-info.yaml"));
-    await expect(readDeclaredProjectLinks(root)).resolves.toEqual([]);
-    await writeFile(join(root, "pyproject.toml"), PYPROJECT);
     await expect(readDeclaredProjectLinks(root)).resolves.toHaveLength(3);
   });
 

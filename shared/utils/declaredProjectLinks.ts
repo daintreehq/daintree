@@ -87,19 +87,26 @@ function plainUrl(value: string): string | null {
 }
 
 /**
+ * How much of a name is looked at. A YAML alias can hand the same long name
+ * to many links, so each costs a bounded scan, not a pass over the whole text.
+ */
+const MAX_TITLE_SCAN = MAX_PROJECT_LINK_TITLE_LENGTH * 4;
+
+/**
  * A name the file gives a link, as one line within the length a saved link's
  * name may have, or null when there is nothing to show.
  */
 function linkTitle(value: unknown): string | null {
   if (typeof value !== "string") return null;
+  const clipped = value.length > MAX_TITLE_SCAN;
   let line = "";
-  for (const char of value) {
+  for (const char of clipped ? value.slice(0, MAX_TITLE_SCAN) : value) {
     const code = char.codePointAt(0) ?? 0;
     line += code < 0x20 || (code >= 0x7f && code < 0xa0) ? " " : char;
   }
   const title = line.replace(/\s+/g, " ").trim();
   if (!title) return null;
-  if (title.length <= MAX_PROJECT_LINK_TITLE_LENGTH) return title;
+  if (!clipped && title.length <= MAX_PROJECT_LINK_TITLE_LENGTH) return title;
   let cut = title.slice(0, MAX_PROJECT_LINK_TITLE_LENGTH - 1);
   // Never end on half of a surrogate pair.
   if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
@@ -154,7 +161,8 @@ export function declaredLinksFromPyproject(manifest: unknown): DeclaredProjectLi
  * A Cargo.toml address field. A package's own string, or the workspace's
  * value when the package says `field.workspace = true`; a virtual workspace's
  * root has no `[package]`, so what it declares for its members is the
- * project's own. A field the package leaves out isn't inherited.
+ * project's own. A field the package leaves out isn't inherited. Editions
+ * before 2024 also accept `[project]` for the package table.
  */
 function cargoFieldValue(
   manifest: Record<string, unknown>,
@@ -162,8 +170,9 @@ function cargoFieldValue(
 ): string | null {
   const shared = asRecord(asRecord(manifest.workspace)?.package)?.[field];
   const sharedValue = typeof shared === "string" ? shared : null;
-  if (manifest.package === undefined) return sharedValue;
-  const own = asRecord(manifest.package)?.[field];
+  const packageTable = manifest.package !== undefined ? manifest.package : manifest.project;
+  if (packageTable === undefined) return sharedValue;
+  const own = asRecord(packageTable)?.[field];
   if (typeof own === "string") return own;
   return asRecord(own)?.workspace === true ? sharedValue : null;
 }
@@ -194,6 +203,7 @@ export function declaredLinksFromBackstageCatalog(
   documents: readonly unknown[]
 ): DeclaredProjectLink[] {
   const links: DeclaredProjectLink[] = [];
+  const seen = new Set<string>();
   for (const document of documents) {
     const entries = asRecord(asRecord(document)?.metadata)?.links;
     if (!Array.isArray(entries)) continue;
@@ -201,12 +211,14 @@ export function declaredLinksFromBackstageCatalog(
       const fields = asRecord(entry);
       if (fields === null || typeof fields.url !== "string") continue;
       const url = plainUrl(fields.url);
-      if (url === null) continue;
-      const title = linkTitle(fields.title) ?? linkHost(url);
+      // A link listed again, often through an alias, is shown once, under its first name.
+      if (url === null || seen.has(url)) continue;
+      seen.add(url);
+      const title = linkTitle(fields.title) ?? linkTitle(linkHost(url)) ?? url;
       links.push({ source: "catalog-info.yaml", title, url });
     }
   }
-  return uniqueByUrl(links);
+  return links;
 }
 
 /**
