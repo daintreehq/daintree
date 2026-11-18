@@ -290,7 +290,7 @@ describe("CloudProvidersSection", () => {
           machineName: "build",
           machine: "running",
           // A stop this device was in the middle of: not something the provider said.
-          operation: { id: "op-1", kind: "stopping", startedAt: 1, stage: null },
+          operation: { id: "op-1", kind: "stopping", startedAt: 1, stage: "Stopping" },
           dataExpired: false,
           asleep: false,
           lastError: null,
