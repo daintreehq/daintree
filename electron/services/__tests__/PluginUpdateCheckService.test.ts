@@ -32,8 +32,14 @@ const systemSleepMock = vi.hoisted(() => ({
 const pluginServiceMock = vi.hoisted(() => ({
   waitForCatalog: vi.fn(async () => {}),
   listPlugins: vi.fn(() => [] as unknown[]),
-  checkForUpdate: vi.fn(async (_id: string) => ({ status: "up-to-date" }) as unknown),
+  checkForUpdate: vi.fn(
+    async (_id: string, _options?: unknown) => ({ status: "up-to-date" }) as unknown
+  ),
 }));
+
+// The catalog client is real, fed by a fake catalog fetch, so a pass reads the
+// catalog the way it does in the app (#17805).
+const catalogRef = vi.hoisted(() => ({ current: null as unknown }));
 
 vi.mock("electron", () => ({ powerMonitor: powerMonitorMock }));
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
@@ -41,12 +47,21 @@ vi.mock("../../store.js", () => ({ store: storeMock }));
 vi.mock("../../ipc/channels.js", () => ({ CHANNELS: { EVENTS_PUSH: "events:push" } }));
 vi.mock("../SystemSleepService.js", () => ({ getSystemSleepService: () => systemSleepMock }));
 vi.mock("../PluginService.js", () => ({ pluginService: pluginServiceMock }));
+vi.mock("../plugin/PluginCatalogService.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugin/PluginCatalogService.js")>();
+  return { ...actual, getPluginCatalogService: () => catalogRef.current };
+});
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logError: vi.fn(),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
 import { PluginUpdateCheckService } from "../PluginUpdateCheckService.js";
+import {
+  PluginCatalogService,
+  type PluginCatalogUpdateSource,
+} from "../plugin/PluginCatalogService.js";
 
 function urlPlugin(name: string, over: Record<string, unknown> = {}) {
   return {
@@ -79,6 +94,12 @@ describe("PluginUpdateCheckService", () => {
     broadcastMock.mockClear();
     storeMock.set.mockClear();
     pluginServiceMock.checkForUpdate.mockClear();
+    catalogRef.current = new PluginCatalogService({
+      cachePath: null,
+      fetchImpl: async () => {
+        throw new Error("unexpected catalog fetch");
+      },
+    });
   });
 
   afterEach(() => {
@@ -346,7 +367,9 @@ describe("PluginUpdateCheckService", () => {
       });
 
       await svc.maybeRunDue("Periodic");
-      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledWith("pub.a");
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledWith("pub.a", {
+        catalog: expect.anything(),
+      });
       expect(storeState.value.lastCheckedAt).toBe(START - 2 * DAY);
 
       expect(await nextPassDelay(svc)).toBeGreaterThan(0);
@@ -651,6 +674,128 @@ describe("PluginUpdateCheckService", () => {
     expect(svc.getLatest()).toMatchObject({
       updates: [{ pluginId: "pub.b" }],
       signature: "pub.b@2.0.0",
+    });
+  });
+
+  describe("one catalog per pass (#17805)", () => {
+    const TEN = Array.from({ length: 10 }, (_, i) => `pub.p${i}`);
+
+    function release(id: string, version: string) {
+      const [owner, name] = id.split(".");
+      const repo = `https://github.com/${owner}/${name}`;
+      return {
+        id,
+        repo,
+        version,
+        url: `${repo}/releases/download/v${version}/${id}-${version}.dntr`,
+        sha256: "a".repeat(64),
+        capabilities: [],
+      };
+    }
+
+    /** The catalog answers each fetch with the next document, or is offline. */
+    function catalogServes(...documents: Array<{ entries: unknown[] } | "offline">) {
+      const queue = [...documents];
+      const fetchImpl = vi.fn(async () => {
+        const next = queue.shift();
+        if (next === undefined) throw new Error("unexpected catalog fetch");
+        if (next === "offline") throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
+        return new Response(JSON.stringify(next), {
+          headers: { "content-type": "application/json" },
+        });
+      });
+      catalogRef.current = new PluginCatalogService({ cachePath: null, fetchImpl });
+      return fetchImpl;
+    }
+
+    /**
+     * The catalog half of the installer's check: it reads the catalog the pass
+     * hands it, or the shared one when it is handed none.
+     */
+    function checksAgainstCatalog(installedVersion = "1.0.0") {
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string, options?: unknown) => {
+        const handed = (options as { catalog?: PluginCatalogUpdateSource } | undefined)?.catalog;
+        const source = handed ?? (catalogRef.current as PluginCatalogService);
+        const lookup = await source.lookupUpdate(id, installedVersion);
+        switch (lookup.status) {
+          case "stale":
+          case "unavailable":
+            return {
+              status: "catalog-unavailable",
+              catalog: lookup.status,
+              failure: lookup.failure,
+            };
+          case "current":
+            return { status: "up-to-date" };
+          case "delisted":
+            return { status: "delisted", scope: lookup.scope, version: installedVersion };
+          case "update":
+            return available(id, lookup.entry.version);
+        }
+      });
+    }
+
+    it("fetches the catalog once for ten up-to-date catalog installs", async () => {
+      storeState.value = { enabled: true, lastCheckedAt: null };
+      pluginServiceMock.listPlugins.mockReturnValue(TEN.map(catalogPlugin));
+      const fetchImpl = catalogServes({ entries: TEN.map((id) => release(id, "1.0.0")) });
+      checksAgainstCatalog();
+
+      const svc = new PluginUpdateCheckService();
+      await svc._checkNowForTest();
+
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(10);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(storeState.value.lastCheckedAt).not.toBeNull();
+      expect(broadcastMock).not.toHaveBeenCalled();
+    });
+
+    it("answers each install from the one catalog by its own id", async () => {
+      storeState.value = { enabled: true, lastCheckedAt: null };
+      pluginServiceMock.listPlugins.mockReturnValue(TEN.map(catalogPlugin));
+      const entries = TEN.map((id) => release(id, "1.0.0"));
+      // pub.p3 has a newer release; pub.p7 is gone.
+      entries.push(release("pub.p3", "1.1.0"));
+      const fetchImpl = catalogServes({ entries: entries.filter((e) => e.id !== "pub.p7") });
+      checksAgainstCatalog();
+
+      const svc = new PluginUpdateCheckService();
+      await svc._checkNowForTest();
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(svc.getLatest()).toMatchObject({ signature: "pub.p3@1.1.0" });
+    });
+
+    it("fetches afresh on the pass after a failed one, and that pass counts", async () => {
+      storeState.value = { enabled: true, lastCheckedAt: null };
+      pluginServiceMock.listPlugins.mockReturnValue(TEN.map(catalogPlugin));
+      const fetchImpl = catalogServes("offline", {
+        entries: TEN.map((id) => release(id, "1.0.0")),
+      });
+      checksAgainstCatalog();
+      const svc = new PluginUpdateCheckService();
+
+      await svc._checkNowForTest();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      // Nothing was learned, so the day's check is still owed.
+      expect(storeState.value.lastCheckedAt).toBeNull();
+
+      await svc._checkNowForTest();
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(storeState.value.lastCheckedAt).not.toBeNull();
+      expect(svc.getLatest()).toBeNull();
+    });
+
+    it("never fetches the catalog for a pass with only URL installs", async () => {
+      storeState.value = { enabled: true, lastCheckedAt: null };
+      pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a"), urlPlugin("pub.b")]);
+      const fetchImpl = catalogServes();
+
+      const svc = new PluginUpdateCheckService();
+      await svc._checkNowForTest();
+
+      expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledTimes(2);
+      expect(fetchImpl).not.toHaveBeenCalled();
     });
   });
 

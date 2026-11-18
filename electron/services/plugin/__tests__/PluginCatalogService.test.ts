@@ -867,4 +867,107 @@ describe("PluginCatalogService", () => {
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("update batches (#17805)", () => {
+    const IDS = Array.from({ length: 10 }, (_, i) => `acme.plugin-${i}`);
+
+    function release(id: string, version: string) {
+      const repo = `https://github.com/acme/${id.slice("acme.".length)}`;
+      return catalogEntry({
+        id,
+        repo,
+        version,
+        url: `${repo}/releases/download/v${version}/${id}-${version}.dntr`,
+      });
+    }
+
+    const tenAt = (version: string) => ({ entries: IDS.map((id) => release(id, version)) });
+
+    /** Two lookups at a time, the way a background pass runs its checks. */
+    async function inPairs<T>(ids: readonly string[], lookup: (id: string) => Promise<T>) {
+      const results: T[] = [];
+      for (let i = 0; i < ids.length; i += 2) {
+        results.push(...(await Promise.all(ids.slice(i, i + 2).map(lookup))));
+      }
+      return results;
+    }
+
+    it("answers ten paired lookups from one fetch", async () => {
+      const fetchImpl = respondWith(ok(tenAt("1.0.0")));
+      const batch = service(fetchImpl).openUpdateBatch();
+
+      const results = await inPairs(IDS, (id) => batch.lookupUpdate(id, "1.0.0"));
+
+      expect(results).toEqual(IDS.map(() => ({ status: "current", fetchedAt: T0 })));
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("fetches nothing until its first lookup", async () => {
+      const fetchImpl = respondWith();
+      service(fetchImpl).openUpdateBatch();
+      await Promise.resolve();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("answers each plugin from its own releases, the way a single lookup does", async () => {
+      const entries = [
+        release("acme.plugin-0", "1.0.0"),
+        release("acme.plugin-0", "1.2.0"),
+        release("acme.plugin-0", "2.0.0-rc.1"),
+        release("acme.plugin-1", "0.9.0"),
+        release("acme.plugin-2", "1.0.0"),
+      ];
+      const asked = ["acme.plugin-0", "acme.plugin-1", "acme.plugin-2", "acme.gone"];
+      const batch = service(respondWith(ok({ entries }))).openUpdateBatch();
+      const single = service(respondWith(...asked.map(() => ok({ entries }))));
+
+      const fromBatch = await Promise.all(asked.map((id) => batch.lookupUpdate(id, "1.0.0")));
+      const fromSingle: unknown[] = [];
+      for (const id of asked) fromSingle.push(await single.lookupUpdate(id, "1.0.0"));
+
+      expect(fromBatch).toEqual(fromSingle);
+      expect(fromBatch.map((r) => r.status)).toEqual(["update", "delisted", "current", "delisted"]);
+      expect(fromBatch[0]).toMatchObject({ entry: { version: "1.2.0" } });
+    });
+
+    it("answers the whole batch from one failed fetch, and the next batch fetches again", async () => {
+      const fetchImpl = respondWith(offline, ok(tenAt("1.0.0")));
+      const svc = service(fetchImpl);
+
+      const failed = svc.openUpdateBatch();
+      const blocked = await inPairs(IDS, (id) => failed.lookupUpdate(id, "1.0.0"));
+      expect(blocked).toEqual(IDS.map(() => ({ status: "unavailable", failure: "unreachable" })));
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+      const next = svc.openUpdateBatch();
+      const answered = await inPairs(IDS, (id) => next.lookupUpdate(id, "1.0.0"));
+      expect(answered).toEqual(IDS.map(() => ({ status: "current", fetchedAt: T0 })));
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("never answers from a cached catalog, even a young one", async () => {
+      await seedCache(T0 - 1_000, tenAt("1.0.0"));
+      const fetchImpl = respondWith(offline);
+      const batch = service(fetchImpl).openUpdateBatch();
+      expect(await batch.lookupUpdate(IDS[0], "1.0.0")).toEqual({
+        status: "stale",
+        fetchedAt: T0 - 1_000,
+        failure: "unreachable",
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves single lookups fetching afresh, so a withdrawn release is never offered", async () => {
+      const fetchImpl = respondWith(
+        ok({ entries: [release(IDS[0], "1.0.0"), release(IDS[0], "1.1.0")] }),
+        ok({ entries: [release(IDS[0], "1.0.0")] })
+      );
+      const svc = service(fetchImpl);
+      const batch = svc.openUpdateBatch();
+      expect(await batch.lookupUpdate(IDS[0], "1.0.0")).toMatchObject({ status: "update" });
+
+      expect(await svc.lookupUpdate(IDS[0], "1.0.0")).toEqual({ status: "current", fetchedAt: T0 });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+  });
 });

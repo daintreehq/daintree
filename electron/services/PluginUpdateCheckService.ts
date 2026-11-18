@@ -11,6 +11,7 @@ import { getSystemSleepService } from "./SystemSleepService.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logInfo, logError } from "../utils/logger.js";
+import type { PluginUpdateCheckOptions } from "./plugin/PluginInstaller.js";
 
 // Daily cadence. A URL re-fetch of every installed plugin is cheap but not free,
 // so once a day is the coarsest useful granularity for "an update landed."
@@ -353,19 +354,23 @@ export class PluginUpdateCheckService {
     // The registry can list one plugin twice while a re-enable is in flight (running
     // and disabled rows). One check per id keeps a plugin out of both `found` and
     // `failedIds`, so a fresh offer never sits beside its own cached version.
-    const targets = [
-      ...new Set(
-        pluginService
-          .listPlugins()
-          // A catalog install is checked against the catalog, not its URL (#16781).
-          .filter(
-            (p) => !p.isBuiltin && (p.source === "catalog" || (!!p.originalUrl && !!p.archiveHash))
-          )
-          .map((p) => p.manifest.name)
-      ),
-    ];
+    const eligible = pluginService
+      .listPlugins()
+      // A catalog install is checked against the catalog, not its URL (#16781).
+      .filter(
+        (p) => !p.isBuiltin && (p.source === "catalog" || (!!p.originalUrl && !!p.archiveHash))
+      );
+    const targets = [...new Set(eligible.map((p) => p.manifest.name))];
 
-    const { found, failedIds } = await this.checkAll(pluginService, targets);
+    // One catalog answers every catalog install in the pass, rather than one
+    // fetch per check (#17805). A pass with none never loads the catalog client.
+    let options: PluginUpdateCheckOptions | undefined;
+    if (eligible.some((p) => p.source === "catalog")) {
+      const { getPluginCatalogService } = await import("./plugin/PluginCatalogService.js");
+      options = { catalog: getPluginCatalogService().openUpdateBatch() };
+    }
+
+    const { found, failedIds } = await this.checkAll(pluginService, targets, options);
     return {
       updates: found,
       inconclusive: failedIds.length > 0,
@@ -381,7 +386,8 @@ export class PluginUpdateCheckService {
    */
   private async checkAll(
     pluginService: typeof import("./PluginService.js").pluginService,
-    ids: string[]
+    ids: string[],
+    options: PluginUpdateCheckOptions | undefined
   ): Promise<{ found: PluginBackgroundUpdateEntry[]; failedIds: string[] }> {
     const found: PluginBackgroundUpdateEntry[] = [];
     // Ids we couldn't determine this pass (fetch-failed or threw). Collected as
@@ -395,7 +401,9 @@ export class PluginUpdateCheckService {
         if (this.disposed || !this.getSettings().enabled) return;
         const id = ids[cursor++];
         try {
-          const result = await pluginService.checkForUpdate(id);
+          const result = options
+            ? await pluginService.checkForUpdate(id, options)
+            : await pluginService.checkForUpdate(id);
           if (result.status === "available") {
             found.push({
               pluginId: id,
