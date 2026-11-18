@@ -365,6 +365,89 @@ describe("createHostSampleSources", () => {
     });
   });
 
+  describe("the cached worktree count (#17813)", () => {
+    const STATES: Record<string, number> = { "/p1": 3, "/p2": 1, "/p1-moved": 5 };
+    let clock = 0;
+    let sources: ReturnType<typeof createHostSampleSources>;
+    let ask: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      clock = 0;
+      sources = createHostSampleSources(() => clock);
+      ask = vi.fn(async (projectPath: string, projectId: string) => ({
+        status: "ok",
+        projectId,
+        states: Array.from({ length: STATES[projectPath] ?? 0 }, () => ({})),
+      }));
+      workspace.client = { getAllStatesForProjectResultAsync: ask };
+    });
+
+    it("drops a closed project's worktrees before the count expires", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      store.projects = [{ id: "p1", path: "/p1", status: "closed" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 0, worktreeCount: 0 });
+    });
+
+    it("counts the project that replaced another, though the project total is unchanged", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      store.projects = [{ id: "p2", path: "/p2", status: "active" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 1 });
+    });
+
+    it("counts a project again once its root moves", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      store.projects = [{ id: "p1", path: "/p1-moved", status: "active" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 5 });
+    });
+
+    it("reuses the count while the same projects stay open, whatever their order or status", async () => {
+      store.projects = [
+        { id: "p1", path: "/p1", status: "active" },
+        { id: "p2", path: "/p2", status: "background" },
+      ];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: 4 });
+      store.projects = [
+        { id: "p2", path: "/p2", status: "active" },
+        { id: "p1", path: "/p1", status: "background" },
+      ];
+      clock += 29_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: 4 });
+      expect(ask).toHaveBeenCalledTimes(2);
+
+      clock += 2_000;
+      ask.mockClear();
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: 4 });
+      expect(ask).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports a changed set it can't count as unknown, and asks again next sample", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      store.projects = [
+        { id: "p1", path: "/p1", status: "active" },
+        { id: "p2", path: "/p2", status: "active" },
+      ];
+      ask.mockImplementation(async (projectPath: string, projectId: string) =>
+        projectPath === "/p2"
+          ? { status: "unavailable", reason: "workspace-unavailable" }
+          : { status: "ok", projectId, states: [{}, {}, {}] }
+      );
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: null });
+
+      ask.mockClear();
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: null });
+      expect(ask).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("reports worktrees as unknown when one project's workspace can't answer", async () => {
     workspace.client = {
       getAllStatesForProjectResultAsync: vi.fn(async (path: string) =>
