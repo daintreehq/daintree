@@ -6,7 +6,10 @@ import type { HandlerDependencies } from "../types.js";
 import type { PulseRangeDays, ProjectPulse } from "../../../shared/types/pulse.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import type { GitFileDiffResult } from "../../../shared/types/ipc/git.js";
+import type {
+  GitCompareWorktreesPayload,
+  GitFileDiffResult,
+} from "../../../shared/types/ipc/git.js";
 import { GIT_FILE_DIFF_MAX_BYTES } from "../../../shared/config/gitReadLimits.js";
 
 // Whole-file context for any file the diff preview's byte cap would let through.
@@ -15,15 +18,7 @@ const MAX_COMPARE_CONTEXT_LINES = 1_000_000;
 export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleGitCompareWorktrees = async (payload: {
-    cwd: string;
-    branch1: string;
-    branch2: string;
-    filePath?: string;
-    useMergeBase?: boolean;
-    ignoreWhitespace?: boolean;
-    contextLines?: number;
-  }) => {
+  const handleGitCompareWorktrees = async (payload: GitCompareWorktreesPayload) => {
     // Opening a file in the compare dialog is two reads (its diff, and the
     // whole-file diff its hidden context comes from), so the allowance is
     // twice the files a reader can step through in the window.
@@ -32,8 +27,16 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, branch1, branch2, filePath, useMergeBase, ignoreWhitespace, contextLines } =
-      payload;
+    const {
+      cwd,
+      branch1,
+      branch2,
+      filePath,
+      useMergeBase,
+      ignoreWhitespace,
+      contextLines,
+      oldPath,
+    } = payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -46,6 +49,9 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     }
     if (filePath !== undefined && (typeof filePath !== "string" || !filePath)) {
       throw new Error("Invalid filePath");
+    }
+    if (oldPath !== undefined && (typeof oldPath !== "string" || !oldPath || !filePath)) {
+      throw new Error("Invalid oldPath");
     }
     if (useMergeBase !== undefined && typeof useMergeBase !== "boolean") {
       throw new Error("Invalid useMergeBase");
@@ -69,7 +75,8 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
       filePath,
       useMergeBase,
       ignoreWhitespace,
-      contextLines
+      contextLines,
+      oldPath
     );
   };
   handlers.push(typedHandle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees));

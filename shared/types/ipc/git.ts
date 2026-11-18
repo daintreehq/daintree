@@ -42,9 +42,9 @@ export interface GitFileDiffResult {
 
 /** Single file entry in a cross-worktree comparison */
 export interface CrossWorktreeFile {
-  /** File path (new path for renames) */
+  /** File path (new path for renames and copies) */
   path: string;
-  /** Original path before rename (only set for renamed files) */
+  /** Source path of a rename or copy (only set for those) */
   oldPath?: string;
   /** Change status: A=added, D=deleted, M=modified, R=renamed, C=copied, U=unmerged */
   status: "A" | "D" | "M" | "R" | "C" | "U" | string;
@@ -117,4 +117,9 @@ export interface GitCompareWorktreesPayload {
    * text in full: the source a reader expands hidden context from.
    */
   contextLines?: number;
+  /**
+   * Source path of a renamed or copied `filePath`, from the listing's
+   * `oldPath`. Without it the file diffs as a newly added one.
+   */
+  oldPath?: string;
 }

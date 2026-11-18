@@ -432,6 +432,8 @@ describe("CrossWorktreeDiff file stepping", () => {
       "src/alpha.ts",
       undefined,
       false,
+      undefined,
+      undefined,
     ]);
   });
 
@@ -452,6 +454,8 @@ describe("CrossWorktreeDiff file stepping", () => {
       "src/beta.ts",
       undefined,
       false,
+      undefined,
+      undefined,
     ]);
 
     fireEvent.keyDown(window, { key: "[" });
