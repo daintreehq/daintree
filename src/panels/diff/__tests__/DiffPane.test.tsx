@@ -1338,6 +1338,7 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     renderPane();
 
     expect(sendCommand("nextFile", "another-diff")).toBe(false);
+    expect(sendCommand("previousChange", "another-diff")).toBe(false);
     expect(sendCommand("toggleViewed", "another-diff")).toBe(false);
     expect(setDiffPanelFileMock).not.toHaveBeenCalled();
     expect(toggleViewedMock).not.toHaveBeenCalled();
@@ -1684,6 +1685,24 @@ describe("DiffPane — hunk stepping (#17326)", () => {
       expect(stepperText()).toBe("2 of 3");
     });
 
+    it("lets a reload that returns the same patch end a step's hold", () => {
+      viewerHunkCount.current = 3;
+      seedSingle();
+      withContent("diff --git a/a.ts b/a.ts\n@@ one @@");
+      const { rerender } = renderPane();
+      pressInPane("n");
+      pressInPane("n");
+      expect(stepperText()).toBe("3 of 3");
+
+      withContent(undefined);
+      rerender(paneElement());
+      withContent("diff --git a/a.ts b/a.ts\n@@ one @@");
+      rerender(paneElement());
+      layOut([50, 400, 800]);
+      scroll();
+      expect(stepperText()).toBe("1 of 3");
+    });
+
     it("lets a refreshed patch end a step's hold", () => {
       viewerHunkCount.current = 3;
       seedSingle();
@@ -1728,6 +1747,48 @@ describe("DiffPane — hunk stepping (#17326)", () => {
     const arrow = screen.getByRole("button", { name: "Next hunk" });
     expect(arrow).toBe(next);
     expect(arrow.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Previous hunk" }).getAttribute("aria-disabled")
+    ).toBe("true");
+  });
+
+  it("lets hand scrolling call off a crossing still waiting to land", () => {
+    viewerHunkCount.current = 1;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+    pressInPane("p");
+    expectSelected(0);
+
+    seedAt(0);
+    withContent(undefined);
+    rerender(paneElement());
+    act(() => {
+      document.querySelector(".diff-scroll-root")!.dispatchEvent(new Event("wheel"));
+    });
+
+    viewerHunkCount.current = 4;
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(null);
+  });
+
+  it("asks the viewer afresh for a step after the reader withdrew the last one", () => {
+    viewerHunkCount.current = 3;
+    seedSingle();
+    renderPane();
+    const seq = () => screen.getByTestId("diff-viewer-mock").getAttribute("data-reveal-seq");
+
+    pressInPane("n");
+    const first = seq();
+    act(() => {
+      document.querySelector(".diff-scroll-root")!.dispatchEvent(new Event("wheel"));
+    });
+    expect(seq()).toBe(null);
+    pressInPane("n");
+    // A sequence the viewer has already carried out would be ignored.
+    expect(seq()).not.toBe(first);
+    expect(revealed()).toBe(2);
   });
 
   it("drops the landing once the pane returns to the file it left", () => {

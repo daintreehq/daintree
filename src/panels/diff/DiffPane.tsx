@@ -1194,6 +1194,15 @@ export function DiffPane({
   // about which of them it was for. Tagged with the stops and the patch it was
   // taken in: a refresh can put the viewport anywhere, so it ends the hold.
   const holdRef = useRef<{ key: string; content: string | undefined } | null>(null);
+  // A body that reloads (a refresh, even one that returns the same bytes, or a
+  // visit to another file) can come back scrolled anywhere: the hold goes.
+  const bodyLoading = content === undefined;
+  useEffect(() => {
+    holdRef.current = null;
+  }, [bodyLoading, currentFileIdentity]);
+  // Never reused, not even after the reader withdraws a step: the viewer treats
+  // a sequence it has carried out as done.
+  const revealSeqRef = useRef(0);
 
   const goToStop = (index: number, count: number) => {
     setCursor({ key: stopsKey, index });
@@ -1212,7 +1221,8 @@ export function DiffPane({
         ?.querySelector(`[data-change-index="${index}"]`)
         ?.scrollIntoView({ block: "center", behavior: "instant" });
     } else if (content) {
-      setRevealRequest((current) => ({ diff: content, index, seq: (current?.seq ?? 0) + 1 }));
+      revealSeqRef.current += 1;
+      setRevealRequest({ diff: content, index, seq: revealSeqRef.current });
     }
   };
 
@@ -1321,16 +1331,36 @@ export function DiffPane({
     if (best !== null && Number.isFinite(best)) setCursor({ key: stopsKey, index: best });
   });
   // The reader taking the scroll back, by wheel, touch, pointer or key, ends a
-  // step's hold, and with it the step itself: a remounted viewer shouldn't
-  // jump back to a hunk the reader has since scrolled away from.
-  const releaseStepHold = useEffectEvent(() => {
+  // step: its hold, a reveal still staging, and a crossing still waiting to
+  // land, which would otherwise pull them back once the destination settles.
+  // Listened for whether or not the file has stops yet, since those waits are
+  // exactly when it hasn't.
+  const releaseStep = useEffectEvent(() => {
     holdRef.current = null;
     setRevealRequest(null);
+    setLanding(null);
   });
-  const hasStops = (stopCount ?? 0) > 0;
   useEffect(() => {
     const root = scrollRootRef.current;
     const paneRoot = paneRootRef.current;
+    if (!root) return;
+    const release = () => releaseStep();
+    root.addEventListener("wheel", release, { passive: true });
+    root.addEventListener("touchstart", release, { passive: true });
+    root.addEventListener("pointerdown", release);
+    // The step keys are consumed before they reach the panel, so any key that
+    // does is the reader's own (PageDown, Space, an arrow).
+    paneRoot?.addEventListener("keydown", release, { capture: true });
+    return () => {
+      root.removeEventListener("wheel", release);
+      root.removeEventListener("touchstart", release);
+      root.removeEventListener("pointerdown", release);
+      paneRoot?.removeEventListener("keydown", release, { capture: true });
+    };
+  }, []);
+  const hasStops = (stopCount ?? 0) > 0;
+  useEffect(() => {
+    const root = scrollRootRef.current;
     if (!hasStops || !root) return;
     let frame = 0;
     const onScroll = () => {
@@ -1340,21 +1370,10 @@ export function DiffPane({
         syncStopFromScroll(root);
       });
     };
-    const release = () => releaseStepHold();
     root.addEventListener("scroll", onScroll, { passive: true });
-    root.addEventListener("wheel", release, { passive: true });
-    root.addEventListener("touchstart", release, { passive: true });
-    root.addEventListener("pointerdown", release);
-    // The step keys are consumed before they reach the panel, so any key that
-    // does is the reader's own (PageDown, Space, an arrow).
-    paneRoot?.addEventListener("keydown", release, { capture: true });
     syncStopFromScroll(root);
     return () => {
       root.removeEventListener("scroll", onScroll);
-      root.removeEventListener("wheel", release);
-      root.removeEventListener("touchstart", release);
-      root.removeEventListener("pointerdown", release);
-      paneRoot?.removeEventListener("keydown", release, { capture: true });
       if (frame) cancelAnimationFrame(frame);
     };
   }, [hasStops, showRendered, stopsKey, content]);
