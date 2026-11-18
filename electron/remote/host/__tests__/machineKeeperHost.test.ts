@@ -136,9 +136,10 @@ describe("installMachineKeeperHost (#17361)", () => {
       region: "eu-west-1",
       instanceId: "i-0abc0000000000001",
     };
-    await expect(
-      host.call(GUEST_POWER_OFF_METHOD, { target, enabled: true })
-    ).resolves.toEqual({ armed: true, problem: null });
+    await expect(host.call(GUEST_POWER_OFF_METHOD, { target, enabled: true })).resolves.toEqual({
+      armed: true,
+      problem: null,
+    });
     // Anything that could carry a credential, or a machine named loosely, is turned away by the schema.
     for (const bad of [
       { target, enabled: true, secret: "x" },

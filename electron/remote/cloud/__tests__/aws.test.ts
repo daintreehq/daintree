@@ -1556,7 +1556,12 @@ describe("an EC2 machine stopping itself once idle (#17362)", () => {
 
   it("never lets a machine whose own shutdown would delete or end it power itself off", async () => {
     const { provider, credentials, resourceId, instance } = await runningMachine();
-    const target = { provider: "aws", accountId: ACCOUNT, region: "eu-west-1", instanceId: instance.id };
+    const target = {
+      provider: "aws",
+      accountId: ACCOUNT,
+      region: "eu-west-1",
+      instanceId: instance.id,
+    };
 
     instance.shutdownBehavior = "terminate";
     await expect(provider.checkGuestPowerOff(credentials, resourceId)).resolves.toEqual({

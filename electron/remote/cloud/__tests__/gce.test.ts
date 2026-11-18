@@ -512,7 +512,11 @@ function fakeGoogle(
         case "/computeMetadata/v1/project/project-id":
           return { status: 200, headers: flavor, body: PROJECT };
         case "/computeMetadata/v1/instance/zone":
-          return { status: 200, headers: flavor, body: `projects/123456789/zones/${instance.zone}` };
+          return {
+            status: 200,
+            headers: flavor,
+            body: `projects/123456789/zones/${instance.zone}`,
+          };
         case "/computeMetadata/v1/instance/id":
           return { status: 200, headers: flavor, body: instance.id };
         default:

@@ -194,7 +194,8 @@ export class GuestPowerOffKeeper {
     const target = this.restoring;
     if (!target || this.disposed) return;
     const generation = this.generation;
-    const current = () => !this.disposed && this.generation === generation && this.restoring === target;
+    const current = () =>
+      !this.disposed && this.generation === generation && this.restoring === target;
     const signal = this.controller.signal;
     const identity = await this.deps.system.verifyIdentity(target, signal);
     if (!current()) return;

@@ -198,7 +198,11 @@ async function readGceIdentity(
 ): Promise<{ project: string; zone: string; instanceId: string }> {
   const get = async (key: string): Promise<string> => {
     const response = await fetch(
-      { method: "GET", path: `/computeMetadata/v1/${key}`, headers: { "Metadata-Flavor": "Google" } },
+      {
+        method: "GET",
+        path: `/computeMetadata/v1/${key}`,
+        headers: { "Metadata-Flavor": "Google" },
+      },
       signal
     );
     // Only Google's server answers with its flavor: anything else isn't the metadata it claims to be.
@@ -254,14 +258,17 @@ export interface GuestPowerOffSystemOptions {
 }
 
 /** The real machine: its metadata server, `sudo systemctl poweroff`, its boot id and a file in the host's data. */
-export function createGuestPowerOffSystem(options: GuestPowerOffSystemOptions): GuestPowerOffSystem {
+export function createGuestPowerOffSystem(
+  options: GuestPowerOffSystemOptions
+): GuestPowerOffSystem {
   const platform = options.platform ?? process.platform;
   const fetch = options.fetch ?? metadataFetch;
   const run = options.run ?? runCommand;
   const readFile = options.readFile ?? ((file: string) => fs.readFile(file, "utf8"));
   const writeFile =
     options.writeFile ??
-    ((file: string, data: string) => resilientAtomicWriteFile(file, data, "utf-8", { mode: 0o600 }));
+    ((file: string, data: string) =>
+      resilientAtomicWriteFile(file, data, "utf-8", { mode: 0o600 }));
   const removeFile =
     options.removeFile ?? ((file: string) => fs.rm(file, { force: true }).then(() => undefined));
   const exists =

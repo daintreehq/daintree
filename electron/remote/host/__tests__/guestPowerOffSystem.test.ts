@@ -164,7 +164,9 @@ describe("createGuestPowerOffSystem (#17362)", () => {
   });
 
   it("says why when sudo wants a password, and tells a refusal from a cut-off command", async () => {
-    const refused = system({ run: async () => ({ code: 1, stderr: "sudo: a password is required\n" }) });
+    const refused = system({
+      run: async () => ({ code: 1, stderr: "sudo: a password is required\n" }),
+    });
     await expect(refused.system.probePowerOff(signal)).resolves.toMatch(/without a password/);
     await expect(refused.system.powerOff(signal)).resolves.toEqual({
       kind: "refused",
