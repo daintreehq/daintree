@@ -10,7 +10,12 @@ import {
   gceTokenUrlFor,
   parseGceServiceAccountKey,
 } from "../gce/gceAuth.js";
-import { GCE_PRODUCTION_API_URL, GceClient, resolveGceApiUrl } from "../gce/GceClient.js";
+import {
+  GCE_PRODUCTION_API_URL,
+  GceClient,
+  mayHaveReachedCompute,
+  resolveGceApiUrl,
+} from "../gce/GceClient.js";
 import { GceApiError, redactGceText } from "../gce/gceErrors.js";
 import { GCE_SSH_USER, GceProvider, gceInstanceName } from "../gce/GceProvider.js";
 import { gceMachineState } from "../gce/gceState.js";
@@ -101,6 +106,8 @@ function fakeGoogle(
     nextId: 0n,
     /** Inserts answer with an operation that's already done. */
     insertDone: false,
+    /** What the next delete's operation ends in, once waited for. */
+    deleteFailure: null as null | { code: string; message: string; status: number },
     /** What the next stop's operation ends in, once waited for. */
     stopFailure: null as null | { code: string; message: string; status: number },
     /** Answers taken in order by the next requests whose path matches, before the fake's own. */
@@ -367,7 +374,27 @@ function fakeGoogle(
       instance.status = "STOPPING";
       return json(
         200,
-        opView(operation(zone!, instance.id, {}, () => instances.delete(instance.id)))
+        opView(
+          operation(
+            zone!,
+            instance.id,
+            state.deleteFailure
+              ? {
+                  failure: {
+                    error: {
+                      errors: [
+                        { code: state.deleteFailure.code, message: state.deleteFailure.message },
+                      ],
+                    },
+                    httpErrorStatusCode: state.deleteFailure.status,
+                  },
+                }
+              : {},
+            () => {
+              if (!state.deleteFailure) instances.delete(instance.id);
+            }
+          )
+        )
       );
     }
     if (!action) return json(200, view(instance));
@@ -1037,6 +1064,55 @@ describe("GceProvider", () => {
     await expect(
       google.provider.delete(google.credentials(), created.resourceId)
     ).resolves.toBeUndefined();
+    expect(lookupsAfterDelete(google.requests)).toBe(1);
+  });
+
+  it("confirms a delete Google answered 503 to by looking at the VM", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    google.state.script.push(
+      ...[0, 1, 2].map(() => ({
+        path: /\/instances\/\d+$/,
+        status: 503,
+        reason: "backendError",
+      }))
+    );
+    google.instances.delete(BIG_ID);
+    await expect(
+      google.provider.delete(google.credentials(), created.resourceId)
+    ).resolves.toBeUndefined();
+    expect(lookupsAfterDelete(google.requests)).toBe(1);
+  });
+
+  it("looks at the VM when a delete Google took can't be followed", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    google.state.script.push(
+      ...[0, 1, 2].map(() => ({
+        path: /\/operations\/operation-2\/wait$/,
+        status: 503,
+        reason: "backendError",
+      }))
+    );
+    const error = await google.provider
+      .delete(google.credentials(), created.resourceId)
+      .catch((err: unknown) => err);
+    expect(error).toMatchObject({ kind: "server", message: /hasn't finished deleting/ });
+    expect(lookupsAfterDelete(google.requests)).toBe(1);
+  });
+
+  it("says a delete Google finished with an error of its own", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    google.state.deleteFailure = {
+      code: "SOMETHING_FAILED",
+      message: "Delete failed",
+      status: 500,
+    };
+    await expect(
+      google.provider.delete(google.credentials(), created.resourceId)
+    ).rejects.toMatchObject({ message: "Delete failed" });
+    expect(lookupsAfterDelete(google.requests)).toBe(0);
   });
 
   it("says a stop Google gave up on", async () => {
@@ -1176,6 +1252,81 @@ describe("GceProvider", () => {
       .sshAccess(google.credentials(), created.resourceId)
       .catch((err: unknown) => err);
     expect((error as GceApiError).message).toMatch(/no external IP address/);
+  });
+});
+
+describe("GceClient writes", () => {
+  const ID = "1234567890";
+  function client(responses: Response[]) {
+    const fetch = vi.fn(async () => responses.shift() ?? new Response("{}", { status: 500 }));
+    return {
+      fetch,
+      client: new GceClient({
+        baseUrl: API,
+        fetch: fetch as unknown as typeof globalThis.fetch,
+        sleep: async () => {},
+      }),
+    };
+  }
+
+  it("calls a token failure of any shape an unsent refusal", async () => {
+    const { client: gce, fetch } = client([]);
+    const error = await gce
+      .deleteInstance(
+        {
+          project: PROJECT,
+          authorize: async () => {
+            throw new Error("sign failed");
+          },
+        },
+        "us-central1-a",
+        ID
+      )
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ kind: "unauthorized" });
+    expect(mayHaveReachedCompute(error as GceApiError)).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a sent write's uncertainty through a later token failure", async () => {
+    const { client: gce, fetch } = client([
+      new Response(JSON.stringify({ error: { code: 503, message: "busy" } }), { status: 503 }),
+    ]);
+    let calls = 0;
+    const error = await gce
+      .deleteInstance(
+        {
+          project: PROJECT,
+          authorize: async () => {
+            if (calls++ > 0) throw new Error("sign failed");
+            return "ya29.token";
+          },
+        },
+        "us-central1-a",
+        ID
+      )
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ kind: "outcome-unknown" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("never marks a write that only ever failed to get a token as possibly sent", async () => {
+    const { client: gce, fetch } = client([]);
+    const error = await gce
+      .deleteInstance(
+        {
+          project: PROJECT,
+          authorize: async () => {
+            throw new GceApiError("server", "sign-in down", 503, null);
+          },
+        },
+        "us-central1-a",
+        ID
+      )
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ kind: "server" });
+    expect(mayHaveReachedCompute(error as GceApiError)).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

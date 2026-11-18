@@ -23,6 +23,13 @@ import {
 
 /** Failures that happened before anything was sent to Compute Engine. */
 const UNSENT = new WeakSet<GceApiError>();
+/** A write's final failure when an earlier attempt of it may have reached Compute Engine. */
+const MAYBE_SENT = new WeakSet<GceApiError>();
+
+/** Whether the write that failed with this may still have done what it asked. */
+export function mayHaveReachedCompute(error: GceApiError): boolean {
+  return error.kind === "outcome-unknown" || MAYBE_SENT.has(error);
+}
 
 /** The one Compute Engine origin a packaged build sends a token to. */
 export const GCE_PRODUCTION_API_URL = "https://compute.googleapis.com/compute/v1";
@@ -565,6 +572,7 @@ export class GceClient {
   ): GceApiError {
     if (!request.mutation || !possiblyDelivered) return error;
     if (error.kind === "network" || error.kind === "timeout" || error.kind === "server") {
+      MAYBE_SENT.add(error);
       return error;
     }
     return new GceApiError(

@@ -22,6 +22,7 @@ import {
   GCE_INSTANCE_ID,
   GCE_NAME,
   gceSleep,
+  mayHaveReachedCompute,
   operationError,
   type GceClient,
   type GceRequestContext,
@@ -60,14 +61,6 @@ const IMAGES: readonly { id: string; label: string; description: string }[] = [
 ];
 
 const BOOT_DISK_GB = 30;
-/** Delete failures that leave whether the VM still exists to a fresh look at it. */
-const DELETE_UNSETTLED: ReadonlySet<string> = new Set([
-  "not-found",
-  "outcome-unknown",
-  "network",
-  "timeout",
-  "server",
-]);
 const PREFERRED_ZONE = "us-central1-a";
 /** How long a create, start or delete waits for Compute Engine to finish it. */
 const OPERATION_DEADLINE_MS = 5 * 60_000;
@@ -747,23 +740,42 @@ export class GceProvider implements CloudProvider {
     const ctx = this.ctx(credentials);
     const client = this.client(credentials);
     // Resolved only once the VM is gone: the host is forgotten as soon as this returns.
-    let done: GceOperation;
+    const stillThere = () =>
+      new GceApiError("server", "Compute Engine hasn't finished deleting the machine", null, null);
+    let operation: GceOperation;
     try {
-      done = await this.finish(client, ctx, zone, await client.deleteInstance(ctx, zone, instance));
+      operation = await client.deleteInstance(ctx, zone, instance);
     } catch (error) {
-      // A lost or unreadable answer, or an operation that can't be found, says nothing about the VM: only the VM itself can.
-      if (!(error instanceof GceApiError) || !DELETE_UNSETTLED.has(error.kind)) throw error;
+      // A 404, or an answer lost after the request may have gone out, leaves it to the VM itself.
+      if (
+        error instanceof GceApiError &&
+        (error.kind === "not-found" || mayHaveReachedCompute(error))
+      ) {
+        if (await this.isGone(client, ctx, zone, instance)) return;
+        throw stillThere();
+      }
+      throw error;
+    }
+    let done = operation;
+    try {
+      if (operation.status !== "DONE") {
+        done = await client.waitOperation(
+          ctx,
+          zone,
+          operation.name,
+          Date.now() + OPERATION_DEADLINE_MS
+        );
+      }
+    } catch (error) {
+      if (error instanceof GceApiError && error.kind === "cancelled") throw error;
+      // Google took the delete; an operation that can't be followed leaves it to the VM itself.
       if (await this.isGone(client, ctx, zone, instance)) return;
-      throw new GceApiError(
-        "server",
-        "Compute Engine hasn't finished deleting the machine",
-        null,
-        null
-      );
+      throw stillThere();
     }
-    if (done.status !== "DONE") {
-      throw new GceApiError("server", "Compute Engine is still deleting the machine", null, null);
-    }
+    // A delete Google finished with an error of its own is said as it is.
+    const refused = operationError(done);
+    if (refused) throw refused;
+    if (done.status !== "DONE") throw stillThere();
   }
 
   /** Whether Compute Engine says the VM no longer exists; a failed lookup is no answer. */
