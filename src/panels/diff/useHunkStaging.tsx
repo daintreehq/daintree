@@ -1,6 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FileDiff as FileDiffIcon, Minus, Plus, RefreshCw, XCircle } from "lucide-react";
-import type { HunkData } from "react-diff-view";
 import { Button } from "@/components/ui/button";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { plainMessage } from "@/components/Git/fileMutationCopy";
@@ -13,6 +12,7 @@ import {
   isPlainModification,
   parseFilePatch,
   type FilePatch,
+  type HunkRange,
 } from "@shared/utils/patchHunks";
 import { evictCachedDiffsForFile } from "./diffContentCache";
 
@@ -63,7 +63,7 @@ interface UseHunkStagingInput {
 }
 
 interface UseHunkStagingResult {
-  renderHunkActions: ((hunk: HunkData) => ReactNode) | undefined;
+  renderHunkActions: ((hunk: HunkRange) => ReactNode) | undefined;
   notice: HunkStagingNotice | null;
   dismissNotice: () => void;
 }
@@ -152,7 +152,7 @@ export function useHunkStaging({
   // Every button waits while any write is out: one pane runs one at a time.
   const renderHunkActions = useMemo(() => {
     if (!patch || !side) return undefined;
-    const renderActions = (hunk: HunkData) => {
+    const renderActions = (hunk: HunkRange) => {
       const indices = hunksWithin(patch, hunk);
       if (indices.length === 0) return null;
       // The pane's diff is decoded leniently, so U+FFFD may stand for bytes
