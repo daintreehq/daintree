@@ -1614,22 +1614,30 @@ export class ProjectStore {
   }
 
   /**
-   * Acknowledgement watermarks for the completed-agent tallies: project id →
-   * epoch ms up to which the user has seen that project's completions. Only
-   * projects with a stamp appear. Read on every stats compute, so it selects
-   * the two columns it needs rather than hydrating full rows.
+   * Every project's id beside its raw acknowledgement watermark, in one
+   * statement and in no particular order: what the stats poll needs on each
+   * tick (#17806). Not `getAllProjects()`, whose status repair, row hydration
+   * and frecency ranking the poll would pay for and discard, and whose repair
+   * would undo the `active` a remote switch just wrote.
    */
-  getLastCompletionSeenMap(): Map<string, number> {
-    const db = getSharedDb();
-    const rows = db
+  getCompletionWatermarks(): Array<{ id: string; lastCompletionSeenAt: number | null }> {
+    return getSharedDb()
       .select({
         id: projectsTable.id,
         lastCompletionSeenAt: projectsTable.lastCompletionSeenAt,
       })
       .from(projectsTable)
       .all();
+  }
+
+  /**
+   * Acknowledgement watermarks for the completed-agent tallies: project id →
+   * epoch ms up to which the user has seen that project's completions. Only
+   * projects with a stamp appear.
+   */
+  getLastCompletionSeenMap(): Map<string, number> {
     const map = new Map<string, number>();
-    for (const row of rows) {
+    for (const row of this.getCompletionWatermarks()) {
       if (typeof row.lastCompletionSeenAt === "number" && row.lastCompletionSeenAt > 0) {
         map.set(row.id, row.lastCompletionSeenAt);
       }

@@ -340,10 +340,14 @@ export class ProjectStatsService {
       // Scratches ride the same map: a scratch terminal is already stamped with
       // the scratch id as its `projectId` (#11079), the counting helper treats
       // ids as opaque, and the two id formats are disjoint (64-hex vs UUID), so
-      // a scratch row can never shadow a project's entry (#11518).
-      const allProjects = projectStore.getAllProjects();
-      const allScratches = scratchStore.getAllScratches();
-      const projectIds = [...allProjects.map((p) => p.id), ...allScratches.map((s) => s.id)];
+      // a scratch row can never shadow a project's entry (#11518). Only ids and
+      // watermarks are read: the poll needs no ranking, no full rows and no
+      // status repair, which every tick would otherwise pay for (#17806).
+      const workspaces = [
+        ...projectStore.getCompletionWatermarks(),
+        ...scratchStore.getCompletionWatermarks(),
+      ];
+      const projectIds = workspaces.map((workspace) => workspace.id);
       if (projectIds.length === 0) {
         // Track the empty broadcast so a later non-empty result with the
         // same shape as the prior non-empty broadcast still fires
@@ -361,7 +365,7 @@ export class ProjectStatsService {
 
       // Acknowledgement watermarks ride the same rows already fetched.
       const seenMap = new Map<string, number>();
-      for (const workspace of [...allProjects, ...allScratches]) {
+      for (const workspace of workspaces) {
         if (
           typeof workspace.lastCompletionSeenAt === "number" &&
           workspace.lastCompletionSeenAt > 0

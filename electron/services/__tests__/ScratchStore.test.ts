@@ -292,6 +292,39 @@ describe("ScratchStore.markCompletionSeen", () => {
 
     expect([...store.getLastCompletionSeenMap().keys()]).toEqual([scratchId]);
   });
+
+  // The stats poll's id list comes from here (#17806), so an unstamped live
+  // scratch has to be listed too, and a tombstoned one must not be.
+  it("lists every live scratch with its raw watermark, and only those two fields", () => {
+    const unstamped = randomUUID();
+    const tombstoned = randomUUID();
+    for (const [id, deletedAt] of [
+      [unstamped, null],
+      [tombstoned, 8_000],
+    ] as const) {
+      db.insert(schema.scratches)
+        .values({
+          id,
+          path: "/tmp/daintree-scratch-test/" + id,
+          name: "Other",
+          createdAt: 1_000,
+          lastOpened: 2_000,
+          deletedAt,
+        })
+        .run();
+    }
+    store.markCompletionSeen(scratchId, 5_000);
+
+    const rows = store.getCompletionWatermarks();
+
+    expect(Object.fromEntries(rows.map((row) => [row.id, row.lastCompletionSeenAt]))).toEqual({
+      [scratchId]: 5_000,
+      [unstamped]: null,
+    });
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(["id", "lastCompletionSeenAt"]);
+    }
+  });
 });
 
 describe("ScratchStore resumable agent count (#11821)", () => {

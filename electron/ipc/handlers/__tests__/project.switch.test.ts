@@ -65,6 +65,7 @@ const projectStoreMock = vi.hoisted(() => {
       }
     ),
     getAllProjects: vi.fn(() => []),
+    getCompletionWatermarks: vi.fn(() => []),
     getCurrentProject: vi.fn(() => null),
     updateProjectStatus: vi.fn(),
   };

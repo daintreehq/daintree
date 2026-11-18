@@ -585,6 +585,99 @@ describe("ProjectStore.getAllProjectIdentities", () => {
   });
 });
 
+/**
+ * The stats poll's read (#17806): every five seconds it needs each workspace's
+ * id and acknowledgement watermark, and nothing `getAllProjects()` adds.
+ */
+describe("ProjectStore.getCompletionWatermarks", () => {
+  let store: ProjectStore;
+  const currentId = "c".repeat(64);
+  const remoteActiveId = "a".repeat(64);
+  const closedId = "d".repeat(64);
+
+  function insert(id: string, status: string | null, lastCompletionSeenAt: number | null) {
+    db.insert(schema.projects)
+      .values({
+        id,
+        path: `/projects/${id.slice(0, 4)}`,
+        name: id.slice(0, 4),
+        emoji: "🌲",
+        lastOpened: 1_000,
+        status,
+        lastCompletionSeenAt,
+      })
+      .run();
+  }
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    // The current project still marked closed, and a project another machine
+    // just switched to, which is `active` without being this window's current.
+    insert(currentId, "closed", 5_000);
+    insert(remoteActiveId, "active", null);
+    insert(closedId, "closed", 0);
+    db.insert(schema.appState).values({ key: "currentProjectId", value: currentId }).run();
+    store = new ProjectStore();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("returns every project's id and raw watermark, stamped or not, and nothing else", () => {
+    const rows = store.getCompletionWatermarks();
+
+    expect(rows.map((row) => row.id).sort()).toEqual([closedId, currentId, remoteActiveId].sort());
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(["id", "lastCompletionSeenAt"]);
+    }
+    expect(Object.fromEntries(rows.map((row) => [row.id, row.lastCompletionSeenAt]))).toEqual({
+      [currentId]: 5_000,
+      [remoteActiveId]: null,
+      [closedId]: 0,
+    });
+  });
+
+  it("reads in one unordered statement with no write and no status repair", () => {
+    const prepareSpy = vi.spyOn(sqlite, "prepare");
+    const txSpy = vi.spyOn(db, "transaction");
+    const updateSpy = vi.spyOn(db, "update");
+
+    store.getCompletionWatermarks();
+
+    expect(prepareSpy).toHaveBeenCalledTimes(1);
+    expect(String(prepareSpy.mock.calls[0]![0]).toLowerCase()).not.toContain("order by");
+    expect(txSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+    const statuses = Object.fromEntries(
+      db
+        .select({ id: schema.projects.id, status: schema.projects.status })
+        .from(schema.projects)
+        .all()
+        .map((row) => [row.id, row.status])
+    );
+    // A remote switch's `active` survives the read; `getAllProjects()` would
+    // have demoted it to background.
+    expect(statuses[remoteActiveId]).toBe("active");
+    expect(statuses[currentId]).toBe("closed");
+
+    prepareSpy.mockRestore();
+    txSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
+  it("leaves the watermark map to the stamped projects", () => {
+    expect([...store.getLastCompletionSeenMap()]).toEqual([[currentId, 5_000]]);
+  });
+
+  it("returns an empty list when no projects are registered", () => {
+    db.delete(schema.projects).run();
+    expect(store.getCompletionWatermarks()).toEqual([]);
+  });
+});
+
 describe("ProjectStore disk pressure suppression", () => {
   let store: ProjectStore;
   let alphaDir: string;
