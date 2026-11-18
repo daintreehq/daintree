@@ -3,7 +3,13 @@ import path from "path";
 import os from "os";
 import { openWithDefaultApp } from "../utils/openPath.js";
 import { linuxDesktopAppEnv } from "./pty/EnvironmentFilter.js";
-import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "../../shared/types/editor.js";
+import {
+  terminalOnlyEditorCommand,
+  type EditorConfig,
+  type DiscoveredEditor,
+  type KnownEditorId,
+} from "../../shared/types/editor.js";
+import type { SystemOpenInEditorNeedsTerminal } from "../../shared/types/ipc/system.js";
 import { withPathProbeSlot } from "../utils/findOnPath.js";
 import { findWindowsPathFile, windowsEnvValue } from "../utils/windowsExecutable.js";
 
@@ -460,6 +466,12 @@ async function tryEnvEditor(
  * `$VISUAL`/`$EDITOR`, then whatever is discoverable, then the platform
  * launcher.
  *
+ * A terminal-only editor is never launched: every launch here is detached with
+ * its streams ignored, so it would start as a process nobody can see (#17441).
+ * Automatic selection passes over one, as `$VISUAL`/`$EDITOR` already do, and a
+ * configured one launches nothing and says so in the result, so the caller can
+ * explain how to run it through a terminal app.
+ *
  * `isDirectory` marks the target as a folder — the worktree "Open in Editor"
  * action opens one (#12329). Coordinates are meaningless there, so they are
  * dropped up front: that alone gives most editors their correct folder syntax,
@@ -474,7 +486,7 @@ export async function openFile(
   col?: number,
   config?: EditorConfig | null,
   isDirectory = false
-): Promise<void> {
+): Promise<SystemOpenInEditorNeedsTerminal | void> {
   if (!path.isAbsolute(filePath)) {
     throw new Error("Only absolute paths are allowed");
   }
@@ -538,6 +550,10 @@ export async function openFile(
       }
     } else {
       const def = resolveEditorDef(config.id);
+      const terminalCommand = def && terminalOnlyEditorCommand(def.id);
+      if (def && terminalCommand) {
+        return { outcome: "needs-terminal", editorName: def.name, command: terminalCommand };
+      }
       if (def) {
         const executable = await findExecutable(def);
         if (executable) {
@@ -566,6 +582,7 @@ export async function openFile(
 
   // 3. Try discovered editors in priority order
   for (const def of KNOWN_EDITORS) {
+    if (terminalOnlyEditorCommand(def.id)) continue;
     const executable = await findExecutable(def);
     if (executable) {
       const args = def.buildArgs(filePath, targetLine, targetCol, isDirectory);
