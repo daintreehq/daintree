@@ -44,6 +44,8 @@ export const CHOICE_PAD = "px-3 py-2.5";
  * `selection-outline`, the neutral indicator ink; the fill alone is only
  * 1.1:1 over the surface. Both are neutral, so accent stays free for the focus
  * ring. No hover edge step: `border-strong` is weaker than the resting edge.
+ * `prefers-contrast: more` rebinds `border-input` to `text-secondary`, which
+ * would outweigh the chosen card's edge, so that mode inks it `text-primary`.
  */
 
 /**
@@ -54,7 +56,7 @@ export const CHOICE_PAD = "px-3 py-2.5";
  * rendering.
  */
 export const CHOICE_SELECTED =
-  "border-selection-outline bg-overlay-selected outline outline-2 outline-transparent";
+  "border-selection-outline bg-overlay-selected outline outline-2 outline-transparent contrast-more:border-text-primary";
 
 export const CHOICE_UNSELECTED = "border-border-input hover:bg-overlay-soft";
 
