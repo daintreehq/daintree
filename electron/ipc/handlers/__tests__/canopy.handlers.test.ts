@@ -254,9 +254,18 @@ vi.mock("../../../store.js", () => ({
   },
 }));
 const gitBranch = vi.hoisted(() =>
-  vi.fn(async (_path: string) => "feature/login" as string | null)
+  vi.fn(
+    async (
+      _path: string
+    ): Promise<
+      { branch: string | null; unreadable: false } | { branch: null; unreadable: true }
+    > => ({
+      branch: "feature/login",
+      unreadable: false,
+    })
+  )
 );
-vi.mock("../../../utils/gitUtils.js", () => ({ getGitBranch: gitBranch }));
+vi.mock("../../../utils/gitUtils.js", () => ({ readGitBranch: gitBranch }));
 const localReader = vi.hoisted(() => ({
   read: vi.fn(),
   release: vi.fn(),
@@ -465,6 +474,25 @@ describe("canopy IPC", () => {
       await invoke(CANOPY_METHOD_CHANNELS.runBranch, sender, "run-1", { spawnedAt: 99 })
     ).toBeNull();
     expect(gitBranch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a branch read that failed rather than answer it branchless", async () => {
+    state.runs = [{ runId: "run-1", spawnedAt: 100, cwd: "/repo/worktrees/login" }];
+    const sender = fakeSender(5);
+    const read = () =>
+      invoke(CANOPY_METHOD_CHANNELS.runBranch, sender, "run-1", { spawnedAt: 100 });
+    expect(await read()).toBe("feature/login");
+
+    gitBranch.mockResolvedValueOnce({ branch: null, unreadable: true });
+    const failed = await outcome(read());
+    expect(failed.ok).toBe(false);
+    expect(failed.message).toContain("Couldn't read the run's branch");
+
+    expect(await read()).toBe("feature/login");
+
+    // A detached HEAD is an answer, not a failure.
+    gitBranch.mockResolvedValueOnce({ branch: null, unreadable: false });
+    expect(await read()).toBeNull();
   });
 
   it("searches only the terminals the fleet holds, answering with ids alone", async () => {

@@ -133,7 +133,7 @@ import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.j
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
 import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
-import { getGitBranch } from "../../utils/gitUtils.js";
+import { readGitBranch } from "../../utils/gitUtils.js";
 import { events } from "../../services/events.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { getDefaultPanelTitle } from "../../../shared/config/panelKindRegistry.js";
@@ -2808,7 +2808,9 @@ export const canopyNamespace = defineIpcNamespace({
      * The branch a run's folder has checked out, for the panel to say where the
      * agent is. Read from the folder the fleet snapshot holds for the run, never
      * a path the view names; null for a detached HEAD, a folder outside git, or
-     * a run that has gone.
+     * a run that has gone. A read that failed (git timed out, couldn't start,
+     * or refused) rejects instead: it says nothing about the branch, and the
+     * panel keeps the one it last read rather than take it for branchless.
      */
     runBranch: op(
       CANOPY_METHOD_CHANNELS.runBranch,
@@ -2820,7 +2822,9 @@ export const canopyNamespace = defineIpcNamespace({
           ?.getLastBroadcast()
           ?.runs.find((entry) => entry.runId === runId && entry.spawnedAt === target.spawnedAt);
         if (!run?.cwd) return null;
-        return getGitBranch(run.cwd);
+        const reading = await readGitBranch(run.cwd);
+        if (reading.unreadable) throw new Error("Couldn't read the run's branch");
+        return reading.branch;
       }
     ),
 

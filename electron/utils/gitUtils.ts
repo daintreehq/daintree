@@ -382,6 +382,85 @@ export function probeGitCommonDir(
 }
 
 /**
+ * What a branch read found. `unreadable: false` is git's own answer: the branch
+ * HEAD is on (even one with no commits yet), or `null` for a detached HEAD or a
+ * folder git says isn't a repository. `unreadable: true` is a failure to look
+ * (timeout, spawn error, any other fatal), which says nothing about the branch.
+ */
+export type GitBranchReading =
+  { branch: string | null; unreadable: false } | { branch: null; unreadable: true };
+
+/**
+ * Older git says "not a git repository: <target>" for a `.git` file whose
+ * target is gone or unreachable: a worktree it couldn't open, not a folder
+ * outside git.
+ */
+const UNREACHABLE_GITFILE_PATTERN = /not a git repository: /i;
+
+const BRANCH_REF_PREFIX = "refs/heads/";
+
+/** Git's output without its line ending: a branch name may hold other whitespace. */
+function withoutLineEnding(output: string): string {
+  return output.replace(/\r?\n$/, "");
+}
+
+/**
+ * The branch HEAD names, from the ref it points at, or `null` for anything
+ * else: a detached HEAD, a broken ref store and a failed read are all silent
+ * here, so only the positive answer means anything. Never throws.
+ */
+async function readBranchRef(worktreePath: string, timeout: number): Promise<string | null> {
+  try {
+    const ref = withoutLineEnding(
+      await execGit(["symbolic-ref", "--quiet", "HEAD"], worktreePath, timeout)
+    );
+    return ref.startsWith(BRANCH_REF_PREFIX) && ref.length > BRANCH_REF_PREFIX.length
+      ? ref.slice(BRANCH_REF_PREFIX.length)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the checked-out branch of a worktree, keeping a failed read apart from
+ * a branchless answer, for a caller that must not take one for the other. Not
+ * cached: unlike the git dir, the branch is mutable over a worktree's life.
+ * Never throws.
+ */
+export async function readGitBranch(
+  worktreePath: string,
+  options: { timeout?: number } = {}
+): Promise<GitBranchReading> {
+  const { timeout = 500 } = options;
+  try {
+    const name = withoutLineEnding(
+      await execGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath, timeout)
+    );
+    if (name === "HEAD") return { branch: null, unreadable: false };
+    return name ? { branch: name, unreadable: false } : { branch: null, unreadable: true };
+  } catch (error) {
+    const execError = error instanceof GitExecError ? error : null;
+    const failure = execError ? execError.originalError : error;
+    const stderr = execError?.stderr ?? "";
+    if (
+      classifyGitFailure(failure, stderr) === "definitive" &&
+      !UNREACHABLE_GITFILE_PATTERN.test(stderr)
+    ) {
+      return { branch: null, unreadable: false };
+    }
+    // Git ran and gave up, as `rev-parse` does on a branch with no commits yet
+    // (fresh or orphaned), where `symbolic-ref` still names the branch. A
+    // timeout or a failed spawn isn't asked twice.
+    if ((failure as { code?: unknown } | null)?.code === GIT_FATAL_EXIT_CODE) {
+      const branch = await readBranchRef(worktreePath, timeout);
+      if (branch) return { branch, unreadable: false };
+    }
+    return { branch: null, unreadable: true };
+  }
+}
+
+/**
  * Resolve the currently checked-out branch name for a worktree. Returns `null`
  * for a detached HEAD (git emits the literal "HEAD") or on any failure. Not
  * cached: unlike the git dir, the branch is mutable over a worktree's life.
