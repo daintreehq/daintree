@@ -1321,6 +1321,11 @@ interface PluginHostedViewDescriptorBase {
   componentPath: string;
   /** For a `location: "fileEditor"` view, the file editors it backs (#13809). */
   fileEditors?: readonly HostedFileEditorDescriptor[];
+  /**
+   * The plugin ships with Daintree. Carried on the view so whoever chooses
+   * between views learns it from the same snapshot, never a later one.
+   */
+  builtin?: boolean;
 }
 
 export interface PluginSettingsHostedViewDescriptor extends PluginHostedViewDescriptorBase {

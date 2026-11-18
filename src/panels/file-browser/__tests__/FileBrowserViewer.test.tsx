@@ -2751,8 +2751,9 @@ describe("a built-in viewer in the file browser (#17336)", () => {
   const context = { projectId: "project-1", worktreePath: "/repo", isFocused: true };
   let bridge: PropertyDescriptor | undefined;
 
-  function viewerView(pluginId: string): PluginHostedViewDescriptor {
+  function viewerView(pluginId: string, builtin: boolean): PluginHostedViewDescriptor {
     return {
+      ...(builtin && { builtin: true }),
       id: `plugin-view:${pluginId}/table`,
       pluginId,
       viewId: "table",
@@ -2782,7 +2783,9 @@ describe("a built-in viewer in the file browser (#17336)", () => {
         },
       },
     });
-    usePluginHostedViewsStore.setState({ views: plugins.map((plugin) => viewerView(plugin.id)) });
+    usePluginHostedViewsStore.setState({
+      views: plugins.map((plugin) => viewerView(plugin.id, plugin.builtin)),
+    });
   }
 
   beforeEach(() => {
@@ -2860,6 +2863,20 @@ describe("a built-in viewer in the file browser (#17336)", () => {
     );
     expect(await screen.findByTestId("file-browser-unavailable")).toBeTruthy();
     expect(viewerHostProps.some((props) => props.filePath === "/repo/big.csv")).toBe(false);
+  });
+
+  it("never reuses a file's size when the browser comes back to it", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+    viewer.rerender(viewerJsx("/repo/photo.png", { editorContext: context }));
+    await act(async () => {});
+    viewerHostProps.length = 0;
+
+    readMock.mockReturnValueOnce(new Promise(() => {}));
+    viewer.rerender(viewerJsx("/repo/users.csv", { editorContext: context }));
+    await act(async () => {});
+    expect(viewerHostProps).toHaveLength(0);
   });
 
   it("shows a CSV too large for Source in the table, and Source points at it", async () => {

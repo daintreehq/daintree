@@ -463,7 +463,7 @@ describe("files:read handler", () => {
     await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
       name: "AppError",
       code: "FILE_TOO_LARGE",
-      details: { code: "FILE_TOO_LARGE", sizeBytes: 600 * 1024 },
+      details: { code: "FILE_TOO_LARGE", sizeBytes: 600 * 1024, pathIsCanonical: true },
     });
     expect(fsMock.open).not.toHaveBeenCalled();
   });

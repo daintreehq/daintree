@@ -30,3 +30,12 @@ export function refusedFileSize(error: unknown): number | null {
   if (!isClientAppError(error) || error.code !== "FILE_TOO_LARGE") return null;
   return error.details?.code === "FILE_TOO_LARGE" ? error.details.sizeBytes : null;
 }
+
+/**
+ * Whether a too-large refusal read the file through its own canonical path,
+ * so a watcher's directories can scope its re-reads as a successful read's can.
+ */
+export function refusedPathIsCanonical(error: unknown): boolean {
+  if (!isClientAppError(error) || error.code !== "FILE_TOO_LARGE") return false;
+  return error.details?.code === "FILE_TOO_LARGE" && error.details.pathIsCanonical === true;
+}

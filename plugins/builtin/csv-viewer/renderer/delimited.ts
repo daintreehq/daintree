@@ -101,13 +101,14 @@ const SAMPLE_RECORDS = 50;
 const SAMPLE_CHARS = 64 * 1024;
 
 /**
- * The delimiter that splits the start of the file into the most rows of one
- * consistent width wider than a single column, the wider width breaking a tie.
- * A record only counts when its quotes make sense under that delimiter, so a
- * delimiter that only appears inside quoted values can't win. A `.tsv` prefers
- * tab on a full tie, anything else comma, then semicolon, then tab, so a
- * single-column file or one the sample can't decide keeps the delimiter its
- * extension names.
+ * The delimiter that best explains the start of the file: the most records of
+ * one consistent width wider than a single column, less one for every record
+ * whose quotes that delimiter can't account for, the wider width breaking a
+ * tie. A delimiter that only appears inside quoted values leaves the records
+ * around them stray and loses; a file whose values carry loose quotes still
+ * keeps the delimiter its rows agree on. A `.tsv` prefers tab on a full tie,
+ * anything else comma, then semicolon, then tab, so a single-column file or
+ * one the sample can't decide keeps the delimiter its extension names.
  */
 export function detectDelimiter(text: string, extension: string | null): Delimiter {
   const order: readonly Delimiter[] =
@@ -115,25 +116,26 @@ export function detectDelimiter(text: string, extension: string | null): Delimit
   const sample = text.length > SAMPLE_CHARS ? text.slice(0, SAMPLE_CHARS) : text;
   const truncated = text.length > SAMPLE_CHARS;
   let best: Delimiter = order[0]!;
-  let bestRows = 0;
+  let bestScore = 0;
   let bestWidth = 0;
   for (const delimiter of order) {
     const delim = delimiter.charCodeAt(0);
     const widths = new Map<number, number>();
+    let stray = 0;
     let i = 0;
     for (let n = 0; n < SAMPLE_RECORDS && i < sample.length; n += 1) {
       const scan = scanRecord(sample, i, delim, null);
       i = scan.next;
       // A sample cut mid-file may end in a partial record; it says nothing.
       if (truncated && i >= sample.length && n > 0) break;
-      if (scan.fields > 1 && !scan.stray) {
-        widths.set(scan.fields, (widths.get(scan.fields) ?? 0) + 1);
-      }
+      if (scan.stray) stray += 1;
+      if (scan.fields > 1) widths.set(scan.fields, (widths.get(scan.fields) ?? 0) + 1);
     }
     for (const [width, rows] of widths) {
-      if (rows > bestRows || (rows === bestRows && width > bestWidth)) {
+      const score = rows - stray;
+      if (score > bestScore || (score === bestScore && score > 0 && width > bestWidth)) {
         best = delimiter;
-        bestRows = rows;
+        bestScore = score;
         bestWidth = width;
       }
     }
@@ -184,8 +186,8 @@ export function readDelimitedTable(text: string, extension: string | null): Deli
     columnCount,
     rows(from, to) {
       const out: string[][] = [];
-      const end = Math.min(to, rowCount);
-      for (let row = Math.max(0, from); row < end; row += 1) {
+      const end = Math.min(Math.floor(to), rowCount);
+      for (let row = Math.max(0, Math.floor(from)); row < end; row += 1) {
         const fields: string[] = [];
         scanRecord(text, starts[row + 1]!, delim, fields);
         out.push(fields);

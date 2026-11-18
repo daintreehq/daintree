@@ -65,7 +65,11 @@ import {
 } from "@/components/Markdown/MarkdownTextSizeControl";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
-import { refusedFileSize, toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
+import {
+  refusedFileSize,
+  refusedPathIsCanonical,
+  toFileReadErrorCode,
+} from "@/components/FileViewer/fileReadErrors";
 import { useFileViewerChoice } from "@/panels/file/useFileEditorChoice";
 import { useFileChangeCount, type FileChangeSignal } from "@/hooks/useFileChangeCount";
 import {
@@ -683,13 +687,16 @@ export function FileBrowserViewer({
     revision,
     changeSignal,
     relativePath,
-    canonicalFilePath !== null && canonicalFilePath === filePath && state.status !== "error"
+    canonicalFilePath !== null &&
+      canonicalFilePath === filePath &&
+      (state.status !== "error" || state.reason === "FILE_TOO_LARGE")
   );
 
   useEffect(() => {
     if (!filePath || !rootPath) {
       shownPathRef.current = null;
       setState({ status: "idle" });
+      setSizeEvidence(null);
       return;
     }
 
@@ -698,7 +705,12 @@ export function FileBrowserViewer({
     const isSvg = isSvgFilePath(filePath);
     const isSameFile = shownPathRef.current === filePath;
     shownPathRef.current = filePath;
-    if (!isSameFile) lastContentRef.current = null;
+    // A size seen for an earlier selection says nothing about this read, even
+    // for the same file met again after another: it may have grown since.
+    if (!isSameFile) {
+      lastContentRef.current = null;
+      setSizeEvidence(null);
+    }
     if (lastSurfaceRefreshNonceRef.current !== surfaceRefreshNonce) {
       forceSurfaceReloadRef.current = true;
       lastSurfaceRefreshNonceRef.current = surfaceRefreshNonce;
@@ -803,6 +815,9 @@ export function FileBrowserViewer({
       .catch((error: unknown) => {
         if (cancelled) return;
         setSizeEvidence({ filePath, rootPath, bytes: refusedFileSize(error) });
+        // Refused only for its size through its own canonical path: the
+        // watcher's directories still scope its re-reads and the viewer's.
+        if (refusedPathIsCanonical(error)) setCanonicalFilePath(filePath);
         if (isClientAppError(error)) {
           setState({ status: "error", reason: toFileReadErrorCode(error.code), message: "" });
           return;
@@ -1398,10 +1413,10 @@ export function FileBrowserViewer({
               fileName={fileName}
               rootPath={rootPath}
               candidate={pluginViewer}
-              // Only a write that could have touched the file, and a foreground
-              // refresh, re-check it: a viewer has no draft to protect.
+              // Only a write that could have touched the file, or a Refresh
+              // (which moves the same count), re-checks it: a viewer has no
+              // draft to protect.
               changeTick={fileChangeCount}
-              refreshEpoch={surfaceRefreshNonce}
             />
           </Suspense>
         </div>

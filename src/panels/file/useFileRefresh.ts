@@ -137,7 +137,9 @@ export function useFileRefresh({
       [worktreeChangeTick, gitChangeTick, changedDirs]
     ),
     relativeFilePath || null,
-    canonicalFilePath !== null && canonicalFilePath === filePath && loadState !== "error"
+    canonicalFilePath !== null &&
+      canonicalFilePath === filePath &&
+      (loadState !== "error" || errorCode === "FILE_TOO_LARGE")
   );
   const lastChangeSignalRef = useRef({
     filePath,

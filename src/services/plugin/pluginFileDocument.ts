@@ -58,21 +58,18 @@ interface DocumentRecord {
    * prompt's Save would quietly write the draft over a change it never saw.
    */
   revision: string | null;
-  /**
-   * The latest disk state a read or a disk-change check saw — a revision, or
-   * `status:<refusal>` — so one change is reported once. Reads and checks run
-   * concurrently; `observedSeq` is the start order of the one recorded, so an
-   * older answer that lands late never replaces a newer one.
-   */
+  /** The latest disk state a read or a disk-change check saw: a revision, or `status:<refusal>`. */
   observedState: string | null;
-  observedSeq: number;
-  /** Start order handed to each read and check. */
-  seq: number;
   /** What the view's own last read returned, the same way: what it is showing. */
   shown: string | null;
-  /** The disk-change check in flight, and whether another was asked for meanwhile. */
+  /** The disk state the view was last told about since that read, so one change is reported once. */
+  announced: string | null;
+  /** The view's reads in flight: a change that lands meanwhile is news to it. */
+  reading: number;
+  /** The disk-change check in flight, whether another was asked for, and with what ceiling. */
   probing: Promise<void> | null;
   probeAgain: boolean;
+  probeMaxBytes: number;
   draft: string | null;
   /** Observed by the host: a save refused as stale, or the disk moving under a draft. */
   hostConflict: boolean;
@@ -155,7 +152,7 @@ async function read(
   record: DocumentRecord,
   maxBytes: number
 ): Promise<PluginFileDocumentReadResult> {
-  const seq = ++record.seq;
+  record.reading += 1;
   let result: PluginFileDocumentReadResult;
   try {
     result = await window.electron.fileDocument.read({
@@ -166,34 +163,27 @@ async function read(
   } catch (err) {
     logWarn("[PluginFileDocument] Read failed", { error: err });
     result = { status: "unavailable" };
+  } finally {
+    record.reading -= 1;
   }
-  // A refused read is an observation too, so the next disk change that makes
-  // the file readable again reaches a view still showing the refusal.
+  // A refused read is what the view shows too, so the next disk change that
+  // makes the file readable again, even back to the revision it had, reaches it.
   const state = stateOf(result);
-  if (seq > record.observedSeq) {
-    record.observedState = state;
-    record.observedSeq = seq;
-  } else if (record.observedState !== state) {
-    // A check that started later saw the disk differently while this read was
-    // in flight: what it returns is already stale, so the view reads again.
-    queueMicrotask(() => emit(record, { reason: "disk", revision: diskRevisionOf(record) }));
-  }
+  record.observedState = state;
   record.shown = state;
+  record.announced = null;
   if (result.status === "ok" && record.draft === null) {
     record.revision = result.revision;
     if (record.hostConflict) {
       record.hostConflict = false;
       publish(record);
     }
-  } else {
-    reconcileDraft(record, state);
   }
   return result;
 }
 
 /** One disk-change check: re-read, and tell the view when the disk moved from what it shows. */
 async function probe(record: DocumentRecord, maxBytes: number): Promise<void> {
-  const seq = ++record.seq;
   let state: string;
   try {
     // A file that grew past the ceiling or stopped decoding changed too; the
@@ -208,17 +198,13 @@ async function probe(record: DocumentRecord, maxBytes: number): Promise<void> {
   } catch {
     return;
   }
-  if (seq < record.observedSeq) return;
-  const previous = record.observedState;
-  record.observedSeq = seq;
-  if (state === previous) return;
   record.observedState = state;
-  // Nothing observed yet means nothing to be stale against; the view's first
-  // read sees whatever is there now.
-  if (previous === null) return;
   reconcileDraft(record, state);
-  // Back to exactly what the view already shows: nothing for it to re-read.
-  if (state === record.shown) return;
+  // Nothing read and nothing being read means nothing to be stale against:
+  // the view's first read sees whatever is there now.
+  if (record.shown === null && record.reading === 0) return;
+  if (state === record.shown || state === record.announced) return;
+  record.announced = state;
   emit(record, { reason: "disk", revision: diskRevisionOf(record) });
 }
 
@@ -247,9 +233,9 @@ async function save(
   if (result.status === "saved") {
     record.revision = result.revision;
     record.observedState = result.revision;
-    record.observedSeq = ++record.seq;
     // The editor holds what it just wrote.
     record.shown = result.revision;
+    record.announced = null;
     // Typing that landed while the save was in flight stays a draft.
     if (record.draft === text) record.draft = null;
     record.hostConflict = false;
@@ -257,7 +243,6 @@ async function save(
     publish(record);
   } else if (result.status === "conflict") {
     record.observedState = result.revision;
-    record.observedSeq = ++record.seq;
     record.hostConflict = true;
     publish(record);
   } else {
@@ -387,11 +372,12 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
       maxBytes: target.maxBytes,
       revision: null,
       observedState: null,
-      observedSeq: 0,
-      seq: 0,
       shown: null,
+      announced: null,
+      reading: 0,
       probing: null,
       probeAgain: false,
+      probeMaxBytes: target.maxBytes,
       draft: null,
       hostConflict: false,
       viewConflict: false,
@@ -423,21 +409,22 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
       };
     },
     notifyDiskChange: () => {
-      // One check at a time per document, with one more after it when asked
-      // meanwhile: a burst of writes costs two reads, not one per tick.
-      if (live.probing !== null) {
-        live.probeAgain = true;
-        return live.probing;
-      }
-      const run = async () => {
-        do {
-          live.probeAgain = false;
-          await probe(live, target.maxBytes);
-        } while (live.probeAgain);
-      };
-      live.probing = run().finally(() => {
-        live.probing = null;
-      });
+      // One check at a time per document, with one more after it for changes
+      // meanwhile: a burst of writes costs two reads, not one per tick. The
+      // runner clears its own slot in the same turn its loop ends, so a request
+      // can never land on a runner that has already stopped looking.
+      live.probeAgain = true;
+      live.probeMaxBytes = target.maxBytes;
+      live.probing ??= (async () => {
+        try {
+          while (live.probeAgain) {
+            live.probeAgain = false;
+            await probe(live, live.probeMaxBytes);
+          }
+        } finally {
+          live.probing = null;
+        }
+      })();
       return live.probing;
     },
   };

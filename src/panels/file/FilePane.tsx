@@ -343,6 +343,7 @@ export function FilePane({
     reloadNonce,
     byteFacts,
     observedBytes,
+    observedInvalidText,
     canonicalFilePath,
     loadFile,
     handleMediaPlayingChange,
@@ -369,10 +370,13 @@ export function FilePane({
     effectiveRootPath,
     pluginEditorsAllowed: location !== "dialog" && isInsideGovernedRoot,
     isRenderable,
-    loadedBytes: loadState === "loaded" ? contentBytes : null,
+    // The size the latest read saw, kept through a refresh and taken from a
+    // refusal too, so an editor chosen because a smaller one didn't fit isn't
+    // swapped for that one when the file stops loading as text.
+    loadedBytes: observedBytes ?? (loadState === "loaded" ? contentBytes : null),
     // A file the read already found isn't UTF-8 is one the document read, which
     // is strict, would refuse: Source shows it, a viewer can't.
-    fileBytes: loadState === "loaded" && byteFacts.encoding === "invalid" ? null : observedBytes,
+    fileBytes: observedInvalidText ? null : observedBytes,
     pinnedEditor,
   });
   const {
@@ -427,6 +431,9 @@ export function FilePane({
   );
   const viewMode: FileViewMode = availableModes.includes(requestedMode) ? requestedMode : "source";
   const showPluginViewer = viewMode === "rendered" && !isRenderable && pluginViewer !== null;
+  // Rendered Markdown previews a standing draft, which is document state, so a
+  // disk read that fails underneath it (the file grew too large) doesn't hide it.
+  const previewsDraft = viewMode === "rendered" && isMarkdown && draftText !== null;
 
   const editorPicker = useFileEditorPicker(filePath, viewMode, showPluginViewer, editorChoice);
   // A mode a plugin fills carries the plugin's name, so it is never mistaken
@@ -913,6 +920,7 @@ export function FilePane({
 
           {filePath &&
             !showPluginViewer &&
+            !previewsDraft &&
             viewMode !== "diff" &&
             viewMode !== "edit" &&
             loadState === "error" &&
@@ -1091,15 +1099,14 @@ export function FilePane({
             viewMode !== "diff" &&
             viewMode !== "edit" &&
             !showPluginViewer &&
-            loadState === "loaded" &&
-            content !== null &&
+            ((loadState === "loaded" && content !== null) || previewsDraft) &&
             (viewMode === "rendered" && isMarkdown ? (
               <MarkdownImageTrackingContext value={markdownImageTracking}>
                 <MarkdownViewer
                   ref={markdownViewerRef}
                   // The draft is document state, so Rendered previews it while one
                   // exists and the disk text otherwise (#12323).
-                  content={draftText ?? content}
+                  content={draftText ?? content ?? ""}
                   filePath={filePath}
                   rootPath={effectiveRootPath}
                   viewMode="rendered"

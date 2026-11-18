@@ -8,6 +8,7 @@ import {
 } from "@daintreehq/plugin-ui";
 import type { PanelViewProps } from "@shared/types/plugin";
 import { pluralize } from "@shared/utils/pluralize";
+import { utf8ByteLength } from "@shared/utils/folderUpload";
 import { readDelimitedTable, type DelimitedTable, type Delimiter } from "./delimited";
 
 /**
@@ -24,8 +25,8 @@ export const COLUMN_WINDOW = 200;
  */
 export const ROW_WINDOW = 50_000;
 
-/** The manifest's `maxBytes`: a draft longer than this is more than the table opens. */
-const MAX_TABLE_CHARS = 2 * 1024 * 1024;
+/** The manifest's `maxBytes`: a draft larger than this is more than the table opens. */
+const MAX_TABLE_BYTES = 2 * 1024 * 1024;
 
 /** Rows read to size the columns; enough to see a column's usual width. */
 const WIDTH_SAMPLE_ROWS = 200;
@@ -98,7 +99,7 @@ export function CsvTableView({ fileDocument }: PanelViewProps) {
       const request = ++latest;
       const draft = fileDocument.getDraft();
       if (draft !== null) {
-        if (draft.length > MAX_TABLE_CHARS) {
+        if (draft.length > MAX_TABLE_BYTES || utf8ByteLength(draft) > MAX_TABLE_BYTES) {
           shown = null;
           setState({ status: "too-large" });
         } else {
@@ -239,29 +240,33 @@ export function CsvTableView({ fileDocument }: PanelViewProps) {
     size: number,
     setOffset: (offset: number) => void
   ) =>
-    total > size
-      ? [
-          `${noun} ${(start + 1).toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`,
-          <IconButton
-            key={`${noun}-previous`}
-            icon="chevron-left"
-            aria-label={`Previous ${noun.toLowerCase()}`}
-            disabled={start === 0}
-            onClick={() => setOffset(Math.max(0, start - size))}
-          />,
-          <IconButton
-            key={`${noun}-next`}
-            icon="chevron-right"
-            aria-label={`Next ${noun.toLowerCase()}`}
-            disabled={end >= total}
-            onClick={() => setOffset(start + size)}
-          />,
-        ]
-      : [];
-  const controls = [
-    ...windowControls("Rows", rowStart, rowEnd, rowCount, ROW_WINDOW, setRowOffset),
-    ...windowControls("Columns", colStart, colEnd, columnCount, COLUMN_WINDOW, setColumnOffset),
-  ];
+    total > size ? (
+      // One unit, so a narrow pane wraps whole groups and never clips a button.
+      <span key={noun} className="inline-flex items-center gap-1">
+        <span>{`${noun} ${(start + 1).toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`}</span>
+        <IconButton
+          icon="chevron-left"
+          aria-label={`Previous ${noun.toLowerCase()}`}
+          disabled={start === 0}
+          onClick={() => setOffset(Math.max(0, start - size))}
+        />
+        <IconButton
+          icon="chevron-right"
+          aria-label={`Next ${noun.toLowerCase()}`}
+          disabled={end >= total}
+          onClick={() => setOffset(start + size)}
+        />
+      </span>
+    ) : null;
+  const rowControls = windowControls("Rows", rowStart, rowEnd, rowCount, ROW_WINDOW, setRowOffset);
+  const columnControls = windowControls(
+    "Columns",
+    colStart,
+    colEnd,
+    columnCount,
+    COLUMN_WINDOW,
+    setColumnOffset
+  );
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="csv-table-view">
       <div className="min-h-0 flex-1">
@@ -275,6 +280,16 @@ export function CsvTableView({ fileDocument }: PanelViewProps) {
           stickyFirstColumn
         />
       </div>
+      {(rowControls !== null || columnControls !== null) && (
+        <div
+          role="group"
+          aria-label="Table pages"
+          className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-divider px-2 py-1 text-xs text-text-secondary"
+        >
+          {rowControls}
+          {columnControls}
+        </div>
+      )}
       <StatusBar
         aria-label="Table details"
         left={[
@@ -282,7 +297,6 @@ export function CsvTableView({ fileDocument }: PanelViewProps) {
           pluralize(columnCount, "column"),
           DELIMITER_NAMES[table.delimiter],
         ]}
-        right={controls.length > 0 ? controls : undefined}
       />
     </div>
   );

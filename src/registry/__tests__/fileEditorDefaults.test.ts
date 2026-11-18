@@ -292,6 +292,13 @@ describe("currentFileViewerClaim (#17336)", () => {
     expect(currentFileViewerClaim("/anywhere/users.csv")).toBe(false);
   });
 
+  it("claims nothing for a file no viewer's extension names when none claims paths", () => {
+    usePluginHostedViewsStore.setState({
+      views: [viewer("daintree.csv-viewer", { extensions: ["csv"] })],
+    });
+    expect(currentFileViewerClaim("/repo/src/index.css")).toBe(false);
+  });
+
   it("ignores an editor that fills Edit", () => {
     usePluginHostedViewsStore.setState({
       views: [editorView(ACME, [{ id: "records", paths: ["data/*.record"] }])],
@@ -314,6 +321,8 @@ describe("currentFileViewerClaim (#17336)", () => {
     );
     // `data/a.record` from the nested worktree, though not from `/repo`.
     expect(currentFileViewerClaim("/repo/nested/data/a.record")).toBe(true);
-    expect(currentFileViewerClaim("/repo/nested/other/a.record")).toBe(false);
+    // No known root matches, but one still loading might: the pane decides.
+    expect(currentFileViewerClaim("/repo/nested/other/a.record")).toBeNull();
+    expect(currentFileViewerClaim("/repo/nested/data/a.txt")).toBeNull();
   });
 });

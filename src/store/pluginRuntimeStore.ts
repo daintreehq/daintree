@@ -28,8 +28,6 @@ export interface PluginRuntimeMeta {
   devMode: boolean;
   /** `manifest.displayName` when the manifest declares one, else the manifest id. */
   displayName: string;
-  /** Ships with Daintree. Absent reads as not built-in, the way an absent entry reads as non-dev. */
-  builtin?: boolean;
 }
 
 /** A prompt template a loaded plugin contributes, with who it belongs to. */
@@ -141,8 +139,7 @@ function sameMeta(
     if (
       other === undefined ||
       other.devMode !== meta.devMode ||
-      other.displayName !== meta.displayName ||
-      other.builtin !== meta.builtin
+      other.displayName !== meta.displayName
     ) {
       return false;
     }
@@ -213,7 +210,6 @@ async function pullPluginRuntimeSnapshot(
         // no min length, so a blank one is well-formed and would otherwise
         // render as an empty label everywhere a plugin is named.
         displayName: p.manifest.displayName?.trim() || p.manifest.name,
-        ...(p.isBuiltin ? { builtin: true } : {}),
       });
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a

@@ -73,6 +73,18 @@ describe("detectDelimiter", () => {
     expect(detectDelimiter('a;b\n"x,y,z";2\n"p,q,r";3\n', "csv")).toBe(";");
   });
 
+  it("keeps the delimiter rows agree on when values carry loose quotes", () => {
+    expect(detectDelimiter('id;first,last,name\n1;He said "hello"\n2;Also "hi"\n', "csv")).toBe(
+      ";"
+    );
+  });
+
+  it("reads lines inside a quoted value as part of it, not as records", () => {
+    const text = 'id,notes\r\n1,"start\r\none;two;three\r\nfour;five;six\r\nend"\r\n';
+    expect(detectDelimiter(text, "csv")).toBe(",");
+    expect(readDelimitedTable(text, "csv").rowCount).toBe(1);
+  });
+
   it("never picks a delimiter that only splits quoted values", () => {
     const text = 'id,"a;b;c"\n1,"x;y;z"\n';
     expect(detectDelimiter(text, "csv")).toBe(",");

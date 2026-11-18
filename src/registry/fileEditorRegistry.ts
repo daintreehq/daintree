@@ -251,7 +251,6 @@ export function pluginFileEditorCandidates(
     mode: FileEditorMode;
     disabled: ReadonlySet<string>;
     displayNameOf: (pluginId: string) => string;
-    isBuiltin?: (pluginId: string) => boolean;
   }
 ): PluginFileEditorCandidate[] {
   if (views === null) return [];
@@ -266,7 +265,7 @@ export function pluginFileEditorCandidates(
         choiceId: fileEditorChoiceId(view.pluginId, editor.id),
         pluginId: view.pluginId,
         pluginName: options.displayNameOf(view.pluginId),
-        builtin: options.isBuiltin?.(view.pluginId) ?? false,
+        builtin: view.builtin === true,
         editor,
         view,
       });
@@ -306,7 +305,6 @@ export function usePluginFileEditorCandidates(
             mode,
             disabled,
             displayNameOf: (pluginId) => meta.get(pluginId)?.displayName ?? pluginId,
-            isBuiltin: (pluginId) => meta.get(pluginId)?.builtin === true,
           }),
     [enabled, filePath, rootPath, mode, views, meta, disabled]
   );

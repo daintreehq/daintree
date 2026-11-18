@@ -252,21 +252,28 @@ export function registerFilesHandlers(): () => void {
     // through an upload or click grant hasn't had the file checked against it
     // yet, and no viewer is offered there anyway.
     const reportsSize = ownUpload === null && !clicked;
-    const tooLarge = (sizeBytes: number | null) =>
+    const tooLarge = (measured: { size: number; nlink: number } | null) =>
       new AppError({
         code: "FILE_TOO_LARGE",
         message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
         userMessage: "This file is too large to preview.",
         context: {
           filePath,
-          ...(sizeBytes !== null && { size: sizeBytes }),
+          ...(measured !== null && { size: measured.size }),
           limit: FILE_PREVIEW_MAX_BYTES,
         },
         ...(reportsSize &&
-          sizeBytes !== null && { details: { code: "FILE_TOO_LARGE" as const, sizeBytes } }),
+          measured !== null && {
+            details: {
+              code: "FILE_TOO_LARGE" as const,
+              sizeBytes: measured.size,
+              // The same test a successful read's `pathIsCanonical` makes.
+              pathIsCanonical: realFile === path.resolve(filePath) && !(measured.nlink > 1),
+            },
+          }),
       });
 
-    if (stat.size > FILE_PREVIEW_MAX_BYTES) throw tooLarge(stat.size);
+    if (stat.size > FILE_PREVIEW_MAX_BYTES) throw tooLarge(stat);
 
     // Open the contained realFile, not the path as asked, with O_NOFOLLOW: a
     // link inside the project resolves to a real path that was just checked,
@@ -309,7 +316,7 @@ export function registerFilesHandlers(): () => void {
           context: { filePath, rootPath },
         });
       }
-      if (opened.size > FILE_PREVIEW_MAX_BYTES) throw tooLarge(opened.size);
+      if (opened.size > FILE_PREVIEW_MAX_BYTES) throw tooLarge(opened);
       if (ownUpload && !(await isPlacedUpload(fileHandle, ownUpload))) {
         throw new AppError({
           code: "OUTSIDE_ROOT",
@@ -324,7 +331,7 @@ export function registerFilesHandlers(): () => void {
         // It grew past the limit mid-read. The descriptor it was read through
         // says how large it is now; without that, the size stays unknown.
         const grown = await fileHandle.stat().catch(() => null);
-        throw tooLarge(grown !== null && grown.size > FILE_PREVIEW_MAX_BYTES ? grown.size : null);
+        throw tooLarge(grown !== null && grown.size > FILE_PREVIEW_MAX_BYTES ? grown : null);
       }
       // A grant rests on the lease, which may have moved while this read ran.
       if (clicked && !remoteCallerClicked(ctx, filePath, rootPath)) {

@@ -330,7 +330,7 @@ describe("pluginFileDocument (#13809)", () => {
     expect(listener).toHaveBeenCalledWith({ reason: "disk", revision: REV_B });
   });
 
-  it("conflicts a draft when a read finds the file no longer reads as text", async () => {
+  it("still conflicts a draft on the next check after a read saw the file stop reading", async () => {
     bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
     const handle = openPluginFileDocument(target());
     handle.retain();
@@ -339,7 +339,38 @@ describe("pluginFileDocument (#13809)", () => {
 
     bridge.read.mockResolvedValue({ status: "not-text" });
     await handle.document.read();
+    await handle.notifyDiskChange();
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(true);
+  });
+
+  it("never conflicts a draft over a stale read", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    await handle.document.read();
+    handle.document.setDraft("mine");
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_B });
+    await handle.document.read();
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]?.conflict).toBe(false);
+  });
+
+  it("checks again for a change asked about while the last check was finishing", async () => {
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_A });
+    const handle = openPluginFileDocument(target({ mode: "view" }));
+    handle.retain();
+    await handle.document.read();
+    const listener = vi.fn();
+    handle.document.onDidChange(listener);
+
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_B });
+    const first = handle.notifyDiskChange();
+    // Lands once the first check's read has answered, before its runner returns.
+    bridge.read.mockResolvedValueOnce({ status: "ok", text: "{}", revision: REV_C });
+    await Promise.resolve();
+    await Promise.resolve();
+    const second = handle.notifyDiskChange();
+    await Promise.all([first, second]);
+    expect(listener).toHaveBeenLastCalledWith({ reason: "disk", revision: REV_C });
   });
 
   it("keeps the draft owner's save ceiling when a viewer opens the same document", async () => {

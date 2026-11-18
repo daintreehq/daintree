@@ -218,6 +218,35 @@ describe("useFileLoad observed size (#17336)", () => {
     expect(result.current.observedBytes).toBeNull();
   });
 
+  it("keeps the verdict that the text isn't UTF-8 through a refresh", async () => {
+    readMock.mockResolvedValueOnce({ ...read("caf\ufffd"), byteLength: 4, encoding: "invalid" });
+    const { result } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
+    await load(result, "explicit");
+    expect(result.current.observedInvalidText).toBe(true);
+
+    readMock.mockReturnValueOnce(new Promise(() => {}));
+    await load(result, "explicit");
+    expect(result.current.loadState).toBe("loading");
+    expect(result.current.observedInvalidText).toBe(true);
+  });
+
+  it("keeps canonical evidence from a refusal that read the file's own path", async () => {
+    readMock.mockRejectedValueOnce(
+      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+        code: "FILE_TOO_LARGE",
+        sizeBytes: 1_000_000,
+        pathIsCanonical: true,
+      })
+    );
+    const { result } = renderLoad({ filePath: "/a/t.csv", root: "/a" });
+    await load(result, "explicit");
+    expect(result.current.canonicalFilePath).toBe("/a/t.csv");
+
+    readMock.mockRejectedValueOnce(tooLarge(1_000_000));
+    await load(result, "explicit");
+    expect(result.current.canonicalFilePath).toBeNull();
+  });
+
   it("never carries one file's size over to the next", async () => {
     readMock.mockResolvedValueOnce(read("first"));
     const { result, rerender } = renderLoad({ filePath: "/a/one.csv", root: "/a" });

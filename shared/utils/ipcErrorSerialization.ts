@@ -228,10 +228,15 @@ export function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined
     return tools === undefined ? undefined : { code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE", tools };
   }
   if (raw.code === "FILE_TOO_LARGE") {
-    const { sizeBytes } = raw;
-    return typeof sizeBytes === "number" && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0
-      ? { code: "FILE_TOO_LARGE", sizeBytes }
-      : undefined;
+    const { sizeBytes, pathIsCanonical } = raw;
+    if (typeof sizeBytes !== "number" || !Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
+      return undefined;
+    }
+    return {
+      code: "FILE_TOO_LARGE",
+      sizeBytes,
+      ...(pathIsCanonical === true && { pathIsCanonical: true }),
+    };
   }
   if (raw.code === "HOST_SWITCH_ON_SCREEN") {
     const switchId = pickDetailString(raw.switchId);

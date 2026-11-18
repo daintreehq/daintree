@@ -133,32 +133,6 @@ describe("usePluginRuntimeStore", () => {
     expect(state.pluginMetaById.has("gregpriday.video-manager")).toBe(false);
   });
 
-  it("marks a built-in plugin, and only a built-in one, as built-in (#17336)", async () => {
-    listMock.mockResolvedValue([
-      { ...makePlugin({ id: "daintree.csv-viewer" }), isBuiltin: true },
-      makePlugin({ id: "acme.csv" }),
-    ]);
-
-    usePluginRuntimeStore.getState().init();
-
-    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(2));
-    const meta = usePluginRuntimeStore.getState().pluginMetaById;
-    expect(meta.get("daintree.csv-viewer")?.builtin).toBe(true);
-    expect(meta.get("acme.csv")?.builtin).toBeUndefined();
-
-    // Only the classification moves: subscribers still hear about it.
-    listMock.mockResolvedValue([
-      makePlugin({ id: "daintree.csv-viewer" }),
-      makePlugin({ id: "acme.csv" }),
-    ]);
-    usePluginRuntimeStore.getState().refresh();
-    await vi.waitFor(() =>
-      expect(
-        usePluginRuntimeStore.getState().pluginMetaById.get("daintree.csv-viewer")?.builtin
-      ).toBeUndefined()
-    );
-  });
-
   it("learns a project plugin's name when the project's plugins change, not only on provenance", async () => {
     const listeners = new Map<string, () => void>();
     Object.defineProperty(window, "electron", {

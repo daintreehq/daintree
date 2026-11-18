@@ -227,12 +227,11 @@ export function currentFileEditorDefault(filePath: string): FileEditorDefault | 
 /**
  * Whether a plugin viewer claims the file for Rendered (#17336), read once
  * outside React for an opener deciding what mode to ask for: true when an
- * enabled plugin's `mode: "view"` editor matches it, false when none does, null
- * while that can't be settled yet. An extension claim needs no root. A path
- * claim is tried against every root the file sits under, since the panel that
- * shows it may be bound to any of them; with no root resolved yet (the
- * worktrees or the project not loaded), or no snapshot, the answer is null.
- * The size check and the panel's own root are the pane's, once it reads.
+ * enabled plugin's `mode: "view"` editor matches it by extension or by a path
+ * under a root the file sits under, false when no viewer could, and null
+ * otherwise: no snapshot yet, or path claims none of the roots known so far
+ * match, since a root still loading (a nested worktree) might. A null keeps the
+ * request, and the pane, which knows its root, clamps it live.
  */
 export function currentFileViewerClaim(filePath: string): boolean | null {
   const hosted = usePluginHostedViewsStore.getState();
@@ -248,14 +247,13 @@ export function currentFileViewerClaim(filePath: string): boolean | null {
   if (ext !== null && editors.some((editor) => editor.extensions.includes(ext))) return true;
   const pathClaims = editors.flatMap((editor) => editor.paths);
   if (pathClaims.length === 0) return false;
-  const roots = containingRoots(filePath);
-  if (roots.length === 0) return null;
-  return roots.some((root) => {
+  const matched = containingRoots(filePath).some((root) => {
     const relative = relativeFilePath(root, filePath);
     return (
       relative !== null && pathClaims.some((pattern) => matchesFileEditorGlob(relative, pattern))
     );
   });
+  return matched ? true : null;
 }
 
 /** Every worktree root and this view's project root the file sits under. */

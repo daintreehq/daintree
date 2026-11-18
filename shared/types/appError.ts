@@ -20,6 +20,12 @@ export type AppErrorDetails =
 export interface FileTooLargeError {
   code: "FILE_TOO_LARGE";
   sizeBytes: number;
+  /**
+   * The path asked for is the file's own canonical path, as a successful
+   * read's `pathIsCanonical` says, so a watcher's directories can still scope
+   * re-reads of a file only a viewer can show.
+   */
+  pathIsCanonical?: boolean;
 }
 
 /**
