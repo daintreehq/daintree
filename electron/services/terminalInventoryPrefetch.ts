@@ -18,14 +18,18 @@ import { logInfo } from "../utils/logger.js";
  * the switch it was taken for. A rejected prefetch is dropped so the handler
  * falls back to a live fetch. A switch whose swap fails, or whose view never
  * hydrates, never consumes its entry, so one shared timer evicts entries as
- * they expire (#17793); expiry runs on the monotonic clock so a wall-clock
- * jump can't stretch an entry's life.
+ * they expire (#17793). An entry expires when either clock says the TTL has
+ * passed: the monotonic one paces the sweep and ignores a wall-clock jump
+ * backward, and the wall one catches a system sleep, which the monotonic clock
+ * does not count.
  */
 const PREFETCH_TTL_MS = 5_000;
 
 interface Entry {
   promise: Promise<BackendTerminalInfo[]>;
+  /** Monotonic deadline; the sweep is armed on it. */
   expiresAt: number;
+  wallExpiresAt: number;
 }
 
 const inflight = new Map<string, Entry>();
@@ -33,6 +37,10 @@ let sweepTimer: ReturnType<typeof setTimeout> | null = null;
 
 function now(): number {
   return performance.now();
+}
+
+function isExpired(entry: Entry, at = now()): boolean {
+  return entry.expiresAt <= at || entry.wallExpiresAt <= Date.now();
 }
 
 function scheduleSweep(): void {
@@ -50,7 +58,7 @@ function sweepExpired(): void {
   sweepTimer = null;
   const at = now();
   for (const [projectId, entry] of inflight) {
-    if (entry.expiresAt <= at) inflight.delete(projectId);
+    if (isExpired(entry, at)) inflight.delete(projectId);
   }
   scheduleSweep();
 }
@@ -130,11 +138,12 @@ export function prefetchTerminalInventory(
   build: (projectId: string) => Promise<BackendTerminalInfo[]>
 ): Promise<BackendTerminalInfo[]> {
   const existing = inflight.get(projectId);
-  if (existing && existing.expiresAt > now()) return existing.promise;
+  if (existing && !isExpired(existing)) return existing.promise;
 
   const entry: Entry = {
     promise: build(projectId),
     expiresAt: now() + PREFETCH_TTL_MS,
+    wallExpiresAt: Date.now() + PREFETCH_TTL_MS,
   };
   entry.promise.catch(() => {
     if (inflight.get(projectId) !== entry) return;
@@ -154,7 +163,7 @@ export function consumeTerminalInventoryPrefetch(
   if (!entry) return null;
   inflight.delete(projectId);
   stopSweepIfIdle();
-  if (entry.expiresAt <= now()) return null;
+  if (isExpired(entry)) return null;
   return entry.promise;
 }
 

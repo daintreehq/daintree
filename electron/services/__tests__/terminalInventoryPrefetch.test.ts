@@ -69,12 +69,26 @@ describe("prefetchTerminalInventory", () => {
 
     expect(consumeTerminalInventoryPrefetch("p1")).toBe(first);
     expect(consumeTerminalInventoryPrefetch("p1")).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
     await expect(first).resolves.toHaveLength(1);
   });
 
   it("does not serve an inventory older than its TTL", () => {
+    // Registered before the prefetch, so at t=5s it runs ahead of the sweep and
+    // the consume itself has to refuse the expired entry.
+    let consumed: unknown = "not run";
+    setTimeout(() => {
+      consumed = consumeTerminalInventoryPrefetch("p1");
+    }, 5_000);
     prefetchTerminalInventory("p1", async () => []);
-    vi.advanceTimersByTime(6_000);
+    vi.advanceTimersByTime(5_000);
+    expect(consumed).toBeNull();
+  });
+
+  it("does not serve an inventory taken before a system sleep", () => {
+    // The monotonic clock stands still across a sleep; the wall clock does not.
+    prefetchTerminalInventory("p1", async () => []);
+    vi.setSystemTime(Date.now() + 60 * 60 * 1_000);
     expect(consumeTerminalInventoryPrefetch("p1")).toBeNull();
   });
 
@@ -96,6 +110,7 @@ describe("prefetchTerminalInventory", () => {
     prefetchTerminalInventory("p3", async () => []);
     invalidateTerminalInventoryPrefetch();
     expect(consumeTerminalInventoryPrefetch("p3")).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("evicts abandoned prefetches once their TTL passes, with no consumer asking", async () => {
@@ -138,15 +153,18 @@ describe("prefetchTerminalInventory", () => {
     });
     original.catch(() => {});
     let replacement: Promise<unknown> | null = null;
+    let pendingAtDeadline: string[] = [];
     // Registered before the prefetch, so at t=5s it runs ahead of the sweep and
     // finds the original expired but not yet evicted.
     setTimeout(() => {
+      pendingAtDeadline = _pendingTerminalInventoryPrefetchesForTests();
       replacement = prefetchTerminalInventory("p1", async () => [terminal("t2")]);
     }, 5_000);
     const build = vi.fn(() => original);
     prefetchTerminalInventory("p1", build);
 
     vi.advanceTimersByTime(5_000);
+    expect(pendingAtDeadline).toEqual(["p1"]);
     expect(replacement).not.toBeNull();
     expect(replacement).not.toBe(original);
     expect(_pendingTerminalInventoryPrefetchesForTests()).toEqual(["p1"]);
