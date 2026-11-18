@@ -182,7 +182,21 @@ describe("prefetchHydrateCache", () => {
 
       expect(build).toHaveBeenCalledTimes(1);
       expect(second).toBe(first);
+
+      // Reuse keeps the original deadline rather than extending it.
+      await vi.advanceTimersByTimeAsync(14_000);
+      expect(_peekPrefetchCacheForTests("p1")).toBeUndefined();
+    });
+
+    it("hands a reused entry to the next consume exactly once", async () => {
+      const build = vi.fn((id: string) => Promise.resolve(makeHydrate(id)));
+
+      const first = await prefetchHydrateResult("p1", build);
+      await vi.advanceTimersByTimeAsync(16_000);
+      await prefetchHydrateResult("p1", build);
+
       expect(consumePrefetchedHydrateResult("p1")).toBe(first);
+      expect(consumePrefetchedHydrateResult("p1")).toBeUndefined();
     });
 
     it("rebuilds once the entry has expired", async () => {
@@ -264,5 +278,23 @@ describe("prefetchHydrateCache", () => {
       expect(await pending).toBeNull();
       expect(_peekPrefetchCacheForTests("p1")).toBeUndefined();
     });
+  });
+
+  it("does not let a build orphaned by a reset overwrite a newer entry", async () => {
+    let resolveOrphan: ((v: HydrateResult) => void) | null = null;
+    const orphan = prefetchHydrateResult(
+      "p1",
+      () =>
+        new Promise<HydrateResult>((r) => {
+          resolveOrphan = r;
+        })
+    );
+
+    _resetPrefetchHydrateCacheForTests();
+    const fresh = await prefetchHydrateResult("p1", () => Promise.resolve(makeHydrate("p1")));
+    resolveOrphan!(makeHydrate("p1"));
+
+    expect(await orphan).toBeNull();
+    expect(_peekPrefetchCacheForTests("p1")).toBe(fresh);
   });
 });

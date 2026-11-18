@@ -90,7 +90,9 @@ export function prefetchHydrateResult(
   promise = (async () => {
     try {
       const result = await build(projectId);
-      if (currentVersion(projectId) !== versionAtStart) {
+      // The inflight check catches a build orphaned by a reset, whose version
+      // snapshot would otherwise match again and overwrite a newer entry.
+      if (currentVersion(projectId) !== versionAtStart || inflight.get(projectId) !== promise) {
         return null;
       }
       commitEntry(projectId, result);
