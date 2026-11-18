@@ -618,30 +618,60 @@ describe("FileSearchService", () => {
       expect(page).toEqual(listing.slice(0, 20));
     });
 
-    it("builds its word index on the first lookup only, and drops it with the listing", async () => {
+    it("builds its word index once per listing, on the first lookup that needs it", async () => {
       const dir = makeTempDir();
       tempDirs.push(dir);
       gitRepo(dir, "src/UserProfilePanel.tsx\0src/SettingsDialog.tsx\0");
       const service = await createService();
 
+      // The picker and a description of nothing but stop words never need one.
       await service.search({ cwd: dir, query: "user", limit: 5 });
-      expect(service.getNaturalLanguageIndexCount()).toBe(0);
+      await service.searchNaturalLanguage({ cwd: dir, description: "the file" });
+      expect(service.peekNaturalLanguageIndex(dir)).toBeUndefined();
 
+      // Two descriptions resolved together, as one dictation's file links are.
       await expect(
-        service.searchNaturalLanguage({ cwd: dir, description: "user profile" })
-      ).resolves.toEqual(["src/UserProfilePanel.tsx"]);
-      await expect(
-        service.searchNaturalLanguage({ cwd: dir, description: "settings dialog" })
-      ).resolves.toEqual(["src/SettingsDialog.tsx"]);
-      expect(service.getNaturalLanguageIndexCount()).toBe(1);
+        Promise.all([
+          service.searchNaturalLanguage({ cwd: dir, description: "user profile" }),
+          service.searchNaturalLanguage({ cwd: dir, description: "settings dialog" }),
+        ])
+      ).resolves.toEqual([["src/UserProfilePanel.tsx"], ["src/SettingsDialog.tsx"]]);
+      const index = service.peekNaturalLanguageIndex(dir);
+      expect(index).toBeDefined();
+
+      await service.searchNaturalLanguage({ cwd: dir, description: "profile panel" });
+      expect(service.peekNaturalLanguageIndex(dir)).toBe(index);
       expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+    });
 
-      service.invalidate(dir);
-      expect(service.getNaturalLanguageIndexCount()).toBe(0);
+    it("drops its word index with the listing, so a changed tree is indexed afresh", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "src/UserProfilePanel.tsx\0");
+      const service = await createService();
+      await service.searchNaturalLanguage({ cwd: dir, description: "user profile" });
+      expect(service.peekNaturalLanguageIndex(dir)).toBeDefined();
+
+      service.invalidateUnder(dir);
+      expect(service.peekNaturalLanguageIndex(dir)).toBeUndefined();
+
       gitClientMock.raw.mockResolvedValue("src/UserProfileView.tsx\0");
       await expect(
         service.searchNaturalLanguage({ cwd: dir, description: "user profile" })
       ).resolves.toEqual(["src/UserProfileView.tsx"]);
+    });
+
+    it("scores a token once per file however many of its words match it", async () => {
+      // `profile` matches both of the first file's words. Counted per matching
+      // word rather than per token, the first file would outscore the second.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "ProfileProfiles.ts\0src/ProfilePanel.ts\0");
+      const service = await createService();
+
+      await expect(
+        service.searchNaturalLanguage({ cwd: dir, description: "profile profile panel" })
+      ).resolves.toEqual(["src/ProfilePanel.ts", "ProfileProfiles.ts"]);
     });
 
     describe("against the per-description scan it replaced", () => {
@@ -697,7 +727,8 @@ describe("FileSearchService", () => {
               matched++;
             }
           }
-          if (matched > 0) scored.push({ file, score: matched / tokens.length, pathLen: file.length });
+          if (matched > 0)
+            scored.push({ file, score: matched / tokens.length, pathLen: file.length });
         }
         scored.sort((a, b) => b.score - a.score || a.pathLen - b.pathLen);
         return scored.slice(0, limit).map((s) => s.file);
@@ -711,12 +742,32 @@ describe("FileSearchService", () => {
         };
       }
 
-      const pick = <T,>(rng: () => number, items: readonly T[]): T =>
+      const pick = <T>(rng: () => number, items: readonly T[]): T =>
         items[Math.floor(rng() * items.length)]!;
 
       // Few words and few directories, so most files tie on score and many on
       // path length too, and listing order decides more than one page boundary.
-      const NAME_PARTS = ["User", "Profile", "Panel", "HTML", "Parser", "s3", "Client", "us", "Set"];
+      const NAME_PARTS = [
+        "User",
+        "Profile",
+        "Panel",
+        "HTML",
+        "Parser",
+        "s3",
+        "Client",
+        "us",
+        "Set",
+        // Match the first and the thirty-sixth distinct filler token below.
+        "Qaa",
+        "Qjb",
+      ];
+      // Thirty-six distinct three-letter tokens, so a long description holds
+      // more distinct tokens than one 32-bit group of the scorer's masks.
+      const FILLERS = Array.from(
+        { length: 36 },
+        (_, i) =>
+          `q${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}`
+      );
       const JOINERS = ["", "", "_", "-", "."];
       const DIRS = ["src", "lib", "a/b", "pkg", "src/ui"];
       const EXTENSIONS = [".ts", ".tsx", ".test.ts", "", "."];
@@ -764,10 +815,13 @@ describe("FileSearchService", () => {
           const files = await service.listFiles(dir);
 
           for (let q = 0; q < 15; q++) {
+            // One long description per listing: the fillers, then ordinary
+            // words whose tokens land past the first group.
             const words = 1 + Math.floor(rng() * 4);
-            const description = Array.from({ length: words }, () => pick(rng, DESCRIPTION_WORDS)).join(
-              " "
-            );
+            const description = [
+              ...(q === 0 ? FILLERS : []),
+              ...Array.from({ length: words }, () => pick(rng, DESCRIPTION_WORDS)),
+            ].join(" ");
             for (const limit of [1, 20, 100]) {
               const page = await service.searchNaturalLanguage({ cwd: dir, description, limit });
               expect(page, `seed ${seed} "${description}" limit ${limit}`).toEqual(

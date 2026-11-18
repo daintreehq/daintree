@@ -500,7 +500,14 @@ const UNICODE_SPACE = /\s/;
 
 function isWordSeparator(code: number): boolean {
   if (code < 128) {
-    return code === 32 || (code >= 9 && code <= 13) || code === 95 || code === 45 || code === 46 || code === 47;
+    return (
+      code === 32 ||
+      (code >= 9 && code <= 13) ||
+      code === 95 ||
+      code === 45 ||
+      code === 46 ||
+      code === 47
+    );
   }
   return UNICODE_SPACE.test(String.fromCharCode(code));
 }
@@ -611,6 +618,12 @@ function buildNaturalLanguageIndex(files: string[]): NaturalLanguageIndex {
   return { vocabulary, wordStarts, fileWords: fileWords.slice(0, wordCount) };
 }
 
+interface NaturalLanguageMatch {
+  fileIdx: number;
+  /** Description tokens the file's words match, each weighted by how often the description says it. */
+  matched: number;
+}
+
 /**
  * The `limit` best files for a description, best first, in the order a stable
  * sort by score then path length would give them.
@@ -644,22 +657,29 @@ function pickTopNaturalLanguageMatches(
   const distinctTokens = [...tokenWeights.keys()];
   const weights = distinctTokens.map((token) => tokenWeights.get(token)!);
 
-  // `matchesByToken[t]` marks the vocabulary words distinct token `t` matches.
-  const matchesByToken = distinctTokens.map((token) => {
-    const matches = new Uint8Array(vocabulary.length);
-    for (let wordId = 0; wordId < vocabulary.length; wordId++) {
-      if (wordMatchesToken(vocabulary[wordId], token)) matches[wordId] = 1;
+  // Bit `t % 32` of `tokenMasks[wordId * groups + (t >> 5)]` is set when the
+  // word matches distinct token `t`. A file's matched tokens are the OR of its
+  // words' masks, so a token two of its words match (`ProfileProfiles`) still
+  // counts once. Thirty-two tokens to a group keeps the scratch at four bytes a
+  // word per group, however long the description.
+  const groups = Math.ceil(distinctTokens.length / 32);
+  const tokenMasks = new Int32Array(vocabulary.length * groups);
+  for (let wordId = 0; wordId < vocabulary.length; wordId++) {
+    for (let t = 0; t < distinctTokens.length; t++) {
+      if (wordMatchesToken(vocabulary[wordId], distinctTokens[t])) {
+        tokenMasks[wordId * groups + (t >> 5)] |= 1 << (t & 31);
+      }
     }
-    return matches;
-  });
+  }
 
   const files = entry.files;
-  const matchedOf = new Int32Array(files.length);
-  const compare = (a: number, b: number): number =>
-    matchedOf[b] - matchedOf[a] || files[a].length - files[b].length || a - b;
+  const rank = (aMatched: number, a: number, bMatched: number, b: number): number =>
+    bMatched - aMatched || files[a].length - files[b].length || a - b;
+  const compare = (a: NaturalLanguageMatch, b: NaturalLanguageMatch): number =>
+    rank(a.matched, a.fileIdx, b.matched, b.fileIdx);
 
   // A max-heap of the best files seen so far: its root is the worst of them.
-  const heap: number[] = [];
+  const heap: NaturalLanguageMatch[] = [];
   const siftDown = (): void => {
     let parent = 0;
     while (true) {
@@ -677,23 +697,20 @@ function pickTopNaturalLanguageMatches(
   for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
     const start = wordStarts[fileIdx];
     const end = wordStarts[fileIdx + 1];
-    if (start === end) continue;
-
     let matched = 0;
-    for (let t = 0; t < matchesByToken.length; t++) {
-      const matches = matchesByToken[t];
-      for (let i = start; i < end; i++) {
-        if (matches[fileWords[i]] === 1) {
-          matched += weights[t];
-          break;
-        }
+    for (let group = 0; group < groups; group++) {
+      let bits = 0;
+      for (let i = start; i < end; i++) bits |= tokenMasks[fileWords[i] * groups + group];
+      while (bits !== 0) {
+        const lowest = bits & -bits;
+        matched += weights[(group << 5) + 31 - Math.clz32(lowest)];
+        bits ^= lowest;
       }
     }
     if (matched === 0) continue;
-    matchedOf[fileIdx] = matched;
 
     if (heap.length < limit) {
-      let child = heap.push(fileIdx) - 1;
+      let child = heap.push({ fileIdx, matched }) - 1;
       while (child > 0) {
         const parent = (child - 1) >> 1;
         if (compare(heap[child], heap[parent]) <= 0) break;
@@ -702,12 +719,12 @@ function pickTopNaturalLanguageMatches(
       }
       continue;
     }
-    if (compare(fileIdx, heap[0]) >= 0) continue;
-    heap[0] = fileIdx;
+    if (rank(matched, fileIdx, heap[0].matched, heap[0].fileIdx) >= 0) continue;
+    heap[0] = { fileIdx, matched };
     siftDown();
   }
 
-  return heap.sort(compare).map((fileIdx) => files[fileIdx]);
+  return heap.sort(compare).map((match) => files[match.fileIdx]);
 }
 
 export class FileSearchService {
@@ -812,15 +829,17 @@ export class FileSearchService {
   }
 
   /**
-   * How many cached indexes carry a natural-language word index, for tests
-   * that check only a spoken-name lookup builds one.
+   * The natural-language word index cached for `cwd`, if one has been built,
+   * as an opaque handle: tests compare it by identity to tell an index reused
+   * from one rebuilt. Read without touching the cache's recency or hit counts.
    */
-  getNaturalLanguageIndexCount(): number {
-    let count = 0;
-    FILE_LIST_CACHE.forEach((entry) => {
-      if (entry.naturalLanguageIndex) count++;
+  peekNaturalLanguageIndex(cwd: string): object | undefined {
+    const resolvedCwd = path.resolve(cwd);
+    let index: object | undefined;
+    FILE_LIST_CACHE.forEach((entry, key) => {
+      if (key === resolvedCwd) index = entry.naturalLanguageIndex;
     });
-    return count;
+    return index;
   }
 
   /**
