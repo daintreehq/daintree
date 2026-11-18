@@ -1115,6 +1115,16 @@ describe("GceProvider", () => {
     expect(lookupsAfterDelete(google.requests)).toBe(0);
   });
 
+  it("never reads a finished delete's own 404 as the VM gone while it's still there", async () => {
+    const google = fakeGoogle();
+    const created = await google.provider.create(google.credentials(), CREATE);
+    google.state.deleteFailure = { code: "RESOURCE_NOT_FOUND", message: "Not found", status: 404 };
+    await expect(
+      google.provider.delete(google.credentials(), created.resourceId)
+    ).rejects.toMatchObject({ kind: "server", message: /hasn't finished deleting/ });
+    expect(google.instances.size).toBe(1);
+  });
+
   it("says a stop Google gave up on", async () => {
     const google = fakeGoogle();
     const created = await google.provider.create(google.credentials(), CREATE);

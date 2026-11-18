@@ -596,9 +596,16 @@ export class GceClient {
       token = await ctx.authorize(freshToken);
     } catch (error) {
       // Whatever went wrong getting a token, nothing was sent; it settles like any other failure.
+      // A copy per request: an exchange shared with another call must not carry that call's marks.
       const failed =
         error instanceof GceApiError
-          ? error
+          ? new GceApiError(
+              error.kind,
+              error.message,
+              error.status,
+              error.reason,
+              error.retryAfterMs
+            )
           : new GceApiError(
               "unauthorized",
               "This account's service account key couldn't sign in to Google",

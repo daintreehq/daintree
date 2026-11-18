@@ -772,9 +772,10 @@ export class GceProvider implements CloudProvider {
       if (await this.isGone(client, ctx, zone, instance)) return;
       throw stillThere();
     }
-    // A delete Google finished with an error of its own is said as it is.
+    // A delete Google finished with an error of its own is said as it is; a 404 there is checked, never taken as gone.
     const refused = operationError(done);
-    if (refused) throw refused;
+    if (refused?.kind === "not-found" && (await this.isGone(client, ctx, zone, instance))) return;
+    if (refused) throw refused.kind === "not-found" ? stillThere() : refused;
     if (done.status !== "DONE") throw stillThere();
   }
 
