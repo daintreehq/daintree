@@ -305,6 +305,19 @@ describe("probeRepositorySleepSafety", () => {
     }
   );
 
+  it.skipIf(process.platform === "win32")(
+    "is unknown when a linked worktree's commondir is a dangling symlink",
+    async () => {
+      const { worktree, gitDir } = linkedWorktree("feature");
+      rmSync(path.join(gitDir, "commondir"));
+      symlinkSync(path.join(root, "gone", "commondir"), path.join(gitDir, "commondir"));
+      expect(await probeRepositorySleepSafety([worktree])).toEqual({
+        state: "unknown",
+        reason: "ENOENT",
+      });
+    }
+  );
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
     ["neither listed nor searched", 0o000],
     ["searched but not listed", 0o111],

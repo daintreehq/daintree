@@ -41,10 +41,12 @@ async function isAbsent(target: string): Promise<boolean> {
 /**
  * A path a git pointer file names, resolved as git resolves it: from `base`,
  * following each symlink before any `..` after it rather than collapsing `..`
- * lexically first.
+ * lexically first. Windows collapses `..` lexically whatever it is handed, and
+ * there `path.resolve` gives a drive-less target its checkout's drive.
  */
 function resolvePointer(base: string, target: string): Promise<string> {
-  return realpath(path.isAbsolute(target) ? target : `${base}${path.sep}${target}`);
+  if (process.platform === "win32") return realpath(path.resolve(base, target));
+  return realpath(path.isAbsolute(target) ? target : `${base}/${target}`);
 }
 
 /**
@@ -77,11 +79,12 @@ async function resolveGitDir(
 
 /** The repository's shared directory: a linked worktree's `commondir`, else the git dir itself. */
 async function resolveCommonDir(gitDir: string): Promise<string> {
+  const pointer = path.join(gitDir, "commondir");
   let content: string;
   try {
-    content = await readFile(path.join(gitDir, "commondir"), "utf8");
+    content = await readFile(pointer, "utf8");
   } catch (error) {
-    if (isMissing(error)) return gitDir;
+    if (isMissing(error) && (await isAbsent(pointer))) return gitDir;
     throw error;
   }
   return resolvePointer(gitDir, content.trim());
