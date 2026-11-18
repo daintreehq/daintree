@@ -268,6 +268,7 @@ export function ReviewHubContent({
     readWithCapture,
     refreshWithCapture,
     debouncedBgRefreshRef,
+    isOpenPath,
     beginOpen: beginStatusOpen,
     reset: resetStatus,
   } = useReviewHubStatus({ isOpen, worktreePath, worktreeId });
@@ -1171,6 +1172,7 @@ export function ReviewHubContent({
     handleToggleUnstaged,
   } = useReviewHubStagingActions({
     worktreePath,
+    isOpenPath,
     refresh,
     derivedStaged,
     derivedUnstaged,
@@ -1297,6 +1299,8 @@ export function ReviewHubContent({
         await window.electron.git.stageAll(worktreePath);
         await refresh();
       } catch (err) {
+        // Its Retry would stage the worktree the hub has since moved off.
+        if (!isOpenPath(worktreePath)) return;
         hasAutoStagedRef.current = false;
         setActionError({
           title: "Couldn't stage all files",
@@ -1313,6 +1317,7 @@ export function ReviewHubContent({
     isOperationState,
     refresh,
     worktreePath,
+    isOpenPath,
     handleStageAll,
     debouncedBgRefreshRef,
   ]);
@@ -1362,16 +1367,21 @@ export function ReviewHubContent({
         await window.electron.git.abortRepositoryOperation(worktreePath, chosen);
         await refresh();
       } catch (err) {
-        const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
-        setActionError({
-          title: "Couldn't abort repository operation",
-          detail: formatErrorMessage(err, "Failed to abort repository operation"),
-        });
-        if (changed) void refresh().catch(() => {});
+        // The conflict writes below all still throw for ConflictPanel, which
+        // guards a move itself; only the banner is this hub's, and it belongs
+        // to the worktree the write was for (#17584).
+        if (isOpenPath(worktreePath)) {
+          const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+          setActionError({
+            title: "Couldn't abort repository operation",
+            detail: formatErrorMessage(err, "Failed to abort repository operation"),
+          });
+          if (changed) void refresh().catch(() => {});
+        }
         throw err;
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   // Each handler retries itself from its own error banner. A named function
@@ -1389,19 +1399,21 @@ export function ReviewHubContent({
           await window.electron.git.continueRepositoryOperation(worktreePath, chosen);
           await refresh();
         } catch (err) {
-          const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
-          setActionError({
-            title: "Couldn't continue repository operation",
-            detail: formatErrorMessage(err, "Failed to continue repository operation"),
-            ...(changed ? {} : { retry: () => void continueOperation().catch(() => {}) }),
-          });
-          if (changed) void refresh().catch(() => {});
+          if (isOpenPath(worktreePath)) {
+            const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+            setActionError({
+              title: "Couldn't continue repository operation",
+              detail: formatErrorMessage(err, "Failed to continue repository operation"),
+              ...(changed ? {} : { retry: () => void continueOperation().catch(() => {}) }),
+            });
+            if (changed) void refresh().catch(() => {});
+          }
           throw err;
         }
       };
       return continueOperation();
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   const handleOpenInEditor = useCallback(
@@ -1444,24 +1456,26 @@ export function ReviewHubContent({
         await window.electron.git.checkoutOursTheirs(worktreePath, filePath, choice);
         await refresh();
       } catch (err) {
-        // Main refuses a choice the index no longer agrees with, and the read
-        // that would have shown the change was cancelled above: read again so
-        // the row offers what is there now.
-        debouncedBgRefreshRef.current?.();
-        const action =
-          choice.resolution === "delete"
-            ? "delete file"
-            : choice.side === "ours"
-              ? "take ours"
-              : "take theirs";
-        setActionError({
-          title: `Couldn't ${action}`,
-          detail: formatErrorMessage(err, `Failed to ${action}`),
-        });
+        if (isOpenPath(worktreePath)) {
+          // Main refuses a choice the index no longer agrees with, and the read
+          // that would have shown the change was cancelled above: read again so
+          // the row offers what is there now.
+          debouncedBgRefreshRef.current?.();
+          const action =
+            choice.resolution === "delete"
+              ? "delete file"
+              : choice.side === "ours"
+                ? "take ours"
+                : "take theirs";
+          setActionError({
+            title: `Couldn't ${action}`,
+            detail: formatErrorMessage(err, `Failed to ${action}`),
+          });
+        }
         throw err;
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   // Same body as handleStageFile but rethrows so ConflictPanel can roll back
@@ -1476,14 +1490,16 @@ export function ReviewHubContent({
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError({
-          title: "Couldn't mark file resolved",
-          detail: formatErrorMessage(err, "Failed to mark file resolved"),
-        });
+        if (isOpenPath(worktreePath)) {
+          setActionError({
+            title: "Couldn't mark file resolved",
+            detail: formatErrorMessage(err, "Failed to mark file resolved"),
+          });
+        }
         throw err;
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   const handleFocusBlocker = useCallback(

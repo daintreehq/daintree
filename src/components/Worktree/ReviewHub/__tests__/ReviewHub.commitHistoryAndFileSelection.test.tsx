@@ -2545,6 +2545,139 @@ describe("ReviewHub", () => {
         ).toBe("first worktree draft")
       );
     });
+
+    describe("a staging write the previous worktree answers after the move (#17584)", () => {
+      // Three rows with two selected, so the selection's write can't pass for a
+      // whole-section one.
+      const threeUnstaged = (): StagingStatus =>
+        makeStatus({
+          unstaged: [
+            { path: "src/x.ts", status: "modified", insertions: 1, deletions: 0 },
+            { path: "src/y.ts", status: "modified", insertions: 1, deletions: 0 },
+            { path: "src/z.ts", status: "modified", insertions: 1, deletions: 0 },
+          ],
+        });
+
+      function deferred<T>() {
+        let resolve!: (value: T) => void;
+        let reject!: (reason: unknown) => void;
+        const promise = new Promise<T>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
+        return { promise, resolve, reject };
+      }
+
+      async function renderAndMove(start: () => Promise<void>) {
+        getStagingStatusMock.mockResolvedValue(threeUnstaged());
+        const view = render(
+          <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        );
+        await waitFor(() => screen.getByTestId("file-stage-row-src/x.ts"));
+        await start();
+        view.rerender(
+          <ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />
+        );
+        await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledWith(OTHER_PATH));
+        await waitFor(() => screen.getByTestId("file-stage-row-src/x.ts"));
+        getStagingStatusMock.mockClear();
+        return view;
+      }
+
+      async function selectBothRows() {
+        fireEvent.click(screen.getByTestId("file-stage-row-src/x.ts"), { metaKey: true });
+        fireEvent.click(screen.getByTestId("file-stage-row-src/y.ts"), { metaKey: true });
+        await waitFor(() =>
+          expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+            /Stage selection \(2\)/i
+          )
+        );
+      }
+
+      it("shows no single-row failure and no Retry against the old worktree", async () => {
+        const write = deferred<void>();
+        stageFileMock.mockImplementationOnce(() => write.promise);
+        await renderAndMove(async () => {
+          const row = screen.getByTestId("file-stage-row-src/x.ts");
+          fireEvent.click(within(row).getByRole("button", { name: /Stage src\/x\.ts/i }));
+          await waitFor(() =>
+            expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/x.ts")
+          );
+        });
+
+        await act(async () => {
+          write.reject(new Error("index.lock exists"));
+        });
+
+        expect(screen.queryByText("Couldn't stage file")).toBeNull();
+        expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
+        expect(stageFileMock).toHaveBeenCalledTimes(1);
+      });
+
+      it("shows no multi-row failure and no Retry against the old worktree", async () => {
+        const write = deferred<void>();
+        stageFilesMock.mockImplementationOnce(() => write.promise);
+        await renderAndMove(async () => {
+          await selectBothRows();
+          fireEvent.click(screen.getByTestId("review-hub-stage-section-button"));
+          await waitFor(() =>
+            expect(stageFilesMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/x.ts", "src/y.ts"])
+          );
+        });
+
+        await act(async () => {
+          write.reject(new Error("index.lock exists"));
+        });
+
+        expect(screen.queryByText("Couldn't stage selected files")).toBeNull();
+        expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
+        expect(stageFilesMock).toHaveBeenCalledTimes(1);
+        expect(getStagingStatusMock).not.toHaveBeenCalledWith(WORKTREE_PATH);
+      });
+
+      it("leaves the new worktree's selection and status alone when the old write succeeds late", async () => {
+        const write = deferred<void>();
+        stageFilesMock.mockImplementationOnce(() => write.promise);
+        await renderAndMove(async () => {
+          await selectBothRows();
+          fireEvent.click(screen.getByTestId("review-hub-stage-section-button"));
+          await waitFor(() => expect(stageFilesMock).toHaveBeenCalledTimes(1));
+        });
+        await selectBothRows();
+
+        await act(async () => {
+          write.resolve();
+        });
+
+        expect(screen.getByTestId("review-hub-stage-section-button").textContent).toMatch(
+          /Stage selection \(2\)/i
+        );
+        expect(getStagingStatusMock).not.toHaveBeenCalledWith(WORKTREE_PATH);
+      });
+
+      it("still reports the failure once the hub is back on the worktree the write was for", async () => {
+        const write = deferred<void>();
+        stageFileMock.mockImplementationOnce(() => write.promise);
+        const view = await renderAndMove(async () => {
+          const row = screen.getByTestId("file-stage-row-src/x.ts");
+          fireEvent.click(within(row).getByRole("button", { name: /Stage src\/x\.ts/i }));
+          await waitFor(() => expect(stageFileMock).toHaveBeenCalledTimes(1));
+        });
+        view.rerender(
+          <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        );
+        await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledWith(WORKTREE_PATH));
+
+        await act(async () => {
+          write.reject(new Error("index.lock exists"));
+        });
+
+        await screen.findByText("Couldn't stage file");
+        fireEvent.click(screen.getByRole("button", { name: /^Retry$/ }));
+        await waitFor(() => expect(stageFileMock).toHaveBeenCalledTimes(2));
+        expect(stageFileMock).toHaveBeenLastCalledWith(WORKTREE_PATH, "src/x.ts");
+      });
+    });
   });
 });
 

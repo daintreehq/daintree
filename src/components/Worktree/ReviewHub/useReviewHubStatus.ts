@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { StagingStatus } from "@shared/types";
 import type { ReviewMarkCapture } from "@shared/types/ipc/reviewMarks";
 import { debounce } from "@/utils/debounce";
@@ -109,14 +109,19 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
   // one's reads.
   const sessionRef = useRef<Session>({ live: false });
   const openedSessionRef = useRef<Session | null>(null);
-  // The worktree the subscription is open on. A callback a staging action held
-  // across a worktree switch still reads its own worktree, and that read must
-  // never land in this one's list.
+  // The worktree the hub is open on. A callback a staging action held across a
+  // worktree switch still reads its own worktree, and that read must never land
+  // in this one's list. Moved in a layout effect, so an answer that arrives
+  // between a switch's commit and its passive effects already sees the new one.
   const openPathRef = useRef<string | null>(null);
   const latestCaptureRef = useRef<{ path: string; capture: ReviewHubCapture } | null>(null);
   const laneRef = useRef<CaptureLane | null>(null);
 
-  /** Whether a read of `path` belongs to the worktree open now; true before any opening. */
+  useLayoutEffect(() => {
+    if (isOpen) openPathRef.current = worktreePath;
+  }, [isOpen, worktreePath]);
+
+  /** Whether a read or write of `path` belongs to the worktree open now; true before any opening. */
   const isOpenPath = useCallback((path: string): boolean => {
     const open = openPathRef.current;
     return open === null || open === path;
@@ -170,9 +175,12 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
   );
 
   const refresh = useCallback(async () => {
-    if (!worktreePath) return;
+    // A write that settles after the hub moved on still holds the old
+    // worktree's `refresh`; starting its read would supersede the open
+    // worktree's own foreground read, whose answer then never lands.
+    if (!worktreePath || !isOpenPath(worktreePath)) return;
     await sendForegroundRead(beginForegroundRead());
-  }, [worktreePath, beginForegroundRead, sendForegroundRead]);
+  }, [worktreePath, isOpenPath, beginForegroundRead, sendForegroundRead]);
 
   const backgroundRefresh = useCallback(async () => {
     if (!worktreePath) return;
@@ -312,7 +320,6 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     if (!isOpen) return;
     const session: Session = { live: true };
     sessionRef.current = session;
-    openPathRef.current = worktreePath;
     latestCaptureRef.current = null;
 
     const debouncedBgRefresh = debounce(() => readWithCapture(), 800);
@@ -393,6 +400,7 @@ export function useReviewHubStatus({ isOpen, worktreePath, worktreeId }: UseRevi
     readWithCapture,
     refreshWithCapture,
     debouncedBgRefreshRef,
+    isOpenPath,
     beginOpen,
     reset,
   };
