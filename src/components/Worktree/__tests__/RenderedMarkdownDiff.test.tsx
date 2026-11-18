@@ -1183,6 +1183,15 @@ describe("RenderedMarkdownDiff GitHub alerts (#17333)", () => {
       "+> [!WARNING]",
       " > Back up the database first.",
     ]);
+    // The engine marks inside the marker itself, so the marks reach the alert step.
+    const built = buildMarkdownDiff({ diff, newSource: source, status: "modified" });
+    const modified = built.ok
+      ? built.model.changes.find((change) => change.kind === "modified")
+      : undefined;
+    expect(modified?.kind).toBe("modified");
+    if (modified?.kind !== "modified") return;
+    expect(modified.inline.old.some((range) => range.start < "[!NOTE]".length)).toBe(true);
+    expect(modified.inline.new.some((range) => range.start < "[!WARNING]".length)).toBe(true);
 
     const { container } = renderDiff(diff, source);
 
@@ -1196,6 +1205,18 @@ describe("RenderedMarkdownDiff GitHub alerts (#17333)", () => {
     for (const mark of container.querySelectorAll(".rendered-markdown-diff__inline")) {
       expect(visibleText(mark)).not.toBe("");
     }
+  });
+
+  it("reads no further through authored strikethrough than the document does", () => {
+    const source = "> ~~[!NOTE]~~\n> Body changed.\n";
+    const diff = patch(["@@ -1,2 +1,2 @@", " > ~~[!NOTE]~~", "-> Body.", "+> Body changed."]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(container.querySelector(".markdown-alert")).toBeNull();
+    expect(visibleText(container.querySelector(".rendered-markdown-diff__block--added"))).toContain(
+      "[!NOTE]"
+    );
   });
 
   it("draws a whole added alert as an alert", () => {

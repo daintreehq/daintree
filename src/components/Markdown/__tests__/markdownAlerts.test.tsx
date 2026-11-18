@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
-import type { Element, ElementContent, Root } from "hast";
+import type { Element as HastElement, ElementContent, Root } from "hast";
 import { MarkdownDocument } from "../MarkdownDocument";
 import { rehypeMarkdownAlerts } from "../markdownAlerts";
 
@@ -15,7 +15,7 @@ function renderDocument(content: string): HTMLElement {
 }
 
 /** Text as read, with the line endings hast lays block markup out with collapsed. */
-function words(element: Element | undefined): string {
+function words(element: Element | null | undefined): string {
   return (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
@@ -46,15 +46,28 @@ describe("GitHub alerts in rendered Markdown (#17333)", () => {
       "Warning",
       "Caution",
     ]);
+    expect(boxes.map((box) => box.className)).toEqual(
+      ["note", "tip", "important", "warning", "caution"].map(
+        (type) => `markdown-alert markdown-alert-${type}`
+      )
+    );
     expect(words(boxes[3])).toBe("Warning Body for warning.");
     expect(container.textContent).not.toContain("[!");
     expect(container.querySelector("blockquote")).toBeNull();
   });
 
-  it("draws the type's glyph beside the title, hidden from assistive technology", () => {
-    const container = renderDocument("> [!TIP]\n> Try this.");
-    const glyph = container.querySelector(".markdown-alert-title svg");
-    expect(glyph?.getAttribute("aria-hidden")).toBe("true");
+  it("draws a glyph of each type's own beside its title, hidden from assistive technology", () => {
+    const container = renderDocument(
+      ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"]
+        .map((marker) => `> [!${marker}]\n> Body.`)
+        .join("\n\n")
+    );
+    const glyphs = alerts(container).map((box) => box.querySelector(".markdown-alert-title svg"));
+
+    expect(glyphs.map((glyph) => glyph?.getAttribute("aria-hidden"))).toEqual(
+      Array(5).fill("true")
+    );
+    expect(new Set(glyphs.map((glyph) => glyph?.innerHTML)).size).toBe(5);
   });
 
   it("keeps the alert's own Markdown: paragraphs, lists and inline formatting", () => {
@@ -82,6 +95,7 @@ describe("GitHub alerts in rendered Markdown (#17333)", () => {
     const box = alerts(container)[0];
     expect(box?.getAttribute("data-markdown-alert")).toBe("important");
     expect(words(box)).toBe("Important Read this first.");
+    expect(box?.querySelectorAll("p")).toHaveLength(2);
   });
 
   it("takes a marker ended by a hard line break", () => {
@@ -89,7 +103,9 @@ describe("GitHub alerts in rendered Markdown (#17333)", () => {
     const box = alerts(container)[0];
     expect(box?.getAttribute("data-markdown-alert")).toBe("note");
     expect(box?.querySelector("br")).toBeNull();
-    expect(words(box)).toBe("Note After a hard break.");
+    expect(box?.querySelector("p:not(.markdown-alert-title)")?.textContent).toBe(
+      "After a hard break."
+    );
   });
 
   it("leaves an unknown marker as a literal blockquote", () => {
@@ -136,6 +152,25 @@ describe("GitHub alerts in rendered Markdown (#17333)", () => {
     expect(words(box)).toBe("Tip Windows line endings.");
   });
 
+  it("takes a marker ended by a bare carriage return", () => {
+    const container = renderDocument("> [!TIP]\r> Old Mac line endings.");
+    const box = alerts(container)[0];
+    expect(box?.getAttribute("data-markdown-alert")).toBe("tip");
+    expect(words(box)).toBe("Tip Old Mac line endings.");
+  });
+
+  it("finds the body past raw HTML that never renders", () => {
+    const container = renderDocument("> [!NOTE]\n>\n> <!-- aside -->\n>\n> Read this.");
+    const box = alerts(container)[0];
+    expect(box?.getAttribute("data-markdown-alert")).toBe("note");
+    expect(words(box)).toBe("Note Read this.");
+  });
+
+  it("leaves a marker followed on its line by a space it can't have", () => {
+    const container = renderDocument("> [!NOTE]&#32;\n>\n> Body.");
+    expect(alerts(container)).toHaveLength(0);
+  });
+
   it("keeps a body that is only an image", () => {
     const container = renderDocument("> [!NOTE]\n> ![diagram](https://example.com/d.png)");
     const box = alerts(container)[0];
@@ -163,7 +198,11 @@ describe("GitHub alerts in rendered Markdown (#17333)", () => {
 
 describe("rehypeMarkdownAlerts through the rendered diff's revision marks", () => {
   const text = (value: string): ElementContent => ({ type: "text", value });
-  const element = (tagName: string, children: ElementContent[], className?: string[]): Element => ({
+  const element = (
+    tagName: string,
+    children: ElementContent[],
+    className?: string[]
+  ): HastElement => ({
     type: "element",
     tagName,
     properties: className ? { className } : {},
@@ -176,17 +215,17 @@ describe("rehypeMarkdownAlerts through the rendered diff's revision marks", () =
       [element("span", [text("Inserted: ")], ["sr-only"]), text(value)],
       ["revision"]
     );
-  const isRevisionMark = (node: Element) =>
+  const isRevisionMark = (node: HastElement) =>
     Array.isArray(node.properties.className) && node.properties.className.includes("revision");
 
-  function quote(paragraph: ElementContent[]): { tree: Root; blockquote: Element } {
+  function quote(paragraph: ElementContent[]): { tree: Root; blockquote: HastElement } {
     const blockquote = element("blockquote", [text("\n"), element("p", paragraph), text("\n")]);
     return { tree: { type: "root", children: [blockquote] }, blockquote };
   }
 
-  function paragraphOf(blockquote: Element): Element | undefined {
+  function paragraphOf(blockquote: HastElement): HastElement | undefined {
     return blockquote.children.find(
-      (child): child is Element => child.type === "element" && child.tagName === "p"
+      (child): child is HastElement => child.type === "element" && child.tagName === "p"
     );
   }
 
@@ -221,6 +260,40 @@ describe("rehypeMarkdownAlerts through the rendered diff's revision marks", () =
       element("span", [text("Inserted: ")], ["sr-only"]),
       text("New"),
     ]);
+  });
+
+  it("takes the line ending written after a hard break, even past an emptied mark", () => {
+    const { tree, blockquote } = quote([
+      text("[!"),
+      mark("ins", "WARNING"),
+      text("]"),
+      element("br", []),
+      text("\n"),
+      text("Body."),
+    ]);
+
+    rehypeMarkdownAlerts({ isRevisionMark })(tree);
+
+    expect(blockquote.properties.dataMarkdownAlert).toBe("warning");
+    expect(paragraphOf(blockquote)?.children).toEqual([text("Body.")]);
+  });
+
+  it("keeps a line ending the body opens with when no hard break ended the marker", () => {
+    const { tree, blockquote } = quote([text("[!NOTE]\n\nBody.")]);
+
+    rehypeMarkdownAlerts()(tree);
+
+    expect(blockquote.properties.dataMarkdownAlert).toBe("note");
+    expect(paragraphOf(blockquote)?.children).toEqual([text("\nBody.")]);
+  });
+
+  it("keeps a body that is only a no-break space", () => {
+    const { tree, blockquote } = quote([text("[!NOTE]\n\u00a0")]);
+
+    rehypeMarkdownAlerts()(tree);
+
+    expect(blockquote.properties.dataMarkdownAlert).toBe("note");
+    expect(paragraphOf(blockquote)?.children).toEqual([text("\u00a0")]);
   });
 
   it("treats the same mark as ordinary markup when it isn't named a revision mark", () => {

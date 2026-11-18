@@ -65,6 +65,7 @@ export {
   HardDriveDownload, // a backup branch (backup/) — a stored snapshot, kept apart from archiving a project
   History, // resume closed session / session history
   Hourglass, // an environment reporting it is still coming up (starting, provisioning) — a shape beside the neutral status word, so the word keeps its contrast
+  Info, // a NOTE alert in rendered Markdown — GitHub's info glyph, the same shape the info severity wears through SEVERITY_GLYPH
   KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)

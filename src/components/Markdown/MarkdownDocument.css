@@ -108,6 +108,20 @@
   background: color-mix(in oklab, var(--markdown-alert-tone) 10%, transparent);
 }
 
+/* The typography plugin's edge exceptions, restated for a box whose own
+   margin outranks them, as the table frame's are. */
+.markdown-document :where(:is(h2, h3, h4, hr) + .markdown-alert) {
+  margin-top: 0;
+}
+
+.markdown-document > :where(.markdown-alert:first-child) {
+  margin-top: 0;
+}
+
+.markdown-document > :where(.markdown-alert:last-child) {
+  margin-bottom: 0;
+}
+
 .markdown-document :where(.markdown-alert[data-markdown-alert="tip"]) {
   --markdown-alert-tone: var(--color-status-success);
 }
@@ -151,6 +165,15 @@
 
 .markdown-document .markdown-alert > :last-child {
   margin-bottom: 0;
+}
+
+/* Chromium forces an inherited `currentColor` but not a colour set on the SVG
+   itself (forced-colors.css), so the glyph would keep its tone on the system
+   canvas. The title names the type; the glyph only has to be seen. */
+@media (forced-colors: active) {
+  .markdown-document :where(.markdown-alert-glyph) {
+    color: CanvasText;
+  }
 }
 
 /* kbd: chip treatment; kills the plugin's --tw-prose-kbd-shadows box-shadow,

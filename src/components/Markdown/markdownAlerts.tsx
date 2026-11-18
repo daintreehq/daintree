@@ -31,8 +31,11 @@ function isMarkdownAlertType(value: unknown): value is MarkdownAlertType {
   return typeof value === "string" && Object.hasOwn(MARKDOWN_ALERTS, value);
 }
 
-/** The marker, ending its line: GitHub takes no title or text after it. */
-const MARKER = /^\[!([a-z]+)\][ \t]*(\r?\n|$)/i;
+/**
+ * The marker, ending its line: GitHub takes no title or text after it, not even
+ * a space. Markdown strips the spaces that end a line before this sees it.
+ */
+const MARKER = /^\[!([a-z]+)\](\r\n|\n|\r|$)/i;
 
 export interface MarkdownAlertOptions {
   /**
@@ -47,8 +50,11 @@ export interface MarkdownAlertOptions {
 type Leaf =
   { kind: "text"; node: Text; parent: Element } | { kind: "break"; node: Element; parent: Element };
 
+/** HTML's inter-element whitespace, which a no-break space is not. */
+const INTER_ELEMENT_WHITESPACE = /^[ \t\n\f\r]*$/;
+
 function isWhitespaceText(node: ElementContent): boolean {
-  return node.type === "text" && !/\S/.test(node.value);
+  return node.type === "text" && INTER_ELEMENT_WHITESPACE.test(node.value);
 }
 
 /**
@@ -89,13 +95,18 @@ function removeChild(parent: Element, child: ElementContent): void {
   if (index !== -1) parent.children.splice(index, 1);
 }
 
-/** Takes the first `count` characters of the run out of the tree. */
-function consume(leaves: Leaf[], count: number): void {
+/**
+ * Takes the first `count` characters of the run out of the tree, and says
+ * whether a `<br>` was among them.
+ */
+function consume(leaves: Leaf[], count: number): boolean {
   let remaining = count;
+  let tookBreak = false;
   for (const leaf of leaves) {
-    if (remaining <= 0) return;
+    if (remaining <= 0) break;
     if (leaf.kind === "break") {
       removeChild(leaf.parent, leaf.node);
+      tookBreak = true;
       remaining -= 1;
       continue;
     }
@@ -107,6 +118,7 @@ function consume(leaves: Leaf[], count: number): void {
       remaining = 0;
     }
   }
+  return tookBreak;
 }
 
 /**
@@ -143,20 +155,18 @@ export function rehypeMarkdownAlerts(options: MarkdownAlertOptions = {}) {
 
       // Something other than text right after the marker shares its line.
       if (match[2] === "" && run.blocked) continue;
-      // A marker that is the whole paragraph needs a body after it, and raw
-      // HTML there is none: `skipHtml` drops it.
-      const isWholeParagraph = !run.blocked && !/\S/.test(run.text.slice(match[0].length));
-      const body = block.children.slice(contentIndex + 1).find((child) => !isWhitespaceText(child));
-      if (isWholeParagraph && body?.type !== "element") continue;
-
-      consume(run.leaves, match[0].length);
-      // A hard break is followed by the line ending mdast-util-to-hast writes
-      // after it, which would otherwise open the body.
-      const first = paragraph.children[0];
-      if (first?.type === "text") {
-        first.value = first.value.replace(/^\r?\n/, "");
-        if (!first.value) paragraph.children.shift();
+      // A marker that is the whole paragraph needs a body after it. Raw HTML
+      // is none, since `skipHtml` drops it, but it doesn't hide one after it.
+      const isWholeParagraph =
+        !run.blocked && INTER_ELEMENT_WHITESPACE.test(run.text.slice(match[0].length));
+      if (
+        isWholeParagraph &&
+        !block.children.slice(contentIndex + 1).some((child) => child.type === "element")
+      ) {
+        continue;
       }
+
+      const tookBreak = consume(run.leaves, match[0].length);
       if (isRevisionMark) {
         paragraph.children = paragraph.children.filter(
           (child) =>
@@ -164,6 +174,13 @@ export function rehypeMarkdownAlerts(options: MarkdownAlertOptions = {}) {
             !isRevisionMark(child) ||
             child.children.some((inner) => inner.type === "text" && inner.value)
         );
+      }
+      // mdast-util-to-hast writes a line ending after every `<br>`, which would
+      // otherwise open the body. An authored one stays.
+      const first = paragraph.children[0];
+      if (tookBreak && first?.type === "text" && first.value.startsWith("\n")) {
+        first.value = first.value.slice(1);
+        if (!first.value) paragraph.children.shift();
       }
       if (paragraph.children.every(isWhitespaceText)) removeChild(block, paragraph);
 
@@ -175,8 +192,8 @@ export function rehypeMarkdownAlerts(options: MarkdownAlertOptions = {}) {
 /**
  * The `blockquote` every Markdown pipeline renders: a plain quote, or for one
  * `rehypeMarkdownAlerts` flagged, GitHub's titled box. A `div` rather than a
- * blockquote, as on GitHub, so the typography plugin's quote marks, italics
- * and rule stay off it.
+ * blockquote, with GitHub's classes, so the typography plugin's quote marks,
+ * italics and rule stay off it.
  */
 export function MarkdownBlockquote({
   node,
@@ -187,7 +204,7 @@ export function MarkdownBlockquote({
   if (!isMarkdownAlertType(type)) return <blockquote {...props}>{children}</blockquote>;
   const { title, Icon } = MARKDOWN_ALERTS[type];
   return (
-    <div className="markdown-alert" data-markdown-alert={type}>
+    <div className={`markdown-alert markdown-alert-${type}`} data-markdown-alert={type}>
       <p className="markdown-alert-title">
         <Icon className="markdown-alert-glyph" aria-hidden="true" />
         {title}
