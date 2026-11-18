@@ -5032,6 +5032,10 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { projectId: string }];
     result: import("./api.js").VoiceDictionaryEntry[];
   };
+  "voice-dictionary:import-terms": {
+    args: [__0: { entries: { term: string; heardAs?: string[] | undefined }[] }];
+    result: import("./api.js").VoiceDictionaryChange;
+  };
   "voice-dictionary:record-suggestions": {
     args: [__0: { candidates: { word: string; original: string }[] }];
     result: import("./api.js").VoiceDictionaryState;

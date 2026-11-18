@@ -1376,6 +1376,7 @@ export const CHANNEL_LOCALITY = {
   "voice-dictionary:add-to-project": "host",
   "voice-dictionary:dismiss-suggestion": "shell",
   "voice-dictionary:get-project": "host",
+  "voice-dictionary:import-terms": "shell",
   "voice-dictionary:record-suggestions": "shell",
   "voice-dictionary:remove": "shell",
   "voice-dictionary:remove-from-project": "host",

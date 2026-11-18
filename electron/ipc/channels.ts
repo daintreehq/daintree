@@ -965,6 +965,7 @@ export const CHANNELS = {
   VOICE_DICTIONARY_REMOVE: "voice-dictionary:remove",
   VOICE_DICTIONARY_UPDATE: "voice-dictionary:update",
   VOICE_DICTIONARY_ACCEPT_SUGGESTION: "voice-dictionary:accept-suggestion",
+  VOICE_DICTIONARY_IMPORT_TERMS: "voice-dictionary:import-terms",
   VOICE_DICTIONARY_DISMISS_SUGGESTION: "voice-dictionary:dismiss-suggestion",
   VOICE_DICTIONARY_RECORD_SUGGESTIONS: "voice-dictionary:record-suggestions",
   VOICE_DICTIONARY_GET_PROJECT: "voice-dictionary:get-project",

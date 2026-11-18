@@ -2267,6 +2267,9 @@ export interface GeneratedElectronAPI {
     getProject(
       ...args: IpcInvokeMap["voice-dictionary:get-project"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:get-project"]["result"]>;
+    importTerms(
+      ...args: IpcInvokeMap["voice-dictionary:import-terms"]["args"]
+    ): Promise<IpcInvokeMap["voice-dictionary:import-terms"]["result"]>;
     recordSuggestions(
       ...args: IpcInvokeMap["voice-dictionary:record-suggestions"]["args"]
     ): Promise<IpcInvokeMap["voice-dictionary:record-suggestions"]["result"]>;
