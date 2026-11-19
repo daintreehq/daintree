@@ -298,6 +298,20 @@ describe("putting a linked Agent 37 instance to sleep once its host is idle (#17
     expect(env.sleeps()).toHaveLength(0);
   });
 
+  it("sends nothing on a grant that arrives after a read found its idle sleep turned off", async () => {
+    const env = await agent37();
+    let grant!: (granted: boolean) => void;
+    env.answerClaim(() => new Promise<boolean>((resolve) => (grant = resolve)));
+    const pass = env.summary();
+    await env.until(() => env.claims.mock.calls.length === 1);
+    env.machine.auto_sleep = false;
+    await env.lifecycle.refresh("build");
+    grant(true);
+    await pass;
+    expect(env.sleeps()).toHaveLength(0);
+    expect(env.machine.status).toBe("running");
+  });
+
   it("sends nothing on a grant that came over a link since replaced", async () => {
     const env = await agent37();
     let grant!: (granted: boolean) => void;

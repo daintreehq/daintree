@@ -1165,7 +1165,11 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
         void manager.disconnect(hostId).catch(() => {});
       },
       reconnect: (hostId) => {
-        if (registry.get(hostId)) manager.connect(hostId);
+        // Only a link the sleep let go: one a person disconnected, or one up again, is left be.
+        if (!registry.get(hostId) || manager.get(hostId) || client.isDisconnectedByPerson(hostId)) {
+          return;
+        }
+        manager.connect(hostId);
       },
     },
     hosts: {

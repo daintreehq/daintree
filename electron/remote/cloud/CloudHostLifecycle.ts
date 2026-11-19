@@ -3938,8 +3938,12 @@ export class CloudHostLifecycle {
         }));
         return;
       }
-      // The link was let go for a sleep that didn't happen: it comes back.
-      this.deps.idleClaims?.reconnect?.(hostId);
+      // The link was let go for a sleep that didn't happen: it comes back, unless a person's
+      // Start, Stop or removal came since and decides about the link itself.
+      const now = this.deps.store.binding(bindingId);
+      if (now?.hostId === hostId && (this.admitted.get(bindingId) ?? 0) === admitted) {
+        this.deps.idleClaims?.reconnect?.(hostId);
+      }
       if (failure !== null) {
         this.recordError(bindingId, {
           code: provider.describeError(failure).code,
@@ -3972,6 +3976,9 @@ export class CloudHostLifecycle {
     }
     const bindingId = binding.id;
     const seconds = minutes * 60;
+    // Turned on by a pick only where it was off; one on then and turned off at the provider
+    // since is the newer choice, which a resend never undoes.
+    const turnsOn = binding.observation?.idleSleep?.enabled !== true;
     // Until the pick lands, a summary taken before it says nothing about what the host holds.
     this.idleTimeHolds.set(bindingId, {
       until: this.now() + RENEW_RETRY_MS,
@@ -3983,7 +3990,7 @@ export class CloudHostLifecycle {
       this.idleTimeHolds.set(bindingId, {
         until: this.now() + RENEW_RETRY_MS,
         // Kept until it lands, whatever the provider last said of its idle sleep.
-        enable: sent !== "landed",
+        enable: sent !== "landed" && turnsOn,
         stuckOn: sent === "refused" || sent === "kept-another" ? seconds : null,
       });
     });
@@ -4010,6 +4017,10 @@ export class CloudHostLifecycle {
     const minutes = this.deps.idleClaims?.idleOn(hostId, session)?.idle.idleAfterMinutes;
     if (!isHostIdleMinutes(minutes)) return;
     const seconds = minutes * 60;
+    // A value the provider wouldn't keep is tried again once the host has moved off it.
+    if (hold && hold.stuckOn !== null && hold.stuckOn !== seconds) {
+      this.idleTimeHolds.set(binding.id, { ...hold, stuckOn: null });
+    }
     if (!enable && own?.idleSeconds === seconds) return;
     if (hold?.stuckOn === seconds) return;
     const bindingId = binding.id;
