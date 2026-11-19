@@ -70,6 +70,7 @@ import {
   sshKeyContractProblem,
   sshKeyTiming,
   type CloudProvider,
+  type ProviderCreateRequest,
   type ProviderCredentials,
   type ProviderResource,
   type ProviderSshAccess,
@@ -99,6 +100,12 @@ const KEEPER_INTERVAL_MS = 60_000;
 /** The provider's own name, for messages: this layer never assumes which provider it is. */
 function nameOf(provider: CloudProvider): string {
   return provider.info(process.platform).name;
+}
+
+/** A provider's own words, ended as a sentence so more can follow them. */
+function asSentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 /**
@@ -852,7 +859,7 @@ export class CloudHostLifecycle {
   }
 
   private async runCreate(bindingId: string, signal: AbortSignal): Promise<void> {
-    let binding = this.deps.store.binding(bindingId);
+    const binding = this.deps.store.binding(bindingId);
     if (!binding?.creation || !binding.hostId) return;
     const creation = binding.creation;
     const { provider, credentials } = await this.context(binding, signal);
@@ -915,44 +922,53 @@ export class CloudHostLifecycle {
         throw error;
       }
       if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
-      // The provider leaving, or another registering in its place, while the key was made: ask nobody.
-      const registered = this.deps.accounts.providerUnavailable(binding.providerId)
-        ? null
-        : this.deps.accounts.provider(binding.providerId);
-      if (registered !== provider) {
-        const reason = `${nameOf(provider)} was ${registered ? "replaced" : "removed"} while the SSH key was made`;
-        this.recordUnsentCreate(bindingId, creation.sentAt !== null, {
-          code: "unsupported",
-          reason,
-        });
-        throw new AppError({ code: "UNSUPPORTED", message: reason, userMessage: reason });
-      }
+      this.requireSameProvider(binding, provider, creation.sentAt !== null, "the SSH key was made");
     }
     // Cancelled while the credentials or the key were read: nothing is marked as sent.
     if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    const request: ProviderCreateRequest = {
+      name: creation.name,
+      machineType: creation.machineType,
+      lifetimeSeconds: binding.lifetimeSeconds,
+      provisioning,
+      labels: {
+        [LABEL_MARKER]: "1",
+        [LABEL_BINDING]: bindingId,
+      },
+      idempotencyKey: creation.idempotencyKey,
+      publicKey,
+    };
+    let send = () => provider.create(credentials, request);
+    if (provider.prepareCreate) {
+      this.stage(bindingId, `Getting ${nameOf(provider)} ready to make the machine`);
+      try {
+        send = await provider.prepareCreate(credentials, request);
+      } catch (error) {
+        if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+        this.recordUnpreparedCreate(bindingId, provider, creation.sentAt !== null, error);
+        throw error;
+      }
+      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+      this.requireSameProvider(
+        binding,
+        provider,
+        creation.sentAt !== null,
+        "the machine was readied"
+      );
+    }
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
-    binding = this.deps.store.updateBinding(bindingId, (current) => ({
+    const marked = this.deps.store.updateBinding(bindingId, (current) => ({
       ...current,
       creation: current.creation
         ? { ...current.creation, sentAt: current.creation.sentAt ?? this.now() }
         : null,
       lastError: null,
-    }))!;
+    }));
+    if (!marked?.creation) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     let resource: ProviderResource;
     try {
-      resource = await provider.create(credentials, {
-        name: creation.name,
-        machineType: creation.machineType,
-        lifetimeSeconds: binding.lifetimeSeconds,
-        provisioning,
-        labels: {
-          [LABEL_MARKER]: "1",
-          [LABEL_BINDING]: bindingId,
-        },
-        idempotencyKey: creation.idempotencyKey,
-        publicKey,
-      });
+      resource = await send();
     } catch (error) {
       const described = provider.describeError(error);
       // Only the provider's own refusal proves nothing was made; anything else (lost answer,
@@ -1034,6 +1050,40 @@ export class CloudHostLifecycle {
         ? `${reason}, so the create wasn't sent again. Retry looks for a machine from the earlier request first.`
         : `${reason}, so no machine was asked for. Retry to create it.`,
       at: this.now(),
+    });
+  }
+
+  /** The provider leaving, or another registering in its place, while a create was readied: ask nobody. */
+  private requireSameProvider(
+    binding: StoredCloudBinding,
+    provider: CloudProvider,
+    sentBefore: boolean,
+    meanwhile: string
+  ): void {
+    const registered = this.deps.accounts.providerUnavailable(binding.providerId)
+      ? null
+      : this.deps.accounts.provider(binding.providerId);
+    if (registered === provider) return;
+    const reason = `${nameOf(provider)} was ${registered ? "replaced" : "removed"} while ${meanwhile}`;
+    this.recordUnsentCreate(binding.id, sentBefore, { code: "unsupported", reason });
+    throw new AppError({ code: "UNSUPPORTED", message: reason, userMessage: reason });
+  }
+
+  /** Readying the create failed, so this attempt asked for nothing; an earlier one still may have. */
+  private recordUnpreparedCreate(
+    bindingId: string,
+    provider: CloudProvider,
+    sentBefore: boolean,
+    error: unknown
+  ): void {
+    const described = provider.describeError(error);
+    const said = asSentence(described.message);
+    this.recordError(bindingId, {
+      ...described,
+      code: sentBefore ? "outcome-unknown" : described.code,
+      message: sentBefore
+        ? `${said} The machine wasn't asked for again, but an earlier request may still have made it: Retry and removal look for it first.`
+        : `${said} No machine was asked for; Retry to create it.`,
     });
   }
 
@@ -1120,14 +1170,16 @@ export class CloudHostLifecycle {
             at: this.now(),
           });
         }
-      } catch {
-        // The provider can't be asked now; the host keeps saying setup is incomplete.
+      } catch (error) {
         // One that left while it was asked looks again when it's back, and one
-        // that came back meanwhile is asked again now.
+        // that came back meanwhile is asked again now. Any other failure (offline
+        // at login, say) leaves Retry, since nothing here looks again on its own.
         if (this.deps.accounts.providerUnavailable(binding.providerId)) {
           this.awaitingProvider.add(binding.id);
         } else if (this.reconcileOvertaken.has(binding.id)) {
           again.add(binding.id);
+        } else {
+          this.recordFailedLookup(binding.id, key, error);
         }
       } finally {
         this.reconciling.delete(binding.id);
@@ -1135,6 +1187,40 @@ export class CloudHostLifecycle {
       }
     }
     if (again.size > 0 && !this.disposed) void this.reconcileUnfinishedCreates(again);
+  }
+
+  /**
+   * A restart's lookup that couldn't be made: the host says so and offers
+   * Retry. Never over what was said since, by a Retry or a removal, or by an
+   * earlier run whose error already offers Retry.
+   */
+  private recordFailedLookup(bindingId: string, key: string, error: unknown): void {
+    const current = this.deps.store.binding(bindingId);
+    if (
+      this.disposed ||
+      !current ||
+      current.resourceId ||
+      current.lastError ||
+      current.creation?.idempotencyKey !== key ||
+      this.operations.has(bindingId)
+    ) {
+      return;
+    }
+    const provider = this.deps.accounts.provider(current.providerId);
+    const said = asSentence(
+      error instanceof AppError
+        ? (error.userMessage ?? error.message)
+        : provider.describeError(error).message
+    );
+    this.recordError(bindingId, {
+      code: "outcome-unknown",
+      message: `Setup didn't finish, and Daintree couldn't look for the machine ${nameOf(provider)} may have made. ${said} ${
+        provider.createReplay === "lookup-only"
+          ? "Retry looks for it again."
+          : "Retry looks for it, and asks for it again if it isn't there."
+      }`,
+      at: this.now(),
+    });
   }
 
   /** Adds an existing machine as a host. Importing never starts it, and never changes its lifetime. */
@@ -2109,9 +2195,16 @@ export class CloudHostLifecycle {
     };
     let binding = current();
     if (!binding.resourceId) {
+      // Retry is offered as Settings offers it; until then, the details say where setup is.
+      const retryable =
+        binding.lastError !== null &&
+        !this.operations.has(bindingId) &&
+        this.deps.accounts.providerUnavailable(binding.providerId) === null;
       throw new UnusableConnectionError(
         "The cloud machine hasn't been created yet",
-        "Setup didn't finish. Open the host's details to retry."
+        retryable
+          ? "Setup didn't finish. Open the host's details to retry."
+          : "Setup hasn't finished. Open the host's details to see where it is."
       );
     }
     let context: { provider: CloudProvider; credentials: ProviderCredentials };

@@ -3993,6 +3993,15 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
     (env.provider as { createReplay?: string }).createReplay = "lookup-only";
     await quitWhileSent(env);
+    const bindingId = env.store.bindings()[0]!.id;
+    const hint = async (lifecycle: CloudHostLifecycle) =>
+      (
+        (await lifecycle
+          .ensureAccess(bindingId)
+          .catch((e: unknown) => e)) as UnusableConnectionError
+      ).detail;
+    // While the create is still out, there is no Retry to point to.
+    expect(await hint(env.lifecycle)).not.toContain("retry");
     vi.mocked(env.provider.list).mockRejectedValueOnce(
       new BoatApiError("network", "offline", null, null, null)
     );
@@ -4003,15 +4012,58 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
       resourceId: null,
       operation: null,
       providerUnavailable: null,
-      lastError: { code: "outcome-unknown", message: expect.stringContaining("Retry") },
+      lastError: {
+        code: "outcome-unknown",
+        message: expect.stringContaining("Retry looks for it again"),
+      },
     });
-    const bindingId = next.store.bindings()[0]!.id;
+    expect(next.store.bindings()[0]!.creation).toEqual(env.store.bindings()[0]!.creation);
+    expect(await hint(next.lifecycle)).toContain("to retry");
     vi.mocked(env.provider.list).mockResolvedValue([
       resource({ resourceId: "bx_found0001", labels: { "daintree-binding": bindingId } }),
     ]);
     await next.lifecycle.retryCreate("build");
     expect(next.store.bindings()[0]).toMatchObject({ resourceId: "bx_found0001", lastError: null });
     expect(env.provider.create).toHaveBeenCalledTimes(1);
+    next.lifecycle.dispose();
+  });
+
+  it("keeps what a Retry found over a startup lookup that fails after it (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    await quitWhileSent(env);
+    let failStartup: (error: unknown) => void = () => {};
+    vi.mocked(env.provider.list)
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            failStartup = reject;
+          })
+      )
+      .mockResolvedValue([]);
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(env.provider.list).toHaveBeenCalledTimes(1));
+    await expect(next.lifecycle.retryCreate("build")).rejects.toThrow(/remove the host/);
+    const said = next.lifecycle.statuses()[0]!.lastError;
+    expect(said?.message).toContain("isn't in the account");
+    failStartup(new BoatApiError("network", "offline", null, null, null));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(next.lifecycle.statuses()[0]!.lastError).toEqual(said);
+    next.lifecycle.dispose();
+  });
+
+  it("says why a startup lookup couldn't be made when the account's credentials are gone (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    await quitWhileSent(env);
+    const gone = vi.spyOn(MemoryCloudCredentialVault.prototype, "get").mockResolvedValue(null);
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(next.lifecycle.statuses()[0]?.lastError).not.toBeNull());
+    expect(next.lifecycle.statuses()[0]!.lastError).toMatchObject({
+      code: "outcome-unknown",
+      message: expect.stringContaining("Replace them in Settings"),
+    });
+    expect(env.provider.list).not.toHaveBeenCalled();
+    gone.mockRestore();
     next.lifecycle.dispose();
   });
 

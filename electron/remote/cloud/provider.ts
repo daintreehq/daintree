@@ -131,6 +131,17 @@ export interface CloudProvider {
     request: ProviderCreateRequest
   ): Promise<ProviderResource>;
   /**
+   * For a provider with work to do before it asks for the machine (Agent 37
+   * registers the key): does that work, asking for nothing, and answers with
+   * the send that does ask. The create is marked sent between the two, so one
+   * interrupted while it is readied is known never to have reached the
+   * provider. Without it, `create` is the send and is marked before it starts.
+   */
+  prepareCreate?(
+    credentials: ProviderCredentials,
+    request: ProviderCreateRequest
+  ): Promise<() => Promise<ProviderResource>>;
+  /**
    * Starts a stopped machine; resolves with what the provider said, which may
    * still be starting. `lifetimeSeconds` is the runtime limit to start it with,
    * absent when it keeps whatever it has (and null for none).

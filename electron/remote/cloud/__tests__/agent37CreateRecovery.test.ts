@@ -38,6 +38,8 @@ const keygen = (async (cmd: string, args: string[]): Promise<CommandResult> => {
   return ok;
 }) as unknown as CommandRunner;
 
+type SavedCreation = { sentAt: number | null } | null;
+
 /**
  * Daintree's cloud runtime over the real Agent 37 provider and client, against
  * the fake API. A crash ends a run on the spot: nothing it would still write
@@ -45,18 +47,29 @@ const keygen = (async (cmd: string, args: string[]): Promise<CommandResult> => {
  */
 async function agent37() {
   const api = new FakeAgent37Api();
-  /** Requests that go out but are never answered, as when Daintree quits while they're in flight. */
-  const unanswered = new Set<string>();
+  /**
+   * Requests still in flight when Daintree quits: `held` never reached Agent 37,
+   * `lost` did, and only its answer never came back.
+   */
+  const unanswered = new Map<string, "held" | "lost">();
   const sent: string[] = [];
+  let saved: unknown;
+  /** The create as saved when each request went out. */
+  const savedWhenSent = new Map<string, SavedCreation>();
+  const creationSaved = (): SavedCreation =>
+    (saved as { bindings?: Array<{ creation: SavedCreation }> } | undefined)?.bindings?.[0]
+      ?.creation ?? null;
   const fetch = (input: URL | string, init?: RequestInit): Promise<Response> => {
     const route = `${init?.method ?? "GET"} ${new URL(String(input)).pathname.replace(/^\/v1/, "")}`;
     sent.push(route);
-    if (!unanswered.has(route)) return api.fetch(input, init);
+    savedWhenSent.set(route, structuredClone(creationSaved()));
+    const mode = unanswered.get(route);
+    if (!mode) return api.fetch(input, init);
+    if (mode === "lost") void api.fetch(input, init);
     return new Promise((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
     });
   };
-  let saved: unknown;
   const vault = new MemoryCloudCredentialVault();
   const hosts: HostDescriptor[] = [];
   const files = new CloudSshFiles(path.join(root, "cloud"), keygen);
@@ -104,7 +117,7 @@ async function agent37() {
     });
     const crash = () => {
       alive = false;
-      // Only so this run's timers and waits end with the test; it writes nothing more.
+      // Only so this run's waits end with the test; it writes nothing more.
       lifecycle.dispose();
       const next = build();
       next.lifecycle.start();
@@ -129,15 +142,20 @@ async function agent37() {
     for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5));
     expect(check()).toBe(true);
   };
-  return { api, unanswered, sent, first, create, until };
+  const count = (route: string) => sent.filter((entry) => entry === route).length;
+  return { api, unanswered, sent, savedWhenSent, first, create, until, count };
 }
 
 describe("an Agent 37 create interrupted before setup finished (#17928)", () => {
   it("asks Agent 37 for the machine on Retry after a quit while the key was being registered", async () => {
-    const { api, unanswered, sent, first, create, until } = await agent37();
-    unanswered.add("POST /ssh-keys");
+    const { api, unanswered, sent, savedWhenSent, first, create, until, count } = await agent37();
+    // Agent 37 took the key; its answer was still on the way when Daintree quit.
+    unanswered.set("POST /ssh-keys", "lost");
     await create();
     await until(() => sent.includes("POST /ssh-keys"));
+    expect(savedWhenSent.get("POST /ssh-keys")).toMatchObject({ sentAt: null });
+    expect(api.sshKeys).toHaveLength(1);
+    expect(count("POST /instances")).toBe(0);
 
     const next = first.crash();
     await until(() => next.lifecycle.statuses()[0]?.lastError !== null);
@@ -152,20 +170,27 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
 
     unanswered.clear();
     await next.lifecycle.retryCreate("build");
-    expect(sent.filter((route) => route === "POST /instances")).toHaveLength(1);
+    // The key it registered before the quit counts as registered now.
+    expect(count("POST /ssh-keys")).toBe(2);
+    expect(api.sshKeys).toHaveLength(1);
+    expect(count("POST /instances")).toBe(1);
     const [instance] = [...api.instances.values()];
     expect(next.lifecycle.statuses()[0]).toMatchObject({
       resourceId: instance!.id,
+      machine: "running",
       lastError: null,
     });
+    expect(next.store.bindings()[0]!.creation).toBeNull();
     next.lifecycle.dispose();
   });
 
   it("only looks again on Retry after a quit while the instance itself was asked for", async () => {
-    const { unanswered, sent, first, create, until } = await agent37();
-    unanswered.add("POST /instances");
+    const { unanswered, sent, savedWhenSent, first, create, until, count } = await agent37();
+    unanswered.set("POST /instances", "held");
     await create();
     await until(() => sent.includes("POST /instances"));
+    // Saved before the request left, so a lost answer is looked for, never sent again.
+    expect(savedWhenSent.get("POST /instances")).toMatchObject({ sentAt: expect.any(Number) });
 
     const next = first.crash();
     await until(() => next.lifecycle.statuses()[0]?.lastError !== null);
@@ -176,8 +201,44 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
 
     unanswered.clear();
     await expect(next.lifecycle.retryCreate("build")).rejects.toThrow(/remove the host/);
-    expect(sent.filter((route) => route === "POST /instances")).toHaveLength(1);
+    expect(count("POST /instances")).toBe(1);
     expect(next.store.bindings()[0]!.creation!.sentAt).toEqual(expect.any(Number));
     next.lifecycle.dispose();
+  });
+
+  it("binds the instance a lost answer made, once the restart finds it", async () => {
+    const { api, unanswered, sent, first, create, until, count } = await agent37();
+    unanswered.set("POST /instances", "lost");
+    await create();
+    await until(() => sent.includes("POST /instances"));
+
+    const next = first.crash();
+    const [instance] = [...api.instances.values()];
+    await until(() => next.lifecycle.statuses()[0]?.resourceId === instance!.id);
+    expect(count("POST /instances")).toBe(1);
+    next.lifecycle.dispose();
+  });
+
+  it("says nothing was asked for when Agent 37 won't take the key, and Retry asks for it", async () => {
+    const { api, first, create, until, count } = await agent37();
+    api.fail(
+      "POST",
+      /^\/ssh-keys$/,
+      FakeAgent37Api.error(400, "invalid_request", "A workspace holds at most 20 SSH keys.")
+    );
+    await create();
+    await until(() => first.lifecycle.statuses()[0]?.lastError !== null);
+    expect(first.lifecycle.statuses()[0]!.lastError).toMatchObject({
+      code: "ssh-authorization",
+      message: expect.stringMatching(/at most 20 SSH keys.*Retry to create it/),
+    });
+    expect(first.store.bindings()[0]!.creation!.sentAt).toBeNull();
+    expect(count("POST /instances")).toBe(0);
+
+    await first.lifecycle.retryCreate("build");
+    expect(count("POST /instances")).toBe(1);
+    expect(first.lifecycle.statuses()[0]).toMatchObject({ lastError: null });
+    expect(first.lifecycle.statuses()[0]!.resourceId).not.toBeNull();
+    first.lifecycle.dispose();
   });
 });

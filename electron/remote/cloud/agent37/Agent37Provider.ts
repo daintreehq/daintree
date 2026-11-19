@@ -345,6 +345,15 @@ export class Agent37Provider implements CloudProvider {
     credentials: ProviderCredentials,
     request: ProviderCreateRequest
   ): Promise<ProviderResource> {
+    const send = await this.prepareCreate(credentials, request);
+    return send();
+  }
+
+  /** Registers the key, which asks for no instance; the send that follows asks for one. */
+  async prepareCreate(
+    credentials: ProviderCredentials,
+    request: ProviderCreateRequest
+  ): Promise<() => Promise<ProviderResource>> {
     const shape = SHAPES.find((entry) => entry.id === request.machineType);
     if (!shape) {
       throw new Agent37ApiError("invalid-request", "Not an Agent 37 machine size", null, null);
@@ -356,31 +365,34 @@ export class Agent37Provider implements CloudProvider {
         at: this.now(),
       });
     }
+    const publicKey = request.publicKey;
     const client = this.clientFor(credentials.apiUrl);
     // First: an instance boots with every key its workspace has, while one already running
     // takes minutes to see a new one.
-    await this.register(credentials, request.publicKey, true);
-    let instance: Agent37Instance;
-    try {
-      instance = await client.createInstance(ctx(credentials), {
-        template: TEMPLATE,
-        type: INSTANCE_TYPE,
-        resources: { cpu: shape.vcpu, memory: shape.memoryGB, disk: shape.diskGB },
-        name: request.name.slice(0, MAX_NAME_LENGTH),
-        metadata: request.labels,
-        auto_sleep: true,
-        idle_timeout_seconds: AGENT37_IDLE_SECONDS,
-      });
-    } catch (error) {
-      // A request Agent 37 rejected as invalid provisioned nothing; say so, with its reason.
-      // Only a 400: other statuses the client calls invalid (a 408 from a proxy) prove nothing.
-      if (error instanceof Agent37ApiError && error.status === 400) {
-        throw new Agent37CreateRefused(error.message);
+    await this.register(credentials, publicKey, true);
+    return async () => {
+      let instance: Agent37Instance;
+      try {
+        instance = await client.createInstance(ctx(credentials), {
+          template: TEMPLATE,
+          type: INSTANCE_TYPE,
+          resources: { cpu: shape.vcpu, memory: shape.memoryGB, disk: shape.diskGB },
+          name: request.name.slice(0, MAX_NAME_LENGTH),
+          metadata: request.labels,
+          auto_sleep: true,
+          idle_timeout_seconds: AGENT37_IDLE_SECONDS,
+        });
+      } catch (error) {
+        // A request Agent 37 rejected as invalid provisioned nothing; say so, with its reason.
+        // Only a 400: other statuses the client calls invalid (a 408 from a proxy) prove nothing.
+        if (error instanceof Agent37ApiError && error.status === 400) {
+          throw new Agent37CreateRefused(error.message);
+        }
+        throw error;
       }
-      throw error;
-    }
-    this.bootedWithKey.add(`${this.keyId(credentials, request.publicKey)}\n${instance.id}`);
-    return agent37Resource(instance);
+      this.bootedWithKey.add(`${this.keyId(credentials, publicKey)}\n${instance.id}`);
+      return agent37Resource(instance);
+    };
   }
 
   async start(
