@@ -3397,6 +3397,87 @@ describe("CloudHostLifecycle SSH key at create", () => {
     );
   });
 
+  /** A created, running machine reached once, so a route to it is on disk and cached. */
+  const createdAndReached = async (options: Parameters<typeof setup>[1] = {}) => {
+    const harness = await setup({}, { sshKey: "at-create", ...options });
+    await harness.lifecycle.create(request(harness.account.id));
+    await vi.waitFor(() =>
+      expect(harness.lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
+    );
+    const bindingId = harness.store.bindings()[0]!.id;
+    const route = await harness.lifecycle.ensureAccess(bindingId);
+    const keyPath = /IdentityFile "(.+)"/.exec(await fs.readFile(route.configPath, "utf8"))![1]!;
+    const createKey = vi.mocked(harness.provider.create).mock.calls[0]![1].publicKey!;
+    vi.mocked(harness.provider.sshAccess).mockClear();
+    harness.run.mockClear();
+    return { ...harness, bindingId, keyPath, createKey };
+  };
+
+  it("makes and registers a new key for a created machine whose key files are both gone (#17929)", async () => {
+    const { lifecycle, provider, bindingId, keyPath, createKey } = await createdAndReached();
+    await fs.rm(keyPath);
+    await fs.rm(`${keyPath}.pub`);
+    // The new key is still on its way to the machine: the provider's wait is the answer.
+    vi.mocked(provider.authorizeSsh).mockRejectedValueOnce(
+      new BoatApiError("network", "lost", null, null, null)
+    );
+    const waiting = await lifecycle.ensureAccess(bindingId).catch((error: unknown) => error);
+    expect(waiting).toBeInstanceOf(TransportError);
+    const madeKey = (await fs.readFile(`${keyPath}.pub`, "utf8")).trim();
+    expect(madeKey).toMatch(/^ssh-ed25519 /);
+    expect(madeKey).not.toBe(createKey);
+    expect(provider.authorizeSsh).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "bx_23456789",
+      madeKey
+    );
+    // The key is on disk again, but the machine still predates it: the retry waits on the provider too.
+    await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+    expect(provider.authorizeSsh).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "bx_23456789",
+      madeKey
+    );
+    expect(provider.sshAccess).not.toHaveBeenCalled();
+    expect((await fs.readFile(`${keyPath}.pub`, "utf8")).trim()).toBe(madeKey);
+    expect(lifecycle.statuses()[0]?.lastError).toBeNull();
+  });
+
+  it("says the host's key is missing, and makes none, when the provider can't give a created machine another (#17929)", async () => {
+    const { lifecycle, provider, run, bindingId, keyPath } = await createdAndReached();
+    delete (provider as { authorizeSsh?: unknown }).authorizeSsh;
+    await fs.rm(keyPath);
+    await fs.rm(`${keyPath}.pub`);
+    const error = await lifecycle.ensureAccess(bindingId).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "ssh-authorization",
+      message: expect.stringMatching(/SSH key is missing/),
+    });
+    expect((error as UnusableConnectionError).detail).toBe(
+      lifecycle.statuses()[0]?.lastError?.message
+    );
+    expect(provider.sshAccess).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalledWith("ssh-keygen", expect.anything(), expect.anything());
+    await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(`${keyPath}.pub`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps the key a created machine took when only its public half is gone (#17929)", async () => {
+    const { lifecycle, provider, files, account, bindingId, keyPath, createKey } =
+      await createdAndReached();
+    const privateKey = await fs.readFile(keyPath, "utf8");
+    await fs.rm(`${keyPath}.pub`);
+    const route = await lifecycle.ensureAccess(bindingId, undefined, { fresh: true });
+    expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(await fs.readFile(route.configPath, "utf8")).toContain(`IdentityFile "${keyPath}"`);
+    expect(await fs.readFile(keyPath, "utf8")).toBe(privateKey);
+    // The public half comes back from the private one; no new key replaces it.
+    expect(await files.publicKey(account.id)).toBe(createKey);
+  });
+
   it("sends nothing when the account's key can't be made, and says why", async () => {
     const { lifecycle, provider, store, run, account } = await setup({}, { sshKey: "at-create" });
     run.mockResolvedValueOnce({
