@@ -198,6 +198,7 @@ function DevServerRow({
       // or project's server can share a port with one here.
       opensPanel={() => devServerPanelInView(session) !== undefined}
       onOpen={() => onOpen(session)}
+      onOpenExternal={onOpenExternal}
       actions={
         <>
           {url !== undefined && (

@@ -13,6 +13,7 @@ import {
 } from "@shared/types/panel";
 import {
   hostForwardFailure,
+  parseLoopbackLink,
   remoteHostOfView,
   resolveTerminalLinkForHost,
 } from "@/services/terminal/remoteLoopbackLinks";
@@ -172,14 +173,74 @@ function externalAddress(url: string): string | undefined {
   return absoluteWebUrl(withScheme) !== undefined ? withScheme : undefined;
 }
 
+/**
+ * `url` as the system browser gets it when asked to open there whatever it
+ * is: as {@link externalAddress} reads it, except that a bare loopback address
+ * (`localhost:3000/admin`) is a local server's, read as http as a panel reads
+ * it, not as https.
+ */
+function systemBrowserAddress(url: string): string | undefined {
+  const trimmed = url.trim();
+  if (absoluteWebUrl(trimmed) === undefined && panelAddress(trimmed) !== undefined) {
+    return `http://${trimmed}`;
+  }
+  return externalAddress(trimmed);
+}
+
 function linkRefused(message: string): void {
   // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
   notify({ type: "error", title: "Couldn't open link", message });
 }
 
+/**
+ * `address` as this machine opens it for a view bound to `hostId`. A loopback
+ * address is the host's, so its port is forwarded here, as a terminal link's
+ * is, and only the origin goes through the forward: the resolver rebuilds the
+ * URL it hands back from a normalized copy, which would drop credentials and
+ * rewrite a `0.0.0.0` in the path or query. An outside address whose sign-in
+ * returns to the host's localhost gets that port forwarded.
+ */
+async function addressForHost(address: string, hostId: string): Promise<string> {
+  const loopback = parseLoopbackLink(address);
+  if (loopback === null) return resolveTerminalLinkForHost(address, hostId);
+  const local = new URL(await resolveTerminalLinkForHost(loopback.url.origin, hostId));
+  const target = new URL(address);
+  target.hostname = local.hostname;
+  target.port = local.port;
+  return target.href;
+}
+
+/** Hand `address` to the system browser, through a forward in a view bound to a remote host. */
+async function openInSystemBrowser(address: string): Promise<void> {
+  const hostId = remoteHostOfView();
+  if (hostId === null) {
+    openUrlExternally(address, LOG_PREFIX);
+    return;
+  }
+  try {
+    openUrlExternally(await addressForHost(address, hostId), LOG_PREFIX);
+  } catch (error) {
+    logError(`${LOG_PREFIX} Failed to forward the link's port`, error);
+    linkRefused(hostForwardFailure(address, error));
+  }
+}
+
 /** Whether {@link openLinkUrl} shows `url` in a panel, which takes focus as it comes forward. */
 export function opensInPanel(url: string): boolean {
   return panelAddress(url) !== undefined;
+}
+
+/**
+ * Open a link in the system browser whatever its address, a local one
+ * included, as it is saved: the way to test a local server in a real browser.
+ */
+export async function openLinkUrlExternally(url: string): Promise<void> {
+  const address = systemBrowserAddress(url);
+  if (address === undefined) {
+    linkRefused("Only http and https addresses can be opened.");
+    return;
+  }
+  await openInSystemBrowser(address);
 }
 
 /**
@@ -200,17 +261,7 @@ export async function openLinkUrl(url: string): Promise<void> {
       linkRefused("Only http and https addresses can be opened.");
       return;
     }
-    const hostId = remoteHostOfView();
-    if (hostId === null) {
-      openUrlExternally(external, LOG_PREFIX);
-      return;
-    }
-    try {
-      openUrlExternally(await resolveTerminalLinkForHost(external, hostId), LOG_PREFIX);
-    } catch (error) {
-      logError(`${LOG_PREFIX} Failed to forward the link's port`, error);
-      linkRefused(hostForwardFailure(external, error));
-    }
+    await openInSystemBrowser(external);
     return;
   }
 
