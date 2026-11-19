@@ -1040,6 +1040,7 @@ export class TerminalProcess {
       detectedProcessIconId: t.detectedProcessIconId,
       everDetectedAgent: t.everDetectedAgent,
       agentIncarnation: t.agentIncarnation,
+      updateInstalled: t.updateInstalled,
       restartCount: t.restartCount,
       activityTier: this._activityTier,
       hasPty,
