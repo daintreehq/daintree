@@ -73,9 +73,8 @@ Main Process (electron/)     Renderer (src/)
 | ------------------------------- | --------------------------------------------------------- |
 | `components/Terminal/`          | Xterm.js rendering, grid layout                           |
 | `components/Worktree/`          | Dashboard cards, status display                           |
-| `components/Layout/`            | App shell, toolbar, dock                                  |
+| `components/Layout/`            | App shell, toolbar, dock, links launcher                  |
 | `components/Browser/`           | Browser panel (BrowserPane, toolbar)                      |
-| `components/Portal/`            | Localhost portal, dev-server dashboard, log viewer        |
 | `panels/<kind>/`                | Per-kind panel modules for the seven built-in panel kinds |
 | `services/actions/definitions/` | Action definitions — the dispatch and MCP tool surface    |
 | `store/*.ts`                    | Zustand stores                                            |
