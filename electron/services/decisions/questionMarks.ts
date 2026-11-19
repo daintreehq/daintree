@@ -121,48 +121,59 @@ export function withInbox(
  * Whether the list leaves `mark` standing. This computer's own list is whole,
  * so one of its questions no longer listed has gone for good. A Host's can be
  * missing for a while (its link down, its list not read yet), so its mark
- * stays until the list shows the question over. A stopped delivery can stand
- * over a question that still waits, and its mark waits with it.
+ * stays until the list shows the question over. A different ask proves the
+ * mark stale only when it was reported (`reported`): a Host from before
+ * #17895 says only which questions wait for a reply, so its open question's
+ * ask is a guess. A stopped delivery can stand over a question that still
+ * waits, and its mark waits with it.
  */
 function stillHolds(
   mark: QuestionMark,
   item: DecisionQuestionListItem | undefined,
-  ownHostId: string | null
+  ownHostId: string | null,
+  reported: boolean
 ): boolean {
   if (item === undefined) return mark.hostId !== ownHostId;
-  if (item.inbox !== undefined) return item.inbox.ask === mark.ask;
+  if (item.inbox !== undefined) return item.inbox.ask === mark.ask || !reported;
   return item.standing.kind === "needs-attention";
 }
 
 /**
  * `record` with the person's `payload` applied, each question only while
  * `list` (as published, with `inbox`) shows it in Needs you at the ask it was
- * shown with, and every mark the list proves stale let go. `marked` counts
- * the questions the payload changed.
+ * shown with, and every mark the list proves stale let go. `reported` names,
+ * by `markKey`, the questions whose ask was reported rather than guessed, as
+ * `withInbox` took them. `marked` counts the questions the payload changed.
  */
 export function applyQuestionMarks(
   record: QuestionMarks,
   list: readonly DecisionQuestionListItem[],
   payload: MarkDecisionQuestionsPayload,
-  ownHostId: string | null
+  ownHostId: string | null,
+  reported: ReadonlyMap<string, string | null>
 ): { marks: Map<string, QuestionMark>; marked: number } {
   const listed = new Map(list.map((item) => [markKey(item.reference), item]));
   const marks = new Map<string, QuestionMark>();
   for (const [key, mark] of record) {
-    if (stillHolds(mark, listed.get(key), ownHostId)) marks.set(key, mark);
+    if (stillHolds(mark, listed.get(key), ownHostId, reported.has(key))) marks.set(key, mark);
   }
   let marked = 0;
   for (const { reference, ask } of payload.questions) {
     const key = markKey(reference);
     const inbox = listed.get(key)?.inbox;
     if (inbox === undefined || inbox.ask !== ask) continue;
-    const before = marks.get(key) ?? {
-      hostId: reference.hostId,
-      questionId: reference.questionId,
-      ask,
-      seen: false,
-      cleared: false,
-    };
+    // A mark kept at another ask (one only guessed) says nothing about this one.
+    const held = marks.get(key);
+    const before =
+      held !== undefined && held.ask === ask
+        ? held
+        : {
+            hostId: reference.hostId,
+            questionId: reference.questionId,
+            ask,
+            seen: false,
+            cleared: false,
+          };
     const seen = before.seen || payload.action === "seen";
     const cleared =
       payload.action === "clear" ? true : payload.action === "restore" ? false : before.cleared;

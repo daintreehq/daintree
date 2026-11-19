@@ -399,6 +399,8 @@ function publishPaneState(projectId: string, state: PaneDecisionState): void {
 let ownQuestions: readonly DecisionQuestionListItem[] = [];
 /** What its questions in Needs you ask now, and the person's marks (#17895), as read with them. */
 let ownInbox: QuestionInboxFacts | null = null;
+/** The asks the list last published was told, by `markKey`: those it didn't have to guess. */
+let listedAsks: ReadonlyMap<string, string | null> = new Map();
 /** The owner lifetime lists questions now: its store is read. */
 let listingQuestions = false;
 /** Follows the Remote Hosts client's port for its Hosts' questions (#17230), while listing. */
@@ -480,6 +482,7 @@ function listedQuestions(): DecisionQuestionListItem[] {
       asks.set(markKey({ hostId: host.questionHostId, questionId }), ask);
     }
   }
+  listedAsks = asks;
   return withInbox(
     withHostQuestions(ownQuestions, hosts, ownHostId),
     asks,
@@ -1438,14 +1441,23 @@ async function markQuestionsNow(
   } catch {
     return { result: "failed" };
   }
-  // The list read now, after the record: a store let go of meanwhile lists nothing to mark.
-  if (!listingQuestions || running.getStore() !== localStore) return { result: "not-running" };
+  // The list read now, after the record: a store let go of meanwhile, Decisions turned off or
+  // quit begun while the read waited its turn, lists nothing to mark.
+  if (
+    shutDown ||
+    !listingQuestions ||
+    running.getStore() !== localStore ||
+    readDecisionsSettings(store).enabled !== true
+  ) {
+    return { result: "not-running" };
+  }
   const record = parseQuestionMarks(text);
   const { marks, marked } = applyQuestionMarks(
     record,
     getDecisionQuestionList().questions,
     payload,
-    running.getSettings()?.hostId ?? null
+    running.getSettings()?.hostId ?? null,
+    listedAsks
   );
   const next = serializeQuestionMarks(marks);
   // Unchanged writes nothing: a commit would only read the list again.

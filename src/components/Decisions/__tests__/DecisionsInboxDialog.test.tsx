@@ -815,7 +815,11 @@ describe("DecisionsInboxDialog", () => {
   });
 
   describe("seen and cleared on this computer (#17895)", () => {
-    const unmarked = { ask: null, seen: false, cleared: false };
+    const unmarked: NonNullable<DecisionQuestionListItem["inbox"]> = {
+      ask: null,
+      seen: false,
+      cleared: false,
+    };
     /** `LIST` as this computer lists it: question-2, in Needs you, carrying `inbox`. */
     function marked(inbox = unmarked, revision = 2, extra: DecisionQuestionListItem[] = []) {
       return {
@@ -862,18 +866,47 @@ describe("DecisionsInboxDialog", () => {
       expect(seenCalls()).toHaveLength(0);
 
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
-      act(() => window.dispatchEvent(new Event("focus")));
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
       await waitFor(() => expect(seenCalls()).toHaveLength(1));
     });
 
-    it("waits for a read that holds the agent's follow-up the ask names before marking it seen", async () => {
-      listQuestions.mockResolvedValue(marked({ ...unmarked, ask: "note-1" }));
+    it("marks nothing seen while another modal covers the inbox, and does once it closes", async () => {
+      let land!: (read: DecisionQuestionContentResult) => void;
+      getQuestionContentByReference.mockImplementation(
+        () => new Promise<DecisionQuestionContentResult>((resolve) => (land = resolve))
+      );
+      listQuestions.mockResolvedValue(marked());
       open();
-      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
-      await act(async () => {});
-      // The read on screen predates the follow-up.
-      expect(seenCalls()).toHaveLength(0);
+      await waitFor(() => expect(readsOf("question-2")).toBe(1));
+      // An image opened full size over the reader: a modal of its own, on top of the inbox.
+      const cover = document.createElement("div");
+      cover.setAttribute("role", "dialog");
+      cover.setAttribute("aria-modal", "true");
+      cover.tabIndex = -1;
+      document.body.appendChild(cover);
+      try {
+        act(() => cover.focus());
+        await act(async () => land({ result: "read", question: CONTENT["question-2"]! }));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+        await act(async () => {});
+        expect(seenCalls()).toHaveLength(0);
 
+        // Closed: the keyboard comes back into the inbox.
+        act(() => {
+          cover.remove();
+          const active = document.activeElement;
+          if (active instanceof HTMLElement) active.blur();
+          rowNamed("q-2").focus();
+        });
+        await waitFor(() => expect(seenCalls()).toHaveLength(1));
+      } finally {
+        cover.remove();
+      }
+    });
+
+    it("waits for a read that holds the agent's follow-up the ask names before marking it seen", async () => {
       const followUp = {
         type: "message" as const,
         messageId: "note-1",
@@ -885,37 +918,78 @@ describe("DecisionsInboxDialog", () => {
         deliveryStatus: null,
         unreadable: false,
       };
-      getQuestionContentByReference.mockImplementation(async ({ reference: ref }) => ({
-        result: "read",
-        question:
-          ref.questionId === "question-2"
-            ? { ...CONTENT["question-2"]!, thread: [followUp] }
-            : CONTENT[ref.questionId]!,
-      }));
-      // The list moving with the follow-up reads the question again.
-      push(marked({ ...unmarked, ask: "note-1" }, 3, [item("question-4", 4, OPEN)]));
+      // Seen at the question alone; the list's first push is the baseline the reader compares with.
+      listQuestions.mockResolvedValue(marked({ ...unmarked, seen: true }));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      push(marked({ ...unmarked, seen: true }, 2));
+      await waitFor(() => expect(readsOf("question-2")).toBe(2));
+      // The agent follows up: the list says so, and only that moves, so the question is read again.
+      let land!: (read: DecisionQuestionContentResult) => void;
+      getQuestionContentByReference.mockImplementation(
+        () => new Promise<DecisionQuestionContentResult>((resolve) => (land = resolve))
+      );
+      push(marked({ ...unmarked, ask: "note-1" }, 3));
+      await waitFor(() => expect(readsOf("question-2")).toBe(3));
+      await act(async () => {});
+      // The read on screen predates the follow-up.
+      expect(seenCalls()).toHaveLength(0);
+
+      await act(async () =>
+        land({ result: "read", question: { ...CONTENT["question-2"]!, thread: [followUp] } })
+      );
       await waitFor(() =>
         expect(seenCalls().map(([payload]) => payload.questions[0]?.ask)).toEqual(["note-1"])
       );
+    });
+
+    it("holds Clear while the read on screen predates what the question asks now", async () => {
+      listQuestions.mockResolvedValue(marked({ ...unmarked, seen: true }));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      getQuestionContentByReference.mockImplementation(
+        () => new Promise<DecisionQuestionContentResult>(() => {})
+      );
+      push(marked({ ...unmarked, ask: "note-1" }, 3));
+      const clear = screen.getByTestId("decisions-inbox-clear");
+      await waitFor(() => expect(clear.getAttribute("aria-disabled")).toBe("true"));
+      fireEvent.click(clear);
+      await act(async () => {});
+      expect(markQuestions.mock.calls.filter(([p]) => p.action === "clear")).toHaveLength(0);
     });
 
     it("marks a follow-up seen only once it's scrolled into view", async () => {
       const observed: Array<{ target: Element; fire: (visible: boolean) => void }> = [];
       vi.stubGlobal(
         "IntersectionObserver",
-        class {
+        class implements IntersectionObserver {
+          readonly root = null;
+          readonly rootMargin = "0px";
+          readonly thresholds = [0];
           constructor(private readonly callback: IntersectionObserverCallback) {}
           observe(target: Element) {
             observed.push({
               target,
-              fire: (visible) =>
-                this.callback(
-                  [{ isIntersecting: visible, target } as IntersectionObserverEntry],
-                  this as unknown as IntersectionObserver
-                ),
+              fire: (visible) => {
+                const rect = target.getBoundingClientRect();
+                const entry: IntersectionObserverEntry = {
+                  boundingClientRect: rect,
+                  intersectionRatio: visible ? 1 : 0,
+                  intersectionRect: rect,
+                  isIntersecting: visible,
+                  rootBounds: null,
+                  target,
+                  time: 0,
+                };
+                this.callback([entry], this);
+              },
             });
           }
+          unobserve() {}
           disconnect() {}
+          takeRecords(): IntersectionObserverEntry[] {
+            return [];
+          }
         }
       );
       const followUp = {
@@ -991,12 +1065,23 @@ describe("DecisionsInboxDialog", () => {
 
     it("clears a question it can't read, as for a Host that isn't connected", async () => {
       getQuestionContentByReference.mockResolvedValue({ result: "host-not-connected" });
-      listQuestions.mockResolvedValue(marked());
+      const away = {
+        ...item("question-9", 9, OPEN, {
+          reference: reference("question-9", { hostId: "qhost_studio_0001" }),
+          remoteHost: { hostId: "studio", name: "Studio", connected: false },
+        }),
+        inbox: { ask: "note-3", seen: false, cleared: false },
+      };
+      listQuestions.mockResolvedValue({ revision: 2, questions: [away] });
       open();
-      await waitFor(() => expect(screen.getByTestId("decisions-inbox-clear")).toBeTruthy());
+      await waitFor(() => expect(readsOf("question-9")).toBe(1));
+      await act(async () => {});
       fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
       await waitFor(() =>
-        expect(markQuestions).toHaveBeenCalledWith(expect.objectContaining({ action: "clear" }))
+        expect(markQuestions).toHaveBeenCalledWith({
+          action: "clear",
+          questions: [{ reference: away.reference, ask: "note-3" }],
+        })
       );
       // Never read, never seen.
       expect(seenCalls()).toHaveLength(0);

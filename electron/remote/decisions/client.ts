@@ -302,6 +302,12 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly beforeQuestions = new WeakSet<DecisionsHostSession>();
   /** Sessions whose Host answered the list with its asks UNSUPPORTED: from before #17895. */
   private readonly beforeAsks = new WeakSet<DecisionsHostSession>();
+  /**
+   * Sessions with a read of the list with its asks out. A Host answers that
+   * read with its list as it stands then, after any v1 push it sent before
+   * the read reached it, so such a push never supersedes the read.
+   */
+  private readonly readingAsks = new WeakSet<DecisionsHostSession>();
   private readonly questionListeners = new Set<() => void>();
   private readonly now: () => number;
 
@@ -475,6 +481,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     let withAsks = !this.beforeAsks.has(session);
     try {
       if (withAsks) {
+        this.readingAsks.add(session);
         try {
           raw = await session.call(
             DecisionsLinkMethod.QUESTION_LIST_V2,
@@ -486,6 +493,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
           if (codeOf(error) !== "UNSUPPORTED") throw error;
           this.beforeAsks.add(session);
           withAsks = false;
+        } finally {
+          this.readingAsks.delete(session);
         }
       }
       if (!withAsks) {
@@ -604,8 +613,10 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       (payload) => {
         // A replaced link's list, or one served to another owner, moves nothing: not even a read's turn.
         if (!this.takesList(hostId, session, payload)) return null;
-        // Newer than any read still waiting for its answer.
-        this.questionTurns.set(hostId, (this.questionTurns.get(hostId) ?? 0) + 1);
+        // Newer than any read still waiting for its answer, except one of the list with its asks.
+        if (!this.readingAsks.has(session)) {
+          this.questionTurns.set(hostId, (this.questionTurns.get(hostId) ?? 0) + 1);
+        }
         this.hearQuestions(hostId, session, payload);
         return null;
       }

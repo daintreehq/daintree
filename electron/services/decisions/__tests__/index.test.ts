@@ -28,6 +28,12 @@ const loads = vi.hoisted(() => ({
   opening: null as Promise<void> | null,
   // Why the stores stopped writing; null while they write.
   faultReason: null as "disk-pressure" | "disk-full" | "storage-busy" | "storage-fault" | null,
+  // While set, every store opened holds these rows and meta, and a meta write commits (#17895).
+  persisted: null as null | {
+    rows: unknown[];
+    meta: Map<string, string>;
+    commits: Set<() => void>;
+  },
 }));
 const broadcast = vi.hoisted(() => vi.fn());
 const toasts = vi.hoisted(() => vi.fn());
@@ -438,23 +444,35 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             loads.failNextOpen = false;
             throw new Error("store unavailable");
           }
+          const persisted = loads.persisted;
           return {
             close: () => loads.closing ?? Promise.resolve(),
-            onCommit: () => () => {},
+            onCommit: (listener: () => void) => {
+              persisted?.commits.add(listener);
+              return () => persisted?.commits.delete(listener);
+            },
             onQuestionDeleted: () => () => {},
             onFault: () => () => {},
             faultReason: () => loads.faultReason,
-            listQuestions: async () => [],
-            ...(notificationRecord.readable
+            listQuestions: async () => persisted?.rows ?? [],
+            ...(persisted
               ? {
-                  getMeta: async (key: string) => {
-                    if (key !== "daintree:notified-questions") return null;
-                    await notificationRecord.read;
-                    return "[]";
+                  getMeta: async (key: string) => persisted.meta.get(key) ?? null,
+                  setMeta: async (key: string, value: string) => {
+                    persisted.meta.set(key, value);
+                    for (const listener of [...persisted.commits]) listener();
                   },
-                  setMeta: async () => {},
                 }
-              : {}),
+              : notificationRecord.readable
+                ? {
+                    getMeta: async (key: string) => {
+                      if (key !== "daintree:notified-questions") return null;
+                      await notificationRecord.read;
+                      return "[]";
+                    },
+                    setMeta: async () => {},
+                  }
+                : {}),
           } as never;
         },
       });
@@ -613,6 +631,7 @@ describe("Decisions entry", () => {
     notificationRecord.read = Promise.resolve();
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
+    loads.persisted = null;
     loads.closing = null;
     loads.opening = null;
     loads.faultReason = null;
@@ -857,6 +876,51 @@ describe("Decisions entry", () => {
       expect(getDecisionQuestionList().questions).toEqual([]);
     } finally {
       withdraw();
+      setDecisionQuestions([]);
+    }
+  });
+
+  it("lists a mark once it commits, and with the first list after Decisions starts again (#17895)", async () => {
+    loads.persisted = {
+      rows: [row(1, { origin: { host_id: RELAY.hostId } })],
+      meta: new Map(),
+      commits: new Set(),
+    };
+    saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+    try {
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() =>
+        expect(getDecisionQuestionList().questions[0]?.inbox).toEqual(UNMARKED)
+      );
+      const reference = getDecisionQuestionList().questions[0]!.reference;
+
+      expect(
+        await markDecisionQuestions({ action: "clear", questions: [{ reference, ask: null }] })
+      ).toEqual({ result: "marked", marked: 1 });
+      // The write's commit reads the list again: nothing else republishes it.
+      await vi.waitFor(() =>
+        expect(getDecisionQuestionList().questions[0]?.inbox).toEqual({
+          ask: null,
+          seen: false,
+          cleared: true,
+        })
+      );
+
+      await setDecisionsEnabled(false);
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      const heard: DecisionQuestionList[] = [];
+      const off = onDecisionQuestionsChanged((list) => heard.push(list));
+      try {
+        await setDecisionsEnabled(true);
+        await vi.waitFor(() => expect(heard.length).toBeGreaterThan(0));
+        // Never listed unmarked on the way back: the marks come with the first read of the store.
+        expect(heard.map((list) => list.questions[0]?.inbox?.cleared)).toEqual(
+          heard.map(() => true)
+        );
+      } finally {
+        off();
+      }
+    } finally {
       setDecisionQuestions([]);
     }
   });

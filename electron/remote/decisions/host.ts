@@ -86,18 +86,22 @@ const LONGEST_OWNER = { installationId: "x".repeat(64), ownerDeviceId: "x".repea
 
 /**
  * The newest questions within what one message carries, by count and by
- * size. The asks a v2 list adds stay within the link's message: at most one
- * per question, each two bounded ids.
+ * size, the asks a v2 list sends with them counted in (#17895).
  */
 function bounded(list: HostQuestionList): HostQuestionList {
   const kept: HostQuestionList["questions"] = [];
   let bytes = Buffer.byteLength(
-    JSON.stringify({ hostId: list.hostId, owner: LONGEST_OWNER, questions: [] })
+    JSON.stringify({ hostId: list.hostId, owner: LONGEST_OWNER, questions: [], asks: [] })
   );
   for (let i = list.questions.length - 1; i >= 0 && kept.length < MAX_HOST_QUESTIONS; i--) {
     const question = list.questions[i]!;
     // Each question, and the comma before it when one is already kept.
     bytes += Buffer.byteLength(JSON.stringify(question)) + (kept.length > 0 ? 1 : 0);
+    const { questionId } = question.reference;
+    const ask = list.asks?.get(questionId);
+    if (ask !== undefined) {
+      bytes += Buffer.byteLength(JSON.stringify({ questionId, ask })) + (kept.length > 0 ? 1 : 0);
+    }
     if (bytes > MAX_HOST_QUESTION_LIST_BYTES) break;
     kept.push(question);
   }
@@ -208,6 +212,8 @@ export function installDecisionsHostWith(
   const beforeQuestions = new WeakSet<LinkSession>();
   /** Sessions whose Shell reads the list with its asks (#17895): their pushes carry them too. */
   const listsV2 = new WeakSet<LinkSession>();
+  /** The list as last bounded to send, so a push told again as v1 tells what holds now. */
+  let latestList: HostQuestionList | null = null;
 
   /** The session's owner enrolled this Host and has Decisions on: only it reads the questions. */
   const servesQuestions = (session: LinkSession): boolean => {
@@ -230,9 +236,13 @@ export function installDecisionsHostWith(
       if (toldQuestions.get(session) === key) toldQuestions.delete(session);
       if (!unsupported) return;
       if (v2) {
-        // A Shell that read the list with its asks takes them pushed; one that doesn't hears v1.
+        // A Shell that read the list with its asks takes them pushed; one that doesn't hears v1,
+        // the list as it stands now, and only while this Host still serves it its questions.
         listsV2.delete(session);
-        tellQuestions(session, list, owner);
+        const current = owners.get(session);
+        if (latestList !== null && current !== undefined && servesQuestions(session)) {
+          tellQuestions(session, latestList, current);
+        }
       } else {
         beforeQuestions.add(session);
       }
@@ -246,6 +256,7 @@ export function installDecisionsHostWith(
     // A Host that stopped serving its questions says nothing: its owner keeps what it last heard.
     if (list === null) return;
     const sent = bounded(list);
+    latestList = sent;
     for (const [session, owner] of owners) {
       if (servesQuestions(session)) tellQuestions(session, sent, owner);
     }
@@ -392,7 +403,8 @@ export function installDecisionsHostWith(
       const list = made.questions();
       const owner = owners.get(session);
       if (list === null || owner === undefined) return NO_QUESTIONS;
-      const sent = servedTo(bounded(list), owner);
+      latestList = bounded(list);
+      const sent = servedTo(latestList, owner);
       toldQuestions.set(session, JSON.stringify(sent));
       return sent;
     }
@@ -413,7 +425,8 @@ export function installDecisionsHostWith(
     const list = made.questions();
     const owner = owners.get(session);
     if (list === null || owner === undefined) return noQuestionsV2();
-    const sent = servedToV2(bounded(list), owner);
+    latestList = bounded(list);
+    const sent = servedToV2(latestList, owner);
     toldQuestions.set(session, JSON.stringify(sent));
     return sent;
   };

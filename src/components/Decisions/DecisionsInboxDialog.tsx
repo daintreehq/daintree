@@ -54,6 +54,7 @@ import { aliasLabel } from "./decisionQuestionModel";
 import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 import {
   agentName,
+  askShownIn,
   attentionText,
   connectionNotice,
   emptyText,
@@ -755,6 +756,13 @@ export function DecisionsInboxDialog() {
   // unless the keyboard went somewhere else meanwhile or another question was chosen.
   const shownRead = reader.current?.result === "read" ? reader.current.question : null;
   useDecisionQuestionSeen(selected, shownRead, active, detailRef);
+  // Clearing waits while the read on screen predates what the list says it asks now; with
+  // no read on screen (one that can't be read, its Host away) it goes by the list alone.
+  const clearWaits =
+    selected !== null &&
+    selectedGroup === "needs-you" &&
+    shownRead !== null &&
+    !askShownIn(selected, shownRead);
   useEffect(() => {
     const pending = pendingFocus.current;
     if (pending === null || shownRead === null) return;
@@ -1005,11 +1013,14 @@ export function DecisionsInboxDialog() {
                           <Button
                             variant="ghost"
                             size="xs"
-                            onClick={() =>
+                            aria-disabled={clearWaits || undefined}
+                            onClick={() => {
+                              if (clearWaits) return;
                               markShown(selectedGroup === "cleared" ? "restore" : "clear", [
                                 selected,
-                              ])
-                            }
+                              ]);
+                            }}
+                            className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
                             data-testid="decisions-inbox-clear"
                           >
                             {selectedGroup === "cleared"

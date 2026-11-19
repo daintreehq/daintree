@@ -323,7 +323,12 @@ describe("DecisionQuestionDialog seen on this computer (#17895)", () => {
 
   it("marks a pane's question seen once read, at the ask this computer's list names", async () => {
     const decisions = Reflect.get(window, "electron").decisions as Record<string, unknown>;
-    // The agent's follow-up in its thread, `m1`, is what it asks now.
+    // Still open, the agent's follow-up in its thread, `m1`, is what it asks now.
+    const open = content("qa", 7, { status: "open" });
+    getQuestionContent.mockResolvedValue({
+      result: "read",
+      question: { ...open, thread: open.thread.filter((entry) => entry.type === "message") },
+    });
     decisions.listQuestions = vi.fn(async () =>
       listing({ ask: "m1", seen: false, cleared: false })
     );
@@ -370,7 +375,7 @@ describe("DecisionQuestionDialog seen on this computer (#17895)", () => {
     // qb isn't on this computer's list at all.
     fireEvent.click(screen.getByTestId("decision-question-next"));
     await waitFor(() =>
-      expect(screen.getByTestId("decision-question-body").textContent).not.toContain("Merged")
+      expect(screen.getByTestId("decision-question-body").textContent).toContain("Question 8")
     );
     await act(async () => {});
     expect(markQuestions).not.toHaveBeenCalled();

@@ -18,6 +18,14 @@ import {
 const OWN = "host_own_0001";
 const HOST = "host_studio_01";
 
+/** Every question's ask taken as reported, not guessed, as this computer's own always are. */
+class EveryAskReported extends Map<string, string | null> {
+  override has(): boolean {
+    return true;
+  }
+}
+const REPORTED: ReadonlyMap<string, string | null> = new EveryAskReported();
+
 function item(
   n: number,
   standing: DecisionQuestionStanding = { kind: "waiting", reason: "open" },
@@ -147,30 +155,66 @@ describe("applyQuestionMarks", () => {
 
   it("records seen, clear and restore apart, each at the ask shown", () => {
     const [q] = listed(item(1));
-    const seen = applyQuestionMarks(new Map(), [q!], payload("seen", { of: q! }), OWN);
+    const seen = applyQuestionMarks(new Map(), [q!], payload("seen", { of: q! }), OWN, REPORTED);
     expect(seen.marked).toBe(1);
     expect([...seen.marks.values()]).toEqual([mark(q!, { seen: true, cleared: false })]);
 
-    const cleared = applyQuestionMarks(seen.marks, [q!], payload("clear", { of: q! }), OWN);
+    const cleared = applyQuestionMarks(
+      seen.marks,
+      [q!],
+      payload("clear", { of: q! }),
+      OWN,
+      REPORTED
+    );
     expect([...cleared.marks.values()]).toEqual([mark(q!, { seen: true, cleared: true })]);
 
     // Restoring takes it back into Needs you without forgetting it was seen.
-    const restored = applyQuestionMarks(cleared.marks, [q!], payload("restore", { of: q! }), OWN);
+    const restored = applyQuestionMarks(
+      cleared.marks,
+      [q!],
+      payload("restore", { of: q! }),
+      OWN,
+      REPORTED
+    );
     expect([...restored.marks.values()]).toEqual([mark(q!, { seen: true, cleared: false })]);
   });
 
   it("drops a mark that a restore leaves holding nothing", () => {
     const [q] = listed(item(1));
-    const cleared = applyQuestionMarks(new Map(), [q!], payload("clear", { of: q! }), OWN);
-    const restored = applyQuestionMarks(cleared.marks, [q!], payload("restore", { of: q! }), OWN);
+    const cleared = applyQuestionMarks(
+      new Map(),
+      [q!],
+      payload("clear", { of: q! }),
+      OWN,
+      REPORTED
+    );
+    const restored = applyQuestionMarks(
+      cleared.marks,
+      [q!],
+      payload("restore", { of: q! }),
+      OWN,
+      REPORTED
+    );
     expect(restored.marks.size).toBe(0);
     expect(restored.marked).toBe(1);
   });
 
   it("seeing a cleared question never restores it", () => {
     const [q] = listed(item(1));
-    const cleared = applyQuestionMarks(new Map(), [q!], payload("clear", { of: q! }), OWN);
-    const seen = applyQuestionMarks(cleared.marks, [q!], payload("seen", { of: q! }), OWN);
+    const cleared = applyQuestionMarks(
+      new Map(),
+      [q!],
+      payload("clear", { of: q! }),
+      OWN,
+      REPORTED
+    );
+    const seen = applyQuestionMarks(
+      cleared.marks,
+      [q!],
+      payload("seen", { of: q! }),
+      OWN,
+      REPORTED
+    );
     expect([...seen.marks.values()]).toEqual([mark(q!, { seen: true, cleared: true })]);
   });
 
@@ -180,21 +224,31 @@ describe("applyQuestionMarks", () => {
       new Map(),
       [open!, settled!],
       payload("clear", { of: open!, ask: "older-note" }, { of: settled!, ask: null }),
-      OWN
+      OWN,
+      REPORTED
     );
     expect(result).toEqual({ marks: new Map(), marked: 0 });
   });
 
   it("leaves a question the list doesn't hold", () => {
     const missing = item(9);
-    const result = applyQuestionMarks(new Map(), [], payload("clear", { of: missing }), OWN);
+    const result = applyQuestionMarks(
+      new Map(),
+      [],
+      payload("clear", { of: missing }),
+      OWN,
+      REPORTED
+    );
     expect(result).toEqual({ marks: new Map(), marked: 0 });
   });
 
   it("counts only the questions it changed", () => {
     const [q] = listed(item(1));
-    const once = applyQuestionMarks(new Map(), [q!], payload("seen", { of: q! }), OWN);
-    expect(applyQuestionMarks(once.marks, [q!], payload("seen", { of: q! }), OWN).marked).toBe(0);
+    const once = applyQuestionMarks(new Map(), [q!], payload("seen", { of: q! }), OWN, REPORTED);
+    expect(once.marked).toBe(1);
+    expect(
+      applyQuestionMarks(once.marks, [q!], payload("seen", { of: q! }), OWN, REPORTED).marked
+    ).toBe(0);
   });
 
   it("lets go of marks the list proves over, and keeps those it can't", () => {
@@ -226,12 +280,59 @@ describe("applyQuestionMarks", () => {
       record,
       [...questions, ...asked],
       { action: "seen", questions: [] },
-      OWN
+      OWN,
+      REPORTED
     );
     // Still waiting at its ask; masked by a stopped delivery; a Host's while its list is away.
     expect([...marks.keys()].sort()).toEqual(
       [questions[0]!, questions[2]!, awayHost].map((q) => markKey(q.reference)).sort()
     );
+  });
+});
+
+describe("applyQuestionMarks with a Host from before #17895", () => {
+  it("keeps a mark at another ask while the list only guesses the question's ask", () => {
+    const old = hostItem(1);
+    const other = item(2);
+    const listed = withInbox([old, other], new Map(), new Map());
+    // Cleared at the agent's follow-up m2 over a v2 link; the Host now speaks v1.
+    const record = marksOf(mark(old, { ask: "m2", seen: false, cleared: true }));
+    expect(listed[0]!.inbox).toEqual({ ask: null, seen: false, cleared: false });
+
+    const kept = applyQuestionMarks(
+      record,
+      listed,
+      payload("seen", { of: listed[1]! }),
+      OWN,
+      new Map()
+    );
+    expect(kept.marks.get(markKey(old.reference))).toEqual(record.get(markKey(old.reference)));
+
+    // Once a reported ask says otherwise, it is stale.
+    const reported = new Map([[markKey(old.reference), null]]);
+    const pruned = applyQuestionMarks(
+      record,
+      listed,
+      payload("seen", { of: listed[1]! }),
+      OWN,
+      reported
+    );
+    expect(pruned.marks.has(markKey(old.reference))).toBe(false);
+  });
+
+  it("starts a mark at the ask shown, carrying nothing of one kept at another ask", () => {
+    const old = hostItem(1);
+    const [listed] = withInbox([old], new Map(), new Map());
+    const record = marksOf(mark(old, { ask: "m2", seen: true, cleared: true }));
+    const { marks, marked } = applyQuestionMarks(
+      record,
+      [listed!],
+      payload("seen", { of: listed! }),
+      OWN,
+      new Map()
+    );
+    expect(marked).toBe(1);
+    expect([...marks.values()]).toEqual([mark(old, { ask: null, seen: true, cleared: false })]);
   });
 });
 

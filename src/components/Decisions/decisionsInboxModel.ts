@@ -101,6 +101,25 @@ export function seeableAsk(
   return held ? { ask: inbox.ask } : null;
 }
 
+/**
+ * Whether `shown`, a read of the listed question, has its current ask on
+ * screen: the question alone, or the agent's follow-up the ask names, even
+ * one that couldn't be opened. A clear made from a read that predates the ask
+ * would set aside something the person never had in front of them.
+ */
+export function askShownIn(
+  item: Pick<DecisionQuestionListItem, "inbox">,
+  shown: Pick<DecisionQuestionContent, "thread">
+): boolean {
+  const ask = item.inbox?.ask ?? null;
+  return (
+    ask === null ||
+    shown.thread.some(
+      (entry) => entry.type === "message" && entry.from === "agent" && entry.messageId === ask
+    )
+  );
+}
+
 /** What a cleared question's row says: it still waits for the agent, just not on the person. */
 export const CLEARED_NOTE = "Cleared on this computer";
 

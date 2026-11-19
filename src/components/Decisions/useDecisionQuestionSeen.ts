@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { decisionsClient } from "@/clients/decisionsClient";
+import { topmostOpenModal } from "@/lib/openModalFocus";
 import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import type {
   DecisionQuestionContent,
@@ -8,27 +9,39 @@ import type {
 } from "@shared/types/decisionsQuestion";
 import { seeableAsk } from "./decisionsInboxModel";
 
-/** Someone can be reading this view: it isn't cached or hidden, and its window has focus. */
-function isWatched(): boolean {
-  return isProjectViewObservable() && typeof document !== "undefined" && document.hasFocus();
+/**
+ * Someone can be reading `scope`: its view isn't cached or hidden, its window
+ * has focus, and no other modal (an image opened full size, a confirmation)
+ * covers the one it is in.
+ */
+function isWatched(scope: HTMLElement | null): boolean {
+  if (scope === null || !isProjectViewObservable()) return false;
+  if (typeof document === "undefined" || !document.hasFocus()) return false;
+  const top = topmostOpenModal(null);
+  return top === null || top.contains(scope);
 }
 
-/** `isWatched`, kept current while `active`. */
-function useWatched(active: boolean): boolean {
-  const [watched, setWatched] = useState(isWatched);
+/**
+ * `isWatched`, kept current while `active`. Focus moving into a modal over it,
+ * or back out of one, is when a cover comes or goes.
+ */
+function useWatched(active: boolean, scope: RefObject<HTMLElement | null>): boolean {
+  const [watched, setWatched] = useState(false);
   useEffect(() => {
     if (!active) return;
-    const check = () => setWatched(isWatched());
+    const check = () => setWatched(isWatched(scope.current));
     check();
     window.addEventListener("focus", check);
     window.addEventListener("blur", check);
+    document.addEventListener("focusin", check);
     const offObservable = subscribeProjectViewObservability(check);
     return () => {
       window.removeEventListener("focus", check);
       window.removeEventListener("blur", check);
+      document.removeEventListener("focusin", check);
       offObservable();
     };
-  }, [active]);
+  }, [active, scope]);
   return active && watched;
 }
 
@@ -46,7 +59,7 @@ export function useDecisionQuestionSeen(
   active: boolean,
   scope: RefObject<HTMLElement | null>
 ): void {
-  const watched = useWatched(active);
+  const watched = useWatched(active, scope);
   const seeable = item !== null && shown !== null ? seeableAsk(item, shown) : null;
   const reference = seeable === null ? null : item!.reference;
   const hostId = reference?.hostId ?? null;
@@ -62,22 +75,26 @@ export function useDecisionQuestionSeen(
     if (terminalId === null || questionId === null) return;
     const key = JSON.stringify([hostId, questionId, ask]);
     if (sent.current === key) return;
+    // A look that ended (the question changed, focus left) sends nothing, even from a callback already queued.
+    let retired = false;
     const send = () => {
-      if (sent.current === key) return;
+      if (retired || sent.current === key || !isWatched(scope.current)) return;
       sent.current = key;
       const forget = () => {
-        // Not taken: the next change to what's shown tries again.
+        // Not taken, or nothing it named was marked: the next change to what's shown tries again.
         if (sent.current === key) sent.current = null;
       };
       decisionsClient
         .markQuestions("seen", [{ reference: { hostId, projectId, terminalId, questionId }, ask }])
         .then((result) => {
-          if (result.result !== "marked") forget();
+          if (result.result !== "marked" || result.marked === 0) forget();
         }, forget);
     };
     if (ask === null || typeof IntersectionObserver === "undefined") {
       send();
-      return;
+      return () => {
+        retired = true;
+      };
     }
     const entry = scope.current?.querySelector(`[data-message-id="${CSS.escape(ask)}"]`);
     if (entry == null) return;
@@ -87,7 +104,10 @@ export function useDecisionQuestionSeen(
       send();
     });
     observer.observe(entry);
-    return () => observer.disconnect();
+    return () => {
+      retired = true;
+      observer.disconnect();
+    };
     // `shown` is a dependency so a read that renders the entry looks for it again.
   }, [watched, hostId, projectId, terminalId, questionId, ask, shown, scope]);
 }

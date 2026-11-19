@@ -14,7 +14,6 @@ import {
   peekDeviceAnswerService,
 } from "../../services/deviceAnswer/index.js";
 import { sanitizeDeviceAnswerSettings } from "../../services/deviceAnswer/deviceAnswerSettings.js";
-import { DECISION_QUESTION_MARKS_PER_CALL } from "../../../shared/types/decisionsQuestion.js";
 import { DEVICE_ANSWER_METHOD_CHANNELS } from "./deviceAnswer.preload.js";
 import { sshLoginTarget } from "../../utils/machineName.js";
 import { isRemoteView } from "../../window/webviewSrcGate.js";
@@ -356,6 +355,10 @@ const getQuestionImageByReferenceSchema = z
   })
   .strict();
 
+// The client's page, `DECISION_QUESTION_MARKS_PER_CALL`, as a literal: this module loads at
+// startup, and importing a value from the Decisions types would add that module to it.
+const MARKS_PER_CALL = 500;
+
 // What the person did with questions' current asks on this computer (#17895), a page at a time.
 const markQuestionsSchema = z
   .object({
@@ -370,7 +373,7 @@ const markQuestionsSchema = z
           .strict()
       )
       .min(1)
-      .max(DECISION_QUESTION_MARKS_PER_CALL),
+      .max(MARKS_PER_CALL),
   })
   .strict();
 

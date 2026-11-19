@@ -1777,6 +1777,54 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(heard[0]).toEqual({ hostId: QHOST, owner: SERVED, questions: [answered] });
   });
 
+  it("tells a Shell that reads the asks but can't take them pushed the list as it stands, as v1", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    const first = item(1).reference.questionId;
+    decisions.set({ hostId: QHOST, questions: [item(1)], asks: new Map([[first, null]]) });
+    serveQuestions(host, decisions);
+    const heard: unknown[] = [];
+    client.registerCallHandler(DecisionsLinkMethod.QUESTIONS_CHANGED, z.unknown(), (payload) => {
+      heard.push(payload);
+      return null;
+    });
+    await client.call(DecisionsLinkMethod.OWNER_STATE_V2, OWNER);
+    await client.call(DecisionsLinkMethod.QUESTION_LIST_V2, {});
+
+    // Its v2 push is refused: the same change is told again in the strict v1 shape.
+    const answered = item(1, { kind: "settled", outcome: "answered", handled: false });
+    decisions.set({ hostId: QHOST, questions: [answered], asks: new Map() });
+    await vi.waitFor(() => expect(heard).toHaveLength(1));
+    expect(heard[0]).toEqual({ hostId: QHOST, owner: SERVED, questions: [answered] });
+  });
+
+  it("keeps the list with its asks when a v1 push the Host sent before the read lands first", async () => {
+    const { host, client } = await pair();
+    const first = item(1).reference.questionId;
+    host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+      runtime: RUNNING,
+    }));
+    // As the read reaches it, the Host has just pushed a list from before it knew the Shell reads asks.
+    host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V2, z.unknown(), async () => {
+      await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED, {
+        hostId: QHOST,
+        owner: SERVED,
+        questions: [item(1)],
+      });
+      return {
+        hostId: QHOST,
+        owner: SERVED,
+        questions: [item(1)],
+        asks: [{ questionId: first, ask: "msg_agent_0002" }],
+      };
+    });
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.asks?.get(first)).toBe("msg_agent_0002")
+    );
+  });
+
   it("reads a Host from before #17895 without asks, asking for them once per link", async () => {
     const { host, client } = await pair();
     answerAnnouncements(

@@ -1257,19 +1257,33 @@ describe("NotificationService", () => {
       expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
 
-      // A pane still counts for a question there that hasn't been seen, beside one that has.
-      setDecisionQuestions([
-        marked("terminal-a", { ask: null, seen: true, cleared: false }),
-        marked("terminal-a", { ask: "note-2", seen: false, cleared: false }, "q-second"),
-      ]);
-      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
-
       // Seen and cleared everywhere: nothing waits on the person.
       setDecisionQuestions([
         marked("terminal-a", { ask: null, seen: true, cleared: false }),
         marked("terminal-b", { ask: null, seen: true, cleared: true }),
       ]);
       expect(win.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
+
+      // The same question asks something new: main lists the new ask unmarked, and it counts again.
+      setDecisionQuestions([
+        marked("terminal-a", { ask: "note-2", seen: false, cleared: false }),
+        marked("terminal-b", { ask: null, seen: true, cleared: true }),
+      ]);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+
+      // A pane still counts for a question there that hasn't been seen, beside one that has.
+      setDecisionQuestions([
+        marked("terminal-b", { ask: null, seen: true, cleared: false }),
+        marked("terminal-b", { ask: "note-3", seen: false, cleared: false }, "q-second"),
+      ]);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+      setDecisionQuestions([
+        marked("terminal-b", { ask: null, seen: true, cleared: false }),
+        marked("terminal-b", { ask: "note-3", seen: true, cleared: false }, "q-second"),
+      ]);
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
     });
 

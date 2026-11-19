@@ -5,9 +5,12 @@ import { decisionItems } from "@/components/Terminal/decisionsChipModel";
 import type {
   DecisionQuestionListItem,
   DecisionQuestionStanding,
+  DecisionThreadEntry,
+  DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
 import {
   agentName,
+  askShownIn,
   connectionNotice,
   groupOf,
   inboxGroupOf,
@@ -326,12 +329,11 @@ describe("seen and cleared on this computer (#17895)", () => {
   });
 
   describe("seeableAsk", () => {
-    const shown = (questionId: string, thread: object[] = []) =>
-      ({
-        reference: { hostId: "h1", projectId: "p1", terminalId: "t9", questionId },
-        thread,
-      }) as Parameters<typeof seeableAsk>[1];
-    const agentMessage = (messageId: string, unreadable = false) => ({
+    const shown = (questionId: string, thread: DecisionThreadEntry[] = []) => ({
+      reference: { hostId: "h1", projectId: "p1", terminalId: "t9", questionId },
+      thread,
+    });
+    const agentMessage = (messageId: string, unreadable = false): DecisionThreadMessage => ({
       type: "message",
       messageId,
       from: "agent",
@@ -365,6 +367,13 @@ describe("seen and cleared on this computer (#17895)", () => {
       expect(seeableAsk(item("q1", OPEN), shown("q1"))).toBeNull();
       // A cleared question can still be seen: seeing never takes it back into Needs you.
       expect(seeableAsk(marked("q1", false, true), shown("q1"))).toEqual({ ask: null });
+    });
+
+    it("lets a read show an ask whose follow-up couldn't be opened, for clearing (askShownIn)", () => {
+      const q = marked("q1", true, false, "note-2");
+      expect(askShownIn(q, shown("q1", [agentMessage("note-1")]))).toBe(false);
+      expect(askShownIn(q, shown("q1", [agentMessage("note-2", true)]))).toBe(true);
+      expect(askShownIn(marked("q1", false, false), shown("q1"))).toBe(true);
     });
   });
 
