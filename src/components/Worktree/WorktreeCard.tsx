@@ -101,7 +101,10 @@ import {
 import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
-import { canOpenResourceBoxOnHost } from "@/components/Hosts/resourceHostHandoff";
+import {
+  canOfferResourceBoxHandoff,
+  canOpenResourceBoxOnHost,
+} from "@/components/Hosts/resourceHostHandoff";
 
 const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
@@ -663,6 +666,7 @@ export function WorktreeCard({
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
   const [showTitleDialog, setShowTitleDialog] = useState(false);
+  const [showIdlePauseDialog, setShowIdlePauseDialog] = useState(false);
   // The dialog returns focus to the ⋯ trigger it was opened from on its own;
   // these are where it lands when the opener was the right-click menu, which
   // has no trigger: the sidebar card's select button, or the grid cell.
@@ -1027,6 +1031,9 @@ export function WorktreeCard({
     onResourceProvision: hasProvisionCommand ? handleResourceProvision : undefined,
     onResourceResume: hasResumeCommand ? handleResourceResume : undefined,
     onResourcePause: hasPauseCommand ? handleResourcePause : undefined,
+    // Only where this window can open the box as a host: that host's idleness is what it acts on.
+    onIdlePause:
+      hasPauseCommand && canOfferResourceBoxHandoff() ? () => setShowIdlePauseDialog(true) : undefined,
     onResourceConnect: worktree.resourceConnectCommand ? handleResourceConnect : undefined,
     onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
     onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
@@ -1786,6 +1793,8 @@ export function WorktreeCard({
             onCloseTitleDialog={() => setShowTitleDialog(false)}
             customTitle={customTitle}
             restoreTitleDialogFocusTo={resolveTitleDialogRestore}
+            showIdlePauseDialog={showIdlePauseDialog}
+            onCloseIdlePauseDialog={() => setShowIdlePauseDialog(false)}
           />
         </div>
       </ContextMenuTrigger>
