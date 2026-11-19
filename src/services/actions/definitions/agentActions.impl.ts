@@ -342,9 +342,13 @@ async function runPresetWrite(
       "Preset write refused: the preset or its defaults changed after the user approved the change, so the approval doesn't cover what would be written. Nothing was written. Call again to raise a fresh confirmation."
     );
   }
+  // The whole list goes back, so main keeps every preset's continuation switch
+  // as stored: an MCP write can't arm panes, even from a stale view (#17912).
   await useAgentSettingsStore
     .getState()
-    .updateAgent(mutation.agentId, agentPresetMutationUpdates(mutation));
+    .updateAgent(mutation.agentId, agentPresetMutationUpdates(mutation), {
+      lockContinueAtLimitReset: true,
+    });
   const written = {
     presetId: mutation.preset.id,
     name: typeof mutation.preset.name === "string" ? mutation.preset.name : "",

@@ -212,8 +212,9 @@ describe("emptyTrash", () => {
 
     usePanelStore.getState().emptyTrash(["p-1", "p-2"]);
 
-    expect(terminalClient.kill).toHaveBeenCalledWith("p-1");
-    expect(terminalClient.kill).toHaveBeenCalledWith("p-2");
+    // Emptied for good, so main drops what was chosen for them (#17912).
+    expect(terminalClient.kill).toHaveBeenCalledWith("p-1", { closesPane: true });
+    expect(terminalClient.kill).toHaveBeenCalledWith("p-2", { closesPane: true });
     expect(terminalInstanceService.destroy).toHaveBeenCalledWith("p-1");
     expect(terminalInstanceService.destroy).toHaveBeenCalledWith("p-2");
   });

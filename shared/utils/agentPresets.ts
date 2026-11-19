@@ -165,6 +165,10 @@ export function keepStoredLimitResets(incoming: unknown[], stored: unknown): unk
   const on = new Map<string, boolean>();
   for (const preset of Array.isArray(stored) ? stored : []) {
     if (preset === null || typeof preset !== "object") continue;
+    // An entry an import let through malformed answers nothing, and mustn't
+    // stop the write that replaces it.
+    const { id, name } = preset as Record<string, unknown>;
+    if (typeof id !== "string" || typeof name !== "string") continue;
     const valid = sanitizePreset(preset as AgentPreset);
     if (!valid || on.has(valid.id)) continue;
     on.set(valid.id, valid.continueAtLimitReset === true);

@@ -184,3 +184,33 @@ describe("useAgentScope — rename follows the preset sanitizer's rules", () => 
     }
   );
 });
+
+describe("useAgentScope — duplicating a preset's continuation switch (#17912)", () => {
+  async function duplicate(entry: AgentSettingsEntry, preset: { id: string; name: string }) {
+    const writes: Array<Partial<AgentSettingsEntry>> = [];
+    const props = {
+      ...makeProps("codex", entry),
+      updateAgent: async (_agentId: string, updates: Partial<AgentSettingsEntry>) => {
+        writes.push(updates);
+      },
+    };
+    const { result } = renderHook(() => useAgentScope(props));
+    await act(async () => {
+      result.current.handleDuplicatePreset({ ...preset, continueAtLimitReset: true });
+    });
+    return writes[0]?.customPresets?.at(-1);
+  }
+
+  it("keeps it on a copy of the user's own preset", async () => {
+    const own = { id: "user-1", name: "Mine", continueAtLimitReset: true };
+    const copy = await duplicate({ customPresets: [own] }, own);
+    expect(copy?.name).toBe("Mine (copy)");
+    expect(copy?.continueAtLimitReset).toBe(true);
+  });
+
+  it("drops it from a copy of a repository's preset, whose switch the user never saw", async () => {
+    const copy = await duplicate({ customPresets: [] }, { id: "team", name: "Team" });
+    expect(copy?.name).toBe("Team (copy)");
+    expect(copy?.continueAtLimitReset).toBeUndefined();
+  });
+});

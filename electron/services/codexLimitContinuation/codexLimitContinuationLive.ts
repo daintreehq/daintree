@@ -18,7 +18,7 @@ import {
   limitResetOptIn,
   type LimitFallback,
 } from "./limitFallback.js";
-import { setContinuationPaneForgetter } from "./forgetPane.js";
+import { setContinuationForgetter } from "./forgetPane.js";
 
 async function readTerminal(terminalId: string): Promise<ContinuationTerminal | null> {
   const pty = getPtyClient();
@@ -91,6 +91,7 @@ function readOwnPresets(agentId: string): AgentPreset[] | undefined {
 
 let service: CodexLimitContinuation | null = null;
 let stopListening: (() => void) | null = null;
+let stopForgetting: (() => void) | null = null;
 
 /** A launch of an agent a pane can be armed for, as the spawn handler sent it. */
 export interface AgentLaunchForContinuation {
@@ -197,7 +198,11 @@ export function getCodexLimitContinuation(): CodexLimitContinuation {
     },
   });
   service = created;
-  setContinuationPaneForgetter((terminalId) => created.forgetPane(terminalId));
+  setContinuationForgetter(created);
+  // A trashed pane expiring, or emptied from the trash, is closed for good,
+  // whichever process let it go; menu choices outlive arming, so this listens
+  // for as long as the service exists.
+  stopForgetting = events.on("terminal:trash-cleared", ({ id }) => created.forgetPane(id));
   return created;
 }
 
@@ -212,5 +217,7 @@ export function _resetCodexLimitContinuationForTest(): void {
   stopListening?.();
   stopListening = null;
   service = null;
-  setContinuationPaneForgetter(null);
+  stopForgetting?.();
+  stopForgetting = null;
+  setContinuationForgetter(null);
 }

@@ -29,8 +29,12 @@ export const WAKE_SETTLE_MS = 15_000;
 /** How soon a pane whose output was held unread is asked again, and how many times. */
 export const READS_PAUSED_RETRY_MS = 10_000;
 const READS_PAUSED_RETRIES = 6;
-/** How long a launch's preset default waits for its host to confirm the spawn (#17912). */
-export const LAUNCH_CONFIRMATION_MS = 60_000;
+/**
+ * How long a launch's preset default waits for its host to confirm the spawn
+ * (#17912). Only a backstop for a spawn never answered: a crash replay's
+ * answer, under a newer generation, still confirms it.
+ */
+export const LAUNCH_CONFIRMATION_MS = 10 * 60_000;
 
 /** A pane as its host reports it, as far as arming and the fallback read it. */
 export interface ContinuationTerminal {
@@ -121,12 +125,8 @@ interface ArmedPane {
   epoch: number;
   /** The pane's current process, as last read or spawned: a late exit of an earlier one changes nothing. */
   spawnedAt: number | undefined;
-}
-
-/** The user's own choice for a pane, from its menu, and the project it was made in. */
-interface PaneOverride {
-  projectId: string;
-  armed: boolean;
+  /** The newest spawn confirmed under the pane, so an older one's late answer changes nothing. */
+  launchGeneration: number | undefined;
 }
 
 interface PendingLaunch extends ContinuationLaunch {
@@ -149,13 +149,17 @@ export class CodexLimitContinuation {
   private readonly requests = new Map<string, number>();
   private readonly fired = new Map<string, number[]>();
   /**
-   * The user's menu choice per pane (#17912). It outranks the pane's preset at
-   * every launch, so it sticks across the preset being edited, until the pane
-   * is closed for good.
+   * The user's menu choice per pane, by the project it was made from (#17912).
+   * It outranks the pane's preset at every launch there, so it sticks across
+   * the preset being edited, until the pane is closed for good.
    */
-  private readonly overrides = new Map<string, PaneOverride>();
-  /** Launches whose preset default waits on the host confirming the spawn. */
-  private readonly launches = new Map<string, PendingLaunch>();
+  private readonly overrides = new Map<string, Map<string, boolean>>();
+  /**
+   * Launches whose preset default waits on the host confirming the spawn,
+   * oldest generation first: a duplicate spawn queued behind a live one
+   * doesn't displace it.
+   */
+  private readonly launches = new Map<string, PendingLaunch[]>();
   /** Whether the live listeners are wanted, as last told. */
   private active = false;
   /**
@@ -208,12 +212,12 @@ export class CodexLimitContinuation {
     if (!enabled) {
       // An arm still waiting on its host read is superseded too.
       this.requests.delete(requestKey);
-      this.overrides.set(terminalId, { projectId, armed: false });
+      this.setOverride(terminalId, projectId, false);
       this.disarm(terminalId);
       return;
     }
     if (owned) {
-      this.overrides.set(terminalId, { projectId, armed: true });
+      this.setOverride(terminalId, projectId, true);
       return;
     }
     const request = this.nextRequest++;
@@ -240,9 +244,9 @@ export class CodexLimitContinuation {
         "UNSUPPORTED"
       );
     }
-    this.overrides.set(terminalId, { projectId, armed: true });
+    this.setOverride(terminalId, projectId, true);
     if (this.panes.has(terminalId)) return;
-    this.arm(terminalId, projectId, terminal.spawnedAt);
+    this.arm(terminalId, projectId, terminal.spawnedAt, undefined);
   }
 
   /**
@@ -251,17 +255,18 @@ export class CodexLimitContinuation {
    * confirmed is dropped.
    */
   noteLaunch(launch: ContinuationLaunch): void {
-    const earlier = this.launches.get(launch.terminalId);
-    if (earlier) this.deps.clearTimer(earlier.timer);
     const pending: PendingLaunch = {
       ...launch,
       timer: this.deps.setTimer(() => {
-        if (this.launches.get(launch.terminalId) !== pending) return;
-        this.launches.delete(launch.terminalId);
+        this.dropLaunches(launch.terminalId, (held) => held === pending);
         this.updateActive();
       }, LAUNCH_CONFIRMATION_MS),
     };
-    this.launches.set(launch.terminalId, pending);
+    const held = this.launches.get(launch.terminalId) ?? [];
+    this.launches.set(
+      launch.terminalId,
+      [...held, pending].sort((a, b) => a.launchGeneration - b.launchGeneration)
+    );
     this.updateActive();
   }
 
@@ -272,16 +277,57 @@ export class CodexLimitContinuation {
    * new process under an armed pane's id keeps it armed.
    */
   handleSpawnResult(terminalId: string, result: ContinuationSpawnResult): void {
-    const launch = this.launches.get(terminalId);
-    const confirms = launch !== undefined && result.launchGeneration === launch.launchGeneration;
-    if (confirms) {
-      this.launches.delete(terminalId);
-      this.deps.clearTimer(launch.timer);
-    }
-    if (result.success && !(confirms && this.applyLaunch(launch, result.spawnedAt))) {
-      this.handleSpawn(terminalId, result.spawnedAt);
-    }
+    this.settleSpawnResult(terminalId, result);
     this.updateActive();
+  }
+
+  private settleSpawnResult(terminalId: string, result: ContinuationSpawnResult): void {
+    const generation = result.launchGeneration;
+    if (!result.success) {
+      if (generation !== undefined) {
+        this.dropLaunches(terminalId, (held) => held.launchGeneration === generation);
+      }
+      return;
+    }
+    const pane = this.panes.get(terminalId);
+    // An earlier spawn's answer arriving after a later one's, as across shards.
+    if (
+      generation !== undefined &&
+      pane?.launchGeneration !== undefined &&
+      generation < pane.launchGeneration
+    ) {
+      return;
+    }
+    // Its own launch, or for a crash replay, which resends a launch under a
+    // newer generation, the newest one noted before it.
+    let launch: PendingLaunch | undefined;
+    if (generation !== undefined) {
+      launch = this.launches
+        .get(terminalId)
+        ?.filter((held) => held.launchGeneration <= generation)
+        .at(-1);
+      this.dropLaunches(terminalId, (held) => held.launchGeneration <= generation);
+    }
+    if (launch && this.applyLaunch(launch, result.spawnedAt, generation)) return;
+    this.handleSpawn(terminalId, result.spawnedAt, generation);
+  }
+
+  private dropLaunches(terminalId: string, matches: (held: PendingLaunch) => boolean): void {
+    const held = this.launches.get(terminalId);
+    if (!held) return;
+    const kept = held.filter((launch) => {
+      if (!matches(launch)) return true;
+      this.deps.clearTimer(launch.timer);
+      return false;
+    });
+    if (kept.length > 0) this.launches.set(terminalId, kept);
+    else this.launches.delete(terminalId);
+  }
+
+  private setOverride(terminalId: string, projectId: string, armed: boolean): void {
+    const choices = this.overrides.get(terminalId) ?? new Map<string, boolean>();
+    choices.set(projectId, armed);
+    this.overrides.set(terminalId, choices);
   }
 
   /**
@@ -292,11 +338,7 @@ export class CodexLimitContinuation {
   forgetPane(terminalId: string): void {
     this.overrides.delete(terminalId);
     this.fired.delete(terminalId);
-    const launch = this.launches.get(terminalId);
-    if (launch) {
-      this.deps.clearTimer(launch.timer);
-      this.launches.delete(terminalId);
-    }
+    this.dropLaunches(terminalId, () => true);
     // An arm still waiting on its host read arms nothing now.
     const suffix = `\u0000${terminalId}`;
     for (const key of [...this.requests.keys()]) {
@@ -306,20 +348,41 @@ export class CodexLimitContinuation {
     this.updateActive();
   }
 
+  /** A project was removed: everything held for its panes goes (#17912). */
+  forgetProject(projectId: string): void {
+    for (const pane of [...this.panes.values()]) {
+      if (pane.projectId === projectId) this.forgetPane(pane.terminalId);
+    }
+    for (const [terminalId, choices] of [...this.overrides]) {
+      choices.delete(projectId);
+      if (choices.size === 0) this.overrides.delete(terminalId);
+    }
+    for (const terminalId of [...this.launches.keys()]) {
+      this.dropLaunches(terminalId, (held) => held.projectId === projectId);
+    }
+    const prefix = `${projectId}\u0000`;
+    for (const key of [...this.requests.keys()]) {
+      if (key.startsWith(prefix)) this.requests.delete(key);
+    }
+    this.updateActive();
+  }
+
   /** True when the launch armed or disarmed the pane, which tells the host itself. */
-  private applyLaunch(launch: ContinuationLaunch, spawnedAt: number | undefined): boolean {
+  private applyLaunch(
+    launch: ContinuationLaunch,
+    spawnedAt: number | undefined,
+    generation: number | undefined
+  ): boolean {
     const { terminalId, projectId } = launch;
-    const override = this.overrides.get(terminalId);
-    // A choice made for this id in another project was for another pane.
-    if (override && override.projectId !== projectId) this.overrides.delete(terminalId);
     const pane = this.panes.get(terminalId);
+    // An id another project now runs under is not the pane that was armed.
     if (pane && pane.projectId !== projectId) {
       this.disarm(terminalId);
-      return this.applyLaunch(launch, spawnedAt);
+      return this.applyLaunch(launch, spawnedAt, generation);
     }
-    const wanted = override?.projectId === projectId ? override.armed : launch.arms;
+    const wanted = this.overrides.get(terminalId)?.get(projectId) ?? launch.arms;
     if (wanted && !pane) {
-      this.arm(terminalId, projectId, spawnedAt);
+      this.arm(terminalId, projectId, spawnedAt, generation);
       return true;
     }
     if (!wanted && pane) {
@@ -329,7 +392,12 @@ export class CodexLimitContinuation {
     return false;
   }
 
-  private arm(terminalId: string, projectId: string, spawnedAt: number | undefined): void {
+  private arm(
+    terminalId: string,
+    projectId: string,
+    spawnedAt: number | undefined,
+    launchGeneration: number | undefined
+  ): void {
     const pane: ArmedPane = {
       terminalId,
       projectId,
@@ -338,6 +406,7 @@ export class CodexLimitContinuation {
       wait: null,
       epoch: 0,
       spawnedAt,
+      launchGeneration,
     };
     this.panes.set(terminalId, pane);
     this.updateActive();
@@ -446,11 +515,12 @@ export class CodexLimitContinuation {
   }
 
   /** A new process under an armed pane's id: its host has to be told it is armed. */
-  handleSpawn(terminalId: string, spawnedAt?: number): void {
+  handleSpawn(terminalId: string, spawnedAt?: number, launchGeneration?: number): void {
     const pane = this.panes.get(terminalId);
     if (!pane) return;
     this.handleProcessChange(terminalId);
     pane.spawnedAt = spawnedAt;
+    if (launchGeneration !== undefined) pane.launchGeneration = launchGeneration;
     this.deps.setHostArmed(terminalId, true);
   }
 
@@ -487,7 +557,9 @@ export class CodexLimitContinuation {
     if (this.timer !== null) this.deps.clearTimer(this.timer);
     this.timer = null;
     this.timerAt = null;
-    for (const launch of this.launches.values()) this.deps.clearTimer(launch.timer);
+    for (const held of this.launches.values()) {
+      for (const launch of held) this.deps.clearTimer(launch.timer);
+    }
     this.launches.clear();
     this.overrides.clear();
     this.panes.clear();

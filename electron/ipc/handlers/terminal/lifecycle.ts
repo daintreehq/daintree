@@ -1611,6 +1611,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // the shell, so when the agent exits the shell reclaims the foreground.
       // SIGINT routes to the agent (the foreground process group) via the
       // kernel's TTY line discipline; the shell stays pristine.
+      const generationBeforeSpawn = getLifecycleLedger().currentGeneration(id);
       ptyClient.spawn(id, {
         cwd,
         shell: spawnShell,
@@ -1670,8 +1671,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // Whether the preset starts the pane armed to continue at its limit's
       // reset, confirmed with the spawn's own generation (#17912).
       if (continuationLive && projectId !== undefined && typeof launchAgentId === "string") {
+        // Unchanged means PtyClient refused the spawn without sending it, and
+        // the generation still current is an earlier launch's.
         const launchGeneration = getLifecycleLedger().currentGeneration(id);
-        if (launchGeneration !== undefined) {
+        if (launchGeneration !== undefined && launchGeneration !== generationBeforeSpawn) {
           continuationLive.noteContinuationLaunch({
             terminalId: id,
             projectId,
@@ -1830,8 +1833,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         throw new Error("Invalid terminal ID: must be a string");
       }
       if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
-      // A kill that isn't a restart ends the pane's line (#17912).
-      else forgetContinuationPane(id);
+      // The pane goes with this kill: its continuation choice goes too (#17912).
+      if (options?.closesPane === true) forgetContinuationPane(id);
       dropHeldComposerSend(id, options);
       // Before any await: a restart's respawn arms a fresh window for this id,
       // and it must not be the one this kill clears.
@@ -1870,7 +1873,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error("Invalid terminal ID: must be a string");
     }
     if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
-    else forgetContinuationPane(id);
+    if (options?.closesPane === true) forgetContinuationPane(id);
     dropHeldComposerSend(id, options);
     // An Assistant's lane, frozen before the kill: the id it hands back is the
     // lane's conversation too, which a view keeps by itself otherwise (#17919).
@@ -2116,6 +2119,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
     }
 
+    // The renderer removes the pane once this answers, without a kill (#17912).
+    forgetContinuationPane(terminalId);
     return { record };
   };
 

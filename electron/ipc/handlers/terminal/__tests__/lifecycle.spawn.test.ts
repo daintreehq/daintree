@@ -11,7 +11,7 @@ vi.mock("../../../../utils/windowsCliSpawn.js", async (importOriginal) => ({
   resolveWindowsCliTarget: resolveWindowsCliTargetMock,
 }));
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { setContinuationPaneForgetter } from "../../../../services/codexLimitContinuation/forgetPane.js";
+import { setContinuationForgetter } from "../../../../services/codexLimitContinuation/forgetPane.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -3812,7 +3812,7 @@ describe("terminal close handlers - resume journaling", () => {
     return call?.[1] as (
       event: unknown,
       id: string,
-      options?: { forRestart?: boolean }
+      options?: { forRestart?: boolean; closesPane?: boolean }
     ) => Promise<void>;
   }
 
@@ -3823,7 +3823,7 @@ describe("terminal close handlers - resume journaling", () => {
     return call?.[1] as (
       event: unknown,
       id: string,
-      options?: { forRestart?: boolean }
+      options?: { forRestart?: boolean; closesPane?: boolean }
     ) => Promise<string | null>;
   }
 
@@ -3881,22 +3881,24 @@ describe("terminal close handlers - resume journaling", () => {
   );
 
   it.each(["kill", "gracefulKill"] as const)(
-    "forgets the pane's continuation choice when %s closes it for good, never for a restart (#17912)",
+    "forgets the pane's continuation choice only when %s closes the pane for good (#17912)",
     async (operation) => {
       register();
       ptyClient.getTerminalAsync.mockResolvedValue(null);
       ptyClient.gracefulKill.mockResolvedValue(null);
-      const forget = vi.fn();
-      setContinuationPaneForgetter(forget);
+      const forgetPane = vi.fn();
+      setContinuationForgetter({ forgetPane, forgetProject: vi.fn() });
       try {
         const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
         await handler({}, "term-1", { forRestart: true });
-        expect(forget).not.toHaveBeenCalled();
-
+        // A process ended from the Processes dialog leaves its pane behind.
         await handler({}, "term-1");
-        expect(forget).toHaveBeenCalledExactlyOnceWith("term-1");
+        expect(forgetPane).not.toHaveBeenCalled();
+
+        await handler({}, "term-1", { closesPane: true });
+        expect(forgetPane).toHaveBeenCalledExactlyOnceWith("term-1");
       } finally {
-        setContinuationPaneForgetter(null);
+        setContinuationForgetter(null);
       }
     }
   );
@@ -4523,6 +4525,29 @@ describe("terminal spawn handler - a preset arming the pane to continue (#17912)
     expect(mockNoteContinuationLaunch).toHaveBeenCalledWith(
       expect.objectContaining({ presetId: "spare", originalPresetId: "spare" })
     );
+  });
+
+  it("names each launch's own generation, a restart's included", async () => {
+    await codexSpawn();
+    await codexSpawn();
+
+    const generations = mockNoteContinuationLaunch.mock.calls.map(
+      (call) => (call as [{ launchGeneration: number }])[0].launchGeneration
+    );
+    expect(generations).toHaveLength(2);
+    expect(generations[1]).toBeGreaterThan(generations[0]!);
+    expect(generations[1]).toBe(getLifecycleLedger().currentGeneration("terminal-codex"));
+  });
+
+  it("says nothing when PtyClient refuses the spawn before sending it", async () => {
+    await codexSpawn();
+    mockNoteContinuationLaunch.mockClear();
+    // Refused without minting: the generation still current is the first launch's.
+    ptyClient.spawn.mockImplementation(() => {});
+
+    await codexSpawn();
+
+    expect(mockNoteContinuationLaunch).not.toHaveBeenCalled();
   });
 
   it("says nothing for an agent that waits for its own reset, a shell, or the Assistant", async () => {

@@ -68,7 +68,15 @@ interface AgentSettingsActions {
   refresh: (read?: () => Promise<AgentSettings | undefined>) => Promise<void>;
   /** Take a saved slice another view (or this one) just wrote (#14700). */
   applySaved: (raw: AgentSettings) => void;
-  updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
+  /**
+   * `lockContinueAtLimitReset` keeps each preset's stored continuation switch,
+   * for a writer that may not arm panes (#17912).
+   */
+  updateAgent: (
+    agentId: string,
+    updates: Partial<AgentSettingsEntry>,
+    options?: { lockContinueAtLimitReset?: boolean }
+  ) => Promise<void>;
   /**
    * Set the global skip-permissions override (#10432). Writes the root-level
    * `globalSkipPermissions` field only — does not mutate any per-agent
@@ -221,7 +229,8 @@ async function writeAgentEntry(
   get: StoreGet,
   agentId: string,
   updates: Partial<AgentSettingsEntry>,
-  patch: Patch
+  patch: Patch,
+  options?: { lockContinueAtLimitReset?: boolean }
 ): Promise<void> {
   ++normalizeEpoch;
   const myWrite = ++writeEpoch;
@@ -231,7 +240,9 @@ async function writeAgentEntry(
   const release = holdPatch(patch);
   if (previous) set({ settings: patch(previous) });
   try {
-    const raw = await agentSettingsClient.set(agentId, updates);
+    const raw = await (options
+      ? agentSettingsClient.set(agentId, updates, options)
+      : agentSettingsClient.set(agentId, updates));
     release();
     // A newer write of this view's own owns the answer.
     const saved = myWrite === writeEpoch ? normalizeSaved(raw) : null;
@@ -344,14 +355,21 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     }
   },
 
-  updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) =>
-    writeAgentEntry(set, get, agentId, updates, (settings) => ({
-      ...settings,
-      agents: {
-        ...settings.agents,
-        [agentId]: { ...settings.agents[agentId], ...updates },
-      },
-    })),
+  updateAgent: (agentId, updates, options) =>
+    writeAgentEntry(
+      set,
+      get,
+      agentId,
+      updates,
+      (settings) => ({
+        ...settings,
+        agents: {
+          ...settings.agents,
+          [agentId]: { ...settings.agents[agentId], ...updates },
+        },
+      }),
+      options
+    ),
 
   setGlobalSkipPermissions: async (value: boolean) => {
     ++normalizeEpoch;

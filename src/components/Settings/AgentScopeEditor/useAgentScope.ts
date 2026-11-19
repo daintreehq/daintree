@@ -163,11 +163,20 @@ export function useAgentScope({
 
   const handleDuplicatePreset = (preset: AgentPreset) => {
     const id = `user-${crypto.randomUUID()}`;
+    // Continuing at a limit's reset is the user's to turn on (#17912): a copy
+    // of a repository's or router's preset never brings it along unseen.
+    const ownSource = (activeEntry.customPresets ?? []).some((own) => own.id === preset.id);
     const updated = [
       ...(activeEntry.customPresets ?? []),
       // Drop the display title on copy so the duplicate doesn't share an
       // identical custom label with its source — it falls back to the new name.
-      { ...preset, id, name: `${preset.name} (copy)`, displayTitle: undefined },
+      {
+        ...preset,
+        id,
+        name: `${preset.name} (copy)`,
+        displayTitle: undefined,
+        ...(!ownSource && { continueAtLimitReset: undefined }),
+      },
     ];
     void (async () => {
       try {

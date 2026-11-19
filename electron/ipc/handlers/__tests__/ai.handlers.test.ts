@@ -451,6 +451,10 @@ describe("ai handler payload validation", () => {
             agents: {
               codex: {
                 customPresets: [
+                  // An entry an import let through malformed, and one the
+                  // sanitiser drops, answer for nothing.
+                  { id: "on", name: 7, continueAtLimitReset: false },
+                  { id: "on", name: "<bad>", continueAtLimitReset: false },
                   { id: "on", name: "On", continueAtLimitReset: true },
                   { id: "off", name: "Off" },
                   // A later duplicate isn't the one a launch reads.

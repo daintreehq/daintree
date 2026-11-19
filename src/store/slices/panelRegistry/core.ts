@@ -180,7 +180,7 @@ export const createCorePanelActions = (
       // Bookmark and close already closed the backend via prepareBookmark; a
       // second kill here is redundant and could hit a same-id successor.
       if (!options?.backendAlreadyClosed) {
-        terminalClient.kill(id).catch((error) => {
+        terminalClient.kill(id, { closesPane: true }).catch((error) => {
           logError("[TerminalStore] Failed to kill terminal", error);
         });
       }
@@ -262,7 +262,7 @@ export const createCorePanelActions = (
         recordLedgerClose(id, "trash-emptied");
         cancelDriveLeaseHold(id);
         clearPanelDriveLeaseMark(id);
-        terminalClient.kill(id).catch((error) => {
+        terminalClient.kill(id, { closesPane: true }).catch((error) => {
           logError("[TerminalStore] Failed to kill terminal", error);
         });
         peekTerminalService()?.destroy(id);
