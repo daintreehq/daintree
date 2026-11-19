@@ -241,6 +241,14 @@ describe("ssh argument construction", () => {
     // An older reply, or a shell's noise that only looks like it, reads as the first.
     expect(discoveryReadFrom(`\n@@dt:discovery\n{}`)).toBe(0);
     expect(discoveryReadFrom(`x@@dt:discovery-from 2\n`)).toBe(0);
+    // Only the marker right before the file counts.
+    expect(
+      discoveryReadFrom(`@@dt:discovery-from 1\nbanner\n@@dt:discovery-from 2\n@@dt:discovery\n{}`)
+    ).toBe(1);
+    expect(
+      discoveryReadFrom(`@@dt:discovery-from 2\nbanner\n@@dt:discovery-from 1\n@@dt:discovery\n{}`)
+    ).toBe(0);
+    expect(discoveryReadFrom(`@@dt:discovery-from 2\nbanner\n@@dt:discovery\n{}`)).toBe(0);
     expect(
       buildMuxForwardArgs("studio", "/cp/cm-%C", "/l/l.sock", "/run/user/1/daintree/host.sock")
     ).toEqual([

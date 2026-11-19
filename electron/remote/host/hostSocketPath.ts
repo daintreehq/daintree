@@ -49,7 +49,8 @@ export const PID1_COMM_PATH = "/proc/1/comm";
  * the discovery read apply the same test in shell.
  */
 export function startsOnConnectForInit(pid1Comm: string | null): boolean {
-  const comm = pid1Comm?.trim() ?? "";
+  // As `$(head -c 64 /proc/1/comm)` reads it: only its trailing newlines go.
+  const comm = pid1Comm?.replace(/\n+$/, "") ?? "";
   return comm !== "" && comm !== "systemd";
 }
 

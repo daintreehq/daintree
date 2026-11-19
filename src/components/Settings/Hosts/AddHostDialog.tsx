@@ -773,14 +773,17 @@ export function AddHostDialog({
     );
   };
 
-  /** Add the host to the list once; every later step reuses that record. */
-  const save = (): Promise<SavedHost> => {
+  /**
+   * Add the host to the list once; every later step reuses that record. `seen`
+   * is the latest check when the caller has one newer than the dialog's.
+   */
+  const save = (seen: HostProbeResult | null = probe): Promise<SavedHost> => {
     if (savedHost) return Promise.resolve(savedHost);
     saving.current ??= remoteHostsClient
       .add({
         name: hostLabel,
         connection: connectionFor(),
-        ...(probe?.startsOnConnect === true ? { startsOnConnect: true } : {}),
+        ...(seen?.startsOnConnect === true ? { startsOnConnect: true } : {}),
       })
       .then(
         (descriptor) => {
@@ -813,7 +816,10 @@ export function AddHostDialog({
     }
     // Adding: Host mode is on there for good, so Connect is next and the host is saved now.
     setStep("advise");
-    run(save, () => {});
+    run(
+      () => save(seen),
+      () => {}
+    );
   };
 
   const check = (nextTarget?: string) => {
@@ -1009,7 +1015,10 @@ export function AddHostDialog({
         if (hostModeSwitchedOn(result.probe)) {
           setHostModeTurnedOn(true);
           setStep("advise");
-          run(save, () => {});
+          run(
+            () => save(result.probe),
+            () => {}
+          );
         }
       }
     );
@@ -1017,7 +1026,10 @@ export function AddHostDialog({
   /** Setup ends here, saved but not connected: nothing after Host mode applies without it. */
   const skipHostMode = () => {
     setSkipped(true);
-    run(save, () => setOutcome("skipped"));
+    run(
+      () => save(),
+      () => setOutcome("skipped")
+    );
   };
 
   /** Connect and end on what the link reported, not on the dial having started. */
@@ -1055,10 +1067,13 @@ export function AddHostDialog({
       onClose();
       return;
     }
-    run(save, (host) => {
-      if (skipped || !probe?.hostModeListening) setOutcome("skipped");
-      else connectSaved(host);
-    });
+    run(
+      () => save(),
+      (host) => {
+        if (skipped || !probe?.hostModeListening) setOutcome("skipped");
+        else connectSaved(host);
+      }
+    );
   };
 
   const cancelInstall = () => {

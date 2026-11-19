@@ -78,6 +78,7 @@ export default function HostsSettingsTab() {
     id: HostId;
     name: string;
     connection: HostConnection;
+    startsOnConnect: boolean;
   } | null>(null);
   const [forgetError, setForgetError] = useState<string | null>(null);
   const bringBacks = useHostBringBacks();
@@ -479,6 +480,7 @@ export default function HostsSettingsTab() {
                                   id: descriptor.id,
                                   name: descriptor.name,
                                   connection: descriptor.connection,
+                                  startsOnConnect: descriptor.startsOnConnect === true,
                                 });
                               }}
                             >

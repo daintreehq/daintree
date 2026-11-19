@@ -41,12 +41,21 @@ import { runHostInstall, stopScript } from "./hostInstaller.js";
 import { RestartImpactSchema } from "../metrics/linkMethods.js";
 import {
   bootstrapHostMode,
+  DETACHED_LOG_PATH,
+  DETACHED_LOG_SCRIPT,
+  detachedAliveScript,
   detachedStartScript,
+  lastRunError,
   LINUX_START_SCRIPT,
   linuxLaunchTarget,
   macStartScript,
+  parseDetachedAlive,
+  parseDetachedLaunch,
+  UNPACKED_LISTEN_TIMEOUT_MS,
+  type LinuxLaunchTarget,
 } from "./hostModeBootstrap.js";
 import { liveHostRecord, probeHost, type ProbeOutcome } from "./hostProbe.js";
+import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
 import { sshExecutable } from "./sshExecutable.js";
@@ -427,6 +436,7 @@ export class HostSetupService {
       return unstartable("quit");
     }
     let script: string | null = null;
+    let detached: LinuxLaunchTarget | null = null;
     if (probe.platform === "darwin" && probe.hostModeState?.enabled === true) {
       script = macStartScript(probe.install.path);
     } else if (probe.platform === "linux" && probe.startsOnConnect) {
@@ -439,7 +449,8 @@ export class HostSetupService {
             userMessage: `Couldn't tell which Daintree to start on ${formatHostConnection(connection)}. ${outcome.parsed.appImageConflict}`,
           });
         }
-        script = detachedStartScript(linuxLaunchTarget(probe));
+        detached = linuxLaunchTarget(probe);
+        script = detachedStartScript(detached);
       }
     } else if (probe.platform === "linux" && probe.advice.hostModeUnit === true) {
       script = LINUX_START_SCRIPT;
@@ -469,12 +480,33 @@ export class HostSetupService {
       });
     }
     const sleep = this.deps.sleep ?? abortableSleep;
-    const deadline = now() + START_LISTEN_TIMEOUT_MS;
+    const launch = detached ? parseDetachedLaunch(started.stdout) : null;
+    const deadline =
+      now() +
+      (detached?.appImageExtractAndRun ? UNPACKED_LISTEN_TIMEOUT_MS : START_LISTEN_TIMEOUT_MS);
     while (now() < deadline) {
       if (signal?.aborted) return "not-startable";
       await sleep(1_000, signal ?? new AbortController().signal);
       const next = await this.probeOutcome(connection, channel, signal);
       if (next.result.hostModeListening) return "started";
+      // Nothing else restarts it: one that exited as it started is said at once.
+      if (launch) {
+        const alive = await channel
+          .exec(detachedAliveScript(launch), { timeoutMs: 15_000, signal })
+          .catch(() => null);
+        if (alive?.code === 0 && !parseDetachedAlive(alive.stdout)) {
+          const log = await channel
+            .exec(DETACHED_LOG_SCRIPT, { timeoutMs: 15_000, signal })
+            .catch(() => null);
+          const error = log ? lastRunError(log.stdout) : null;
+          const where = `${DETACHED_LOG_PATH} there`;
+          throw new AppError({
+            code: "INTERNAL",
+            message: "The host's Daintree exited as it started",
+            userMessage: `Daintree exited on ${label} as it started: ${error ? `${error} (more in ${where})` : `see ${where}`}`,
+          });
+        }
+      }
     }
     throw new AppError({
       code: "INTERNAL",
@@ -496,11 +528,19 @@ export class HostSetupService {
     const outcome = await this.probeOutcome(connection, channel, signal);
     const parsed = outcome.parsed;
     if (!parsed || !outcome.result.startsOnConnect || signal?.aborted) return false;
-    if (liveHostRecord(parsed)?.startMethod !== "on-connect") return false;
-    const stopped = await channel.exec(
-      stopScript("linux", parsed.hostPid, false, parsed.hostStartedAt, "wait"),
-      { timeoutMs: 90_000, signal }
-    );
+    // Only Host mode switched on for good: a listener for this run alone isn't one Daintree started.
+    const consented = (record: HostModeObservation | null) =>
+      record?.startMethod === "on-connect" && record.enabled;
+    let stop: string;
+    if (outcome.result.hostModeListening) {
+      if (!consented(liveHostRecord(parsed))) return false;
+      stop = stopScript("linux", parsed.hostPid, false, parsed.hostStartedAt, "wait");
+    } else {
+      // Not listening yet, but a start may still be unpacking: that start is ended too.
+      if (!consented(parsed.hostModeState) || parsed.hostModeState?.stopped) return false;
+      stop = stopScript("linux", null, false, null, "stop");
+    }
+    const stopped = await channel.exec(stop, { timeoutMs: 90_000, signal });
     return stopped.code === 0 && stopped.stdout.includes("@@dt:stopped yes");
   }
 

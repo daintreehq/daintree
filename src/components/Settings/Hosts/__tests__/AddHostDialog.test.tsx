@@ -736,6 +736,51 @@ describe("AddHostDialog", () => {
     );
   });
 
+  it("saves what turning Host mode on saw there, not the check before it", async () => {
+    const box = probeResult({
+      platform: "linux",
+      arch: "x64",
+      install: {
+        path: "/home/node/Applications/Daintree.AppImage",
+        version: "1.4.0",
+        commit: "abcdef0",
+        packaging: "appimage",
+      },
+      hostModeListening: false,
+      hostModeState: null,
+    });
+    remoteHosts.probe!.mockResolvedValue(box);
+    remoteHosts.startHostMode!.mockResolvedValueOnce({
+      probe: {
+        ...box,
+        hostModeListening: true,
+        advice: { ...box.advice, systemd: false },
+        startsOnConnect: true,
+        hostModeState: {
+          pid: 4242,
+          enabled: true,
+          startMethod: "on-connect",
+          startAtLogin: false,
+          startAtLoginInstalled: null,
+          startAtLoginError: null,
+          keychain: { state: "unknown", detail: "Not checked yet", checked: false },
+        },
+      },
+      lingerRefused: null,
+    });
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
+    await screen.findByText(/Host mode is on there and runs in the background/);
+    expect(remoteHosts.add).toHaveBeenCalledWith(
+      expect.objectContaining({ startsOnConnect: true })
+    );
+  });
+
   it("says a taken or reserved name, or an added target, before anything is checked", () => {
     useRemoteHostsStore.getState().setHosts([known("lab", "studio", "admin@lab.local")]);
     render(<AddHostDialog isOpen onClose={() => {}} />);

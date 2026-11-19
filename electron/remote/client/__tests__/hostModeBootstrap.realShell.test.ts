@@ -172,6 +172,36 @@ describe.skipIf(process.platform !== "linux")("the detached Host start under a r
     expect(next.pid).not.toBe(zombie);
   });
 
+  it("stops the Daintree an unpacked AppImage runs, so its runtime can clean up and go", async () => {
+    // A runtime that runs Daintree as its child and waits for it, as an unpacked AppImage does.
+    const daintree = path.join(home, "bin", "daintree");
+    fs.copyFileSync(fs.realpathSync("/bin/sleep"), daintree);
+    fs.chmodSync(daintree, 0o755);
+    fs.writeFileSync(executable, `#!/bin/sh\n"${daintree}" 600 &\nwait\n`, { mode: 0o755 });
+    const runtime = launch();
+    const child = () =>
+      fs
+        .readdirSync("/proc")
+        .filter((name) => /^\d+$/.test(name))
+        .find((pid) => {
+          try {
+            const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8").replace(/.*\) /, "");
+            return stat.split(" ")[1] === String(runtime.pid);
+          } catch {
+            return false;
+          }
+        });
+    await until(() => child() !== undefined, "Daintree under its runtime");
+    const daintreePid = Number(child());
+    adoptProcessForKill(daintreePid);
+    started.add(daintreePid);
+
+    expect(sh(detachedStopScript(runtime)).status).toBe(0);
+    await until(() => !alive(daintreePid), "Daintree to quit");
+    // Its runtime saw it go and went too: nothing was left orphaned.
+    await until(() => !alive(runtime.pid), "its runtime to go");
+  });
+
   it("is taken down by a recovery stop before it is named Daintree", async () => {
     const first = launch();
     const stopped = sh(stopScript("linux", null, false, null, "stop"));

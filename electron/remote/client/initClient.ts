@@ -965,6 +965,13 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     // kept running by a service or login item is left as it is.
     onRemoving: async (descriptor): Promise<void> => {
       if (descriptor.startsOnConnect !== true) return;
+      // A cloud machine not running has no Daintree to stop, and reaching it would only wait.
+      if (descriptor.connection.kind === "cloud") {
+        const machine = cloudLifecycle
+          ?.statuses()
+          .find((status) => status.hostId === descriptor.id)?.machine;
+        if (machine !== undefined && machine !== "running") return;
+      }
       await setup.stopStartedOnConnect(descriptor.connection, AbortSignal.timeout(REMOVE_STOP_MS));
     },
     onForget: async (descriptor): Promise<void> => {
@@ -1103,6 +1110,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     isRetiring: (connection) => client.isRetiring(connection),
     wslKeepalive,
     onProbed: (connection, result) => {
+      // PID 1 unread says nothing either way: what was seen before stands.
+      if (result.platform === "linux" && result.advice.systemd == null) return;
       for (const host of registry.list()) {
         if (sameHostConnection(host.connection, connection)) {
           registry.recordStartsOnConnect(host.id, result.startsOnConnect === true);

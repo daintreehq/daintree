@@ -419,9 +419,11 @@ const DISCOVERY_FROM = "@@dt:discovery-from";
  * into the script, so it is quoted once for the login shell, whichever it is.
  * A Linux host's second path (`$2`) is where it listens when PID 1 isn't
  * systemd, the same test the host makes (host/hostSocketPath.ts); which one
- * was read is printed first.
+ * was read is printed first. Nothing restarts a host there, so a file whose
+ * process has gone (killed outright, or left a zombie) reads as none, and the
+ * dial starts it again rather than meeting a dead socket.
  */
-const DISCOVERY_READ_SCRIPT = `f=$1; n=1; if [ $# -gt 1 ]; then c=$(head -c 64 ${PID1_COMM_PATH} 2>/dev/null); if [ -n "$c" ] && [ "$c" != systemd ]; then f=$2; n=2; fi; fi; if [ -e "$f" ]; then echo; echo "${DISCOVERY_FROM} $n"; echo ${DISCOVERY_START}; cat -- "$f" || exit 1; echo; echo ${DISCOVERY_END}; else exit ${NO_DISCOVERY_FILE_EXIT}; fi`;
+const DISCOVERY_READ_SCRIPT = `f=$1; n=1; if [ $# -gt 1 ]; then c=$(head -c 64 ${PID1_COMM_PATH} 2>/dev/null); if [ -n "$c" ] && [ "$c" != systemd ]; then f=$2; n=2; fi; fi; if [ "$n" = 2 ] && [ -e "$f" ]; then p=$(sed -n "s/.*\\"pid\\":\\([0-9][0-9]*\\).*/\\1/p" "$f"); w=$(sed -n "s/.*\\"startedAt\\":\\"\\([^\\"]*\\)\\".*/\\1/p" "$f"); t=""; if [ -n "$p" ]; then t=$(sed "s/.*) //" "/proc/$p/stat" 2>/dev/null); fi; set -- $t; if [ -z "$t" ] || [ "$1" = Z ] || { [ -n "$w" ] && [ "\${20:-}" != "$w" ]; }; then exit ${NO_DISCOVERY_FILE_EXIT}; fi; fi; if [ -e "$f" ]; then echo; echo "${DISCOVERY_FROM} $n"; echo ${DISCOVERY_START}; cat -- "$f" || exit 1; echo; echo ${DISCOVERY_END}; else exit ${NO_DISCOVERY_FILE_EXIT}; fi`;
 
 export function buildCatArgs(
   target: string,
@@ -443,10 +445,16 @@ export function buildCatArgs(
   ];
 }
 
-/** Which of the paths given the read read: 0 for the first, 1 for the second. */
+/**
+ * Which of the paths given the read read: 0 for the first, 1 for the second.
+ * Only the marker right before the file counts, so a startup file printing
+ * something like it can't move the socket check to the other place.
+ */
 export function discoveryReadFrom(stdout: string): number {
-  const match = new RegExp(`(?:^|\n)${DISCOVERY_FROM} ([12])\r?\n`).exec(stdout);
-  return match ? Number(match[1]) - 1 : 0;
+  const marker = new RegExp(`(?:^|\n)${DISCOVERY_FROM} ([12])\r?\n${DISCOVERY_START}\r?\n`, "g");
+  let from = 0;
+  for (const match of stdout.matchAll(marker)) from = Number(match[1]) - 1;
+  return from;
 }
 
 /** The discovery file from the read's output; null unless it arrived whole between its markers. */

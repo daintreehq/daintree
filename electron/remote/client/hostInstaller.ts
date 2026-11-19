@@ -34,6 +34,7 @@ import {
   detachedStartScript,
   linuxLaunchTarget,
   linuxTargetFor,
+  stopLaunchShell,
 } from "./hostModeBootstrap.js";
 import { type ClientBuild, debInstallCommand, planInstall } from "./installPlan.js";
 import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -673,7 +674,7 @@ export function stopScript(
   // A zombie its PID 1 never reaps is gone, whatever pgrep and kill -0 say.
   const live = `for q in $(pgrep -u "$(id -u)" -x ${name} 2>/dev/null) $lp; do if kill -0 "$q" 2>/dev/null && ${notZombieShell("q")}; then return 0; fi; done; return 1`;
   const stopLaunch =
-    launch === "stop" ? `if [ -n "$lp" ]; then kill -TERM "$lp" 2>/dev/null; fi; ` : "";
+    launch === "stop" ? `if [ -n "$lp" ]; then ${stopLaunchShell("lp")}; fi; ` : "";
   return `${unitStop}${DETACHED_LAUNCH_READ}; alive() { ${live}; }; ${stopLaunch}if ${running}; then ${signalIt}; fi; i=0; while alive && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if alive; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
 }
 
@@ -1084,14 +1085,7 @@ export async function runHostInstall(
           ? probe.install.path
           : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
     }
-    const start = wasRunning
-      ? startScript(
-          platform,
-          parsed,
-          restart,
-          plan.packaging === "deb" && restart === "on-connect" ? DEB_EXECUTABLE : target
-        )
-      : null;
+    const start = wasRunning ? startScript(platform, parsed, restart, target) : null;
     if (wasRunning && start === null) {
       await dropStaged();
       throw new AppError({
@@ -1415,7 +1409,7 @@ async function applyStagedUpdate(
     const restart = linuxRestartFor(current.result, parsed);
     const hasUnit = restart === "unit";
     const launchStop = restart === "on-connect" ? ("wait" as const) : null;
-    const start = stagedStart(platform, current);
+    const start = stagedStart(platform, { ...current, parsed });
     if (start === null) throw refusal(NO_SERVICE_TO_RESTART);
     /**
      * The start to run now. A host started on connect is started from the
@@ -1441,6 +1435,7 @@ async function applyStagedUpdate(
     let started = false;
 
     const runStart = async (): Promise<CommandResult> => {
+      const script = await currentStart();
       // Without the lock another device may be updating the host: it starts Daintree there itself.
       if (!lock.held()) {
         return {
@@ -1452,7 +1447,7 @@ async function applyStagedUpdate(
         };
       }
       const result = await deps.shell
-        .exec(await currentStart(), { signal: settle, timeoutMs: 30_000 })
+        .exec(script, { signal: settle, timeoutMs: 30_000 })
         .catch((err: unknown): CommandResult => ({
           code: null,
           stdout: "",

@@ -55,6 +55,8 @@ import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 const MARK = "@@dt:";
 const SAFE_EXECUTABLE = /^\/[A-Za-z0-9._\-/ ]{1,1024}$/;
 const LISTEN_TIMEOUT_MS = 60_000;
+/** How long a start that unpacks its AppImage first (no FUSE) gets to listen. */
+export const UNPACKED_LISTEN_TIMEOUT_MS = 5 * 60_000;
 const CONFIRM_TIMEOUT_MS = 60_000;
 const KEYCHAIN_SETTLE_MS = 12_000;
 const POLL_MS = 2_000;
@@ -285,8 +287,11 @@ export function detachedStartScript(
     `PATH=${SERVICE_PATH}`,
     ...(target.appImageExtractAndRun ? [`${APPIMAGE_EXTRACT_AND_RUN_ENV}=1`] : []),
   ];
+  const executable = sq(target.executable);
   return [
     `umask 077`,
+    // A start that can't run would otherwise still report one launched.
+    `if [ ! -f ${executable} ] || [ ! -x ${executable} ]; then echo "Daintree isn't at ${target.executable}" >&2; exit 127; fi`,
     `c="${CACHE_DIR}"`,
     `mkdir -p "$c" || exit 1`,
     `cd "$HOME" || exit 1`,
@@ -305,7 +310,7 @@ export function detachedStartScript(
     // `&` ends the command itself: a `;` after it would be a syntax error.
     `nohup $s env -i "$@" ${argv.map(sq).join(" ")} </dev/null >>"$l" 2>&1 & lp=$!`,
     processStartShell("lp", "ln"),
-    `printf '%s %s\\n' "$lp" "$ln" > "$r.tmp" && mv -f "$r.tmp" "$r"`,
+    `printf '%s %s\\n' "$lp" "$ln" > "$r.$$" && mv -f "$r.$$" "$r"`,
     `echo "${MARK}launched $lp $ln new"`,
   ].join("; ");
 }
@@ -347,9 +352,19 @@ export function parseDetachedAlive(stdout: string): boolean {
   return markerValue(stdout, "alive") === "yes";
 }
 
+/**
+ * Asks launch `$<pidVar>` to quit: Daintree itself when that is what it runs
+ * as, else the Daintree an AppImage's runtime runs as its child once unpacked
+ * (signalled alone, the runtime would leave it running, and it removes what it
+ * unpacked once that child quits), else the runtime, still unpacking.
+ */
+export function stopLaunchShell(pidVar: string): string {
+  return `if [ "$(cat "/proc/$${pidVar}/comm" 2>/dev/null)" = daintree ]; then kill -TERM "$${pidVar}" 2>/dev/null; else kids=""; for s in /proc/[0-9]*/stat; do set -- $(sed 's/.*) //' "$s" 2>/dev/null); if [ "\${2:-}" = "$${pidVar}" ]; then d=\${s%/stat}; kids="$kids \${d#/proc/}"; fi; done; if [ -n "$kids" ]; then kill -TERM $kids 2>/dev/null; else kill -TERM "$${pidVar}" 2>/dev/null; fi; fi`;
+}
+
 /** Ask a launch that is still the process it was to quit; anything since given its pid is left alone. */
 export function detachedStopScript(launch: DetachedLaunch): string {
-  return `${whileSameLaunch(launch, `kill -TERM "$p" 2>/dev/null`)}; true`;
+  return `${whileSameLaunch(launch, stopLaunchShell("p"))}; true`;
 }
 
 /**
@@ -532,7 +547,8 @@ export async function bootstrapHostMode(
         let exited = false;
         const up = await pollUntil(
           (o) => o.result.hostModeListening,
-          LISTEN_TIMEOUT_MS,
+          // Unpacked first where there is no FUSE, as the handoff allows for; an exit still ends it early.
+          target.appImageExtractAndRun ? UNPACKED_LISTEN_TIMEOUT_MS : LISTEN_TIMEOUT_MS,
           async () => {
             const alive = await deps.channel
               .exec(detachedAliveScript(launch), { timeoutMs: 15_000, signal })

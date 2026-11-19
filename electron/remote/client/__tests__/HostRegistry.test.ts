@@ -168,7 +168,9 @@ describe("HostRegistry", () => {
     expect(registry.recordStartsOnConnect(host.id, true)?.startsOnConnect).toBe(true);
     expect(store.writes).toBe(writes);
     expect(registry.recordStartsOnConnect(host.id, false)).not.toHaveProperty("startsOnConnect");
+    expect(new HostRegistry(store).get(host.id)).not.toHaveProperty("startsOnConnect");
     registry.recordStartsOnConnect(host.id, true);
+    expect(new HostRegistry(store).get(host.id)?.startsOnConnect).toBe(true);
     const moved = registry.update({
       hostId: host.id,
       connection: { kind: "ssh", target: "other.example" },
@@ -180,7 +182,9 @@ describe("HostRegistry", () => {
   it("never keeps a WSL distro as started on connect, from setup or a hand-edited file", () => {
     const platform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32" });
-    onTestFinished(() => Object.defineProperty(process, "platform", { value: platform }));
+    onTestFinished(() => {
+      Object.defineProperty(process, "platform", { value: platform });
+    });
     const store = memoryStore();
     const registry = new HostRegistry(store);
     const distro = registry.add({
@@ -194,7 +198,9 @@ describe("HostRegistry", () => {
       ...(store.value as object),
       hosts: [{ ...distro, startsOnConnect: true }],
     } as never);
-    expect(new HostRegistry(store).get(distro.id)).not.toHaveProperty("startsOnConnect");
+    const reloaded = new HostRegistry(store).get(distro.id);
+    expect(reloaded?.connection).toEqual({ kind: "wsl", distro: "Ubuntu" });
+    expect(reloaded).not.toHaveProperty("startsOnConnect");
   });
 
   it("keeps assistant control apart from notifications, and across a rename and a change of target", () => {

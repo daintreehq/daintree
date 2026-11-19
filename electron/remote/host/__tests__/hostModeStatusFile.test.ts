@@ -45,8 +45,9 @@ describe("host-mode.json keychain record", () => {
       JSON.stringify({ ...later, startMethod: "socket-activated" })
     );
     expect(parsed).not.toBeNull();
+    // Everything else is kept as it was.
+    expect({ ...parsed, startMethod: "on-connect" }).toEqual(onConnect);
     expect(parsed?.startMethod).toBeUndefined();
-    expect(parsed?.enabled).toBe(true);
   });
 
   it("still reads a file written before checkedAt existed", () => {

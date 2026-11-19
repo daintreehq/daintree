@@ -509,9 +509,14 @@ describe("HostSetupService", () => {
 
         const others = [
           // A service keeps it: removing the host leaves it running, as before.
-          box({ listening: true, state: hostState(true) }).replace("@@dt:init docker-init\n", ""),
-          // Not running: nothing to stop.
-          box({}),
+          box({ listening: true, state: hostState(true) }).replace(
+            "@@dt:init docker-init",
+            "@@dt:init systemd"
+          ),
+          // Not running, and quit there on purpose: nothing is starting.
+          box({ state: onConnectState({ pid: 0, stopped: true }) }),
+          // Running for this run only: not a start Daintree made.
+          box({ listening: true, state: onConnectState({ enabled: false }) }),
           // Running, but not by its own account started on connect.
           box({ listening: true, state: hostState(true) }),
         ];
@@ -530,6 +535,52 @@ describe("HostSetupService", () => {
           })
         ).resolves.toBe(false);
         expect(wsl.scripts).toEqual([]);
+      });
+
+      it("ends a start still unpacking when it's removed before listening", async () => {
+        const left = recording([box({})]);
+        const stopping = service("", {
+          run: async (command, args) => {
+            const script = args.at(-1) ?? "";
+            if (script.includes("@@dt:stopped")) {
+              left.scripts.push(script);
+              return ok("@@dt:stopped yes\n");
+            }
+            return left.run(command, args);
+          },
+        });
+        await expect(stopping.setup.stopStartedOnConnect(studio)).resolves.toBe(true);
+        const stop = left.scripts.find((c) => c.includes("@@dt:stopped"))!;
+        // The last start's own process is asked to quit, not merely waited for.
+        expect(stop).toContain("host-launch.pid");
+        expect(stop).toContain("/proc/$lp/comm");
+      });
+
+      it("says at once when the start it made exits, in the log's words", async () => {
+        const scripts: string[] = [];
+        let probed = 0;
+        const run: CommandRunner = async (_command, args) => {
+          const script = args.at(-1) ?? "";
+          scripts.push(script);
+          if (script.includes("@@dt:uname")) {
+            probed++;
+            return ok(box({ image: true }));
+          }
+          if (script.includes("nohup")) return ok("@@dt:launched 777 123456 new\n");
+          if (script.includes("alive yes")) return ok("");
+          if (script.includes("host.log")) {
+            return ok(
+              "Started Daintree host\n[1:1:FATAL:zygote_host_impl_linux.cc(1)] No usable sandbox!\n"
+            );
+          }
+          return ok();
+        };
+        await expect(service("", { run }).setup.ensureHostRunning(studio)).rejects.toMatchObject({
+          userMessage:
+            "Daintree exited on studio as it started: No usable sandbox! (more in ~/.cache/daintree/host.log there)",
+        });
+        // One check before the start and one after it: not a minute, or five, of waiting.
+        expect(probed).toBe(2);
       });
 
       it("tells its record what every check that reached the host saw", async () => {

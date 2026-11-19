@@ -14,7 +14,9 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...actual,
     readFileSync: ((file: string, ...rest: unknown[]) => {
-      if (file !== "/proc/1/comm") return (actual.readFileSync as Function)(file, ...rest);
+      if (file !== "/proc/1/comm") {
+        return Reflect.apply(actual.readFileSync, undefined, [file, ...rest]) as string;
+      }
       if (pid1.comm === null) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
       return pid1.comm;
     }) as typeof actual.readFileSync,
@@ -22,10 +24,13 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
+  // The account's home, not $HOME: an AppImage's portable home changes only the latter.
+  const userInfo = () => ({ ...actual.userInfo(), homedir: "/home/node" });
   return {
     ...actual,
-    default: { ...actual, homedir: () => "/home/node" },
-    homedir: () => "/home/node",
+    default: { ...actual, homedir: () => "/home/node/Daintree.AppImage.home", userInfo },
+    homedir: () => "/home/node/Daintree.AppImage.home",
+    userInfo,
   };
 });
 

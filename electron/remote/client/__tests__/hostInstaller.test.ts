@@ -741,7 +741,11 @@ describe("runHostInstall", () => {
       expect(shell.scripts[rolledAt - 1]).toContain(`kill -TERM "$lp"`);
       // The new build started, then the old one again.
       expect(starts(shell.scripts)).toHaveLength(2);
-      expect(shell.scripts.findLastIndex((s) => s.includes("nohup"))).toBeGreaterThan(rolledAt);
+      const lastStart = shell.scripts.reduce(
+        (last, script, index) => (script.includes("nohup") ? index : last),
+        -1
+      );
+      expect(lastStart).toBeGreaterThan(rolledAt);
     });
 
     it("won't stop one whose own record doesn't say it was started on connect", async () => {
