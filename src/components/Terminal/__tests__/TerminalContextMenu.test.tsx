@@ -1680,6 +1680,18 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     expect(screen.queryByText("Continue when usage limit resets")).toBeNull();
   });
 
+  it("keeps the checked item on a pane armed while Codex ran in it, once Codex has left (#17911)", () => {
+    useCodexLimitContinueStore.setState({
+      panes: { "panel-1": { revision: 2, state: { status: "armed" } } },
+    });
+    renderMenu({ ...agentPane, launchAgentId: undefined, detectedAgentId: undefined });
+    const row = screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" });
+    expect(row.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(row);
+    expect(continueClient.set).toHaveBeenLastCalledWith("panel-1", false);
+    useCodexLimitContinueStore.setState({ panes: {} });
+  });
+
   it("runs the watch and fleet rows from where they now sit", () => {
     fleetEligible.current = true;
     armed.armedIds = new Set(["panel-1", "panel-2"]);

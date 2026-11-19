@@ -236,6 +236,9 @@ export class CodexLimitContinuation {
     if (wait) {
       pane.wait = null;
       this.reschedule();
+      // Its time goes with it: a view must never show a deadline no timer
+      // holds, while the new stop is read or after it comes to nothing.
+      this.setState(pane, { status: "armed" });
     }
     // Asked at once: once the printed minute begins, what was spent at the
     // stop can no longer be told.

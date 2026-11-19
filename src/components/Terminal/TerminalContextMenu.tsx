@@ -950,7 +950,11 @@ function TerminalContextMenuBody({
             continueAtLimitReset={
               terminalPty &&
               !isEphemeralPanel(terminal) &&
-              canContinueAtLimitReset(terminal.detectedAgentId ?? terminal.launchAgentId)
+              // Kept for a pane already armed whose Codex has since left (a
+              // shell it ran in): the checked item is where it's seen and
+              // turned off (#17911).
+              (armedToContinue ||
+                canContinueAtLimitReset(terminal.detectedAgentId ?? terminal.launchAgentId))
                 ? armedToContinue
                 : undefined
             }

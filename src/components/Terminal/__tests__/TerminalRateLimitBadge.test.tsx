@@ -17,6 +17,23 @@ vi.mock("@/services/ActionService", () => ({
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
   useGlobalMinuteClock: () => clock.now,
 }));
+const setContinue = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+interface ToastPayload {
+  type: string;
+  message: string;
+  action: { label: string; onClick: () => void };
+}
+const notifyMock = vi.hoisted(() => vi.fn<(payload: ToastPayload) => void>());
+vi.mock("@/lib/notify", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/notify")>()),
+  notify: (payload: ToastPayload) => notifyMock(payload),
+}));
+vi.mock("@/clients/codexLimitContinueClient", () => ({
+  codexLimitContinueClient: {
+    set: (...args: unknown[]) => setContinue(...args),
+    list: vi.fn().mockResolvedValue([]),
+  },
+}));
 
 import { TerminalRateLimitBadge } from "../TerminalRateLimitBadge";
 import {
@@ -26,7 +43,11 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCodexLimitContinueStore } from "@/store/codexLimitContinueStore";
+import { setHostInputBlock, setLeaseInputBlock } from "@/services/terminal/inputGate";
+import { LIMIT_CONTINUE_OUTCOME_TTL_MS } from "../limitContinueChipModel";
 import type { AgentSettings } from "@shared/types/agentSettings";
+import type { CodexLimitContinueState } from "@shared/types/codexLimitContinuation";
 import type { PtyPanelData } from "@shared/types/panel";
 
 function renderBadge(terminalId: string) {
@@ -39,16 +60,23 @@ function renderBadge(terminalId: string) {
 
 beforeEach(() => {
   readQuota.mockReset().mockResolvedValue([]);
+  setContinue.mockReset().mockResolvedValue(undefined);
+  notifyMock.mockReset();
+  dispatchMock.mockClear();
 });
 
 afterEach(() => {
   cleanup();
   useRateLimitObservationStore.setState({ observedAtByTerminalId: {} });
+  useCodexLimitContinueStore.setState({ panes: {}, disarmed: {} });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  useAgentSettingsStore.setState({ settings: null });
+  setLeaseInputBlock(null);
+  setHostInputBlock(null);
 });
 
 describe("TerminalRateLimitBadge (#12797)", () => {
-  it("renders nothing for a pane with no observation", () => {
+  it("renders nothing for a pane with no observation or continuation", () => {
     renderBadge("t1");
     expect(screen.queryByTestId("terminal-rate-limit-badge")).toBeNull();
   });
@@ -260,5 +288,371 @@ describe("TerminalRateLimitBadge (#12797)", () => {
     await act(async () => {});
     const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
     expect(items).toEqual(["Default login", "LabWeekly limit 35% used"]);
+  });
+});
+
+const codexPane = (extra: Partial<PtyPanelData> = {}): PtyPanelData => ({
+  id: "t1",
+  kind: "terminal",
+  title: "Codex",
+  cwd: "/repo",
+  cols: 80,
+  rows: 24,
+  location: "grid",
+  launchAgentId: "codex",
+  ...extra,
+});
+
+function armWith(state: CodexLimitContinueState, revision = 2) {
+  act(() => {
+    useCodexLimitContinueStore
+      .getState()
+      .mergeSnapshot([{ terminalId: "t1", revision, state }], new Set());
+  });
+}
+
+function openChipMenu() {
+  act(() => {
+    fireEvent.keyDown(screen.getByTestId("terminal-rate-limit-badge"), { key: "Enter" });
+  });
+}
+
+// Local wall-clock instants, so the expectations hold in any time zone.
+const local = (day: number, hour: number, minute: number) =>
+  new Date(2026, 10, day, hour, minute).getTime();
+
+describe("TerminalRateLimitBadge, armed to continue (#17911)", () => {
+  it("shows when a wait days away resumes, with no observation, and turns it off from its menu", async () => {
+    // Thursday morning; the weekly window resets Monday.
+    clock.now = local(19, 9, 0);
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    renderBadge("t1");
+    expect(screen.queryByTestId("terminal-rate-limit-badge")).toBeNull();
+
+    const resetsAt = local(23, 9, 59);
+    armWith({ status: "waiting", resetsAt, continueAt: resetsAt + 60_000 });
+    const badge = screen.getByTestId("terminal-rate-limit-badge");
+    expect(badge.textContent).toMatch(/^Resumes Mon 10:00\sAM$/u);
+
+    // Past the observation's 15 minutes, the wait still shows.
+    clock.now = local(21, 9, 0);
+    armWith({ status: "waiting", resetsAt, continueAt: resetsAt + 60_000 }, 3);
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toMatch(
+      /^Resumes Mon 10:00\sAM$/u
+    );
+
+    openChipMenu();
+    const row = screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" });
+    expect(row.getAttribute("aria-checked")).toBe("true");
+    act(() => {
+      fireEvent.click(row);
+    });
+    await act(async () => {});
+    expect(setContinue).toHaveBeenCalledWith("t1", false);
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    // Main's disarm is what takes the chip away.
+    expect(screen.queryByTestId("terminal-rate-limit-badge")).not.toBeNull();
+    act(() => {
+      useCodexLimitContinueStore
+        .getState()
+        .applyChange({ terminalId: "t1", revision: 4, state: null });
+    });
+    expect(screen.queryByTestId("terminal-rate-limit-badge")).toBeNull();
+  });
+
+  it("follows a wait main moved to a later time", () => {
+    clock.now = local(19, 15, 0);
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    renderBadge("t1");
+    armWith({ status: "waiting", resetsAt: local(19, 15, 39), continueAt: local(19, 15, 40) });
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toMatch(
+      /^Resumes 3:40\sPM$/u
+    );
+    act(() => {
+      useCodexLimitContinueStore.getState().applyChange({
+        terminalId: "t1",
+        revision: 3,
+        state: { status: "waiting", resetsAt: local(19, 15, 39), continueAt: local(19, 15, 41) },
+      });
+    });
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toMatch(
+      /^Resumes 3:41\sPM$/u
+    );
+  });
+
+  it("says how the wait ended for a day, then goes", () => {
+    const continuedAt = local(19, 3, 41);
+    clock.now = local(19, 8, 0);
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    const view = renderBadge("t1");
+    armWith({ status: "continued", at: continuedAt, line: "continue" });
+    const badge = screen.getByTestId("terminal-rate-limit-badge");
+    expect(badge.textContent).toMatch(/^Resume sent 3:41\sAM$/u);
+    expect(badge.getAttribute("data-limit-continue")).toBe("continued");
+
+    clock.now = continuedAt + LIMIT_CONTINUE_OUTCOME_TTL_MS;
+    view.rerender(
+      <TooltipProvider>
+        <TerminalRateLimitBadge terminalId="t1" />
+      </TooltipProvider>
+    );
+    expect(screen.queryByTestId("terminal-rate-limit-badge")).toBeNull();
+  });
+
+  it("says a skip and a missing reset time rather than a time", () => {
+    clock.now = local(19, 8, 0);
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    renderBadge("t1");
+    armWith({ status: "skipped", at: local(19, 3, 41), reason: "draft" });
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toBe("Resume skipped");
+
+    armWith({ status: "skipped", at: local(19, 7, 0), reason: "no-reset" }, 3);
+    const badge = screen.getByTestId("terminal-rate-limit-badge");
+    expect(badge.textContent).toBe("No reset time");
+    expect(badge.getAttribute("data-limit-continue")).toBe("no-reset");
+  });
+
+  it("keeps the observation chip for an armed pane with no wait yet, its menu showing it armed", () => {
+    const observedAt = local(19, 8, 0);
+    clock.now = observedAt + 60_000;
+    useRateLimitObservationStore.setState({ observedAtByTerminalId: { t1: observedAt } });
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    renderBadge("t1");
+    armWith({ status: "armed" });
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toBe("Rate limit reported");
+    openChipMenu();
+    expect(
+      screen
+        .getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  it("reads no quota for a menu holding only the continue row", async () => {
+    clock.now = local(19, 9, 0);
+    useAgentSettingsStore.setState({
+      settings: { agents: { codex: { customPresets: [{ id: "only", name: "Only" }] } } },
+    });
+    usePanelStore.setState({
+      panelsById: { t1: codexPane({ agentPresetId: "only" }) },
+      panelIds: ["t1"],
+    });
+    renderBadge("t1");
+    armWith({ status: "waiting", resetsAt: local(19, 15, 39), continueAt: local(19, 15, 40) });
+    openChipMenu();
+    await act(async () => {});
+    expect(screen.getAllByRole("menuitemcheckbox")).toHaveLength(1);
+    expect(screen.queryAllByRole("menuitem")).toHaveLength(0);
+    expect(readQuota).not.toHaveBeenCalled();
+  });
+
+  it("offers a move elsewhere during a wait, but not beside an outcome", async () => {
+    clock.now = local(19, 9, 0);
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          codex: {
+            customPresets: [
+              { id: "personal", name: "Personal" },
+              { id: "work", name: "Work" },
+            ],
+          },
+        },
+      },
+    });
+    usePanelStore.setState({
+      panelsById: { t1: codexPane({ agentPresetId: "personal" }) },
+      panelIds: ["t1"],
+    });
+    renderBadge("t1");
+    armWith({ status: "waiting", resetsAt: local(19, 15, 39), continueAt: local(19, 15, 40) });
+    openChipMenu();
+    await act(async () => {});
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Work"]);
+    act(() => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    });
+
+    armWith({ status: "skipped", at: local(19, 8, 59), reason: "draft" }, 3);
+    openChipMenu();
+    await act(async () => {});
+    expect(screen.getAllByRole("menuitemcheckbox")).toHaveLength(1);
+    expect(screen.queryAllByRole("menuitem")).toHaveLength(0);
+    act(() => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    });
+
+    // With the banner fresh, a stop that wasn't continued still offers a move;
+    // one whose line went in doesn't.
+    useRateLimitObservationStore.setState({ observedAtByTerminalId: { t1: local(19, 8, 58) } });
+    armWith({ status: "skipped", at: local(19, 8, 59), reason: "no-reset" }, 4);
+    openChipMenu();
+    await act(async () => {});
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Work"]);
+    act(() => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    });
+    armWith({ status: "continued", at: local(19, 8, 59), line: "continue" }, 5);
+    openChipMenu();
+    await act(async () => {});
+    expect(screen.getAllByRole("menuitemcheckbox")).toHaveLength(1);
+    expect(screen.queryAllByRole("menuitem")).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      "driven from another screen",
+      () => setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "Laptop" }),
+    ],
+    [
+      "cut off from its host",
+      () => setHostInputBlock({ kind: "disconnected", hostName: "Studio" }),
+    ],
+  ])("can't turn the wait off from a view %s", (_name, block) => {
+    clock.now = local(19, 9, 0);
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    act(() => {
+      block();
+    });
+    renderBadge("t1");
+    armWith({ status: "waiting", resetsAt: local(19, 15, 39), continueAt: local(19, 15, 40) });
+    openChipMenu();
+    const row = screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" });
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    act(() => {
+      fireEvent.click(row);
+    });
+    expect(setContinue).not.toHaveBeenCalled();
+  });
+
+  it("keeps a restart confirm already asked once the wait it was asked from ends", () => {
+    clock.now = local(19, 9, 0);
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          codex: {
+            customPresets: [
+              { id: "personal", name: "Personal" },
+              { id: "work", name: "Work" },
+            ],
+          },
+        },
+      },
+    });
+    usePanelStore.setState({
+      panelsById: { t1: codexPane({ title: "Codex [Personal]", agentPresetId: "personal" }) },
+      panelIds: ["t1"],
+    });
+    renderBadge("t1");
+    armWith({ status: "waiting", resetsAt: local(19, 15, 39), continueAt: local(19, 15, 40) });
+    openChipMenu();
+    act(() => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    });
+    expect(screen.getByText("Restart 'Codex [Personal]' on 'Work'?")).toBeTruthy();
+
+    act(() => {
+      useCodexLimitContinueStore
+        .getState()
+        .applyChange({ terminalId: "t1", revision: 3, state: null });
+    });
+    expect(screen.queryByTestId("terminal-rate-limit-badge")).toBeNull();
+    expect(screen.getByText("Restart 'Codex [Personal]' on 'Work'?")).toBeTruthy();
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart on preset" }));
+    });
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "terminal.restartOnPreset",
+      { terminalId: "t1", presetId: "work", confirmed: true },
+      { source: "user" }
+    );
+  });
+
+  it("says when main refuses to turn the wait off, and keeps showing it", async () => {
+    clock.now = local(19, 9, 0);
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    renderBadge("t1");
+    armWith({ status: "waiting", resetsAt: local(19, 15, 39), continueAt: local(19, 15, 40) });
+    setContinue.mockRejectedValueOnce(new Error("refused"));
+    openChipMenu();
+    act(() => {
+      fireEvent.click(
+        screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" })
+      );
+    });
+    await act(async () => {});
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const toast = notifyMock.mock.calls[0]![0];
+    expect(toast.type).toBe("error");
+    expect(toast.message).toMatch(/'Codex' may still continue/);
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toMatch(/^Resumes /);
+
+    act(() => toast.action.onClick());
+    await act(async () => {});
+    expect(setContinue).toHaveBeenLastCalledWith("t1", false);
+    expect(setContinue).toHaveBeenCalledTimes(2);
+  });
+
+  it("never lets an old refusal's Retry cancel a wait armed since", async () => {
+    clock.now = local(19, 9, 0);
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    renderBadge("t1");
+    armWith({ status: "waiting", resetsAt: local(19, 15, 39), continueAt: local(19, 15, 40) });
+    setContinue.mockRejectedValueOnce(new Error("refused"));
+    openChipMenu();
+    act(() => {
+      fireEvent.click(
+        screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" })
+      );
+    });
+    await act(async () => {});
+    const toast = notifyMock.mock.calls[0]![0];
+
+    // Cancelled from elsewhere, then armed again, with a new wait.
+    act(() => {
+      const store = useCodexLimitContinueStore.getState();
+      store.applyChange({ terminalId: "t1", revision: 3, state: null });
+      store.applyChange({
+        terminalId: "t1",
+        revision: 4,
+        state: { status: "waiting", resetsAt: local(19, 16, 39), continueAt: local(19, 16, 40) },
+      });
+    });
+    act(() => toast.action.onClick());
+    await act(async () => {});
+    expect(setContinue).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toMatch(
+      /^Resumes 4:40\sPM$/u
+    );
+  });
+
+  it("keeps a wait on the pane past the banner's 15 minutes, with no new record", () => {
+    const observedAt = local(19, 9, 0);
+    clock.now = observedAt + 60_000;
+    useRateLimitObservationStore.setState({ observedAtByTerminalId: { t1: observedAt } });
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    const view = renderBadge("t1");
+    armWith({ status: "waiting", resetsAt: local(23, 9, 59), continueAt: local(23, 10, 0) });
+    clock.now = observedAt + RATE_LIMIT_OBSERVATION_TTL_MS + 60_000;
+    view.rerender(
+      <TooltipProvider>
+        <TerminalRateLimitBadge terminalId="t1" />
+      </TooltipProvider>
+    );
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toMatch(/^Resumes Mon /);
+  });
+
+  it("comes back for a new record after an outcome expired, even one repeating its revision", () => {
+    const sentAt = local(18, 9, 0);
+    clock.now = sentAt + LIMIT_CONTINUE_OUTCOME_TTL_MS + 60_000;
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    renderBadge("t1");
+    armWith({ status: "continued", at: sentAt, line: "continue" }, 7);
+    expect(screen.queryByTestId("terminal-rate-limit-badge")).toBeNull();
+
+    // A restarted host whose revisions began again.
+    armWith({ status: "skipped", at: clock.now - 60_000, reason: "draft" }, 7);
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toBe("Resume skipped");
   });
 });
