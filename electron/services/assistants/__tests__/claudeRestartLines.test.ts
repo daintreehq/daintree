@@ -131,4 +131,16 @@ describe("findClaudeRestartRefusal", () => {
   ])("finds nothing in %s", (_name, row) => {
     expect(findClaudeRestartRefusal(answered(row))).toBeNull();
   });
+
+  it("reads nothing from the composer, where a draft can read /restart too", () => {
+    const text = [
+      "❯ /restart",
+      `  ⎿  ${REFUSALS[0]}`,
+      "",
+      "─".repeat(60),
+      "❯ /restart",
+      "─".repeat(60),
+    ].join("\n");
+    expect(findClaudeRestartRefusal(text)).toBe(REFUSALS[0]);
+  });
 });

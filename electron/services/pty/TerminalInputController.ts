@@ -787,7 +787,9 @@ export class TerminalInputController {
     // body stays in the composer unsent, which is a draft from here on, as a
     // staged line is.
     if (ctx?.isWithdrawn?.() === true) {
-      stampTypedInput(this.host.terminalInfo, Date.now());
+      // Only for the run the body went to: a run that replaced it meanwhile
+      // starts with an empty composer.
+      leaveDraft();
       return;
     }
 

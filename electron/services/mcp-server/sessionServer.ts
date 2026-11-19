@@ -158,6 +158,7 @@ import {
   ASSISTANT_TARGET_REFUSALS,
   AssistantResumeArgsSchema,
   AssistantStartArgsSchema,
+  RunGenerationArgSchema,
   WORKER_STEER_REFUSALS,
   type AgentReadQuotaResult,
 } from "../../../shared/types/assistantControl.js";
@@ -804,6 +805,13 @@ function auditCodeForAssistantRefusal(
   }
 }
 
+/** Whether a Claude Code update's answer says `/restart` went in and no refusal was seen (#17908). */
+function restartedWithoutRefusal(result: unknown): boolean {
+  const record =
+    result !== null && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  return record.status === "sent" && record.refusal === null;
+}
+
 /** A relayed write refused at its last check, just before its side effect (#13493). */
 class RelayWriteRefused extends Error {
   constructor(readonly refusal: { code: string; message: string }) {
@@ -1417,16 +1425,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
       // A run the caller named holds it to that run; one it misspelled must
       // not quietly become the run that is there now.
-      const generation = callArgs.generation;
-      if (
-        generation !== undefined &&
-        !(typeof generation === "number" && Number.isInteger(generation) && generation >= 0)
-      ) {
+      const parsedGeneration = RunGenerationArgSchema.safeParse(callArgs.generation);
+      if (!parsedGeneration.success) {
         throw new AssistantTargetError(
           "VALIDATION_ERROR",
           "`generation` must be the whole number the run was listed with. Nothing was sent."
         );
       }
+      const generation = parsedGeneration.data;
       const steer =
         globalUpdateTerminalId !== undefined ? globalSteerTarget(terminalId) : undefined;
       // Asked right before `/restart` is typed, long after the approval: the
@@ -1486,12 +1492,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               authorize,
               signal: extra.signal,
               ...(deadline !== undefined ? { deadline } : {}),
-              // What this pane heard about the worker's last prompt is stale
-              // once `/restart` is in, as after any prompt it sends (#16187).
-              onWritten: () => {
-                const pane = tier === "external" ? null : ownPane();
-                if (pane !== null) terminalNotify?.supersede(pane, terminalId);
-              },
             });
             // The approval's own record (its decision, a session grant, the
             // workspace it ran in) stays with the answer; only the result is main's.
@@ -3967,7 +3967,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               closeGenerations.get(id)
             );
           }
-          settleRestartHold?.(envelope.result.ok);
+          // An update answers ok whether or not `/restart` went in (#17908):
+          // only one sent with no refusal seen replaced what the notice was about.
+          settleRestartHold?.(
+            actionId === CLAUDE_UPDATE_TOOL
+              ? envelope.result.ok && restartedWithoutRefusal(envelope.result.result)
+              : envelope.result.ok
+          );
           settleRestartHold = undefined;
           // Hand the notice what the action reported: the send's submission
           // token or the launch's terminal id. A failed dispatch drops it —

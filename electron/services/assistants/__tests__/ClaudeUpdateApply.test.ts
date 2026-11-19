@@ -568,24 +568,6 @@ describe("ClaudeUpdateApply.apply, at its edges", () => {
     expect(fake.now - started).toBeGreaterThan(CLAUDE_UPDATE_WAIT_MS - 1_000);
   });
 
-  it("tells the caller once the line is written, and not when it isn't", async () => {
-    const sent = await pinned();
-    let told = 0;
-    await sent.service.apply(sent.pin, { ...allow, onWritten: () => (told += 1) });
-    expect(told).toBe(1);
-
-    const withheld = await pinned({
-      onSubmit: (submit, f) =>
-        f.submissions.set(submit.token, { token: submit.token, phase: "cancelled", at: f.now }),
-    });
-    let toldWithheld = 0;
-    await withheld.service.apply(withheld.pin, {
-      ...allow,
-      onWritten: () => (toldWithheld += 1),
-    });
-    expect(toldWithheld).toBe(0);
-  });
-
   it("asks to take back a line still queued when the call ends, and reports what became of it", async () => {
     const controller = new AbortController();
     let reads = 0;
@@ -605,6 +587,52 @@ describe("ClaudeUpdateApply.apply, at its edges", () => {
     const result = await service.apply(pin, { ...allow, signal: controller.signal });
     expect(fake.withdrawn).toEqual([fake.submits[0]!.token]);
     expect(result).toMatchObject({ status: "not-sent", reason: "withheld" });
+  });
+
+  it("takes the line back the moment the call ends, not at its next read", async () => {
+    const controller = new AbortController();
+    const { fake, service, pin } = await pinned({
+      onSubmit: (submit, f) =>
+        f.submissions.set(submit.token, { token: submit.token, phase: "writing", at: f.now }),
+    });
+    let withdrawnAtAbort: string[] = [];
+    fake.beforeRead = (f, token) => {
+      if (token === undefined || controller.signal.aborted) return;
+      controller.abort();
+      // Synchronous with the abort, inside a read still out.
+      withdrawnAtAbort = [...f.withdrawn];
+      f.submissions.set(token, { token, phase: "cancelled", at: f.now });
+    };
+    const result = await service.apply(pin, { ...allow, signal: controller.signal });
+    expect(withdrawnAtAbort).toEqual([fake.submits[0]!.token]);
+    expect(fake.withdrawn).toHaveLength(1);
+    expect(result).toMatchObject({ status: "not-sent", reason: "withheld" });
+  });
+
+  it("quotes a refusal only once it stops growing past one repeated read", async () => {
+    const partial = "❯ /restart\n  ⎿  Can't restart while Remote Control is";
+    const whole = `${partial} connected. Disconnect it.`;
+    const { fake, service, pin } = await pinned({ onSubmit: written(partial) });
+    let reads = 0;
+    fake.beforeRead = (f, token) => {
+      if (token === undefined) return;
+      reads += 1;
+      // The capture repeats the half row once before it publishes the rest.
+      if (reads === 3) written(whole)(f.submits[0]!, f);
+    };
+    expect((await service.apply(pin, allow)).refusal).toBe(
+      "Can't restart while Remote Control is connected. Disconnect it."
+    );
+  });
+
+  it("keeps a lost capture marked lost even with a refusal in it", async () => {
+    const { service, pin } = await pinned({
+      onSubmit: written("❯ /restart\n  ⎿  Can't restart automatically. Type it.", "lost"),
+    });
+    expect(await service.apply(pin, allow)).toMatchObject({
+      refusal: "Can't restart automatically. Type it.",
+      output: "lost",
+    });
   });
 
   it.each<[TerminalSubmissionRecord["phase"], RegExp]>([

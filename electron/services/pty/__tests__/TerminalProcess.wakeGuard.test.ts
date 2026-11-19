@@ -1009,4 +1009,21 @@ describe("TerminalProcess settled-prompt-exact guard pinned to an update observa
       expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
     }
   );
+
+  it("leaves no draft on a run that replaced the one the line went to", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+    });
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    await vi.advanceTimersByTimeAsync(0);
+    const typedBefore = info(terminal).lastTypedInputAt;
+    // Claude relaunched under the body: a new run, its observation cleared.
+    Object.assign(info(terminal), { agentIncarnation: 1, updateInstalled: undefined });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+    expect(info(terminal).lastTypedInputAt).toBe(typedBefore);
+  });
 });
