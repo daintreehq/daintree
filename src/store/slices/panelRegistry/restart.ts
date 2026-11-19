@@ -1767,6 +1767,7 @@ export const createRestartActions = (
       {
         kind: "own-chain-step",
         inputs,
+        startedAt: panel.startedAt,
         ...(options?.deadlineAt !== undefined ? { deadlineAt: options.deadlineAt } : {}),
       },
       options
@@ -1864,6 +1865,8 @@ interface OwnChainStepRequest {
   kind: "own-chain-step";
   inputs: OwnStepInputs;
   deadlineAt?: number;
+  /** The launch the move was asked about: a restart or a replacement since then asks. */
+  startedAt: number | undefined;
 }
 
 function needsConfirmation(): PresetRespawnResult {
@@ -1914,6 +1917,8 @@ function mirroredOwnFallbackStepRoot(get: Get, id: string, presetId: string): st
   const panel = get().panelsById[id];
   if (!panel || !isPtyPanel(panel) || !panel.launchAgentId) return null;
   if (panel.isRestarting || isTerminalRestarting(id) || panel.restoreRecovery) return null;
+  // An exit can send the pane to Trash with its chain still on it.
+  if (panel.location === "trash") return null;
   const entry = getAgentSettingsEntrySnapshot(panel.launchAgentId);
   return entry === null ? null : ownFallbackStepRoot(id, panel, presetId, entry.customPresets);
 }
@@ -1935,13 +1940,28 @@ function settleRespawnMode(
   if (requested.deadlineAt !== undefined && Date.now() >= requested.deadlineAt) {
     return { success: false, error: "the call's deadline passed before the move started" };
   }
-  if (presetId === undefined || !terminal.launchAgentId) return needsConfirmation();
+  const agentId = terminal.launchAgentId;
+  if (presetId === undefined || !agentId || terminal.startedAt !== requested.startedAt) {
+    return needsConfirmation();
+  }
   const root = mirroredOwnFallbackStepRoot(get, id, presetId);
-  const launchEntry = requested.inputs.agentSettings?.agents?.[terminal.launchAgentId];
-  if (
-    root === null ||
-    ownFallbackStepRoot(id, terminal, presetId, launchEntry?.customPresets) !== root
-  ) {
+  const launchCustom = requested.inputs.agentSettings?.agents?.[agentId]?.customPresets;
+  if (root === null || ownFallbackStepRoot(id, terminal, presetId, launchCustom) !== root) {
+    return needsConfirmation();
+  }
+  // The step as the launch would build it, and as this view knows it now: an
+  // edit to its flags, env or permission mode heard meanwhile asks.
+  const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[agentId];
+  const projectPresets = useProjectPresetsStore.getState().presetsByAgent[agentId];
+  const launching = getMergedPreset(agentId, presetId, launchCustom, ccrPresets, projectPresets);
+  const known = getMergedPreset(
+    agentId,
+    presetId,
+    getAgentSettingsEntrySnapshot(agentId)?.customPresets,
+    ccrPresets,
+    projectPresets
+  );
+  if (!launching || !known || presetLaunchContent(launching) !== presetLaunchContent(known)) {
     return needsConfirmation();
   }
   return { kind: "fallback", originalPresetId: root, ownChainStep: true };
@@ -2205,6 +2225,25 @@ async function respawnAgentOnPreset(
     // agent is the one the pane launched (as in `restartTerminal`).
     const captureTrusted =
       livePanel.detectedAgentId === undefined || livePanel.detectedAgentId === effectiveAgentId;
+
+    // An assistant's hop whose caller gave up while it prepared (#17917) ends
+    // here, before anything is torn down: it was told the call failed.
+    if (
+      requested.kind === "own-chain-step" &&
+      requested.deadlineAt !== undefined &&
+      Date.now() >= requested.deadlineAt
+    ) {
+      unmarkTerminalRestarting(id);
+      set((state) =>
+        updateTerminal(state, id, (t) => ({
+          ...t,
+          isRestarting: false,
+          restartError: livePanel.restartError,
+          spawnError: livePanel.spawnError,
+        }))
+      );
+      return { success: false, error: "the call's deadline passed before the move started" };
+    }
 
     peekTerminalService()?.destroy(id);
     withTerminalService((service) => service.suppressNextExit(id, 10000), id);

@@ -1194,6 +1194,19 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     call.asked = true;
     return () => {
       if (!call.skipped) this.grantSkip(call);
+      // A resend of this very call to the same host, recorded afresh after
+      // another send replaced this record under the id, joined the same run.
+      const current = this.callsInFlight.get(dispatch.callId);
+      if (
+        current !== undefined &&
+        current !== call &&
+        current.hostId === call.hostId &&
+        current.helpSessionId === call.helpSessionId &&
+        sameCall(current, call) &&
+        !current.skipped
+      ) {
+        this.grantSkip(current);
+      }
     };
   }
 

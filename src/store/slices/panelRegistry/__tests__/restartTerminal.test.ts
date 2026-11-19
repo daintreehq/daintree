@@ -2842,7 +2842,7 @@ describe("restartTerminalOnPreset", () => {
 });
 
 describe("restartTerminalOnOwnFallbackStep (#17917)", () => {
-  type Preset = { id: string; name: string; fallbacks?: string[] };
+  type Preset = { id: string; name: string; fallbacks?: string[]; args?: string[] };
   const custom: Preset[] = [
     { id: "personal", name: "Personal", fallbacks: ["work", "backup"] },
     { id: "work", name: "Work", fallbacks: ["other"] },
@@ -2865,10 +2865,11 @@ describe("restartTerminalOnOwnFallbackStep (#17917)", () => {
     mirror = custom;
     const { setAgentSettingsEntryAccessor } = await import("@/store/storeAccessors");
     setAgentSettingsEntryAccessor(() => ({ customPresets: mirror }) as never);
-    getMergedPresetMock.mockImplementation((_agentId: string, presetId: string) =>
-      [...custom, ...(projectPresetsByAgent.current.claude ?? [])].find(
-        (preset) => (preset as Preset).id === presetId
-      )
+    getMergedPresetMock.mockImplementation(
+      (_agentId: string, presetId: string, customPresets?: Preset[]) =>
+        [...(customPresets ?? custom), ...(projectPresetsByAgent.current.claude ?? [])].find(
+          (preset) => (preset as Preset).id === presetId
+        )
     );
     buildAgentLaunchFlagsMock.mockReturnValue([]);
     await savedPresets(custom);
@@ -2998,6 +2999,43 @@ describe("restartTerminalOnOwnFallbackStep (#17917)", () => {
     expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(pane()).toMatchObject({ agentPresetId: "work", fallbackChainIndex: 1 });
+  });
+
+  it("asks when the pane it was asked about was replaced, or relaunched, during the read", async () => {
+    seed({ startedAt: 1_000 });
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "test-1": { ...state.panelsById["test-1"]!, startedAt: 2_000 } as PtyPanelData,
+        },
+      }));
+      return { agents: { claude: { customPresets: custom } } } as never;
+    });
+
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("asks for a pane an exit sent to Trash", async () => {
+    seed({ location: "trash" });
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("asks when this view heard of an edit to the step's own launch during the read", async () => {
+    seed();
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+      mirror = custom.map((preset) =>
+        preset.id === "work" ? { ...preset, args: ["--skip-prompts"] } : preset
+      );
+      return { agents: { claude: { customPresets: custom } } } as never;
+    });
+
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 
   it("starts a new conversation, as the owned move does: a caller's resume selector stays behind", async () => {
