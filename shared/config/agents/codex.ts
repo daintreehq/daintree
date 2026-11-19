@@ -154,6 +154,20 @@ export const config: AgentConfig = {
     fallbackConfidence: 0.75,
     promptConfidence: 0.85,
   },
+  // Captured from 0.170.0 (#17915): the composer is a band in a tint of its
+  // own, a blank row above and below `›` and a space at column 0, with no
+  // rules. A sent message's echo is a band too, its glyph drawn dim. An empty
+  // composer always shows a fixed dim placeholder; the second sits beside the
+  // first in the 0.170.0 binary. Codex draws no suggested next prompt.
+  inputSuggestion: {
+    label: "Codex",
+    style: "dim",
+    promptRowPattern: "^›(?:\\s|$)",
+    borderPattern: "^\\s*$",
+    frame: "band",
+    echoGlyphStyle: "dim",
+    placeholderPatterns: ["^Ask Codex to do anything$", "^Ask a follow-up question$"],
+  },
   resume: {
     kind: "session-id",
     // `-C .` pins the conversation to the directory the pane launches in. A

@@ -335,7 +335,7 @@ describe("screen text from a real headless terminal", () => {
 
   it("reports the box as unknown for an agent with no declared rule, and for a plain shell", async () => {
     const output = "⏺ Done.\r\n› \x1b[2mExplain this codebase\x1b[22m";
-    await expect(screenRead(4, output, 20, WITH_INPUT_LINE, "codex")).resolves.toMatchObject({
+    await expect(screenRead(4, output, 20, WITH_INPUT_LINE, "gemini")).resolves.toMatchObject({
       inputLine: { state: "unknown", text: "" },
     });
     await expect(screenRead(4, "$ ls", 20, WITH_INPUT_LINE)).resolves.toMatchObject({
@@ -350,7 +350,7 @@ describe("screen text from a real headless terminal", () => {
     ).resolves.toMatchObject({ inputLine: { state: "suggestion", text: "commit this" } });
     // A detected agent with no rule wins over the launch agent's rule.
     await expect(
-      screenRead(4, output, 20, WITH_INPUT_LINE, "codex", "claude")
+      screenRead(4, output, 20, WITH_INPUT_LINE, "gemini", "claude")
     ).resolves.toMatchObject({ inputLine: { state: "unknown", text: "" } });
   });
 
@@ -362,7 +362,7 @@ describe("screen text from a real headless terminal", () => {
 
   it("keeps the generic dim drop for an agent with no declared rule", async () => {
     const output = "⏺ Done.\r\n› \x1b[2mExplain this codebase\x1b[22m";
-    const result = await screenRead(4, output, 20, { dropGhostInput: true }, "codex");
+    const result = await screenRead(4, output, 20, { dropGhostInput: true }, "gemini");
     expect(result.status === "ok" && result.text).toBe("⏺ Done.\n›");
   });
 

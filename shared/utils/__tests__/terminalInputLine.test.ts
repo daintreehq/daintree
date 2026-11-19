@@ -144,7 +144,7 @@ describe("observeInputLine", () => {
   });
 
   it("reads every box as unknown for an agent that declares no rule", () => {
-    expect(inputSuggestionRuleFor("codex")).toBeUndefined();
+    expect(inputSuggestionRuleFor("gemini")).toBeUndefined();
     expect(inputSuggestionRuleFor(null)).toBeUndefined();
     expect(inputSuggestionRuleFor("toString")).toBeUndefined();
     const serialized = screen("❯ \x1b[2mopen the PR\x1b[22m");
@@ -152,6 +152,80 @@ describe("observeInputLine", () => {
       inputLine: { state: "unknown", text: "" },
       marked: serialized,
     });
+  });
+});
+
+const codex = inputSuggestionRuleFor("codex");
+
+const TINT = "\x1b[48;2;30;30;30m";
+
+/** A Codex screen in the serializer's shape: a reply, then the composer's tinted band and its footer. */
+function band(box: string, tint = TINT): string {
+  return `• Done.\r\n${tint} \x1b[99X\r\n\x1b[1m›\x1b[22m ${box}\x1b[50X\r\n \x1b[99X\r\n\x1b[0m  ? for shortcuts`;
+}
+
+describe("observeInputLine in a band", () => {
+  it.each([
+    ["a truecolour tint", TINT],
+    ["a colon-form tint", "\x1b[48:2::30:30:30m"],
+    ["a 256-colour tint", "\x1b[48;5;236m"],
+    ["a basic tint", "\x1b[44m"],
+  ])("reads the box in %s", (_, tint) => {
+    expect(observeInputLine(band("add a test", tint), codex).inputLine).toEqual({
+      state: "typed",
+      text: "add a test",
+    });
+    expect(
+      observeInputLine(band("\x1b[2mAsk Codex to do anything\x1b[22m", tint), codex).inputLine
+    ).toEqual({ state: "empty", text: "" });
+  });
+
+  it("reads dim text that is not a placeholder as Codex's suggestion, and marks it", () => {
+    const { inputLine, marked } = observeInputLine(band("\x1b[2mopen the PR\x1b[22m"), codex);
+    expect(inputLine).toEqual({ state: "suggestion", text: "open the PR" });
+    expect(plain(marked)).toContain("› [suggested by Codex: open the PR]");
+  });
+
+  it.each([
+    [
+      "a band that runs off the bottom of the screen",
+      `• Done.\r\n${TINT} \x1b[99X\r\n\x1b[1m›\x1b[22m add a test\x1b[50X\r\n \x1b[99X`,
+    ],
+    [
+      "a band with no blank row closing it",
+      `• Done.\r\n${TINT} \x1b[99X\r\n\x1b[1m›\x1b[22m add a test\x1b[50X\r\n\x1b[0m  ? for shortcuts`,
+    ],
+    [
+      "a band with an unindented row inside it",
+      `• Done.\r\n${TINT} \x1b[99X\r\n\x1b[1m›\x1b[22m add a test\x1b[50X\r\nmore\r\n \x1b[99X\r\n\x1b[0m  ? for shortcuts`,
+    ],
+    [
+      "an echo, its glyph drawn dim",
+      band("add a test").replace("\x1b[1m›\x1b[22m", "\x1b[1;2m›\x1b[22;22m"),
+    ],
+    [
+      "a prompt row in a highlight of its own",
+      band("add a test").replace("\x1b[1m›", "\x1b[48;2;99;168;248m›"),
+    ],
+    [
+      "a prompt row back on the default background",
+      band("add a test").replace("\x1b[1m›", "\x1b[49m›"),
+    ],
+  ])("reads %s as no box at all", (_, serialized) => {
+    expect(observeInputLine(serialized, codex).inputLine).toEqual({ state: "unknown", text: "" });
+  });
+
+  it("keeps blank rows inside the band in the box", () => {
+    const serialized = band("first\x1b[50X\r\n \x1b[99X\r\n  third");
+    expect(observeInputLine(serialized, codex).inputLine).toEqual({
+      state: "typed",
+      text: "first\n\nthird",
+    });
+  });
+
+  it("drops the placeholder for Canopy", () => {
+    const serialized = band("\x1b[2mAsk Codex to do anything\x1b[22m");
+    expect(plain(dropInputSuggestion(serialized, codex))).not.toContain("Ask Codex");
   });
 });
 
