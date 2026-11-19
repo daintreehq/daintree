@@ -116,17 +116,11 @@ describe("scanClaudeUpdateFooter", () => {
     expect(hasClaudeComposer(lines)).toBe(expected);
   });
 
-  it("takes a short pane's composer whose top edge is clipped", () => {
-    const short = [
-      "❯ ",
-      "─".repeat(30),
-      "  ? for shortcuts  ✔ Update ins",
-      "talled · /restart to apply",
-    ];
-    expect(hasClaudeComposer(short)).toBe(true);
-    // Only when the whole viewport is in view: in a taller one the row above is just out of the scan.
-    const tall = [...Array(10).fill("output"), ...short];
-    expect(hasClaudeComposer(tall)).toBe(false);
+  it("wants both edges, since a shell prompt over a rule reads the same as a clipped composer", () => {
+    // Blank rows are dropped, so this could be a 24-row pane's whole read.
+    expect(
+      hasClaudeComposer(["❯ claude", "─".repeat(30), "  ✔ Update installed · /restart to apply"])
+    ).toBe(false);
   });
 
   it("checks for the composer in linear time on long blank rows", () => {

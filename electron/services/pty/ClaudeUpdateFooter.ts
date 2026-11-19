@@ -76,11 +76,10 @@ function lastRuleIndex(tail: readonly string[]): number {
 export function hasClaudeComposer(lines: readonly string[]): boolean {
   const tail = tailOf(lines);
   const bottom = lastRuleIndex(tail);
-  // A pane short enough to show whole may have clipped the top edge.
-  const wholeViewport = lines.length <= SCAN_LINES;
-  for (let i = bottom - 1; i >= 0 && bottom - i <= MAX_INPUT_ROWS; i--) {
-    if (!PROMPT_ROW.test(tail[i]!)) continue;
-    if (i === 0 ? wholeViewport : isRule(tail[i - 1]!)) return true;
+  // Both edges, always: the read drops blank rows, so a short read is no sign
+  // of a short pane, and a shell prompt row over a rule would pass for one.
+  for (let i = bottom - 1; i >= 1 && bottom - i <= MAX_INPUT_ROWS; i--) {
+    if (PROMPT_ROW.test(tail[i]!) && isRule(tail[i - 1]!)) return true;
   }
   return false;
 }
