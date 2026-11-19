@@ -11,6 +11,7 @@ vi.mock("../../../../utils/windowsCliSpawn.js", async (importOriginal) => ({
   resolveWindowsCliTarget: resolveWindowsCliTargetMock,
 }));
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { setContinuationPaneForgetter } from "../../../../services/codexLimitContinuation/forgetPane.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -3876,6 +3877,27 @@ describe("terminal close handlers - resume journaling", () => {
       expect(ptyClient.suppressExitForRestart.mock.invocationCallOrder[0]).toBeLessThan(
         ptyClient.getTerminalAsync.mock.invocationCallOrder[0]!
       );
+    }
+  );
+
+  it.each(["kill", "gracefulKill"] as const)(
+    "forgets the pane's continuation choice when %s closes it for good, never for a restart (#17912)",
+    async (operation) => {
+      register();
+      ptyClient.getTerminalAsync.mockResolvedValue(null);
+      ptyClient.gracefulKill.mockResolvedValue(null);
+      const forget = vi.fn();
+      setContinuationPaneForgetter(forget);
+      try {
+        const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
+        await handler({}, "term-1", { forRestart: true });
+        expect(forget).not.toHaveBeenCalled();
+
+        await handler({}, "term-1");
+        expect(forget).toHaveBeenCalledExactlyOnceWith("term-1");
+      } finally {
+        setContinuationPaneForgetter(null);
+      }
     }
   );
 

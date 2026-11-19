@@ -170,8 +170,7 @@ describe("formatAgentPresetPreviewLines", () => {
         { id: "user-work", name: "Work", continueAtLimitReset: true },
         { id: "user-work", name: "Work" }
       )
-    ).join("
-");
+    ).join("\n");
     expect(text).toContain("Continue when usage limit resets: On → Off");
   });
 
