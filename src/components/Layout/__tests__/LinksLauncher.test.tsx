@@ -1539,7 +1539,7 @@ describe("a row's menu in the launcher", () => {
       expect.stringMatching(/^feature-foo · pa/),
     ]);
     for (const li of addressless) {
-      await rightClick(li.firstElementChild as HTMLElement);
+      await rightClick(li.querySelector<HTMLElement>(":scope > div")!);
       expect(menuItems()).toEqual([]);
     }
   });
@@ -1585,6 +1585,7 @@ describe("a row's menu in the launcher", () => {
       await openLauncher();
       await rightClick(rowNamed(name));
       await pick("Open in external browser");
+      expect(h.openLinkUrlExternally, name).toHaveBeenCalledTimes(1);
       expect(h.openLinkUrlExternally, name).toHaveBeenCalledWith(url);
       expect(launcher(), name).toBeNull();
       cleanup();
@@ -1601,6 +1602,7 @@ describe("a row's menu in the launcher", () => {
 
     await rightClick(server);
     await pick("Copy URL");
+    expect(h.copyWithToast).toHaveBeenCalledTimes(1);
     expect(h.copyWithToast).toHaveBeenCalledWith("URL", "http://localhost:5824/admin");
     expect(launcher()).not.toBeNull();
 
@@ -1623,10 +1625,13 @@ describe("a row's menu in the launcher", () => {
     expect(row.hasAttribute("data-row-menu")).toBe(true);
     act(() => row.focus());
 
+    let unhandled = true;
     await act(async () => {
-      fireEvent.keyDown(row, key);
+      unhandled = fireEvent.keyDown(row, key);
     });
     await flush();
+    // Handled, so the browser's own contextmenu for the key can't open it a second time.
+    expect(unhandled).toBe(false);
     expect(menuItems()).toEqual(["Open in external browser", "Copy URL"]);
 
     await act(async () => {
@@ -1666,7 +1671,8 @@ describe("a row's menu in the launcher", () => {
 
     expect(screen.queryByRole("menu")).toBeNull();
     expect(launcher()).not.toBeNull();
-    expect(launcher()!.contains(document.activeElement)).toBe(true);
+    // The list's first row, as when the row it was on goes.
+    expect(document.activeElement).toBe(rows()[0]);
     expect(h.copyWithToast).not.toHaveBeenCalled();
   });
 

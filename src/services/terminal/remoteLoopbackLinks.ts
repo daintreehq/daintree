@@ -133,6 +133,22 @@ export async function resolveExternalPageForView(text: string, label: string): P
   return loopback.url.toString();
 }
 
+/**
+ * `address` moved onto the host and port that a forward of its origin came
+ * back as, keeping its own path, query, fragment and credentials. Only the
+ * origin goes through a resolver: they rebuild what they return from a
+ * normalized copy, which drops credentials and rewrites a `0.0.0.0` anywhere
+ * in the address.
+ */
+export function atForwardedOrigin(address: string, forwarded: string): string {
+  const target = new URL(address);
+  const local = new URL(forwarded);
+  target.hostname = local.hostname;
+  // An empty port is the forwarded scheme's default, which needn't be the address's.
+  target.port = local.port || (local.protocol === "https:" ? "443" : "80");
+  return target.href;
+}
+
 /** The host's port is taken on this machine, so its page can't open here at the same address. */
 export class HostPortInUseError extends Error {
   constructor(readonly port: number) {

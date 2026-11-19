@@ -6,6 +6,7 @@ import { focusPanelInItsWorktree } from "@/lib/panelNavigation";
 import { notify } from "@/lib/notify";
 import { isReachable, openUrlExternally } from "@/services/openLinkUrl";
 import {
+  atForwardedOrigin,
   hostForwardFailure,
   parseLoopbackLink,
   remoteHostOfView,
@@ -127,9 +128,10 @@ export async function openDevServerExternally(url: string): Promise<void> {
   try {
     // Any other address is the host's network's, opened as it is, apart from
     // a sign-in callback to the host's localhost, forwarded as a terminal
-    // link's is.
+    // link's is. A loopback's path and query are its own, so only its origin
+    // goes through the forward.
     const target = loopback
-      ? await resolveExternalPageForView(address, "Dev server")
+      ? atForwardedOrigin(address, await resolveExternalPageForView(parsed.origin, "Dev server"))
       : await resolveTerminalLinkForHost(address, hostId);
     openUrlExternally(target, LOG_PREFIX);
   } catch (error) {

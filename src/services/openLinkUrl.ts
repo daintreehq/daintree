@@ -12,6 +12,7 @@ import {
   type PanelInstance,
 } from "@shared/types/panel";
 import {
+  atForwardedOrigin,
   hostForwardFailure,
   parseLoopbackLink,
   remoteHostOfView,
@@ -174,16 +175,31 @@ function externalAddress(url: string): string | undefined {
 }
 
 /**
+ * Whether `text` is a loopback address written without a scheme
+ * (`localhost:3000/admin`, `127.0.0.1:8080`), a nested address in its query
+ * included. Credentials don't belong in one: `mailto:me@localhost` is a
+ * scheme, not a user.
+ */
+function isBareLoopback(text: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(`http://${text}`);
+  } catch {
+    return false;
+  }
+  return (
+    parsed.username === "" && parsed.password === "" && parseLoopbackLink(parsed.href) !== null
+  );
+}
+
+/**
  * `url` as the system browser gets it when asked to open there whatever it
  * is: as {@link externalAddress} reads it, except that a bare loopback address
- * (`localhost:3000/admin`) is a local server's, read as http as a panel reads
- * it, not as https.
+ * is a local server's, read as http as a panel reads it, not as https.
  */
 function systemBrowserAddress(url: string): string | undefined {
   const trimmed = url.trim();
-  if (absoluteWebUrl(trimmed) === undefined && panelAddress(trimmed) !== undefined) {
-    return `http://${trimmed}`;
-  }
+  if (absoluteWebUrl(trimmed) === undefined && isBareLoopback(trimmed)) return `http://${trimmed}`;
   return externalAddress(trimmed);
 }
 
@@ -195,19 +211,15 @@ function linkRefused(message: string): void {
 /**
  * `address` as this machine opens it for a view bound to `hostId`. A loopback
  * address is the host's, so its port is forwarded here, as a terminal link's
- * is, and only the origin goes through the forward: the resolver rebuilds the
- * URL it hands back from a normalized copy, which would drop credentials and
- * rewrite a `0.0.0.0` in the path or query. An outside address whose sign-in
- * returns to the host's localhost gets that port forwarded.
+ * is. An outside address whose sign-in returns to the host's localhost gets
+ * that port forwarded.
  */
 async function addressForHost(address: string, hostId: string): Promise<string> {
-  const loopback = parseLoopbackLink(address);
+  // Classified as the system browser reads it: a saved `http:localhost:3000`
+  // names localhost, which the loopback parser alone reads as a host "http".
+  const loopback = parseLoopbackLink(new URL(address).href);
   if (loopback === null) return resolveTerminalLinkForHost(address, hostId);
-  const local = new URL(await resolveTerminalLinkForHost(loopback.url.origin, hostId));
-  const target = new URL(address);
-  target.hostname = local.hostname;
-  target.port = local.port;
-  return target.href;
+  return atForwardedOrigin(address, await resolveTerminalLinkForHost(loopback.url.origin, hostId));
 }
 
 /** Hand `address` to the system browser, through a forward in a view bound to a remote host. */
