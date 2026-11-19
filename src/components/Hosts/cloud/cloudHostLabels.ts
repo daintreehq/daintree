@@ -9,7 +9,7 @@ import {
 import type { HostIdleObservation } from "@shared/types/hostIdle";
 
 /** The parts of a provider's declaration that decide what stopping and deleting mean. */
-export type CloudProviderTerms = Pick<CloudProviderInfo, "name" | "capabilities">;
+export type CloudProviderTerms = Pick<CloudProviderInfo, "name" | "capabilities" | "hostIdleStop">;
 
 /** The provider a host's machine runs on, or null while it isn't registered. */
 export function cloudProviderFor<P extends { id: string }>(
@@ -57,15 +57,20 @@ export function stoppedBillingSentence(provider: CloudProviderTerms | null): str
     const stopPaying = provider.capabilities.deletion
       ? "remove the host and delete its machine"
       : `delete the machine in ${provider.name}'s console`;
-    const bills =
-      provider.capabilities.persistence.stoppedBilling ??
-      `${provider.name} keeps billing a stopped machine for compute until it's deleted.`;
-    return `${bills} To stop paying for it, ${stopPaying}.`;
+    return `${stoppedComputeBilling(provider)} To stop paying for it, ${stopPaying}.`;
   }
   if (!provider.capabilities.persistence.stoppedStorageBilled) return null;
   const parked =
     provider.capabilities.lifetime.kind === "idle-sleep" ? "stopped or asleep" : "stopped";
   return `${provider.name} bills only for its disk while it's ${parked}.`;
+}
+
+/** That a stopped machine keeps billing for compute, in the provider's own words where it gave them. */
+function stoppedComputeBilling(provider: CloudProviderTerms): string {
+  return (
+    provider.capabilities.persistence.stoppedBilling ??
+    `${provider.name} keeps billing a stopped machine for compute until it's deleted.`
+  );
 }
 
 /** That a stopped machine on this provider is still billing, for a line of short facts. */
@@ -183,6 +188,32 @@ export function idleClockSentence(
       : `Idle since ${since}. It stops by itself ${ends} if it stays idle.`;
   }
   return `Idle since ${since}. Its idle time ${ended ? "ended" : "ends"} ${ends}.`;
+}
+
+/** Said where nothing current shows what a host's idle time ending does to its machine. */
+export const IDLE_STOP_UNKNOWN =
+  "Daintree can't tell whether the machine stops when its idle time ends.";
+
+/**
+ * What a host's idle time ending does to its machine, beside its idle clock:
+ * nothing more once the host says it stops the machine itself, which the
+ * clock already says (#17361, #17362). Otherwise why it can't, as this device
+ * found; that it doesn't, for a provider whose hosts have no way to stop their
+ * machines, with what a stopped one would still cost; and unknown while the
+ * provider isn't registered or its host hasn't said. `idle` is only ever from a
+ * summary on the current link: one from an earlier link says nothing about now.
+ */
+export function idleEndSentence(
+  idle: HostIdleObservation | undefined,
+  provider: CloudProviderTerms | null,
+  selfStopProblem: string | null
+): string | null {
+  if (idle?.stopsWhenIdle) return null;
+  if (selfStopProblem) return selfStopProblem;
+  if (provider?.hostIdleStop !== false) return IDLE_STOP_UNKNOWN;
+  // Its own idle sleep or lifetime, if it has one, is described on its own.
+  const doesnt = `On ${provider.name}, the machine doesn't stop when its idle time ends.`;
+  return billsWhileStopped(provider) ? `${doesnt} ${stoppedComputeBilling(provider)}` : doesnt;
 }
 
 /**

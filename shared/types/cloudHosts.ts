@@ -233,6 +233,13 @@ export interface CloudProviderInfo {
   unsupportedReason: string | null;
   /** Present for a plugin's provider: the plugin behind it, and whether the person has agreed to it. */
   plugin?: CloudProviderPluginConsent;
+  /**
+   * A machine's host can stop it once the host's idle time ends: Boat's
+   * machine keys (#17361), EC2's and Compute Engine's guest power-off
+   * (#17362). Set by this device for every registered provider, from what the
+   * provider implements, never from a declaration, so a plugin's is false.
+   */
+  hostIdleStop?: boolean;
 }
 
 /**

@@ -239,7 +239,9 @@ export class CloudAccountService {
     return [...this.deps.providers.values()].map((provider) => {
       const info = provider.info(this.deps.platform ?? process.platform);
       const plugin = this.consentFor(info.id);
-      return plugin ? { ...info, plugin } : info;
+      const hostIdleStop =
+        provider.machineKeys !== undefined || typeof provider.checkGuestPowerOff === "function";
+      return { ...info, ...(plugin ? { plugin } : {}), hostIdleStop };
     });
   }
 

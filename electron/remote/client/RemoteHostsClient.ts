@@ -532,12 +532,20 @@ export class RemoteHostsClient {
   }
 
   list(): HostListEntry[] {
-    return this.options.registry.list().map((descriptor) => ({
-      descriptor,
-      connection: this.options.manager.connectionState(descriptor.id),
-      // The last summary frame, so a refreshed list isn't blank until the next one.
-      summary: getRemoteService("hostMetrics")?.latest(descriptor.id) ?? null,
-    }));
+    const metrics = getRemoteService("hostMetrics");
+    return this.options.registry.list().map((descriptor) => {
+      // The last summary frame, so a refreshed list isn't blank until the next one;
+      // never one from an earlier link, which would pass for the host now beside
+      // a link that has come back (#17921). The assistant reads those from metrics.
+      const latest = metrics?.latest(descriptor.id) ?? null;
+      const session = this.options.manager.get(descriptor.id)?.currentSession ?? null;
+      const earlier = latest !== null && metrics?.cameOn(latest, session) === false;
+      return {
+        descriptor,
+        connection: this.options.manager.connectionState(descriptor.id),
+        summary: earlier ? null : latest,
+      };
+    });
   }
 
   add(payload: AddHostPayload): HostDescriptor {

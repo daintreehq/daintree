@@ -609,6 +609,7 @@ export function CloudMachineSection({
           idle={liveSummary?.idle}
           sampledAt={liveSummary?.sampledAt ?? null}
           selfStopProblem={status.selfStopProblem ?? null}
+          provider={provider}
         />
         <SettingsRow
           label="Disk"
