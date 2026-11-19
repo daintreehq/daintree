@@ -705,7 +705,9 @@ describe("Agent37Provider", () => {
         ...credentials,
         values: { apiKey: "sk_live_other00000000000000" },
       };
-      const refused = await provider.create(elsewhere, createRequest()).catch((e) => e);
+      const refused = await provider
+        .create(elsewhere, createRequest({ publicKey: OTHER_KEY }))
+        .catch((e) => e);
       expect(client.registerSshKey).toHaveBeenCalledTimes(2);
       expect(provider.describeError(refused).code).toBe("credential-invalid");
     } finally {
