@@ -47,6 +47,7 @@ export function provider(
     name?: string;
     lifetime?: CloudLifetimeModel;
     hostIdleStop?: boolean;
+    sleepsWhenHostIdle?: boolean;
   } = {}
 ): CloudProviderInfo {
   const name = overrides.name ?? "Acme";
@@ -72,5 +73,6 @@ export function provider(
       deletion: overrides.deletion ?? true,
     },
     hostIdleStop: overrides.hostIdleStop ?? false,
+    ...(overrides.sleepsWhenHostIdle ? { sleepsWhenHostIdle: true } : {}),
   };
 }

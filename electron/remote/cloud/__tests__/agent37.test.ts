@@ -12,6 +12,7 @@ import {
   Agent37Provider,
 } from "../agent37/Agent37Provider.js";
 import { agent37MachineState } from "../agent37/agent37State.js";
+import { DEFAULT_HOST_IDLE_MINUTES } from "../../../../shared/types/hostIdle.js";
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import { FAKE_AGENT37_KEY, FakeAgent37Api } from "./fakeAgent37Api.js";
 
@@ -205,6 +206,22 @@ describe("Agent37Client", () => {
     });
     expect(api.calls("POST", /\/stop$/)).toHaveLength(5);
     expect(sleeps).toEqual([2_000, 4_000, 8_000, 10_000]);
+  });
+
+  it("sends a sleep once, whatever comes back: a caller acting on idleness can't send it again", async () => {
+    const { api, client, ctx, sleeps } = env();
+    const instance = api.seed();
+    api.fail("POST", /\/sleep$/, FakeAgent37Api.error(409, "try_again"));
+    const busy = await client.sleepInstance(ctx, instance.id).catch((e: unknown) => e);
+    expect(busy).toBeInstanceOf(Agent37ApiError);
+    expect((busy as Agent37ApiError).busy).toBe(true);
+    api.fail("POST", /\/sleep$/, () => new TypeError("socket hang up"));
+    await expect(client.sleepInstance(ctx, instance.id)).rejects.toMatchObject({
+      kind: "network",
+    });
+    expect(api.calls("POST", /\/sleep$/)).toHaveLength(2);
+    expect(sleeps).toEqual([]);
+    expect(api.instances.get(instance.id)!.status).toBe("running");
   });
 
   it("sends a start again after a lost answer: a start of a running instance is the same ack", async () => {
@@ -405,7 +422,8 @@ describe("Agent37Provider", () => {
       name: "x".repeat(60),
       metadata: LABELS,
       auto_sleep: true,
-      idle_timeout_seconds: AGENT37_IDLE_SECONDS,
+      // The host's own idle time, which its Idle after starts at (#17916).
+      idle_timeout_seconds: DEFAULT_HOST_IDLE_MINUTES * 60,
     });
     expect(created).toMatchObject({
       machine: "running",
@@ -539,6 +557,51 @@ describe("Agent37Provider", () => {
     expect(api.instances.get(instance.id)!.name).toBe("y".repeat(60));
     await provider.delete(credentials, instance.id);
     expect(api.instances.has(instance.id)).toBe(false);
+  });
+
+  it("puts an instance to sleep with one request, and takes one already asleep as asleep (#17916)", async () => {
+    const { api, provider, credentials } = env();
+    const instance = api.seed();
+    await provider.sleepIdle(credentials, instance.id);
+    expect(api.instances.get(instance.id)!.status).toBe("sleeping");
+    await provider.sleepIdle(credentials, instance.id);
+    expect(api.calls("POST", `/instances/${instance.id}/sleep`)).toHaveLength(2);
+    expect(api.calls("POST", `/instances/${instance.id}/stop`)).toHaveLength(0);
+    const stopped = api.seed({ status: "stopped" });
+    const refused = await provider.sleepIdle(credentials, stopped.id).catch((e: unknown) => e);
+    expect(provider.describeError(refused).code).toBe("failed");
+    expect(api.instances.get(stopped.id)!.status).toBe("stopped");
+  });
+
+  it("says a sleep that met another operation on the instance found Agent 37 busy, asking once", async () => {
+    const { api, provider, credentials } = env();
+    const instance = api.seed();
+    api.fail("POST", /\/sleep$/, FakeAgent37Api.error(409, "try_again"), 3);
+    const busy = await provider.sleepIdle(credentials, instance.id).catch((e: unknown) => e);
+    expect(provider.describeError(busy).message).toContain("busy with another change");
+    expect(api.calls("POST", /\/sleep$/)).toHaveLength(1);
+  });
+
+  it("sets an instance's own idle timeout, turning its idle sleep on only when asked (#17916)", async () => {
+    const { api, provider, credentials } = env();
+    const instance = api.seed({ auto_sleep: false, idle_timeout_seconds: 600, name: "kept" });
+    const kept = await provider.setIdleSleep(credentials, instance.id, 300, false);
+    expect(api.calls("PATCH", `/instances/${instance.id}`).at(-1)!.body).toEqual({
+      idle_timeout_seconds: 300,
+    });
+    expect(kept.idleSleep).toEqual({ enabled: false, idleSeconds: 300 });
+    const on = await provider.setIdleSleep(credentials, instance.id, 86_400, true);
+    expect(on.idleSleep).toEqual({ enabled: true, idleSeconds: 86_400 });
+    expect(api.instances.get(instance.id)).toMatchObject({
+      auto_sleep: true,
+      idle_timeout_seconds: 86_400,
+      name: "kept",
+    });
+    // Outside what Agent 37 takes: refused before anything is sent.
+    for (const seconds of [299, 86_401, 900.5]) {
+      await expect(provider.setIdleSleep(credentials, instance.id, seconds, true)).rejects.toThrow();
+    }
+    expect(api.calls("PATCH", `/instances/${instance.id}`)).toHaveLength(2);
   });
 
   it("reaches a machine it created as node through the tunnel's name for it, with no key to pin", async () => {

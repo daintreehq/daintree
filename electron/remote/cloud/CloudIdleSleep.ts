@@ -25,7 +25,7 @@ export interface HostIdleReading {
 }
 
 export interface CloudIdleSleepDeps {
-  store: Pick<CloudHostStore, "bindingForHost" | "updateBinding">;
+  store: Pick<CloudHostStore, "binding" | "bindingForHost" | "updateBinding">;
   accounts: Pick<CloudAccountService, "provider" | "providerUnavailable">;
   hosts: { get(hostId: HostId): HostDescriptor | null };
   lifecycle(): Pick<CloudHostLifecycle, "sleepIdleMachine" | "setIdleTime" | "idleTimeWriting"> | null;
@@ -130,9 +130,15 @@ export class CloudIdleSleep {
     if (!lifecycle || lifecycle.idleTimeWriting(binding.id)) return;
     const retryAt = this.idleTimeRetryAt.get(binding.id);
     if (retryAt !== undefined && retryAt > this.now()) return;
-    // Paused until it lands, or for good measure after: a provider that keeps another value isn't asked every summary.
+    // Paused unless it lands as sent: a provider that keeps another value isn't asked every summary.
     this.idleTimeRetryAt.set(binding.id, this.now() + RETRY_MS);
-    void lifecycle.setIdleTime(binding.id, seconds, false).catch(() => {});
+    void lifecycle.setIdleTime(binding.id, seconds, false).then(
+      () => {
+        const now = this.deps.store.binding(binding.id)?.observation?.idleSleep;
+        if (now?.idleSeconds === seconds) this.idleTimeRetryAt.delete(binding.id);
+      },
+      () => {}
+    );
   }
 
   private due(binding: StoredCloudBinding, { idle, sampledAt }: HostIdleReading): boolean {
