@@ -3,7 +3,10 @@ import {
   accountFolderName,
   defaultLoginLabel,
   defaultLoginPhrase,
+  describeLaunchAccount,
   isUsableAccountFolder,
+  launchAnswer,
+  listAgentAccountIdentities,
   keepPaneAccount,
   paneAccountEnv,
   resolveEffectiveAccountId,
@@ -207,5 +210,108 @@ describe("accountFolderName", () => {
     [".codex", "!!!", undefined],
   ])("%s + %s → %s", (defaultDir, name, expected) => {
     expect(accountFolderName(defaultDir, name)).toBe(expected);
+  });
+});
+
+describe("listAgentAccountIdentities (#17079)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+
+  it("names each saved account and the default, and never its folder", () => {
+    const listed = listAgentAccountIdentities({
+      accounts: [COMPANY, PERSONAL, { id: "bad id", name: "x", configDir: "/x" }],
+      accountId: "personal",
+    });
+
+    expect(listed).toEqual([
+      { id: "company", name: "Company", isDefault: false },
+      { id: "personal", name: "Personal", isDefault: true },
+    ]);
+    expect(JSON.stringify(listed)).not.toContain("/Users/me");
+  });
+
+  it("marks no account the default when the CLI's own login is", () => {
+    expect(listAgentAccountIdentities({ accounts: [COMPANY] })).toEqual([
+      { id: "company", name: "Company", isDefault: false },
+    ]);
+    expect(listAgentAccountIdentities(undefined)).toEqual([]);
+  });
+});
+
+describe("describeLaunchAccount (#17079)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+  const entry = {
+    accounts: [COMPANY, PERSONAL],
+    accountId: "personal",
+    worktreeAccounts: { "wt-company": "company", "wt-cli": null },
+  };
+  const pinned = { id: "work", accountId: "company" };
+
+  it("says the worktree's own pick chose it, the CLI's login included, over a preset's pin", () => {
+    expect(describeLaunchAccount(entry, "wt-company", pinned)).toEqual({
+      accountId: "company",
+      source: "worktree",
+    });
+    expect(describeLaunchAccount(entry, "wt-cli", pinned)).toEqual({
+      accountId: null,
+      source: "worktree",
+    });
+  });
+
+  it("names the preset whose pin chose it, else the agent's default, else the CLI's login", () => {
+    expect(describeLaunchAccount(entry, "wt-other", pinned)).toEqual({
+      accountId: "company",
+      source: "preset",
+      presetId: "work",
+    });
+    expect(describeLaunchAccount(entry, "wt-other", { id: "plain" })).toEqual({
+      accountId: "personal",
+      source: "agentDefault",
+    });
+    expect(describeLaunchAccount({ accounts: [COMPANY] }, "wt-other", undefined)).toEqual({
+      accountId: null,
+      source: "cliDefault",
+    });
+  });
+
+  it("flags an id whose saved row has an unusable folder, as a launch reads it", () => {
+    const broken = { accounts: [{ id: "relative", name: "Rel", configDir: ".claude-rel" }] };
+    expect(describeLaunchAccount({ ...broken, accountId: "relative" }, "wt", undefined)).toEqual({
+      accountId: "relative",
+      source: "agentDefault",
+      missing: true,
+    });
+  });
+
+  it("names no account while presets load, unless the worktree's own pick decides", () => {
+    const viaPreset = describeLaunchAccount(entry, "wt-other", pinned);
+    expect(launchAnswer(viaPreset, false)).toEqual({ presetsComplete: false });
+    expect(launchAnswer(viaPreset, true)).toEqual({ ...viaPreset, presetsComplete: true });
+    // The defaults sit under a preset that hasn't loaded, which may yet pin one.
+    const noDefault = { accounts: entry.accounts };
+    for (const [owner, preset] of [
+      [entry, { id: "plain" }],
+      [noDefault, undefined],
+    ] as const) {
+      const viaDefault = describeLaunchAccount(owner, "wt-other", preset);
+      expect(["agentDefault", "cliDefault"]).toContain(viaDefault.source);
+      expect(launchAnswer(viaDefault, false)).toEqual({ presetsComplete: false });
+    }
+    const viaWorktree = describeLaunchAccount(entry, "wt-company", pinned);
+    expect(launchAnswer(viaWorktree, false)).toEqual({ ...viaWorktree, presetsComplete: false });
+  });
+
+  it("flags an id no saved account answers to, which a launch refuses", () => {
+    expect(
+      describeLaunchAccount({ accounts: [COMPANY], accountId: "gone" }, "wt", undefined)
+    ).toEqual({ accountId: "gone", source: "agentDefault", missing: true });
+  });
+
+  it("reads an inherited worktree key as no pick of its own", () => {
+    const inherited = Object.create({ "wt-proto": "company" }) as Record<string, string>;
+    expect(
+      describeLaunchAccount({ ...entry, worktreeAccounts: inherited }, "wt-proto", undefined)
+    ).toEqual({ accountId: "personal", source: "agentDefault" });
   });
 });

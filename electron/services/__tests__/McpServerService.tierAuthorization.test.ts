@@ -1107,6 +1107,18 @@ describe("McpServerService", () => {
         description: "Respawn an agent this MCP session created on another preset",
         danger: "confirm",
       }),
+      createManifestEntry({
+        id: "terminal.restartOnAccountOwned" as ActionId,
+        title: "Restart Owned Agent on Account",
+        description: "Respawn an agent this MCP session created on another account",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "agent.addAccount" as ActionId,
+        title: "Add Agent Accounts",
+        description: "Add agent accounts.",
+        danger: "confirm",
+      }),
       ...(
         [
           ["agent.createPreset", "Create Launch Preset"],
@@ -1806,6 +1818,7 @@ describe("McpServerService", () => {
           ["worktree.waitForPullRequest", "Wait For Pull Request"],
           ["agent.listAvailable", "List Available Agents"],
           ["agent.listPresets", "List Agent Presets"],
+          ["agent.listAccounts", "List Agent Accounts"],
           ["agent.listModels", "List Agent Models"],
           ["terminal.list", "List Terminals"],
           ["terminal.getStatus", "Get Terminal Status"],

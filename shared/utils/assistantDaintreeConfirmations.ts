@@ -1,5 +1,6 @@
 import type { HelpAssistantDaintreeConfirmations } from "../types/ipc/api.js";
 import {
+  ASSISTANT_ACCOUNT_ADD_CONFIRMATION,
   ASSISTANT_HOST_SETTINGS_CONFIRMATION,
   sanitizeDelegatedConfirmations,
 } from "../config/assistantConfirmationDelegation.js";
@@ -99,14 +100,21 @@ export function resolveAssistantConfirmationPolicy(
 }
 
 /**
- * Whether the assistant's call to `calledActionId` runs without asking. A
- * `host.settings` change never asked before it could be delegated, so the
- * blanket skip doesn't reach it: only its own tick does.
+ * Confirm-gated calls the blanket skip never reaches. A `host.settings`
+ * change never asked before it could be delegated, so only its own tick
+ * does. An account add's dialog is where the person ticks each folder before
+ * it's made (#17079), so nothing skips it.
  */
+const NEVER_BLANKET_SKIPPED: ReadonlySet<string> = new Set([
+  ASSISTANT_HOST_SETTINGS_CONFIRMATION,
+  ASSISTANT_ACCOUNT_ADD_CONFIRMATION,
+]);
+
+/** Whether the assistant's call to `calledActionId` runs without asking. */
 export function assistantPolicySkips(
   policy: AssistantConfirmationPolicy,
   calledActionId: string
 ): boolean {
   if (policy.delegated.has(calledActionId)) return true;
-  return policy.skipsAll && calledActionId !== ASSISTANT_HOST_SETTINGS_CONFIRMATION;
+  return policy.skipsAll && !NEVER_BLANKET_SKIPPED.has(calledActionId);
 }

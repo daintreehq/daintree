@@ -65,6 +65,10 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // caller's only route today is reading an id off a panel already running one
   // (#11859). Identity only: no env, args or flags at any redaction level.
   "agent.listPresets",
+  // The same argument for the account `agent.launch` takes (#17079): account
+  // ids are minted when an account is added and live only in Daintree's
+  // settings. Identity only, never the folder the login lives in.
+  "agent.listAccounts",
 
   // The same argument as `agent.listPresets`, one surface out: workspace ids
   // are minted by Daintree and cannot be reconstructed from outside it.
@@ -201,6 +205,9 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // user handed over. `danger: "confirm"`, so the user approves each restart,
   // and `isWithheldFromBoundSession` withholds it where nobody would see that.
   "terminal.restartOnPresetOwned",
+  // Its account twin (#17079), for a worker whose account hit its limit. The
+  // same ownership, hand-over refusal and confirmation as the preset move.
+  "terminal.restartOnAccountOwned",
   // What a launched agent last said (#12479). The surface could see that an
   // agent was `waiting` and not what it was waiting on: a scrollback tail fits a
   // shell, and cuts an agent's structured hand-off — a review verdict, a

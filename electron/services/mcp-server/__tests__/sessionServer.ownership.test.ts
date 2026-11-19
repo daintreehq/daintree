@@ -88,6 +88,11 @@ describe("session-scoped resource ownership (#11909)", () => {
         kind: "command",
         danger: "confirm" as const,
       },
+      {
+        ...makeManifestEntry("terminal.restartOnAccountOwned"),
+        kind: "command",
+        danger: "confirm" as const,
+      },
       makeManifestEntry("worktree.createWithRecipe"),
       makeManifestEntry("recipe.run"),
       makeManifestEntry("agent.launch"),
@@ -1173,6 +1178,79 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
+  describe("terminal.restartOnAccountOwned (#17079)", () => {
+    const RESTART_RESULT = {
+      terminalId: "terminal-1",
+      agentAccountId: null,
+      agentSessionIdCleared: true,
+    };
+
+    function restartHarness(sessionId: string) {
+      const h = harness(sessionId, {
+        "terminal.restartOnAccount": { result: { ok: true, result: RESTART_RESULT } },
+      });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    // `confirmed` never crosses, so the approval is the host's; an explicit
+    // null (the CLI's own login) and `keepConversation: false` both do.
+    it("delegates with only the id, the account and the ask to keep it, unconfirmed", async () => {
+      const { server, dispatchAction } = restartHarness("s-account");
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnAccountOwned",
+        arguments: {
+          terminalId: "terminal-1",
+          accountId: null,
+          keepConversation: false,
+          confirmed: true,
+        },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnAccount",
+        { accountId: null, keepConversation: false, terminalId: "terminal-1" },
+        false
+      );
+      expect(payloadOf<typeof RESTART_RESULT>(result)).toEqual(RESTART_RESULT);
+    });
+
+    it("refuses a panel the session did not create, without dispatching", async () => {
+      const { store, server, dispatchAction } = restartHarness("s-account-foreign");
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnAccountOwned",
+        arguments: { terminalId: "terminal-theirs", accountId: "account-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("forwards a saved account's id and keeps ownership across the restart", async () => {
+      const { store, server, dispatchAction } = restartHarness("s-account-keeps");
+
+      await callTool(server, {
+        name: "terminal.restartOnAccountOwned",
+        arguments: { terminalId: "terminal-1", accountId: "account-1", keepConversation: true },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnAccount",
+        { accountId: "account-1", keepConversation: true, terminalId: "terminal-1" },
+        false
+      );
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      expect(store.resourceOwnership.owns("s-account-keeps", "terminal", "terminal-1")).toBe(true);
+    });
+  });
+
   describe("terminal.placeOwned (#13662)", () => {
     const PLACE_RESULT = { terminalId: "terminal-1", location: "background", transitioned: true };
 

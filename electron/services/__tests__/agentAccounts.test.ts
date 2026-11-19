@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -121,6 +121,77 @@ describe("addAgentAccount (#16040)", () => {
     await expect(attempt("relative/codex")).rejects.toMatchObject({ code: "INVALID_PATH" });
     await expect(attempt(`${folder}/`)).rejects.toMatchObject({ code: "VALIDATION" });
     expect(savedCodex().accounts as unknown[]).toHaveLength(1);
+  });
+
+  it("registers one folder once when two adds of it start together (#17079)", async () => {
+    // An account already saved, so each add awaits its folder before writing.
+    const other = path.join(home, "codex-other");
+    await mkdir(other);
+    await addAgentAccount({
+      agentId: "codex",
+      name: "Other",
+      folder: { kind: "existing", path: other },
+    });
+    const folder = path.join(home, "codex-team");
+    await mkdir(folder);
+    // Another name for the same folder, which only its real path gives away.
+    const alias = path.join(home, "codex-team-link");
+    await symlink(folder, alias);
+
+    const results = await Promise.allSettled([
+      addAgentAccount({
+        agentId: "codex",
+        name: "Team",
+        folder: { kind: "existing", path: folder },
+      }),
+      addAgentAccount({
+        agentId: "codex",
+        name: "Team again",
+        folder: { kind: "existing", path: alias },
+      }),
+    ]);
+
+    // Whichever finishes its checks first is the one saved.
+    expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const saved = (savedCodex().accounts as Array<{ name: string }>).map((a) => a.name);
+    expect(saved).toHaveLength(2);
+    expect(saved[0]).toBe("Other");
+    expect(["Team", "Team again"]).toContain(saved[1]);
+  });
+
+  it("refuses to create a folder a saved account already names, its folder since deleted", async () => {
+    fakeStore.reset({
+      agentSettings: {
+        agents: {
+          codex: {
+            accounts: [
+              {
+                id: "account-old",
+                name: "Old",
+                configDir: `${path.join(home, ".codex-company")}/`,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    await expect(
+      addAgentAccount({ agentId: "codex", name: "Company", folder: { kind: "create" } })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((savedCodex().accounts as unknown[]).length).toBe(1);
+  });
+
+  it("still adds after an add before it failed", async () => {
+    await mkdir(path.join(home, ".codex-company"));
+    const [failed, added] = await Promise.allSettled([
+      addAgentAccount({ agentId: "codex", name: "Company", folder: { kind: "create" } }),
+      addAgentAccount({ agentId: "codex", name: "Lab", folder: { kind: "create" } }),
+    ]);
+
+    expect(failed.status).toBe("rejected");
+    expect(added.status).toBe("fulfilled");
+    expect((savedCodex().accounts as Array<{ name: string }>).map((a) => a.name)).toEqual(["Lab"]);
   });
 
   it("refuses an agent whose CLI holds no folder account", async () => {

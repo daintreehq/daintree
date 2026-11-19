@@ -778,7 +778,12 @@ describe("external tool surface budget (#11585)", () => {
   // worker hit a plan limit could only close it and launch another, losing the
   // pane's place and leaving its saved launch env on the old preset. Bounded
   // like the close: a pane this session launched, and the user confirms it.
-  const EXTERNAL_BUDGET_MAX = 36;
+  //
+  // 36 → 38 for #17079's `agent.listAccounts` and `terminal.restartOnAccountOwned`.
+  // `agent.launch` takes an `accountId` that only Daintree's settings hold, so
+  // the listing is the account half of `agent.listPresets`; the owned restart is
+  // the account half of the preset move above, bounded the same way.
+  const EXTERNAL_BUDGET_MAX = 38;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
@@ -3330,11 +3335,14 @@ describe("agent-pane approval (#12692)", () => {
   });
 
   // A target-picking tool's dialog is where the user chooses which terminals
-  // die (#12123), so no approval can stand in for it. None of them is inside a
-  // pane's reach at all: the one left on MCP, `terminal.closeAll`, is reserved
-  // for the assistant.
-  it("keeps every target-picking tool out of a pane's reach", () => {
-    const targetPicking = Object.keys(NATIVE_GRANT_USE_POLICY_OVERRIDES);
+  // die (#12123), so no approval can stand in for it. None of the panel ones is
+  // inside a pane's reach at all: the one left on MCP, `terminal.closeAll`, is
+  // reserved for the assistant. The account add (#17079) is the exception,
+  // pinned below: its checklist is the point, so it is reached and asked.
+  it("keeps every panel-picking tool out of a pane's reach", () => {
+    const targetPicking = Object.keys(NATIVE_GRANT_USE_POLICY_OVERRIDES).filter(
+      (id) => id !== "agent.addAccount"
+    );
     expect(targetPicking.length).toBeGreaterThan(0);
     for (const id of targetPicking) {
       expect(PANE_APPROVAL_CEILING.has(id), id).toBe(false);
@@ -3342,6 +3350,38 @@ describe("agent-pane approval (#12692)", () => {
         expect(getReachableActionIds(tier, false, true).has(id), `${tier} ${id}`).toBe(false);
       }
     }
+  });
+
+  // The person ticks each account's folder in the add's own checklist (#17079),
+  // so a full pane reaches it and a core pane may ask, but nothing a pane holds
+  // (a per-tool approval, Skip confirmations, a session grant) waives the dialog.
+  // #17079: the add is Full only and never on the api-key surface; listing
+  // and the owned move are where a launch's `accountId` is.
+  it("keeps the account add off core and the external surface", () => {
+    expect(isTierPermitted("full", "agent.addAccount")).toBe(true);
+    expect(isTierPermitted("core", "agent.addAccount")).toBe(false);
+    expect(isTierPermitted("external", "agent.addAccount")).toBe(false);
+    for (const id of ["agent.listAccounts", "terminal.restartOnAccountOwned"]) {
+      expect(isTierPermitted("core", id), id).toBe(true);
+      expect(isTierPermitted("external", id), id).toBe(true);
+    }
+  });
+
+  it("reaches the account add from a pane and never waives its checklist", () => {
+    const add = makeEntry({ id: "agent.addAccount", kind: "command", danger: "confirm" });
+    expect(getReachableActionIds("full", false, true).has("agent.addAccount")).toBe(true);
+    expect(isApprovalRequestable("core", "agent.addAccount", true)).toBe(true);
+    expect(isPaneAutoConfirmed("full", "agent.addAccount", true, true)).toBe(false);
+    expect(buildTargetPolicy(add, paneSnapshot("full", ["agent.addAccount"]))).toMatchObject({
+      authorizedBy: "tier",
+      requiresConfirmation: true,
+      grantable: false,
+    });
+    expect(buildTargetPolicy(add, paneSnapshot("core"))).toMatchObject({
+      authorizedBy: "approval",
+      requiresConfirmation: true,
+      grantable: false,
+    });
   });
 
   it("reports a session approval as waiving the dialog it replaced", () => {

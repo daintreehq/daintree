@@ -291,6 +291,11 @@ export interface McpConfirmSelectableTarget {
   kindLabel: string;
   /** Whether an agent session is mid-work in this panel right now. */
   agentRunning: boolean;
+  /**
+   * What the row does, shown in full in place of the id (#17079): an account
+   * row names the folder it makes or uses, which is what the person approves.
+   */
+  detail?: string;
 }
 
 /**

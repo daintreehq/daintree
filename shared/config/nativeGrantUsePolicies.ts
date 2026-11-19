@@ -51,6 +51,9 @@ export const NATIVE_GRANT_USE_POLICY_OVERRIDES: Readonly<
   "terminal.killAll": "per-resolved-target",
   "terminal.killBatch": "per-resolved-target",
   "project.sleepIdle": "per-resolved-target",
+  // One call adds up to 32 accounts, each a credential folder the person ticks
+  // with its path in front of them (#17079); a grant names none of them.
+  "agent.addAccount": "per-resolved-target",
 };
 
 // Keyed lookup rather than a bare index into the literal above: `toolId` is

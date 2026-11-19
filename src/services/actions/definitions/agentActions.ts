@@ -30,8 +30,10 @@ import {
 } from "@shared/utils/launchInNewWorktree";
 import { WorktreeCreationSourceSchema } from "./workflowCreationActionArgs";
 import {
+  AgentAddAccountArgsSchema,
   AgentCreatePresetArgsSchema,
   AgentDeletePresetArgsSchema,
+  AgentListAccountsArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
   AgentUpdatePresetArgsSchema,
@@ -754,6 +756,106 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.listPresets", args, ctx, callbacks),
+  }));
+
+  // Every `accountId` on the surface is one of these (#17079). Identity only:
+  // an account's folder holds its login and names the user's home.
+  actions.set("agent.listAccounts", () => ({
+    id: "agent.listAccounts",
+    title: "List agent accounts",
+    description:
+      "List an agent's saved accounts: the ids a launch's accountId takes. With worktreeId, also which account a launch there uses when it names no account or preset, and why.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: AgentListAccountsArgsSchema,
+    examples: [
+      {
+        args: { agentId: "claude", worktreeId: "wt-1" },
+        description: "Find Claude's account ids and the one a launch in wt-1 signs in as",
+      },
+    ],
+    resultSchema: z.object({
+      accounts: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          isDefault: z.boolean().describe("The agent's Default account in Settings."),
+        })
+      ),
+      worktreeLaunch: z
+        .object({
+          accountId: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("null: no saved account; the preset's env may still name a folder."),
+          source: z.enum(["worktree", "preset", "agentDefault", "cliDefault"]).optional(),
+          presetId: z.string().optional().describe("The preset whose pin chose it."),
+          missing: z.literal(true).optional().describe("No such account: a launch is refused."),
+          presetsComplete: z
+            .boolean()
+            .describe("false: a preset is loading; with no accountId, ask again."),
+        })
+        .optional(),
+    }),
+    mcpOutputSchema: true,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.listAccounts", args, ctx, callbacks),
+  }));
+
+  // Confirm tier with a row per account (#17079): the dialog names each folder
+  // before anything is made, the person unticks what they don't want, and the
+  // run adds only the ticked rows. No grant or Never ask stands in for that.
+  // Closed to plugins and palette-hidden, like the preset writes.
+  actions.set("agent.addAccount", () => ({
+    id: "agent.addAccount",
+    title: "Add agent accounts",
+    description:
+      "Add accounts to agents that sign in through a folder, once the user ticks each one with its folder shown. Reports each row's account id or why it failed; launch with that accountId to sign in.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Each account is a folder the agent keeps its login in, and a launch on it signs in as whoever logs in there.",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["account", "login", "add", "folder", "sign in"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentAddAccountArgsSchema,
+    examples: [
+      {
+        args: {
+          accounts: [
+            { agentId: "claude", name: "Work", folder: { kind: "create" } },
+            {
+              agentId: "codex",
+              name: "Team",
+              folder: { kind: "existing", path: "/Users/me/.codex-team" },
+            },
+          ],
+        },
+        description: "A new Claude folder and an existing Codex one, in one approval",
+      },
+    ],
+    resultSchema: z.object({
+      accounts: z.array(
+        z.object({
+          index: z.number().int().describe("The row's position in the request, from 0."),
+          agentId: z.string(),
+          status: z
+            .enum(["added", "declined", "failed", "notAttempted"])
+            .describe("declined: the user unticked it; notAttempted: the call ran out of time."),
+          accountId: z.string().optional().describe("Launch with this accountId to sign in."),
+          name: z.string().optional(),
+          error: z.string().optional(),
+        })
+      ),
+    }),
+    mcpOutputSchema: true,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.addAccount", args, ctx, callbacks),
   }));
 
   // The user-preset writes (#16047). Confirm tier, so an agent's call raises

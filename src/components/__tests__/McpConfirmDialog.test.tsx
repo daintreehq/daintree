@@ -157,6 +157,7 @@ function enqueue(
       worktree?: string;
       kindLabel: string;
       agentRunning: boolean;
+      detail?: string;
     }[];
   } = {},
   deadline?: McpConfirmDeadline
@@ -743,6 +744,40 @@ describe("McpConfirmDialog", () => {
       // one checkbox as far as anyone reading them is concerned.
       expect(screen.getByRole("checkbox", { name: /aaa111/ })).toBeTruthy();
       expect(screen.getByRole("checkbox", { name: /bbb222/ })).toBeTruthy();
+    });
+
+    // An account row's folder is what the person approves (#17079), so it is
+    // read in full as part of the checkbox's name, never an id in its place.
+    it("names each account row's folder in full in place of an id", () => {
+      const folder = "/Volumes/a-very-long-volume-name/team/shared-accounts/.claude-shared";
+      void enqueue({
+        actionTitle: "Add agent accounts",
+        selectableTargets: [
+          {
+            id: "row-0",
+            name: "Shared",
+            kindLabel: "Claude account",
+            agentRunning: false,
+            detail: `Existing folder ${folder}`,
+          },
+          {
+            id: "row-1",
+            name: "Shared",
+            kindLabel: "Codex account",
+            agentRunning: false,
+            detail: "New folder ~/.codex-shared",
+          },
+        ],
+      });
+      render(<McpConfirmDialog />);
+
+      const existing = screen.getByRole("checkbox", { name: /Claude account/ });
+      expect(existing.getAttribute("aria-labelledby")).toBeTruthy();
+      expect(screen.getByRole("checkbox", { name: new RegExp(`Existing folder ${folder}$`) })).toBe(
+        existing
+      );
+      expect(screen.getByRole("checkbox", { name: /New folder ~\/\.codex-shared$/ })).toBeTruthy();
+      expect(screen.queryByText(/row-0/)).toBeNull();
     });
 
     it("lengthens the shown id when two targets share a tail", () => {

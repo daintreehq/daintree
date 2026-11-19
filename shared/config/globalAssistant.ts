@@ -72,7 +72,8 @@ export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
  * waits on no one (#16096); every other owned form keeps the ledger.
  * `worktree.resource.teardown` and `recipe.run` are here on purpose: both are
  * `danger: "confirm"`, so the person approves each run. So are the user-preset
- * writes (#16047), each previewed as the exact change.
+ * writes (#16047), each previewed as the exact change, and the account add
+ * (#17079), each account a row naming its folder.
  */
 export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "actions.getContext",
@@ -121,9 +122,12 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeMany",
   "terminal.waitForExit",
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.listAccounts",
+  "agent.addAccount",
   "terminal.revealOwned",
   "terminal.placeOwned",
   "terminal.waitUntilIdle",

@@ -1476,27 +1476,37 @@ function TargetChecklist({
                   <span className="truncate text-xs text-text-primary">{target.name}</span>
                   {target.agentRunning && <Badge size="xs">Agent running</Badge>}
                 </span>
-                {/* The id is the column's tiebreaker, so it never truncates: two panels
-                    in one worktree can carry the same title, and then only the id
-                    tells their checkboxes apart. It is also what the caller named, so
-                    it is what a human cross-referencing the tool call looks for. A
-                    long worktree name gives way instead. */}
-                <span className="flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary">
-                  {target.worktree && <span className="min-w-0 truncate">{target.worktree}</span>}
-                  {/* Bare spaces, not inside either span: the name computation
+                {target.detail !== undefined ? (
+                  // Wraps rather than truncates, and keeps every space: a folder
+                  // cut short or with two spaces read as one is not the folder
+                  // being approved.
+                  <span className="text-2xs text-text-secondary">
+                    {target.kindLabel} <FactSeparator />{" "}
+                    <span className="font-mono break-all whitespace-pre-wrap">{target.detail}</span>
+                  </span>
+                ) : (
+                  // The id is the column's tiebreaker, so it never truncates: two
+                  // panels in one worktree can carry the same title, and then only
+                  // the id tells their checkboxes apart. It is also what the caller
+                  // named, so it is what a human cross-referencing the tool call
+                  // looks for. A long worktree name gives way instead.
+                  <span className="flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary">
+                    {target.worktree && <span className="min-w-0 truncate">{target.worktree}</span>}
+                    {/* Bare spaces, not inside either span: the name computation
                       trims each element's text and skips the hidden dot, so without
                       them the worktree would fuse onto the kind in the checkbox's name. */}
-                  {target.worktree && (
-                    <>
-                      {" "}
-                      <FactSeparator />{" "}
-                    </>
-                  )}
-                  <span className="shrink-0">
-                    {target.kindLabel} <FactSeparator />{" "}
-                    <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
+                    {target.worktree && (
+                      <>
+                        {" "}
+                        <FactSeparator />{" "}
+                      </>
+                    )}
+                    <span className="shrink-0">
+                      {target.kindLabel} <FactSeparator />{" "}
+                      <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
+                    </span>
                   </span>
-                </span>
+                )}
               </span>
             </li>
           );
