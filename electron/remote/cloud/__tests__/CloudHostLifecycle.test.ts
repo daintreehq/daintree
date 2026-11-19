@@ -1671,6 +1671,18 @@ describe("CloudHostLifecycle review fixes", () => {
     await expect(fs.access(pub.slice(0, -".pub".length))).resolves.toBeUndefined();
   });
 
+  it("replaces a public half whose private key is gone with a new pair (#17929)", async () => {
+    const { files, account } = await setup();
+    const key = await files.publicKey(account.id);
+    const keyPath = path.join(root, "cloud", "keys", `${account.id}_ed25519`);
+    await fs.rm(keyPath);
+    expect(await files.hasKey(account.id)).toBe(false);
+    const made = await files.publicKey(account.id);
+    expect(made).not.toBe(key);
+    expect((await fs.readFile(`${keyPath}.pub`, "utf8")).trim()).toBe(made);
+    expect(await files.hasKey(account.id)).toBe(true);
+  });
+
   it("removes an account's key only once the key being made for it is written", async () => {
     const { files, run, account } = await setup();
     const make = run.getMockImplementation()!;
@@ -3377,19 +3389,20 @@ describe("CloudHostLifecycle SSH key at create", () => {
   });
 
   it("reaches a machine that took its key at create without authorizing a key", async () => {
-    const { lifecycle, provider, store, files, account } = await setup({}, { sshKey: "at-create" });
+    const { lifecycle, provider, store, run, account } = await setup({}, { sshKey: "at-create" });
     await lifecycle.create(request(account.id));
     await vi.waitFor(() =>
       expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
     );
     const bindingId = store.bindings()[0]!.id;
-    const readKey = vi.spyOn(files, "publicKey");
+    run.mockClear();
     const route = await lifecycle.ensureAccess(bindingId);
     const config = await fs.readFile(route.configPath, "utf8");
     expect(config).toContain("HostName 203.0.113.10");
     expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
     expect(provider.authorizeSsh).not.toHaveBeenCalled();
-    expect(readKey).not.toHaveBeenCalled();
+    // The key on disk is only read, to see it is still the one the machine took.
+    expect(run).not.toHaveBeenCalledWith("ssh-keygen", expect.anything(), expect.anything());
     // The identity the route dials with is the key the create handed over.
     const identity = /IdentityFile "(.+)"/.exec(config)![1]!;
     expect((await fs.readFile(`${identity}.pub`, "utf8")).trim()).toBe(
@@ -3413,55 +3426,92 @@ describe("CloudHostLifecycle SSH key at create", () => {
     return { ...harness, bindingId, keyPath, createKey };
   };
 
-  it("makes and registers a new key for a created machine whose key files are both gone (#17929)", async () => {
-    const { lifecycle, provider, bindingId, keyPath, createKey } = await createdAndReached();
+  const LOST = [
+    ["both key files", ["", ".pub"]],
+    ["the private key", [""]],
+  ] as const;
+
+  it.each(LOST)(
+    "makes and registers a new key for a created machine that lost %s (#17929)",
+    async (_lost, suffixes) => {
+      const { lifecycle, provider, bindingId, keyPath, createKey } = await createdAndReached();
+      for (const suffix of suffixes) await fs.rm(`${keyPath}${suffix}`);
+      // The new key is still on its way to the machine: the provider's wait is the answer.
+      const delivering = new BoatApiError("network", "lost", null, null, null);
+      vi.mocked(provider.authorizeSsh).mockRejectedValueOnce(delivering);
+      const waiting = await lifecycle.ensureAccess(bindingId).catch((error: unknown) => error);
+      expect(waiting).toBeInstanceOf(TransportError);
+      expect(waiting).not.toBeInstanceOf(UnusableConnectionError);
+      expect((waiting as TransportError).detail).toBe(provider.describeError(delivering).message);
+      const madeKey = (await fs.readFile(`${keyPath}.pub`, "utf8")).trim();
+      expect(madeKey).toMatch(/^ssh-ed25519 /);
+      expect(madeKey).not.toBe(createKey);
+      expect(provider.authorizeSsh).toHaveBeenLastCalledWith(
+        expect.anything(),
+        "bx_23456789",
+        madeKey
+      );
+      // The key is on disk again, but the machine still predates it: the retry waits on the provider too.
+      await lifecycle.ensureAccess(bindingId);
+      expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+      expect(provider.authorizeSsh).toHaveBeenLastCalledWith(
+        expect.anything(),
+        "bx_23456789",
+        madeKey
+      );
+      expect(provider.sshAccess).not.toHaveBeenCalled();
+      expect((await fs.readFile(`${keyPath}.pub`, "utf8")).trim()).toBe(madeKey);
+      expect(lifecycle.statuses()[0]?.lastError).toBeNull();
+    }
+  );
+
+  it.each(LOST)(
+    "says the host's key is missing, and makes none, when the provider can't give a created machine another after it lost %s (#17929)",
+    async (_lost, suffixes) => {
+      const { lifecycle, provider, run, bindingId, keyPath } = await createdAndReached();
+      delete (provider as { authorizeSsh?: unknown }).authorizeSsh;
+      for (const suffix of suffixes) await fs.rm(`${keyPath}${suffix}`);
+      const error = await lifecycle.ensureAccess(bindingId).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(UnusableConnectionError);
+      expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+        code: "ssh-authorization",
+        message: expect.stringMatching(/SSH key is missing/),
+      });
+      expect((error as UnusableConnectionError).detail).toBe(
+        lifecycle.statuses()[0]?.lastError?.message
+      );
+      expect(provider.sshAccess).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalledWith("ssh-keygen", expect.anything(), expect.anything());
+      await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  );
+
+  it("puts a key made since on a created machine that holds an older one, before reusing its route (#17929)", async () => {
+    const { lifecycle, provider, files, account, bindingId, keyPath, createKey } =
+      await createdAndReached();
+    // Something else on the account (another create, an import's dial) made the key again.
     await fs.rm(keyPath);
-    await fs.rm(`${keyPath}.pub`);
-    // The new key is still on its way to the machine: the provider's wait is the answer.
-    vi.mocked(provider.authorizeSsh).mockRejectedValueOnce(
-      new BoatApiError("network", "lost", null, null, null)
-    );
-    const waiting = await lifecycle.ensureAccess(bindingId).catch((error: unknown) => error);
-    expect(waiting).toBeInstanceOf(TransportError);
-    const madeKey = (await fs.readFile(`${keyPath}.pub`, "utf8")).trim();
-    expect(madeKey).toMatch(/^ssh-ed25519 /);
-    expect(madeKey).not.toBe(createKey);
-    expect(provider.authorizeSsh).toHaveBeenLastCalledWith(
-      expect.anything(),
-      "bx_23456789",
-      madeKey
-    );
-    // The key is on disk again, but the machine still predates it: the retry waits on the provider too.
+    const remade = await files.publicKey(account.id);
+    expect(remade).not.toBe(createKey);
     await lifecycle.ensureAccess(bindingId);
-    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
-    expect(provider.authorizeSsh).toHaveBeenLastCalledWith(
-      expect.anything(),
-      "bx_23456789",
-      madeKey
-    );
+    expect(provider.authorizeSsh).toHaveBeenCalledWith(expect.anything(), "bx_23456789", remade);
     expect(provider.sshAccess).not.toHaveBeenCalled();
-    expect((await fs.readFile(`${keyPath}.pub`, "utf8")).trim()).toBe(madeKey);
-    expect(lifecycle.statuses()[0]?.lastError).toBeNull();
+    // Once it holds the key, the route is reused again without asking the provider.
+    await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    expect(provider.sshAccess).not.toHaveBeenCalled();
   });
 
-  it("says the host's key is missing, and makes none, when the provider can't give a created machine another (#17929)", async () => {
-    const { lifecycle, provider, run, bindingId, keyPath } = await createdAndReached();
-    delete (provider as { authorizeSsh?: unknown }).authorizeSsh;
-    await fs.rm(keyPath);
-    await fs.rm(`${keyPath}.pub`);
-    const error = await lifecycle.ensureAccess(bindingId).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(UnusableConnectionError);
-    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
-      code: "ssh-authorization",
-      message: expect.stringMatching(/SSH key is missing/),
-    });
-    expect((error as UnusableConnectionError).detail).toBe(
-      lifecycle.statuses()[0]?.lastError?.message
-    );
-    expect(provider.sshAccess).not.toHaveBeenCalled();
+  it("puts the key on a created machine once after a restart, which can't know what it holds (#17929)", async () => {
+    const { lifecycle, provider, run, bindingId, createKey, restart } = await createdAndReached();
+    const next = restart(lifecycle);
+    await next.lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    expect(provider.authorizeSsh).toHaveBeenCalledWith(expect.anything(), "bx_23456789", createKey);
+    await next.lifecycle.ensureAccess(bindingId, undefined, { fresh: true });
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    expect(provider.sshAccess).toHaveBeenCalledTimes(1);
     expect(run).not.toHaveBeenCalledWith("ssh-keygen", expect.anything(), expect.anything());
-    await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.access(`${keyPath}.pub`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps the key a created machine took when only its public half is gone (#17929)", async () => {

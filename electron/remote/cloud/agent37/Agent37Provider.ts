@@ -14,6 +14,7 @@ import type {
   ProviderSshAccess,
 } from "../provider.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { raceAbort } from "../../../utils/raceAbort.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import {
   Agent37ApiError,
@@ -191,6 +192,8 @@ class Agent37CreateRefused extends Error {
   }
 }
 
+const CANCELLED = Symbol("cancelled");
+
 /** A machine that was running before Daintree's key was registered, which it may not have yet. */
 class Agent37KeyInDelivery extends Error {
   constructor(readonly waitMs: number) {
@@ -215,6 +218,8 @@ export class Agent37Provider implements CloudProvider {
   private readonly registered = new Map<string, { localAt: number; serverAt: number | null }>();
   /** Each key with an instance this process created after registering it, which booted with it. */
   private readonly bootedWithKey = new Set<string>();
+  /** Registrations sent and not answered yet, by key: every caller waits on the one answer. */
+  private readonly registering = new Map<string, Promise<void>>();
 
   constructor(
     private readonly clientFor: (apiUrl: string) => Agent37Client,
@@ -485,13 +490,22 @@ export class Agent37Provider implements CloudProvider {
     publicKey: string,
     beforeCreate: boolean
   ): Promise<void> {
-    let answer: { created: boolean; at: number | null };
+    const keyId = this.keyId(credentials, publicKey);
+    const cancelled = () => new Agent37ApiError("cancelled", "Cancelled", null, null);
     try {
-      answer = await this.clientFor(credentials.apiUrl).registerSshKey(
-        ctx(credentials),
-        publicKey,
-        SSH_KEY_NAME
-      );
+      if (credentials.signal?.aborted) throw cancelled();
+      // A caller sending its own would hear "already registered" before the first answer said
+      // when, and hand out a machine still waiting for the key (#17929).
+      let pending = this.registering.get(keyId);
+      if (!pending) {
+        // Tied to no one caller's signal: one that gives up mustn't fail the others waiting.
+        pending = this.sendKey({ ...credentials, signal: undefined }, publicKey, keyId).finally(
+          () => this.registering.delete(keyId)
+        );
+        this.registering.set(keyId, pending);
+      }
+      if ((await raceAbort(pending, credentials.signal, CANCELLED)) === CANCELLED)
+        throw cancelled();
     } catch (error) {
       if (!beforeCreate) throw error;
       const described = this.describeError(error);
@@ -509,11 +523,21 @@ export class Agent37Provider implements CloudProvider {
         at: described.at,
       });
     }
+  }
+
+  /** Sends the key, and notes when a new one was registered before anyone hears the answer. */
+  private async sendKey(
+    credentials: ProviderCredentials,
+    publicKey: string,
+    keyId: string
+  ): Promise<void> {
+    const answer = await this.clientFor(credentials.apiUrl).registerSshKey(
+      ctx(credentials),
+      publicKey,
+      SSH_KEY_NAME
+    );
     if (answer.created) {
-      this.registered.set(this.keyId(credentials, publicKey), {
-        localAt: this.now(),
-        serverAt: answer.at,
-      });
+      this.registered.set(keyId, { localAt: this.now(), serverAt: answer.at });
     }
   }
 
