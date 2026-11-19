@@ -24,11 +24,11 @@ export function attachAssistantPaneCreationStore(): void {
  */
 export async function admitRestoredAssistantPanesFromStore(
   workspaceId: string,
-  paneIds: readonly string[]
+  panes: ReadonlyArray<{ id: string; spawnedBy?: unknown }>
 ): Promise<void> {
   attachAssistantPaneCreationStore();
   const { getPendingHelpHibernationStore } = await import("../PendingHelpHibernationStore.js");
   const pointers = getPendingHelpHibernationStore();
   await pointers.load();
-  admitRestoredAssistantPanes(workspaceId, paneIds, pointers.loadedConversationOwnershipIds());
+  admitRestoredAssistantPanes(workspaceId, panes, pointers.loadedConversationOwnershipIds());
 }

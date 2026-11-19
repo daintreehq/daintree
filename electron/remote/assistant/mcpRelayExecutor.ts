@@ -464,23 +464,22 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     keptTaken = true;
     const senders = new Set<string>();
     for (const { senderId, conversationId, usedAt } of kept) {
-      if (usedAt < now() - RELAY_PRINCIPAL_RETENTION_MS) {
-        forgetConversation(senderId, conversationId);
-        continue;
-      }
       // A caller already on it this run holds it; its own end decides.
       const live = [...(principals.get(senderId)?.values() ?? [])].some(
         (record) => record.conversationId === conversationId
       );
       if (live) continue;
       let asleep = dormant.get(senderId);
+      const latest = Math.max(usedAt, asleep?.get(conversationId)?.usedAt ?? 0);
+      if (latest < now() - RELAY_PRINCIPAL_RETENTION_MS) {
+        forgetConversation(senderId, conversationId);
+        continue;
+      }
       if (!asleep) {
         asleep = new Map();
         dormant.set(senderId, asleep);
       }
-      asleep.set(conversationId, {
-        usedAt: Math.max(usedAt, asleep.get(conversationId)?.usedAt ?? 0),
-      });
+      asleep.set(conversationId, { usedAt: latest });
       senders.add(senderId);
     }
     for (const senderId of senders) boundPrincipals(senderId);
@@ -520,16 +519,20 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     }
     held.set(helpSessionId, record);
     boundPrincipals(senderId);
-    if (record.conversationId !== undefined) {
+    const noteCall = (): void => {
+      if (record.conversationId === undefined) return;
       try {
         deps.noteConversationCall?.(senderId, record.conversationId, record.usedAt);
       } catch (error) {
         logger.warn("Couldn't note a relay conversation's call", { error });
       }
-    }
+    };
+    noteCall();
     return () => {
       record.running -= 1;
       record.usedAt = now();
+      // An ended caller's day runs from here, so a restart's does too.
+      noteCall();
       if (
         record.ended === true &&
         principals.get(senderId)?.get(helpSessionId) === record &&

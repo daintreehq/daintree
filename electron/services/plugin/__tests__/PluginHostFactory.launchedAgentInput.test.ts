@@ -76,6 +76,11 @@ import {
   type PluginHostBinding,
 } from "../../../../shared/types/plugin.js";
 import type { ActionDispatchResult } from "../../../../shared/types/actions.js";
+import {
+  _resetAssistantPaneCreationsForTests,
+  attachAssistantPaneCreationPersistence,
+  isKeptAssistantPane,
+} from "../../mcp-server/assistantPaneCreations.js";
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
 
 const PLUGIN_ID = "acme.orchestrator";
@@ -349,6 +354,24 @@ describe("host.agents input on agents the plugin launched (#14018)", () => {
     const host = hostFor(h);
     await host.dispatch("terminal.list", {});
     await expect(host.agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+  });
+
+  it("ends what an earlier run kept for an Assistant under the id it launches (#16845)", async () => {
+    _resetAssistantPaneCreationsForTests();
+    attachAssistantPaneCreationPersistence({
+      load: () => ({
+        chosen: { scope: "help", conversationId: "c", projectId: "p", seenAt: Date.now() },
+      }),
+      save: () => {},
+    });
+    const h = makeHarness();
+    await launch(h, {
+      result: launchResult("chosen"),
+      args: { agentId: "claude", requestedId: "chosen" },
+    });
+
+    expect(isKeptAssistantPane("chosen")).toBe(false);
+    _resetAssistantPaneCreationsForTests();
   });
 
   it("never records a launch that named its own panel id", async () => {

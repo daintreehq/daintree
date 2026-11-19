@@ -281,16 +281,18 @@ function admitRestoredPluginLaunchesFor(
  */
 function admitRestoredAssistantPanesFor(
   workspaceId: string | null | undefined,
-  terminals: ReadonlyArray<{ id?: unknown }>
+  terminals: ReadonlyArray<{ id?: unknown; spawnedBy?: unknown }>
 ): void {
   if (!workspaceId || terminals.length === 0) return;
   const kept = store.get("assistantPaneCreations");
   if (kept === null || typeof kept !== "object" || Object.keys(kept).length === 0) return;
-  const paneIds = terminals.flatMap(({ id }) => (typeof id === "string" ? [id] : []));
-  if (paneIds.length === 0) return;
+  const panes = terminals.flatMap(({ id, spawnedBy }) =>
+    typeof id === "string" ? [{ id, spawnedBy }] : []
+  );
+  if (panes.length === 0) return;
   void import("../../../services/mcp-server/assistantPaneCreationStore.js")
     .then(({ admitRestoredAssistantPanesFromStore }) =>
-      admitRestoredAssistantPanesFromStore(workspaceId, paneIds)
+      admitRestoredAssistantPanesFromStore(workspaceId, panes)
     )
     .catch((error: unknown) => {
       console.error("[AppHydrate] Failed to restore Assistant pane records:", error);

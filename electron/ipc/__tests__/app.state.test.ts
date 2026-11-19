@@ -2122,7 +2122,14 @@ describe("app:boot handler", () => {
 
   describe("Assistant pane records an earlier run kept (#16845)", () => {
     const SAVED = [
-      { id: "claude-7f3a", kind: "terminal", title: "A", location: "grid", cwd: "/tmp" },
+      {
+        id: "claude-7f3a",
+        kind: "terminal",
+        title: "A",
+        location: "grid",
+        cwd: "/tmp",
+        spawnedBy: "assistant",
+      },
       { id: "shell", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
     ];
     const KEPT = {
@@ -2151,8 +2158,8 @@ describe("app:boot handler", () => {
       await invokeBoot();
       await vi.waitFor(() =>
         expect(admitRestoredAssistantPanesFromStore).toHaveBeenCalledWith("p1", [
-          "claude-7f3a",
-          "shell",
+          { id: "claude-7f3a", spawnedBy: "assistant" },
+          { id: "shell", spawnedBy: undefined },
         ])
       );
     });

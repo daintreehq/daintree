@@ -47,6 +47,7 @@ import {
 } from "./mcp-server/resourceOwnership.js";
 import { readRunAssistantWork, type RunAssistantWork } from "./mcp-server/workerCreationHistory.js";
 import {
+  assistantPaneCreationLedgerFor,
   assistantPaneCreationObserver,
   attachAssistantPaneCreationLedger,
   forgetTrashedAssistantPane,
@@ -338,7 +339,12 @@ export class McpServerService {
       }
     );
 
-    attachAssistantPaneCreationLedger(this.sessionStore.resourceOwnership);
+    attachAssistantPaneCreationLedger(
+      assistantPaneCreationLedgerFor(
+        this.sessionStore.resourceOwnership,
+        this.sessionStore.terminalAdoption
+      )
+    );
 
     this.turnOutcomeService = new TurnOutcomeService({
       saveConfig: (patch) => this.persistConfig(patch),

@@ -536,7 +536,72 @@ describe("createMcpRelayExecutor and conversations a restart kept (#16845)", () 
     vi.advanceTimersByTime(60_000);
 
     expect(forgotten).toEqual([]);
-    expect(calls).toEqual([["local", "conv-1", DAY / 2]]);
+    // When the call began and when it settled, which an ended caller's day runs from.
+    expect(calls).toEqual([
+      ["local", "conv-1", DAY / 2],
+      ["local", "conv-1", DAY / 2],
+    ]);
+  });
+
+  it("notes when a call settles, which is where an ended caller's day starts", async () => {
+    const clock = { now: 0 };
+    let finish: (() => void) | undefined;
+    const calls: Array<[string, string, number]> = [];
+    executor = createMcpRelayExecutor({
+      acceptsRemoteControl: () => true,
+      hasProject: async () => true,
+      openSession: async () => ({
+        isOpen: () => true,
+        callTool: () =>
+          new Promise<CallToolResult>((resolve) => {
+            finish = () => resolve(ANSWER);
+          }),
+        close: () => {},
+      }),
+      keptConversations: () => [],
+      noteConversationCall: (...args) => calls.push(args),
+      now: () => clock.now,
+    });
+    const running = executor.call(spec("help-1", "conv-1"), payload("help-1"));
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    clock.now = 5_000;
+    finish!();
+    await running;
+
+    expect(calls).toEqual([
+      ["local", "conv-1", 0],
+      ["local", "conv-1", 5_000],
+    ]);
+  });
+
+  it("forgets a kept conversation resumed after its day ran out, though it was fresh when taken in", async () => {
+    const clock = { now: DAY / 2 };
+    const { executor, forgotten } = harness(clock, () => [
+      { senderId: "local", conversationId: "conv-1", usedAt: 0 },
+    ]);
+    await executor.call(spec("help-1", "conv-other"), payload("help-1"));
+    expect(forgotten).toEqual([]);
+
+    clock.now = DAY + 1;
+    await executor.call(spec("help-2", "conv-1"), payload("help-2"));
+
+    expect(forgotten).toEqual([["local", "conv-1"]]);
+  });
+
+  it("leaves a kept conversation a caller already runs to that caller, when the records load late", async () => {
+    vi.useFakeTimers();
+    const clock = { now: 0 };
+    let loaded = false;
+    const { executor, forgotten } = harness(clock, () =>
+      loaded ? [{ senderId: "local", conversationId: "conv-1", usedAt: 0 }] : null
+    );
+    clock.now = DAY - 1_000;
+    await executor.call(spec("help-2", "conv-1"), payload("help-2"));
+    loaded = true;
+    clock.now = DAY + 1_000;
+    vi.advanceTimersByTime(60_000);
+
+    expect(forgotten).toEqual([]);
   });
 
   it("asks again until the kept records have loaded", () => {

@@ -738,8 +738,12 @@ export function recordOwnershipFromDispatch(
     !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) &&
     !sessionStore.hasLiveTransport(sessionId)
   ) {
-    // Still something new under those ids, so no older record speaks for them (#16845).
-    sessionStore.resourceOwnership.supersede(drafts);
+    // Still a new pane under those ids: what an earlier run kept for them is
+    // of the pane it replaced (#16845).
+    sessionStore.resourceOwnership.supersedeRestored(
+      drafts,
+      envelope.dispatchedWorkspace?.workspaceId
+    );
     return;
   }
   const recorded = sessionStore.resourceOwnership.record(

@@ -9,7 +9,9 @@ import {
   type OwnedResourceKind,
   type OwnedResourceRecord,
   type OwnershipRecordObserver,
+  type ResourceOwnershipLedger,
 } from "./resourceOwnership.js";
+import type { TerminalAdoptionLedger } from "./terminalAdoption.js";
 
 /**
  * The panes an Assistant's conversation launched on this machine, kept on
@@ -22,14 +24,15 @@ import {
  * lifetimes they always had.
  *
  * A kept record comes back only for a pane the hydrate of the project it was
- * created in hands back to restore under the id it was launched with, while the
- * lane pointers loaded at startup still name its conversation, and never over a
- * record this run made. Every creation main sees under an id it keeps ends the
- * kept record, whoever made it: an MCP creation the ledger records or lets go,
- * a plugin's launch, and main never mints a short agent id it keeps. A pane put
- * in the trash ends it too. So the id is never someone else's pane by the time
- * it comes back. A creation whose caller chose its own id is never kept: a
- * restart can't tell that pane from a later one under the same id.
+ * created in hands back to restore under the id it was launched with, still
+ * stamped as launched the way that conversation launches (`spawnedBy`, which
+ * main writes from the dispatching session, never the caller), while the lane
+ * pointers loaded at startup name its conversation, and never over a record or
+ * hand-over this run made. A pane main sees created under a kept id in a later
+ * run ends the record: an MCP creation the ledger records or lets go, a
+ * plugin's launch, and main never mints a short agent id it keeps. A pane put
+ * in the trash ends it too. A creation whose caller chose its own id is never
+ * kept: a restart can't tell that pane from a later one under the same id.
  */
 export interface StoredAssistantPaneCreation {
   /** Whose conversation: a lane's help session, or this machine's own `host.call` relay. */
@@ -60,8 +63,16 @@ export interface AssistantPaneCreationLedger {
     draft: OwnedResourceDraft,
     workspaceId: string
   ): boolean;
-  supersede(drafts: readonly OwnedResourceDraft[]): void;
+  supersedeRestored(drafts: readonly OwnedResourceDraft[], workspaceId?: string): void;
 }
+
+/** What a restored pane says launched it, by whose conversation kept it (`spawnSourceForMcpOrigin`). */
+const SPAWNED_BY: Record<StoredAssistantPaneCreation["scope"], string> = {
+  // Daintree's own assistant session.
+  help: "assistant",
+  // The relay admits this machine's own calls as `external` sessions.
+  localRelay: "mcp",
+};
 
 const TERMINAL: OwnedResourceKind = "terminal";
 
@@ -74,8 +85,11 @@ export const MAX_STORED_ASSISTANT_PANE_CREATIONS = 200;
 /** How long an ended relay caller's hold outlasts its last call (`mcpRelayExecutor`). */
 export const LOCAL_RELAY_CONVERSATION_RETENTION_MS = 24 * 60 * 60 * 1000;
 
-/** A relay call refreshes the kept time only once it has moved this far, to spare the disk. */
+/** A relay call reaches the disk only once its time has moved this far, to spare it; a quit writes the rest. */
 const LAST_CALL_WRITE_STEP_MS = 10 * 60 * 1000;
+
+/** Creations seen before the records load, remembered to apply to them. */
+const MAX_PENDING_SUPERSEDES = 1024;
 
 /** A loaded time this far past "now" is corrupt, not early. */
 const FUTURE_SKEW_MS = 60_000;
@@ -90,6 +104,13 @@ const unchecked = new Set<string>();
 let ledger: AssistantPaneCreationLedger | null = null;
 /** Records a hydrate gave back before the ledger existed, handed over when it attaches. */
 const waiting = new Map<string, StoredAssistantPaneCreation>();
+/** Terminal ids this run recorded itself, which a later creation main didn't record can't be newer than. */
+const writtenThisRun = new Set<string>();
+/** Each local relay conversation's last call here, exactly; the disk lags it by at most a write step. */
+const relayLastCall = new Map<string, number>();
+const relayLastWritten = new Map<string, number>();
+/** Terminal id → what to drop once the records load: kept for that workspace (null: any), or trashed. */
+const pendingSupersedes = new Map<string, { workspaceId: string | null; trashed: boolean }>();
 let quitting = false;
 let saveQueued = false;
 
@@ -113,12 +134,15 @@ function readStoredRecord(
   if (!isBoundedId(conversationId) || !isBoundedId(projectId)) return null;
   if (!isTime(seenAt, now) || seenAt < now - STORED_ASSISTANT_PANE_CREATION_TTL_MS) return null;
   if (scope === "localRelay") {
-    if (!isTime(lastCallAt, now) || lastCallAt < now - LOCAL_RELAY_CONVERSATION_RETENTION_MS) {
-      return null;
-    }
-    return { scope, conversationId, projectId, seenAt, lastCallAt };
+    return isTime(lastCallAt, now)
+      ? { scope, conversationId, projectId, seenAt, lastCallAt }
+      : null;
   }
   return { scope, conversationId, projectId, seenAt };
+}
+
+function relayDayRanOut(conversationId: string, now: number): boolean {
+  return (relayLastCall.get(conversationId) ?? 0) < now - LOCAL_RELAY_CONVERSATION_RETENTION_MS;
 }
 
 function conversationKeyOf(record: StoredAssistantPaneCreation): string {
@@ -143,8 +167,15 @@ function scopeOf(
 function persistNow(): void {
   saveQueued = false;
   if (persistence === null) return;
+  const records: Record<string, StoredAssistantPaneCreation> = {};
+  for (const [terminalId, record] of stored) {
+    const lastCallAt =
+      record.scope === "localRelay" ? relayLastCall.get(record.conversationId) : undefined;
+    records[terminalId] = lastCallAt !== undefined ? { ...record, lastCallAt } : record;
+  }
+  for (const [conversationId, at] of relayLastCall) relayLastWritten.set(conversationId, at);
   try {
-    persistence.save(Object.fromEntries(stored));
+    persistence.save(records);
   } catch (error) {
     console.warn("[assistantPaneCreations] Failed to save kept pane creations:", error);
   }
@@ -173,7 +204,38 @@ function capStored(): boolean {
 function forgetRow(terminalId: string): boolean {
   waiting.delete(terminalId);
   unchecked.delete(terminalId);
+  writtenThisRun.delete(terminalId);
   return stored.delete(terminalId);
+}
+
+function rememberSupersede(terminalId: string, workspaceId: string | null, trashed: boolean): void {
+  const earlier = pendingSupersedes.get(terminalId);
+  pendingSupersedes.delete(terminalId);
+  pendingSupersedes.set(terminalId, {
+    workspaceId: earlier !== undefined && earlier.workspaceId !== workspaceId ? null : workspaceId,
+    trashed: trashed || earlier?.trashed === true,
+  });
+  if (pendingSupersedes.size > MAX_PENDING_SUPERSEDES) {
+    pendingSupersedes.delete(pendingSupersedes.keys().next().value as string);
+  }
+}
+
+/**
+ * A pane no one recorded was created under `terminalId`: a record an earlier
+ * run kept for it, in that workspace when known, is of the pane it replaced.
+ * One this run recorded is of a pane at least as new, and stays.
+ */
+function supersedeRow(terminalId: string, workspaceId: string | null | undefined): void {
+  if (!isBoundedId(terminalId)) return;
+  if (persistence === null) {
+    rememberSupersede(terminalId, workspaceId ?? null, false);
+    return;
+  }
+  const record = stored.get(terminalId);
+  if (record === undefined || writtenThisRun.has(terminalId)) return;
+  if (workspaceId != null && record.projectId !== workspaceId) return;
+  forgetRow(terminalId);
+  persist();
 }
 
 function forgetConversationRows(holder: string): boolean {
@@ -202,16 +264,21 @@ export const assistantPaneCreationObserver: OwnershipRecordObserver = {
     const scope = durable && record.workspaceId !== undefined ? scopeOf(holder) : null;
     if (scope === null) return;
     const now = Date.now();
-    const previous = stored.get(record.id);
     forgetRow(record.id);
+    if (scope.scope === "localRelay") {
+      // The relay call that made it is the conversation's latest.
+      relayLastCall.set(
+        scope.conversationId,
+        Math.max(now, relayLastCall.get(scope.conversationId) ?? 0)
+      );
+    }
     stored.set(record.id, {
       ...scope,
       projectId: record.workspaceId!,
       seenAt: now,
-      ...(scope.scope === "localRelay"
-        ? { lastCallAt: Math.max(now, previous?.lastCallAt ?? 0) }
-        : {}),
+      ...(scope.scope === "localRelay" ? { lastCallAt: now } : {}),
     });
+    writtenThisRun.add(record.id);
     capStored();
     persist();
   },
@@ -225,6 +292,9 @@ export const assistantPaneCreationObserver: OwnershipRecordObserver = {
   dropped(holder: string): void {
     if (persistence === null || quitting) return;
     if (forgetConversationRows(holder)) persist();
+  },
+  superseded(kind: OwnedResourceKind, id: string, workspaceId: string | undefined): void {
+    if (kind === TERMINAL) supersedeRow(id, workspaceId);
   },
 };
 
@@ -256,8 +326,48 @@ export function attachAssistantPaneCreationPersistence(
     }
     stored.set(terminalId, record);
     unchecked.add(terminalId);
+    if (record.lastCallAt !== undefined) {
+      // One time per conversation: the latest any of its records carries.
+      relayLastCall.set(
+        record.conversationId,
+        Math.max(record.lastCallAt, relayLastCall.get(record.conversationId) ?? 0)
+      );
+    }
   }
+  for (const [terminalId, record] of [...stored]) {
+    if (record.scope === "localRelay" && relayDayRanOut(record.conversationId, now)) {
+      forgetRow(terminalId);
+      pruned = true;
+    }
+  }
+  for (const [conversationId, at] of relayLastCall) relayLastWritten.set(conversationId, at);
+  // What was created, or trashed, before this load still applies to what it read.
+  for (const [terminalId, { workspaceId, trashed }] of pendingSupersedes) {
+    const record = stored.get(terminalId);
+    if (record === undefined) continue;
+    if (trashed || workspaceId === null || record.projectId === workspaceId) {
+      forgetRow(terminalId);
+      pruned = true;
+    }
+  }
+  pendingSupersedes.clear();
   if (capStored() || pruned) persist();
+}
+
+/**
+ * The MCP server's ledger as restores reach it: never over a terminal the
+ * person handed to a pane, which would give it two drivers (#12490).
+ */
+export function assistantPaneCreationLedgerFor(
+  ownership: Pick<ResourceOwnershipLedger, "restoreIfUnclaimed" | "supersedeRestored">,
+  handOvers: Pick<TerminalAdoptionLedger, "holderOf">
+): AssistantPaneCreationLedger {
+  return {
+    restoreIfUnclaimed: (conversationKey, draft, workspaceId) =>
+      handOvers.holderOf(draft.id) === undefined &&
+      ownership.restoreIfUnclaimed(conversationKey, draft, workspaceId),
+    supersedeRestored: (drafts, workspaceId) => ownership.supersedeRestored(drafts, workspaceId),
+  };
 }
 
 /** Hand restored records to the ledger from now on, with any a hydrate already gave back. */
@@ -283,7 +393,7 @@ export function attachAssistantPaneCreationLedger(target: AssistantPaneCreationL
  */
 export function admitRestoredAssistantPanes(
   projectId: string,
-  paneIds: readonly string[],
+  panes: ReadonlyArray<{ id: string; spawnedBy?: unknown }>,
   resumable: ReadonlySet<string>
 ): void {
   if (persistence === null || stored.size === 0 || quitting) return;
@@ -297,12 +407,13 @@ export function admitRestoredAssistantPanes(
   }
   unchecked.clear();
   const now = Date.now();
-  for (const terminalId of paneIds) {
+  for (const { id: terminalId, spawnedBy } of panes) {
     const record = stored.get(terminalId);
     if (record === undefined || record.projectId !== projectId) continue;
+    // Another surface's pane under the id, or a relay conversation whose day ran out.
     if (
-      record.scope === "localRelay" &&
-      (record.lastCallAt ?? 0) < now - LOCAL_RELAY_CONVERSATION_RETENTION_MS
+      spawnedBy !== SPAWNED_BY[record.scope] ||
+      (record.scope === "localRelay" && relayDayRanOut(record.conversationId, now))
     ) {
       forgetRow(terminalId);
       changed = true;
@@ -324,29 +435,38 @@ export function admitRestoredAssistantPanes(
 }
 
 /**
- * A pane main didn't record as an MCP creation took `terminalId` (a plugin's
- * launch): any record for the id, kept or given back, is about another pane.
+ * A pane main didn't record took `terminalId` (a plugin's launch), in
+ * `workspaceId` when known: a record an earlier run kept for the id there, kept
+ * or given back, is of the pane it replaced.
  */
-export function supersedeAssistantPane(terminalId: string): void {
+export function supersedeAssistantPane(terminalId: string, workspaceId?: string | null): void {
   if (!isBoundedId(terminalId)) return;
-  if (forgetRow(terminalId)) persist();
-  ledger?.supersede([{ kind: "terminal", id: terminalId }]);
+  if (ledger !== null) {
+    ledger.supersedeRestored([{ kind: TERMINAL, id: terminalId }], workspaceId ?? undefined);
+  } else {
+    supersedeRow(terminalId, workspaceId);
+  }
 }
 
-/**
- * A plugin's `agent.launch` started a pane, under an id it chose or not: no
- * record of an Assistant's names it any more (#16845).
- */
-export function supersedeByPluginLaunch(actionId: string, result: ActionDispatchResult): void {
+/** A plugin's `agent.launch` started a pane in `workspaceId`, under an id it chose or not (#16845). */
+export function supersedeByPluginLaunch(
+  actionId: string,
+  result: ActionDispatchResult,
+  workspaceId?: string | null
+): void {
   if (actionId !== AGENT_LAUNCH_ACTION_ID || !result.ok) return;
   const launched = result.result as { terminalId?: unknown } | null;
   const terminalId = launched?.terminalId;
-  if (typeof terminalId === "string") supersedeAssistantPane(terminalId);
+  if (typeof terminalId === "string") supersedeAssistantPane(terminalId, workspaceId);
 }
 
 /** The person put the pane in the trash: no restart gives it back to anyone. */
 export function forgetTrashedAssistantPane(terminalId: string): void {
-  if (quitting) return;
+  if (quitting || !isBoundedId(terminalId)) return;
+  if (persistence === null) {
+    rememberSupersede(terminalId, null, true);
+    return;
+  }
   if (forgetRow(terminalId)) persist();
 }
 
@@ -365,26 +485,34 @@ export function keptLocalRelayConversations(): Array<{
   usedAt: number;
 }> | null {
   if (persistence === null) return null;
-  const lastCall = new Map<string, number>();
+  const kept = new Set<string>();
   for (const record of stored.values()) {
-    if (record.scope !== "localRelay") continue;
-    const at = record.lastCallAt ?? record.seenAt;
-    lastCall.set(record.conversationId, Math.max(at, lastCall.get(record.conversationId) ?? 0));
+    if (record.scope === "localRelay") kept.add(record.conversationId);
   }
-  return [...lastCall].map(([conversationId, usedAt]) => ({ conversationId, usedAt }));
+  return [...kept].map((conversationId) => ({
+    conversationId,
+    usedAt: relayLastCall.get(conversationId) ?? 0,
+  }));
 }
 
-/** The local relay ran a call for `conversationId`: what it launched keeps its day from now. */
+/**
+ * The local relay ran, or finished, a call for `conversationId`: what it
+ * launched keeps its day from `at`. Held exactly here; written once it has
+ * moved a step since the last write, and by the quit.
+ */
 export function noteLocalRelayCall(conversationId: string, at: number = Date.now()): void {
-  if (persistence === null || quitting) return;
-  let changed = false;
-  for (const [terminalId, record] of stored) {
-    if (record.scope !== "localRelay" || record.conversationId !== conversationId) continue;
-    if (at - (record.lastCallAt ?? 0) < LAST_CALL_WRITE_STEP_MS) continue;
-    stored.set(terminalId, { ...record, lastCallAt: at });
-    changed = true;
+  if (persistence === null) return;
+  if (at <= (relayLastCall.get(conversationId) ?? 0)) return;
+  relayLastCall.set(conversationId, at);
+  let kept = false;
+  for (const record of stored.values()) {
+    if (record.scope === "localRelay" && record.conversationId === conversationId) {
+      kept = true;
+      break;
+    }
   }
-  if (changed) persist();
+  if (!kept) return;
+  if (at - (relayLastWritten.get(conversationId) ?? 0) >= LAST_CALL_WRITE_STEP_MS) persist();
 }
 
 /**
@@ -394,7 +522,10 @@ export function noteLocalRelayCall(conversationId: string, at: number = Date.now
  */
 export function beginAssistantPaneCreationQuit(): void {
   quitting = true;
-  if (saveQueued) persistNow();
+  const relayBehind = [...relayLastCall].some(
+    ([conversationId, at]) => at > (relayLastWritten.get(conversationId) ?? 0)
+  );
+  if (saveQueued || (relayBehind && stored.size > 0)) persistNow();
 }
 
 export function _resetAssistantPaneCreationsForTests(): void {
@@ -402,6 +533,10 @@ export function _resetAssistantPaneCreationsForTests(): void {
   stored.clear();
   unchecked.clear();
   waiting.clear();
+  writtenThisRun.clear();
+  relayLastCall.clear();
+  relayLastWritten.clear();
+  pendingSupersedes.clear();
   ledger = null;
   quitting = false;
   saveQueued = false;

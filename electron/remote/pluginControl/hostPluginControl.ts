@@ -309,7 +309,7 @@ export function createHostPluginControl(deps: HostPluginControlDeps) {
         audit(null, error);
         throw error;
       }
-      supersedeByPluginLaunch(payload.actionId, result);
+      supersedeByPluginLaunch(payload.actionId, result, payload.projectId);
       const terminalId = launchedTerminal(payload.actionId, payload.args, result);
       if (terminalId !== null) {
         remember(terminalId, {

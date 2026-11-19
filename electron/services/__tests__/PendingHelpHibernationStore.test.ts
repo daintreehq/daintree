@@ -377,6 +377,7 @@ describe("PendingHelpHibernationStore", () => {
           [slotKey("proj-1", 0)]: { ...entry, agentSessionId: "a", conversationOwnershipId: "c-1" },
           [slotKey("proj-1", 1)]: { ...entry, agentSessionId: "", conversationOwnershipId: "c-2" },
           [slotKey("proj-1", 2)]: { ...entry, agentSessionId: "c" },
+          [slotKey("proj-3", 0)]: { ...entry, agentSessionId: "f", conversationOwnershipId: "c-4" },
           [slotKey("proj-2", 0)]: {
             ...entry,
             agentSessionId: "d",
@@ -395,7 +396,9 @@ describe("PendingHelpHibernationStore", () => {
       conversationOwnershipId: "c-3",
     });
 
-    expect([...store.loadedConversationOwnershipIds()]).toEqual(["c-1"]);
+    await store.clear(slotKey("proj-3", 0));
+
+    expect([...store.loadedConversationOwnershipIds()].sort()).toEqual(["c-1", "c-4"]);
   });
 
   it("never persists the in-memory-only panelWasOpen flag to disk (#10815)", async () => {

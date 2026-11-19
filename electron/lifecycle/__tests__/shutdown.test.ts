@@ -299,6 +299,9 @@ vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: helpSessionMock,
 }));
 
+const paneCreationsMock = vi.hoisted(() => ({ beginAssistantPaneCreationQuit: vi.fn() }));
+vi.mock("../../services/mcp-server/assistantPaneCreations.js", () => paneCreationsMock);
+
 const idleTerminalMock = vi.hoisted(() => ({ stop: vi.fn() }));
 vi.mock("../../services/IdleTerminalNotificationService.js", () => ({
   getIdleTerminalNotificationService: vi.fn(() => idleTerminalMock),
@@ -555,6 +558,25 @@ describe("registerShutdownHandler", () => {
     // Paired devices stop answering before any terminal is enumerated or killed.
     expect(order[1]).toBe("device-answer-stop");
     expect(order).toContain("pty-dispose");
+  });
+
+  it("keeps the Assistant's pane records before the remote hosts' teardown lets anything go (#16845)", async () => {
+    const order: string[] = [];
+    paneCreationsMock.beginAssistantPaneCreationQuit.mockImplementationOnce(() => {
+      order.push("keep-records");
+    });
+    const stopRemoteHosts = vi.fn(async () => {
+      order.push("remote-stop");
+    });
+    const { beforeQuitCb } = await setup({ stopRemoteHosts });
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(order.slice(0, 2)).toEqual(["keep-records", "remote-stop"]);
   });
 
   it("imports no Decisions module at quit when nothing loaded it", async () => {

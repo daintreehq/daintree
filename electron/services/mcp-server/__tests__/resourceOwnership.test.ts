@@ -839,6 +839,8 @@ describe("ResourceOwnershipLedger and what a restart keeps (#16845)", () => {
         events.push(`held ${readable(holder)} ${record.id}${durable ? "" : " named"}`),
       released: (holder, record) => events.push(`released ${readable(holder)} ${record.id}`),
       dropped: (holder) => events.push(`dropped ${readable(holder)}`),
+      superseded: (kind, id, workspaceId) =>
+        events.push(`superseded ${kind}:${id} ${workspaceId ?? "-"}`),
     });
     return { ledger, events };
   }
@@ -888,19 +890,64 @@ describe("ResourceOwnershipLedger and what a restart keeps (#16845)", () => {
       id: "t1",
       workspaceId: "p",
     });
+    expect(ledger.creatorOf("terminal", "t1")).toBe(helpConversationKey("c"));
+    expect(
+      ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "t1" }, "p")
+    ).toBe(false);
     expect(ledger.get(other, "terminal", "taken")).toBeDefined();
   });
 
-  it("lets a creation no one records take the id from whoever held it", () => {
+  it("lets a pane no one recorded end only a record an earlier run kept, in its workspace", () => {
     const { ledger, events } = observed();
     const principal = helpOwnershipPrincipal("help-a");
     ledger.bindPrincipal("s-a", principal);
-    ledger.record(principalOwnerKey(principal), [{ kind: "terminal", id: "t1" }], "p");
+    const owner = principalOwnerKey(principal);
+    ledger.attachConversation(principal, helpConversationKey("c"));
+    ledger.record(owner, [{ kind: "terminal", id: "made" }], "p");
+    ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "kept" }, "p");
     events.length = 0;
 
-    ledger.supersede([{ kind: "terminal", id: "t1" }]);
+    ledger.supersedeRestored(
+      [
+        { kind: "terminal", id: "made" },
+        { kind: "terminal", id: "kept" },
+      ],
+      "other"
+    );
+    expect(ledger.get(owner, "terminal", "kept")).toBeDefined();
+    ledger.supersedeRestored([
+      { kind: "terminal", id: "made" },
+      { kind: "terminal", id: "kept" },
+    ]);
 
-    expect(ledger.creatorOf("terminal", "t1")).toBeUndefined();
-    expect(events).toEqual(["created terminal:t1", "released principal|help|help-a t1"]);
+    expect(ledger.get(owner, "terminal", "made")).toBeDefined();
+    expect(ledger.get(owner, "terminal", "kept")).toBeUndefined();
+    expect(ledger.creatorOf("terminal", "kept")).toBeUndefined();
+    expect(events).toEqual([
+      "superseded terminal:made other",
+      "superseded terminal:kept other",
+      "superseded terminal:made -",
+      "superseded terminal:kept -",
+      "released conversation|help|c kept",
+    ]);
+  });
+
+  it("reports a creation that replaces the holder's own record of the id", () => {
+    const { ledger, events } = observed();
+    const principal = helpOwnershipPrincipal("help-a");
+    ledger.bindPrincipal("s-a", principal);
+    const owner = principalOwnerKey(principal);
+    ledger.record(owner, [{ kind: "terminal", id: "t1" }], "p");
+    const first = ledger.get(owner, "terminal", "t1");
+    events.length = 0;
+
+    ledger.record(owner, [{ kind: "terminal", id: "t1" }], "p");
+
+    expect(ledger.get(owner, "terminal", "t1")).not.toBe(first);
+    expect(events).toEqual([
+      "created terminal:t1",
+      "released principal|help|help-a t1",
+      "held principal|help|help-a t1",
+    ]);
   });
 });

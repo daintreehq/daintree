@@ -52,7 +52,7 @@ describe("an Assistant's panes across a restart (#16845)", () => {
     },
   };
 
-  function startRun(launchedId = "claude-7f3a") {
+  function startRun() {
     _resetAssistantPaneCreationsForTests();
     const store = new RealSessionStore(() => {}, {
       ownershipObserver: assistantPaneCreationObserver,
@@ -60,15 +60,17 @@ describe("an Assistant's panes across a restart (#16845)", () => {
     liveStores.push(store);
     attachAssistantPaneCreationPersistence(disk);
     attachAssistantPaneCreationLedger(store.resourceOwnership);
-    const dispatchAction = vi.fn().mockImplementation((actionId: string) => {
+    // The launch takes the id main wrote into its arguments, as the renderer does.
+    const dispatchAction = vi.fn().mockImplementation((actionId: string, args: unknown) => {
+      const { requestedId, terminalId } = (args ?? {}) as Record<string, string>;
       if (actionId === "agent.launch") {
         return Promise.resolve({
-          result: { ok: true, result: { launched: true, terminalId: launchedId } },
+          result: { ok: true, result: { launched: true, terminalId: requestedId } },
           dispatchedWorkspace: PROJECT,
         });
       }
       if (actionId === "terminal.close") {
-        return Promise.resolve({ result: { ok: true, result: { closedIds: [launchedId] } } });
+        return Promise.resolve({ result: { ok: true, result: { closedIds: [terminalId] } } });
       }
       return Promise.resolve({ result: { ok: true, result: null } });
     });
@@ -112,6 +114,12 @@ describe("an Assistant's panes across a restart (#16845)", () => {
     return createSessionServer(sessionId, run.deps);
   }
 
+  /** The id main minted for the run's one launch. */
+  function launchedId(run: ReturnType<typeof startRun>): string {
+    const launch = run.dispatchAction.mock.calls.find(([actionId]) => actionId === "agent.launch");
+    return (launch?.[1] as { requestedId: string }).requestedId;
+  }
+
   afterEach(() => {
     while (liveStores.length > 0) {
       const store = liveStores.pop()!;
@@ -127,20 +135,22 @@ describe("an Assistant's panes across a restart (#16845)", () => {
     const before = startRun();
     const launcher = helpBearer(before, "s-help-a", "help-a", "conv-1");
     await callTool(launcher, { name: "agent.launch", arguments: { agentId: "claude" } });
+    const id = launchedId(before);
+    expect(id).toMatch(/^claude-[0-9a-f]{4}$/);
     await Promise.resolve();
 
     const after = startRun();
-    admitRestoredAssistantPanes("proj-1", ["claude-7f3a"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [{ id, spawnedBy: "assistant" }], new Set(["conv-1"]));
     const resumed = helpBearer(after, "s-help-b", "help-b", "conv-1");
     const closed = await callTool(resumed, {
       name: "terminal.closeOwned",
-      arguments: { terminalId: "claude-7f3a" },
+      arguments: { terminalId: id },
     });
 
     expect(closed.isError).toBeUndefined();
     expect(after.dispatchAction).toHaveBeenCalledWith(
       "terminal.close",
-      expect.objectContaining({ terminalId: "claude-7f3a" }),
+      expect.objectContaining({ terminalId: id }),
       false
     );
     // Closed, so the next restart gives it to no one.
@@ -148,34 +158,65 @@ describe("an Assistant's panes across a restart (#16845)", () => {
     expect(saved).toEqual({});
   });
 
-  it("lets the global Assistant's resumed relay conversation close what it launched in another project", async () => {
+  it("lets the global Assistant's resumed relay conversation close what it launched", async () => {
     const before = startRun();
     const launcher = localRelayBearer(before, "r-help-a", "help-global", "conv-g");
     await callTool(launcher, { name: "agent.launch", arguments: { agentId: "claude" } });
+    const id = launchedId(before);
     await Promise.resolve();
 
     const after = startRun();
-    admitRestoredAssistantPanes("proj-1", ["claude-7f3a"], new Set(["conv-g"]));
+    admitRestoredAssistantPanes("proj-1", [{ id, spawnedBy: "mcp" }], new Set(["conv-g"]));
     const resumed = localRelayBearer(after, "r-help-b", "help-global-2", "conv-g");
     const closed = await callTool(resumed, {
       name: "terminal.closeOwned",
-      arguments: { terminalId: "claude-7f3a" },
+      arguments: { terminalId: id },
     });
 
     expect(closed.isError).toBeUndefined();
   });
 
-  it("gives a fresh conversation, and a launch that named its own id, nothing after the restart", async () => {
-    const before = startRun("mine-1");
+  it("gives a fresh conversation nothing after the restart", async () => {
+    const before = startRun();
     const launcher = helpBearer(before, "s-help-a", "help-a", "conv-1");
-    await callTool(launcher, {
+    await callTool(launcher, { name: "agent.launch", arguments: { agentId: "claude" } });
+    const id = launchedId(before);
+    await Promise.resolve();
+
+    const after = startRun();
+    admitRestoredAssistantPanes("proj-1", [{ id, spawnedBy: "assistant" }], new Set(["conv-1"]));
+    const fresh = helpBearer(after, "s-help-c", "help-c", "conv-2");
+    const refused = await callTool(fresh, {
+      name: "terminal.closeOwned",
+      arguments: { terminalId: id },
+    });
+
+    expect(toolErrorPayload(refused).code).toBe("RESOURCE_NOT_OWNED");
+  });
+
+  it("keeps a launch that named its own id for its run only", async () => {
+    const before = startRun();
+    const launcher = helpBearer(before, "s-help-a", "help-a", "conv-1");
+    const launched = await callTool(launcher, {
       name: "agent.launch",
       arguments: { agentId: "claude", requestedId: "mine-1" },
     });
+    expect(launched.isError).toBeUndefined();
+    expect(
+      before.store.resourceOwnership.get(
+        before.store.resourceOwnership.ownerOf("s-help-a"),
+        "terminal",
+        "mine-1"
+      )
+    ).toBeDefined();
     await Promise.resolve();
 
-    const after = startRun("mine-1");
-    admitRestoredAssistantPanes("proj-1", ["mine-1"], new Set(["conv-1"]));
+    const after = startRun();
+    admitRestoredAssistantPanes(
+      "proj-1",
+      [{ id: "mine-1", spawnedBy: "assistant" }],
+      new Set(["conv-1"])
+    );
     const resumed = helpBearer(after, "s-help-b", "help-b", "conv-1");
     const refused = await callTool(resumed, {
       name: "terminal.closeOwned",
@@ -190,34 +231,36 @@ describe("an Assistant's panes across a restart (#16845)", () => {
     );
   });
 
-  it("keeps nothing for a pane whose launch ran on after its session was gone, and lets that end an older record", async () => {
+  it("lets a launch that lands after its session was gone end what an earlier run kept for the id", async () => {
     const before = startRun();
     const launcher = helpBearer(before, "s-help-a", "help-a", "conv-1");
     await callTool(launcher, { name: "agent.launch", arguments: { agentId: "claude" } });
+    const id = launchedId(before);
     await Promise.resolve();
+    expect(Object.keys(saved as object)).toEqual([id]);
 
-    // Next run: an api-key client's launch draws the same id, and its session is
-    // gone by the time the result lands.
+    // Next run: an api-key client's launch lands under the same id, and its
+    // session is gone by the time the result does.
     const after = startRun();
     seedLiveSession(after.store, "s-api", "external");
     after.store.sessionOriginMap.set("s-api", "external");
     const api = createSessionServer("s-api", after.deps);
     after.dispatchAction.mockImplementationOnce(async () => {
-      // The transport drops while the launch is out.
       after.store.sessions.delete("s-api");
       return {
-        result: { ok: true, result: { launched: true, terminalId: "claude-7f3a" } },
+        result: { ok: true, result: { launched: true, terminalId: id } },
         dispatchedWorkspace: PROJECT,
       };
     });
     await callTool(api, { name: "agent.launch", arguments: { agentId: "claude" } });
-    admitRestoredAssistantPanes("proj-1", ["claude-7f3a"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [{ id, spawnedBy: "assistant" }], new Set(["conv-1"]));
     const resumed = helpBearer(after, "s-help-b", "help-b", "conv-1");
     const refused = await callTool(resumed, {
       name: "terminal.closeOwned",
-      arguments: { terminalId: "claude-7f3a" },
+      arguments: { terminalId: id },
     });
 
     expect(toolErrorPayload(refused).code).toBe("RESOURCE_NOT_OWNED");
+    expect(after.store.resourceOwnership.creatorOf("terminal", id)).toBeUndefined();
   });
 });

@@ -56,6 +56,8 @@ import type { ActionDispatchResult } from "../../../shared/types/actions.js";
  */
 export type OwnedResourceKind = "terminal" | "worktree";
 
+const TERMINAL_KIND: OwnedResourceKind = "terminal";
+
 export interface OwnedResourceDraft {
   kind: OwnedResourceKind;
   id: string;
@@ -200,6 +202,11 @@ export interface OwnershipRecordObserver {
   released(holder: string, record: OwnedResourceRecord): void;
   /** Whatever `holder` held is gone, including anything kept for it that is not loaded. */
   dropped(holder: string): void;
+  /**
+   * A pane no one records was created under `id`, in `workspaceId` when known:
+   * whatever an earlier run kept for the id there no longer speaks for it.
+   */
+  superseded(kind: OwnedResourceKind, id: string, workspaceId: string | undefined): void;
 }
 
 /** A Daintree Assistant's principal, read back from the owner key its authority is held under. */
@@ -253,6 +260,8 @@ export class ResourceOwnershipLedger {
   private readonly conversationByPrincipal = new Map<string, string>();
   /** Records whose creation named its own id (#16845): never kept past the app. */
   private readonly callerNamed = new WeakSet<OwnedResourceRecord>();
+  /** Records an earlier run kept and this one gave back (#16845). */
+  private readonly restored = new WeakSet<OwnedResourceRecord>();
 
   constructor(private readonly observer?: OwnershipRecordObserver) {}
 
@@ -417,18 +426,36 @@ export class ResourceOwnershipLedger {
     return added;
   }
 
-  /**
-   * Resources were created under these ids with no one to record them for: a
-   * revoked bearer's late creation, one whose session is gone, or a plugin's
-   * launch (#16845). Nothing is recorded, but the ids name something new, so
-   * an older record for them, such as a dormant conversation's, no longer
-   * speaks for them.
-   */
-  supersede(drafts: readonly OwnedResourceDraft[]): void {
+  /** A revoked bearer's creation: nothing for it, but the ids name something new. */
+  private supersede(drafts: readonly OwnedResourceDraft[]): void {
     for (const draft of drafts) {
       if (draft.id.length === 0) continue;
       this.notify((observer) => observer.created(draft.kind, draft.id));
       this.evict(resourceKey(draft.kind, draft.id));
+    }
+  }
+
+  /**
+   * Panes were created under these ids with no one to record them for: one
+   * whose session was gone when it landed, or a plugin's launch (#16845). A
+   * record this run made stays, being of a pane at least as new; a record an
+   * earlier run kept, given back or not, is of the pane the new one replaced,
+   * so it goes. With `workspaceId`, only one kept for that workspace.
+   */
+  supersedeRestored(drafts: readonly OwnedResourceDraft[], workspaceId?: string): void {
+    for (const draft of drafts) {
+      if (draft.kind !== TERMINAL_KIND || draft.id.length === 0) continue;
+      this.notify((observer) => observer.superseded(draft.kind, draft.id, workspaceId));
+      const key = resourceKey(draft.kind, draft.id);
+      const holder = this.ownerByResource.get(key);
+      const record = holder === undefined ? undefined : this.byOwner.get(holder)?.get(key);
+      if (
+        record !== undefined &&
+        this.restored.has(record) &&
+        (workspaceId === undefined || record.workspaceId === workspaceId)
+      ) {
+        this.evict(key);
+      }
     }
   }
 
@@ -452,7 +479,9 @@ export class ResourceOwnershipLedger {
       owned = new Map();
       this.byOwner.set(conversationKey, owned);
     }
-    owned.set(key, { kind: draft.kind, id: draft.id, workspaceId });
+    const record: OwnedResourceRecord = { kind: draft.kind, id: draft.id, workspaceId };
+    this.restored.add(record);
+    owned.set(key, record);
     this.ownerByResource.set(key, conversationKey);
     return true;
   }

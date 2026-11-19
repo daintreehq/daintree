@@ -7,12 +7,14 @@ import {
   relayConversationKey,
   relayOwnershipPrincipal,
 } from "../resourceOwnership.js";
+import { TerminalAdoptionLedger } from "../terminalAdoption.js";
 import {
   LOCAL_RELAY_CONVERSATION_RETENTION_MS,
   MAX_STORED_ASSISTANT_PANE_CREATIONS,
   STORED_ASSISTANT_PANE_CREATION_TTL_MS,
   _resetAssistantPaneCreationsForTests,
   admitRestoredAssistantPanes,
+  assistantPaneCreationLedgerFor,
   assistantPaneCreationObserver,
   attachAssistantPaneCreationLedger,
   attachAssistantPaneCreationPersistence,
@@ -21,6 +23,7 @@ import {
   isKeptAssistantPane,
   keptLocalRelayConversations,
   noteLocalRelayCall,
+  supersedeAssistantPane,
   supersedeByPluginLaunch,
   type StoredAssistantPaneCreation,
 } from "../assistantPaneCreations.js";
@@ -69,6 +72,10 @@ function bindLocalRelay(
 
 const flush = () => Promise.resolve();
 
+/** A restored pane as the hydrate hands it back, stamped as each surface launches. */
+const byHelp = (id: string) => ({ id, spawnedBy: "assistant" });
+const byRelay = (id: string) => ({ id, spawnedBy: "mcp" });
+
 describe("assistant pane creations kept across a restart (#16845)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -96,7 +103,7 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     expect(second.get(bindHelp(second, "help-b", "conv-1"), "terminal", "claude-7f3a")).toBe(
       undefined
     );
-    admitRestoredAssistantPanes("proj-1", ["claude-7f3a"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [byHelp("claude-7f3a")], new Set(["conv-1"]));
 
     expect(
       second.get(principalOwnerKey(helpOwnershipPrincipal("help-b")), "terminal", "claude-7f3a")
@@ -114,7 +121,7 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     await flush();
 
     const second = startRun(disk);
-    admitRestoredAssistantPanes("proj-1", ["t1"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
     expect(second.get(bindHelp(second, "help-b", "conv-1"), "terminal", "t1")).toBeDefined();
   });
 
@@ -126,7 +133,7 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
 
     _resetAssistantPaneCreationsForTests();
     attachAssistantPaneCreationPersistence(disk.persistence);
-    admitRestoredAssistantPanes("proj-1", ["t1"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
     const second = new ResourceOwnershipLedger(assistantPaneCreationObserver);
     attachAssistantPaneCreationLedger(second);
 
@@ -152,7 +159,7 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
 
     const second = startRun(disk);
     expect(keptLocalRelayConversations()).toEqual([{ conversationId: "conv-1", usedAt: T0 }]);
-    admitRestoredAssistantPanes("proj-2", ["t1"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-2", [byRelay("t1")], new Set(["conv-1"]));
     expect(second.get(bindLocalRelay(second, "help-b", "conv-1"), "terminal", "t1")).toBeDefined();
     // The same conversation's direct help bearer is another holder.
     expect(second.get(bindHelp(second, "help-b", "conv-1"), "terminal", "t1")).toBeUndefined();
@@ -206,9 +213,9 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
 
     const second = startRun(disk);
     const resumed = bindHelp(second, "help-b", "conv-1");
-    admitRestoredAssistantPanes("proj-2", ["t1"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-2", [byHelp("t1")], new Set(["conv-1"]));
     expect(second.get(resumed, "terminal", "t1")).toBeUndefined();
-    admitRestoredAssistantPanes("proj-1", ["t2", "t3"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [byHelp("t2"), byHelp("t3")], new Set(["conv-1"]));
     await flush();
 
     expect(second.get(resumed, "terminal", "t2")).toBeDefined();
@@ -233,8 +240,12 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     second.record(principalOwnerKey(other), [{ kind: "terminal", id: "t1" }], "proj-1");
     second.revokePrincipal(other);
     second.record(principalOwnerKey(other), [{ kind: "terminal", id: "t2" }], "proj-1");
-    second.supersede([{ kind: "terminal", id: "t3" }]);
-    admitRestoredAssistantPanes("proj-1", ["t1", "t2", "t3"], new Set(["conv-1"]));
+    second.supersedeRestored([{ kind: "terminal", id: "t3" }]);
+    admitRestoredAssistantPanes(
+      "proj-1",
+      [byHelp("t1"), byHelp("t2"), byHelp("t3")],
+      new Set(["conv-1"])
+    );
     await flush();
 
     const resumed = bindHelp(second, "help-b", "conv-1");
@@ -252,10 +263,10 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
 
     const second = startRun(disk);
     const resumed = bindHelp(second, "help-b", "conv-1");
-    admitRestoredAssistantPanes("proj-1", ["t1"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
     const record = second.get(resumed, "terminal", "t1");
     second.release(resumed, "terminal", "t1", record);
-    admitRestoredAssistantPanes("proj-1", ["t1"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
     await flush();
 
     expect(second.get(resumed, "terminal", "t1")).toBeUndefined();
@@ -271,12 +282,12 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     await flush();
 
     const second = startRun(disk);
-    admitRestoredAssistantPanes("proj-1", ["t1"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
     second.forgetConversation(helpConversationKey("conv-1"));
     await flush();
 
     expect(disk.read()).toEqual({});
-    admitRestoredAssistantPanes("proj-2", ["t2"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-2", [byHelp("t2")], new Set(["conv-1"]));
     expect(second.get(bindHelp(second, "help-b", "conv-1"), "terminal", "t2")).toBeUndefined();
   });
 
@@ -321,7 +332,7 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
 
     const second = startRun(disk);
     const resumed = bindHelp(second, "help-b", "conv-1");
-    admitRestoredAssistantPanes("proj-1", ["t1"], new Set(["conv-1"]));
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
     supersedeByPluginLaunch("agent.launch", {
       ok: true,
       result: { launched: true, terminalId: "t1" },
@@ -363,7 +374,11 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     vi.setSystemTime(T0 + LOCAL_RELAY_CONVERSATION_RETENTION_MS + 60_000);
 
     const second = startRun(disk);
-    admitRestoredAssistantPanes("proj-1", ["t1", "t2"], new Set(["conv-1", "conv-2"]));
+    admitRestoredAssistantPanes(
+      "proj-1",
+      [byRelay("t1"), byRelay("t2")],
+      new Set(["conv-1", "conv-2"])
+    );
 
     expect(
       second.get(bindLocalRelay(second, "help-c", "conv-1"), "terminal", "t1")
@@ -413,5 +428,129 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     );
     await flush();
     expect(disk.save).toHaveBeenCalledTimes(1);
+    expect(Object.keys(disk.read()).sort()).toEqual(["t1", "t2", "t3"]);
+  });
+
+  it("gives back nothing for a pane under the id that another surface launched, and lets the record go", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    first.record(bindHelp(first, "help-a", "conv-1"), [{ kind: "terminal", id: "t1" }], "proj-1");
+    await flush();
+
+    const second = startRun(disk);
+    admitRestoredAssistantPanes(
+      "proj-1",
+      [{ id: "t1", spawnedBy: "palette" }],
+      new Set(["conv-1"])
+    );
+    await flush();
+
+    expect(second.get(bindHelp(second, "help-b", "conv-1"), "terminal", "t1")).toBeUndefined();
+    expect(disk.read()).toEqual({});
+  });
+
+  it("applies a creation or trash seen before the records load once they do", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    const owner = bindHelp(first, "help-a", "conv-1");
+    for (const id of ["t1", "t2", "t3"]) {
+      first.record(owner, [{ kind: "terminal", id }], "proj-1");
+    }
+    await flush();
+
+    _resetAssistantPaneCreationsForTests();
+    supersedeAssistantPane("t1", "proj-1");
+    supersedeAssistantPane("t2", "proj-9");
+    forgetTrashedAssistantPane("t3");
+    attachAssistantPaneCreationPersistence(disk.persistence);
+    await flush();
+
+    expect(Object.keys(disk.read())).toEqual(["t2"]);
+  });
+
+  it("lets a pane no one recorded end only what an earlier run kept, and only in its workspace", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    const owner = bindHelp(first, "help-a", "conv-1");
+    first.record(owner, [{ kind: "terminal", id: "t1" }], "proj-1");
+    await flush();
+
+    const second = startRun(disk);
+    const resumed = bindHelp(second, "help-b", "conv-1");
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
+    second.record(resumed, [{ kind: "terminal", id: "t5" }], "proj-1");
+    supersedeByPluginLaunch("agent.launch", { ok: true, result: { terminalId: "t1" } }, "proj-2");
+    supersedeByPluginLaunch("agent.launch", { ok: true, result: { terminalId: "t5" } }, "proj-1");
+    supersedeByPluginLaunch("terminal.new", { ok: true, result: { terminalId: "t1" } }, "proj-1");
+    await flush();
+
+    expect(second.get(resumed, "terminal", "t1")).toBeDefined();
+    expect(second.get(resumed, "terminal", "t5")).toBeDefined();
+    expect(Object.keys(disk.read()).sort()).toEqual(["t1", "t5"]);
+
+    second.supersedeRestored([{ kind: "terminal", id: "t1" }], "proj-1");
+    await flush();
+    expect(second.get(resumed, "terminal", "t1")).toBeUndefined();
+    expect(second.creatorOf("terminal", "t1")).toBeUndefined();
+    expect(Object.keys(disk.read())).toEqual(["t5"]);
+  });
+
+  it("gives nothing back over a terminal the person handed to a pane", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    first.record(bindHelp(first, "help-a", "conv-1"), [{ kind: "terminal", id: "t1" }], "proj-1");
+    await flush();
+
+    _resetAssistantPaneCreationsForTests();
+    const ledger = new ResourceOwnershipLedger(assistantPaneCreationObserver);
+    const handOvers = new TerminalAdoptionLedger();
+    attachAssistantPaneCreationPersistence(disk.persistence);
+    attachAssistantPaneCreationLedger(assistantPaneCreationLedgerFor(ledger, handOvers));
+    handOvers.adopt({ terminalId: "t1", orchestratorPaneId: "pane-o", principalId: "pane-p" });
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
+
+    expect(ledger.creatorOf("terminal", "t1")).toBeUndefined();
+  });
+
+  it("holds one last-call time per relay conversation, written at least every step and at the quit", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    const owner = bindLocalRelay(first, "help-a", "conv-1");
+    first.record(owner, [{ kind: "terminal", id: "p" }], "proj-1");
+    vi.setSystemTime(T0 + 9 * 60_000);
+    first.record(owner, [{ kind: "terminal", id: "q" }], "proj-1");
+    await flush();
+    noteLocalRelayCall("conv-1", T0 + 12 * 60_000);
+    await flush();
+    // Under a step since the last write: held, not written.
+    expect(disk.read().p.lastCallAt).toBe(T0 + 9 * 60_000);
+    beginAssistantPaneCreationQuit();
+    expect(disk.read().p.lastCallAt).toBe(T0 + 12 * 60_000);
+    expect(disk.read().q.lastCallAt).toBe(T0 + 12 * 60_000);
+
+    vi.setSystemTime(T0 + LOCAL_RELAY_CONVERSATION_RETENTION_MS + 5 * 60_000);
+    const second = startRun(disk);
+    expect(keptLocalRelayConversations()).toEqual([
+      { conversationId: "conv-1", usedAt: T0 + 12 * 60_000 },
+    ]);
+    admitRestoredAssistantPanes("proj-1", [byRelay("p"), byRelay("q")], new Set(["conv-1"]));
+    const resumed = bindLocalRelay(second, "help-b", "conv-1");
+    expect(second.get(resumed, "terminal", "p")).toBeDefined();
+    expect(second.get(resumed, "terminal", "q")).toBeDefined();
+  });
+
+  it("keeps a caller-named creation off disk after its bearer binds the conversation", async () => {
+    const disk = makeDisk();
+    const ledger = startRun(disk);
+    const principal = helpOwnershipPrincipal("help-a");
+    ledger.bindPrincipal("s-a", principal);
+    ledger.record(principalOwnerKey(principal), [{ kind: "terminal", id: "named" }], "proj-1", {
+      callerNamedId: true,
+    });
+    ledger.record(principalOwnerKey(principal), [{ kind: "terminal", id: "minted" }], "proj-1");
+    ledger.attachConversation(principal, helpConversationKey("conv-1"));
+    await flush();
+
+    expect(Object.keys(disk.read())).toEqual(["minted"]);
   });
 });

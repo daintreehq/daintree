@@ -478,7 +478,7 @@ export function buildNotificationsHostApi(
       ? dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId)
       : dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId, approval));
     if (isBound()) recordPluginLaunch(pluginId, actionId, args, result, projectId);
-    supersedeByPluginLaunch(actionId, result);
+    supersedeByPluginLaunch(actionId, result, projectId);
     return result;
   };
   /**
