@@ -1165,13 +1165,7 @@ export class CloudHostLifecycle {
     for (const binding of this.deps.store.bindings()) {
       if (only && !only.has(binding.id)) continue;
       if (binding.resourceId || !binding.creation?.sentAt || !binding.hostId) continue;
-      if (
-        this.operations.has(binding.id) ||
-        this.reconciling.has(binding.id) ||
-        this.removing.has(binding.id)
-      ) {
-        continue;
-      }
+      if (this.operations.has(binding.id) || this.reconciling.has(binding.id)) continue;
       if (this.deps.accounts.providerUnavailable(binding.providerId)) {
         this.awaitingProvider.add(binding.id);
         continue;
