@@ -1612,7 +1612,7 @@ export class CloudHostLifecycle {
       await running.promise.catch(() => {});
     }
     // An idle stop under way is joined, and sends nothing more; the person's choice is still theirs to record.
-    if (running?.kind === "stopping") {
+    if (running?.kind === "stopping" && this.deps.store.binding(binding.id)?.intent !== "stop") {
       this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
     }
     // The stop holds the machine before it waits on anything, so a Start meanwhile is refused.
@@ -3353,7 +3353,13 @@ export class CloudHostLifecycle {
     const attempts: Promise<void>[] = [];
     for (const binding of this.deps.store.bindings()) {
       if (this.idleAttempts.has(binding.id)) continue;
-      const due = this.idleStopDue(binding);
+      let due: ReturnType<typeof this.idleStopDue>;
+      try {
+        due = this.idleStopDue(binding);
+      } catch {
+        // A summary or link that couldn't be read is looked at again on the next pass.
+        continue;
+      }
       if (!due) continue;
       const attempt: Promise<void> = this.stopOnIdleClaim(binding.id, due)
         .catch(() => {

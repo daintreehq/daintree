@@ -614,6 +614,37 @@ describe("stopping an idle plugin provider's machine from the desktop (#17923)",
     b.dispose();
   });
 
+  it("lets a person's Stop join an idle stop under way, sending nothing more and recording their choice", async () => {
+    const clock = worldClock();
+    const plugin = acmePlugin();
+    const host = fakeHost(clock);
+    const env = device("a", clock, host, host.link());
+    const hostId = await withMachine(env, plugin);
+    let answer!: () => void;
+    plugin.impl.stop.mockImplementationOnce(
+      () =>
+        new Promise<CloudProviderResource>((resolve) => {
+          answer = () => {
+            plugin.setMachine(machine({ machine: "stopped", rawState: "stopped" }));
+            resolve(machine({ machine: "stopping", rawState: "stopping" }));
+          };
+        })
+    );
+
+    await idleTimeEnds(clock, host);
+    const idleStop = env.lifecycle.stopIdleDue();
+    await vi.waitFor(() => expect(plugin.impl.stop).toHaveBeenCalledTimes(1));
+    expect(env.lifecycle.statuses()[0]!.operation?.kind).toBe("stopping");
+    const personal = env.lifecycle.stopMachine(hostId);
+    await vi.waitFor(() => expect(env.store.bindings()[0]!.intent).toBe("stop"));
+    answer();
+    await Promise.all([idleStop, personal]);
+
+    expect(plugin.impl.stop).toHaveBeenCalledTimes(1);
+    expect(env.lifecycle.statuses()[0]).toMatchObject({ machine: "stopped", operation: null });
+    env.dispose();
+  });
+
   it("sends nothing when a person's Start begins while the host decides", async () => {
     const clock = worldClock();
     const plugin = acmePlugin();
