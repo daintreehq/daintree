@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { signAwsRequest } from "../aws/awsSigV4.js";
 import { parseXml, xmlItems, xmlTags, xmlText, XmlParseError } from "../aws/awsXml.js";
 import {
