@@ -183,7 +183,9 @@ describe("gatePluginPresetLaunch", () => {
     expect(
       (
         await summaryFor({
-          settings: { agents: { codex: { customPresets: [{ id: "work", name: "Work" }] } } } as never,
+          settings: {
+            agents: { codex: { customPresets: [{ id: "work", name: "Work" }] } },
+          } as never,
         })
       ).continuesAtLimitReset
     ).toBeUndefined();
