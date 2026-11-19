@@ -392,6 +392,73 @@ describe("the idle claim a Shell makes over its link (#17922)", () => {
   });
 });
 
+describe("the claim a Shell makes standing in for a refused self-stop (#17924)", () => {
+  const hosts: Array<ReturnType<typeof claimingHost>> = [];
+  const make = (system?: GuestPowerOffSystem) => {
+    const host = claimingHost(undefined, system);
+    hosts.push(host);
+    return host;
+  };
+  afterEach(() => {
+    for (const host of hosts.splice(0)) {
+      host.dispose();
+      host.tracker.dispose();
+    }
+  });
+  const standIn = (link: ReturnType<ReturnType<typeof claimingHost>["link"]>) =>
+    link.call(LinkMethod.CLAIM_IDLE_STAND_IN, null);
+
+  it("is granted while no keeper here stops the machine, and holds the idle time like any claim", async () => {
+    const host = make();
+    await host.idleOut();
+    const shell = host.link();
+    await expect(standIn(shell)).resolves.toEqual({ granted: true });
+    await expect(standIn(shell)).resolves.toEqual({ granted: false });
+    await expect(host.link().claim()).resolves.toEqual({ granted: false });
+  });
+
+  it("leaves the idle time to the machine's own keeper once another device gave it a working key", async () => {
+    const stop = vi.fn(async () => null);
+    driver.stop = stop;
+    const host = make();
+    // Armed while the host still had work, so its keeper has claimed nothing when the Shell asks.
+    await host.link().call(MachineKeeperLinkMethod.ARM, request());
+    await getRemoteService("machineKeeper")!.tick();
+    await host.idleOut();
+    await expect(standIn(host.link())).resolves.toEqual({ granted: false });
+    expect(stop).not.toHaveBeenCalled();
+    await getRemoteService("machineKeeper")!.tick();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the idle time to the power-off keeper once its host may power the machine off", async () => {
+    const launch = vi.fn(async () => ({ kind: "accepted" as const }));
+    const host = make({ ...guestSystem(), preparePowerOff: vi.fn(async () => launch) });
+    const shell = host.link();
+    await host.idleOut();
+    await shell.call(GUEST_POWER_OFF_METHOD, {
+      target: {
+        provider: "aws",
+        accountId: "123456789012",
+        region: "eu-west-1",
+        instanceId: "i-0abc0000000000001",
+      },
+      enabled: true,
+    });
+    await expect(standIn(shell)).resolves.toEqual({ granted: false });
+    await getRemoteService("guestPowerOff")!.tick();
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes no payload", async () => {
+    const host = make();
+    await host.idleOut();
+    await expect(
+      host.link().call(LinkMethod.CLAIM_IDLE_STAND_IN, { owner: "keeper" })
+    ).rejects.toThrow("VALIDATION");
+  });
+});
+
 function guestSystem(saved: StoredGuestPowerOff | null = null) {
   return {
     unsupported: () => null,

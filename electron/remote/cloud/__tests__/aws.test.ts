@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { signAwsRequest } from "../aws/awsSigV4.js";
 import { parseXml, xmlItems, xmlTags, xmlText, XmlParseError } from "../aws/awsXml.js";
 import {
@@ -707,6 +707,26 @@ describe("AwsClient", () => {
     expect(refused.seen).toEqual(["DescribeRegions"]);
   });
 
+  it("sends an idle stop once, where a person's stop retries a throttled send (#17924)", async () => {
+    const idle = clientWith([
+      ec2Error("RequestLimitExceeded", "Request limit exceeded.", 503),
+      ec2Error("X", "never sent"),
+    ]);
+    await expect(
+      idle.client.stopInstance(ctx, "i-0aaaaaaaaaaaaaaa1", { once: true })
+    ).rejects.toMatchObject({ kind: "rate-limited" });
+    expect(idle.seen).toEqual(["StopInstances"]);
+
+    const person = clientWith([
+      ec2Error("RequestLimitExceeded", "Request limit exceeded.", 503),
+      xml(
+        `<StopInstancesResponse><instancesSet><item><currentState><name>stopping</name></currentState></item></instancesSet></StopInstancesResponse>`
+      ),
+    ]);
+    await expect(person.client.stopInstance(ctx, "i-0aaaaaaaaaaaaaaa1")).resolves.toBe("stopping");
+    expect(person.seen).toEqual(["StopInstances", "StopInstances"]);
+  });
+
   it("keeps a mutation's lost answer unknown when its resend is refused", async () => {
     const { client, seen } = clientWith([
       new TypeError("socket hang up"),
@@ -1312,6 +1332,18 @@ describe("AwsProvider", () => {
     });
     await expect(lagging.start(credentials, resourceId, {})).resolves.toMatchObject({
       machine: "starting",
+    });
+  });
+
+  it("asks its client for an idle stop sent once (#17924)", async () => {
+    const { provider, credentials, client, fake } = setup();
+    const { resourceId } = await provider.create(credentials, CREATE);
+    fake.instances[0]!.state = "running";
+    const stop = vi.spyOn(client, "stopInstance");
+    await provider.stop(credentials, resourceId, { once: true });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledWith(expect.anything(), fake.instances[0]!.id, {
+      once: true,
     });
   });
 

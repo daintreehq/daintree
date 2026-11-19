@@ -72,8 +72,15 @@ export function installMachineKeeperHost(
   const unregisterGuest = registerRemoteService("guestPowerOff", guest);
   void guest.restore().catch(() => {});
   let live = true;
-  const claimIdle = async (session: LinkSession, claimant: symbol): Promise<IdleClaimAnswer> => {
+  const claimIdle = async (
+    session: LinkSession,
+    claimant: symbol,
+    standIn = false
+  ): Promise<IdleClaimAnswer> => {
     const reading = await idle.checkFresh();
+    // A Shell standing in for a refused self-stop leaves the idle time to a keeper that now stops
+    // the machine itself (#17924), decided in the same turn as the claim.
+    if (standIn && (keeper.stopsWhenIdle() || guest.stopsWhenIdle())) return { granted: false };
     // A link gone, or Host mode stopping, before the decision claims nothing; one gone after it
     // leaves the idle time spent, its answer perhaps lost.
     return { granted: live && session.isOpen && idle.tryClaim(reading, claimant) };
@@ -84,6 +91,9 @@ export function installMachineKeeperHost(
     const handlers = [
       session.registerCallHandler(LinkMethod.CLAIM_IDLE, EmptyPayloadSchema, () =>
         claimIdle(session, claimant)
+      ),
+      session.registerCallHandler(LinkMethod.CLAIM_IDLE_STAND_IN, EmptyPayloadSchema, () =>
+        claimIdle(session, claimant, true)
       ),
       session.registerCallHandler(
         MachineKeeperLinkMethod.STATUS,

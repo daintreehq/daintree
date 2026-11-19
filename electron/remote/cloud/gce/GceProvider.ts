@@ -727,13 +727,14 @@ export class GceProvider implements CloudProvider {
 
   async stop(
     credentials: ProviderCredentials,
-    resourceId: string
+    resourceId: string,
+    options: { once?: boolean } = {}
   ): Promise<ProviderResource | null> {
     const project = projectOf(credentials);
     const { zone, instance } = parseResourceId(resourceId, project);
     const ctx = this.ctx(credentials);
     const client = this.client(credentials);
-    const operation = await client.stopInstance(ctx, zone, instance);
+    const operation = await client.stopInstance(ctx, zone, instance, options);
     // Followed to its end, so a stop Google gives up on is said, not read as one still under way.
     let done = operation;
     try {

@@ -164,3 +164,25 @@ describe("withHostIdleClaim (#17922)", () => {
     expect(act).not.toHaveBeenCalled();
   });
 });
+
+describe("withHostIdleClaim standing in for a refused self-stop (#17924)", () => {
+  it("asks with the stand-in claim, which a host from before it doesn't know", async () => {
+    const { host, client } = await link();
+    const plain = vi.fn(() => ({ granted: true }));
+    host.registerCallHandler(LinkMethod.CLAIM_IDLE, EmptyPayloadSchema, plain);
+    const act = vi.fn(() => "stopped");
+    await expect(
+      withHostIdleClaim(HOST, client, () => client, act, { standIn: true })
+    ).resolves.toEqual({ kind: "unsupported" });
+    expect(plain).not.toHaveBeenCalled();
+    expect(act).not.toHaveBeenCalled();
+
+    host.registerCallHandler(LinkMethod.CLAIM_IDLE_STAND_IN, EmptyPayloadSchema, () => ({
+      granted: false,
+    }));
+    await expect(
+      withHostIdleClaim(HOST, client, () => client, act, { standIn: true })
+    ).resolves.toEqual({ kind: "refused" });
+    expect(act).not.toHaveBeenCalled();
+  });
+});

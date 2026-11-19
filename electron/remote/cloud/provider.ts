@@ -151,8 +151,16 @@ export interface CloudProvider {
     resourceId: string,
     options: { lifetimeSeconds?: number | null }
   ): Promise<ProviderResource | null>;
-  /** A normal, saving stop. Never forced. */
-  stop(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource | null>;
+  /**
+   * A normal, saving stop. Never forced. `once` sends it a single time, for a
+   * stop whose reason has to be checked again before any second try: an idle
+   * stop, whose idle time new work may have ended by the time a resend went.
+   */
+  stop(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    options?: { once?: boolean }
+  ): Promise<ProviderResource | null>;
   /**
    * Moves the machine's automatic stop to `lifetimeSeconds` from now. Only a
    * provider whose lifetime is `renewable` has it, and that one must.

@@ -25,6 +25,14 @@ export const LinkMethod = {
    */
   CLAIM_IDLE: "host.claim-idle",
   /**
+   * Shell → Host, for a Shell standing in for a cloud machine's own idle stop
+   * that was refused (#17924): as {@link LinkMethod.CLAIM_IDLE}, but refused
+   * while one of the Host's keepers would stop its machine itself, so a
+   * keeper given a working key or permission meanwhile keeps that idle time.
+   * A Host from before it answers `UNSUPPORTED`.
+   */
+  CLAIM_IDLE_STAND_IN: "host.claim-idle-stand-in",
+  /**
    * Shell → Host, on a resumed session: the endpoints this Shell holds. Any
    * other the Host kept for it, and not opened again since, was closed in a
    * frame still queued when the link dropped.

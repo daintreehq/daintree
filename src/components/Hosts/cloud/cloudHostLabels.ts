@@ -200,6 +200,18 @@ export const LINKED_IDLE_STOP =
   "While this device is linked to the host, it stops the machine once the host's idle time ends. With every device away, the machine keeps running.";
 
 /**
+ * Said after why a machine can't stop itself, where this device stops it
+ * instead while linked (#17924). Nothing about every device being away: a
+ * machine with a runtime limit still stops when that runs out.
+ */
+export const LINKED_IDLE_STOP_INSTEAD =
+  "While this device is linked to the host, it stops the machine once the host's idle time ends instead.";
+
+function sentences(first: string, second: string): string {
+  return `${/[.!?]$/.test(first) ? first : `${first}.`} ${second}`;
+}
+
+/**
  * What a host's idle time ending does to its machine, beside its idle clock:
  * nothing more once the host says it stops the machine itself, which the
  * clock already says (#17361, #17362). Otherwise why it can't, as this device
@@ -207,8 +219,10 @@ export const LINKED_IDLE_STOP =
  * machines, with what a stopped one would still cost; and unknown while the
  * provider isn't registered or its host hasn't said. A plugin provider's
  * machine this device stops while it's linked says so, with what happens with
- * every device away, or why it doesn't (#17923). `idle` is only ever from a
- * summary on the current link: one from an earlier link says nothing about now.
+ * every device away, or why it doesn't (#17923). A machine that can't stop
+ * itself, where this device stops it instead, says both, as does one where a
+ * stop from here is blocked too (#17924). `idle` is only ever from a summary
+ * on the current link: one from an earlier link says nothing about now.
  */
 export function idleEndSentence(
   idle: HostIdleObservation | undefined,
@@ -217,7 +231,15 @@ export function idleEndSentence(
   linkedIdleStop: CloudLinkedIdleStop | null = null
 ): string | null {
   if (idle?.stopsWhenIdle) return null;
-  if (selfStopProblem) return selfStopProblem;
+  if (selfStopProblem) {
+    if (provider && linkedIdleStop?.kind === "stops") {
+      return sentences(selfStopProblem, LINKED_IDLE_STOP_INSTEAD);
+    }
+    if (provider && linkedIdleStop?.kind === "blocked") {
+      return sentences(selfStopProblem, linkedIdleStop.problem);
+    }
+    return selfStopProblem;
+  }
   if (provider && linkedIdleStop) {
     switch (linkedIdleStop.kind) {
       case "stops":

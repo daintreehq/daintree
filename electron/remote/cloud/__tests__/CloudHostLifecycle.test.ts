@@ -2544,6 +2544,8 @@ describe("CloudHostLifecycle guest power-off (#17362)", () => {
         problemFor: vi.fn((bindingId: string): string | null =>
           bindingId === env?.store.bindings()[0]?.id ? problem : null
         ),
+        standsInFor: vi.fn(() => false),
+        arm: vi.fn(async () => {}),
         tick: vi.fn(async () => {}),
         forgetRemoved: vi.fn(),
       };
@@ -2571,8 +2573,10 @@ describe("CloudHostLifecycle machine keys (#17361)", () => {
   it("revokes the keys a removed host's machine was given, and shows why one can't stop itself", async () => {
     const machineKeys = {
       problemFor: vi.fn((): string | null => "This machine can't stop itself when idle."),
+      standsInFor: vi.fn(() => false),
       tick: vi.fn(async () => {}),
       revokePending: vi.fn(async () => {}),
+      forgetRemoved: vi.fn(),
     };
     const env = await setup({ machine: "running" }, { machineKeys });
     env.lifecycle.start();
@@ -2622,11 +2626,15 @@ describe("CloudHostLifecycle background timers (#17795)", () => {
   async function quiet() {
     const machineKeys = {
       problemFor: vi.fn((): string | null => null),
+      standsInFor: vi.fn(() => false),
       tick: vi.fn(async () => {}),
       revokePending: vi.fn(async () => {}),
+      forgetRemoved: vi.fn(),
     };
     const guestPowerOff = {
       problemFor: vi.fn((): string | null => null),
+      standsInFor: vi.fn(() => false),
+      arm: vi.fn(async () => {}),
       tick: vi.fn(async () => {}),
       forgetRemoved: vi.fn(),
     };
