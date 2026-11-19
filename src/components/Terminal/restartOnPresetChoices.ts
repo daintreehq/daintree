@@ -72,24 +72,32 @@ export function useRestartPresetChoices(
   const projectPresets = useProjectPresetsStore((s) =>
     agentId ? s.presetsByAgent[agentId] : undefined
   );
-  const { profiles } = useCodexQuota(open && agentId === "codex");
+  const others = useMemo(
+    () =>
+      agentId
+        ? getMergedPresets(agentId, customPresets, ccrPresets, projectPresets).filter(
+            (preset) => preset.id !== currentPresetId
+          )
+        : [],
+    [agentId, currentPresetId, customPresets, ccrPresets, projectPresets]
+  );
+  // Nothing to hint on, nothing to read: a menu open for another reason (the
+  // rate-limit chip's continue row, #17911) costs no app-server round trip.
+  const { profiles } = useCodexQuota(open && agentId === "codex" && others.length > 0);
 
   return useMemo(() => {
     if (!agentId) return [];
-    const presets = getMergedPresets(agentId, customPresets, ccrPresets, projectPresets);
     const globalPresetIds =
       agentId === "codex"
         ? new Set(getMergedPresets("codex", customPresets).map((preset) => preset.id))
         : new Set<string>();
-    return presets
-      .filter((preset) => preset.id !== currentPresetId)
-      .map((preset) => ({
-        id: preset.id,
-        name: preset.name,
-        color: preset.color,
-        hint: profiles
-          ? formatCodexHeadroom(codexProfileForPreset(preset, globalPresetIds, profiles))
-          : undefined,
-      }));
-  }, [agentId, currentPresetId, customPresets, ccrPresets, projectPresets, profiles]);
+    return others.map((preset) => ({
+      id: preset.id,
+      name: preset.name,
+      color: preset.color,
+      hint: profiles
+        ? formatCodexHeadroom(codexProfileForPreset(preset, globalPresetIds, profiles))
+        : undefined,
+    }));
+  }, [agentId, others, customPresets, profiles]);
 }

@@ -296,6 +296,22 @@ describe("CodexLimitContinuation (#17909)", () => {
     expect(h.continueAt).not.toHaveBeenCalled();
   });
 
+  it("withdraws a replaced wait's time at once, and keeps it withdrawn if the pane is gone (#17911)", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    await h.service.handleStop("t1", STOP);
+    expect(h.state()).toMatchObject({ status: "waiting" });
+
+    h.setTerminal(null);
+    const handled = h.service.handleStop("t1", { run: "run-a", seq: 2 });
+    expect(h.state()).toEqual({ status: "armed" });
+    expect(h.changes.at(-1)).toMatchObject({ terminalId: "t1", state: { status: "armed" } });
+    await handled;
+    expect(h.state()).toEqual({ status: "armed" });
+    await vi.runAllTimersAsync();
+    expect(h.continueAt).not.toHaveBeenCalled();
+  });
+
   it("drops a pending wait the moment the pane is disarmed", async () => {
     const h = harness();
     await h.service.set("t1", true, PROJECT);
