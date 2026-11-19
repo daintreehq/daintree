@@ -22,8 +22,11 @@ const guard: IdlePauseGuard = {
   selector: "settings:gpu",
   fingerprint: "f".repeat(64),
   sshTarget: BOX,
+  commandsDigest: "d".repeat(64),
   generation: 0,
   environmentEpoch: 0,
+  monitorGeneration: 0,
+  processEpoch: "run-1",
 };
 
 function ownedHost(overrides: Partial<HostDescriptor> = {}): HostDescriptor {
