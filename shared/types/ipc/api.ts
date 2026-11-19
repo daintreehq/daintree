@@ -2723,6 +2723,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          */
         requester?: import("./mcpServer.js").McpRequester;
         /**
+         * "Don't ask again for this kind of action" (#16752), set only by main
+         * on a local send for its own assistant's call. Display only.
+         */
+        delegationOffer?: import("./mcpServer.js").McpDelegationOffer;
+        /**
          * Main's deadline for the call as it stood when sent, epoch ms on
          * this machine's clock (#15648), set only by main. A confirm the view
          * reports moves it; until then, nothing may start after it.
@@ -2740,7 +2745,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       requestId: string;
       result: import("../actions.js").ActionDispatchResult;
       confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
-      /** Present only when the approver chose to keep allowing the tool (#12692). */
+      /**
+       * Present only when the approver chose to keep allowing the tool
+       * (#12692), or to stop asking about this kind of action (#16752).
+       */
       approvalScope?: import("./mcpServer.js").McpApprovalScope;
     }): void;
   };

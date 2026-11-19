@@ -965,6 +965,8 @@ export function createRendererBridge(
       | "fixedDeadline"
       | "holdUntil"
       | "requester"
+      | "delegationOffer"
+      | "onDelegationApproved"
       | "actionsListWalk"
     >
   ): Promise<DispatchEnvelope> {
@@ -1010,6 +1012,8 @@ export function createRendererBridge(
       | "fixedDeadline"
       | "holdUntil"
       | "requester"
+      | "delegationOffer"
+      | "onDelegationApproved"
       | "actionsListWalk"
     >
   ): Promise<DispatchEnvelope> {
@@ -1104,6 +1108,14 @@ export function createRendererBridge(
         webContentsId,
         destroyedCleanup: settle,
         hold,
+        ...(approval?.delegationOffer
+          ? {
+              offeredDelegation: true as const,
+              ...(approval.onDelegationApproved
+                ? { onDelegationApproved: approval.onDelegationApproved }
+                : {}),
+            }
+          : {}),
       });
 
       const send = () => {
@@ -1123,6 +1135,10 @@ export function createRendererBridge(
             // Only on this local send: another machine's view has none of
             // this machine's panes to look the id up in.
             ...(approval?.requester ? { requester: approval.requester } : {}),
+            // "Don't ask again for this kind of action" (#16752). Local-only
+            // as well: it writes this machine's preference, which another
+            // machine's view has no business offering to change.
+            ...(approval?.delegationOffer ? { delegationOffer: approval.delegationOffer } : {}),
             // When this call ends unless the view reports a confirm (#15648),
             // capped by whoever is timing it. Also local-only: it is an
             // instant on this machine's clock, which another machine's isn't.
@@ -1361,6 +1377,8 @@ export function createRendererBridge(
       | "fixedDeadline"
       | "holdUntil"
       | "requester"
+      | "delegationOffer"
+      | "onDelegationApproved"
       | "actionsListWalk"
     >,
     callerInfo?: McpBearerIdentity
@@ -2150,6 +2168,8 @@ export function createRendererBridge(
     clearTimeout(pending.timer);
     pending.destroyedCleanup?.();
     pendingDispatches.delete(payload.requestId);
+    // An approval nothing claimed first, such as an approval-only question's.
+    if (payload.confirmationDecision === "approved") noteDelegationApproved(pending);
     // Snapshot the workspace identity here, synchronously, off the sender we
     // just validated (#11536). Resolving it later — after the awaiting caller
     // in sessionServer resumes — would race view eviction and workspace
@@ -2162,6 +2182,13 @@ export function createRendererBridge(
       // report it, and main checks that again before minting anything.
       ...(payload.confirmationDecision === "approved" && payload.approvalScope === "session"
         ? { approvalScope: "session" as const }
+        : {}),
+      // Only for a request this bridge sent the offer with (#16752): a view
+      // can't hand over an action on a request it was never asked to.
+      ...(payload.confirmationDecision === "approved" &&
+      payload.approvalScope === "delegate" &&
+      pending.offeredDelegation === true
+        ? { approvalScope: "delegate" as const }
         : {}),
       ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
     });
@@ -2187,6 +2214,8 @@ export function createRendererBridge(
       hold.expire();
       return { held: false };
     }
+    // The approval stands from here, before its action runs (#16752).
+    if (phase === "approved") noteDelegationApproved(pending);
     if (HOLD_PHASE_ORDER[phase] > HOLD_PHASE_ORDER[hold.phase]) {
       hold.phase = phase;
       // The decision window and the run each start afresh when they begin,
@@ -2208,6 +2237,18 @@ export function createRendererBridge(
       }
     }
     return { held: true, remainingMs: hold.deadlineAt - now };
+  }
+
+  /** Tells the offer's owner the person approved, once. */
+  function noteDelegationApproved(pending: PendingRequest<DispatchEnvelope>): void {
+    const approved = pending.onDelegationApproved;
+    if (approved === undefined) return;
+    pending.onDelegationApproved = undefined;
+    try {
+      approved();
+    } catch (err) {
+      console.warn("[MCP] A hand-over's approval hook failed:", err);
+    }
   }
 
   function setupListeners(cleanupListeners: Array<() => void>): void {

@@ -62,8 +62,17 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
   let skips: boolean | Error | ReadonlySet<string>;
   let skipReads: string[];
   let skipNotes: number;
+  // The hand-over this Shell's preference offers for a called id (#16752), and its writes.
+  let delegable: ReadonlySet<string>;
+  let delegationReads: Array<[string, string]>;
+  let commits: string[];
+  let reply: { delegate?: true };
 
   beforeEach(() => {
+    delegable = new Set();
+    delegationReads = [];
+    commits = [];
+    reply = {};
     skips = false;
     skipReads = [];
     skipNotes = 0;
@@ -94,7 +103,19 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       controlEnabled: (hostId) => control.has(hostId),
       askApproval: async (question) => {
         asked.push(question);
-        return decision;
+        return decision === null ? null : { decision, ...reply };
+      },
+      prepareDelegation: (helpSessionId, calledActionId) => {
+        delegationReads.push([helpSessionId, calledActionId]);
+        if (!delegable.has(calledActionId)) return null;
+        return {
+          offer: { label: calledActionId, detail: "only this" },
+          approved: () => {},
+          commit: () => {
+            commits.push(calledActionId);
+            return true;
+          },
+        };
       },
       confirmationsSkipped: (helpSessionId, calledActionId) => {
         skipReads.push(helpSessionId);
@@ -192,6 +213,68 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
     await deleteCall("worktree.deleteOwned");
 
     expect(answers[0]?.decision).toBe("approved");
+  });
+
+  describe("the dialog's hand-over (#16752)", () => {
+    it("offers the tool the assistant called, and writes it beside the approval", async () => {
+      delegable = new Set(["worktree.deleteOwned"]);
+      reply = { delegate: true };
+      duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+
+      await deleteCall("worktree.deleteOwned");
+
+      expect(delegationReads).toEqual([["a", "worktree.deleteOwned"]]);
+      expect(asked[0]?.delegation).toEqual({ label: "worktree.deleteOwned", detail: "only this" });
+      expect(answers[0]).toEqual({
+        approvalId: ask().approvalId,
+        argsHash: ask().argsHash,
+        decision: "approved",
+      });
+      expect(commits).toEqual(["worktree.deleteOwned"]);
+    });
+
+    it("offers nothing for a plain delete, though the host asks about the same action", async () => {
+      delegable = new Set(["worktree.deleteOwned"]);
+      duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+
+      await deleteCall();
+
+      expect(delegationReads).toEqual([["a", "worktree.delete"]]);
+      expect(asked[0]).not.toHaveProperty("delegation");
+    });
+
+    it("writes nothing on an approval without the tick, or a decline with it", async () => {
+      delegable = new Set(["worktree.deleteOwned"]);
+      duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+      await deleteCall("worktree.deleteOwned");
+
+      decision = "rejected";
+      reply = { delegate: true };
+      await deleteCall("worktree.deleteOwned");
+
+      expect(asked.map((question) => question.delegation?.label)).toEqual([
+        "worktree.deleteOwned",
+        "worktree.deleteOwned",
+      ]);
+      expect(answers.map((answer) => answer.decision)).toEqual(["approved", "rejected"]);
+      expect(commits).toEqual([]);
+    });
+
+    it("writes nothing when the host's control is switched off while the person decides", async () => {
+      delegable = new Set(["worktree.deleteOwned"]);
+      reply = { delegate: true };
+      duringCall = async (r, callId) => {
+        const answered = r.receiveApproval("studio", ask({ callId }));
+        control.delete("studio");
+        return answered;
+      };
+
+      await deleteCall("worktree.deleteOwned");
+
+      expect(asked[0]?.delegation).toBeDefined();
+      expect(answers[0]?.decision).toBe("refused");
+      expect(commits).toEqual([]);
+    });
   });
 
   it("asks once per call: a second ask about the same call is refused", async () => {
@@ -399,6 +482,47 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
         during((r, callId) => verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId))));
         await deleteCall();
         expect(verdicts).toEqual([false]);
+      });
+
+      it("offers a hand-over only for the call out to that host, settled on the tool called (#16752)", async () => {
+        delegable = new Set(["worktree.deleteOwned"]);
+        const offers: Array<string | null> = [];
+        let held: ReturnType<HostCallRuntime["relayedDelegation"]> = null;
+        duringCall = async (r, callId) => {
+          for (const candidate of [
+            dispatch(callId, { helpSessionId: "b" }),
+            dispatch(callId, { projectId: "proj-9" }),
+            dispatch(callId, { args: { worktreeId: "/wt/feature", force: true } }),
+            dispatch("someone-elses-call"),
+          ]) {
+            offers.push(r.relayedDelegation("studio", candidate)?.offer.label ?? null);
+          }
+          offers.push(r.relayedDelegation("elsewhere", dispatch(callId))?.offer.label ?? null);
+          held = r.relayedDelegation("studio", dispatch(callId));
+          offers.push(held?.offer.label ?? null);
+          return { decision: "unused" };
+        };
+
+        await deleteCall("worktree.deleteOwned");
+
+        expect(offers).toEqual([null, null, null, null, null, "worktree.deleteOwned"]);
+        // The call has settled, so its offer can no longer write.
+        expect(held!.commit()).toBe(false);
+        expect(commits).toEqual([]);
+      });
+
+      it("writes a relayed dispatch's hand-over while its call is still out (#16752)", async () => {
+        delegable = new Set(["worktree.retireOwned"]);
+        let committed: boolean | undefined;
+        duringCall = async (r, callId) => {
+          committed = r.relayedDelegation("studio", dispatch(callId))?.commit();
+          return { decision: "unused" };
+        };
+
+        await deleteCall("worktree.retireOwned");
+
+        expect(committed).toBe(true);
+        expect(commits).toEqual(["worktree.retireOwned"]);
       });
 
       it("skips once per call: a second dispatch of the same call asks", async () => {

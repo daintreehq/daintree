@@ -1,8 +1,12 @@
 import type { AgentState } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { AuditOutcome } from "./auditLog.js";
-import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
+import type {
+  McpDelegationOffer,
+  McpDispatchAuthorization,
+} from "../../../shared/types/ipc/mcpServer.js";
 import type { AssistantConfirmationPolicy } from "../../../shared/utils/assistantDaintreeConfirmations.js";
+import type { PreparedAssistantDelegation } from "./assistantConfirmationsPreference.js";
 import type { HelpAssistantTier, McpTier, DispatchEnvelope } from "./shared.js";
 import type { McpWorkspaceBinding } from "./shared.js";
 import type { OwnPane, TerminalNotifyHandlers } from "./terminalNotify.js";
@@ -95,10 +99,17 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      */
     relayCallId?: string,
     /**
-     * Passed only by main's own `actions.list` walk (#17036), so a local view
-     * answers with one large page. See `WorkspaceDispatchOptions.actionsListWalk`.
+     * `actionsListWalk` is passed only by main's own `actions.list` walk
+     * (#17036), so a local view answers with one large page. See
+     * `WorkspaceDispatchOptions.actionsListWalk`. `delegationOffer` (#16752)
+     * reaches only the help session's own pinned view; see
+     * `WorkspaceDispatchOptions.delegationOffer`.
      */
-    walk?: { actionsListWalk: true }
+    options?: {
+      actionsListWalk?: true;
+      delegationOffer?: McpDelegationOffer;
+      onDelegationApproved?: () => void;
+    }
   ) => Promise<DispatchEnvelope>;
   /**
    * Take the user to a run, and bring the window it lands in with them
@@ -498,6 +509,13 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * Only consulted for `help` sessions; absent reads as asking for everything.
    */
   readAssistantConfirmationPolicy?: () => AssistantConfirmationPolicy;
+  /**
+   * "Don't ask again for this kind of action" for a dialog about the
+   * assistant's call to `calledActionId` (#16752), or null when it can't be
+   * offered. Bound to this machine's preference for the agent the session
+   * runs. Only consulted for `help` sessions; absent, nothing is offered.
+   */
+  prepareAssistantDelegation?: (calledActionId: string) => PreparedAssistantDelegation | null;
   /**
    * Optional renderer notifier fired when an MCP tool dispatch enters the call
    * path (after tier/rate/dedup guards pass and the manifest entry resolves).

@@ -18,7 +18,11 @@ import {
   type HostSettingsUpdatePayload,
   type HostSettingsUpdateResult,
 } from "../../../shared/types/hostSettings.js";
-import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
+import type {
+  McpConfirmationDecision,
+  McpDelegationOffer,
+} from "../../../shared/types/ipc/mcpServer.js";
+import type { PreparedAssistantDelegation } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import {
   CANOPY_STOP_ON_EACH,
@@ -26,6 +30,16 @@ import {
   canopyLocalOnHosts,
   canopyStopOn,
 } from "../../../shared/config/canopyTerms.js";
+
+/**
+ * The person's answer in an assistant's window. `delegate` when they also
+ * ticked "Don't ask again for this kind of action" (#16752), which the window
+ * reports only for an approval of a dialog that offered it.
+ */
+export interface WindowApprovalAnswer {
+  decision: McpConfirmationDecision;
+  delegate?: true;
+}
 
 type HostRow = HostSettingsResult["hosts"][number];
 type AssistantValue = string | number | boolean | null;
@@ -66,13 +80,21 @@ export interface HostSettingsRequestDeps {
     args: Record<string, unknown>;
     subject: string;
     lines: string[];
-  }): Promise<McpConfirmationDecision | null>;
+    /** "Don't ask again for this kind of action", when it may be offered (#16752). */
+    delegation?: McpDelegationOffer;
+  }): Promise<WindowApprovalAnswer | null>;
   /**
    * Whether the person handed this assistant's settings changes over to it
    * (#16752), read at each apply: then nobody is asked. Never "Never ask",
    * and never anything the caller sends.
    */
   skipsApproval?(helpSessionId: string): boolean;
+  /**
+   * The hand-over of this assistant's settings changes a dialog about one may
+   * offer (#16752), bound to this machine's preference, or null. Absent,
+   * nothing is offered.
+   */
+  prepareDelegation?(helpSessionId: string): PreparedAssistantDelegation | null;
   now(): number;
   newId(): string;
 }
@@ -404,8 +426,9 @@ export class HostSettingsRequests {
         ],
       };
     }
-    const decision = await this.decide(helpSessionId, ticket, noteSkipped);
-    if (decision === null) return none("policy_rejected", NO_ASK_DETAIL);
+    const answer = await this.decide(helpSessionId, ticket, noteSkipped);
+    if (answer === null) return none("policy_rejected", NO_ASK_DETAIL);
+    const { decision } = answer;
     // Unseen isn't declined (#16752): the ticket is already spent, so the
     // assistant is told to preview again rather than that the person said no.
     if (decision === "timeout") return none("confirmation_timeout", TIMEOUT_DETAIL);
@@ -413,6 +436,8 @@ export class HostSettingsRequests {
     if (!stillRunning() || ticket.hosts.some((host) => !this.deps.controlOn(host.hostId))) {
       return none("policy_rejected", GONE_DETAIL);
     }
+    // The approval stands, so the tick beside it does too (#16752).
+    answer.handOver?.();
     const rows = await Promise.all(
       ticket.hosts.map((host) =>
         this.applyHost(host, () => stillRunning() && this.deps.controlOn(host.hostId))
@@ -430,16 +455,22 @@ export class HostSettingsRequests {
     helpSessionId: string,
     ticket: Ticket,
     noteSkipped: (() => void) | undefined
-  ): Promise<McpConfirmationDecision | null> {
+  ): Promise<{ decision: McpConfirmationDecision; handOver?: () => void } | null> {
     if (this.deps.skipsApproval?.(helpSessionId) === true) {
       noteSkipped?.();
-      return "approved";
+      return { decision: "approved" };
     }
     const ask = this.deps.askApproval;
     if (!ask) return null;
     const count = ticket.hosts.length;
+    let delegation: PreparedAssistantDelegation | null;
     try {
-      return await ask({
+      delegation = this.deps.prepareDelegation?.(helpSessionId) ?? null;
+    } catch {
+      delegation = null;
+    }
+    try {
+      const answer = await ask({
         helpSessionId,
         actionId: HOST_SETTINGS_TOOL,
         args: { hostIds: ticket.hosts.map((host) => host.hostId), patch: ticket.patch },
@@ -448,7 +479,19 @@ export class HostSettingsRequests {
             ? `Change settings on ${ticket.hosts[0]!.name}`
             : `Change settings on ${count} hosts`,
         lines: this.lines(ticket),
+        ...(delegation !== null ? { delegation: delegation.offer } : {}),
       });
+      if (answer === null) return null;
+      const ticked = delegation;
+      return answer.delegate === true && answer.decision === "approved" && ticked !== null
+        ? {
+            decision: answer.decision,
+            handOver: () => {
+              ticked.approved();
+              ticked.commit();
+            },
+          }
+        : { decision: answer.decision };
     } catch {
       return null;
     }

@@ -847,7 +847,7 @@ describe("sessionServer introspection tier filtering", () => {
           _confirmed?: boolean,
           _authorization?: unknown,
           _relayCallId?: string,
-          walk?: { actionsListWalk: true }
+          walk?: { actionsListWalk?: true }
         ) => {
           const { offset = 0, limit: asked = 50 } = callArgs as { offset?: number; limit?: number };
           const limit = walk?.actionsListWalk ? ACTIONS_LIST_WALK_LIMIT : asked;

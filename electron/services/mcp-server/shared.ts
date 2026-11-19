@@ -11,6 +11,7 @@ import type {
   McpApprovalScope,
   McpAuditResult,
   McpConfirmationDecision,
+  McpDelegationOffer,
   McpDispatchAuthorization,
   McpHostPreview,
   McpRequester,
@@ -172,6 +173,20 @@ export interface WorkspaceDispatchOptions {
    * (#12692). Only an agent pane can hold the grant that button mints.
    */
   offerSessionApproval?: boolean;
+  /**
+   * Offer "Don't ask again for this kind of action" in any dialog this
+   * dispatch raises (#16752), for this machine's own assistant's call. Main
+   * keeps what an approval with the tick writes; sent to a local view only,
+   * so another machine's view never offers to change this machine's preference.
+   */
+  delegationOffer?: McpDelegationOffer;
+  /**
+   * Called once when the person approves a dispatch sent with
+   * {@link delegationOffer}: when the view claims the approval, before the
+   * action runs, or with the answer when nothing runs here (#16752). Main's
+   * own, never sent anywhere.
+   */
+  onDelegationApproved?: () => void;
   /**
    * The pane or Assistant tab this dispatch came from, for any dialog it
    * raises to name (#14992). Set from the bearer's own surface, never from
@@ -1178,6 +1193,13 @@ export interface PendingRequest<T> {
   destroyedCleanup?: () => void;
   /** Dispatches only: how long main still holds the call open for a person (#14989). */
   hold?: DispatchHold;
+  /**
+   * Dispatches only: the view was sent a "Don't ask again" offer (#16752), so
+   * an approval it reports may carry the `delegate` scope.
+   */
+  offeredDelegation?: true;
+  /** Dispatches only: {@link WorkspaceDispatchOptions.onDelegationApproved}, until it runs. */
+  onDelegationApproved?: () => void;
 }
 
 /**
@@ -1223,8 +1245,8 @@ export interface DispatchEnvelope {
   result: ActionDispatchResult;
   confirmationDecision?: McpConfirmationDecision;
   /**
-   * How far an `approved` decision reaches (#12692). Only ever `session` when
-   * the dispatch offered it; absent otherwise.
+   * How far an `approved` decision reaches (#12692). Only ever `session` or
+   * `delegate` (#16752) when the dispatch offered it; absent otherwise.
    */
   approvalScope?: McpApprovalScope;
   /**

@@ -326,6 +326,42 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
+  it("stops a tick offered before a hand change from landing (#16752)", async () => {
+    const { prepareAssistantDelegation } =
+      await import("../../../services/mcp-server/assistantConfirmationsPreference.js");
+    let stored: Partial<HelpAssistantSettings> = {
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["host.settings"],
+    };
+    storeMock.get.mockImplementation(((key: string) =>
+      key === "helpAssistant" ? stored : undefined) as never);
+    storeMock.set.mockImplementation(((_key: string, value: Partial<HelpAssistantSettings>) => {
+      stored = value;
+    }) as never);
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    // A hand write before the approval came before the tick.
+    const before = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    await handler(null, { daintreeConfirmations: "ask-except" });
+    before?.approved();
+    expect(before?.commit()).toBe(true);
+
+    // One while the approved call runs is newer, even one that changes nothing.
+    const during = prepareAssistantDelegation(null, "worktree.retireOwned");
+    during?.approved();
+    await handler(null, { daintreeConfirmationsExcept: ["worktree.deleteOwned", "host.settings"] });
+    expect(during?.commit()).toBe(false);
+    expect(stored.daintreeConfirmationsExcept).toEqual(["worktree.deleteOwned", "host.settings"]);
+
+    // Any other setting isn't a choice about confirmations.
+    const unrelated = prepareAssistantDelegation(null, "worktree.retireOwned");
+    unrelated?.approved();
+    await handler(null, { docSearch: false });
+    expect(unrelated?.commit()).toBe(true);
+    storeMock.set.mockReset();
+  });
+
   it("reads a stored list back as the delegable ids alone (#16752)", async () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
