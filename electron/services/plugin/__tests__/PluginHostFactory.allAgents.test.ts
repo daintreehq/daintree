@@ -447,6 +447,8 @@ describe("app-wide agent list", () => {
         workspaceKind: "project",
         terminalId: "t-1",
         observedState: "waiting",
+        // A stop main never watched the run work before hands nothing back.
+        band: "idle",
       });
       expect(Object.isFrozen(received[0])).toBe(true);
     });
