@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostConnection, HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import type { CloudProviderId } from "../../../../shared/types/cloudHosts.js";
 import type { CommandResult, CommandRunner } from "../../client/commandRunner.js";
@@ -16,12 +16,15 @@ import type { CloudProvider } from "../provider.js";
 import { FAKE_AGENT37_KEY, FakeAgent37Api } from "./fakeAgent37Api.js";
 
 let root: string;
+/** Every run a test started, ended with it even when an assertion stops the test first. */
+const runs: CloudHostLifecycle[] = [];
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "cloud-agent37-recovery-"));
 });
 
 afterEach(async () => {
+  for (const lifecycle of runs.splice(0)) lifecycle.dispose();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -43,7 +46,8 @@ type SavedCreation = { sentAt: number | null } | null;
 /**
  * Daintree's cloud runtime over the real Agent 37 provider and client, against
  * the fake API. A crash ends a run on the spot: nothing it would still write
- * reaches the settings file, and the next run starts from what was saved.
+ * reaches the settings file, and the next run starts from what was saved. A
+ * quit ends it the way Daintree does, letting what it was doing wind down.
  */
 async function agent37() {
   const api = new FakeAgent37Api();
@@ -65,7 +69,11 @@ async function agent37() {
     savedWhenSent.set(route, structuredClone(creationSaved()));
     const mode = unanswered.get(route);
     if (!mode) return api.fetch(input, init);
-    if (mode === "lost") void api.fetch(input, init);
+    if (mode === "lost") {
+      void api.fetch(input, init).catch((error: unknown) => {
+        throw new Error(`The fake refused a request it should have taken: ${String(error)}`);
+      });
+    }
     return new Promise((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
     });
@@ -76,7 +84,8 @@ async function agent37() {
   const build = () => {
     let alive = true;
     const store = new CloudHostStore({
-      get: () => saved,
+      // A copy: the store edits what it reads before it writes, and a crashed run must reach nothing.
+      get: () => structuredClone(saved),
       set: (_key: "cloudHosts", value: CloudHostsValue) => {
         if (alive) saved = JSON.parse(JSON.stringify(value));
       },
@@ -115,6 +124,7 @@ async function agent37() {
       changed: () => {},
       sleep: async () => {},
     });
+    runs.push(lifecycle);
     const crash = () => {
       alive = false;
       // Only so this run's waits end with the test; it writes nothing more.
@@ -123,7 +133,15 @@ async function agent37() {
       next.lifecycle.start();
       return next;
     };
-    return { store, accounts, lifecycle, crash };
+    const quit = async () => {
+      lifecycle.dispose();
+      await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+      alive = false;
+      const next = build();
+      next.lifecycle.start();
+      return next;
+    };
+    return { store, accounts, lifecycle, crash, quit };
   };
   const first = build();
   const account = await first.accounts.addAccount({
@@ -138,16 +156,14 @@ async function agent37() {
       machineType: "2x4",
       lifetimeHours: null,
     });
-  const until = async (check: () => boolean) => {
-    for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5));
-    expect(check()).toBe(true);
-  };
+  const until = (check: () => boolean) =>
+    vi.waitFor(() => expect(check()).toBe(true), { timeout: 5_000 });
   const count = (route: string) => sent.filter((entry) => entry === route).length;
   return { api, unanswered, sent, savedWhenSent, first, create, until, count };
 }
 
 describe("an Agent 37 create interrupted before setup finished (#17928)", () => {
-  it("asks Agent 37 for the machine on Retry after a quit while the key was being registered", async () => {
+  it("asks Agent 37 for the machine on Retry after a crash while the key was being registered", async () => {
     const { api, unanswered, sent, savedWhenSent, first, create, until, count } = await agent37();
     // Agent 37 took the key; its answer was still on the way when Daintree quit.
     unanswered.set("POST /ssh-keys", "lost");
@@ -158,7 +174,7 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
     expect(count("POST /instances")).toBe(0);
 
     const next = first.crash();
-    await until(() => next.lifecycle.statuses()[0]?.lastError !== null);
+    await until(() => (next.lifecycle.statuses()[0]?.lastError ?? null) !== null);
     expect(next.store.bindings()[0]!.creation!.sentAt).toBeNull();
     expect(next.lifecycle.statuses()[0]).toMatchObject({
       resourceId: null,
@@ -184,7 +200,30 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
     next.lifecycle.dispose();
   });
 
-  it("only looks again on Retry after a quit while the instance itself was asked for", async () => {
+  it("asks Agent 37 for the machine on Retry after Daintree quits while the key was being registered", async () => {
+    const { api, unanswered, sent, first, create, until, count } = await agent37();
+    unanswered.set("POST /ssh-keys", "held");
+    await create();
+    await until(() => sent.includes("POST /ssh-keys"));
+
+    const next = await first.quit();
+    await until(() => (next.lifecycle.statuses()[0]?.lastError ?? null) !== null);
+    expect(next.store.bindings()[0]!.creation!.sentAt).toBeNull();
+    // Said by the run that quit, as its registration was stopped.
+    expect(next.lifecycle.statuses()[0]!.lastError!.message).toMatch(
+      /stopped while the machine was readied.*Retry to create it/
+    );
+
+    unanswered.clear();
+    await next.lifecycle.retryCreate("build");
+    expect(count("POST /instances")).toBe(1);
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      resourceId: [...api.instances.values()][0]!.id,
+      lastError: null,
+    });
+  });
+
+  it("only looks again on Retry after a crash while the instance itself was asked for", async () => {
     const { unanswered, sent, savedWhenSent, first, create, until, count } = await agent37();
     unanswered.set("POST /instances", "held");
     await create();
@@ -193,14 +232,16 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
     expect(savedWhenSent.get("POST /instances")).toMatchObject({ sentAt: expect.any(Number) });
 
     const next = first.crash();
-    await until(() => next.lifecycle.statuses()[0]?.lastError !== null);
+    await until(() => (next.lifecycle.statuses()[0]?.lastError ?? null) !== null);
     expect(next.lifecycle.statuses()[0]!.lastError).toMatchObject({
       code: "outcome-unknown",
       message: expect.stringContaining("hasn't shown a machine"),
     });
 
     unanswered.clear();
+    const looked = count("GET /instances");
     await expect(next.lifecycle.retryCreate("build")).rejects.toThrow(/remove the host/);
+    expect(count("GET /instances")).toBe(looked + 1);
     expect(count("POST /instances")).toBe(1);
     expect(next.store.bindings()[0]!.creation!.sentAt).toEqual(expect.any(Number));
     next.lifecycle.dispose();
@@ -227,7 +268,7 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
       FakeAgent37Api.error(400, "invalid_request", "A workspace holds at most 20 SSH keys.")
     );
     await create();
-    await until(() => first.lifecycle.statuses()[0]?.lastError !== null);
+    await until(() => (first.lifecycle.statuses()[0]?.lastError ?? null) !== null);
     expect(first.lifecycle.statuses()[0]!.lastError).toMatchObject({
       code: "ssh-authorization",
       message: expect.stringMatching(/at most 20 SSH keys.*Retry to create it/),

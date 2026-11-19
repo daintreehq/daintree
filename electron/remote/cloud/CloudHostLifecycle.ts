@@ -102,6 +102,10 @@ function nameOf(provider: CloudProvider): string {
   return provider.info(process.platform).name;
 }
 
+function sameError(a: CloudHostError | null, b: CloudHostError | null): boolean {
+  return a === b || (!!a && !!b && a.at === b.at && a.code === b.code && a.message === b.message);
+}
+
 /** A provider's own words, ended as a sentence so more can follow them. */
 function asSentence(text: string): string {
   const trimmed = text.trim();
@@ -862,11 +866,27 @@ export class CloudHostLifecycle {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.creation || !binding.hostId) return;
     const creation = binding.creation;
-    const { provider, credentials } = await this.context(binding, signal);
+    // What the credentials were when they were read: a replacement before the send is refused.
+    const revision = this.deps.store.account(binding.accountId)?.credentialRevision ?? null;
+    let context: { provider: CloudProvider; credentials: ProviderCredentials };
+    try {
+      context = await this.context(binding, signal);
+    } catch (error) {
+      if (creation.sentAt !== null && !signal.aborted) this.recordFailedLookup(bindingId, error);
+      throw error;
+    }
+    const { provider, credentials } = context;
     // A create already sent may have made the machine: look for it (a read) before asking again.
     if (creation.sentAt !== null) {
       this.stage(bindingId, `Looking for the machine ${nameOf(provider)} may already have made`);
-      const found = await this.findCreated(bindingId, provider, { ...credentials, signal });
+      let found: ProviderResource | null;
+      try {
+        found = await this.findCreated(bindingId, provider, { ...credentials, signal });
+      } catch (error) {
+        // Recorded here too: a startup lookup that failed while this ran left that to it.
+        if (!signal.aborted) this.recordFailedLookup(bindingId, error);
+        throw error;
+      }
       if (found) {
         this.bindCreated(bindingId, found);
         await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
@@ -926,10 +946,12 @@ export class CloudHostLifecycle {
     }
     // Cancelled while the credentials or the key were read: nothing is marked as sent.
     if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    // A lifetime saved meanwhile (Settings takes one for a machine not yet made) goes with it.
+    const latest = this.deps.store.binding(bindingId) ?? binding;
     const request: ProviderCreateRequest = {
       name: creation.name,
       machineType: creation.machineType,
-      lifetimeSeconds: binding.lifetimeSeconds,
+      lifetimeSeconds: latest.lifetimeSeconds,
       provisioning,
       labels: {
         [LABEL_MARKER]: "1",
@@ -941,20 +963,35 @@ export class CloudHostLifecycle {
     let send = () => provider.create(credentials, request);
     if (provider.prepareCreate) {
       this.stage(bindingId, `Getting ${nameOf(provider)} ready to make the machine`);
+      // Stopped while readied (a removal, say, that may yet fail): the host says nothing was asked for.
+      const stopped = () => {
+        this.recordUnsentCreate(bindingId, creation.sentAt !== null, {
+          code: "failed",
+          reason: "Setup was stopped while the machine was readied",
+        });
+        return new AppError({ code: "CANCELLED", message: "Cancelled" });
+      };
       try {
         send = await provider.prepareCreate(credentials, request);
       } catch (error) {
-        if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+        if (signal.aborted) throw stopped();
         this.recordUnpreparedCreate(bindingId, provider, creation.sentAt !== null, error);
         throw error;
       }
-      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+      if (signal.aborted) throw stopped();
       this.requireSameProvider(
         binding,
         provider,
         creation.sentAt !== null,
         "the machine was readied"
       );
+    }
+    // Nothing marked as sent stops a replacement, so one made since the read is caught here:
+    // asked with the old set, the machine would be made where the account no longer looks.
+    if ((this.deps.store.account(binding.accountId)?.credentialRevision ?? null) !== revision) {
+      const reason = "This account's credentials were replaced while the machine was readied";
+      this.recordUnsentCreate(bindingId, creation.sentAt !== null, { code: "failed", reason });
+      throw invalid(`${reason}. Retry to create it.`);
     }
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
@@ -1178,8 +1215,8 @@ export class CloudHostLifecycle {
           this.awaitingProvider.add(binding.id);
         } else if (this.reconcileOvertaken.has(binding.id)) {
           again.add(binding.id);
-        } else {
-          this.recordFailedLookup(binding.id, key, error);
+        } else if (this.lookupStillCurrent(binding.id, key, binding.lastError)) {
+          this.recordFailedLookup(binding.id, error);
         }
       } finally {
         this.reconciling.delete(binding.id);
@@ -1190,32 +1227,44 @@ export class CloudHostLifecycle {
   }
 
   /**
-   * A restart's lookup that couldn't be made: the host says so and offers
-   * Retry. Never over what was said since, by a Retry or a removal, or by an
-   * earlier run whose error already offers Retry.
+   * Whether a restart's lookup still speaks for the create: nothing has said
+   * more since it began (a Retry, a removal, a bind). An error from an
+   * earlier run gives way to why this lookup failed.
    */
-  private recordFailedLookup(bindingId: string, key: string, error: unknown): void {
+  private lookupStillCurrent(
+    bindingId: string,
+    key: string,
+    errorBefore: CloudHostError | null
+  ): boolean {
     const current = this.deps.store.binding(bindingId);
-    if (
-      this.disposed ||
-      !current ||
-      current.resourceId ||
-      current.lastError ||
-      current.creation?.idempotencyKey !== key ||
-      this.operations.has(bindingId)
-    ) {
-      return;
-    }
-    const provider = this.deps.accounts.provider(current.providerId);
+    return (
+      !this.disposed &&
+      !!current &&
+      !current.resourceId &&
+      current.creation?.idempotencyKey === key &&
+      !this.operations.has(bindingId) &&
+      sameError(current.lastError, errorBefore)
+    );
+  }
+
+  /** A sent create that couldn't be looked for: the host says so and offers Retry, which looks again. */
+  private recordFailedLookup(bindingId: string, error: unknown): void {
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding) return;
+    const provider = this.deps.accounts.providerUnavailable(binding.providerId)
+      ? null
+      : this.deps.accounts.provider(binding.providerId);
     const said = asSentence(
       error instanceof AppError
         ? (error.userMessage ?? error.message)
-        : provider.describeError(error).message
+        : provider
+          ? provider.describeError(error).message
+          : formatErrorMessage(error, "The lookup failed")
     );
     this.recordError(bindingId, {
       code: "outcome-unknown",
-      message: `Setup didn't finish, and Daintree couldn't look for the machine ${nameOf(provider)} may have made. ${said} ${
-        provider.createReplay === "lookup-only"
+      message: `Setup didn't finish, and Daintree couldn't look for the machine ${provider ? nameOf(provider) : "the provider"} may have made. ${said} ${
+        provider?.createReplay === "lookup-only"
           ? "Retry looks for it again."
           : "Retry looks for it, and asks for it again if it isn't there."
       }`,

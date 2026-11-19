@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   HostConnection,
   HostDescriptor,
@@ -358,6 +358,33 @@ describe("CloudHostLifecycle.create", () => {
       expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
     );
     expect(hostId).toBe("build");
+  });
+
+  it("sends the lifetime saved while a Retry was looking, not the one it began with (#17928)", async () => {
+    const { lifecycle, provider, store } = await setup();
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    let answer: (found: ProviderResource[]) => void = () => {};
+    vi.mocked(provider.list).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    const retry = lifecycle.retryCreate("build");
+    await vi.waitFor(() => expect(provider.list).toHaveBeenCalled());
+    await lifecycle.setLifetime("build", 8);
+    answer([]);
+    await retry;
+    expect(vi.mocked(provider.create).mock.calls[1]![1].lifetimeSeconds).toBe(8 * 3600);
   });
 
   it("retries a lost create with the same key, and a refused one with a fresh key", async () => {
@@ -4056,6 +4083,7 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
     await quitWhileSent(env);
     const gone = vi.spyOn(MemoryCloudCredentialVault.prototype, "get").mockResolvedValue(null);
+    onTestFinished(() => gone.mockRestore());
     const next = env.restart(env.lifecycle);
     await vi.waitFor(() => expect(next.lifecycle.statuses()[0]?.lastError).not.toBeNull());
     expect(next.lifecycle.statuses()[0]!.lastError).toMatchObject({
@@ -4063,7 +4091,6 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
       message: expect.stringContaining("Replace them in Settings"),
     });
     expect(env.provider.list).not.toHaveBeenCalled();
-    gone.mockRestore();
     next.lifecycle.dispose();
   });
 
@@ -4078,12 +4105,161 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     await vi.waitFor(() =>
       expect(next.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
     );
+    expect(next.lifecycle.statuses()[0]!.lastError!.message).toContain("asks for it again");
     vi.mocked(env.provider.list).mockResolvedValue([]);
     await next.lifecycle.retryCreate("build");
     expect(env.provider.create).toHaveBeenCalledTimes(2);
     expect(vi.mocked(env.provider.create).mock.calls[1]![1].idempotencyKey).toBe(key);
+    expect(vi.mocked(env.provider.list).mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      vi.mocked(env.provider.create).mock.invocationCallOrder[1]!
+    );
     expect(next.store.bindings()[0]).toMatchObject({ resourceId: "bx_23456789", lastError: null });
     next.lifecycle.dispose();
+  });
+
+  it("leaves Retry to a Retry still looking when the startup lookup failed, which records its own failure (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    await quitWhileSent(env);
+    const failures: Array<(error: unknown) => void> = [];
+    const held = () =>
+      new Promise<ProviderResource[]>((_resolve, reject) => {
+        failures.push(reject);
+      });
+    vi.mocked(env.provider.list).mockImplementationOnce(held).mockImplementationOnce(held);
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(failures).toHaveLength(1));
+    const retry = next.lifecycle.retryCreate("build").catch((error: unknown) => error);
+    await vi.waitFor(() => expect(failures).toHaveLength(2));
+    failures[0]!(new BoatApiError("network", "offline", null, null, null));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(next.store.bindings()[0]!.lastError).toBeNull();
+    failures[1]!(new BoatApiError("network", "offline", null, null, null));
+    await retry;
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      operation: null,
+      lastError: {
+        code: "outcome-unknown",
+        message: expect.stringContaining("Retry looks for it again"),
+      },
+    });
+    next.lifecycle.dispose();
+  });
+
+  it("gives an earlier run's error way to why this startup's lookup failed (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+    vi.mocked(env.provider.list).mockRejectedValueOnce(
+      new BoatApiError("network", "offline", null, null, null)
+    );
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.lastError?.message).toContain("couldn't look")
+    );
+    next.lifecycle.dispose();
+  });
+
+  /** A provider that readies each create first, held until the test lets it finish. */
+  function readies(env: Awaited<ReturnType<typeof setup>>) {
+    const send = vi.fn(async () => resource({ machine: "running" }));
+    let finish: () => void = () => {};
+    const prepareCreate = vi.fn(
+      () =>
+        new Promise<() => Promise<ProviderResource>>((resolve) => {
+          finish = () => resolve(send);
+        })
+    );
+    (env.provider as CloudProvider).prepareCreate = prepareCreate;
+    return { send, prepareCreate, finish: () => finish() };
+  }
+
+  it("asks nobody when the provider was replaced while the create was readied (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const { send, prepareCreate, finish } = readies(env);
+    await create(env);
+    await vi.waitFor(() => expect(prepareCreate).toHaveBeenCalled());
+    vi.spyOn(env.accounts, "provider").mockReturnValue({ ...env.provider });
+    finish();
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError).toMatchObject({
+        message: expect.stringContaining("replaced while the machine was readied"),
+      })
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+  });
+
+  it("asks with nothing when the account's credentials were replaced while the create was readied (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const { send, prepareCreate, finish } = readies(env);
+    await create(env);
+    await vi.waitFor(() => expect(prepareCreate).toHaveBeenCalledTimes(1));
+    await env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_y" });
+    finish();
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { message: expect.stringContaining("credentials were replaced") },
+      })
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+    // Retry readies it again, with the new set.
+    prepareCreate.mockImplementationOnce(async () => send);
+    await env.lifecycle.retryCreate("build");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(prepareCreate).mock.calls[1]![0].values).toEqual({ apiKey: "boat_live_y" });
+  });
+
+  it("marks nothing and sends nothing when the create is stopped while it is readied (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const { send, prepareCreate, finish } = readies(env);
+    await create(env);
+    await vi.waitFor(() => expect(prepareCreate).toHaveBeenCalled());
+    env.lifecycle.dispose();
+    finish();
+    await vi.waitFor(() => expect(env.store.bindings()[0]!.lastError).not.toBeNull());
+    expect(send).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]).toMatchObject({
+      creation: { sentAt: null },
+      lastError: { message: expect.stringMatching(/stopped while the machine was readied/) },
+    });
+  });
+
+  it("keeps an earlier unanswered create in doubt when readying its retry fails (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const send = vi
+      .fn<() => Promise<ProviderResource>>()
+      .mockRejectedValueOnce(new BoatApiError("network", "lost", null, null, null));
+    const prepareCreate = vi.fn(async () => send);
+    (env.provider as CloudProvider).prepareCreate = prepareCreate;
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+    const sent = env.store.bindings()[0]!.creation!;
+    expect(sent.sentAt).toEqual(expect.any(Number));
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    prepareCreate.mockRejectedValueOnce(new BoatApiError("network", "offline", null, null, null));
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow();
+    expect(env.store.bindings()[0]!.creation).toEqual(sent);
+    expect(env.lifecycle.statuses()[0]!.lastError).toMatchObject({
+      code: "outcome-unknown",
+      message: expect.stringContaining("earlier request"),
+    });
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("binds the earliest machine carrying a lost create's labels, never a later copy of it", async () => {
