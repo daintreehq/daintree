@@ -33,7 +33,10 @@ export function linuxRuntimeDir(uid: number): string {
 }
 
 /** Where a Linux host with no init system to start it keeps its socket: `~/.cache/<dir>/run`. */
-export function linuxHomeRuntimeDir(home: string, dirName: string = LINUX_RUNTIME_DIR_NAME): string {
+export function linuxHomeRuntimeDir(
+  home: string,
+  dirName: string = LINUX_RUNTIME_DIR_NAME
+): string {
   return path.posix.join(home, ".cache", dirName, "run");
 }
 
