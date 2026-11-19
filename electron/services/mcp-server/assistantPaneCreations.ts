@@ -109,8 +109,10 @@ const writtenThisRun = new Set<string>();
 /** Each local relay conversation's last call here, exactly; the disk lags it by at most a write step. */
 const relayLastCall = new Map<string, number>();
 const relayLastWritten = new Map<string, number>();
-/** Terminal id → what to drop once the records load: kept for that workspace (null: any), or trashed. */
-const pendingSupersedes = new Map<string, { workspaceId: string | null; trashed: boolean }>();
+/** Terminal id → what to drop once the records load: kept for one of these workspaces (null: any), or trashed. */
+const pendingSupersedes = new Map<string, { workspaces: Set<string | null>; trashed: boolean }>();
+/** Relay conversations remembered before the records load, the least recent going first past this. */
+const MAX_EARLY_RELAY_CALLS = 256;
 let quitting = false;
 let saveQueued = false;
 
@@ -168,17 +170,26 @@ function persistNow(): void {
   saveQueued = false;
   if (persistence === null) return;
   const records: Record<string, StoredAssistantPaneCreation> = {};
+  const relayKept = new Set<string>();
   for (const [terminalId, record] of stored) {
     const lastCallAt =
       record.scope === "localRelay" ? relayLastCall.get(record.conversationId) : undefined;
+    if (record.scope === "localRelay") relayKept.add(record.conversationId);
     records[terminalId] = lastCallAt !== undefined ? { ...record, lastCallAt } : record;
   }
-  for (const [conversationId, at] of relayLastCall) relayLastWritten.set(conversationId, at);
+  // A conversation with nothing kept needs no time held for it.
+  for (const conversationId of [...relayLastCall.keys()]) {
+    if (relayKept.has(conversationId)) continue;
+    relayLastCall.delete(conversationId);
+    relayLastWritten.delete(conversationId);
+  }
   try {
     persistence.save(records);
   } catch (error) {
     console.warn("[assistantPaneCreations] Failed to save kept pane creations:", error);
+    return;
   }
+  for (const [conversationId, at] of relayLastCall) relayLastWritten.set(conversationId, at);
 }
 
 /** One write for every change one synchronous ledger operation makes. */
@@ -212,7 +223,7 @@ function rememberSupersede(terminalId: string, workspaceId: string | null, trash
   const earlier = pendingSupersedes.get(terminalId);
   pendingSupersedes.delete(terminalId);
   pendingSupersedes.set(terminalId, {
-    workspaceId: earlier !== undefined && earlier.workspaceId !== workspaceId ? null : workspaceId,
+    workspaces: new Set([...(earlier?.workspaces ?? []), workspaceId]),
     trashed: trashed || earlier?.trashed === true,
   });
   if (pendingSupersedes.size > MAX_PENDING_SUPERSEDES) {
@@ -327,7 +338,8 @@ export function attachAssistantPaneCreationPersistence(
     stored.set(terminalId, record);
     unchecked.add(terminalId);
     if (record.lastCallAt !== undefined) {
-      // One time per conversation: the latest any of its records carries.
+      // One time per conversation: the latest any of its records carries, or a
+      // call this run made before the load.
       relayLastCall.set(
         record.conversationId,
         Math.max(record.lastCallAt, relayLastCall.get(record.conversationId) ?? 0)
@@ -340,12 +352,19 @@ export function attachAssistantPaneCreationPersistence(
       pruned = true;
     }
   }
-  for (const [conversationId, at] of relayLastCall) relayLastWritten.set(conversationId, at);
+  for (const record of stored.values()) {
+    if (record.lastCallAt !== undefined) {
+      relayLastWritten.set(
+        record.conversationId,
+        Math.max(record.lastCallAt, relayLastWritten.get(record.conversationId) ?? 0)
+      );
+    }
+  }
   // What was created, or trashed, before this load still applies to what it read.
-  for (const [terminalId, { workspaceId, trashed }] of pendingSupersedes) {
+  for (const [terminalId, { workspaces, trashed }] of pendingSupersedes) {
     const record = stored.get(terminalId);
     if (record === undefined) continue;
-    if (trashed || workspaceId === null || record.projectId === workspaceId) {
+    if (trashed || workspaces.has(null) || workspaces.has(record.projectId)) {
       forgetRow(terminalId);
       pruned = true;
     }
@@ -394,7 +413,8 @@ export function attachAssistantPaneCreationLedger(target: AssistantPaneCreationL
 export function admitRestoredAssistantPanes(
   projectId: string,
   panes: ReadonlyArray<{ id: string; spawnedBy?: unknown }>,
-  resumable: ReadonlySet<string>
+  resumable: ReadonlySet<string>,
+  liveProjectOf: (terminalId: string) => string | null = () => null
 ): void {
   if (persistence === null || stored.size === 0 || quitting) return;
   let changed = false;
@@ -409,13 +429,21 @@ export function admitRestoredAssistantPanes(
   const now = Date.now();
   for (const { id: terminalId, spawnedBy } of panes) {
     const record = stored.get(terminalId);
-    if (record === undefined || record.projectId !== projectId) continue;
-    // Another surface's pane under the id, or a relay conversation whose day ran out.
+    // One this run recorded is newer than any snapshot of the id.
+    if (record === undefined || record.projectId !== projectId || writtenThisRun.has(terminalId)) {
+      continue;
+    }
+    const live = liveProjectOf(terminalId);
+    // Another surface's pane under the id; one running in another project,
+    // which makes restore give this pane a new id; or a relay conversation
+    // whose day ran out. Whatever was given back for it goes too.
     if (
       spawnedBy !== SPAWNED_BY[record.scope] ||
+      (live !== null && live !== projectId) ||
       (record.scope === "localRelay" && relayDayRanOut(record.conversationId, now))
     ) {
       forgetRow(terminalId);
+      ledger?.supersedeRestored([{ kind: TERMINAL, id: terminalId }], projectId);
       changed = true;
       continue;
     }
@@ -501,9 +529,16 @@ export function keptLocalRelayConversations(): Array<{
  * moved a step since the last write, and by the quit.
  */
 export function noteLocalRelayCall(conversationId: string, at: number = Date.now()): void {
-  if (persistence === null) return;
   if (at <= (relayLastCall.get(conversationId) ?? 0)) return;
-  relayLastCall.set(conversationId, at);
+  if (persistence === null) {
+    // Before the load: held so the load counts it, the least recent going first.
+    relayLastCall.delete(conversationId);
+    relayLastCall.set(conversationId, at);
+    if (relayLastCall.size > MAX_EARLY_RELAY_CALLS) {
+      relayLastCall.delete(relayLastCall.keys().next().value as string);
+    }
+    return;
+  }
   let kept = false;
   for (const record of stored.values()) {
     if (record.scope === "localRelay" && record.conversationId === conversationId) {
@@ -512,7 +547,10 @@ export function noteLocalRelayCall(conversationId: string, at: number = Date.now
     }
   }
   if (!kept) return;
-  if (at - (relayLastWritten.get(conversationId) ?? 0) >= LAST_CALL_WRITE_STEP_MS) persist();
+  relayLastCall.set(conversationId, at);
+  // A quit writes at once: nothing after it would.
+  if (quitting) persistNow();
+  else if (at - (relayLastWritten.get(conversationId) ?? 0) >= LAST_CALL_WRITE_STEP_MS) persist();
 }
 
 /**

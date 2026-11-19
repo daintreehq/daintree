@@ -574,6 +574,48 @@ describe("createMcpRelayExecutor and conversations a restart kept (#16845)", () 
     ]);
   });
 
+  it("credits a call's settling to the conversation it ran under, though its caller moved on", async () => {
+    const clock = { now: 0 };
+    const finishes: Array<() => void> = [];
+    const calls: Array<[string, string, number]> = [];
+    executor = createMcpRelayExecutor({
+      acceptsRemoteControl: () => true,
+      hasProject: async () => true,
+      openSession: async () => ({
+        isOpen: () => true,
+        callTool: () =>
+          new Promise<CallToolResult>((resolve) => {
+            finishes.push(() => resolve(ANSWER));
+          }),
+        close: () => {},
+      }),
+      keptConversations: () => [],
+      noteConversationCall: (...args) => calls.push(args),
+      now: () => clock.now,
+    });
+    const first = executor.call(spec("help-1", "conv-a"), payload("help-1"));
+    await vi.waitFor(() => expect(finishes).toHaveLength(1));
+    clock.now = 1_000;
+    const second = executor.call(spec("help-1", "conv-b"), {
+      ...payload("help-1"),
+      callId: "call-b",
+    });
+    await vi.waitFor(() => expect(finishes).toHaveLength(2));
+    clock.now = 2_000;
+    finishes[1]!();
+    await second;
+    clock.now = 3_000;
+    finishes[0]!();
+    await first;
+
+    expect(calls).toEqual([
+      ["local", "conv-a", 0],
+      ["local", "conv-b", 1_000],
+      ["local", "conv-b", 2_000],
+      ["local", "conv-a", 3_000],
+    ]);
+  });
+
   it("forgets a kept conversation resumed after its day ran out, though it was fresh when taken in", async () => {
     const clock = { now: DAY / 2 };
     const { executor, forgotten } = harness(clock, () => [

@@ -519,10 +519,12 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     }
     held.set(helpSessionId, record);
     boundPrincipals(senderId);
+    // The conversation this call runs under, though its caller moves on to another meanwhile.
+    const callConversation = record.conversationId;
     const noteCall = (): void => {
-      if (record.conversationId === undefined) return;
+      if (callConversation === undefined) return;
       try {
-        deps.noteConversationCall?.(senderId, record.conversationId, record.usedAt);
+        deps.noteConversationCall?.(senderId, callConversation, record.usedAt);
       } catch (error) {
         logger.warn("Couldn't note a relay conversation's call", { error });
       }

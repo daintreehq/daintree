@@ -539,6 +539,123 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     expect(second.get(resumed, "terminal", "q")).toBeDefined();
   });
 
+  it("drops what creations before the load name only in the workspaces they ran in", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    first.record(bindHelp(first, "help-a", "conv-1"), [{ kind: "terminal", id: "t1" }], "proj-3");
+    await flush();
+
+    _resetAssistantPaneCreationsForTests();
+    supersedeAssistantPane("t1", "proj-1");
+    supersedeAssistantPane("t1", "proj-2");
+    attachAssistantPaneCreationPersistence(disk.persistence);
+    await flush();
+
+    expect(Object.keys(disk.read())).toEqual(["t1"]);
+  });
+
+  it("ends a given-back record when a later hydrate shows another surface's pane under the id", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    first.record(bindHelp(first, "help-a", "conv-1"), [{ kind: "terminal", id: "t1" }], "proj-1");
+    await flush();
+
+    const second = startRun(disk);
+    const resumed = bindHelp(second, "help-b", "conv-1");
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
+    expect(second.get(resumed, "terminal", "t1")).toBeDefined();
+    admitRestoredAssistantPanes(
+      "proj-1",
+      [{ id: "t1", spawnedBy: "palette" }],
+      new Set(["conv-1"])
+    );
+    await flush();
+
+    expect(second.get(resumed, "terminal", "t1")).toBeUndefined();
+    expect(disk.read()).toEqual({});
+  });
+
+  it("leaves a record this run made to the ledger, whatever an older snapshot of the id says", async () => {
+    const disk = makeDisk();
+    const ledger = startRun(disk);
+    const owner = bindHelp(ledger, "help-a", "conv-1");
+    ledger.record(owner, [{ kind: "terminal", id: "t1" }], "proj-1");
+    await flush();
+
+    admitRestoredAssistantPanes(
+      "proj-1",
+      [{ id: "t1", spawnedBy: "palette" }],
+      new Set(["conv-1"])
+    );
+    await flush();
+
+    expect(ledger.get(owner, "terminal", "t1")).toBeDefined();
+    expect(Object.keys(disk.read())).toEqual(["t1"]);
+  });
+
+  it("gives nothing back for an id already running in another project", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    first.record(bindHelp(first, "help-a", "conv-1"), [{ kind: "terminal", id: "t1" }], "proj-1");
+    first.record(bindHelp(first, "help-a", "conv-1"), [{ kind: "terminal", id: "t2" }], "proj-1");
+    await flush();
+
+    const second = startRun(disk);
+    admitRestoredAssistantPanes(
+      "proj-1",
+      [byHelp("t1"), byHelp("t2")],
+      new Set(["conv-1"]),
+      (id) => (id === "t1" ? "proj-other" : id === "t2" ? "proj-1" : null)
+    );
+    const resumed = bindHelp(second, "help-b", "conv-1");
+
+    expect(second.get(resumed, "terminal", "t1")).toBeUndefined();
+    expect(second.get(resumed, "terminal", "t2")).toBeDefined();
+  });
+
+  it("counts a relay call made before the records load", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    first.record(
+      bindLocalRelay(first, "help-a", "conv-1"),
+      [{ kind: "terminal", id: "t1" }],
+      "proj-1"
+    );
+    await flush();
+
+    vi.setSystemTime(T0 + LOCAL_RELAY_CONVERSATION_RETENTION_MS + 60_000);
+    _resetAssistantPaneCreationsForTests();
+    noteLocalRelayCall("conv-1", T0 + LOCAL_RELAY_CONVERSATION_RETENTION_MS - 60_000);
+    attachAssistantPaneCreationPersistence(disk.persistence);
+
+    expect(isKeptAssistantPane("t1")).toBe(true);
+    expect(keptLocalRelayConversations()).toEqual([
+      { conversationId: "conv-1", usedAt: T0 + LOCAL_RELAY_CONVERSATION_RETENTION_MS - 60_000 },
+    ]);
+  });
+
+  it("writes a relay call that lands during the quit at once, and retries a failed write there", async () => {
+    const disk = makeDisk();
+    const ledger = startRun(disk);
+    ledger.record(
+      bindLocalRelay(ledger, "help-a", "conv-1"),
+      [{ kind: "terminal", id: "t1" }],
+      "proj-1"
+    );
+    await flush();
+    disk.save.mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    noteLocalRelayCall("conv-1", T0 + 11 * 60_000);
+    await flush();
+    expect(disk.read().t1.lastCallAt).toBe(T0);
+
+    beginAssistantPaneCreationQuit();
+    expect(disk.read().t1.lastCallAt).toBe(T0 + 11 * 60_000);
+    noteLocalRelayCall("conv-1", T0 + 12 * 60_000);
+    expect(disk.read().t1.lastCallAt).toBe(T0 + 12 * 60_000);
+  });
+
   it("keeps a caller-named creation off disk after its bearer binds the conversation", async () => {
     const disk = makeDisk();
     const ledger = startRun(disk);

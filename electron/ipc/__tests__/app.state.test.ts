@@ -2131,6 +2131,14 @@ describe("app:boot handler", () => {
         spawnedBy: "assistant",
       },
       { id: "shell", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+      {
+        id: "codex-1b2c",
+        kind: "terminal",
+        title: "C",
+        location: "grid",
+        cwd: "/tmp",
+        spawnedBy: "mcp",
+      },
     ];
     const KEPT = {
       "claude-7f3a": { scope: "help", conversationId: "c", projectId: "p1", seenAt: Date.now() },
@@ -2160,6 +2168,7 @@ describe("app:boot handler", () => {
         expect(admitRestoredAssistantPanesFromStore).toHaveBeenCalledWith("p1", [
           { id: "claude-7f3a", spawnedBy: "assistant" },
           { id: "shell", spawnedBy: undefined },
+          { id: "codex-1b2c", spawnedBy: "mcp" },
         ])
       );
     });
