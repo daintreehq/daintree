@@ -8,10 +8,12 @@ import {
   agent37ErrorEnvelopeSchema,
   agent37InstanceListSchema,
   agent37InstanceSchema,
+  agent37SignedUrlSchema,
   agent37SshKeySchema,
   type Agent37Action,
   type Agent37Billing,
   type Agent37Instance,
+  type Agent37SignedUrl,
 } from "./agent37Schemas.js";
 
 /** The one origin a packaged build sends an Agent 37 key to. */
@@ -117,7 +119,7 @@ export function redactAgent37Text(text: string, apiKey?: string): string {
       .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
       // Key-shaped runs after the documented prefix; error codes like `ssh_key_exists` don't start with `sk_`.
       .replace(/\bsk_[a-z]+_[A-Za-z0-9]{8,}/g, "[redacted]")
-      .replace(/([?&](?:token|_token|key|sig|signature)=)[^&\s]+/gi, "$1[redacted]")
+      .replace(/([?&](?:token|_token|a37_token|key|sig|signature)=)[^&\s]+/gi, "$1[redacted]")
       .slice(0, 500)
   );
 }
@@ -310,6 +312,28 @@ export class Agent37Client {
       ctx,
       { method: "PATCH", path: `/instances/${requireInstanceId(id)}`, body, retry: "safe" },
       agent37InstanceSchema
+    );
+  }
+
+  /**
+   * A URL that reaches one port of the instance until `ttlSeconds` from now,
+   * with no API key. Agent 37 can't revoke it, so a repeat after a lost answer
+   * only leaves a second one nobody holds.
+   */
+  async signedUrl(
+    ctx: Agent37RequestContext,
+    id: string,
+    body: { port: number; ttlSeconds: number }
+  ): Promise<Agent37SignedUrl> {
+    return this.call(
+      ctx,
+      {
+        method: "POST",
+        path: `/instances/${requireInstanceId(id)}/signed-url`,
+        body: { port: body.port, ttl_seconds: body.ttlSeconds },
+        retry: "safe",
+      },
+      agent37SignedUrlSchema
     );
   }
 

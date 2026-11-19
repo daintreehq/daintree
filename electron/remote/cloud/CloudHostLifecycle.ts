@@ -89,6 +89,7 @@ import {
 } from "./provider.js";
 import { lifetimeRenewalDue, stopUnderWay } from "./lifetimeRenewal.js";
 import type { CloudGuestPowerOff } from "./CloudGuestPowerOff.js";
+import type { CloudKeepAwakeLinks } from "./CloudKeepAwakeLinks.js";
 import { awaitsRevoke, type CloudMachineKeys } from "./CloudMachineKeys.js";
 
 /** How often a machine is asked about while Daintree changes it. */
@@ -287,6 +288,8 @@ export interface CloudHostLifecycleDeps {
     CloudGuestPowerOff,
     "problemFor" | "standsInFor" | "arm" | "tick" | "forgetRemoved"
   >;
+  /** The links Agent 37 instances' hosts hold them awake with while they see work (#17918). */
+  keepAwake?: Pick<CloudKeepAwakeLinks, "statusFor" | "tick" | "forgetRemoved">;
   /**
    * What this device hears of a host's idle clock, for stopping a machine
    * once its idle time ends where the machine can't stop itself (#17923,
@@ -732,6 +735,7 @@ export class CloudHostLifecycle {
         if (this.idleCandidates) void this.stopIdleDue();
         void this.deps.machineKeys?.tick();
         void this.deps.guestPowerOff?.tick();
+        void this.deps.keepAwake?.tick();
       }, KEEPER_INTERVAL_MS);
       this.keeperTimer.unref?.();
     } else if (!keeper && this.keeperTimer) {
@@ -740,6 +744,7 @@ export class CloudHostLifecycle {
       // Its pass would have forgotten a removed machine's findings; none comes now.
       this.deps.guestPowerOff?.forgetRemoved(bindings);
       this.deps.machineKeys?.forgetRemoved(bindings);
+      this.deps.keepAwake?.forgetRemoved(bindings);
     }
   }
 
@@ -877,6 +882,7 @@ export class CloudHostLifecycle {
           linkedIdleStop: this.linkedIdleStopOf(binding),
           asleep: machineOf(binding) === "stopped" && observation?.asleep === true,
           idleTimeFollowsHost: followsHostIdleTime(binding),
+          keepAwake: this.deps.keepAwake?.statusFor(binding.id) ?? null,
         };
       });
   }

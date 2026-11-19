@@ -76,6 +76,21 @@ export const agent37SshKeySchema = z
   })
   .loose();
 
+/**
+ * A signed URL for one port of one instance: the token rides in the URL's
+ * `a37_token` query parameter, and Agent 37 can't revoke it before
+ * `expires_at` (Unix seconds).
+ */
+export const agent37SignedUrlSchema = z
+  .object({
+    url: z.string().min(1).max(2048),
+    port: z.number().int(),
+    expires_at: z.number(),
+  })
+  .loose();
+
+export type Agent37SignedUrl = z.infer<typeof agent37SignedUrlSchema>;
+
 /** What a delete answers; anything else isn't proof the instance is gone. */
 export const agent37DeletedSchema = z.object({ id: z.string(), deleted: z.literal(true) }).loose();
 

@@ -173,6 +173,19 @@ export interface StoredCloudBinding {
    * from then on (#17916). A machine Daintree created always follows it.
    */
   idleTimeChosen?: true;
+  /**
+   * What the machine's host last told this device it holds to keep the
+   * machine awake while it sees work (#17918): when that stops working, and
+   * when the host said so. Never the URL itself. Absent while it holds none,
+   * or for a machine other than `resourceId`.
+   */
+  keepAwake?: StoredKeepAwake;
+}
+
+export interface StoredKeepAwake {
+  resourceId: string;
+  expiresAt: number;
+  confirmedAt: number;
 }
 
 /** Put on every machine a create asks for, naming its binding, so a lost answer is found again. */
@@ -639,7 +652,20 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
     lastError: readError(value.lastError),
     createdAt: num(value.createdAt) ?? 0,
     ...(value.idleTimeChosen === true ? { idleTimeChosen: true as const } : {}),
+    ...readKeepAwake(value.keepAwake, resourceId),
   };
+}
+
+function readKeepAwake(
+  raw: unknown,
+  resourceId: string | null
+): { keepAwake: StoredKeepAwake } | Record<string, never> {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object" || resourceId === null) return {};
+  const expiresAt = num(value.expiresAt);
+  const confirmedAt = num(value.confirmedAt);
+  if (value.resourceId !== resourceId || expiresAt === null || confirmedAt === null) return {};
+  return { keepAwake: { resourceId, expiresAt, confirmedAt } };
 }
 
 const MACHINE_KEY_STATES = new Set(["issuing", "delivering", "active", "revoke"]);

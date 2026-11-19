@@ -24,6 +24,7 @@ import {
   type Agent37RequestContext,
 } from "./Agent37Client.js";
 import type { Agent37Instance } from "./agent37Schemas.js";
+import { keepAwakeUrlProblem } from "./agent37KeepAwake.js";
 import { agent37MachineState } from "./agent37State.js";
 
 /**
@@ -41,6 +42,13 @@ export const AGENT37_IDLE_SECONDS_RANGE = { min: 300, max: 86_400 } as const;
  * installed in it survives stops, starts and updates alike.
  */
 export const AGENT37_SSH_USER = "node";
+
+/**
+ * How long a signed URL a host keeps its instance awake with lasts: the most
+ * Agent 37 allows, since one can't be revoked, and Daintree mints a new one
+ * every time it connects (#17918).
+ */
+export const AGENT37_KEEP_AWAKE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /** How long Agent 37 says a newly registered key takes to reach instances already running. */
 export const AGENT37_KEY_DELIVERY_MS = 2 * 60_000;
@@ -476,6 +484,26 @@ export class Agent37Provider implements CloudProvider {
         ...(enable ? { auto_sleep: true } : {}),
       })
     );
+  }
+
+  async keepAwakeUrl(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    port: number
+  ): Promise<{ url: string; expiresAt: number }> {
+    const signed = await this.clientFor(credentials.apiUrl).signedUrl(ctx(credentials), resourceId, {
+      port,
+      ttlSeconds: AGENT37_KEEP_AWAKE_TTL_SECONDS,
+    });
+    if (signed.port !== port || keepAwakeUrlProblem(signed.url, resourceId, port) !== null) {
+      throw new Agent37ApiError(
+        "bad-response",
+        "Agent 37 answered with a link to another machine or port than the one asked for",
+        null,
+        null
+      );
+    }
+    return { url: signed.url, expiresAt: signed.expires_at * 1000 };
   }
 
   async rename(credentials: ProviderCredentials, resourceId: string, name: string): Promise<void> {

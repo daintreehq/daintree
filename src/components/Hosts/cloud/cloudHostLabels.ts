@@ -3,6 +3,7 @@ import {
   cloudMachineLabel,
   type CloudHostStatus,
   type CloudLifetimeModel,
+  type CloudKeepAwake,
   type CloudLinkedIdleStop,
   type CloudProviderInfo,
   type CloudProviderPersistence,
@@ -175,6 +176,17 @@ export function clockTime(iso: string | null): string | null {
     : at.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
 
+/** "Wed 26 Nov, 15:00" in this device's locale, for a time up to weeks away. */
+export function dayTime(at: number): string {
+  return new Date(at).toLocaleString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 /** What the host's idle time counts from, and where it is kept. */
 export const IDLE_TIME_COUNTED =
   "Counted on the host from the last time an agent there was working or waiting, or a window showed it, so it runs with this device away";
@@ -223,6 +235,8 @@ export interface IdleSleepMachine {
   lifetime: CloudLifetimeModel | null;
   /** Its own idle timeout follows the host's idle time (`CloudHostStatus.idleTimeFollowsHost`). */
   followsHost: boolean;
+  /** What the host holds the machine awake with while it sees work (`CloudHostStatus.keepAwake`, #17918). */
+  keepAwake?: CloudKeepAwake | null;
 }
 
 const UNKNOWN_SLEEPER: IdleSleepMachine = { connected: false, lifetime: null, followsHost: true };
@@ -245,9 +259,12 @@ export function idleSleepTimerSentence(
   }
   const own = lifetime?.kind === "idle-sleep" ? lifetime.idleSeconds : null;
   const ownTimer = `${name}'s own idle timer${own === null ? "" : ` (${durationLabel(own)})`}`;
+  const afterIdle =
+    own === null ? "once it's been idle for a while" : `after ${durationLabel(own)} without activity`;
+  const away = awaySentence(ownTimer, afterIdle, machine);
   const inCharge = machine.connected
-    ? `The host's idle time is in charge while this device is connected, since the connection keeps ${ownTimer} from running: once it ends, Daintree checks with the host and puts the machine to sleep.`
-    : `${ownTimer} is in charge while no device is connected: it puts the machine to sleep ${own === null ? "once it's been idle for a while" : `after ${durationLabel(own)} without activity`}. The host's idle time takes over while this device is connected.`;
+    ? `The host's idle time is in charge while this device is connected, since the connection keeps ${ownTimer} from running: once it ends, Daintree checks with the host and puts the machine to sleep.${away.connected ? ` ${away.connected}` : ""}`
+    : `${away.offline} The host's idle time takes over while this device is connected.`;
   const differs =
     !machine.followsHost &&
     idle !== undefined &&
@@ -256,6 +273,37 @@ export function idleSleepTimerSentence(
   return differs
     ? `${inCharge} ${name} keeps its own idle timer until you pick an idle time here.`
     : inCharge;
+}
+
+/**
+ * What holds the machine awake, or doesn't, with no device connected
+ * (#17918): the host, while it sees work, through the link this device last
+ * heard it holds; otherwise the provider's own timer, with why. `connected`
+ * is said after the connected sentence, and is null when there is nothing
+ * worth adding there; `offline` stands on its own.
+ */
+function awaySentence(
+  ownTimer: string,
+  afterIdle: string,
+  machine: IdleSleepMachine
+): { connected: string | null; offline: string } {
+  const keepAwake = machine.keepAwake ?? null;
+  const ownInCharge = `${sentenceCase(ownTimer)} is in charge while no device is connected`;
+  if (keepAwake?.kind === "held") {
+    const said = machine.connected ? "" : ` (as the host said ${dayTime(keepAwake.confirmedAt)})`;
+    const held = `With no device connected, the host keeps the machine awake while it sees work, with a link from Daintree that works until ${dayTime(keepAwake.expiresAt)}${said}. Once the host is idle, ${ownTimer} puts it to sleep ${afterIdle}.`;
+    return { connected: held, offline: held };
+  }
+  if (keepAwake?.kind === "expired") {
+    const expired = `${ownInCharge}, even while the host sees work: the link from Daintree the host kept the machine awake with expired ${dayTime(keepAwake.expiredAt)}.`;
+    return { connected: expired, offline: `${expired} Connecting renews it.` };
+  }
+  if (keepAwake?.kind === "none" && keepAwake.problem) {
+    const problem = /[.!?]$/.test(keepAwake.problem) ? keepAwake.problem : `${keepAwake.problem}.`;
+    const refused = `${ownInCharge}, even while the host sees work: ${problem}`;
+    return { connected: refused, offline: refused };
+  }
+  return { connected: null, offline: `${ownInCharge}: it puts the machine to sleep ${afterIdle}.` };
 }
 
 /**

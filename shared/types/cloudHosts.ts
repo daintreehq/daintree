@@ -714,7 +714,25 @@ export interface CloudHostStatus {
    * imported machine keeps its own until then. Optional for snapshots from before it.
    */
   idleTimeFollowsHost?: boolean;
+  /**
+   * Whether the host holds the machine awake while it sees work with no
+   * device connected, as this device last heard from it (#17918). Absent or
+   * null for a provider with no such hold.
+   */
+  keepAwake?: CloudKeepAwake | null;
 }
+
+/**
+ * `held`: the host said it holds a link that keeps the machine awake while
+ * it sees work until `expiresAt`, when this device last asked at
+ * `confirmedAt`. `expired`: the last one it said it held has run out.
+ * `none`: it holds none, with why when the host or this device found out;
+ * a null problem is nothing handed over yet.
+ */
+export type CloudKeepAwake =
+  | { kind: "held"; expiresAt: number; confirmedAt: number }
+  | { kind: "expired"; expiredAt: number }
+  | { kind: "none"; problem: string | null };
 
 /**
  * `stops`: this device stops the machine with the provider's normal stop once
