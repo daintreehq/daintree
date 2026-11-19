@@ -37,10 +37,13 @@ import {
   HostQuestionCancelResultSchema,
   HostQuestionContentResultSchema,
   HostQuestionImagePartResultSchema,
+  HostQuestionAskSchema,
   HostQuestionItemSchema,
   HostQuestionListSchema,
+  HostQuestionListV2Schema,
   HostQuestionSummariesResultSchema,
   HostQuestionsChangedPayloadSchema,
+  HostQuestionsChangedV2PayloadSchema,
   MAX_HOST_IMAGE_PART_BYTES,
   type HostQuestionListPayload,
 } from "./questionSchemas.js";
@@ -94,7 +97,9 @@ interface HostQuestionsReport {
   session: DecisionsHostSession;
   owner: string;
   questionHostId: string;
-  questions: Omit<DecisionQuestionListItem, "remoteHost">[];
+  questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[];
+  /** What each in Needs you asks now (#17895), by question id; absent from a Host from before it. */
+  asks?: ReadonlyMap<string, string | null>;
 }
 
 function ownerKey(state: Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">): string {
@@ -295,6 +300,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private readonly questionTurns = new Map<string, number>();
   /** Sessions whose Host answered a read of its questions UNSUPPORTED: from before #17230. */
   private readonly beforeQuestions = new WeakSet<DecisionsHostSession>();
+  /** Sessions whose Host answered the list with its asks UNSUPPORTED: from before #17895. */
+  private readonly beforeAsks = new WeakSet<DecisionsHostSession>();
   private readonly questionListeners = new Set<() => void>();
   private readonly now: () => number;
 
@@ -381,6 +388,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
         connected: report.session.isOpen && this.deps.sessionFor(hostId) === report.session,
         questionHostId: report.questionHostId,
         questions: report.questions,
+        ...(report.asks !== undefined ? { asks: report.asks } : {}),
       });
     }
     const claims = new Map<string, number>();
@@ -464,12 +472,29 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     const turn = (this.questionTurns.get(hostId) ?? 0) + 1;
     this.questionTurns.set(hostId, turn);
     let raw: unknown;
+    let withAsks = !this.beforeAsks.has(session);
     try {
-      raw = await session.call(
-        DecisionsLinkMethod.QUESTIONS,
-        { read: "list" },
-        { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
-      );
+      if (withAsks) {
+        try {
+          raw = await session.call(
+            DecisionsLinkMethod.QUESTION_LIST_V2,
+            {},
+            { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
+          );
+        } catch (error) {
+          // A Host from before #17895 lists its questions without what each asks.
+          if (codeOf(error) !== "UNSUPPORTED") throw error;
+          this.beforeAsks.add(session);
+          withAsks = false;
+        }
+      }
+      if (!withAsks) {
+        raw = await session.call(
+          DecisionsLinkMethod.QUESTIONS,
+          { read: "list" },
+          { timeoutMs: HOST_QUESTION_TIMEOUT_MS }
+        );
+      }
     } catch (error) {
       // A Host from before #17230 lists none, whatever an earlier build of it reported;
       // anything else is read again on the next announcement.
@@ -482,6 +507,11 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       return;
     }
     if (this.questionTurns.get(hostId) !== turn) return;
+    if (withAsks) {
+      const parsed = HostQuestionListV2Schema.safeParse(raw);
+      if (parsed.success) this.hearQuestions(hostId, session, parsed.data, parsed.data.asks);
+      return;
+    }
     const parsed = HostQuestionListSchema.safeParse(raw);
     if (parsed.success) this.hearQuestions(hostId, session, parsed.data);
   }
@@ -494,19 +524,38 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   private hearQuestions(
     hostId: string,
     session: DecisionsHostSession,
-    payload: HostQuestionListPayload
+    payload: HostQuestionListPayload,
+    rawAsks?: readonly unknown[]
   ): void {
     const owner = ownerKeyOf(this.deps.ownerState());
     if (owner === null || payload.hostId === null || !this.takesList(hostId, session, payload)) {
       return;
     }
     const questionHostId = payload.hostId;
-    const questions: Omit<DecisionQuestionListItem, "remoteHost">[] = [];
+    const questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[] = [];
     for (const raw of payload.questions) {
       const item = HostQuestionItemSchema.safeParse(raw);
       if (item.success && item.data.reference.hostId === questionHostId) questions.push(item.data);
     }
-    this.questionReports.set(hostId, { session, owner, questionHostId, questions });
+    // Each ask read on its own, and kept only for a question the list kept.
+    let asks: Map<string, string | null> | undefined;
+    if (rawAsks !== undefined) {
+      asks = new Map();
+      const listed = new Set(questions.map((question) => question.reference.questionId));
+      for (const raw of rawAsks) {
+        const ask = HostQuestionAskSchema.safeParse(raw);
+        if (ask.success && listed.has(ask.data.questionId)) {
+          asks.set(ask.data.questionId, ask.data.ask);
+        }
+      }
+    }
+    this.questionReports.set(hostId, {
+      session,
+      owner,
+      questionHostId,
+      questions,
+      ...(asks !== undefined ? { asks } : {}),
+    });
     this.questionsChanged();
   }
 
@@ -561,9 +610,20 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
         return null;
       }
     );
+    const offQuestionsV2 = session.registerCallHandler(
+      DecisionsLinkMethod.QUESTIONS_CHANGED_V2,
+      HostQuestionsChangedV2PayloadSchema,
+      (payload) => {
+        if (!this.takesList(hostId, session, payload)) return null;
+        this.questionTurns.set(hostId, (this.questionTurns.get(hostId) ?? 0) + 1);
+        this.hearQuestions(hostId, session, payload, payload.asks);
+        return null;
+      }
+    );
     const unwire = () => {
       offReport();
       offQuestions();
+      offQuestionsV2();
       offClose();
       this.unwires.delete(unwire);
     };

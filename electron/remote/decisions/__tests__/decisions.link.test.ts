@@ -1137,9 +1137,16 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     const shell = shellOf([STUDIO]);
     shell.open(HOST, client);
 
+    // Read with what each asks (#17895): none reported, as this fake's list names none.
     await vi.waitFor(() =>
       expect(shell.client.hostQuestions()).toEqual([
-        { ...STUDIO, connected: true, questionHostId: QHOST, questions: [item(1)] },
+        {
+          ...STUDIO,
+          connected: true,
+          questionHostId: QHOST,
+          questions: [item(1)],
+          asks: new Map(),
+        },
       ])
     );
 
@@ -1153,7 +1160,7 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
       expect(shell.client.hostQuestions()[0]?.questions).toEqual([answered, item(2)])
     );
     expect(pushes.mock.calls.map(([method]) => method)).toEqual([
-      DecisionsLinkMethod.QUESTIONS_CHANGED,
+      DecisionsLinkMethod.QUESTIONS_CHANGED_V2,
     ]);
     expect(shell.changed).toHaveBeenCalled();
   });
@@ -1185,7 +1192,13 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     shell.open(HOST, second.client);
     await vi.waitFor(() =>
       expect(shell.client.hostQuestions()).toEqual([
-        { ...STUDIO, connected: true, questionHostId: QHOST, questions: [expired] },
+        {
+          ...STUDIO,
+          connected: true,
+          questionHostId: QHOST,
+          questions: [expired],
+          asks: new Map(),
+        },
       ])
     );
   });
@@ -1689,6 +1702,155 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     finish();
 
     expect(await reading).toEqual({ ok: true, value: { result: "off" } });
+  });
+
+  it("carries what each question in Needs you asks, and pushes a change of ask alone (#17895)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    const first = item(1).reference.questionId;
+    const second = item(2).reference.questionId;
+    decisions.set({
+      hostId: QHOST,
+      questions: [item(1), item(2)],
+      asks: new Map([
+        [first, null],
+        [second, "msg_agent_0001"],
+      ]),
+    });
+    serveQuestions(host, decisions);
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.asks).toEqual(
+        new Map([
+          [first, null],
+          [second, "msg_agent_0001"],
+        ])
+      )
+    );
+
+    const pushes = vi.spyOn(host, "call");
+    // The agent follows up on a question still open: nothing its v1 list says moves.
+    decisions.set({
+      hostId: QHOST,
+      questions: [item(1), item(2)],
+      asks: new Map([
+        [first, "msg_agent_0002"],
+        [second, "msg_agent_0001"],
+      ]),
+    });
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.asks?.get(first)).toBe("msg_agent_0002")
+    );
+    expect(pushes.mock.calls.map(([method]) => method)).toEqual([
+      DecisionsLinkMethod.QUESTIONS_CHANGED_V2,
+    ]);
+  });
+
+  it("tells a Shell from before #17895 its list as v1, and nothing when only an ask moved", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    const first = item(1).reference.questionId;
+    decisions.set({ hostId: QHOST, questions: [item(1)], asks: new Map([[first, null]]) });
+    serveQuestions(host, decisions);
+    const heard: unknown[] = [];
+    client.registerCallHandler(DecisionsLinkMethod.QUESTIONS_CHANGED, z.unknown(), (payload) => {
+      heard.push(payload);
+      return null;
+    });
+    await client.call(DecisionsLinkMethod.OWNER_STATE_V2, OWNER);
+    // Exactly the v1 shape an older Shell's strict read takes.
+    expect(await client.call(DecisionsLinkMethod.QUESTIONS, { read: "list" })).toEqual({
+      hostId: QHOST,
+      owner: SERVED,
+      questions: [item(1)],
+    });
+
+    decisions.set({
+      hostId: QHOST,
+      questions: [item(1)],
+      asks: new Map([[first, "msg_agent_0001"]]),
+    });
+    const answered = item(1, { kind: "settled", outcome: "answered", handled: false });
+    decisions.set({ hostId: QHOST, questions: [answered], asks: new Map() });
+    await vi.waitFor(() => expect(heard).toHaveLength(1));
+    expect(heard[0]).toEqual({ hostId: QHOST, owner: SERVED, questions: [answered] });
+  });
+
+  it("reads a Host from before #17895 without asks, asking for them once per link", async () => {
+    const { host, client } = await pair();
+    answerAnnouncements(
+      host,
+      () => RUNNING,
+      () => ({ hostId: QHOST, owner: SERVED, questions: [item(1)] })
+    );
+    const calls = vi.spyOn(client, "call");
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()[0]?.questions).toEqual([item(1)]));
+    expect(shell.client.hostQuestions()[0]?.asks).toBeUndefined();
+
+    shell.client.announceOwnerState();
+    await vi.waitFor(() =>
+      expect(
+        calls.mock.calls.filter(([method]) => method === DecisionsLinkMethod.QUESTIONS)
+      ).toHaveLength(2)
+    );
+    expect(
+      calls.mock.calls.filter(([method]) => method === DecisionsLinkMethod.QUESTION_LIST_V2)
+    ).toHaveLength(1);
+  });
+
+  it("reads a thread whose messages say where they were sent and whether delivery stopped", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [item(1)] });
+    const sentAt = "2026-11-02T10:03:00.000Z";
+    const thread = [
+      {
+        type: "message" as const,
+        messageId: "msg_agent_0001",
+        from: "agent" as const,
+        text: "Which branch?",
+        images: [],
+        expectsReply: true,
+        onComputer: false,
+        sentAt,
+        deliveryStatus: null,
+        deliveryStopped: false,
+        unreadable: false,
+      },
+      {
+        type: "message" as const,
+        messageId: "msg_person_0001",
+        from: "person" as const,
+        text: "main",
+        images: [],
+        expectsReply: false,
+        onComputer: true,
+        sentAt,
+        deliveryStatus: "terminal-delivered" as const,
+        deliveryStopped: true,
+        unreadable: false,
+      },
+    ];
+    decisions.answerWith((read) =>
+      read.read === "content"
+        ? { result: "read", question: { ...content(read.reference), thread } }
+        : null
+    );
+    serveQuestions(host, decisions);
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+    const read = await shell.client.readHostQuestion(QHOST, {
+      read: "content",
+      reference: item(1).reference,
+    });
+    expect(read?.ok && read.value.result === "read" ? read.value.question.thread : read).toEqual(
+      thread
+    );
   });
 
   it("asks a Host from before Host questions once per link, and lists none of its questions", async () => {

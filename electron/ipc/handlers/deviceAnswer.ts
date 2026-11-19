@@ -363,7 +363,10 @@ const markQuestionsSchema = z
     questions: z
       .array(
         z
-          .object({ reference: questionReferenceSchema, ask: z.string().min(1).max(256).nullable() })
+          .object({
+            reference: questionReferenceSchema,
+            ask: z.string().min(1).max(256).nullable(),
+          })
           .strict()
       )
       .min(1)

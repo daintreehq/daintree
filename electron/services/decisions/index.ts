@@ -519,9 +519,7 @@ const hostQuestionListeners = new Set<() => void>();
 
 function publishHostQuestions(list: HostServedQuestions | null): void {
   hostServedQuestions =
-    list === null
-      ? null
-      : { hostId: list.hostId, questions: [...list.questions], asks: list.asks };
+    list === null ? null : { hostId: list.hostId, questions: [...list.questions], asks: list.asks };
   for (const listener of [...hostQuestionListeners]) {
     try {
       listener();

@@ -25,7 +25,9 @@ export interface QuestionMark {
 export type QuestionMarks = ReadonlyMap<string, QuestionMark>;
 
 /** A question by the machine that asked it and its id: a move to another terminal keeps its mark. */
-export function markKey(reference: Pick<DecisionQuestionReference, "hostId" | "questionId">): string {
+export function markKey(
+  reference: Pick<DecisionQuestionReference, "hostId" | "questionId">
+): string {
   return JSON.stringify([reference.hostId, reference.questionId]);
 }
 

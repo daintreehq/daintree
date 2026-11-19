@@ -30,11 +30,13 @@ import {
 } from "./linkMethods.js";
 import {
   HostCancelQuestionPayloadSchema,
+  HostQuestionListV2ReadSchema,
   HostQuestionReadSchema,
   MAX_HOST_QUESTION_LIST_BYTES,
   MAX_HOST_QUESTIONS,
   type HostQuestionList,
   type HostQuestionListPayload,
+  type HostQuestionListV2Payload,
   type HostQuestionRead,
 } from "./questionSchemas.js";
 
@@ -72,11 +74,21 @@ const OFF = { result: "off" } as const;
 
 /** What a Shell this Host doesn't serve its questions to is told: a list of none. */
 const NO_QUESTIONS = { hostId: null, owner: null, questions: [] } as const;
+const noQuestionsV2 = (): HostQuestionListV2Payload => ({
+  hostId: null,
+  owner: null,
+  questions: [],
+  asks: [],
+});
 
 /** The longest owner ids a list can name, for sizing its envelope before knowing which owner. */
 const LONGEST_OWNER = { installationId: "x".repeat(64), ownerDeviceId: "x".repeat(64) };
 
-/** The newest questions within what one message carries, by count and by size. */
+/**
+ * The newest questions within what one message carries, by count and by
+ * size. The asks a v2 list adds stay within the link's message: at most one
+ * per question, each two bounded ids.
+ */
 function bounded(list: HostQuestionList): HostQuestionList {
   const kept: HostQuestionList["questions"] = [];
   let bytes = Buffer.byteLength(
@@ -90,7 +102,11 @@ function bounded(list: HostQuestionList): HostQuestionList {
     kept.push(question);
   }
   if (kept.length === list.questions.length) return list;
-  return { hostId: list.hostId, questions: kept.reverse() };
+  return {
+    hostId: list.hostId,
+    questions: kept.reverse(),
+    ...(list.asks !== undefined ? { asks: list.asks } : {}),
+  };
 }
 
 /** The list as sent to one session: named with the owner that session's announcement named. */
@@ -100,6 +116,16 @@ function servedTo(list: HostQuestionList, owner: OwnerOf): HostQuestionListPaylo
     owner: { installationId: owner.installationId, ownerDeviceId: owner.ownerDeviceId },
     questions: list.questions,
   };
+}
+
+/** `servedTo`, with what each of its questions in Needs you asks now (#17895). */
+function servedToV2(list: HostQuestionList, owner: OwnerOf): HostQuestionListV2Payload {
+  const asks: { questionId: string; ask: string | null }[] = [];
+  for (const question of list.questions) {
+    const ask = list.asks?.get(question.reference.questionId);
+    if (ask !== undefined) asks.push({ questionId: question.reference.questionId, ask });
+  }
+  return { ...servedTo(list, owner), asks };
 }
 
 type OwnerOf = Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">;
@@ -180,6 +206,8 @@ export function installDecisionsHostWith(
   const toldQuestions = new Map<LinkSession, string>();
   /** Sessions whose Shell answered a pushed list UNSUPPORTED: from before #17230, sent no more. */
   const beforeQuestions = new WeakSet<LinkSession>();
+  /** Sessions whose Shell reads the list with its asks (#17895): their pushes carry them too. */
+  const listsV2 = new WeakSet<LinkSession>();
 
   /** The session's owner enrolled this Host and has Decisions on: only it reads the questions. */
   const servesQuestions = (session: LinkSession): boolean => {
@@ -188,16 +216,25 @@ export function installDecisionsHostWith(
     return owner !== undefined && owner.enabled && runtime?.enrolledBy(owner) === true;
   };
 
-  const tellQuestions = (session: LinkSession, list: HostQuestionListPayload): void => {
-    const key = JSON.stringify(list);
+  const tellQuestions = (session: LinkSession, list: HostQuestionList, owner: OwnerOf): void => {
+    const v2 = listsV2.has(session);
+    const payload: HostQuestionListPayload = v2 ? servedToV2(list, owner) : servedTo(list, owner);
+    const key = JSON.stringify(payload);
     if (toldQuestions.get(session) === key || beforeQuestions.has(session)) return;
     toldQuestions.set(session, key);
-    session.call(DecisionsLinkMethod.QUESTIONS_CHANGED, list).catch((error: unknown) => {
-      if ((error as { code?: unknown } | null)?.code === "UNSUPPORTED") {
+    const method = v2
+      ? DecisionsLinkMethod.QUESTIONS_CHANGED_V2
+      : DecisionsLinkMethod.QUESTIONS_CHANGED;
+    session.call(method, payload).catch((error: unknown) => {
+      const unsupported = (error as { code?: unknown } | null)?.code === "UNSUPPORTED";
+      if (toldQuestions.get(session) === key) toldQuestions.delete(session);
+      if (!unsupported) return;
+      if (v2) {
+        // A Shell that read the list with its asks takes them pushed; one that doesn't hears v1.
+        listsV2.delete(session);
+        tellQuestions(session, list, owner);
+      } else {
         beforeQuestions.add(session);
-      } else if (toldQuestions.get(session) === key) {
-        // Not heard: the next change, or the Shell's next read, sends it again.
-        toldQuestions.delete(session);
       }
     });
   };
@@ -210,7 +247,7 @@ export function installDecisionsHostWith(
     if (list === null) return;
     const sent = bounded(list);
     for (const [session, owner] of owners) {
-      if (servesQuestions(session)) tellQuestions(session, servedTo(sent, owner));
+      if (servesQuestions(session)) tellQuestions(session, sent, owner);
     }
   };
 
@@ -350,6 +387,8 @@ export function installDecisionsHostWith(
     // Checked again: the owner may have said otherwise while the lifetime loaded.
     if (!servesQuestions(session)) return payload.read === "list" ? NO_QUESTIONS : OFF;
     if (payload.read === "list") {
+      // A Shell reading the list without its asks is from before them, and is told it that way.
+      listsV2.delete(session);
       const list = made.questions();
       const owner = owners.get(session);
       if (list === null || owner === undefined) return NO_QUESTIONS;
@@ -360,6 +399,23 @@ export function installDecisionsHostWith(
     const answer = await made.readQuestion(payload);
     // What was read goes only to a session still served: its owner may have said otherwise meanwhile.
     return servesQuestions(session) ? answer : OFF;
+  };
+
+  /** The list with its asks (#17895), for the owner that enrolled this Host only. */
+  const readQuestionListV2 = async (session: LinkSession): Promise<HostQuestionListV2Payload> => {
+    if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    // Its pushes carry the asks from now on, whatever this read answers.
+    listsV2.add(session);
+    if (!servesQuestions(session)) return noQuestionsV2();
+    const made = await followLifetime();
+    if (!made || disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
+    if (!servesQuestions(session)) return noQuestionsV2();
+    const list = made.questions();
+    const owner = owners.get(session);
+    if (list === null || owner === undefined) return noQuestionsV2();
+    const sent = servedToV2(bounded(list), owner);
+    toldQuestions.set(session, JSON.stringify(sent));
+    return sent;
   };
 
   const cancelQuestion = async (
@@ -404,6 +460,13 @@ export function installDecisionsHostWith(
           (payload) => readQuestions(session, payload)
         )
       : () => {};
+    const offQuestionListV2 = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.QUESTION_LIST_V2,
+          HostQuestionListV2ReadSchema,
+          () => readQuestionListV2(session)
+        )
+      : () => {};
     const offCancelQuestion = runtime
       ? session.registerCallHandler(
           DecisionsLinkMethod.CANCEL_QUESTION,
@@ -417,6 +480,7 @@ export function installDecisionsHostWith(
       offOwnerState();
       offOwnerStateV2();
       offQuestionReads();
+      offQuestionListV2();
       offCancelQuestion();
       offClose();
       unregisters.delete(unregister);
