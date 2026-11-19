@@ -1137,29 +1137,30 @@ describe("preferences action hardening", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(mocks.agentSettingsClient.set).toHaveBeenCalledWith("claude", {
-      customPresets: [
-        {
-          id: "blue",
-          name: "Blue Provider",
-          env: { ANTHROPIC_BASE_URL: "https://example.test" },
-          args: ["--model", "sonnet"],
-          dangerousEnabled: true,
-          customFlags: "--verbose",
-          color: "#3366ff",
-          displayTitle: "Claude [Blue]",
-          fallbacks: ["fallback"],
-          fallbackOnRateLimit: true,
-          keepConversationOnRateLimit: true,
-        },
-      ],
-    });
+    expect(mocks.agentSettingsClient.set).toHaveBeenCalledWith(
+      "claude",
+      {
+        customPresets: [
+          {
+            id: "blue",
+            name: "Blue Provider",
+            env: { ANTHROPIC_BASE_URL: "https://example.test" },
+            args: ["--model", "sonnet"],
+            dangerousEnabled: true,
+            customFlags: "--verbose",
+            color: "#3366ff",
+            displayTitle: "Claude [Blue]",
+            fallbacks: ["fallback"],
+            fallbackOnRateLimit: true,
+            keepConversationOnRateLimit: true,
+          },
+        ],
+      },
+      { lockContinueAtLimitReset: true }
+    );
   });
 
-  it("can't switch a preset's continuing at its limit's reset on, even by replacing it (#17912)", async () => {
-    mocks.agentSettingsClient.get.mockResolvedValueOnce({
-      agents: { codex: { customPresets: [{ id: "work", name: "Work" }] } },
-    });
+  it("can't change a preset's continuing at its limit's reset, even by replacing it (#17912)", async () => {
     mocks.agentSettingsClient.set.mockResolvedValueOnce({ agents: {} });
     const { service } = buildService(registerPreferencesActions);
 
@@ -1170,7 +1171,7 @@ describe("preferences action hardening", () => {
         settings: {
           customPresets: [
             { id: "work", name: "Work", continueAtLimitReset: true },
-            { id: "new", name: "New", continueAtLimitReset: true },
+            { id: "new", name: "New", continueAtLimitReset: false },
           ],
         },
       },
@@ -1178,38 +1179,17 @@ describe("preferences action hardening", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(mocks.agentSettingsClient.set).toHaveBeenCalledWith("codex", {
-      customPresets: [
-        { id: "work", name: "Work" },
-        { id: "new", name: "New" },
-      ],
-    });
-  });
-
-  it("keeps a stored preset's continuing at its limit's reset when the caller leaves it out (#17912)", async () => {
-    mocks.agentSettingsClient.get.mockResolvedValueOnce({
-      agents: {
-        codex: { customPresets: [{ id: "work", name: "Work", continueAtLimitReset: true }] },
-      },
-    });
-    mocks.agentSettingsClient.set.mockResolvedValueOnce({ agents: {} });
-    const { service } = buildService(registerPreferencesActions);
-
-    const result = await service.dispatch(
-      "agentSettings.set",
+    // The caller's values are dropped, and main is told to keep the stored ones.
+    expect(mocks.agentSettingsClient.set).toHaveBeenCalledWith(
+      "codex",
       {
-        agentId: "codex",
-        settings: {
-          customPresets: [{ id: "work", name: "Work (renamed)", continueAtLimitReset: false }],
-        },
+        customPresets: [
+          { id: "work", name: "Work" },
+          { id: "new", name: "New" },
+        ],
       },
-      { source: "agent" }
+      { lockContinueAtLimitReset: true }
     );
-
-    expect(result.ok).toBe(true);
-    expect(mocks.agentSettingsClient.set).toHaveBeenCalledWith("codex", {
-      customPresets: [{ id: "work", name: "Work (renamed)", continueAtLimitReset: true }],
-    });
   });
 
   it("calls Electron window actions directly and allows agent-driven quit (danger:safe)", async () => {

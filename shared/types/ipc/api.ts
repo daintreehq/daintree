@@ -1104,7 +1104,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   };
   agentSettings: {
     get(): Promise<AgentSettings>;
-    set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;
+    /**
+     * `lockContinueAtLimitReset` keeps each preset's stored
+     * `continueAtLimitReset`, for a writer that may not arm panes (#17912).
+     */
+    set(
+      agentId: AgentId,
+      settings: Partial<AgentSettingsEntry>,
+      options?: { lockContinueAtLimitReset?: boolean }
+    ): Promise<AgentSettings>;
     /**
      * Set the global skip-permissions override (#10432). Persisted as a
      * dot-path leaf so per-agent records aren't rewritten with defaults.

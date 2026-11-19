@@ -81,6 +81,12 @@ export interface PluginPresetLaunchSummary {
    */
   fallbacks: PluginPresetFallbackSummary[];
   fallbackOnRateLimit: boolean;
+  /**
+   * Panes launched on it continue by themselves once their usage limit resets
+   * (#17912), typing into the agent days later: the person's own preset says
+   * so, for an agent that can be continued.
+   */
+  continuesAtLimitReset?: boolean;
 }
 
 /** What one fallback in the chain turns on, display-safe like the summary. */
@@ -130,9 +136,9 @@ export function presetLaunchContent(preset: AgentPreset): string {
     preset.keepConversationOnRateLimit ?? null,
     preset.accountId ?? null,
   ];
-  // Fields added after version 1 go on the end only when set (#17912), so a
-  // grant for a preset that never set one still matches.
-  if (preset.continueAtLimitReset !== undefined) fields.push(preset.continueAtLimitReset);
+  // Fields added after version 1 go on the end only when on (#17912), so a
+  // grant for a preset that never turned one on still matches.
+  if (preset.continueAtLimitReset === true) fields.push(true);
   return JSON.stringify(fields);
 }
 

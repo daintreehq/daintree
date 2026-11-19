@@ -155,6 +155,30 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
 }
 
 /**
+ * A preset list from a writer that may not change whether a preset's panes
+ * continue at their usage limit's reset (#17912): each preset keeps what the
+ * stored preset with its id holds and its own value is dropped, so a new id
+ * starts off and replacing a preset wholesale turns it neither on nor off.
+ * Read as a launch reads presets: the first valid stored preset of an id wins.
+ */
+export function keepStoredLimitResets(incoming: unknown[], stored: unknown): unknown[] {
+  const on = new Map<string, boolean>();
+  for (const preset of Array.isArray(stored) ? stored : []) {
+    if (preset === null || typeof preset !== "object") continue;
+    const valid = sanitizePreset(preset as AgentPreset);
+    if (!valid || on.has(valid.id)) continue;
+    on.set(valid.id, valid.continueAtLimitReset === true);
+  }
+  return incoming.map((preset) => {
+    if (preset === null || typeof preset !== "object" || Array.isArray(preset)) return preset;
+    const { continueAtLimitReset: _written, ...rest } = preset as Record<string, unknown>;
+    return typeof rest.id === "string" && on.get(rest.id) === true
+      ? { ...rest, continueAtLimitReset: true }
+      : rest;
+  });
+}
+
+/**
  * A preset with no pinned account. Accounts are this machine's folders, so
  * only the user's own presets can pin one (#16133): a repository's preset
  * file naming an account id could otherwise refuse every launch of it.

@@ -80,6 +80,9 @@ describe("presetLaunchContent", () => {
     // A stored screen mode no longer reaches a launch, so it is no part of one.
     const withLegacyMode = { ...preset, inlineMode: "off" } as AgentPreset;
     expect(presetLaunchContent(withLegacyMode)).toBe(presetLaunchContent(preset));
+    // Nor does a continuation switch left off (#17912).
+    const continuationOff = { ...preset, continueAtLimitReset: false };
+    expect(presetLaunchContent(continuationOff)).toBe(presetLaunchContent(preset));
   });
 });
 

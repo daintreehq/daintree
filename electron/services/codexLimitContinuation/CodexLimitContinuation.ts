@@ -29,6 +29,8 @@ export const WAKE_SETTLE_MS = 15_000;
 /** How soon a pane whose output was held unread is asked again, and how many times. */
 export const READS_PAUSED_RETRY_MS = 10_000;
 const READS_PAUSED_RETRIES = 6;
+/** How long a launch's preset default waits for its host to confirm the spawn (#17912). */
+export const LAUNCH_CONFIRMATION_MS = 60_000;
 
 /** A pane as its host reports it, as far as arming and the fallback read it. */
 export interface ContinuationTerminal {
@@ -45,6 +47,26 @@ export interface ContinuationTerminal {
 
 export type Timer = unknown;
 
+/**
+ * A launch the spawn handler just sent (#17912), whose preset default is
+ * applied once the host confirms that spawn.
+ */
+export interface ContinuationLaunch {
+  terminalId: string;
+  projectId: string;
+  /** The ledger generation the spawn went out under, which its result echoes. */
+  launchGeneration: number;
+  /** The user's own original preset arms the pane. */
+  arms: boolean;
+}
+
+/** A host's answer to a spawn, as far as arming reads it. */
+export interface ContinuationSpawnResult {
+  success: boolean;
+  launchGeneration?: number;
+  spawnedAt?: number;
+}
+
 export interface CodexLimitContinuationDeps {
   now(): number;
   /** Null for a pane that is gone; rejects when its host didn't answer. */
@@ -59,7 +81,10 @@ export interface CodexLimitContinuationDeps {
   notify(projectId: string, change: CodexLimitContinueChange): void;
   setTimer(callback: () => void, delayMs: number): Timer;
   clearTimer(timer: Timer): void;
-  /** True once a pane is armed, false once none is: the live listeners follow it. */
+  /**
+   * True once a pane is armed or a launch awaits its spawn, false once none
+   * is: the live listeners follow it.
+   */
   onActiveChange(active: boolean): void;
 }
 
@@ -98,20 +123,41 @@ interface ArmedPane {
   spawnedAt: number | undefined;
 }
 
+/** The user's own choice for a pane, from its menu, and the project it was made in. */
+interface PaneOverride {
+  projectId: string;
+  armed: boolean;
+}
+
+interface PendingLaunch extends ContinuationLaunch {
+  timer: Timer;
+}
+
 /**
  * Continuing armed Codex panes once their usage limit resets (#17909). The
  * user arms a pane; its host reports the stop once it has settled; this asks
  * whether the pane falls back instead and when the limit resets, waits until
  * then, and has the host check the pane and type the line. Lives in main, so
  * it runs whether or not any view of the project is on screen, and on a
- * Remote Host with no Shell attached. Held in memory: an app restart starts
- * every pane disarmed.
+ * Remote Host with no Shell attached. A preset can arm every pane launched on
+ * it (#17912), and the pane's menu outranks that. Held in memory: an app
+ * restart forgets every menu choice, and a restored pane takes its preset's.
  */
 export class CodexLimitContinuation {
   private readonly panes = new Map<string, ArmedPane>();
   /** The latest arm or disarm asked per pane, so an earlier one answered late changes nothing. */
   private readonly requests = new Map<string, number>();
   private readonly fired = new Map<string, number[]>();
+  /**
+   * The user's menu choice per pane (#17912). It outranks the pane's preset at
+   * every launch, so it sticks across the preset being edited, until the pane
+   * is closed for good.
+   */
+  private readonly overrides = new Map<string, PaneOverride>();
+  /** Launches whose preset default waits on the host confirming the spawn. */
+  private readonly launches = new Map<string, PendingLaunch>();
+  /** Whether the live listeners are wanted, as last told. */
+  private active = false;
   /**
    * Seeded from the clock, so revisions keep rising across a restart of the
    * host a view outlives: a view that held a disarm at an earlier revision
@@ -162,10 +208,14 @@ export class CodexLimitContinuation {
     if (!enabled) {
       // An arm still waiting on its host read is superseded too.
       this.requests.delete(requestKey);
+      this.overrides.set(terminalId, { projectId, armed: false });
       this.disarm(terminalId);
       return;
     }
-    if (owned) return;
+    if (owned) {
+      this.overrides.set(terminalId, { projectId, armed: true });
+      return;
+    }
     const request = this.nextRequest++;
     this.requests.set(requestKey, request);
     const terminal = await this.deps.readTerminal(terminalId).catch(() => null);
@@ -190,8 +240,96 @@ export class CodexLimitContinuation {
         "UNSUPPORTED"
       );
     }
+    this.overrides.set(terminalId, { projectId, armed: true });
     if (this.panes.has(terminalId)) return;
-    const wasActive = this.panes.size > 0;
+    this.arm(terminalId, projectId, terminal.spawnedAt);
+  }
+
+  /**
+   * A launch the spawn handler just sent, carrying whether its preset arms the
+   * pane (#17912). Applied once the host confirms that very spawn; one never
+   * confirmed is dropped.
+   */
+  noteLaunch(launch: ContinuationLaunch): void {
+    const earlier = this.launches.get(launch.terminalId);
+    if (earlier) this.deps.clearTimer(earlier.timer);
+    const pending: PendingLaunch = {
+      ...launch,
+      timer: this.deps.setTimer(() => {
+        if (this.launches.get(launch.terminalId) !== pending) return;
+        this.launches.delete(launch.terminalId);
+        this.updateActive();
+      }, LAUNCH_CONFIRMATION_MS),
+    };
+    this.launches.set(launch.terminalId, pending);
+    this.updateActive();
+  }
+
+  /**
+   * The host answered a spawn. A refused one changes nothing: a process still
+   * running under the id stays the pane's, wait and all. A confirmed launch
+   * takes its preset's default unless the user chose for the pane; any other
+   * new process under an armed pane's id keeps it armed.
+   */
+  handleSpawnResult(terminalId: string, result: ContinuationSpawnResult): void {
+    const launch = this.launches.get(terminalId);
+    const confirms = launch !== undefined && result.launchGeneration === launch.launchGeneration;
+    if (confirms) {
+      this.launches.delete(terminalId);
+      this.deps.clearTimer(launch.timer);
+    }
+    if (result.success && !(confirms && this.applyLaunch(launch, result.spawnedAt))) {
+      this.handleSpawn(terminalId, result.spawnedAt);
+    }
+    this.updateActive();
+  }
+
+  /**
+   * The pane is closed for good (#17912): its menu choice, its arming and what
+   * it already continued go with it, so a later pane given the same id starts
+   * from its own preset.
+   */
+  forgetPane(terminalId: string): void {
+    this.overrides.delete(terminalId);
+    this.fired.delete(terminalId);
+    const launch = this.launches.get(terminalId);
+    if (launch) {
+      this.deps.clearTimer(launch.timer);
+      this.launches.delete(terminalId);
+    }
+    // An arm still waiting on its host read arms nothing now.
+    const suffix = `\u0000${terminalId}`;
+    for (const key of [...this.requests.keys()]) {
+      if (key.endsWith(suffix)) this.requests.delete(key);
+    }
+    this.disarm(terminalId);
+    this.updateActive();
+  }
+
+  /** True when the launch armed or disarmed the pane, which tells the host itself. */
+  private applyLaunch(launch: ContinuationLaunch, spawnedAt: number | undefined): boolean {
+    const { terminalId, projectId } = launch;
+    const override = this.overrides.get(terminalId);
+    // A choice made for this id in another project was for another pane.
+    if (override && override.projectId !== projectId) this.overrides.delete(terminalId);
+    const pane = this.panes.get(terminalId);
+    if (pane && pane.projectId !== projectId) {
+      this.disarm(terminalId);
+      return this.applyLaunch(launch, spawnedAt);
+    }
+    const wanted = override?.projectId === projectId ? override.armed : launch.arms;
+    if (wanted && !pane) {
+      this.arm(terminalId, projectId, spawnedAt);
+      return true;
+    }
+    if (!wanted && pane) {
+      this.disarm(terminalId);
+      return true;
+    }
+    return false;
+  }
+
+  private arm(terminalId: string, projectId: string, spawnedAt: number | undefined): void {
     const pane: ArmedPane = {
       terminalId,
       projectId,
@@ -199,10 +337,10 @@ export class CodexLimitContinuation {
       state: { status: "armed" },
       wait: null,
       epoch: 0,
-      spawnedAt: terminal.spawnedAt,
+      spawnedAt,
     };
     this.panes.set(terminalId, pane);
-    if (!wasActive) this.deps.onActiveChange(true);
+    this.updateActive();
     this.publish(pane);
     this.deps.setHostArmed(terminalId, true);
   }
@@ -218,7 +356,15 @@ export class CodexLimitContinuation {
       state: null,
     });
     this.reschedule();
-    if (this.panes.size === 0) this.deps.onActiveChange(false);
+    this.updateActive();
+  }
+
+  /** The live listeners follow armed panes and launches awaiting their spawn. */
+  private updateActive(): void {
+    const active = this.panes.size > 0 || this.launches.size > 0;
+    if (active === this.active) return;
+    this.active = active;
+    this.deps.onActiveChange(active);
   }
 
   /**
@@ -341,9 +487,11 @@ export class CodexLimitContinuation {
     if (this.timer !== null) this.deps.clearTimer(this.timer);
     this.timer = null;
     this.timerAt = null;
-    const wasActive = this.panes.size > 0;
+    for (const launch of this.launches.values()) this.deps.clearTimer(launch.timer);
+    this.launches.clear();
+    this.overrides.clear();
     this.panes.clear();
-    if (wasActive) this.deps.onActiveChange(false);
+    this.updateActive();
   }
 
   private async fire(pane: ArmedPane, wait: PendingWait): Promise<void> {
