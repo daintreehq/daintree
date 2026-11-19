@@ -14,7 +14,6 @@ import { CloudAccountService } from "../CloudAccountService.js";
 import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
 import { CloudHostLifecycle, IDLE_SLEEP_HOST_TOO_OLD } from "../CloudHostLifecycle.js";
 import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
-import { CloudIdleSleep, type HostIdleReading } from "../CloudIdleSleep.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
 import type { CloudProvider } from "../provider.js";
 import { FAKE_AGENT37_KEY, FakeAgent37Api, type FakeAgent37Instance } from "./fakeAgent37Api.js";
@@ -41,10 +40,13 @@ function unsupported(): Error {
   return Object.assign(new Error("Unknown method"), { code: "UNSUPPORTED" });
 }
 
+/** What the host's latest summary on the link says of its idle clock. */
+type IdleReading = { idle: HostIdleObservation; sampledAt: number };
+
 /**
  * Daintree's cloud runtime over the real Agent 37 provider and client, against
- * the fake API, with the coordinator fed the summaries a test hands it. The
- * link is a stand-in that answers the host's idle claim as the test says.
+ * the fake API, with the keeper's idle pass reading the summaries a test hands
+ * it. The link is a stand-in that answers the host's idle claim as the test says.
  */
 async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
   const api = new FakeAgent37Api();
@@ -70,6 +72,15 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
     apiUrlFor: () => api.baseUrl,
     platform: "darwin",
   });
+  let answer: () => ClaimAnswer = () => true;
+  const claims = vi.fn(async (_method: string) => {
+    const said = await answer();
+    if (said instanceof Error) throw said;
+    return { granted: said };
+  });
+  const session = { isOpen: true, call: claims } as unknown as LinkSession;
+  let reading: IdleReading | null = null;
+  const release = vi.fn();
   const hosts: HostDescriptor[] = [];
   const lifecycle = new CloudHostLifecycle({
     store,
@@ -89,30 +100,15 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
       onChange: () => () => {},
     },
     changed: () => {},
+    idleClaims: {
+      sessionFor: () => (session.isOpen ? session : null),
+      idleOn: () => reading,
+      release,
+    },
     sleep: async () => {},
     now: () => Date.now() - skew,
   });
   disposers.push(() => lifecycle.dispose());
-
-  let answer: () => ClaimAnswer = () => true;
-  const claims = vi.fn(async (_method: string) => {
-    const said = await answer();
-    if (said instanceof Error) throw said;
-    return { granted: said };
-  });
-  const session = { isOpen: true, call: claims } as unknown as LinkSession;
-  let reading: HostIdleReading | null = null;
-  const release = vi.fn();
-  const idleSleep = new CloudIdleSleep({
-    store,
-    accounts,
-    hosts: { get: (id) => hosts.find((host) => host.id === id) ?? null },
-    lifecycle: () => lifecycle,
-    sessionFor: () => (session.isOpen ? session : null),
-    idleReading: () => reading,
-    release,
-  });
-  disposers.push(() => idleSleep.dispose());
 
   const account = await accounts.addAccount({
     providerId: "agent37",
@@ -124,7 +120,7 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
   const bindingId = store.bindings()[0]!.id;
 
   let lastWorkAt = 1_000_000;
-  /** What the host's latest summary says: idle and ended unless told otherwise. */
+  /** What the host's latest summary says, idle and ended unless told otherwise, read by a keeper pass. */
   const summary = (idle: Partial<HostIdleObservation> = {}, sampledAt = lastWorkAt + 3_600_000) => {
     const after = idle.idleAfterMinutes ?? 30;
     reading = {
@@ -137,7 +133,7 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
       },
       sampledAt,
     };
-    idleSleep.summaryReceived("build");
+    return lifecycle.stopIdleDue();
   };
   const until = (check: () => boolean) =>
     vi.waitFor(() => expect(check()).toBe(true), { timeout: 5_000 });
@@ -147,7 +143,6 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
     api,
     store,
     lifecycle,
-    idleSleep,
     session,
     claims,
     release,
@@ -168,15 +163,15 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
 }
 
 describe("putting a linked Agent 37 instance to sleep once its host is idle (#17916)", () => {
-  it("sleeps an idle linked instance once the host grants its idle time, and doesn't redial it", async () => {
+  it("sleeps an idle linked instance once the host grants its idle time, lets go of the link, and doesn't redial it", async () => {
     const env = await agent37();
-    env.summary();
-    await env.until(() => env.release.mock.calls.length === 1);
+    expect(env.status().linkedIdleStop).toEqual({ kind: "sleeps" });
+    await env.summary();
     expect(env.claims).toHaveBeenCalledTimes(1);
     expect(env.sleeps()).toHaveLength(1);
     expect(env.machine.status).toBe("sleeping");
     expect(env.release).toHaveBeenCalledWith("build", env.session);
-    expect(env.status()).toMatchObject({ machine: "stopped", asleep: true, selfStopProblem: null });
+    expect(env.status()).toMatchObject({ machine: "stopped", asleep: true, lastError: null });
 
     // A dial reads the machine afresh and stops at "asleep": it never asks for a tunnel to it.
     const error = await env.lifecycle.ensureAccess(env.bindingId).catch((e: unknown) => e);
@@ -185,27 +180,23 @@ describe("putting a linked Agent 37 instance to sleep once its host is idle (#17
     expect(env.machine.status).toBe("sleeping");
 
     // The same idle time again asks nothing more.
-    env.summary();
-    await Promise.resolve();
+    await env.summary();
     expect(env.claims).toHaveBeenCalledTimes(1);
     expect(env.sleeps()).toHaveLength(1);
   });
 
   it("leaves a busy host's instance awake, and one whose host refuses the claim", async () => {
     const env = await agent37();
-    env.summary({ busy: true, idleEndsAt: null });
+    await env.summary({ busy: true, idleEndsAt: null });
     // Ended by its own figures, but taken before the host's clock got there.
-    env.summary({}, 1_000_000 + 29 * 60_000);
-    await Promise.resolve();
+    await env.summary({}, 1_000_000 + 29 * 60_000);
     expect(env.claims).not.toHaveBeenCalled();
 
     // The host read afresh and saw work, or another device claimed it first.
     env.answerClaim(() => false);
-    env.summary();
-    await env.until(() => env.claims.mock.calls.length === 1);
-    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]!.selfStopProblem).toBeNull());
-    env.summary();
-    await Promise.resolve();
+    await env.summary();
+    expect(env.claims).toHaveBeenCalledTimes(1);
+    await env.summary();
     expect(env.claims).toHaveBeenCalledTimes(1);
     expect(env.sleeps()).toHaveLength(0);
     expect(env.machine.status).toBe("running");
@@ -220,66 +211,69 @@ describe("putting a linked Agent 37 instance to sleep once its host is idle (#17
       env.machine.slept_at = 1_781_222_400;
       return FakeAgent37Api.error(409, "try_again")();
     });
-    env.summary();
-    await env.until(() => env.release.mock.calls.length === 1);
+    await env.summary();
     expect(env.sleeps()).toHaveLength(1);
-    expect(env.status()).toMatchObject({ asleep: true, selfStopProblem: null });
+    expect(env.status()).toMatchObject({ asleep: true, lastError: null });
   });
 
   it("sends a sleep that meets 409 try_again on a running instance once, and says why it's awake", async () => {
     const env = await agent37();
     env.api.fail("POST", /\/sleep$/, FakeAgent37Api.error(409, "try_again"));
-    env.summary();
-    await env.until(() => env.status().selfStopProblem !== null);
-    expect(env.status().selfStopProblem).toContain("busy with another change");
+    await env.summary();
     expect(env.sleeps()).toHaveLength(1);
     expect(env.machine.status).toBe("running");
-    expect(env.release).not.toHaveBeenCalled();
+    expect(env.status().asleep).toBe(false);
+    expect(env.status().lastError?.message).toBe(
+      "Agent 37 didn't put the machine to sleep once the host's idle time ended: Agent 37 was busy with another change to the machine."
+    );
     // The claim spent that idle time: nothing is sent again until new work ends another.
-    env.summary();
-    await Promise.resolve();
+    await env.summary();
     expect(env.claims).toHaveBeenCalledTimes(1);
     env.newWork();
-    env.summary();
-    await env.until(() => env.release.mock.calls.length === 1);
+    await env.summary();
     expect(env.sleeps()).toHaveLength(2);
-    expect(env.status().selfStopProblem).toBeNull();
+    expect(env.status()).toMatchObject({ asleep: true, lastError: null });
   });
 
   it("refuses every dial while the sleep is under way", async () => {
     const env = await agent37();
     let grant!: (granted: boolean) => void;
     env.answerClaim(() => new Promise<boolean>((resolve) => (grant = resolve)));
-    env.summary();
+    const pass = env.summary();
     await env.until(() => env.claims.mock.calls.length === 1);
     const meanwhile = await env.lifecycle.ensureAccess(env.bindingId).catch((e: unknown) => e);
     expect(meanwhile).toBeInstanceOf(TransportError);
     grant(true);
-    await env.until(() => env.release.mock.calls.length === 1);
+    await pass;
     expect(env.sleeps()).toHaveLength(1);
+    expect(env.status().asleep).toBe(true);
   });
 
-  it("sends nothing to a host too old to confirm its idle time, and says so", async () => {
+  it("sends nothing to a host too old to confirm its idle time, and says so on that link", async () => {
     const env = await agent37();
     env.answerClaim(() => unsupported());
-    env.summary();
-    await env.until(() => env.status().selfStopProblem !== null);
-    expect(env.status().selfStopProblem).toBe(IDLE_SLEEP_HOST_TOO_OLD);
+    await env.summary();
     expect(env.sleeps()).toHaveLength(0);
+    expect(env.status().linkedIdleStop).toEqual({
+      kind: "blocked",
+      problem: IDLE_SLEEP_HOST_TOO_OLD,
+    });
+    // Not asked again on that link, whatever idle time comes next.
+    env.newWork();
+    await env.summary();
+    expect(env.claims).toHaveBeenCalledTimes(1);
   });
 
-  it("asks nothing of a host whose summary came on another link", async () => {
+  it("asks nothing of a host with no open link", async () => {
     const env = await agent37();
     (env.session as { isOpen: boolean }).isOpen = false;
-    env.summary();
-    await Promise.resolve();
+    await env.summary();
     expect(env.claims).not.toHaveBeenCalled();
   });
 
   it("leaves an instance whose own idle sleep is off awake", async () => {
     const env = await agent37({ auto_sleep: false });
-    env.summary();
-    await Promise.resolve();
+    await env.summary();
     expect(env.claims).not.toHaveBeenCalled();
     expect(env.patches()).toHaveLength(0);
   });
@@ -292,31 +286,34 @@ describe("keeping an Agent 37 instance's own idle timeout at its host's idle tim
       ...current,
       ownership: "created-by-daintree",
     }));
-    env.summary({ busy: true, idleEndsAt: null });
-    await env.until(() => env.patches().length === 1);
+    await env.summary({ busy: true, idleEndsAt: null });
+    await env.until(
+      () => env.status().lifetime?.kind === "idle-sleep" && env.patches().length === 1
+    );
     expect(env.patches()[0]!.body).toEqual({ idle_timeout_seconds: 1800 });
-    await env.until(() => env.status().lifetime?.kind === "idle-sleep");
     await vi.waitFor(() =>
       expect(env.status().lifetime).toEqual({ kind: "idle-sleep", idleSeconds: 1800 })
     );
     expect(env.status().idleTimeFollowsHost).toBe(true);
+    // Already there: nothing more is sent.
+    await env.summary({ busy: true, idleEndsAt: null });
+    expect(env.patches()).toHaveLength(1);
 
-    env.idleSleep.settingsApplied("build", [
+    env.lifecycle.idleTimePicked("build", [
       { key: "hostIdle.idleAfterMinutes", value: 60, revision: "r2" },
     ]);
     await env.until(() => env.patches().length === 2);
     expect(env.patches()[1]!.body).toEqual({ idle_timeout_seconds: 3600, auto_sleep: true });
-    expect(env.machine.idle_timeout_seconds).toBe(3600);
+    await env.until(() => env.machine.idle_timeout_seconds === 3600);
   });
 
   it("leaves an imported instance's own idle timeout alone until the person picks one, then follows the host", async () => {
     const env = await agent37({ idle_timeout_seconds: 600, name: "kept" });
-    env.summary({ busy: true, idleEndsAt: null });
-    await Promise.resolve();
+    await env.summary({ busy: true, idleEndsAt: null });
     expect(env.patches()).toHaveLength(0);
     expect(env.status().idleTimeFollowsHost).toBe(false);
 
-    env.idleSleep.settingsApplied("build", [
+    env.lifecycle.idleTimePicked("build", [
       { key: "hostIdle.idleAfterMinutes", value: 30, revision: "r2" },
     ]);
     await env.until(() => env.patches().length === 1);
@@ -325,10 +322,18 @@ describe("keeping an Agent 37 instance's own idle timeout at its host's idle tim
     expect(env.status().idleTimeFollowsHost).toBe(true);
 
     // Changed on the host from elsewhere: it follows now.
-    env.summary({ busy: true, idleEndsAt: null, idleAfterMinutes: 120 });
-    await env.until(() => env.patches().length === 2);
+    await env.until(() => env.status().lifetime?.kind === "idle-sleep");
+    await vi.waitFor(() =>
+      expect(env.status().lifetime).toEqual({ kind: "idle-sleep", idleSeconds: 1800 })
+    );
+    // Each keeper pass reads the latest summary; the one after the pick settles sends it.
+    await env.until(() => {
+      void env.summary({ busy: true, idleEndsAt: null, idleAfterMinutes: 120 });
+      return env.patches().length === 2;
+    });
     expect(env.patches()[1]!.body).toEqual({ idle_timeout_seconds: 7200 });
-    expect(env.machine).toMatchObject({ idle_timeout_seconds: 7200, name: "kept" });
+    await env.until(() => env.machine.idle_timeout_seconds === 7200);
+    expect(env.machine.name).toBe("kept");
   });
 
   it("turns an instance's own idle sleep on only when the person picks an idle time", async () => {
@@ -337,10 +342,9 @@ describe("keeping an Agent 37 instance's own idle timeout at its host's idle tim
       ...current,
       ownership: "created-by-daintree",
     }));
-    env.summary({ busy: true, idleEndsAt: null, idleAfterMinutes: 60 });
-    await Promise.resolve();
+    await env.summary({ busy: true, idleEndsAt: null, idleAfterMinutes: 60 });
     expect(env.patches()).toHaveLength(0);
-    env.idleSleep.settingsApplied("build", [
+    env.lifecycle.idleTimePicked("build", [
       { key: "hostIdle.idleAfterMinutes", value: 60, revision: "r2" },
     ]);
     await env.until(() => env.machine.auto_sleep);
@@ -350,15 +354,17 @@ describe("keeping an Agent 37 instance's own idle timeout at its host's idle tim
   it("says when Agent 37 didn't take the idle time, and clears it once it does", async () => {
     const env = await agent37();
     env.api.fail("PATCH", /^\/instances\/[^/]+$/, FakeAgent37Api.error(403, "forbidden"));
-    env.idleSleep.settingsApplied("build", [
+    env.lifecycle.idleTimePicked("build", [
       { key: "hostIdle.idleAfterMinutes", value: 60, revision: "r2" },
     ]);
-    await env.until(() => env.status().selfStopProblem !== null);
-    expect(env.status().selfStopProblem).toContain("didn't take the idle time");
-    env.idleSleep.settingsApplied("build", [
+    await env.until(() => env.status().lastError !== null);
+    expect(env.status().lastError?.message).toContain(
+      "Agent 37 didn't take the host's idle time as the machine's own:"
+    );
+    env.lifecycle.idleTimePicked("build", [
       { key: "hostIdle.idleAfterMinutes", value: 60, revision: "r3" },
     ]);
-    await env.until(() => env.status().selfStopProblem === null);
+    await env.until(() => env.status().lastError === null);
     expect(env.machine.idle_timeout_seconds).toBe(3600);
   });
 });

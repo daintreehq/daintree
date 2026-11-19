@@ -28,12 +28,7 @@ import {
   type StoredProviderConsent,
 } from "./CloudHostStore.js";
 import { cloudCredentialHint, normalizeCloudCredentials } from "./cloudCredentials.js";
-import {
-  canSleepIdle,
-  type CloudProvider,
-  type ProviderCatalog,
-  type ProviderCredentials,
-} from "./provider.js";
+import type { CloudProvider, ProviderCatalog, ProviderCredentials } from "./provider.js";
 
 const MAX_ACCOUNTS = 16;
 const MAX_NAME_LENGTH = 64;
@@ -247,8 +242,7 @@ export class CloudAccountService {
       const plugin = this.consentFor(info.id);
       const hostIdleStop =
         provider.machineKeys !== undefined || typeof provider.checkGuestPowerOff === "function";
-      const sleepsWhenHostIdle = canSleepIdle(provider);
-      return { ...info, ...(plugin ? { plugin } : {}), hostIdleStop, sleepsWhenHostIdle };
+      return { ...info, ...(plugin ? { plugin } : {}), hostIdleStop };
     });
   }
 

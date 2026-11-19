@@ -240,12 +240,6 @@ export interface CloudProviderInfo {
    * provider implements, never from a declaration, so a plugin's is false.
    */
   hostIdleStop?: boolean;
-  /**
-   * This device puts a machine to sleep once its host's idle time ends while
-   * linked to it, and keeps the provider's own idle timer at the host's idle
-   * time: Agent 37's (#17916). Set by this device, like `hostIdleStop`.
-   */
-  sleepsWhenHostIdle?: boolean;
 }
 
 /**
@@ -724,11 +718,17 @@ export interface CloudHostStatus {
 
 /**
  * `stops`: this device stops the machine with the provider's normal stop once
- * the host grants it the ended idle time. `unknown`: the provider hasn't said
- * yet whether a stop would keep this machine's disk. `blocked`: why it doesn't.
+ * the host grants it the ended idle time. `sleeps`: it puts the machine to
+ * sleep the same way, for a provider whose own idle timer a link keeps from
+ * running, which is in charge with no device linked (#17916). `unknown`: the
+ * provider hasn't said yet whether a stop would keep this machine's disk.
+ * `blocked`: why it doesn't.
  */
 export type CloudLinkedIdleStop =
-  { kind: "stops" } | { kind: "unknown" } | { kind: "blocked"; problem: string };
+  | { kind: "stops" }
+  | { kind: "sleeps" }
+  | { kind: "unknown" }
+  | { kind: "blocked"; problem: string };
 
 /** The machine as it would be created. */
 export interface CloudHostCreateRequest {

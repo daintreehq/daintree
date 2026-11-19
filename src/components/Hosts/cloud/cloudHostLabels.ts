@@ -10,10 +10,7 @@ import {
 import type { HostIdleObservation } from "@shared/types/hostIdle";
 
 /** The parts of a provider's declaration that decide what stopping and deleting mean. */
-export type CloudProviderTerms = Pick<
-  CloudProviderInfo,
-  "name" | "capabilities" | "hostIdleStop" | "sleepsWhenHostIdle"
->;
+export type CloudProviderTerms = Pick<CloudProviderInfo, "name" | "capabilities" | "hostIdleStop">;
 
 /** The provider a host's machine runs on, or null while it isn't registered. */
 export function cloudProviderFor<P extends { id: string }>(
@@ -228,6 +225,8 @@ export interface IdleSleepMachine {
   followsHost: boolean;
 }
 
+const UNKNOWN_SLEEPER: IdleSleepMachine = { connected: false, lifetime: null, followsHost: true };
+
 /**
  * Which timer puts a machine to sleep on a provider whose own idle timer an
  * open link keeps from running, Agent 37's (#17916): the host's idle time
@@ -250,7 +249,10 @@ export function idleSleepTimerSentence(
     ? `The host's idle time is in charge while this device is connected, since the connection keeps ${ownTimer} from running: once it ends, Daintree checks with the host and puts the machine to sleep.`
     : `${ownTimer} is in charge while no device is connected: it puts the machine to sleep ${own === null ? "once it's been idle for a while" : `after ${durationLabel(own)} without activity`}. The host's idle time takes over while this device is connected.`;
   const differs =
-    !machine.followsHost && idle !== undefined && own !== null && own !== idle.idleAfterMinutes * 60;
+    !machine.followsHost &&
+    idle !== undefined &&
+    own !== null &&
+    own !== idle.idleAfterMinutes * 60;
   return differs
     ? `${inCharge} ${name} keeps its own idle timer until you pick an idle time here.`
     : inCharge;
@@ -288,7 +290,7 @@ export function idleEndSentence(
   provider: CloudProviderTerms | null,
   selfStopProblem: string | null,
   linkedIdleStop: CloudLinkedIdleStop | null = null,
-  machine?: IdleSleepMachine
+  machine: IdleSleepMachine = UNKNOWN_SLEEPER
 ): string | null {
   if (idle?.stopsWhenIdle) return null;
   if (selfStopProblem) {
@@ -300,13 +302,12 @@ export function idleEndSentence(
     }
     return selfStopProblem;
   }
-  if (provider?.sleepsWhenHostIdle && machine) {
-    return idleSleepTimerSentence(provider, idle, machine);
-  }
   if (provider && linkedIdleStop) {
     switch (linkedIdleStop.kind) {
       case "stops":
         return LINKED_IDLE_STOP;
+      case "sleeps":
+        return idleSleepTimerSentence(provider, idle, machine);
       case "blocked":
         return linkedIdleStop.problem;
       case "unknown":

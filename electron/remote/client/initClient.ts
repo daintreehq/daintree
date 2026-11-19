@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { app, type BrowserWindow, type Event, type WebContents } from "electron";
 import type { HostRestartImpact, RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
+import type { HostSettingLeaf } from "../../../shared/types/hostSettings.js";
 import { MetricsLinkMethod, RestartImpactSchema } from "../metrics/linkMethods.js";
 import {
   isLocalHostId,
@@ -47,7 +48,6 @@ import {
 } from "../../window/projectOwnership.js";
 import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
 import { CloudGuestPowerOff } from "../cloud/CloudGuestPowerOff.js";
-import { CloudIdleSleep } from "../cloud/CloudIdleSleep.js";
 import { CloudMachineKeys } from "../cloud/CloudMachineKeys.js";
 import { CloudSshFiles } from "../cloud/CloudSshFiles.js";
 import { initCloudHosts } from "../cloud/initCloudHosts.js";
@@ -844,8 +844,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   /** Sends a Remote Hosts event to every view on this machine. */
   emitLocal(event: RemoteHostsEvent): void;
   registry: HostRegistry;
-  /** Linked machines put to sleep once their host's idle time ends (#17916): fed host summaries and settings changes. */
-  idleSleep: Pick<CloudIdleSleep, "summaryReceived" | "settingsApplied">;
+  /** A change that landed on a host's settings: a new idle time becomes its cloud machine's own (#17916). */
+  idleTimePicked(hostId: HostId, settings: readonly HostSettingLeaf[]): void;
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
@@ -1147,28 +1147,6 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopGuestPowerOff = manager.onSessionOpened((hostId, session) =>
     guestPowerOff.sessionOpened(hostId, session)
   );
-  const idleSleep = new CloudIdleSleep({
-    store: cloud.store,
-    accounts: cloud.accounts,
-    hosts: { get: (hostId) => registry.get(hostId) },
-    lifecycle: () => cloudLifecycle,
-    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
-    idleReading: (hostId, session) => {
-      const metrics = getRemoteService("hostMetrics");
-      const summary = metrics?.latest(hostId) ?? null;
-      if (!metrics || !summary?.idle || metrics.cameOn(summary, session) !== true) return null;
-      // One held from before a pause says nothing about the host now.
-      const receipt = metrics.receiptOf(summary);
-      if (!receipt || Date.now() - receipt.receivedAt >= 60_000) return null;
-      return { idle: summary.idle, sampledAt: summary.sampledAt };
-    },
-    release: (hostId, session) => {
-      const current = manager.get(hostId)?.currentSession ?? null;
-      if (current !== null && current !== session) return;
-      // Not a person's disconnect: anything that dials it later reads it asleep and stops there.
-      void manager.disconnect(hostId).catch(() => {});
-    },
-  });
   cloudLifecycle = new CloudHostLifecycle({
     store: cloud.store,
     accounts: cloud.accounts,
@@ -1180,6 +1158,12 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
       idleOn: (hostId, session) =>
         getRemoteService("hostMetrics")?.idleOn(hostId, session, 60_000) ?? null,
+      release: (hostId, session) => {
+        const current = manager.get(hostId)?.currentSession ?? null;
+        if (current !== null && current !== session) return;
+        // Not a person's disconnect: anything that dials it later reads it asleep and stops there.
+        void manager.disconnect(hostId).catch(() => {});
+      },
     },
     hosts: {
       add: (name, connection, pendingPlacement) =>
@@ -1237,7 +1221,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     manager,
     emitLocal: broadcastLocal,
     registry,
-    idleSleep,
+    idleTimePicked: (hostId, settings) => cloudLifecycle?.idleTimePicked(hostId, settings),
     async dispose() {
       stopWakeWatch();
       app.off("browser-window-focus", onWindowFocus);
@@ -1254,7 +1238,6 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       machineKeys?.dispose();
       stopGuestPowerOff();
       guestPowerOff.dispose();
-      idleSleep.dispose();
       cloudLifecycle?.dispose();
       cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.

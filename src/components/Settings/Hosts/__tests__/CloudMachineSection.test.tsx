@@ -858,13 +858,13 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
         stoppedComputeBilled: false,
         stoppedStorageBilled: true,
         lifetime: { kind: "idle-sleep", idleSeconds: 1800 },
-        sleepsWhenHostIdle: true,
       }),
       id: "agent37",
     };
     const sleeper = (overrides: Partial<CloudHostStatus> = {}) =>
       running("agent37", {
         lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+        linkedIdleStop: { kind: "sleeps" },
         idleTimeFollowsHost: true,
         ...overrides,
       });
@@ -918,7 +918,9 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
       "The host's idle time is in charge while this device is connected, since the connection keeps Agent 37's own idle timer (15 minutes) from running"
     );
     // Imported, its own timer keeps its own length until an idle time is picked here.
-    expect(idleRow()).toContain("Agent 37 keeps its own idle timer until you pick an idle time here.");
+    expect(idleRow()).toContain(
+      "Agent 37 keeps its own idle timer until you pick an idle time here."
+    );
 
     cleanup();
     show(sleeper({ lifetime: { kind: "none" } }), [agent37]);
