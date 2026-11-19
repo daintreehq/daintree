@@ -678,6 +678,8 @@ export function recordOwnershipFromDispatch(
     readonly args?: unknown;
     /** When the call was made; absent, now. */
     readonly askedAt?: number;
+    /** The caller chose the id it created under, which a restart can't vouch for (#16845). */
+    readonly callerNamedId?: boolean;
   },
   owned: {
     readonly ownedResource: OwnedResourceTool | undefined;
@@ -736,12 +738,15 @@ export function recordOwnershipFromDispatch(
     !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) &&
     !sessionStore.hasLiveTransport(sessionId)
   ) {
+    // Still something new under those ids, so no older record speaks for them (#16845).
+    sessionStore.resourceOwnership.supersede(drafts);
     return;
   }
   const recorded = sessionStore.resourceOwnership.record(
     ownershipOwner,
     drafts,
-    envelope.dispatchedWorkspace?.workspaceId
+    envelope.dispatchedWorkspace?.workspaceId,
+    call.callerNamedId === true ? { callerNamedId: true } : undefined
   );
   // A creation under an id that was handed over names a new terminal, and
   // the hand-over was of the old one (#12490). Left in place, the id would

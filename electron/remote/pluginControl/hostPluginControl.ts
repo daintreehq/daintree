@@ -21,6 +21,7 @@ import {
 } from "../../services/plugin/pluginLaunchedAgents.js";
 import type { ViewlessActionRequest } from "../../services/viewless/ViewlessActionExecutor.js";
 import type { LinkSession } from "../link/session.js";
+import { supersedeByPluginLaunch } from "../../services/mcp-server/assistantPaneCreations.js";
 import type { MetricsSessionContext, MetricsSessionSource } from "../metrics/hostMetricsHost.js";
 import {
   PLUGIN_CONTROL_CALL_MS,
@@ -308,6 +309,7 @@ export function createHostPluginControl(deps: HostPluginControlDeps) {
         audit(null, error);
         throw error;
       }
+      supersedeByPluginLaunch(payload.actionId, result);
       const terminalId = launchedTerminal(payload.actionId, payload.args, result);
       if (terminalId !== null) {
         remember(terminalId, {

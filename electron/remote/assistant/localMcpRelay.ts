@@ -34,7 +34,14 @@ export const LOCAL_RELAY_LINK_SESSION_ID = LOCAL_HOST_ID;
 
 export interface LocalMcpRelayDeps extends Pick<
   McpRelayExecutorDeps,
-  "hasProject" | "openSession" | "retirePrincipal" | "forgetConversation" | "now" | "idleMs"
+  | "hasProject"
+  | "openSession"
+  | "retirePrincipal"
+  | "forgetConversation"
+  | "keptConversations"
+  | "noteConversationCall"
+  | "now"
+  | "idleMs"
 > {
   /** This machine's name, as the prompts its assistants send say where they came from. */
   machineName(): string;
@@ -101,6 +108,8 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
     openSession: deps.openSession,
     ...(deps.retirePrincipal ? { retirePrincipal: deps.retirePrincipal } : {}),
     ...(deps.forgetConversation ? { forgetConversation: deps.forgetConversation } : {}),
+    ...(deps.keptConversations ? { keptConversations: deps.keptConversations } : {}),
+    ...(deps.noteConversationCall ? { noteConversationCall: deps.noteConversationCall } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.idleMs !== undefined ? { idleMs: deps.idleMs } : {}),
   });

@@ -46,6 +46,13 @@ import {
   relayOwnershipPrincipal,
 } from "./mcp-server/resourceOwnership.js";
 import { readRunAssistantWork, type RunAssistantWork } from "./mcp-server/workerCreationHistory.js";
+import {
+  assistantPaneCreationObserver,
+  attachAssistantPaneCreationLedger,
+  forgetTrashedAssistantPane,
+  isKeptAssistantPane,
+} from "./mcp-server/assistantPaneCreations.js";
+import { attachAssistantPaneCreationStore } from "./mcp-server/assistantPaneCreationStore.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
 import { LOCAL_HOST_ID } from "../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
@@ -290,6 +297,8 @@ export class McpServerService {
         cleanupResourceSubscriptions(sessionId, this.sessionStore);
       },
       {
+        // What an Assistant's conversation launched outlives the app (#16845).
+        ownershipObserver: assistantPaneCreationObserver,
         emitGrantLifecycle: (sessionId, payload) => this.emitGrantLifecycle(sessionId, payload),
         launchGenerationOf: (terminalId) => getPtyClient()?.getLaunchGeneration(terminalId) ?? null,
         dropAbuseState: (sessionId) => abusePolicy.dropSession(sessionId),
@@ -329,6 +338,8 @@ export class McpServerService {
       }
     );
 
+    attachAssistantPaneCreationLedger(this.sessionStore.resourceOwnership);
+
     this.turnOutcomeService = new TurnOutcomeService({
       saveConfig: (patch) => this.persistConfig(patch),
       readConfig: () => this.getConfig(),
@@ -360,6 +371,8 @@ export class McpServerService {
       // Trashing is the user putting the terminal away; restoring it later
       // does not restore a hand-over they never repeated (#12490).
       this.sessionStore.terminalAdoption.release(payload.id);
+      // Nor does a restart give it back to the conversation that launched it (#16845).
+      forgetTrashedAssistantPane(payload.id);
     });
     this.persistentListeners.push(offTrashed);
 
@@ -547,8 +560,11 @@ export class McpServerService {
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
         handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
-      // collision check needs: a panel store only knows its own (#12407).
-      isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,
+      // collision check needs: a panel store only knows its own (#12407). A
+      // pane a restart kept for an Assistant is in use too, though its project
+      // hasn't opened yet, or its conversation could get another pane back (#16845).
+      isTerminalIdInUse: (terminalId) =>
+        (getPtyClient()?.hasTerminal(terminalId) ?? false) || isKeptAssistantPane(terminalId),
       // `getTerminalAsync` answers null for a failed read as well as an unknown
       // id, so the id is checked first: null for a tracked terminal is a read
       // that failed, and the assistant's close must ask rather than assume idle.
@@ -1250,6 +1266,8 @@ export class McpServerService {
       return;
     }
     this._registry = resolved;
+    // Before any session can create: a short id main mints must miss every pane kept on disk.
+    attachAssistantPaneCreationStore();
     await this.httpLifecycle.start(resolved);
   }
 
