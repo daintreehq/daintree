@@ -127,33 +127,39 @@ API key owns only what it creates in the session it is using, so a script that
 launches an agent with one call and sends to it with the next needs both calls
 in one session:
 
-  DAINTREE_MCP_SESSION=$(daintree session start) || exit
-  export DAINTREE_MCP_SESSION
+  handle=$(daintree session start) || exit
+  export DAINTREE_MCP_SESSION=$handle
   daintree call agent.launch --arg agentId=claude --json
-  daintree call terminal.sendCommandOwned --arg terminalId=... --args - < prompt.json
+  daintree call terminal.sendCommandOwned --args - < send.json
   daintree session end
+  unset DAINTREE_MCP_SESSION
+
+where send.json is {"terminalId": "<the launch's terminalId>", "command": "..."}.
 
 start opens a session with DAINTREE_MCP_URL and DAINTREE_MCP_TOKEN and prints
-its handle. Every daintree call made with the handle in DAINTREE_MCP_SESSION
-runs in that session; end closes it. The handle holds no credential and is
-useless without the one that opened it.
+its handle, refusing while DAINTREE_MCP_SESSION names one already. Every
+daintree call made with the handle in DAINTREE_MCP_SESSION runs in that
+session; end closes it. The handle holds no credential and is useless without
+the one that opened it.
 
-The session ends with end, after 30 minutes without a call, or when Daintree's
-MCP server stops or changes its key. What it created stays where it is, owned
-by no session: a later call with the handle exits 5, and never opens a new
-session in its place. Within 120 seconds, an identical creation call in the
-same session gets the first answer back; give each its own requestKey to
-create two.
+The session ends with end, after 30 minutes without a call (time asleep
+doesn't count), or when Daintree's MCP server stops, restarts or changes its
+key. What it created stays where it is, owned by no session, and a later call
+with the handle fails (exit 5, or 4 for a changed key, 3 while Daintree isn't
+answering) rather than open a new session in its place. Within 120 seconds, a
+repeated creation call with the same arguments in the same session can get the
+first call's answer back instead of creating again; give each its own
+requestKey to create two.
 
 In an agent pane the pane's credential already owns what its calls create, so
-a held session adds nothing there, and holds one of the pane's eight sessions
-until it ends or the pane exits.
+a held session adds nothing there. It holds one of the pane's eight sessions
+until it ends or the pane exits, and a ninth can evict it.
 
 Exit status:
   0  done; start prints the handle on stdout
   1  Daintree refused the session
-  2  usage error: DAINTREE_MCP_SESSION is already set for start, or missing or
-     malformed for end
+  2  usage error: DAINTREE_MCP_SESSION already names a session for start, or
+     is missing or malformed for end
   3  no answer: Daintree isn't reachable, or the reply wasn't understood
   4  no usable credential: DAINTREE_MCP_URL or DAINTREE_MCP_TOKEN is missing,
      malformed, or refused
@@ -271,7 +277,7 @@ daintree_call_refused() {
 # credential opened, before the request reaches it.
 daintree_call_gone() {
   if [[ $DTC_STATUS == 404 ]]; then
-    daintree_call_fail 5 "the session in DAINTREE_MCP_SESSION is gone: it was ended, went 30 minutes without a call, was evicted, was dropped when Daintree's MCP server stopped or changed its key, or belongs to another credential. Nothing ran, and no new session was opened; start one with daintree session start."
+    daintree_call_fail 5 "the session in DAINTREE_MCP_SESSION is gone: it was ended, went 30 minutes without a call, was evicted, was dropped when Daintree's MCP server restarted, or belongs to another credential. Nothing ran, and no new session was opened; unset DAINTREE_MCP_SESSION and start another with daintree session start."
   fi
 }
 
@@ -288,13 +294,13 @@ daintree_call_parse_handle() {
 }
 
 # A JSON-RPC id no other call in a held session is using. Each call there is a
-# process of its own, so nothing can count; 47 random bits with the top one set
-# stay exact through JSON.parse and awk, and never meet the handshake's 1.
+# process of its own, so nothing can count; 52 random bits with bit 52 set stay
+# below 2^53, exact through JSON.parse and awk, and never meet the handshake's 1.
 daintree_call_fresh_id() {
   local hex
-  hex=$(od -An -N6 -tx1 /dev/urandom 2> /dev/null | tr -d ' \n') || hex=""
-  [[ $hex =~ ^[0-9a-f]{12}$ ]] || daintree_call_fail 3 "could not read /dev/urandom for a request id"
-  DTC_ID=$(((16#$hex & 0x7fffffffffff) | 0x800000000000))
+  hex=$(od -An -N7 -tx1 /dev/urandom 2> /dev/null | tr -d ' \n') || hex=""
+  [[ $hex =~ ^[0-9a-f]{14}$ ]] || daintree_call_fail 3 "could not read /dev/urandom for a request id"
+  DTC_ID=$(((16#$hex & 0xfffffffffffff) | 0x10000000000000))
 }
 
 # What every request needs: the endpoint and bearer from the environment, curl,
@@ -386,6 +392,7 @@ daintree_call() {
   local tool="" args_json="" args_given=0 args_stdin=0 pairs="" keys=" " as_json=0 arg key value
   LC_ALL=C
   export LC_ALL
+  DTC_COMMAND=call
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -779,12 +786,12 @@ daintree_session_start() {
   # session the script already holds. Printed from a subshell, so a closed
   # stdout fails the print instead of killing this shell before it closes the
   # session no one was told about.
-  trap '' INT TERM HUP
+  trap '' INT TERM HUP PIPE
   if (printf '%s:%s\n' "$DTC_VERSION" "$DTC_SESSION") 2> /dev/null; then
     DTC_CLOSE=0
     exit 0
   fi
-  daintree_call_fail 3 "could not print the session's handle, so the session was closed again"
+  daintree_call_fail 3 "could not print the session's handle; closing the session again"
 }
 
 daintree_session_end() {
@@ -797,12 +804,14 @@ daintree_session_end() {
   daintree_call_request "" 10 "$DTC_TMP/reply-headers" || rc=$?
   daintree_call_refused
   daintree_call_gone
-  if [[ $rc -ne 0 ]]; then
-    daintree_call_fail 3 "could not reach Daintree at $DTC_ENDPOINT to end the session: $(daintree_call_curl_error)"
-  fi
+  # The status alone settles it: the server closes the session before it
+  # answers, so a reply cut short after a 2xx still ended it.
   case "$DTC_STATUS" in
     200|202|204) exit 0 ;;
   esac
+  if [[ $rc -ne 0 ]]; then
+    daintree_call_fail 3 "could not reach Daintree at $DTC_ENDPOINT to end the session: $(daintree_call_curl_error)"
+  fi
   daintree_call_fail 3 "Daintree didn't end the session (HTTP ${DTC_STATUS:-none}): $(daintree_call_reply_excerpt)"
 }
 # <<< daintree call <<<

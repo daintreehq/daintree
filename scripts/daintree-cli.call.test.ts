@@ -18,6 +18,8 @@ import {
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "daintree-cli.sh");
 const TOKEN = "pane-bearer-1234";
+// Valid too, but not the credential that opened the session it is sent with.
+const OTHER_TOKEN = "other-bearer-5678";
 // The fixture answers initialize with this older revision whatever was asked,
 // so a client that sent a constant instead of the negotiated one is refused.
 const NEGOTIATED_VERSION = "2025-06-18";
@@ -51,6 +53,10 @@ interface FixtureOptions {
   callReply?: string;
   /** Answers this JSON-RPC method with a 401, as for a bearer revoked mid-call. */
   refuse?: string;
+  /** Holds this JSON-RPC method's request unanswered until the fixture closes. */
+  stall?: string;
+  /** Closes the session a DELETE names, then cuts its 200 short. */
+  truncatedDelete?: boolean;
 }
 
 interface Fixture {
@@ -59,6 +65,8 @@ interface Fixture {
   sessions: Map<string, StreamableHTTPServerTransport>;
   /** Resolves when the server receives a `tools/call`. */
   callArrived: Promise<void>;
+  /** Resolves when the request named by `stall` arrives. */
+  stalled: Promise<void>;
   close: () => Promise<void>;
 }
 
@@ -69,6 +77,11 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const callArrived = new Promise<void>((resolve) => {
     signalCall = resolve;
   });
+  let signalStalled: () => void = () => {};
+  const stalled = new Promise<void>((resolve) => {
+    signalStalled = resolve;
+  });
+  const openedWith = new Map<string, string | undefined>();
   let releaseSlow: () => void = () => {};
   const slowReleased = new Promise<void>((resolve) => {
     releaseSlow = resolve;
@@ -194,8 +207,9 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
     res.end = ((chunk?: unknown, ...rest: unknown[]) =>
       end(capture(chunk), ...rest)) as typeof res.end;
 
+    const authorization = req.headers.authorization;
     if (
-      req.headers.authorization !== `Bearer ${TOKEN}` ||
+      (authorization !== `Bearer ${TOKEN}` && authorization !== `Bearer ${OTHER_TOKEN}`) ||
       (options.refuse !== undefined && rpc?.method === options.refuse)
     ) {
       res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
@@ -244,9 +258,24 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         .end('event: message\ndata: {"jsonrpc":"2.0","id":1,"result":\n\n');
       return;
     }
+    const closing =
+      req.method === "DELETE" ? sessions.get(header("mcp-session-id") ?? "") : undefined;
+    if (options.truncatedDelete && closing) {
+      await closing.close();
+      cutShort(200, {});
+      return;
+    }
+    if (options.stall !== undefined && rpc?.method === options.stall) {
+      signalStalled();
+      await slowReleased;
+      res.destroy();
+      return;
+    }
     const sessionId = header("mcp-session-id");
     let transport = sessionId ? sessions.get(sessionId) : undefined;
-    if (sessionId && !transport) {
+    // As Daintree does, one answer for an unknown session and for one another
+    // credential opened.
+    if (sessionId && (!transport || openedWith.get(sessionId) !== authorization)) {
       res.writeHead(404, { "Content-Type": "application/json" }).end(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -262,6 +291,7 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         enableJsonResponse: options.jsonResponse === true,
         onsessioninitialized: (id) => {
           sessions.set(id, created);
+          openedWith.set(id, authorization);
         },
       });
       created.onclose = () => {
@@ -281,6 +311,7 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
     seen,
     sessions,
     callArrived,
+    stalled,
     close: async () => {
       releaseSlow();
       for (const transport of sessions.values()) await transport.close().catch(() => {});
@@ -799,7 +830,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     const sessionOf = (handle: string) => {
       const opened = fixture.seen.find((r) => r.rpc?.method === "notifications/initialized");
       expect(opened?.sessionId).toBeTruthy();
-      expect(handle).toContain(opened?.sessionId ?? "");
+      expect(handle).toBe(`${NEGOTIATED_VERSION}:${opened?.sessionId}`);
       return opened?.sessionId ?? "";
     };
 
@@ -815,9 +846,12 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       const sessionId = sessionOf(handle);
       const env = { DAINTREE_MCP_SESSION: handle };
 
-      const launched = await call(["fixture.launch", "--arg", "terminalId=t-1"], env);
+      const launched = await call(["fixture.launch", "--arg", "terminalId=t-1", "--json"], env);
       expect(launched.stderr).toBe("");
       expect(launched.status).toBe(0);
+      expect(JSON.parse(launched.stdout)).toEqual({
+        content: [{ type: "text", text: "launched t-1" }],
+      });
       const sent = await call(["fixture.send", "--arg", "terminalId=t-1"], env);
       expect(sent.stderr).toBe("");
       expect(sent.status).toBe(0);
@@ -933,6 +967,66 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       expect(fixture.seen.some((request) => request.method === "DELETE")).toBe(false);
     });
 
+    it("takes a 200 to end as ended even when its reply is cut short", async () => {
+      await fixture.close();
+      fixture = await startFixture({ truncatedDelete: true });
+      const handle = await held();
+
+      const run = await session(["end"], { DAINTREE_MCP_SESSION: handle });
+
+      expect(run.stderr).toBe("");
+      expect(run.status).toBe(0);
+      expect(fixture.sessions.size).toBe(0);
+    });
+
+    it("exits 4 when Daintree refuses the bearer on end, leaving the session open", async () => {
+      const handle = await held();
+
+      const run = await session(["end"], {
+        DAINTREE_MCP_SESSION: handle,
+        DAINTREE_MCP_TOKEN: "rotated",
+      });
+
+      expect(run.status).toBe(4);
+      expect(fixture.sessions.size).toBe(1);
+    });
+
+    it("fails a handle sent with another credential, leaving the session to its own", async () => {
+      const handle = await held();
+      const sessionId = sessionOf(handle);
+      const foreign = { DAINTREE_MCP_SESSION: handle, DAINTREE_MCP_TOKEN: OTHER_TOKEN };
+
+      const run = await call(["fixture.launch", "--arg", "terminalId=t-1"], foreign);
+      expect(run.status).toBe(5);
+      const ended = await session(["end"], foreign);
+      expect(ended.status).toBe(5);
+
+      expect(fixture.sessions.has(sessionId)).toBe(true);
+      expect(fixture.seen.filter((r) => r.rpc?.method === "initialize")).toHaveLength(1);
+      expect(fixture.seen.filter((r) => r.rpc?.method === "tools/call")).toHaveLength(1);
+      const own = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: handle });
+      expect(own.status).toBe(0);
+    });
+
+    it("closes the session when stopped while start is opening it", async () => {
+      await fixture.close();
+      fixture = await startFixture({ stall: "notifications/initialized" });
+
+      const { child, done } = start(["start"], {}, undefined, "session");
+      await fixture.stalled;
+      child.kill("SIGTERM");
+      const run = await done;
+
+      expect(run.status).toBe(143);
+      expect(run.stdout).toBe("");
+      expect(fixture.seen.at(-1)).toMatchObject({
+        method: "DELETE",
+        sessionId: fixture.seen[1].sessionId,
+      });
+      expect(fixture.sessions.size).toBe(0);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
     it("closes a session it opened but couldn't hand over", async () => {
       await fixture.close();
       fixture = await startFixture({ refuse: "notifications/initialized" });
@@ -940,7 +1034,11 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       const refused = await session(["start"]);
       expect(refused.status).toBe(4);
       expect(refused.stdout).toBe("");
-      expect(fixture.seen.at(-1)?.method).toBe("DELETE");
+      expect(fixture.seen.at(-1)).toMatchObject({
+        method: "DELETE",
+        sessionId: fixture.seen[1].sessionId,
+      });
+      expect(fixture.sessions.size).toBe(0);
 
       // stdout closed: the handle can't reach the script, so the session closes.
       await fixture.close();
@@ -967,6 +1065,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       [[], "start or end"],
       [["bogus"], "start or end"],
       [["start", "extra"], "start or end"],
+      [["end", "extra"], "start or end"],
     ])("refuses session %j before contacting Daintree", async (args, message) => {
       const run = await session(args);
 
