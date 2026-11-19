@@ -174,6 +174,11 @@ import {
   type AssistantTarget,
 } from "../assistants/AssistantTerminalControl.js";
 import type { WorkerSteerTarget } from "../assistants/GlobalWorkerSteer.js";
+import {
+  CLAUDE_UPDATE_DELIVERY_MS,
+  CLAUDE_UPDATE_WATCH_MS,
+} from "../../../shared/types/claudeUpdateApply.js";
+import { MCP_REMOTE_CONFIRM_MARGIN_MS } from "../../../shared/config/mcpConfirmWindow.js";
 import type { SessionServerDeps } from "./sessionServerDepsContract.js";
 import { createSessionContext } from "./sessionContext.js";
 import {
@@ -322,16 +327,24 @@ const ASSISTANT_TARGET_TOOLS: ReadonlySet<string> = new Set([
 /** Shown by the global Assistant through the steer's gate, on the owned reveal's own dispatch (#16096). */
 const GLOBAL_REVEAL_TOOL = "terminal.revealOwned";
 /**
+ * Applies a Claude Code update (#17908): for any caller on a pane it
+ * launched, and for the global Assistant on a worker the steer's gate lets
+ * through too. Main types `/restart` itself once the person approved.
+ */
+const CLAUDE_UPDATE_TOOL = "terminal.applyClaudeUpdateOwned";
+/**
  * The input tools the global Assistant may point at a worker it neither
- * launched nor was handed (#14551), and the reveal that shows the person that
- * worker's panel (#16096), and nothing else: closes, restarts and injections
- * keep the ownership ledger.
+ * launched nor was handed (#14551), the reveal that shows the person that
+ * worker's panel (#16096), and the Claude Code update the person approves
+ * (#17908), and nothing else: closes, restarts and injections keep the
+ * ownership ledger.
  */
 const GLOBAL_STEER_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommandOwned",
   "terminal.sendKeysOwned",
   "terminal.interruptOwned",
   GLOBAL_REVEAL_TOOL,
+  CLAUDE_UPDATE_TOOL,
 ]);
 /** The closes whose answer carries what the host saw of each closed panel's process (#14474). */
 const CLOSE_TOOLS: ReadonlySet<string> = new Set([
@@ -1336,6 +1349,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // (#16096), set by the gate; it is `ownedResourceId` too, so the answer
     // names it, but no ledger record or hand-over admitted it.
     let globalRevealTerminalId: string | undefined;
+    // A worker the global Assistant asks to apply a Claude Code update on
+    // without owning it (#17908), set by the gate like the reveal's.
+    let globalUpdateTerminalId: string | undefined;
     // The record the gate accepted. A release drops only this record, so a
     // cleanup that completes after another session on the same bearer
     // recorded a new resource under the id cannot take the new one with it.
@@ -1382,6 +1398,83 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         entry,
         resourceId
       );
+
+    // A Claude Code update an assistant asked to apply (#17908). The pane is
+    // read before anyone is asked, so nothing is put to the person for one
+    // that doesn't offer `/restart`; the person's approval is the delegate's
+    // dispatch, as for the preset move; only then does main wait for the empty
+    // prompt and type `/restart`, once. A worker the global Assistant didn't
+    // launch passes the steer's gate first.
+    const applyClaudeUpdate = async (
+      terminalId: string
+    ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
+      const service = deps.claudeUpdate;
+      if (service === undefined) {
+        throw new AssistantTargetError(
+          EXECUTION_ERROR_CODE,
+          "This host can't apply agent updates right now. Nothing was sent."
+        );
+      }
+      const generation =
+        typeof callArgs.generation === "number" &&
+        Number.isInteger(callArgs.generation) &&
+        callArgs.generation >= 0
+          ? callArgs.generation
+          : undefined;
+      const steer =
+        globalUpdateTerminalId !== undefined ? globalSteerTarget(terminalId) : undefined;
+      // Asked right before `/restart` is typed, long after the approval: the
+      // session, the pane still being its own, and the drive rule.
+      const authorize =
+        steer !== undefined
+          ? () => steer.authorize()
+          : () => {
+              if (sessionStore.getTier(sessionId) === null) {
+                throw new AssistantTargetError(SESSION_GONE, SESSION_GONE_MESSAGE);
+              }
+              if (ownedRecordFor("terminal", terminalId) === undefined) {
+                throw new AssistantTargetError(
+                  RESOURCE_NOT_OWNED_CODE,
+                  `Terminal '${terminalId}' is no longer this session's.`
+                );
+              }
+              const projectId =
+                ownedResourceRecord?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
+              const refusal = projectId !== undefined ? assistantWriteRefusal(projectId) : null;
+              if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
+            };
+      const run = () =>
+        service.exclusive(terminalId, async () => {
+          const pin = await service.preflight(terminalId, generation, ownershipOwner);
+          const approval = await dispatchOwnedResourceAction(
+            ownedResource as RendererOwnedResourceTool,
+            terminalId
+          );
+          if (!approval.envelope.result.ok) return approval;
+          // A relayed call's caller stops waiting at its deadline (#15699):
+          // the line goes in early enough for the answer to reach it, and not
+          // at all once it has been answered.
+          let deadline: number | undefined;
+          if (relayCallId !== undefined) {
+            const at = sessionStore.sessionRelayMap.get(sessionId)?.callDeadline?.(relayCallId);
+            deadline =
+              at === undefined
+                ? Date.now()
+                : at -
+                  CLAUDE_UPDATE_DELIVERY_MS -
+                  CLAUDE_UPDATE_WATCH_MS -
+                  MCP_REMOTE_CONFIRM_MARGIN_MS;
+          }
+          const result = await service.apply(pin, {
+            inputOwner: ownershipOwner,
+            authorize,
+            signal: extra.signal,
+            ...(deadline !== undefined ? { deadline } : {}),
+          });
+          return { envelope: { result: { ok: true, result } }, raised: true };
+        });
+      return steer !== undefined ? deps.globalSteer!.applyUpdate(steer, run) : run();
+    };
 
     const askedAt = Date.now();
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void =>
@@ -1764,6 +1857,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // below, once the steer's gate has let it (#16096).
         if (globalSteerTerminalId !== undefined && actionId === GLOBAL_REVEAL_TOOL) {
           globalRevealTerminalId = globalSteerTerminalId;
+          ownedResourceId = globalSteerTerminalId;
+        }
+        // So is an update's approval: the steer's gate runs around it below (#17908).
+        if (globalSteerTerminalId !== undefined && actionId === CLAUDE_UPDATE_TOOL) {
+          globalUpdateTerminalId = globalSteerTerminalId;
           ownedResourceId = globalSteerTerminalId;
         }
 
@@ -3472,7 +3570,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         let assistantEnvelope: DispatchEnvelope | undefined;
         if (
           (assistantTarget !== undefined && assistantCaller !== null && assistantControl) ||
-          (globalSteerTerminalId !== undefined && globalRevealTerminalId === undefined)
+          (globalSteerTerminalId !== undefined &&
+            globalRevealTerminalId === undefined &&
+            globalUpdateTerminalId === undefined)
         ) {
           try {
             const result =
@@ -3767,23 +3867,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // has let the run it names through, and answered the same way.
           const { envelope: dispatched, raised } = assistantEnvelope
             ? { envelope: assistantEnvelope, raised: true }
-            : globalRevealTerminalId !== undefined
-              ? await deps.globalSteer!.reveal(globalSteerTarget(globalRevealTerminalId), () =>
-                  dispatchOwnedResourceAction(
-                    ownedResource as RendererOwnedResourceTool,
-                    globalRevealTerminalId!
+            : actionId === CLAUDE_UPDATE_TOOL && ownedResourceId !== undefined
+              ? await applyClaudeUpdate(ownedResourceId)
+              : globalRevealTerminalId !== undefined
+                ? await deps.globalSteer!.reveal(globalSteerTarget(globalRevealTerminalId), () =>
+                    dispatchOwnedResourceAction(
+                      ownedResource as RendererOwnedResourceTool,
+                      globalRevealTerminalId!
+                    )
                   )
-                )
-              : listPaging ||
-                  ownedResource?.executor !== "renderer" ||
-                  ownedResourceId === undefined
-                ? {
-                    envelope: listPaging
-                      ? await collectListPages()
-                      : await dispatchToRenderer(actionId, dispatchArgs),
-                    raised: true,
-                  }
-                : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
+                : listPaging ||
+                    ownedResource?.executor !== "renderer" ||
+                    ownedResourceId === undefined
+                  ? {
+                      envelope: listPaging
+                        ? await collectListPages()
+                        : await dispatchToRenderer(actionId, dispatchArgs),
+                      raised: true,
+                    }
+                  : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
           // A close trashes the panel and its process runs on through the
           // grace, so the answer says what the host saw of each one (#14474).
           // Every route a close takes ends here: renderer, viewless, owned,
@@ -3912,9 +4014,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({ code: "EXECUTION_ERROR", message });
           }
         } catch (err) {
-          // The steer's gate refusing a reveal (#16096): its own words, as a
-          // refused steer's are.
-          if (globalRevealTerminalId !== undefined && err instanceof AssistantTargetError) {
+          // The steer's gate refusing a reveal (#16096), or an update's
+          // preflight refusing its pane (#17908): its own words, as a refused
+          // steer's are.
+          if (
+            (globalRevealTerminalId !== undefined || actionId === CLAUDE_UPDATE_TOOL) &&
+            err instanceof AssistantTargetError
+          ) {
             outcome = {
               kind: "result",
               value: {

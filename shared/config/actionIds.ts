@@ -474,6 +474,8 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
   "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdateOwned",
+  "terminal.applyClaudeUpdate",
   "terminal.startHeld",
   "terminal.redraw",
   "terminal.resetModes",
@@ -726,6 +728,10 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Main checks ownership before dispatching it; nothing in its `run()` does.
   "terminal.restartOnPresetOwned",
   "terminal.restartOnAccountOwned",
+  // Main checks the pane and types `/restart` itself; nothing in its `run()`
+  // does (#17908). Its approval is main's to ask for, never a plugin's.
+  "terminal.applyClaudeUpdateOwned",
+  "terminal.applyClaudeUpdate",
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",

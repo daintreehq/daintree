@@ -76,6 +76,7 @@ import {
   type OwnPane,
 } from "./mcp-server/terminalNotify.js";
 import { WorkerSteerQueue } from "./assistants/WorkerSteerQueue.js";
+import { liveClaudeUpdateApply, type ClaudeUpdateApply } from "./assistants/ClaudeUpdateApply.js";
 import type { ListenerRoute } from "./mcp-server/listenerHold.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
 import { createApprovalWake } from "./mcp-server/approvalWake.js";
@@ -225,6 +226,8 @@ export class McpServerService {
   private readonly terminalNotify: TerminalNotifyService;
   /** Prompts the global Assistant held for a busy worker's next prompt (#16187), on its notice line. */
   private readonly workerSteerQueue: WorkerSteerQueue;
+  /** Claude Code updates assistants asked to apply (#17908), one per pane at a time. */
+  private readonly claudeUpdate: ClaudeUpdateApply = liveClaudeUpdateApply(() => getPtyClient());
   /** A pane's launch principal, whichever bearers it holds: the key its notices are held under. */
   private workerPrincipalResolver: ((paneId: string) => string | null) | null = null;
   private readonly replyWaiter: ReplyWaiterService;
@@ -542,6 +545,7 @@ export class McpServerService {
         return readCodexQuota();
       },
       readClaudeUsage: readClaudeUsageObservations,
+      claudeUpdate: this.claudeUpdate,
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
         handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a

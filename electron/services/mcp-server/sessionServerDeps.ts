@@ -286,6 +286,7 @@ export interface SessionServerDepsSource {
   readCodexQuota?: import("./sessionServer.js").SessionServerDeps["readCodexQuota"];
   /** The Claude Code usage messages this machine's panes showed, as `agent.readQuota` reports them. */
   readClaudeUsage?: import("./sessionServer.js").SessionServerDeps["readClaudeUsage"];
+  claudeUpdate?: import("./sessionServer.js").SessionServerDeps["claudeUpdate"];
   isTerminalIdInUse: (terminalId: string) => boolean;
   readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
   readClosedPanelProcess?: import("./sessionServer.js").SessionServerDeps["readClosedPanelProcess"];
@@ -1292,12 +1293,14 @@ export function createSessionServerDeps(
             keys: async (...args) => boundSteer(host).keys(...args),
             interrupt: async (...args) => boundSteer(host).interrupt(...args),
             reveal: async (target, show) => boundSteer(host).reveal(target, show),
+            applyUpdate: async (target, apply) => boundSteer(host).applyUpdate(target, apply),
           },
         }
       : {}),
     assistantCaller: () => assistantCallerFor(),
     ...(deps.readCodexQuota !== undefined ? { readCodexQuota: deps.readCodexQuota } : {}),
     ...(deps.readClaudeUsage !== undefined ? { readClaudeUsage: deps.readClaudeUsage } : {}),
+    ...(deps.claudeUpdate !== undefined ? { claudeUpdate: deps.claudeUpdate } : {}),
     // A pane bearer's own terminal is fixed for the bearer's life and was
     // resolved at handshake; a help lane's is read per call, because its
     // binding follows the PTY that currently serves it.

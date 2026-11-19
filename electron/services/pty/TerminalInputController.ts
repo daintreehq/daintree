@@ -519,6 +519,13 @@ export class TerminalInputController {
       if (run.agentSessionId !== undefined && terminal.agentSessionId !== run.agentSessionId) {
         return false;
       }
+      if (
+        run.updateObservedAt !== undefined &&
+        (terminal.updateInstalled?.observedAt !== run.updateObservedAt ||
+          terminal.updateInstalled.namesRestart !== true)
+      ) {
+        return false;
+      }
       return this.admitStrict({
         acceptWorking:
           run.acceptWorking === true &&

@@ -69,7 +69,9 @@ export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
  * run it names and never over a person's input, and its send runs a slash
  * command only as one of the agent's fixed forms (#16101); `terminal.revealOwned`
  * reaches the same workers through the same checks, which writes nothing and so
- * waits on no one (#16096); every other owned form keeps the ledger.
+ * waits on no one (#16096); `terminal.applyClaudeUpdateOwned` reaches them
+ * through the same checks too, and types only `/restart`, once, after the
+ * person approves (#17908); every other owned form keeps the ledger.
  * `worktree.resource.teardown` and `recipe.run` are here on purpose: both are
  * `danger: "confirm"`, so the person approves each run. So are the user-preset
  * writes (#16047), each previewed as the exact change, and the account add
@@ -123,6 +125,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.waitForExit",
   "terminal.restartOnPresetOwned",
   "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdateOwned",
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",

@@ -362,7 +362,16 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   globalSteer?: Pick<
     import("../assistants/GlobalWorkerSteer.js").GlobalWorkerSteer,
-    "prompt" | "keys" | "interrupt" | "reveal"
+    "prompt" | "keys" | "interrupt" | "reveal" | "applyUpdate"
+  >;
+  /**
+   * A Claude Code update an assistant asked to apply (#17908): the pane's
+   * preflight and, once the person approved, the single `/restart`. Absent,
+   * the tool is refused with nothing sent.
+   */
+  claudeUpdate?: Pick<
+    import("../assistants/ClaudeUpdateApply.js").ClaudeUpdateApply,
+    "exclusive" | "preflight" | "apply"
   >;
   /** This machine's Codex quota, as `agent.readQuota` reports it. */
   readCodexQuota?: () => Promise<CodexQuotaResult>;

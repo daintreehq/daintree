@@ -8,6 +8,7 @@ import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectC
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../shared/utils/launchInNewWorktree.js";
 import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../shared/types/terminalExitWait.js";
+import { CLAUDE_UPDATE_AFTER_APPROVAL_MS } from "../../../shared/types/claudeUpdateApply.js";
 import { WORKTREE_RETIRE_OWNED_TOOL } from "../../services/mcp-server/sessionToolIds.js";
 import {
   MCP_DISPATCH_TIMEOUT_MS,
@@ -756,6 +757,8 @@ const RELAY_MIN_RUN_MS = MCP_REMOTE_DISPATCH_TIMEOUT_MS + RELAY_RUN_MARGIN_MS;
 const THROWAWAY_MIN_RUN_MS = 90_000;
 /** Runs a create, a setup wait and a launch in sequence on its host (#15738). */
 const LAUNCH_IN_NEW_WORKTREE_TOOL = "agent.launchInNewWorktree";
+/** Asks the person, then waits for a pane's empty prompt to type `/restart` (#17908). */
+const CLAUDE_UPDATE_TOOL = "terminal.applyClaudeUpdateOwned";
 /** How much longer than the host's own deadline the Shell waits for the answer. */
 const RELAY_ANSWER_GRACE_MS = 15_000;
 
@@ -796,6 +799,11 @@ export function relayRunMs(
     if (tool === WORKTREE_RETIRE_OWNED_TOOL) {
       wanted =
         (wanted > 0 ? wanted : DEFAULT_TERMINAL_EXIT_WAIT_MS) + MCP_REMOTE_DISPATCH_TIMEOUT_MS;
+    }
+    // An update's approval, then its wait for the empty prompt and the read
+    // of Claude's answer (#17908), one after the other.
+    if (tool === CLAUDE_UPDATE_TOOL) {
+      wanted = MCP_REMOTE_DISPATCH_TIMEOUT_MS + CLAUDE_UPDATE_AFTER_APPROVAL_MS;
     }
     wanted = Math.max(wanted, replyMs);
   }
