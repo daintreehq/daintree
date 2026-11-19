@@ -23,6 +23,8 @@ import {
   selectFleetMemberCount,
 } from "@/store/fleetArmingStore";
 import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
+import { useCodexLimitContinueStore } from "@/store/codexLimitContinueStore";
+import { canContinueAtLimitReset } from "@shared/types/codexLimitContinuation";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
@@ -403,6 +405,9 @@ function TerminalContextMenuBody({
   // Read only while the menu is live, so a closed menu pays nothing for it.
   const whenDoneChoice = useTerminalWhenDoneStore((s) =>
     isMenuLive ? s.choices[terminalId] : undefined
+  );
+  const armedToContinue = useCodexLimitContinueStore(
+    (s) => isMenuLive && terminalId in s.panes
   );
   const fleetSize = useFleetArmingStore((s) => (isMenuLive ? selectFleetMemberCount(s) : 0));
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
@@ -943,6 +948,13 @@ function TerminalContextMenuBody({
             isWatched={isWatched}
             whenDone={
               terminalPty && !isEphemeralPanel(terminal) ? (whenDoneChoice ?? "keep") : undefined
+            }
+            continueAtLimitReset={
+              terminalPty &&
+              !isEphemeralPanel(terminal) &&
+              canContinueAtLimitReset(terminal.detectedAgentId ?? terminal.launchAgentId)
+                ? armedToContinue
+                : undefined
             }
             onRequestPark={handleRequestPark}
             onAction={handleAction}

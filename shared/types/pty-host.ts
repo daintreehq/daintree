@@ -1490,6 +1490,8 @@ export interface PtyHostTerminalInfo {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops. */
   originalAgentPresetId?: string;
+  /** Fallback hops taken from the original preset, as the launch said (#17909). */
+  fallbackChainIndex?: number;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
   /**
