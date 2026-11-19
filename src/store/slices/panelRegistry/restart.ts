@@ -1290,6 +1290,9 @@ export const createRestartActions = (
         agentPresetId: nextAgentPresetId,
         agentPresetColor: nextAgentPresetColor,
         originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
+        // The hops already taken, so the host can tell whether one is left (#17909).
+        fallbackChainIndex:
+          nextAgentPresetId === undefined ? undefined : currentTerminal.fallbackChainIndex,
         // The record the run keeps (#15521): main offers its sends only when
         // it starts with none.
         ...(keepsFirstPrompt && currentTerminal.firstPrompt && { hasFirstPrompt: true }),
@@ -2535,6 +2538,13 @@ async function respawnAgentOnPreset(
       agentPresetId: nextPreset?.id,
       agentPresetColor: nextPreset?.color,
       originalAgentPresetId: nextOriginalPresetId,
+      // As the panel records it below (#17909).
+      fallbackChainIndex:
+        mode.kind === "fallback"
+          ? nextChainIndex
+          : presetKept
+            ? terminal.fallbackChainIndex
+            : undefined,
       // On the record as the PTY starts, so the kept conversation is the
       // pane's from its first moment (#11782).
       agentSessionId: keptSessionId,

@@ -1587,6 +1587,10 @@ export const CHANNELS = {
   SCHEDULES_RUN_CLOSED: "schedules:run-closed",
 
   // An agent terminal's When done choice (#16171)
+  CODEX_LIMIT_CONTINUE_SET: "codex-limit-continue:set",
+  CODEX_LIMIT_CONTINUE_LIST: "codex-limit-continue:list",
+  /** An armed pane's continuation changed, or it was disarmed (#17909). */
+  CODEX_LIMIT_CONTINUE_CHANGED: "codex-limit-continue:changed",
   TERMINAL_WHEN_DONE_SET: "terminal-when-done:set",
   TERMINAL_WHEN_DONE_LIST: "terminal-when-done:list",
   TERMINAL_WHEN_DONE_CHANGED: "terminal-when-done:changed",

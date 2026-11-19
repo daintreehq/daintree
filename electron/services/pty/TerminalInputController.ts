@@ -121,7 +121,18 @@ export class TerminalInputController {
    */
   private laneSubmittedAt: number | undefined;
 
+  /**
+   * Every write of input this terminal took, typed, staged or the lane's own
+   * (#17909); terminal reports aren't input. Two writes in one millisecond
+   * still count twice, where the input timestamps would tie.
+   */
+  private inputCount = 0;
+
   constructor(private readonly host: TerminalInputControllerHost) {}
+
+  get inputSequence(): number {
+    return this.inputCount;
+  }
 
   /** True while a graceful shutdown owns the PTY's input stream. */
   get isInputLocked(): boolean {
@@ -215,7 +226,10 @@ export class TerminalInputController {
     }
 
     terminal.lastInputTime = Date.now();
-    if (!isTerminalReportOnly(data)) this.stampTyped(terminal.lastInputTime);
+    if (!isTerminalReportOnly(data)) {
+      this.inputCount++;
+      this.stampTyped(terminal.lastInputTime);
+    }
     // Read before the analysis hears the keys: in-thread, it can move the
     // state on before the write returns.
     const reachesPrompt = keysReachPrompt(terminal);
@@ -289,6 +303,7 @@ export class TerminalInputController {
       return false;
     }
     terminal.lastInputTime = Date.now();
+    if (!isTerminalReportOnly(data)) this.inputCount++;
     // Read before the analysis hears the keys: in-thread, it can move the
     // state on before the write returns.
     const reachesPrompt = keysReachPrompt(terminal);

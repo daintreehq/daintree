@@ -227,6 +227,10 @@ export const CHANNEL_LOCALITY = {
   "codex:match-restore-sessions": "host",
   // Quota is the Codex account on the machine the agents run on.
   "codex:read-quota": "host",
+  // Where the pane runs, so the wait goes on with no Shell attached (#17909).
+  "codex-limit-continue:changed": "host",
+  "codex-limit-continue:list": "host",
+  "codex-limit-continue:set": "host",
   "codex:refresh-quota": "host",
   "codex:read-context-usage": "host",
   "codex:read-subagent-transcript": "host",

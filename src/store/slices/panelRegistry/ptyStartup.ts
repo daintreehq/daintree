@@ -704,6 +704,7 @@ export function enqueuePtyStartup(
             agentPresetId: options.agentPresetId,
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+            fallbackChainIndex: options.fallbackChainIndex,
             handbackCode: options.handbackCode,
             ...(options.whenDone !== undefined && { whenDone: options.whenDone }),
             // A launch prompt or a carried record is the run's first prompt, so

@@ -441,6 +441,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["codex:resolve-resume-latest-session"]["args"]
     ): Promise<IpcInvokeMap["codex:resolve-resume-latest-session"]["result"]>;
   };
+  codexLimitContinue: {
+    list(
+      ...args: IpcInvokeMap["codex-limit-continue:list"]["args"]
+    ): Promise<IpcInvokeMap["codex-limit-continue:list"]["result"]>;
+    set(
+      ...args: IpcInvokeMap["codex-limit-continue:set"]["args"]
+    ): Promise<IpcInvokeMap["codex-limit-continue:set"]["result"]>;
+  };
   composerHold: {
     hold(
       ...args: IpcInvokeMap["composer-hold:hold"]["args"]

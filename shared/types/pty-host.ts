@@ -132,6 +132,8 @@ export interface PtyHostSpawnOptions {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops for revert UX. */
   originalAgentPresetId?: string;
+  /** Fallback hops the pane has taken from its original preset (#17909: main reads the next one). */
+  fallbackChainIndex?: number;
   /**
    * The run already has its first-prompt record, or launches with the prompt
    * that becomes it (#15521). Main reads it to stop offering the run's sends as
@@ -342,6 +344,15 @@ export type PtyHostRequest =
   | { type: "withdraw-submission"; id: string; submissionToken: string }
   /** Drop input queued for the PTY but not yet written; input stays open. */
   | { type: "cancel-pending-input"; id: string }
+  /** Arm or disarm reporting this pane's settled Codex stop (#17909). */
+  | { type: "set-codex-limit-continue"; id: string; armed: boolean }
+  /** Check the pane is still at `stop` and type the line that continues it (#17909). */
+  | {
+      type: "continue-codex-limit";
+      id: string;
+      requestId: string;
+      stop: import("./codexLimitContinuation.js").CodexLimitStopRef;
+    }
   | { type: "batch-double-escape"; ids: string[]; inputOwner?: string }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
@@ -956,6 +967,17 @@ export type PtyHostEvent =
       payload: AgentFallbackTriggeredPayload;
     }
   | {
+      /**
+       * A Codex pane armed to continue at its limit's reset settled at a stop
+       * banner (#17909): its process and the banner's sighting, no text.
+       */
+      type: "codex-limit-stopped";
+      terminalId: string;
+      run: string;
+      seq: number;
+      timestamp: number;
+    }
+  | {
       type: "agent-detected";
       terminalId: string;
       /** Detected agent identity (lowercase built-in agent id) if a known agent is running. */
@@ -1053,6 +1075,11 @@ export type PtyHostEvent =
     }
   | { type: "replay-history-result"; requestId: string; replayed: number }
   | { type: "reset-terminal-modes-result"; requestId: string; reset: boolean }
+  | {
+      type: "continue-codex-limit-result";
+      requestId: string;
+      result: import("./codexLimitContinuation.js").CodexLimitContinueResult;
+    }
   | {
       type: "serialized-state";
       requestId: string;

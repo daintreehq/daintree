@@ -338,6 +338,18 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.reset === true);
       return true;
 
+    case "continue-codex-limit-result":
+      broker.resolve(event.requestId, event.result);
+      return true;
+
+    case "codex-limit-stopped":
+      emitter.emit("codex-limit-stopped", {
+        terminalId: event.terminalId,
+        run: event.run,
+        seq: event.seq,
+      });
+      return true;
+
     case "available-terminals":
       broker.resolve(event.requestId, event.terminals ?? []);
       return true;

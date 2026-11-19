@@ -12,6 +12,10 @@ import type { PanelTitleMode } from "../../shared/types/panel.js";
 import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import type { CodexLimitAnswer, CodexLimitQuery } from "../../shared/types/codexLimitReset.js";
+import type {
+  CodexLimitContinueResult,
+  CodexLimitStopRef,
+} from "../../shared/types/codexLimitContinuation.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("pty-host:PtyManager");
@@ -832,6 +836,26 @@ export class PtyManager extends EventEmitter {
         reset: { status: "unknown", reason: "no-banner" },
       }
     );
+  }
+
+  /** Arm or disarm reporting the terminal's settled Codex stop (#17909). */
+  setCodexLimitContinueArmed(id: string, armed: boolean): void {
+    this.registry.get(id)?.setCodexLimitContinueArmed(armed);
+  }
+
+  /**
+   * Type the line that continues the terminal's Codex run at `stop` (#17909);
+   * see {@link TerminalProcess.continueAtCodexLimit}. A trashed pane is no
+   * longer where its user left it.
+   */
+  async continueAtCodexLimit(
+    id: string,
+    stop: CodexLimitStopRef
+  ): Promise<CodexLimitContinueResult> {
+    const terminal = this.registry.get(id);
+    if (!terminal) return { status: "skipped", reason: "process-changed" };
+    if (this.isInTrash(id)) return { status: "skipped", reason: "agent-gone" };
+    return terminal.continueAtCodexLimit(stop);
   }
 
   /** Undefined when the registry holds no such terminal. */

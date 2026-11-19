@@ -1244,6 +1244,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     sendInUseReply(reply: import("./terminalWhenDone.js").TerminalWhenDoneInUseReply): void;
   };
+  // set / list come from GeneratedElectronAPI (#17909).
+  codexLimitContinue: GeneratedElectronAPI["codexLimitContinue"] & {
+    onChanged(
+      callback: (change: import("../codexLimitContinuation.js").CodexLimitContinueChange) => void
+    ): () => void;
+  };
   // hold / withdraw / sendNow / list come from GeneratedElectronAPI (#16379).
   composerHold: GeneratedElectronAPI["composerHold"] & {
     onChanged(

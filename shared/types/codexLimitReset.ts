@@ -78,8 +78,14 @@ export interface CodexLimitStamp {
   observedAt: number;
 }
 
-/** What `get-terminal` answers when asked about the pane's Codex limit. */
-export type CodexLimitAnswer = { stamp: CodexLimitStamp } | { reset: CodexLimitReset };
+/**
+ * What `get-terminal` answers when asked about the pane's Codex limit. An
+ * answer about a held banner names it, so a wait can be tied to that sighting
+ * (#17909).
+ */
+export type CodexLimitAnswer =
+  | { stamp: CodexLimitStamp }
+  | { reset: CodexLimitReset; stamp?: CodexLimitStamp };
 
 /** The question: a first read, or a resolve of a stamped banner against a reading. */
 export type CodexLimitQuery =
