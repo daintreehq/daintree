@@ -323,20 +323,25 @@ function targetAccount(entry: AgentSettingsEntry, accountId: unknown): string | 
 /**
  * Whether no checkout is at a worktree slot's path on this host any more. A
  * deleted worktree leaves its slot behind, and only this list can reach it.
- * The `.git` marker (a folder in a main checkout, a file in a linked one) is
- * what's probed, so a folder reused for something else reads as gone too. A
- * path that can't be read is left as there: only a missing one is gone.
+ * The `.git` marker (a folder in a main checkout, a file in a linked one), or
+ * a bare repository's `HEAD`, is what's probed, so a folder reused for
+ * something else reads as gone too. A path that can't be read is left as
+ * there: only a missing one is gone.
  */
 async function isGoneWorktree(worktreeId: string): Promise<boolean> {
   // Worktree ids are absolute paths; anything else names no checkout.
   if (!path.isAbsolute(worktreeId)) return true;
-  try {
-    await stat(path.join(worktreeId, ".git"));
-    return false;
-  } catch (error) {
-    const code = fsCode(error);
-    return code === "ENOENT" || code === "ENOTDIR";
+  // A bare repository listed as its project's main row is its own git folder.
+  for (const marker of [".git", "HEAD"]) {
+    try {
+      await stat(path.join(worktreeId, marker));
+      return false;
+    } catch (error) {
+      const code = fsCode(error);
+      if (code !== "ENOENT" && code !== "ENOTDIR") return false;
+    }
   }
+  return true;
 }
 
 /**
@@ -388,7 +393,9 @@ export function applyAccountEverywhere(request: unknown): AgentSettings {
       : null
   );
   const pins = clearList(clear.presets, ({ presetId, accountId: listed }) =>
-    typeof presetId === "string" && isAccountId(listed) ? { presetId, accountId: listed } : null
+    typeof presetId === "string" && presetId !== "" && isAccountId(listed)
+      ? { presetId, accountId: listed }
+      : null
   );
   // Nothing the list offers names the target: clearing one would only drop a
   // choice that already launches there.

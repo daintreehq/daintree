@@ -405,10 +405,16 @@ describe("using one account everywhere (#17893)", () => {
     const linked = path.join(home, "repo-linked");
     await mkdir(linked);
     await writeFile(path.join(linked, ".git"), "gitdir: /elsewhere\n");
-    // Deleted, or its folder reused for something that isn't a checkout.
+    // A bare repository listed as its project's main row is its own git folder.
+    const bare = path.join(home, "repo-bare");
+    await mkdir(bare);
+    await writeFile(path.join(bare, "HEAD"), "ref: refs/heads/main\n");
+    // Deleted, its folder reused for something that isn't a checkout, or a file now.
     const deleted = path.join(home, "repo-old");
     const reused = path.join(home, "repo-reused");
     await mkdir(reused);
+    const file = path.join(home, "repo-file");
+    await writeFile(file, "");
     fakeStore.set("agentSettings.agents", {
       codex: {
         ...savedCodex(),
@@ -416,8 +422,10 @@ describe("using one account everywhere (#17893)", () => {
         worktreeAccounts: {
           [kept]: spent.id,
           [linked]: spent.id,
+          [bare]: spent.id,
           [deleted]: null,
           [reused]: spent.id,
+          [file]: spent.id,
           "relative/key": spent.id,
           [path.join(home, "repo-fresh")]: fresh.id,
         },
@@ -436,8 +444,10 @@ describe("using one account everywhere (#17893)", () => {
       worktrees: [
         { worktreeId: kept, accountId: spent.id, gone: false },
         { worktreeId: linked, accountId: spent.id, gone: false },
+        { worktreeId: bare, accountId: spent.id, gone: false },
         { worktreeId: deleted, accountId: null, gone: true },
         { worktreeId: reused, accountId: spent.id, gone: true },
+        { worktreeId: file, accountId: spent.id, gone: true },
         { worktreeId: "relative/key", accountId: spent.id, gone: true },
       ],
       presets: [
@@ -450,7 +460,9 @@ describe("using one account everywhere (#17893)", () => {
     expect(toDefault.worktrees.map((choice) => choice.worktreeId)).toEqual([
       kept,
       linked,
+      bare,
       reused,
+      file,
       "relative/key",
       path.join(home, "repo-fresh"),
     ]);
@@ -488,6 +500,7 @@ describe("using one account everywhere (#17893)", () => {
     const saved = savedCodex();
     expect(saved.accountId).toBe(fresh.id);
     expect(saved.presetId).toBe("keep-me");
+    expect(saved.accounts).toEqual([spent, fresh]);
     expect(saved.worktreeAccounts).toEqual({ "/repo/c": spent.id });
     expect(saved.customPresets).toEqual([
       { id: "work", name: "Work", env: { FOO: "1" } },
@@ -506,6 +519,7 @@ describe("using one account everywhere (#17893)", () => {
     fakeStore.set("agentSettings.agents", {
       codex: {
         ...savedCodex(),
+        accountId: spent.id,
         worktreeAccounts: { "/repo/a": spent.id, "/repo/b": fresh.id },
         customPresets: [{ id: "work", name: "Work", accountId: fresh.id }],
       },
@@ -617,6 +631,7 @@ describe("using one account everywhere (#17893)", () => {
     fakeStore.set.mockClear();
     const before = structuredClone(savedCodex());
     const clear = { worktrees: [], presets: [] };
+    const valid = { worktreeId: "/repo/a", accountId: "spent" };
 
     expect(() =>
       applyAccountEverywhere({ agentId: "codex", accountId: "account-removed", clear })
@@ -631,10 +646,11 @@ describe("using one account everywhere (#17893)", () => {
       undefined,
       { worktrees: [] },
       { presets: [] },
-      { worktrees: [{ worktreeId: "/repo/a" }], presets: [] },
-      { worktrees: [{ worktreeId: "", accountId: null }], presets: [] },
-      { worktrees: [], presets: [{ presetId: "work", accountId: null }] },
-      { worktrees: ["/repo/a"], presets: [] },
+      { worktrees: [valid, { worktreeId: "/repo/b" }], presets: [] },
+      { worktrees: [valid, { worktreeId: "", accountId: "spent" }], presets: [] },
+      { worktrees: [valid], presets: [{ presetId: "work", accountId: null }] },
+      { worktrees: [valid], presets: [{ presetId: "", accountId: "spent" }] },
+      { worktrees: [valid, "/repo/b"], presets: [] },
     ]) {
       expect(() =>
         applyAccountEverywhere({ agentId: "codex", accountId: null, clear: malformed })
@@ -645,7 +661,17 @@ describe("using one account everywhere (#17893)", () => {
       applyAccountEverywhere({
         agentId: "codex",
         accountId: null,
-        clear: { worktrees: [{ worktreeId: "/repo/a", accountId: null }], presets: [] },
+        clear: { worktrees: [valid, { worktreeId: "/repo/b", accountId: null }], presets: [] },
+      })
+    ).toThrow(/Invalid request/);
+    const spentId = (savedCodex().accounts as Array<{ id: string; name: string }>).find(
+      (account) => account.name === "Spent"
+    )!.id;
+    expect(() =>
+      applyAccountEverywhere({
+        agentId: "codex",
+        accountId: spentId,
+        clear: { worktrees: [], presets: [{ presetId: "work", accountId: spentId }] },
       })
     ).toThrow(/Invalid request/);
     expect(() => applyAccountEverywhere({ agentId: "cursor", accountId: null, clear })).toThrow(

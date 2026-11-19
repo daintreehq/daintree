@@ -9,6 +9,7 @@ import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import type { AgentAccount, AgentSettingsEntry } from "@shared/types";
 import {
   defaultLoginLabel,
+  listAccountChoicesAway,
   sanitizeLoginName,
   sanitizeAgentAccounts,
 } from "@shared/utils/agentAccounts";
@@ -112,6 +113,13 @@ export function AgentAccountsSection({
   // A saved default no account answers to any more refuses every launch, so
   // it shows as changed and can be reset even with nothing left to choose.
   const hasSavedDefault = typeof entry.accountId === "string";
+  // A worktree pick or preset pin naming an account that's gone refuses its
+  // launches too, and using one account everywhere is what reaches it (#17893).
+  const awayFromDefaultLogin = listAccountChoicesAway(entry, null);
+  const hasDanglingChoice = [
+    ...awayFromDefaultLogin.worktrees,
+    ...awayFromDefaultLogin.presets,
+  ].some((choice) => !accounts.some((account) => account.id === choice.accountId));
 
   // A sign-in runs in a terminal, so Settings closes first and the terminal
   // takes focus once it has gone.
@@ -206,7 +214,7 @@ export function AgentAccountsSection({
         )}
       </SettingsGroup>
 
-      {(accounts.length > 0 || hasSavedDefault) && (
+      {(accounts.length > 0 || hasSavedDefault || hasDanglingChoice) && (
         <SettingsGroup>
           <SettingsSelect
             label="Default account"

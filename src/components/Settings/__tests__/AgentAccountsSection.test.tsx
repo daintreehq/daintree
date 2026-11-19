@@ -114,6 +114,7 @@ import type { AgentSettingsEntry } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
 
 const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.codex-personal" };
 
 function renderSection(
   entry: AgentSettingsEntry,
@@ -241,7 +242,7 @@ describe("AgentAccountsSection (#16040)", () => {
     const open = () => fireEvent.click(screen.getByRole("button", { name: "Use everywhere…" }));
 
     it("opens on the saved default, or the default login when none is saved", () => {
-      renderSection({ accounts: [COMPANY], accountId: "company" });
+      renderSection({ accounts: [PERSONAL, COMPANY], accountId: "company" });
       expect(screen.queryByTestId("use-everywhere-dialog")).toBeNull();
       open();
       expect(everywhereDialog.props?.account).toEqual({ id: "company", name: "Company" });
@@ -256,10 +257,59 @@ describe("AgentAccountsSection (#16040)", () => {
     });
 
     it("leaves the account to the dialog when the saved default is gone", () => {
-      renderSection({ accounts: [], accountId: "gone" });
+      renderSection({ accounts: [COMPANY], accountId: "gone" });
       open();
       expect(screen.getByTestId("use-everywhere-dialog")).toBeTruthy();
       expect(everywhereDialog.props?.account).toBeUndefined();
+    });
+
+    it("is offered when only a worktree pick or preset pin names an account that's gone", () => {
+      renderSection({ worktreeAccounts: { "/work/app/main": "gone" } });
+      open();
+      expect(everywhereDialog.props?.account).toEqual({ id: null, name: "Default login" });
+
+      cleanup();
+      renderSection({ customPresets: [{ id: "review", name: "Review", accountId: "gone" }] });
+      expect(screen.getByRole("button", { name: "Use everywhere…" })).toBeTruthy();
+
+      cleanup();
+      // On the default login already: nothing for the action to reach.
+      renderSection({ worktreeAccounts: { "/work/app/main": null } });
+      expect(screen.queryByRole("button", { name: "Use everywhere…" })).toBeNull();
+    });
+
+    it("drops an offer the Default account select raised once the change is saved", async () => {
+      usePanelStore.setState({
+        panelsById: {
+          p1: {
+            id: "p1",
+            kind: "terminal",
+            title: "Parser",
+            cwd: "/repo",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            launchAgentId: "codex",
+            agentState: "waiting",
+          } as PtyPanelData,
+        },
+        panelIds: ["p1"],
+      });
+      readUsageLimitedPaneIds.mockResolvedValue(["p1"]);
+      useAgentSettingsStore.setState({ updateAgent: vi.fn().mockResolvedValue(undefined) });
+      renderSection({ accounts: [COMPANY] });
+      await act(async () => {
+        fireEvent.change(screen.getByRole("combobox", { name: "Default account" }), {
+          target: { value: "company" },
+        });
+      });
+      expect(screen.getByRole("status").textContent).toBe(
+        "1 Codex terminal stopped on a usage limit"
+      );
+
+      open();
+      act(() => everywhereDialog.props?.onSaved?.());
+      expect(screen.queryByRole("status")).toBeNull();
     });
 
     it("tells Settings once the change is saved, and closes on the dialog's word", () => {

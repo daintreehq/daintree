@@ -17,6 +17,7 @@ import {
   sanitizeLoginName,
   withAccountEnv,
 } from "../agentAccounts.js";
+import type { AgentSettingsEntry } from "../../types/agentSettings.js";
 
 describe("sanitizeAgentAccounts", () => {
   it("keeps the first well-formed entry of each id and drops the rest", () => {
@@ -336,7 +337,7 @@ describe("listAccountChoicesAway (#17893)", () => {
       { id: "home", name: "Home", accountId: "fresh" },
       { id: "plain", name: "Plain" },
       { id: "bad", name: "Bad pin", accountId: "bad id" },
-      { id: "unnamed", name: " ", accountId: "removed" },
+      { id: "old", name: "Old", accountId: "removed" },
     ],
   };
 
@@ -349,7 +350,7 @@ describe("listAccountChoicesAway (#17893)", () => {
       ],
       presets: [
         { presetId: "work", presetName: "Work", accountId: "spent" },
-        { presetId: "unnamed", presetName: "unnamed", accountId: "removed" },
+        { presetId: "old", presetName: "Old", accountId: "removed" },
       ],
     });
   });
@@ -361,9 +362,28 @@ describe("listAccountChoicesAway (#17893)", () => {
       "/work/project-c/fix",
       "/work/project-d/old",
     ]);
-    expect(presets.map((pin) => pin.presetId)).toEqual(["work", "home", "unnamed"]);
+    expect(presets.map((pin) => pin.presetId)).toEqual(["work", "home", "old"]);
     expect(listAccountChoicesAway({}, null)).toEqual({ worktrees: [], presets: [] });
     expect(listAccountChoicesAway(undefined, "fresh")).toEqual({ worktrees: [], presets: [] });
+  });
+
+  it("lists the preset a launch reads, past a stored copy the launcher drops", () => {
+    const { presets } = listAccountChoicesAway(
+      {
+        customPresets: [
+          { id: "review", name: "   ", accountId: "fresh" },
+          { id: "review", name: "Review", accountId: "spent" },
+          { id: "build", name: "<b>Build</b>", accountId: "spent" },
+          { id: 7, name: "Numbered", accountId: "spent" },
+          { id: "named", name: 42, accountId: "spent" },
+        ],
+      } as unknown as AgentSettingsEntry,
+      "fresh"
+    );
+    // Two stored copies share the id, so it's flagged, whichever one launches.
+    expect(presets).toEqual([
+      { presetId: "review", presetName: "Review", accountId: "spent", sharedId: true },
+    ]);
   });
 
   it("leaves every launch on the account once the listed choices are cleared", () => {

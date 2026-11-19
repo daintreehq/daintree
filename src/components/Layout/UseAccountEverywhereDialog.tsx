@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { Checkbox } from "@/components/ui/checkbox";
+import { FactRun } from "@/components/ui/FactSeparator";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   Select,
@@ -18,8 +19,13 @@ import { pluralize } from "@/lib/pluralize";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import type { RestartAccountChoice } from "@/components/Terminal/RestartOnAccount";
+import type { AgentSettings } from "@shared/types";
 import type { AccountChoicesAway } from "@shared/types/ipc/agentAccounts";
-import { defaultLoginLabel, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import {
+  defaultLoginLabel,
+  listAccountChoicesAway,
+  sanitizeAgentAccounts,
+} from "@shared/utils/agentAccounts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   isAccountSwitchCandidate,
@@ -29,12 +35,15 @@ import {
 
 const DEFAULT_LOGIN_VALUE = "default-login";
 
+// The picker's own values: a saved account's id could read "default-login" too.
+const loginValue = (id: string | null) => (id === null ? DEFAULT_LOGIN_VALUE : `account:${id}`);
+
 const worktreeKey = (worktreeId: string) => `worktree:${worktreeId}`;
 const presetKey = (presetId: string) => `preset:${presetId}`;
 
 interface Preview {
-  /** The target it was read for, so a late answer for another one is never shown. */
-  target: string;
+  /** The read it answers: a pick or a retry since then asks again, and an older answer never shows. */
+  request: string;
   choices: AccountChoicesAway;
 }
 
@@ -66,8 +75,8 @@ export function UseAccountEverywhereDialog({
     <UseAccountEverywhereConfirm
       agentId={agentId}
       account={account}
-      onApplied={(target) => {
-        onSaved?.();
+      onSaved={() => onSaved?.()}
+      onDone={(target) => {
         // The offer covers this project's terminals: each project moves its own.
         const { panelIds, panelsById } = usePanelStore.getState();
         if (panelIds.some((id) => isAccountSwitchCandidate(panelsById[id], agentId, target.id))) {
@@ -84,12 +93,14 @@ export function UseAccountEverywhereDialog({
 function UseAccountEverywhereConfirm({
   agentId,
   account,
-  onApplied,
+  onSaved,
+  onDone,
   onClose,
 }: {
   agentId: string;
   account: RestartAccountChoice | undefined;
-  onApplied: (account: RestartAccountChoice) => void;
+  onSaved: () => void;
+  onDone: (account: RestartAccountChoice) => void;
   onClose: () => void;
 }) {
   const pickerId = useId();
@@ -104,34 +115,34 @@ function UseAccountEverywhereConfirm({
   ];
 
   const [picked, setPicked] = useState<RestartAccountChoice | undefined>(account);
+  const [pickCount, setPickCount] = useState(0);
   // An account removed while the dialog is open can't become the default, so
   // the dialog asks for an account again.
   const target =
     picked && (picked.id === null || accounts.some((saved) => saved.id === picked.id))
       ? picked
       : undefined;
-  const targetValue = target ? (target.id ?? DEFAULT_LOGIN_VALUE) : null;
+  const targetId = target?.id;
   const accountName = useCurrentAccountName(agentId, target) ?? "";
 
   const [attempt, setAttempt] = useState(0);
+  const request =
+    targetId === undefined ? null : `${loginValue(targetId)}\n${pickCount}\n${attempt}`;
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [previewError, setPreviewError] = useState<{ target: string; message: string } | null>(
+  const [previewError, setPreviewError] = useState<{ request: string; message: string } | null>(
     null
   );
   useEffect(() => {
-    if (targetValue === null) return;
+    if (request === null || targetId === undefined) return;
     let current = true;
-    const accountId = targetValue === DEFAULT_LOGIN_VALUE ? null : targetValue;
-    agentSettingsClient.listAccountChoicesAway(agentId, accountId).then(
+    agentSettingsClient.listAccountChoicesAway(agentId, targetId).then(
       (choicesAway) => {
-        if (!current) return;
-        setPreview({ target: targetValue, choices: choicesAway });
-        setPreviewError(null);
+        if (current) setPreview({ request, choices: choicesAway });
       },
       (error: unknown) => {
         if (!current) return;
         setPreviewError({
-          target: targetValue,
+          request,
           message: formatErrorMessage(error, "The saved choices couldn't be read."),
         });
       }
@@ -139,15 +150,15 @@ function UseAccountEverywhereConfirm({
     return () => {
       current = false;
     };
-  }, [agentId, targetValue, attempt]);
-  const listed = preview?.target === targetValue ? preview.choices : null;
-  const readError = previewError?.target === targetValue ? previewError.message : null;
+  }, [agentId, request, targetId]);
+  const listed = preview?.request === request ? preview.choices : null;
+  const readError = previewError?.request === request ? previewError.message : null;
   const showReading = useDeferredLoading(
-    targetValue !== null && listed === null && readError === null,
+    request !== null && listed === null && readError === null,
     UI_DOHERTY_THRESHOLD
   );
 
-  // The boxes belong to the list they were cleared on: another account lists afresh, all checked.
+  // The boxes belong to the list they were cleared on: another read lists afresh, all checked.
   const [unticked, setUnticked] = useState<{
     list: AccountChoicesAway;
     keys: ReadonlySet<string>;
@@ -165,6 +176,8 @@ function UseAccountEverywhereConfirm({
 
   const [isApplying, setIsApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
+  // Checked choices another view changed while this was open: the save kept them.
+  const [changedMeanwhile, setChangedMeanwhile] = useState(0);
 
   const worktrees = listed?.worktrees ?? [];
   const presets = listed?.presets ?? [];
@@ -184,8 +197,10 @@ function UseAccountEverywhereConfirm({
     if (!target || listed === null || changesNothing) return;
     setIsApplying(true);
     setApplyError(null);
+    setChangedMeanwhile(0);
+    let saved: AgentSettings;
     try {
-      await useAgentSettingsStore.getState().applyAccountEverywhere({
+      saved = await useAgentSettingsStore.getState().applyAccountEverywhere({
         agentId,
         accountId: target.id,
         clear: {
@@ -202,7 +217,23 @@ function UseAccountEverywhereConfirm({
       return;
     }
     setIsApplying(false);
-    onApplied({ id: target.id, name: accountName });
+    onSaved();
+    // A checked choice that still names another login was changed in another
+    // view since the list was read, and main kept it: list again rather than
+    // close on a switch that didn't reach it.
+    const after = listAccountChoicesAway(saved.agents?.[agentId], target.id);
+    const kept =
+      tickedWorktrees.filter((choice) =>
+        after.worktrees.some((left) => left.worktreeId === choice.worktreeId)
+      ).length +
+      tickedPresets.filter((pin) => after.presets.some((left) => left.presetId === pin.presetId))
+        .length;
+    if (kept > 0) {
+      setChangedMeanwhile(kept);
+      setAttempt((n) => n + 1);
+      return;
+    }
+    onDone({ id: target.id, name: accountName });
   };
 
   const nothingListed = listed !== null && worktrees.length === 0 && presets.length === 0;
@@ -218,7 +249,7 @@ function UseAccountEverywhereConfirm({
       }
       description={
         target
-          ? `New ${agentName} launches in every project sign in as ${accountName}. Each worktree and preset left checked stops choosing its own account.`
+          ? `Sets ${accountName} as the default for new ${agentName} launches in every project. Worktrees and presets left unchecked keep their own account.`
           : undefined
       }
       confirmLabel={target ? `Use ${accountName} everywhere` : "Use account everywhere"}
@@ -231,12 +262,14 @@ function UseAccountEverywhereConfirm({
           Account
         </label>
         <Select
-          value={targetValue ?? ""}
+          value={targetId === undefined ? "" : loginValue(targetId)}
           onValueChange={(value) => {
+            const choice = choices.find((candidate) => loginValue(candidate.id) === value);
+            if (!choice) return;
             setApplyError(null);
-            setPicked(
-              choices.find((choice) => (choice.id ?? DEFAULT_LOGIN_VALUE) === value) ?? picked
-            );
+            setChangedMeanwhile(0);
+            setPicked(choice);
+            setPickCount((n) => n + 1);
           }}
           disabled={isApplying}
         >
@@ -245,10 +278,7 @@ function UseAccountEverywhereConfirm({
           </SelectTrigger>
           <SelectContent>
             {choices.map((choice) => (
-              <SelectItem
-                key={choice.id ?? DEFAULT_LOGIN_VALUE}
-                value={choice.id ?? DEFAULT_LOGIN_VALUE}
-              >
+              <SelectItem key={loginValue(choice.id)} value={loginValue(choice.id)}>
                 {choice.name}
               </SelectItem>
             ))}
@@ -256,20 +286,23 @@ function UseAccountEverywhereConfirm({
         </Select>
       </div>
 
+      {changedMeanwhile > 0 && (
+        <Callout
+          severity="warning"
+          className="mt-3"
+          title={`${pluralize(changedMeanwhile, "checked choice")} changed while this was open`}
+        >
+          {changedMeanwhile === 1 ? "It keeps" : "Each keeps"} the account it was changed to. The
+          default is saved; check the list again to clear what's left.
+        </Callout>
+      )}
       {readError !== null && (
         <Callout
           severity="error"
           className="mt-3"
           title="Couldn't read the saved choices"
           action={
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setPreviewError(null);
-                setAttempt((n) => n + 1);
-              }}
-            >
+            <Button size="sm" variant="outline" onClick={() => setAttempt((n) => n + 1)}>
               Retry
             </Button>
           }
@@ -285,8 +318,8 @@ function UseAccountEverywhereConfirm({
       {target && nothingListed && (
         <p role="status" className="mt-3 text-sm text-text-secondary">
           {changesDefault
-            ? `No worktree or preset chooses another account, so only the default changes`
-            : `Every ${agentName} launch already signs in as ${accountName}`}
+            ? "No worktree or preset chooses another account"
+            : `${accountName} is already the default, and no worktree or preset chooses another account`}
         </p>
       )}
 
@@ -300,16 +333,14 @@ function UseAccountEverywhereConfirm({
             return (
               <ChoiceRow
                 key={key}
-                labelId={`${labelIdPrefix}-${key}`}
                 checked={isTicked(key)}
                 disabled={isApplying}
                 onToggle={() => toggle(key)}
                 label={choice.worktreeId}
-                detail={
-                  choice.gone
-                    ? `On ${loginName(choice.accountId)} · Worktree missing`
-                    : `On ${loginName(choice.accountId)}`
-                }
+                facts={[
+                  `On ${loginName(choice.accountId)}`,
+                  ...(choice.gone ? ["Worktree missing"] : []),
+                ]}
               />
             );
           })}
@@ -322,16 +353,14 @@ function UseAccountEverywhereConfirm({
             return (
               <ChoiceRow
                 key={key}
-                labelId={`${labelIdPrefix}-${key}`}
                 checked={!pin.sharedId && isTicked(key)}
                 disabled={isApplying || pin.sharedId === true}
                 onToggle={() => toggle(key)}
                 label={pin.presetName}
-                detail={
-                  pin.sharedId
-                    ? `On ${loginName(pin.accountId)} · Another preset has its id, so it stays`
-                    : `On ${loginName(pin.accountId)}`
-                }
+                facts={[
+                  `On ${loginName(pin.accountId)}`,
+                  ...(pin.sharedId ? ["Another preset has its id, so it stays"] : []),
+                ]}
               />
             );
           })}
@@ -367,21 +396,22 @@ function ChoiceGroup({
 }
 
 function ChoiceRow({
-  labelId,
   checked,
   disabled,
   onToggle,
   label,
-  detail,
+  facts,
 }: {
-  labelId: string;
   checked: boolean;
   disabled: boolean;
   onToggle: () => void;
+  /** A worktree's full path or a preset's name, wrapped rather than cut: a path's end is what tells two apart. */
   label: string;
-  detail: string;
+  facts: readonly string[];
 }) {
-  const detailId = `${labelId}-detail`;
+  // Generated, never built from the label: an id list splits on the spaces a path can hold.
+  const labelId = useId();
+  const detailId = useId();
   return (
     <li className="relative flex items-start gap-2 py-0.5">
       <Checkbox
@@ -395,11 +425,11 @@ function ChoiceRow({
         className="static mt-0.5 before:absolute before:inset-0 before:content-['']"
       />
       <span className="min-w-0 flex-1">
-        <span id={labelId} className="block truncate text-sm text-text-primary" title={label}>
+        <span id={labelId} className="block text-sm break-all text-text-primary">
           {label}
         </span>
         <span id={detailId} className="block text-xs text-text-secondary">
-          {detail}
+          <FactRun facts={facts} />
         </span>
       </span>
     </li>

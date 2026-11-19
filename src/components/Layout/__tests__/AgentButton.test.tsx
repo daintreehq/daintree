@@ -466,7 +466,10 @@ vi.mock("../UseAccountEverywhereDialog", () => ({
     account?: { id: string | null; name: string };
     onClose: () => void;
   }) => (
-    <div data-testid="use-everywhere-dialog" data-account={account?.id ?? "default-login"}>
+    <div
+      data-testid="use-everywhere-dialog"
+      data-account={account === undefined ? "none" : (account.id ?? "default-login")}
+    >
       {account?.name}
       <button type="button" onClick={onClose}>
         Close everywhere
@@ -2863,12 +2866,53 @@ describe("Use account everywhere in the agent's menu (#17893)", () => {
     expect(updateAgentMock).not.toHaveBeenCalled();
   });
 
+  it("is offered with one saved account, and marks the pick as handing focus to the confirm", () => {
+    mockSettings = settingsWith({ claude: { accounts: [COMPANY] } });
+    const expectHandoff = vi.fn();
+    const focusRestore = {
+      setRestoreTarget: () => {},
+      resetForOpen: () => {},
+      deferToRadix: () => {},
+      restoreIfStranded: () => {},
+      expectHandoff,
+      onContentPointerDown: () => {},
+      onContentPointerDownOutside: () => {},
+      onContentInteractOutside: () => {},
+      onContentKeyDown: () => {},
+      onContentClick: () => {},
+      onContentCloseAutoFocus: () => {},
+    } satisfies OverlayFocusRestore;
+    render(
+      <OverlayFocusRestoreContext.Provider value={focusRestore}>
+        <AgentButton type="claude" availability="ready" />
+      </OverlayFocusRestoreContext.Provider>
+    );
+
+    const rows = submenuRows("Use account everywhere");
+    expect(rows.map((row) => row.textContent)).toEqual(["Default login", "Company"]);
+    fireEvent.click(rows[1]!);
+    expect(expectHandoff).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("use-everywhere-dialog").dataset.account).toBe("company");
+  });
+
   it("isn't offered to an agent with no saved account", () => {
     mockSettings = settingsWith({ claude: {} });
     mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }];
     render(<AgentButton type="claude" availability="ready" />);
 
     expect(screen.queryByText("Use account everywhere")).toBeNull();
+  });
+
+  it("keeps the confirm open when the last account goes and the button loses its menu of choices", () => {
+    mockSettings = settingsWith({ claude: { accounts: [COMPANY] } });
+    const { rerender } = render(<AgentButton type="claude" availability="ready" />);
+    fireEvent.click(submenuRows("Use account everywhere")[1]!);
+    expect(screen.getByTestId("use-everywhere-dialog")).toBeTruthy();
+
+    mockSettings = settingsWith({ claude: {} });
+    rerender(<AgentButton type="claude" availability="ready" />);
+    expect(screen.queryByText("Use account everywhere")).toBeNull();
+    expect(screen.getByTestId("use-everywhere-dialog")).toBeTruthy();
   });
 });
 

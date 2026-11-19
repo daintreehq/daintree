@@ -2,7 +2,7 @@ import { getAgentConfigFolderAccount, type AgentPreset } from "../config/agentRe
 import type { AgentAccount, AgentSettingsEntry } from "../types/agentSettings.js";
 import type { PresetAccountPin, WorktreeAccountChoice } from "../types/ipc/agentAccounts.js";
 import { isAccountId } from "./agentAccountId.js";
-import { sanitizeAgentEnv } from "./agentPresets.js";
+import { sanitizeAgentEnv, sanitizePreset } from "./agentPresets.js";
 
 export { isAccountId };
 
@@ -130,6 +130,17 @@ function worktreeChoiceValue(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function launchablePreset(raw: unknown): AgentPreset | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { id, name } = raw as Record<string, unknown>;
+  if (typeof id !== "string" || typeof name !== "string") return null;
+  try {
+    return sanitizePreset(raw as AgentPreset);
+  } catch {
+    return null;
+  }
+}
+
 /** How many user presets carry each id: more than one means a write by id can't say which. */
 export function presetIdCounts(customPresets: unknown): Map<string, number> {
   const counts = new Map<string, number>();
@@ -163,22 +174,19 @@ export function listAccountChoicesAway(
   const presets: PresetAccountPin[] = [];
   const counts = presetIdCounts(entry?.customPresets);
   const seen = new Set<string>();
-  for (const preset of Array.isArray(entry?.customPresets)
-    ? (entry.customPresets as unknown[])
-    : []) {
-    if (!preset || typeof preset !== "object") continue;
-    const { id, name, accountId: pin } = preset as Record<string, unknown>;
-    // Of presets sharing an id a launch uses the first, so a later one's pin never applies.
-    if (typeof id !== "string" || !id || seen.has(id)) continue;
-    seen.add(id);
-    // A pin `sanitizePreset` would drop never reaches a launch.
-    if (!isAccountId(pin) || pin === accountId) continue;
-    const presetName = typeof name === "string" && name.trim() ? name.trim() : id;
+  for (const raw of Array.isArray(entry?.customPresets) ? (entry.customPresets as unknown[]) : []) {
+    // The preset a launch reads: the first of its id that `sanitizePreset`
+    // keeps, as `getMergedPresets` takes it, pin and name cleaned the same way.
+    const preset = launchablePreset(raw);
+    if (!preset || seen.has(preset.id)) continue;
+    seen.add(preset.id);
+    if (preset.accountId === undefined || preset.accountId === accountId) continue;
     presets.push({
-      presetId: id,
-      presetName,
-      accountId: pin,
-      ...((counts.get(id) ?? 0) > 1 ? { sharedId: true as const } : {}),
+      presetId: preset.id,
+      presetName: preset.name,
+      accountId: preset.accountId,
+      // Counted over every stored copy, as a write by id would have to tell them apart.
+      ...((counts.get(preset.id) ?? 0) > 1 ? { sharedId: true as const } : {}),
     });
   }
   return { worktrees, presets };
