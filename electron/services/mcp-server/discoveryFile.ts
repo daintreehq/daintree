@@ -73,8 +73,9 @@ export class McpDiscoveryFile {
   private readonly readStamp: (pid: number) => string | null;
   /** Kept once read; a failed read is tried again at the next publication. */
   private stamp: string | null = null;
-  /** What this process last wrote, still on disk as far as it knows. */
-  private written: { file: string; text: string; port: number } | null = null;
+  /** What this process last wrote, and the file it landed in, still on disk as far as it knows. */
+  private written: { file: string; text: string; port: number; ino: number; dev: number } | null =
+    null;
 
   constructor(private readonly options: McpDiscoveryFileOptions) {
     this.pid = options.pid ?? process.pid;
@@ -109,7 +110,8 @@ export class McpDiscoveryFile {
     try {
       // Not durable: after a reboot the record is stale whatever it says.
       resilientAtomicWriteFileSync(file, text, "utf-8", { mode: 0o600, durable: false });
-      this.written = { file, text, port };
+      const { ino, dev } = fs.statSync(file);
+      this.written = { file, text, port, ino, dev };
     } catch (err) {
       console.warn("[MCP] Couldn't write the discovery file:", errorCode(err));
     }
@@ -145,11 +147,18 @@ export class McpDiscoveryFile {
     }
     // Ours and still standing, it names this live process for a port it is
     // letting go. Emptying it needs only the file's own permission, which a
-    // directory that refused the unlink can't take away.
+    // directory that refused the unlink can't take away. The path is opened
+    // again, so the file is checked through that descriptor before it is
+    // emptied: the one written, holding the same bytes.
     try {
-      const fd = fs.openSync(written.file, fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW ?? 0));
+      const fd = fs.openSync(written.file, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0));
       try {
-        fs.ftruncateSync(fd, 0);
+        const opened = fs.fstatSync(fd);
+        const same =
+          opened.ino === written.ino &&
+          opened.dev === written.dev &&
+          fs.readFileSync(fd, "utf8") === written.text;
+        if (same) fs.ftruncateSync(fd, 0);
       } finally {
         fs.closeSync(fd);
       }

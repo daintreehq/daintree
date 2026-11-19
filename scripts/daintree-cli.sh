@@ -380,8 +380,11 @@ daintree_process_listens() {
   # 127.0.0.1 as the kernel writes it in either byte order; 0A is LISTEN.
   inode=$(awk -v want=":$hex" '($2 == "0100007F" want || $2 == "7F000001" want) && $4 == "0A" { print $10; exit }' /proc/net/tcp 2> /dev/null) || return 1
   [[ $inode =~ ^[1-9][0-9]*$ ]] || return 1
-  fds=$(ls -l "/proc/$pid/fd" 2> /dev/null) || return 1
-  [[ $fds == *"socket:[$inode]"* ]]
+  # Whatever ls exits with: a descriptor closing mid-listing fails it while the
+  # rest still prints. Only a whole link target counts, never a path that
+  # merely contains the text.
+  fds=$'\n'"$(ls -l "/proc/$pid/fd" 2> /dev/null || true)"$'\n'
+  [[ $fds == *" -> socket:[$inode]"$'\n'* ]]
 }
 
 # Sets DTC_FOUND to "pid port stamp" from the runtime file the running Daintree
