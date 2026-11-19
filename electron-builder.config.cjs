@@ -395,6 +395,9 @@ module.exports = async function () {
         "!node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node",
         "!node_modules/onnxruntime-node/bin/napi-v*/{darwin,linux}/**/*",
       ],
+      // The client bin\daintree.cmd hands `daintree call` and `daintree session`
+      // to (#17932); afterPack.cjs refuses a package without it.
+      extraResources: [{ from: "scripts/daintree-call.ps1", to: "daintree-call.ps1" }],
       artifactName: "${productName}-${version}-${arch}-setup.${ext}",
       target: [
         { target: "appx", arch: ["x64"] },
