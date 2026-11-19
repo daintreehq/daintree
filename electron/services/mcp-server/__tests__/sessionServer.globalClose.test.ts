@@ -161,6 +161,7 @@ function harness(
       askClose,
     },
     globalSteer: steer,
+    terminalGenerationOf: (id) => generations.get(id),
   });
   return { deps, store, owner, records, screens, generations, askClose, dispatchAction };
 }
@@ -283,19 +284,25 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
     expect(dispatchAction).not.toHaveBeenCalled();
   });
 
-  it("asks nobody once the drive moves while the agent is read", async () => {
+  it("asks nobody once the drive moves while the agent is read, alike for every id", async () => {
     let checks = 0;
     const { deps, askClose, dispatchAction } = harness({
+      // Free for the first check of each call, taken by the second.
       refuseWrite: () =>
-        ++checks === 1
+        ++checks % 2 === 1
           ? null
           : { code: "DRIVEN_ELSEWHERE", message: "Another machine drives this project." },
     });
     const server = await serve(deps);
 
-    const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+    const eligible = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+    const missing = await callTool(
+      server,
+      relayed("terminal.closeOwned", { terminalId: "term-nope" })
+    );
 
-    expect(toolErrorPayload(result).code).toBe("DRIVEN_ELSEWHERE");
+    expect(toolErrorPayload(eligible).code).toBe("DRIVEN_ELSEWHERE");
+    expect(toolErrorPayload(missing)).toEqual(toolErrorPayload(eligible));
     expect(askClose).not.toHaveBeenCalled();
     expect(dispatchAction).not.toHaveBeenCalled();
   });

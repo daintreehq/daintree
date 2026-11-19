@@ -1418,10 +1418,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             resourceId
           );
 
-    const settleGlobalCloseLedger = (envelope: DispatchEnvelope): void => {
+    const settleGlobalCloseLedger = (
+      envelope: DispatchEnvelope,
+      dispatchedGeneration: number | undefined
+    ): void => {
       const terminalId = ownedResourceId;
       const generation = globalCloseGeneration;
       if (terminalId === undefined || generation === undefined || !envelope.result.ok) return;
+      // The run under the id when the close went out, as the owned close reads it.
+      if (dispatchedGeneration !== generation) return;
       if (!closedIdsInclude(envelope.result.result, terminalId)) return;
       const record = ownedRecordFor("terminal", terminalId);
       if (record === undefined) return;
@@ -1730,12 +1735,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       const standing = assistantWriteRefusal(projectId);
       if (standing) return refuseWrite(standing);
       const first = asked?.target ?? (await steer.closeTarget(projectId, terminalId));
-      if (first === null) return refuseGlobalClose(terminalId);
-      globalCloseAudited = true;
-      // Asked again now: another machine may have taken the drive while the
-      // agent was read, and nobody is asked about a close that can't run.
+      // Asked again now, whatever the read found: another machine may have
+      // taken the drive meanwhile, and nobody is asked about a close that
+      // can't run.
       const standingNow = assistantWriteRefusal(projectId);
       if (standingNow) return refuseWrite(standingNow);
+      if (first === null) return refuseGlobalClose(terminalId);
+      globalCloseAudited = true;
       let answered: Pick<GlobalCloseItem, "settlement" | "deadline">;
       if (asked !== undefined) {
         answered = asked;
@@ -2436,14 +2442,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               if (target === null) globalCloseItems.set(terminalId, null);
               else globalEligible.push({ terminalId, target });
             }
+            // Asked again, whatever the reads found: the drive may have moved meanwhile.
+            if (candidates.length > 0 || assistants > 0) {
+              const standingNow = assistantWriteRefusal(globalBatchProject);
+              if (standingNow) return refuseWrite(standingNow);
+            }
           }
           const globalAsks = globalEligible.length > 0;
-          if (globalAsks) {
-            globalCloseAudited = true;
-            // Asked again now: the drive may have moved while the agents were read.
-            const standingNow = assistantWriteRefusal(globalBatchProject!);
-            if (standingNow) return refuseWrite(standingNow);
-          }
+          if (globalAsks) globalCloseAudited = true;
           emitToolCallStarted(closeNeedsAsking || globalAsks, closeNeedsAsking || globalAsks);
           if (closeNeedsAsking) {
             const asked = await askToClose(closeIds);
@@ -4099,7 +4105,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // while its question was out by this caller's own launch of the
           // very run it closed: that run was the caller's after all.
           if (!globalCloseAdmitted) recordDispatchOwnership(envelope);
-          else settleGlobalCloseLedger(envelope);
+          else settleGlobalCloseLedger(envelope, closeGenerations.get(ownedResourceId!));
           // What it closed, so it can wait for those processes to exit after
           // `terminal.closeOwned` released them (#15728).
           if (CLOSE_TOOLS.has(actionId) && !globalCloseAdmitted) {

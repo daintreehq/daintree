@@ -31,6 +31,13 @@ describe("the global close's question (#16750)", () => {
     for (const line of [...single.lines, ...batch.lines]) {
       expect(line.length).toBeLessThanOrEqual(RELAY_LINE_MAX_CHARS);
     }
+    // The stop is never cut off, and the id keeps its end.
+    const errorStop = globalCloseBatchQuestion(
+      [{ terminalId: longId, target: { ...target, closeClass: "requires-person" } }],
+      0
+    );
+    expect(errorStop.lines[0]).toContain("may pick up again");
+    expect(errorStop.lines[0]).toContain(longId.slice(-20));
     expect(single.subject.length).toBeLessThanOrEqual(256);
   });
 

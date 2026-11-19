@@ -41,15 +41,16 @@ function panelName(target: GlobalCloseTarget, agent: string): string {
 }
 
 /**
- * The longest a question line runs: well inside the relay's own cap, so an
- * id or title of any length never keeps the question from being asked.
+ * How much of a panel's id the question shows: its head and its tail, so an
+ * id of any length keeps every line inside the relay's cap and two long ids
+ * that share a start still read apart.
  */
-const QUESTION_LINE_MAX_CHARS = 900;
+const QUESTION_ID_MAX_CHARS = 200;
 
-function clipLine(line: string): string {
-  return line.length > QUESTION_LINE_MAX_CHARS
-    ? `${line.slice(0, QUESTION_LINE_MAX_CHARS - 1)}…`
-    : line;
+function shownId(terminalId: string): string {
+  if (terminalId.length <= QUESTION_ID_MAX_CHARS) return terminalId;
+  const half = QUESTION_ID_MAX_CHARS / 2;
+  return `${terminalId.slice(0, half)}…${terminalId.slice(-(half - 1))}`;
 }
 
 function agentName(target: GlobalCloseTarget): string {
@@ -71,7 +72,7 @@ export function globalCloseQuestion(
   return {
     subject,
     lines: [
-      clipLine(`Panel: ${subject} (${terminalId})`),
+      `Panel: ${subject} (${shownId(terminalId)})`,
       `Agent: ${agent}, ${stopOf(target)}`,
       "Its input box holds nothing typed.",
       TRASH_LINE,
@@ -93,7 +94,7 @@ export function globalCloseBatchQuestion(
     lines: [
       ...targets.map(({ terminalId, target }) => {
         const agent = agentName(target);
-        return clipLine(`${panelName(target, agent)} (${terminalId}): ${agent}, ${stopOf(target)}`);
+        return `${panelName(target, agent)} (${shownId(terminalId)}): ${agent}, ${stopOf(target)}`;
       }),
       "None of their input boxes holds anything typed.",
       ...(ownCount > 0
