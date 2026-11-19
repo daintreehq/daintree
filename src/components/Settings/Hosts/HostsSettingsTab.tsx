@@ -83,7 +83,11 @@ export default function HostsSettingsTab() {
   const bringBacks = useHostBringBacks();
   const cloudSnapshot = useCloudHosts().snapshot;
   const machines = useCloudMachineActions();
-  const [removeCloud, setRemoveCloud] = useState<{ hostId: HostId; name: string } | null>(null);
+  const [removeCloud, setRemoveCloud] = useState<{
+    hostId: HostId;
+    name: string;
+    startsOnConnect: boolean;
+  } | null>(null);
   const providerName = (providerId: string | undefined) =>
     cloudSnapshot.providers.find((provider) => provider.id === providerId)?.name ??
     providerId ??
@@ -463,7 +467,11 @@ export default function HostsSettingsTab() {
                               onClick={() => {
                                 // By its kind, not its status: a cloud host is never plainly forgotten.
                                 if (descriptor.connection.kind === "cloud") {
-                                  setRemoveCloud({ hostId: descriptor.id, name: descriptor.name });
+                                  setRemoveCloud({
+                                    hostId: descriptor.id,
+                                    name: descriptor.name,
+                                    startsOnConnect: descriptor.startsOnConnect === true,
+                                  });
                                   return;
                                 }
                                 setForgetError(null);
@@ -527,6 +535,7 @@ export default function HostsSettingsTab() {
             cloudSnapshot.providers,
             cloudStatusFor(cloudSnapshot, removeCloud.hostId)
           )}
+          startsOnConnect={removeCloud.startsOnConnect}
           onClose={() => setRemoveCloud(null)}
         />
       )}
@@ -558,7 +567,7 @@ export default function HostsSettingsTab() {
         onClose={() => setForgetTarget(null)}
         variant="destructive"
         title={`Remove '${forgetTarget?.name ?? "host"}' from this device?`}
-        description={`Its connection here closes, windows attached to it return to this machine, and its plugin permissions, history and browser data on this device are cleared. ${removeHostOutcome(forgetTarget?.connection, forgetTarget?.name ?? "the host").sentence}`}
+        description={`Its connection here closes, windows attached to it return to this machine, and its plugin permissions, history and browser data on this device are cleared. ${removeHostOutcome(forgetTarget?.connection, forgetTarget?.name ?? "the host", forgetTarget?.startsOnConnect === true).sentence}`}
         confirmLabel="Remove host"
         onConfirm={confirmForget}
         isConfirmLoading={forgetting}

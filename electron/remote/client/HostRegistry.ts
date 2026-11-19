@@ -177,6 +177,9 @@ function sanitize(raw: unknown): HostDescriptor[] {
         : {}),
       ...(connection.kind === "ssh" ? wakeOf(host.wake) : {}),
       ...placementOf(host.pendingPlacement),
+      ...(host.startsOnConnect === true && connection.kind !== "wsl"
+        ? { startsOnConnect: true as const }
+        : {}),
     });
   }
   return out;
@@ -273,6 +276,9 @@ export class HostRegistry {
     if (payload.pendingPlacement !== undefined) {
       applyPendingPlacement(descriptor, payload.pendingPlacement);
     }
+    if (payload.startsOnConnect === true && connection.kind !== "wsl") {
+      descriptor.startsOnConnect = true;
+    }
     this.write([...hosts, descriptor]);
     return descriptor;
   }
@@ -317,6 +323,8 @@ export class HostRegistry {
         delete next.pendingPlacement;
         // Nor is this computer's agent offered to a machine it wasn't offered to.
         delete next.forwardSshAgent;
+        // Nor is how Daintree runs on the old machine anything the new one has said.
+        delete next.startsOnConnect;
       }
     }
     if (payload.wake !== undefined) {
@@ -363,6 +371,21 @@ export class HostRegistry {
       else delete next.forwardSshAgent;
     }
     return next;
+  }
+
+  /**
+   * What a check of the host saw about how Daintree runs there. Written only
+   * when it changes: every poll of a setup reports it.
+   */
+  recordStartsOnConnect(hostId: HostId, startsOnConnect: boolean): HostDescriptor | null {
+    const current = this.get(hostId);
+    if (!current) return null;
+    const value = startsOnConnect && current.connection.kind !== "wsl";
+    if ((current.startsOnConnect === true) === value) return current;
+    const next: HostDescriptor = { ...current };
+    if (value) next.startsOnConnect = true;
+    else delete next.startsOnConnect;
+    return this.replace(next);
   }
 
   /** Record what a connection observed. Not a user edit, so it never validates names. */

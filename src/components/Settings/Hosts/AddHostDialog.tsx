@@ -79,6 +79,7 @@ import {
   namedProgressMessage,
   sshRefusalAdvice,
   hostModeSwitchedOn,
+  STARTS_ON_CONNECT_COVERAGE,
   installLabel,
   platformLabel,
   canWaitForIdle,
@@ -775,18 +776,24 @@ export function AddHostDialog({
   /** Add the host to the list once; every later step reuses that record. */
   const save = (): Promise<SavedHost> => {
     if (savedHost) return Promise.resolve(savedHost);
-    saving.current ??= remoteHostsClient.add({ name: hostLabel, connection: connectionFor() }).then(
-      (descriptor) => {
-        const record = { hostId: descriptor.id, name: descriptor.name };
-        setSaved(record);
-        awaitFirstConnect(descriptor.id);
-        return record;
-      },
-      (err: unknown) => {
-        saving.current = null;
-        throw err;
-      }
-    );
+    saving.current ??= remoteHostsClient
+      .add({
+        name: hostLabel,
+        connection: connectionFor(),
+        ...(probe?.startsOnConnect === true ? { startsOnConnect: true } : {}),
+      })
+      .then(
+        (descriptor) => {
+          const record = { hostId: descriptor.id, name: descriptor.name };
+          setSaved(record);
+          awaitFirstConnect(descriptor.id);
+          return record;
+        },
+        (err: unknown) => {
+          saving.current = null;
+          throw err;
+        }
+      );
     return saving.current;
   };
 
@@ -2116,10 +2123,13 @@ export function AddHostDialog({
     announce = title;
   } else if (step === "enable") {
     const switchedOn = hostModeSwitchedOn(probe);
+    const onConnect = probe?.startsOnConnect === true;
     const enableBody = switchedOn ? (
       <p className="text-sm text-text-primary">
-        Host mode is on at {hostLabel} and starts {viaWsl ? "with it" : "at login there"}. This
-        machine can connect.
+        {onConnect
+          ? `Host mode is on at ${hostLabel} and runs in the background. ${STARTS_ON_CONNECT_COVERAGE}`
+          : `Host mode is on at ${hostLabel} and starts ${viaWsl ? "with it" : "at login there"}.`}{" "}
+        This machine can connect.
       </p>
     ) : (
       <div className="space-y-2 text-sm">
@@ -2131,9 +2141,11 @@ export function AddHostDialog({
         <p className="text-text-secondary">
           {probe?.platform === "darwin"
             ? "Daintree turns on Host mode there in the logged-in session and sets it to start at login. If it has never run on that Mac, open it once at the machine: macOS asks to approve a first launch."
-            : viaWsl
-              ? "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode, so it starts whenever the distribution does."
-              : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
+            : onConnect
+              ? `${hostLabel} has no systemd, so there's no Host mode service to install. Daintree starts Host mode there in the background instead. ${STARTS_ON_CONNECT_COVERAGE}`
+              : viaWsl
+                ? "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode, so it starts whenever the distribution does."
+                : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
         </p>
         {!existing && (
           <p className="text-xs text-text-secondary">
@@ -2175,7 +2187,9 @@ export function AddHostDialog({
                 : `${hostLabel} is ready to connect`}
           </p>
           <p className="text-text-secondary">
-            Host mode is on there and starts {viaWsl ? "with the distribution" : "at login"}.
+            {probe?.startsOnConnect === true
+              ? `Host mode is on there and runs in the background. ${STARTS_ON_CONNECT_COVERAGE}`
+              : `Host mode is on there and starts ${viaWsl ? "with the distribution" : "at login"}.`}
           </p>
         </div>
         <AddHostNotes

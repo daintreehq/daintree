@@ -391,7 +391,7 @@ export async function startContainerHost(tls: FeedTls): Promise<ContainerHost> {
               host,
               "sh",
               "-c",
-              'tail -n 60 "/run/user/$(id -u)/standin-systemd/journal.log" 2>/dev/null; ps -eo pid,ppid,comm,args | cut -c1-160',
+              'tail -n 60 "$HOME/.cache/daintree/host.log" 2>/dev/null; ps -eo pid,ppid,comm,args | cut -c1-160',
             ],
             10_000
           ),

@@ -4,6 +4,7 @@ import { Callout } from "@/components/ui/Callout";
 import { pluralize } from "@/lib/pluralize";
 import type { HostProbeResult } from "@shared/types/ipc/remoteHosts";
 import { HostCommand } from "./HostCommand";
+import { STARTS_ON_CONNECT_COVERAGE } from "./hostLabels";
 
 interface Note {
   id: string;
@@ -53,6 +54,13 @@ export function AddHostNotes({
   const attention: Note[] = [];
   const background: Note[] = [];
 
+  if (!viaWsl && probe?.startsOnConnect === true) {
+    background.push({
+      id: "running",
+      title: "Running",
+      body: `${hostLabel} has no systemd, so Daintree runs Host mode there in the background rather than as a service. ${STARTS_ON_CONNECT_COVERAGE}`,
+    });
+  }
   if (viaWsl) {
     background.push({
       id: "running",

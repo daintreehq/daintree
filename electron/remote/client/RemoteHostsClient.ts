@@ -251,6 +251,13 @@ export interface RemoteHostsClientOptions {
   onLetGo?: (hostId: HostId) => void;
   /** How long forgetting a host waits for each of its windows to come back here. */
   forgetSwitchWaitMs?: number;
+  /**
+   * Removing a host, once its windows are home and its link is down but
+   * before its record (and with it a cloud machine's access) goes: stop what
+   * nothing else would ever stop there. Best effort; a failure never keeps
+   * the host in the list.
+   */
+  onRemoving?: (descriptor: HostDescriptor) => Promise<void>;
   /** After a host is forgotten: drop what this machine kept for it (SSH master, cached bundles). */
   onForget?: (descriptor: HostDescriptor) => Promise<void>;
   /**
@@ -598,6 +605,9 @@ export class RemoteHostsClient {
       await this.options.manager.disconnect(hostId);
       this.detached.forget(hostId);
       this.dropProjectOffers(hostId);
+      await this.options.onRemoving?.(descriptor).catch((error: unknown) => {
+        logger.warn("Stopping a removed host failed", { error });
+      });
       this.options.registry.forget(hostId);
       // Anything dialled it meanwhile without asking: the link goes with the record.
       await this.options.manager.disconnect(hostId);

@@ -6,6 +6,7 @@ import { MetricsLinkMethod, RestartImpactSchema } from "../metrics/linkMethods.j
 import {
   isLocalHostId,
   parseHostScopedKey,
+  sameHostConnection,
   toHostScopedKey,
   type HostConnection,
   type HostDescriptor,
@@ -140,6 +141,8 @@ export function setHostAgentsSource(source: AgentsSource | null): void {
 
 /** How long an update waits for a host it has to dial before asking it what a restart ends. */
 const RESTART_IMPACT_CONNECT_MS = 15_000;
+/** How long Remove waits on stopping a host started on connect: a check, then its quit. */
+const REMOVE_STOP_MS = 120_000;
 
 /** How often the network is compared while an ssh host's connection is wanted. */
 const HOST_NETWORK_POLL_MS = 1_000;
@@ -958,6 +961,12 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emit: broadcastLocal,
     listViews: () => getAllAppWebContents().map((wc) => wc.id),
     onFirstUse: hooks.onFirstUse,
+    // Daintree there runs until stopped and nothing else would stop it; one
+    // kept running by a service or login item is left as it is.
+    onRemoving: async (descriptor): Promise<void> => {
+      if (descriptor.startsOnConnect !== true) return;
+      await setup.stopStartedOnConnect(descriptor.connection, AbortSignal.timeout(REMOVE_STOP_MS));
+    },
     onForget: async (descriptor): Promise<void> => {
       stopSignIn(descriptor.connection);
       await forgetHostState(descriptor.id, HOST_STATE_CLEANUPS);
@@ -1093,6 +1102,13 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emit: broadcastLocal,
     isRetiring: (connection) => client.isRetiring(connection),
     wslKeepalive,
+    onProbed: (connection, result) => {
+      for (const host of registry.list()) {
+        if (sameHostConnection(host.connection, connection)) {
+          registry.recordStartsOnConnect(host.id, result.startsOnConnect === true);
+        }
+      }
+    },
   });
   // A host whose Daintree answered is checked afresh the next time it isn't serving.
   const stopStartRechecks = manager.onStateChange((hostId, state) => {
