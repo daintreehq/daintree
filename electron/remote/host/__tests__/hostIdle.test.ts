@@ -33,6 +33,46 @@ vi.mock("../../../window/serviceRefs.js", () => ({
 
 import { _resetRemoteServicesForTest, getRemoteService } from "../../runtime.js";
 import { installHostIdle } from "../hostIdle.js";
+import type { RemoteViewEndpoint } from "../RemoteViewEndpoint.js";
+import type {
+  EndpointOpenedListener,
+  EndpointSessionHandle,
+  TransportChangeListener,
+} from "../SessionHost.js";
+
+const MINUTE = 60_000;
+
+/** The parts of a SessionHost the idle clock reads, with a Shell's moves on it. */
+function fakeSessionHost(servesViews = false) {
+  const opened = new Set<EndpointOpenedListener>();
+  const transport = new Set<TransportChangeListener>();
+  return {
+    servesViews,
+    onEndpointOpened(listener: EndpointOpenedListener) {
+      opened.add(listener);
+      return () => opened.delete(listener);
+    },
+    onTransportChange(listener: TransportChangeListener) {
+      transport.add(listener);
+      return () => transport.delete(listener);
+    },
+    /** A Shell opens a view here. */
+    openView() {
+      for (const listener of [...opened]) {
+        listener({} as RemoteViewEndpoint, {} as EndpointSessionHandle);
+      }
+    },
+    /** A link carrying a view drops, or resumes. */
+    transport(attached: boolean) {
+      for (const listener of [...transport]) listener(["remote:s1:view-1"], attached);
+    },
+    get listeners() {
+      return opened.size + transport.size;
+    },
+  };
+}
+
+const idle = () => getRemoteService("hostIdle")!.observation();
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -49,7 +89,7 @@ afterEach(() => {
 
 describe("installHostIdle (#17357)", () => {
   it("reads the PTY host itself, past the shared snapshot, for a check before acting (#17361)", async () => {
-    const dispose = installHostIdle({ servesViews: false });
+    const dispose = installHostIdle(fakeSessionHost());
     await vi.advanceTimersByTimeAsync(0);
     expect(getRemoteService("hostIdle")?.observation().busy).toBe(false);
     // The shared snapshot is from before an agent started; the PTY host knows it now.
@@ -64,7 +104,7 @@ describe("installHostIdle (#17357)", () => {
 
   it("runs the idle clock with no Shell attached, at the host's stored idle time", async () => {
     stored.values.hostIdle = { idleAfterMinutes: 45 };
-    const dispose = installHostIdle({ servesViews: false });
+    const dispose = installHostIdle(fakeSessionHost());
     await vi.advanceTimersByTimeAsync(0);
 
     const observed = getRemoteService("hostIdle")?.observation();
@@ -74,7 +114,7 @@ describe("installHostIdle (#17357)", () => {
   });
 
   it("holds the clock while a Shell's window is open here, or the terminals can't all be read", async () => {
-    const sessionHost = { servesViews: true };
+    const sessionHost = fakeSessionHost(true);
     const dispose = installHostIdle(sessionHost);
     await vi.advanceTimersByTimeAsync(0);
     expect(getRemoteService("hostIdle")?.observation().busy).toBe(true);
@@ -98,7 +138,7 @@ describe("installHostIdle (#17357)", () => {
       ],
       degraded: false,
     };
-    const dispose = installHostIdle({ servesViews: false });
+    const dispose = installHostIdle(fakeSessionHost());
     await vi.advanceTimersByTimeAsync(0);
     expect(getRemoteService("hostIdle")?.observation().busy).toBe(true);
 
@@ -115,7 +155,7 @@ describe("installHostIdle (#17357)", () => {
   });
 
   it("takes an agent starting to work from its event, before the next check", async () => {
-    const dispose = installHostIdle({ servesViews: false });
+    const dispose = installHostIdle(fakeSessionHost());
     await vi.advanceTimersByTimeAsync(0);
     expect(getRemoteService("hostIdle")?.observation().busy).toBe(false);
 
@@ -130,13 +170,81 @@ describe("installHostIdle (#17357)", () => {
     dispose();
   });
 
-  it("stops, unsubscribes and unregisters when disposed", async () => {
-    const dispose = installHostIdle({ servesViews: false });
+  it("restarts the idle time for a window opened and closed between two checks (#17920)", async () => {
+    const sessionHost = fakeSessionHost();
+    const dispose = installHostIdle(sessionHost);
     await vi.advanceTimersByTimeAsync(0);
+    const endsAt = idle().idleEndsAt!;
+    const idleTime = idle().idleAfterMinutes * MINUTE;
+
+    // Ten seconds before the idle time ends, five after the last check.
+    await vi.advanceTimersByTimeAsync(idleTime - 10_000);
+    sessionHost.servesViews = true;
+    sessionHost.openView();
+    sessionHost.servesViews = false;
+    expect(idle().busy).toBe(true);
+
+    // The check that ends the old idle time can't see the window, but it was
+    // counted: the first check to find none starts a full idle time again.
+    await vi.advanceTimersByTimeAsync(endsAt - Date.now());
+    const restarted = { busy: false, lastWorkAt: endsAt, idleEndsAt: endsAt + idleTime };
+    expect(idle()).toMatchObject(restarted);
+    // And so is the last look before a stop.
+    await getRemoteService("hostIdle")!.checkFresh();
+    expect(idle()).toMatchObject(restarted);
+    dispose();
+  });
+
+  it("restarts the idle time for a link that resumed with views and dropped between two checks (#17920)", async () => {
+    const sessionHost = fakeSessionHost();
+    const dispose = installHostIdle(sessionHost);
+    await vi.advanceTimersByTimeAsync(0);
+    const endsAt = idle().idleEndsAt!;
+    const idleTime = idle().idleAfterMinutes * MINUTE;
+
+    await vi.advanceTimersByTimeAsync(idleTime - 10_000);
+    sessionHost.servesViews = true;
+    sessionHost.transport(true);
+    sessionHost.servesViews = false;
+    sessionHost.transport(false);
+    expect(idle().busy).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(endsAt - Date.now());
+    const restarted = { busy: false, lastWorkAt: endsAt, idleEndsAt: endsAt + idleTime };
+    expect(idle()).toMatchObject(restarted);
+    await getRemoteService("hostIdle")!.checkFresh();
+    expect(idle()).toMatchObject(restarted);
+    dispose();
+  });
+
+  it("leaves the idle time running when a link only drops (#17920)", async () => {
+    // A link with no view raises nothing at all (SessionHost.test.ts); one
+    // that drops takes its views away, which is no new work.
+    const sessionHost = fakeSessionHost();
+    const dispose = installHostIdle(sessionHost);
+    await vi.advanceTimersByTimeAsync(0);
+    const endsAt = idle().idleEndsAt!;
+
+    await vi.advanceTimersByTimeAsync(idle().idleAfterMinutes * MINUTE - 10_000);
+    sessionHost.transport(false);
+    expect(idle()).toMatchObject({ busy: false, idleEndsAt: endsAt });
+
+    await vi.advanceTimersByTimeAsync(endsAt - Date.now());
+    await getRemoteService("hostIdle")!.checkFresh();
+    expect(idle()).toMatchObject({ busy: false, idleEndsAt: endsAt });
+    dispose();
+  });
+
+  it("stops, unsubscribes and unregisters when disposed", async () => {
+    const sessionHost = fakeSessionHost();
+    const dispose = installHostIdle(sessionHost);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sessionHost.listeners).toBe(2);
     dispose();
 
     expect(getRemoteService("hostIdle")).toBeUndefined();
     expect(bus.listeners.get("agent:state-changed")?.size ?? 0).toBe(0);
+    expect(sessionHost.listeners).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
