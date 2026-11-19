@@ -34,7 +34,7 @@ const RestartOnAccountResultSchema = z.object({
   agentAccountId: z
     .string()
     .nullable()
-    .describe("Account it now runs on; null is the CLI's default login."),
+    .describe("Account it now runs on; null is no saved account."),
   agentSessionIdCleared: z
     .boolean()
     .describe("false: asked to reopen it; true: re-send the brief."),

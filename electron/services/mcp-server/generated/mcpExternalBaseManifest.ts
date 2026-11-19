@@ -2605,7 +2605,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description: "The panel, respawned in place.",
         },
         agentAccountId: {
-          description: "Account it now runs on; null is the CLI's default login.",
+          description: "Account it now runs on; null is no saved account.",
           type: ["string", "null"],
         },
         agentSessionIdCleared: {

@@ -519,10 +519,11 @@ describe("core reads with no frontend", () => {
         expect(choice.accountId).toBe(launched ?? null);
 
         const { deps: launch, invoke } = accountDeps();
-        await executeViewlessAction(
+        const launchResult = await executeViewlessAction(
           request("agent.launch", { agentId: "claude", worktreeId }),
           launch
         );
+        expect(launchResult?.ok).toBe(true);
         const call = invoke.mock.calls.find(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN);
         expect(call).toBeDefined();
         const spawned = call?.[2][0] as { env?: Record<string, string> } | undefined;

@@ -1246,6 +1246,7 @@ describe("session-scoped resource ownership (#11909)", () => {
         { accountId: "account-1", keepConversation: true, terminalId: "terminal-1" },
         false
       );
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
       expect(store.resourceOwnership.owns("s-account-keeps", "terminal", "terminal-1")).toBe(true);
     });
   });

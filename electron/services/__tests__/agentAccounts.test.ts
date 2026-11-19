@@ -159,6 +159,25 @@ describe("addAgentAccount (#16040)", () => {
     expect(["Team", "Team again"]).toContain(saved[1]);
   });
 
+  it("refuses to create a folder a saved account already names, its folder since deleted", async () => {
+    fakeStore.reset({
+      agentSettings: {
+        agents: {
+          codex: {
+            accounts: [
+              { id: "account-old", name: "Old", configDir: path.join(home, ".codex-company") },
+            ],
+          },
+        },
+      },
+    });
+
+    await expect(
+      addAgentAccount({ agentId: "codex", name: "Company", folder: { kind: "create" } })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((savedCodex().accounts as unknown[]).length).toBe(1);
+  });
+
   it("still adds after an add before it failed", async () => {
     await mkdir(path.join(home, ".codex-company"));
     const [failed, added] = await Promise.allSettled([

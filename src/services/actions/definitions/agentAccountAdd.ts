@@ -70,9 +70,7 @@ export function planAgentAccountAdd(args: unknown): AccountAddPlan {
       destination = path;
       // `/team` and `/team/` are one folder; main resolves symlinks besides.
       // A backslash separates only in a Windows path.
-      const trailing = /^(?:[A-Za-z]:|[\\/]{2})/.test(path)
-        ? /(?<=[^\\/])[\\/]+$/
-        : /(?<=[^/])\/+$/;
+      const trailing = /^(?:[A-Za-z]:|\\\\)/.test(path) ? /(?<=[^\\/])[\\/]+$/ : /(?<=[^/])\/+$/;
       key = `existing:${request.agentId}:${path.replace(trailing, "")}`;
     }
     const earlier = claimed.get(key);

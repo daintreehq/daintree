@@ -219,7 +219,12 @@ describe("agent.addAccount run (#17079)", () => {
     clock.mockRestore();
 
     const rows = (result as { accounts: Array<{ status: string }> }).accounts;
-    expect(rows.slice(0, 3).map((row) => row.status)).toEqual(["added", "added", "notAttempted"]);
+    expect(rows.map((row) => row.status)).toEqual([
+      "added",
+      "added",
+      "notAttempted",
+      ...Array(5).fill("declined"),
+    ]);
     expect(store.addAccount).toHaveBeenCalledTimes(2);
   });
 
