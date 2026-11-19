@@ -227,7 +227,15 @@ describe("decisionCancelModel", () => {
   });
 
   describe("a dismissal of a Remote Host's question while its Host is away (#17946)", () => {
-    const AWAY: DecisionCancelTarget = { ...TARGET, revision: 3, lastReadAt: 1_000 };
+    const AWAY: DecisionCancelTarget = {
+      ...TARGET,
+      question: {
+        scope: "reference",
+        reference: { hostId: "qhost_studio", projectId: "p1", terminalId: "t1", questionId: "q42" },
+      },
+      revision: 3,
+      lastReadAt: 1_000,
+    };
 
     it("says it goes by what was last read here, and the agent hears once the Host is back", () => {
       const body = dismissBody(AWAY);

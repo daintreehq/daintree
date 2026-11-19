@@ -752,6 +752,40 @@ describe("DecisionsInboxDialog", () => {
       expect(cancelQuestionByReference).not.toHaveBeenCalled();
     });
 
+    it("never offers withdrawing for a dismissal signed from the last read once the Host went away under the confirmation", async () => {
+      getQuestionContentByReference.mockResolvedValue({
+        result: "read",
+        question: content("question-9", 9, {
+          reference: AWAY_REFERENCE,
+          status: "open",
+          revision: 4,
+        }),
+      });
+      declineQuestion.mockImplementation(async ({ declineId }) => ({
+        result: "submitted",
+        declineId,
+        outcome: { status: "unsupported", by: "relay" },
+      }));
+      open();
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      // The Host goes away while the person reads the confirmation opened on a live read.
+      getQuestionContentByReference.mockResolvedValue({
+        result: "host-not-connected",
+        lastRead: { result: "read", revision: 4, alias: 9, readAt: Date.now() },
+      });
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      });
+      await waitFor(() =>
+        expect(confirm.textContent).toMatch(/Your relay needs an update.*q-9 wasn't dismissed/)
+      );
+      expect(declineQuestion).toHaveBeenCalledOnce();
+      expect(confirm.textContent).not.toContain("Withdraw question");
+      expect(confirm.textContent).not.toMatch(/withdraw it instead/);
+      expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    });
+
     it("says why it can't be dismissed when nothing read here says where it stands, and keeps Clear", async () => {
       getQuestionContentByReference.mockResolvedValue({
         result: "host-not-connected",

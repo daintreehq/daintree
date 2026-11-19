@@ -1550,26 +1550,38 @@ export function getDecisionAnswerResult(
 export async function declineDecisionQuestion(
   payload: DeclineDecisionQuestionPayload
 ): Promise<DecisionQuestionDeclineResult> {
-  if (namesUnreportedHost(payload.reference)) return { result: "refused", reason: "not-found" };
+  if (!hostDeclineAdmitted(payload)) return { result: "refused", reason: "not-found" };
   return whileRunning((running) => running.declineQuestion(payload));
 }
 
 /**
- * Whether an owner's decline names another machine's question through no
- * Host reported to the owner this computer speaks as now (#17946). The
- * library signs a decline of a question it holds no copy of by its id and
- * revision alone, so the reference is all that ties it to an enrolled Host:
- * one kept from before this computer took up another owner identity, or
- * from a Host since removed, names nothing here, and is never sent again
- * under this one. A reference naming this computer is the store's to check.
+ * The owner identity each decline of another machine's question was first
+ * submitted under, by decline id (#17946), for as long as this process runs.
  */
-function namesUnreportedHost(reference: DecisionQuestionReference): boolean {
+const hostDeclineOwners = new Map<string, string>();
+
+/**
+ * Whether an owner's decline of another machine's question may be signed
+ * (#17946). The library signs a decline of a question it holds no copy of by
+ * its id and revision alone, so the reference is all that ties it to an
+ * enrolled Host: it must name a Host reported to the owner this computer
+ * speaks as now, and a decline first submitted under another owner identity
+ * is never sent again under this one, whatever its Hosts report. A
+ * reference naming this computer is the store's to check.
+ */
+function hostDeclineAdmitted({ reference, declineId }: DeclineDecisionQuestionPayload): boolean {
   const running = service;
-  if (running === null || running.getRole() !== "owner") return false;
-  const ownHostId = running.getSettings()?.hostId ?? null;
-  if (ownHostId === null || reference.hostId === ownHostId) return false;
+  if (running === null || running.getRole() !== "owner") return true;
+  const settings = running.getSettings();
+  const ownHostId = settings?.hostId ?? null;
+  if (ownHostId === null || reference.hostId === ownHostId) return true;
+  const owner = `${settings?.installationId ?? ""}\n${settings?.deviceId ?? ""}`;
+  const first = hostDeclineOwners.get(declineId);
+  if (first !== undefined && first !== owner) return false;
   const reported = getDecisionsHostsPort()?.hostQuestions() ?? [];
-  return !reported.some((host) => host.questionHostId === reference.hostId);
+  if (!reported.some((host) => host.questionHostId === reference.hostId)) return false;
+  hostDeclineOwners.set(declineId, owner);
+  return true;
 }
 
 /** Where a person's decline stands, by its id (#17239). Never makes or starts the service. */
@@ -3284,6 +3296,7 @@ export async function stopDecisions(): Promise<void> {
 
 /** @internal Tests only. */
 export function _resetDecisionsForTesting(): void {
+  hostDeclineOwners.clear();
   cancelRelayChecks();
   forgetOwnerDevices();
   cancelKitExports();

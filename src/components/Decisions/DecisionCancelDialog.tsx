@@ -161,7 +161,12 @@ export function DecisionCancelDialog({
     const dismiss = async () => {
       const attempt = await dismissQuestion(subject.question, subject.revision, key);
       if (attempt.kind === "submitted") key = attempt.key;
-      const verdict = dismissVerdict(subject, attempt);
+      // Its Remote Host went away after this opened: signed from the last read, never withdrawn.
+      const lastReadAt = attempt.kind === "submitted" ? (attempt.lastReadAt ?? null) : null;
+      const verdict = dismissVerdict(
+        lastReadAt !== null ? { ...subject, lastReadAt } : subject,
+        attempt
+      );
       switch (verdict.kind) {
         case "done":
           onDismissing?.(questionOf(subject.question).questionId, verdict.key);

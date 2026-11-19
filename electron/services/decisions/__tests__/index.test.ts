@@ -1752,6 +1752,13 @@ describe("Decisions entry", () => {
           await expect(
             getDecisionQuestionContentByReference({ reference: ON_HOST })
           ).resolves.toEqual({ result: "host-not-connected", lastRead: read });
+          // Why it can't be dismissed travels with it too.
+          for (const why of [{ result: "not-read" }, { result: "not-sent" }] as const) {
+            last = why;
+            await expect(
+              getDecisionQuestionContentByReference({ reference: ON_HOST })
+            ).resolves.toEqual({ result: "host-not-connected", lastRead: why });
+          }
           last = null;
           await expect(
             getDecisionQuestionContentByReference({ reference: ON_HOST })
@@ -1765,7 +1772,7 @@ describe("Decisions entry", () => {
           await expect(
             getDecisionQuestionContentByReference({ reference: ON_HOST })
           ).resolves.toEqual({ result: "unreadable" });
-          expect(lastHostRead.mock.calls).toEqual([[ON_HOST], [ON_HOST]]);
+          expect(lastHostRead.mock.calls).toEqual([[ON_HOST], [ON_HOST], [ON_HOST], [ON_HOST]]);
         } finally {
           withdraw();
         }
@@ -1787,8 +1794,21 @@ describe("Decisions entry", () => {
           declineId: "0190f0aa-1111-4222-8333-44445555aaaa",
           expectedRevision: 3,
         };
+        const studio: DecisionsHostQuestions = {
+          hostId: "studio-03",
+          name: "Studio",
+          connected: false,
+          questionHostId: ON_HOST.hostId,
+          questions: [],
+        };
         try {
           // A Host removed, or reported to another owner identity than this one: nothing is signed.
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          // Another Host reported here names other questions.
+          hosts = [{ ...studio, hostId: "lab-01", questionHostId: "qhost_lab_0001" }];
           await expect(declineDecisionQuestion(decline)).resolves.toEqual({
             result: "refused",
             reason: "not-found",
@@ -1796,15 +1816,7 @@ describe("Decisions entry", () => {
           expect(declineQuestion).not.toHaveBeenCalled();
 
           // Reported to this owner, connected or not: the relay holds it to its own record.
-          hosts = [
-            {
-              hostId: "studio-03",
-              name: "Studio",
-              connected: false,
-              questionHostId: ON_HOST.hostId,
-              questions: [],
-            },
-          ];
+          hosts = [studio];
           await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
             result: "submitted",
           });
@@ -1815,6 +1827,57 @@ describe("Decisions entry", () => {
             result: "submitted",
           });
           expect(declineQuestion.mock.calls).toEqual([[decline], [own]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("never sends a Host question's decline again under another owner identity than it was first sent under (#17946)", async () => {
+        await running(null);
+        const current = peekDecisionsService()!;
+        const declineQuestion = vi.spyOn(current, "declineQuestion").mockResolvedValue({
+          result: "submitted",
+          declineId: "0190f0aa-1111-4222-8333-44445555aaab",
+          outcome: { status: "queued" },
+        });
+        const studio: DecisionsHostQuestions = {
+          hostId: "studio-03",
+          name: "Studio",
+          connected: false,
+          questionHostId: ON_HOST.hostId,
+          questions: [],
+        };
+        // The same Host, under the same id, is reported to whichever identity this computer holds.
+        const withdraw = publishHostPort({ hostQuestions: () => [studio] });
+        const decline = {
+          reference: ON_HOST,
+          declineId: "0190f0aa-1111-4222-8333-44445555aaab",
+          expectedRevision: 3,
+        };
+        try {
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // Local data deleted and another installation set up, with the old dismissal still followed.
+          const settings = current.getSettings()!;
+          const getSettings = vi
+            .spyOn(current, "getSettings")
+            .mockReturnValue({ ...settings, installationId: "inst_87654321" });
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          // A dismissal made under this identity goes as any other.
+          const fresh = { ...decline, declineId: "0190f0aa-1111-4222-8333-44445555aaac" };
+          await expect(declineDecisionQuestion(fresh)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // Back under the first identity, its own decline may be sent again, as the same decline.
+          getSettings.mockRestore();
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          expect(declineQuestion.mock.calls).toEqual([[decline], [fresh], [decline]]);
         } finally {
           withdraw();
         }

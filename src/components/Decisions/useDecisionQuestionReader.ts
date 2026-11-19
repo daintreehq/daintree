@@ -279,7 +279,12 @@ export function useDecisionQuestionReader(
         : null;
   const answerMode = useAnswerComposerMode(question);
   const subjectRecord = useAnswerRecord(subject !== null ? answerKey(subject.reference) : "");
-  const answering = isInFlight(subjectRecord) || answerMode === "progress";
+  const answer = subjectRecord.submission?.phase;
+  // An answer from here under way, or taken: with no composer showing it while its Host is away.
+  const answering =
+    isInFlight(subjectRecord) ||
+    answerMode === "progress" ||
+    (answer?.kind === "settled" && answer.outcome.status === "sent");
   // Bound to the question the composer was shown for, and stable: its effects call it.
   const reread = useCallback(() => readAgain(target), [readAgain, target]);
   const release = useCallback(() => setTagged(null), []);
