@@ -36,7 +36,11 @@ describe("scanClaudeUpdateFooter", () => {
       true,
     ],
     ["a server-set offer that doesn't", "✔ Update installed · reopen to apply", false],
-    ["a server-set offer that names /restart in brackets", "✔ Update installed · apply (/restart)", true],
+    [
+      "a server-set offer that names /restart in brackets",
+      "✔ Update installed · apply (/restart)",
+      true,
+    ],
     ["an offer naming a longer command", "✔ Update installed · /restart-all to apply", false],
     ["an offer naming a path under it", "✔ Update installed · see /restart/notes", false],
     [
@@ -56,7 +60,8 @@ describe("scanClaudeUpdateFooter", () => {
   });
 
   it("reads the footer appended to other hints behind a separator", () => {
-    const row = "  ⏵⏵ accept edits on (shift+tab to cycle) · ✔ Update installed · /restart to apply";
+    const row =
+      "  ⏵⏵ accept edits on (shift+tab to cycle) · ✔ Update installed · /restart to apply";
     expect(scan(frame(row))).toEqual({ namesRestart: true });
   });
 
@@ -88,10 +93,20 @@ describe("scanClaudeUpdateFooter", () => {
     expect(scan(wrap(row, 44), 44)).toEqual({ namesRestart: true });
   });
 
-  it("reads an offer whose wrap fell on the space after the separator", () => {
+  it("doesn't join a row a column short of the edge, which a dropped blank row could fake", () => {
+    // The read drops blank rows, so a head alone one column short of the edge
+    // and a later row starting with the separator are not a wrapped footer.
+    const head = "✔ Update installed".padStart(COLS - 1);
+    expect(scan([...frame("  ? for shortcuts", COLS).slice(0, -1), head, "· /restart"])).toBeNull();
+  });
+
+  it("misses a footer whose wrap fell on a space, rather than guess at a join", () => {
+    // The trade for the case above: the space in the last column is trimmed,
+    // so the row reads a column short and isn't joined. A repaint at another
+    // width reads it.
     const row = "  ? for shortcuts  ✔ Update installed · /restart to apply";
-    expect(row.indexOf("/restart")).toBe(40);
-    expect(scan(wrap(row, 40), 40)).toEqual({ namesRestart: true });
+    expect(row[39]).toBe(" ");
+    expect(scan(wrap(row, 40), 40)).toBeNull();
   });
 
   it("reads a head a narrow pane wrapped mid-word", () => {

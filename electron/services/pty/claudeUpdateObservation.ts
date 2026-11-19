@@ -15,7 +15,7 @@ export interface UpdateFooterSighting {
   /** The first frame it was missing from since it was last on screen. */
   absentSince: number | null;
   /**
-   * Set when the observation is cleared: a footer the ended run left on screen
+   * Set when an observation is cleared: a footer the ended run left on screen
    * isn't the next run's, so one counts again only after a frame without it.
    */
   fenced: boolean;
@@ -79,14 +79,16 @@ export function noteUpdateFooter(
 /**
  * Forget the observation: the run that showed the footer ended or changed.
  * Cheap to call on every frame of a pane that isn't a live Claude Code run.
+ * With nothing observed there is nothing to fence: a pane whose detection
+ * caught up after Claude drew the footer reads it on its next frame.
  */
 export function clearUpdateInstalled(terminal: TerminalInfo, now: number): void {
+  if (terminal.updateInstalled === undefined) return;
   const sighting = sightingOf(terminal);
   sighting.visible = false;
   sighting.absentSince = null;
   sighting.fenced = true;
   sighting.pid = undefined;
-  if (terminal.updateInstalled === undefined) return;
   terminal.updateInstalled = undefined;
   publish(terminal, null, now);
 }

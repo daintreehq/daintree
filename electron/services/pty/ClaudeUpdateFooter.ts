@@ -59,10 +59,12 @@ export function scanClaudeUpdateFooter(
   for (let i = tail.length - 1; i >= 0; i--) {
     const row = tail[i]!;
     const next = tail[i + 1];
-    // Rows arrive trimmed, so a wrap that fell on a space ends a column short;
-    // padding back to the width restores the space the join needs.
-    const wrapped = cols !== undefined && next !== undefined && row.length >= cols - 1;
-    const text = wrapped ? row.padEnd(cols) + next : row;
+    // Only a row whose last column is filled can have wrapped. Rows arrive
+    // trimmed and without the blank ones, so a row a column short may be one
+    // whose wrap fell on a space, or one a blank row stood under; joining that
+    // could build a footer out of two unrelated rows.
+    const wrapped = cols !== undefined && next !== undefined && row.length >= cols;
+    const text = wrapped ? row + next : row;
     if (!text.includes("Update installed")) continue;
     const match = FOOTER.exec(text);
     if (match === null) continue;

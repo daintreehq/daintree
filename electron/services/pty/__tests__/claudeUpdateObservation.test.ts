@@ -110,6 +110,16 @@ describe("claudeUpdateObservation", () => {
     expect(published).toEqual([]);
   });
 
+  it("reads a footer already up when the pane first counts as Claude's", () => {
+    // Frames before detection clear nothing, so they mustn't fence: Claude
+    // keeps the footer up, and a fenced one would wait for it to go first.
+    clearUpdateInstalled(terminal, 1_000);
+    clearUpdateInstalled(terminal, 2_000);
+    noteUpdateFooter(terminal, SLASH, 3_000);
+
+    expect(terminal.updateInstalled).toEqual({ observedAt: 3_000, namesRestart: true });
+  });
+
   it("doesn't credit a footer left on screen to the next run", () => {
     noteUpdateFooter(terminal, SLASH, 1_000);
     clearUpdateInstalled(terminal, 2_000);

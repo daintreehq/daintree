@@ -4,6 +4,11 @@ import { events } from "../../events.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
 import type { PtyHostEvent } from "../../../../shared/types/pty-host.js";
 import {
+  _pendingTerminalInventoryPrefetchesForTests,
+  _resetTerminalInventoryPrefetchForTests,
+  prefetchTerminalInventory,
+} from "../../terminalInventoryPrefetch.js";
+import {
   clearClaudeUsageObservations,
   readClaudeUsageRecords,
 } from "../../claude/ClaudeUsageObservations.js";
@@ -12,6 +17,7 @@ describe("bridgePtyEvent", () => {
   afterEach(() => {
     events.removeAllListeners();
     clearClaudeUsageObservations();
+    _resetTerminalInventoryPrefetchForTests();
   });
 
   it("normalizes agent-state trigger and confidence before emitting", () => {
@@ -149,6 +155,20 @@ describe("bridgePtyEvent", () => {
       },
       { terminalId: "term-1", updateInstalled: null, timestamp: 2_000 },
     ]);
+  });
+
+  it("drops an inventory read taken before an update-installed change (#17905)", () => {
+    void prefetchTerminalInventory("p1", async () => []);
+    expect(_pendingTerminalInventoryPrefetchesForTests()).toEqual(["p1"]);
+
+    bridgePtyEvent({
+      type: "agent-update-installed-changed",
+      terminalId: "term-1",
+      updateInstalled: { observedAt: 1_000, namesRestart: false },
+      timestamp: 1_000,
+    });
+
+    expect(_pendingTerminalInventoryPrefetchesForTests()).toEqual([]);
   });
 
   it.each([

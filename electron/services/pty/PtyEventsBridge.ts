@@ -28,6 +28,7 @@ import {
   CLAUDE_USAGE_WINDOWS,
 } from "../../../shared/types/ipc/agentQuota.js";
 import { observeClaudeUsage, type ClaudeUsageRecord } from "../claude/ClaudeUsageObservations.js";
+import { invalidateTerminalInventoryPrefetch } from "../terminalInventoryPrefetch.js";
 
 const FALLBACK_REASONS: ReadonlySet<AgentFallbackReason> = new Set([
   "connection",
@@ -299,6 +300,9 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         updateInstalled,
         timestamp: event.timestamp,
       });
+      // A view switched to now would restore from an inventory read before
+      // this, and the footer, staying up, never says it again.
+      invalidateTerminalInventoryPrefetch();
       return true;
     }
 

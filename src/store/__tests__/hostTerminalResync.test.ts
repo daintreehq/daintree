@@ -11,6 +11,7 @@ const { store, setAgentState, reportLost, fetchAndRestore } = vi.hoisted(() => {
     setAgentIncarnation: vi.fn((id: string, agentIncarnation: number) => {
       store.panelsById[id] = { ...store.panelsById[id], agentIncarnation };
     }),
+    setUpdateInstalled: vi.fn(),
     addPanel: vi.fn(async (args: { existingId?: string }) => args.existingId ?? null),
     setRuntimeStatus: vi.fn(),
     removePanel: vi.fn(),
@@ -334,6 +335,38 @@ describe("resyncHostTerminals", () => {
     expect(store.updateAgentState).toHaveBeenCalledTimes(1);
     expect(store.updateAgentState.mock.calls[0]![0]).toBe("t-1");
     expect(setAgentState).toHaveBeenCalledWith("t-1", "idle");
+  });
+
+  it("copies each terminal's update-installed observation, sets and clears alike (#17905)", async () => {
+    const observed = { observedAt: 30, namesRestart: true };
+    panel("t-1", { lastStateChange: 50, agentIncarnation: 1 });
+    panel("t-2", { lastStateChange: 50, agentIncarnation: 1, updateInstalled: observed });
+    getForProject.mockResolvedValue([
+      // Seen on the host while this view was away.
+      {
+        id: "t-1",
+        cwd: "/",
+        spawnedAt: 1,
+        agentState: "working",
+        lastStateChange: 40,
+        agentIncarnation: 1,
+        updateInstalled: observed,
+      },
+      // The host cleared it while the link was down.
+      {
+        id: "t-2",
+        cwd: "/",
+        spawnedAt: 1,
+        agentState: "working",
+        lastStateChange: 40,
+        agentIncarnation: 1,
+      },
+    ]);
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(store.setUpdateInstalled).toHaveBeenCalledWith("t-1", observed);
+    expect(store.setUpdateInstalled).toHaveBeenCalledWith("t-2", undefined);
   });
 
   it("records the session it takes a state from on the pane, before the state (#16153)", async () => {
