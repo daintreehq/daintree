@@ -75,8 +75,6 @@ export class CodexLimitContinuationError extends Error {
 
 interface PendingWait {
   stop: CodexLimitStopRef;
-  /** The process that stopped, so a late exit of an earlier one leaves the wait alone. */
-  spawnedAt: number | undefined;
   resetsAt: number;
   continueAt: number;
   /** Taken for checking and typing: a timer and a wake landing together share it. */
@@ -96,6 +94,8 @@ interface ArmedPane {
    * an earlier one is dropped.
    */
   epoch: number;
+  /** The pane's current process, as last read or spawned: a late exit of an earlier one changes nothing. */
+  spawnedAt: number | undefined;
 }
 
 /**
@@ -112,14 +112,21 @@ export class CodexLimitContinuation {
   /** The latest arm or disarm asked per pane, so an earlier one answered late changes nothing. */
   private readonly requests = new Map<string, number>();
   private readonly fired = new Map<string, number[]>();
-  private nextRevision = 1;
+  /**
+   * Seeded from the clock, so revisions keep rising across a restart of the
+   * host a view outlives: a view that held a disarm at an earlier revision
+   * still takes what the new process says.
+   */
+  private nextRevision: number;
   private nextRequest = 1;
   private timer: Timer | null = null;
   private timerAt: number | null = null;
   /** No wait is judged before this, after the machine wakes. */
   private wakeHoldUntil = 0;
 
-  constructor(private readonly deps: CodexLimitContinuationDeps) {}
+  constructor(private readonly deps: CodexLimitContinuationDeps) {
+    this.nextRevision = deps.now();
+  }
 
   list(projectId: string): CodexLimitContinueEntry[] {
     return [...this.panes.values()]
@@ -192,6 +199,7 @@ export class CodexLimitContinuation {
       state: { status: "armed" },
       wait: null,
       epoch: 0,
+      spawnedAt: terminal.spawnedAt,
     };
     this.panes.set(terminalId, pane);
     if (!wasActive) this.deps.onActiveChange(true);
@@ -244,6 +252,9 @@ export class CodexLimitContinuation {
     if (this.panes.get(terminalId) !== pane || pane.epoch !== epoch) return;
     if (terminal === "gone") return;
     if (terminal === "unanswered") return this.record(pane, "host-unanswered");
+    // An id another project now runs under is not the pane that was armed.
+    if (terminal.projectId !== pane.projectId) return this.disarm(terminalId);
+    pane.spawnedAt = terminal.spawnedAt ?? pane.spawnedAt;
     if (fallback === "fallback") return this.record(pane, "falls-back");
     if (fallback !== "none") return this.record(pane, "fallback-undetermined");
     if (reset.status === "unknown") return this.record(pane, reset.reason);
@@ -256,7 +267,6 @@ export class CodexLimitContinuation {
     const continueAt = reset.resetsAt + CONTINUE_AFTER_RESET_MS;
     pane.wait = {
       stop,
-      spawnedAt: terminal.spawnedAt,
       resetsAt: reset.resetsAt,
       continueAt,
       claimed: false,
@@ -276,8 +286,9 @@ export class CodexLimitContinuation {
   handleProcessChange(terminalId: string, spawnedAt?: number): void {
     const pane = this.panes.get(terminalId);
     if (!pane) return;
-    const waitedFor = pane.wait?.spawnedAt;
-    if (spawnedAt !== undefined && waitedFor !== undefined && spawnedAt !== waitedFor) return;
+    if (spawnedAt !== undefined && pane.spawnedAt !== undefined && spawnedAt !== pane.spawnedAt) {
+      return;
+    }
     pane.epoch++;
     const hadWait = pane.wait !== null;
     pane.wait = null;
@@ -286,9 +297,11 @@ export class CodexLimitContinuation {
   }
 
   /** A new process under an armed pane's id: its host has to be told it is armed. */
-  handleSpawn(terminalId: string): void {
-    if (!this.panes.has(terminalId)) return;
+  handleSpawn(terminalId: string, spawnedAt?: number): void {
+    const pane = this.panes.get(terminalId);
+    if (!pane) return;
     this.handleProcessChange(terminalId);
+    pane.spawnedAt = spawnedAt;
     this.deps.setHostArmed(terminalId, true);
   }
 
@@ -344,6 +357,11 @@ export class CodexLimitContinuation {
       wait.pausedRetries++;
       wait.claimed = false;
       wait.continueAt = this.deps.now() + READS_PAUSED_RETRY_MS;
+      this.setState(pane, {
+        status: "waiting",
+        resetsAt: wait.resetsAt,
+        continueAt: wait.continueAt,
+      });
       this.reschedule();
       return;
     }

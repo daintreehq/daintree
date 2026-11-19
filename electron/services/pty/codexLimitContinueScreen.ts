@@ -23,6 +23,12 @@ const GOAL_WORD = /\bgoal\b/i;
 /** Plan mode's indicator takes the footer slot a goal status would show in. */
 const PLAN_MODE = /\bPlan mode\b/;
 /**
+ * The narrowest pane whose footer always has room for the goal label: Codex
+ * drops a label that doesn't fit its row (`passive_hints.rs`), so below this
+ * a footer without one says nothing about whether a goal is running.
+ */
+const MIN_COLS_FOR_GOAL_LABEL = GOAL_USAGE_LIMITED.length + 4;
+/**
  * Rows Codex draws below an empty composer: its footer, and room for a status
  * line, each indented as Codex draws them. Anything longer, or a row written
  * from the left edge, is something else printed after it (a shell prompt once
@@ -82,5 +88,6 @@ export function judgeCodexLimitScreen(
   if (below.some((row) => GOAL_WORD.test(row) || PLAN_MODE.test(row))) {
     return { skip: "unrecognized-footer" };
   }
+  if (cols === undefined || cols < MIN_COLS_FOR_GOAL_LABEL) return { skip: "unrecognized-footer" };
   return { line: "continue" };
 }

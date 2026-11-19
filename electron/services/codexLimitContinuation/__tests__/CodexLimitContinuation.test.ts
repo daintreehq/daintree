@@ -258,6 +258,28 @@ describe("CodexLimitContinuation (#17909)", () => {
     expect(h.state()).toEqual({ status: "armed" });
   });
 
+  it("ignores a late exit of an earlier process while a stop is still being answered", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    h.service.handleSpawn("t1", 2_000);
+    h.setTerminal(codexPane({ spawnedAt: 2_000 }));
+    const handled = h.service.handleStop("t1", STOP);
+    h.service.handleProcessChange("t1", 1_000);
+    await handled;
+    expect(h.state()).toMatchObject({ status: "waiting" });
+  });
+
+  it("disarms an id another project now runs under instead of continuing it", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    h.setTerminal(codexPane({ projectId: "other-project" }));
+    await h.service.handleStop("t1", STOP);
+    expect(h.service.list(PROJECT)).toEqual([]);
+    expect(h.hostArmed.at(-1)).toEqual(["t1", false]);
+    await vi.runAllTimersAsync();
+    expect(h.continueAt).not.toHaveBeenCalled();
+  });
+
   it("drops a stop answered after the process changed under it", async () => {
     const h = harness();
     await h.service.set("t1", true, PROJECT);

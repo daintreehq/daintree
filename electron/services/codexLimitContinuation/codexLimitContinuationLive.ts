@@ -6,6 +6,7 @@ import { getPtyClient } from "../../window/serviceRefs.js";
 import { events } from "../events.js";
 import { projectStore } from "../ProjectStore.js";
 import type { PtyIncarnationExit, PtyIncarnationLost } from "../PtyClient.js";
+import type { SpawnResult } from "../../../shared/types/pty-host.js";
 import { readCodexLimitStop } from "../codex/CodexLimitReset.js";
 import type { AgentSettings } from "../../../shared/types/agentSettings.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
@@ -84,7 +85,8 @@ function startListening(target: CodexLimitContinuation): void {
   const ptyClient = getPtyClient();
   const onStop = (fact: { terminalId: string } & CodexLimitStopRef) =>
     void target.handleStop(fact.terminalId, { run: fact.run, seq: fact.seq });
-  const onSpawn = (terminalId: string) => target.handleSpawn(terminalId);
+  const onSpawn = (terminalId: string, result: SpawnResult) =>
+    target.handleSpawn(terminalId, result.success ? result.spawnedAt : undefined);
   const onExit = (fact: PtyIncarnationExit) =>
     target.handleProcessChange(fact.terminalId, fact.spawnedAt);
   const onLost = (fact: PtyIncarnationLost) => target.handleProcessChange(fact.terminalId);

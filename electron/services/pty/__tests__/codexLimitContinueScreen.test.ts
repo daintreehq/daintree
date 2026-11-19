@@ -107,6 +107,12 @@ describe("judgeCodexLimitScreen (#17909)", () => {
     expect(judgeCodexLimitScreen(shell, 80, KEY)).toEqual({ skip: "banner-not-last" });
   });
 
+  it("types nothing in a pane too narrow for Codex to show a goal label, unless it shows one", () => {
+    expect(judgeCodexLimitScreen(screen({ footer: "  ? for shortcuts" }), 32, KEY)).toEqual({
+      skip: "unrecognized-footer",
+    });
+  });
+
   it("reads a banner Codex word-wrapped at a narrow pane", () => {
     const wrapped = screen({
       banner: "■ You’ve hit your usage limit. Try again at\r\n3:40 PM.",

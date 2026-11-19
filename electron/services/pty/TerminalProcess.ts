@@ -56,9 +56,9 @@ import {
   codexBannerResetCandidates,
   codexLaunchZone,
   codexSystemZone,
+  locateCodexLimitBanner,
   readCodexLimitEvidence,
   resolveCodexLimitReset,
-  scanCodexLimitBanner,
   type CodexLimitObservation,
 } from "./CodexUsageLimit.js";
 import type {
@@ -72,6 +72,7 @@ import type {
   CodexLimitStopRef,
 } from "../../../shared/types/codexLimitContinuation.js";
 import { judgeCodexLimitScreen } from "./codexLimitContinueScreen.js";
+import { stripAnsi } from "./AgentPatternDetector.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -126,12 +127,22 @@ import {
 
 /** What has happened to a pane since its Codex stop first showed (#17909). */
 interface CodexStopGuard {
-  /** The banner it was for. */
+  /** The banner it was for, and the history rows just above it. */
   key: string;
   /** The terminal's input count when it first showed: any later write is input since the stop. */
   inputSeq: number;
   /** A choice dialog was observed since, whatever the screen shows now. */
   dialogSeen: boolean;
+}
+
+/** History rows above a stop banner that tell a redisplay of it from a new stop with the same text. */
+const CODEX_STOP_CONTEXT_ROWS = 3;
+
+function codexStopContext(lines: readonly string[], bannerStart: number): string {
+  return lines
+    .slice(Math.max(0, bannerStart - CODEX_STOP_CONTEXT_ROWS), bannerStart)
+    .map((line) => stripAnsi(line).trimEnd())
+    .join("\n");
 }
 
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
@@ -331,12 +342,17 @@ export class TerminalProcess {
     guard: CodexStopGuard;
   } | null = null;
   /**
-   * The guard of the stop last seen, kept for a redisplay of the same banner
-   * after it was off screen a while (a transcript or picker closed): the same
-   * stop, so what happened since it first showed still counts. A turn the
-   * agent works through ends it, and the next stop starts afresh.
+   * The guard of the stop last seen, kept for a redisplay of it after it was
+   * off screen a while (a transcript or picker closed): the same banner under
+   * the same history is the same stop, so what happened since it first showed
+   * still counts. A stop a new turn ran into sits under other history and
+   * starts afresh.
    */
   private codexStopGuard: CodexStopGuard | null = null;
+  /** Bumped by every arm and disarm, so a continuation asked for under one is refused after another. */
+  private codexContinueArmGeneration = 0;
+  /** The continuation in the input lane, so a disarm or a dialog can take back its Enter. */
+  private codexContinueToken: string | null = null;
   /** Whether the latest look showed a readable stop, a half-drawn or unreadable one, or none. */
   private codexLimitLook: "banner" | "unreadable" | "none" = "none";
   private codexLimitSeq = 0;
@@ -847,19 +863,15 @@ export class TerminalProcess {
 
   /**
    * Every state the pane is observed in, whenever it arrives (#17909): a
-   * choice dialog marks the stop on screen, and a turn worked through ends the
-   * guard a redisplay of the same banner would keep.
+   * choice dialog marks the stop on screen, and takes back a continuation
+   * whose Enter hasn't been written yet.
    */
   private noteCodexStopState(): void {
     const t = this.terminalInfo;
-    if (t.agentState === "working") {
-      this.codexStopGuard = null;
-      return;
-    }
-    if (t.agentState === "waiting" && t.waitingReason === "approval") {
-      if (this.codexLimit) this.codexLimit.guard.dialogSeen = true;
-      if (this.codexStopGuard) this.codexStopGuard.dialogSeen = true;
-    }
+    if (t.agentState !== "waiting" || t.waitingReason !== "approval") return;
+    if (this.codexLimit) this.codexLimit.guard.dialogSeen = true;
+    if (this.codexStopGuard) this.codexStopGuard.dialogSeen = true;
+    this.withdrawCodexContinue();
   }
 
   private handleAnalysisWaitingTimeout(spawnedAt: number): void {
@@ -2276,7 +2288,8 @@ export class TerminalProcess {
     const printedAfter = this.codexSettledLookAt ?? t.spawnedAt;
     const live = getLiveAgentId(t) === "codex" && this.isAgentLive && this.lifecycle.isAlive;
     const cols = live ? (readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined) : undefined;
-    const banner = live ? scanCodexLimitBanner(lines, cols) : null;
+    const located = live ? locateCodexLimitBanner(lines, cols) : null;
+    const banner = located?.banner ?? null;
     this.codexLimitLookAt = now;
     if (banner?.kind !== "unreadable") this.codexSettledLookAt = now;
     if (!live) {
@@ -2333,7 +2346,10 @@ export class TerminalProcess {
       observedSince,
       lastSeenAt: now,
       hiddenSince: null,
-      guard: this.codexStopGuardFor(key),
+      guard: this.codexStopGuardFor(
+        // Narrowed by the readable-banner branch above.
+        `${key}\u0000${codexStopContext(lines, located!.start)}`
+      ),
       observation: {
         banner,
         observedAt: now,
@@ -2417,6 +2433,8 @@ export class TerminalProcess {
   setCodexLimitContinueArmed(armed: boolean): void {
     if (armed === this.codexContinueArmed) return;
     this.codexContinueArmed = armed;
+    this.codexContinueArmGeneration++;
+    if (!armed) this.withdrawCodexContinue();
     this.codexStopReportedSeq = null;
     this.trackCodexStop();
   }
@@ -2494,6 +2512,13 @@ export class TerminalProcess {
     });
   }
 
+  /** Take back a continuation in the lane before its Enter: its text stays as a draft, unsent. */
+  private withdrawCodexContinue(): void {
+    if (this.codexContinueToken !== null) {
+      this.writeQueue.withdrawGuardedSubmission(this.codexContinueToken);
+    }
+  }
+
   /**
    * What stops a continuation for `stop` right now, or null (#17909). `inLane`
    * is the lane's own admission, where the continuation itself is the
@@ -2538,12 +2563,16 @@ export class TerminalProcess {
    */
   async continueAtCodexLimit(
     stop: CodexLimitStopRef,
-    hostBlocker: () => CodexLimitContinueSkipReason | null = () => null
+    outerBlocker: () => CodexLimitContinueSkipReason | null = () => null
   ): Promise<CodexLimitContinueResult> {
     const skipped = (reason: CodexLimitContinueSkipReason): CodexLimitContinueResult => ({
       status: "skipped",
       reason,
     });
+    // Disarmed and armed again meanwhile is another arming, not this one.
+    const generation = this.codexContinueArmGeneration;
+    const hostBlocker = () =>
+      this.codexContinueArmGeneration === generation ? outerBlocker() : "disarmed";
     const before = this.codexContinueBlocker(stop, false, hostBlocker);
     if (before !== null) return skipped(before);
     const streamOffset = this.emittedBytes;
@@ -2562,10 +2591,12 @@ export class TerminalProcess {
     const { line } = verdict;
     return new Promise<CodexLimitContinueResult>((resolve) => {
       let settled = false;
+      const token = randomUUID();
       const settle = (result: CodexLimitContinueResult) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (this.codexContinueToken === token) this.codexContinueToken = null;
         resolve(result);
       };
       const timer = setTimeout(
@@ -2583,7 +2614,8 @@ export class TerminalProcess {
         settle(skipped(blocker));
         return false;
       };
-      this.writeQueue.submit(line, undefined, () => settle({ status: "continued", line }), admit);
+      this.codexContinueToken = token;
+      this.writeQueue.submit(line, token, () => settle({ status: "continued", line }), admit);
       // Runs once the lane is past the line, however it ended: refused,
       // abandoned before its Enter, or written (already settled).
       this.writeQueue.stage(() => settle(skipped("not-delivered")));

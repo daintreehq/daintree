@@ -15,6 +15,9 @@ import type { HandlerMap, HostContext } from "./types.js";
  */
 const REFUSING_GUARD: ExactPromptGuard = { kind: "settled-prompt-exact", agentIncarnation: -1 };
 
+/** How long after a PTY's reads resume before its screen counts as caught up (#17909). */
+const READS_RESUME_SETTLE_MS = 2_000;
+
 /** The stop main named (#17909), or null for one with a field missing or malformed. */
 function codexLimitStopOf(value: unknown): CodexLimitStopRef | null {
   if (typeof value !== "object" || value === null) return null;
@@ -117,8 +120,13 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       }
       // Bytes the PTY holds unread may already say the pane moved on: asked
       // at every check up to the write, as reads pause and resume meanwhile.
-      const readsPaused = () =>
-        ctx.getPauseCoordinator(msg.id)?.isReadPaused ? ("reads-paused" as const) : null;
+      const readsPaused = () => {
+        const pause = ctx.getPauseCoordinator(msg.id);
+        if (!pause) return null;
+        const resumedAt = pause.readsResumedAt;
+        const settling = resumedAt !== null && Date.now() - resumedAt < READS_RESUME_SETTLE_MS;
+        return pause.isReadPaused || settling ? ("reads-paused" as const) : null;
+      };
       void ptyManager
         .continueAtCodexLimit(msg.id, stop, readsPaused)
         .then(send, () => send({ status: "skipped", reason: "not-delivered" }));

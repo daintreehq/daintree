@@ -1956,6 +1956,52 @@ describe("TerminalProcess continuing at a Codex limit's reset (#17909)", () => {
     terminal.dispose();
   });
 
+  it("starts afresh at the same banner when a new turn ran into it", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    terminal.write("try again\r");
+    ptyOnDataCallback!("\x1b[2J\x1b[H› try again\r\n\r\n• Working (2s)\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!(
+      "\x1b[2J\x1b[H› try again\r\n\r\n• Looked at the failing test.\r\n\r\n" +
+        `${BANNER}\r\n\r\n` +
+        "\x1b[48;2;30;30;30m\x1b[K\r\n" +
+        "\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[22m\x1b[K\r\n" +
+        "\x1b[K\x1b[0m\r\n  ? for shortcuts"
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(seen.stops).toHaveLength(2);
+    const next = seen.stops[1] as { run: string; seq: number };
+    expect(await continueAt(terminal, { run: next.run, seq: next.seq })).toEqual({
+      status: "continued",
+      line: "continue",
+    });
+    expect(typed()).toBe("try again\rcontinue\r");
+    terminal.dispose();
+  });
+
+  it("withholds the Enter of a line disarmed while it waits for it", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const result = terminal.continueAtCodexLimit(stopOf(seen));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(typed()).toBe("continue");
+    terminal.setCodexLimitContinueArmed(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await result).toEqual({ status: "skipped", reason: "not-delivered" });
+    expect(typed()).toBe("continue");
+    terminal.dispose();
+  });
+
+  it("refuses a line asked for under an arming that was turned off and on again", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const result = terminal.continueAtCodexLimit(stopOf(seen));
+    terminal.setCodexLimitContinueArmed(false);
+    terminal.setCodexLimitContinueArmed(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await result).toEqual({ status: "skipped", reason: "disarmed" });
+    expect(typed()).toBe("");
+    terminal.dispose();
+  });
+
   it("types nothing once a choice dialog showed after the stop, though it has gone", async () => {
     const { terminal, seen, typed } = await stoppedPane();
     const info = infoOf(terminal);
