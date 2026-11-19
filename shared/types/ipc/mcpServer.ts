@@ -303,7 +303,17 @@ export interface McpAuditRecord {
    * (`host.call`, #13493); absent for every call made on this machine.
    */
   relay?: McpAuditRelay;
+  /**
+   * What let the call reach a resource its ledger didn't give it, when
+   * something did: `global-close` is the global Assistant closing a finished
+   * agent it didn't launch (#16750). Whether anyone approved is
+   * `confirmationDecision` or `authorization`, as for any call.
+   */
+  admission?: McpCallAdmission;
 }
+
+/** What admitted a call past its ownership ledger (#16750). */
+export type McpCallAdmission = "global-close";
 
 /**
  * Who a relayed call came from, as this host established it (#13493). `sender`

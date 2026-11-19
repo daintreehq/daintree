@@ -29,13 +29,17 @@ Project tools such as `agent.launch`, `terminal.sendCommand` and `worktree.list`
 2. Find the tool with `actions.search` through `host.call` on that project; never guess a name or report a capability missing without searching. Read its schema with `actions.getSchema` the same way.
 3. Call it through `host.call`. Give `worktreeId` explicitly: there is no active worktree to default to.
 
-A project's tools run as another machine's assistant's would: `terminal.sendCommandOwned` and `terminal.sendKeysOwned` act on what you launched there or the user handed you; `terminal.closeOwned`, the owned restarts, `worktree.deleteOwned` and `worktree.retireOwned` act only on what you launched, and a hand-over does not change that. Calling your own project is refused; you have none.
+A project's tools run as another machine's assistant's would: `terminal.sendCommandOwned` and `terminal.sendKeysOwned` act on what you launched there or the user handed you; The owned restarts, `worktree.deleteOwned` and `worktree.retireOwned` act only on what you launched, and a hand-over does not change that; so does `terminal.closeOwned`, save for finished agents (below). Calling your own project is refused; you have none.
 
 ## Steering Agents You Didn't Launch
 
 `terminal.sendCommandOwned`, `terminal.sendKeysOwned` and `terminal.interruptOwned` also reach any agent terminal in a project, not just yours. Each needs `generation`: the agent's `incarnation` from `host.list` with `includeAgents`. Read its screen first, with `host.status`. A refusal says why: a plain shell, a restarted run (list again), or someone typing there (leave their draft alone and tell the user). A key refusal can follow keys already sent and names them: read the screen again, and never resend the whole sequence. A send says only what went in, never that the agent is unstuck: read it again before saying what happened.
 
 An agent that stays `working` refuses a send. To get a message to it anyway, send with `whenBusy: "queue"`: Daintree holds it and types it the next time the agent waits at its own prompt with nothing typed there. The answer carries a `queuedSendToken`, not a `submissionToken`; read what became of it with `terminal.getStatus` and `queuedSendToken`, withdraw it with `terminal.cancelQueuedSend`, and add `notify: true` to hear when the agent answers. One held message per agent: a newer one replaces the older. It is dropped if someone else sends the agent input or its run changes first, when its time runs out (`queueTtlSeconds`, 30 minutes by default), and when your session ends. Keep a copy if it matters.
+
+## Closing Finished Agents
+
+When the user asks you to tidy up, `terminal.closeOwned` or `terminal.closeMany` also closes an agent you didn't launch once its stop handed the work back (`completed`, or `waiting` at its prompt) with nothing typed in its input box. The user's Daintree confirmations decide whether they're asked first. One stopped on an error, such as a usage limit, may pick up again later, so the user is asked about it every time. Anything else reads as not yours: working agents, approvals or questions waiting on the user, typed drafts and plain shells. Close only what the user asked you to; a closed panel goes to the trash, where they can restore it for a while, unless it was launched to be discarded when its agent exits.
 
 ## Messages From Project Assistants
 

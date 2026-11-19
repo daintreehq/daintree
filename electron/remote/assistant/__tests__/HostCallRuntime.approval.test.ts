@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalArgsHash } from "../../../services/mcp-server/sessionDedup.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
+import { ASSISTANT_GLOBAL_CLOSE_CONFIRMATION } from "../../../../shared/config/assistantConfirmationDelegation.js";
 import {
   HostCallRuntime,
   type ObservedHost,
@@ -17,6 +19,14 @@ const RUN_A: OpenRun = {
   slot: 0,
   sessionId: "a",
   terminalId: "t-a",
+  launchGeneration: 1,
+};
+
+const RUN_GLOBAL: OpenRun = {
+  projectId: GLOBAL_ASSISTANT_ID,
+  slot: 0,
+  sessionId: "g",
+  terminalId: "t-g",
   launchGeneration: 1,
 };
 
@@ -79,7 +89,10 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
     skips = false;
     skipReads = [];
     skipNotes = 0;
-    runs = new Map([["a", RUN_A]]);
+    runs = new Map([
+      ["a", RUN_A],
+      ["g", RUN_GLOBAL],
+    ]);
     control = new Set(["studio"]);
     asked = [];
     decision = "approved";
@@ -87,6 +100,7 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
     duringCall = undefined;
     const lanes = new Map<string, { projectId: string; slot: number }>([
       ["a", { projectId: "proj-1", slot: 0 }],
+      ["g", { projectId: GLOBAL_ASSISTANT_ID, slot: 0 }],
     ]);
     let ids = 0;
     runtime = new HostCallRuntime({
@@ -220,6 +234,137 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
     await deleteCall("worktree.deleteOwned");
 
     expect(answers[0]?.decision).toBe("approved");
+  });
+
+  describe("the global Assistant closing a finished agent it didn't launch (#16750)", () => {
+    const closeCall = (
+      session = "g",
+      tool = "terminal.closeOwned",
+      args: Record<string, unknown> = { terminalId: "t-1" }
+    ) =>
+      runtime.call(
+        session,
+        { hostId: "studio", projectId: "proj-2", tool, args },
+        { tier: "full", noteSkipPreference: () => (skipNotes += 1) }
+      );
+    const closeAsk = (
+      callId: string,
+      closeClass: "handback" | "requires-person" = "handback",
+      overrides: Partial<RelayApprovePayload> = {}
+    ) =>
+      ask({
+        callId,
+        helpSessionId: "g",
+        actionId: "terminal.close",
+        args: { terminalId: "t-1" },
+        lines: ["Panel: Fix the flaky test (t-1)"],
+        closeClass,
+        ...overrides,
+      });
+
+    it("asks the person about one close, offering its own tick", async () => {
+      delegable = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+      reply = { delegate: true };
+      duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId));
+
+      await closeCall();
+
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).toMatchObject({ actionId: "terminal.close", args: { terminalId: "t-1" } });
+      expect(asked[0]?.delegation?.label).toBe(ASSISTANT_GLOBAL_CLOSE_CONFIRMATION);
+      expect(answers[0]?.decision).toBe("approved");
+      // The tick is the close's own, never the owned close as a whole.
+      expect(commits).toEqual([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+    });
+
+    it("answers for the person under their Never ask, or the close's own tick", async () => {
+      skips = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+      duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId));
+
+      await closeCall();
+
+      expect(asked).toEqual([]);
+      expect(answers[0]?.decision).toBe("skip-preference");
+      expect(skipNotes).toBe(1);
+    });
+
+    it("settles a batch on the same tick as one close, asked about whole", async () => {
+      skips = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+      const args = { terminalIds: ["t-1", "t-2"] };
+      duringCall = (r, callId) =>
+        r.receiveApproval(
+          "studio",
+          closeAsk(callId, "handback", {
+            actionId: "terminal.closeMany",
+            args,
+            argsHash: canonicalArgsHash("terminal.closeMany", args),
+          })
+        );
+
+      await closeCall("g", "terminal.closeMany", args);
+
+      expect(answers[0]?.decision).toBe("skip-preference");
+    });
+
+    it("refuses a batch ask about other panels than the call named", async () => {
+      skips = true;
+      const other = { terminalIds: ["t-1", "t-9"] };
+      duringCall = (r, callId) =>
+        r.receiveApproval(
+          "studio",
+          closeAsk(callId, "handback", {
+            actionId: "terminal.closeMany",
+            args: other,
+            argsHash: canonicalArgsHash("terminal.closeMany", other),
+          })
+        );
+
+      await closeCall("g", "terminal.closeMany", { terminalIds: ["t-1", "t-2"] });
+
+      expect(answers[0]?.decision).toBe("refused");
+    });
+
+    it("puts an agent stopped on an error to the person, past any skip and with no tick", async () => {
+      skips = true;
+      delegable = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+      reply = { delegate: true };
+      duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId, "requires-person"));
+
+      await closeCall();
+
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).not.toHaveProperty("delegation");
+      expect(answers[0]?.decision).toBe("approved");
+      expect(commits).toEqual([]);
+      expect(skipNotes).toBe(0);
+      // Neither the preference nor the tick is read for it.
+      expect(skipReads).toEqual([]);
+      expect(delegationReads).toEqual([]);
+    });
+
+    it("refuses a close ask about a project assistant's call, or one that doesn't say how it read the stop", async () => {
+      skips = true;
+      const refusedFor = async (
+        session: string,
+        payload: (callId: string) => RelayApprovePayload
+      ) => {
+        duringCall = (r, callId) => r.receiveApproval("studio", payload(callId));
+        await closeCall(session);
+      };
+
+      await refusedFor("a", (callId) => closeAsk(callId, "handback", { helpSessionId: "a" }));
+      await refusedFor("g", (callId) => {
+        const { closeClass: _dropped, ...unclassed } = closeAsk(callId);
+        return unclassed;
+      });
+      // Classed asks about anything but a close are refused too.
+      duringCall = (r, callId) =>
+        r.receiveApproval("studio", { ...ask({ callId }), closeClass: "handback" });
+      await deleteCall();
+
+      expect(asked).toEqual([]);
+      expect(answers.map((answer) => answer.decision)).toEqual(["refused", "refused", "refused"]);
+    });
   });
 
   describe("the dialog's hand-over (#16752)", () => {

@@ -1215,6 +1215,28 @@ export function createSessionServerDeps(
           relay: {
             shellName: relay.shellName,
             ...(relay.global === true ? { global: true as const } : {}),
+            // Only the global Assistant's: no other caller closes what it didn't launch.
+            ...(relay.global === true && relay.requestApproval !== undefined
+              ? {
+                  askClose: ((callId, ask) => {
+                    const askShell = relay.requestApproval!;
+                    // Inside the call's own wait, with room for the answer (#15699).
+                    const deadline = relay.callDeadline?.(callId);
+                    if (relay.callDeadline !== undefined && deadline === undefined) {
+                      return Promise.resolve({ decision: "timeout" as const });
+                    }
+                    return askShell({
+                      ...ask,
+                      callId,
+                      ...(deadline !== undefined
+                        ? { holdUntil: deadline - MCP_REMOTE_CONFIRM_MARGIN_MS }
+                        : {}),
+                    });
+                  }) satisfies NonNullable<
+                    NonNullable<import("./sessionServer.js").SessionServerDeps["relay"]>["askClose"]
+                  >,
+                }
+              : {}),
             refuseWrite: (projectId: string | undefined) => {
               if (boundWorkspaceId === null) return null;
               if (projectId !== undefined && projectId !== boundWorkspaceId) {
@@ -1292,6 +1314,10 @@ export function createSessionServerDeps(
             keys: async (...args) => boundSteer(host).keys(...args),
             interrupt: async (...args) => boundSteer(host).interrupt(...args),
             reveal: async (target, show) => boundSteer(host).reveal(target, show),
+            // No steer to read with is no agent it may close: the uniform refusal (#16750).
+            closeTarget: async (projectId, terminalId) =>
+              (await host.assistantControlBinding()?.steer?.closeTarget(projectId, terminalId)) ??
+              null,
           },
         }
       : {}),

@@ -358,11 +358,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * The global Assistant's steer of a worker it didn't launch (#14551), set
    * only for a session relayed for one: a prompt, keys or an interrupt, each
    * held to the run it names and the person at it, and a reveal of its panel
-   * held to the same run (#16096). Absent, nothing widens.
+   * held to the same run (#16096), and the read that tells whether a close
+   * may reach a finished agent it didn't launch (#16750). Absent, nothing widens.
    */
   globalSteer?: Pick<
     import("../assistants/GlobalWorkerSteer.js").GlobalWorkerSteer,
-    "prompt" | "keys" | "interrupt" | "reveal"
+    "prompt" | "keys" | "interrupt" | "reveal" | "closeTarget"
   >;
   /** This machine's Codex quota, as `agent.readQuota` reports it. */
   readCodexQuota?: () => Promise<CodexQuotaResult>;
@@ -386,6 +387,22 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * view drives the bound project and `projectId`, when named, is that one.
      */
     refuseWrite(projectId: string | undefined): { code: string; message: string } | null;
+    /**
+     * Puts the global Assistant's close of a finished agent it didn't launch
+     * to the requesting Shell (#16750), about the relayed call `callId` and
+     * inside its deadline: the Shell asks its person, or answers for them
+     * under their Daintree confirmations. Absent, no such close runs.
+     */
+    askClose?(
+      callId: string,
+      ask: {
+        actionId: string;
+        args: Record<string, unknown>;
+        subject: string;
+        lines: string[];
+        closeClass: import("../../../shared/types/assistantControl.js").GlobalCloseClass;
+      }
+    ): Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
   };
   /**
    * Set for this host's own assistant running with no view (#13511), and asked
@@ -440,6 +457,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     rendererOwnedOrigin?: boolean;
     /** A relayed call's callId from its Shell (#13493), so both records name one call. */
     relayCallId?: string;
+    /** What admitted the call past its ownership ledger (#16750). */
+    admission?: import("../../../shared/types/ipc/mcpServer.js").McpCallAdmission;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   /**

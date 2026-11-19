@@ -173,7 +173,17 @@ import {
   type AssistantCaller,
   type AssistantTarget,
 } from "../assistants/AssistantTerminalControl.js";
-import type { WorkerSteerTarget } from "../assistants/GlobalWorkerSteer.js";
+import type { GlobalCloseTarget, WorkerSteerTarget } from "../assistants/GlobalWorkerSteer.js";
+import {
+  GLOBAL_CLOSE_REFUSAL_NOTE,
+  GLOBAL_CLOSE_TOOL,
+  globalCloseBatchQuestion,
+  globalCloseExpired,
+  globalCloseQuestion,
+  type GlobalCloseItem,
+  sameGlobalCloseTarget,
+  settleGlobalCloseAnswer,
+} from "./globalClose.js";
 import type { SessionServerDeps } from "./sessionServerDepsContract.js";
 import { createSessionContext } from "./sessionContext.js";
 import {
@@ -895,6 +905,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       closeApproved?: boolean;
       confirmationsSkipped?: boolean;
       relayCallId?: string;
+      // The global Assistant's batch close (#16750): the run its one question
+      // was about, and how it was answered, so the item asks nothing again
+      // and closes only that run.
+      // Null: the batch read it as nothing the global close takes.
+      globalClose?: GlobalCloseItem | null;
     }
   ): Promise<CallToolResult> => {
     const actionId = request.params.name;
@@ -1336,6 +1351,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // (#16096), set by the gate; it is `ownedResourceId` too, so the answer
     // names it, but no ledger record or hand-over admitted it.
     let globalRevealTerminalId: string | undefined;
+    // A finished agent the global Assistant closes without owning it
+    // (#16750), admitted by the gate: no ledger record is released for it
+    // and no wait on its process is gained.
+    let globalCloseAdmitted = false;
+    // Its audit mark, set once the agent read as one it may close, so a
+    // declined or unanswered close is on record as the global close it was.
+    let globalCloseAudited = false;
+    // Until when the answer that admitted a global close holds, checked again
+    // right before its dispatch, whatever was awaited since the last read.
+    let globalCloseDeadline: number | undefined;
+    // The run a global close was admitted on, for its ledger settlement.
+    let globalCloseGeneration: number | undefined;
     // The record the gate accepted. A release drops only this record, so a
     // cleanup that completes after another session on the same bearer
     // recorded a new resource under the id cannot take the new one with it.
@@ -1366,23 +1393,48 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       entry: RendererOwnedResourceTool,
       resourceId: string
     ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> =>
-      dispatchOwnedResource(
-        {
-          sessionId,
-          actionId,
-          args,
-          sessionStore,
-          ownershipOwner,
-          adoptedRecordFor,
-          admittedAdoption,
-          dispatchToRenderer,
-          dispatchConfirmed,
-          revealOwnedRun: deps.revealOwnedRun,
-        },
-        entry,
-        resourceId
-      );
+      globalCloseDeadline !== undefined &&
+      (Date.now() > globalCloseDeadline || extra.signal.aborted)
+        ? Promise.resolve({
+            envelope: {
+              result: { ok: false, error: globalCloseExpired(`'${resourceId}'`) },
+            },
+            raised: true,
+          })
+        : dispatchOwnedResource(
+            {
+              sessionId,
+              actionId,
+              args,
+              sessionStore,
+              ownershipOwner,
+              adoptedRecordFor,
+              admittedAdoption,
+              dispatchToRenderer,
+              dispatchConfirmed,
+              revealOwnedRun: deps.revealOwnedRun,
+            },
+            entry,
+            resourceId
+          );
 
+    const settleGlobalCloseLedger = (
+      envelope: DispatchEnvelope,
+      dispatchedGeneration: number | undefined
+    ): void => {
+      const terminalId = ownedResourceId;
+      const generation = globalCloseGeneration;
+      if (terminalId === undefined || generation === undefined || !envelope.result.ok) return;
+      // The run under the id when the close went out, as the owned close reads it.
+      if (dispatchedGeneration !== generation) return;
+      if (!closedIdsInclude(envelope.result.result, terminalId)) return;
+      const record = ownedRecordFor("terminal", terminalId);
+      if (record === undefined) return;
+      if (sessionStore.workerCreations.get(terminalId, generation)?.owner !== ownershipOwner)
+        return;
+      sessionStore.resourceOwnership.release(ownershipOwner, "terminal", terminalId, record);
+      noteClosedTerminals({ sessionId, sessionStore, ownershipOwner }, envelope, () => generation);
+    };
     const askedAt = Date.now();
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void =>
       recordOwnershipFromDispatch(
@@ -1637,6 +1689,109 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
     );
 
+    // The ledger's refusal of an id this session didn't create. The global
+    // Assistant's says what else its close takes (#16750): a fact about the
+    // caller, the same for every id.
+    const notOwnedMessage = (resourceKind: string, resourceId: string): string =>
+      `No ${resourceKind} with id '${resourceId}' was created by this session, so ` +
+      `'${actionId}' will not act on it. This tool only acts on resources this ` +
+      `connection created; ids from listings may belong to the user, another client, or a plugin.` +
+      (deps.relay?.global === true && actionId === GLOBAL_CLOSE_TOOL
+        ? ` ${GLOBAL_CLOSE_REFUSAL_NOTE}`
+        : "");
+    const refuseCall = (error: ActionError): CallToolResultLike => {
+      outcome = { kind: "result", value: { ok: false, error } };
+      return buildToolError({
+        code: error.code,
+        message: error.message,
+        ...(error.details !== undefined ? { details: error.details } : {}),
+      });
+    };
+    // A drive-rule refusal, which speaks its own code (#13493).
+    const refuseWrite = (refusal: { code: string; message: string }): CallToolResultLike =>
+      refuseCall({ code: refusal.code as ActionError["code"], message: refusal.message });
+    // Every way a global close can miss, refused exactly as the ledger
+    // refuses an id it doesn't hold.
+    const refuseGlobalClose = (terminalId: string): CallToolResultLike => {
+      const message = notOwnedMessage("terminal", terminalId);
+      return refuseCall({
+        code: RESOURCE_NOT_OWNED_CODE,
+        message: sessionScopedOwner ? `${message} ${SESSION_OWNERSHIP_NOTE}` : message,
+      });
+    };
+    // The global Assistant's close of a finished agent it didn't launch
+    // (#16750), up to the dispatch: undefined once it may go ahead, else the
+    // answer. A batch item carries its batch's question and answer.
+    const admitGlobalClose = async (
+      terminalId: string,
+      asked: GlobalCloseItem | null | undefined
+    ): Promise<CallToolResultLike | undefined> => {
+      if (asked === null) return refuseGlobalClose(terminalId);
+      const steer = deps.globalSteer!;
+      const projectId = sessionStore.sessionWorkspaceMap.get(sessionId);
+      if (projectId === undefined) return refuseGlobalClose(terminalId);
+      // The drive rule is the project's, asked before anything is read of
+      // the id, so it answers alike for every id.
+      const standing = assistantWriteRefusal(projectId);
+      if (standing) return refuseWrite(standing);
+      const first = asked?.target ?? (await steer.closeTarget(projectId, terminalId));
+      // Asked again now, whatever the read found: another machine may have
+      // taken the drive meanwhile, and nobody is asked about a close that
+      // can't run.
+      const standingNow = assistantWriteRefusal(projectId);
+      if (standingNow) return refuseWrite(standingNow);
+      if (first === null) return refuseGlobalClose(terminalId);
+      globalCloseAudited = true;
+      let answered: Pick<GlobalCloseItem, "settlement" | "deadline">;
+      if (asked !== undefined) {
+        answered = asked;
+      } else {
+        // Announced before the wait, so the strip shows the call awaiting
+        // an answer rather than nothing at all.
+        emitToolCallStarted(true, true);
+        const question = globalCloseQuestion(terminalId, first);
+        const settled = settleGlobalCloseAnswer(
+          await deps.relay!.askClose!(relayCallId!, {
+            actionId: "terminal.close",
+            args: { terminalId },
+            subject: question.subject,
+            lines: question.lines,
+            closeClass: first.closeClass,
+          }),
+          first.closeClass === "requires-person",
+          `'${terminalId}'`
+        );
+        if (settled.kind === "refused") {
+          if (settled.decision !== undefined) confirmationDecision = settled.decision;
+          return refuseCall(settled.error);
+        }
+        answered = { settlement: settled.kind, deadline: settled.deadline };
+      }
+      if (answered.settlement === "approved") confirmationDecision = "approved";
+      else dispatchAuthorization = "skip-preference";
+      // Read again right before the close: the person may have typed, or
+      // the agent moved on or been replaced, while the question was out.
+      const now = await steer.closeTarget(projectId, terminalId);
+      if (sessionStore.getTier(sessionId) === null) {
+        return refuseCall({
+          code: SESSION_GONE as ActionError["code"],
+          message: SESSION_GONE_MESSAGE,
+        });
+      }
+      if (extra.signal.aborted) {
+        return refuseCall({
+          code: "EXECUTION_ERROR",
+          message: `The call was cancelled before closing '${terminalId}', so nothing was closed.`,
+        });
+      }
+      if (!sameGlobalCloseTarget(first, now)) return refuseGlobalClose(terminalId);
+      // An answer covers the close only so long, whatever waited before it.
+      if (Date.now() > answered.deadline) return refuseCall(globalCloseExpired(`'${terminalId}'`));
+      globalCloseDeadline = answered.deadline;
+      globalCloseGeneration = first.generation;
+      return undefined;
+    };
+
     // Wrapped in an inner IIFE so the dedup guard below can register this
     // Promise in `dedupInFlight` (singleflight) and attach a `.then()` cache
     // hook that fires before any other awaiter sees the resolved result.
@@ -1766,11 +1921,36 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           globalRevealTerminalId = globalSteerTerminalId;
           ownedResourceId = globalSteerTerminalId;
         }
+        // A finished agent the global Assistant names that the ledger doesn't
+        // give it (#16750), keyed on the relay caller as the steer is. A
+        // hand-over gives it no close: its own launches keep the owned path.
+        const globalCloseRequested =
+          deps.relay?.global === true &&
+          actionId === GLOBAL_CLOSE_TOOL &&
+          ownedResource !== undefined;
+        const globalCloseCandidate =
+          globalCloseRequested &&
+          deps.relay?.askClose !== undefined &&
+          deps.globalSteer !== undefined &&
+          assistantTarget === undefined &&
+          relayCallId !== undefined
+            ? readOwnedResourceId(args, ownedResource!.idArg)
+            : undefined;
+        // A batch item keeps the admission its batch read for it, so a record
+        // made under the id while the question was out never moves it onto
+        // the owned path.
+        const globalCloseTerminalId =
+          globalCloseCandidate !== undefined &&
+          (batchItem?.globalClose !== undefined ||
+            ownedRecordFor("terminal", globalCloseCandidate) === undefined)
+            ? globalCloseCandidate
+            : undefined;
 
         if (
           ownedResource !== undefined &&
           assistantTarget === undefined &&
-          globalSteerTerminalId === undefined
+          globalSteerTerminalId === undefined &&
+          globalCloseTerminalId === undefined
         ) {
           const resourceId = readOwnedResourceId(args, ownedResource.idArg);
           if (resourceId === undefined) {
@@ -1829,9 +2009,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   `handed to it by the user, so '${actionId}' will not act on it. This tool only acts on ` +
                   `terminals this connection created or the user handed to this pane; ids from listings ` +
                   `may belong to the user, another client, or a plugin.`
-                : `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
-                  `'${actionId}' will not act on it. This tool only acts on resources this ` +
-                  `connection created; ids from listings may belong to the user, another client, or a plugin.`;
+                : notOwnedMessage(ownedResource.resourceKind, resourceId);
             const error: import("../../../shared/types/actions.js").ActionError = handOverHint
               ? {
                   code: RESOURCE_NOT_OWNED_CODE,
@@ -1851,6 +2029,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             createdRecord === undefined && !readsByPinnedView
               ? sessionStore.terminalAdoption.get(ownershipOwner, resourceId)
               : undefined;
+        }
+
+        // The global Assistant's close of a finished agent it didn't launch
+        // (#16750). Read on this host where the agent runs, put to the person
+        // at the calling Shell, who answers or whose Daintree confirmations
+        // answer for them, then read again right before the close, so the
+        // answer only ever closes the run it was about. Every miss is the
+        // ledger's own refusal, word for word. Nothing reaches a renderer
+        // until all of that has passed.
+        if (globalCloseTerminalId !== undefined) {
+          const refusal = await admitGlobalClose(globalCloseTerminalId, batchItem?.globalClose);
+          if (refusal !== undefined) return refusal;
+          ownedResourceId = globalCloseTerminalId;
+          ownedResourceRecord = undefined;
+          globalCloseAdmitted = true;
         }
 
         // An owned worktree delete waits for every process in the worktree to
@@ -2209,11 +2402,90 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             dispatchConfirmed = true;
           }
           const closeNeedsAsking = closeWouldAsk && !confirmationsSkipped;
-          emitToolCallStarted(closeNeedsAsking, closeNeedsAsking);
+          // The global Assistant's batch close (#16750): the finished agents
+          // among the ids it didn't launch, read here before any item runs and
+          // put to its Shell as one question about the call it made. Each item
+          // carries what was read of it and how it was answered, and is read
+          // again right before it closes; the rest are refused one by one,
+          // exactly as the ledger refuses an id it doesn't hold. A question
+          // nobody approves closes nothing, its own panels included.
+          const globalCloseItems = new Map<string, GlobalCloseItem | null>();
+          const globalBatchProject =
+            actionId === "terminal.closeMany" &&
+            deps.relay?.global === true &&
+            deps.relay.askClose !== undefined &&
+            deps.globalSteer !== undefined &&
+            relayCallId !== undefined
+              ? sessionStore.sessionWorkspaceMap.get(sessionId)
+              : undefined;
+          const globalEligible: Array<{ terminalId: string; target: GlobalCloseTarget }> = [];
+          let ownCloses = 0;
+          if (globalBatchProject !== undefined) {
+            const candidates: string[] = [];
+            let assistants = 0;
+            for (const terminalId of new Set((parsed.data as TerminalCloseManyArgs).terminalIds)) {
+              // An assistant closes only under its own starter's check, so it
+              // counts with the call's own panels, as one it may close.
+              if (isAssistantId(terminalId)) assistants += 1;
+              else if (ownedRecordFor("terminal", terminalId) !== undefined) ownCloses += 1;
+              else candidates.push(terminalId);
+            }
+            ownCloses += assistants;
+            // The project's drive rule, asked before anything is read of an id
+            // that isn't the call's own.
+            if (candidates.length > 0 || assistants > 0) {
+              const standing = assistantWriteRefusal(globalBatchProject);
+              if (standing) return refuseWrite(standing);
+            }
+            for (const terminalId of candidates) {
+              const target = await deps.globalSteer!.closeTarget(globalBatchProject, terminalId);
+              if (target === null) globalCloseItems.set(terminalId, null);
+              else globalEligible.push({ terminalId, target });
+            }
+            // Asked again, whatever the reads found: the drive may have moved meanwhile.
+            if (candidates.length > 0 || assistants > 0) {
+              const standingNow = assistantWriteRefusal(globalBatchProject);
+              if (standingNow) return refuseWrite(standingNow);
+            }
+          }
+          const globalAsks = globalEligible.length > 0;
+          if (globalAsks) globalCloseAudited = true;
+          emitToolCallStarted(closeNeedsAsking || globalAsks, closeNeedsAsking || globalAsks);
           if (closeNeedsAsking) {
             const asked = await askToClose(closeIds);
             if ("refusal" in asked) return asked.refusal;
             closeApproved = asked.approved;
+          }
+          if (globalAsks) {
+            // One stopped on an error makes the whole question the person's.
+            const personOnly = globalEligible.some(
+              ({ target }) => target.closeClass === "requires-person"
+            );
+            const question = globalCloseBatchQuestion(globalEligible, ownCloses);
+            const settled = settleGlobalCloseAnswer(
+              await deps.relay!.askClose!(relayCallId!, {
+                actionId,
+                args: args as Record<string, unknown>,
+                subject: question.subject,
+                lines: question.lines,
+                closeClass: personOnly ? "requires-person" : "handback",
+              }),
+              personOnly,
+              globalEligible.length === 1 ? `'${globalEligible[0]!.terminalId}'` : "these panels"
+            );
+            if (settled.kind === "refused") {
+              if (settled.decision !== undefined) confirmationDecision = settled.decision;
+              return refuseCall(settled.error);
+            }
+            if (settled.kind === "approved") confirmationDecision = "approved";
+            else dispatchAuthorization = "skip-preference";
+            for (const { terminalId, target } of globalEligible) {
+              globalCloseItems.set(terminalId, {
+                target,
+                settlement: settled.kind,
+                deadline: settled.deadline,
+              });
+            }
           }
           const results: BatchItemOutcome[] = [];
           const batchArgs = parsed.data as {
@@ -2233,6 +2505,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           for (const item of batch.expand(parsed.data, rendererOwnedOrigin)) {
             // A cancelled call starts nothing more; what already went out stands.
             if (extra.signal.aborted) break;
+            const globalClose = globalCloseItems.get(item.target);
             if (
               closeApproved !== undefined &&
               !closeApproved.has(item.target) &&
@@ -2313,12 +2586,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 noticeHold !== undefined ||
                   closeApproved !== undefined ||
                   itemsSkipConfirmations ||
-                  relayCallId !== undefined
+                  relayCallId !== undefined ||
+                  globalClose !== undefined
                   ? {
                       ...(noticeHold !== undefined ? { noticeHold } : {}),
                       ...(closeApproved !== undefined ? { closeApproved: true } : {}),
                       ...(itemsSkipConfirmations ? { confirmationsSkipped: true } : {}),
                       ...(relayCallId !== undefined ? { relayCallId } : {}),
+                      ...(globalClose !== undefined ? { globalClose } : {}),
                     }
                   : undefined
               );
@@ -3825,10 +4100,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // Recorded for every tier
           // — "this session created it" is a fact about the session, not about
           // its privileges.
-          recordDispatchOwnership(envelope);
+          // A global close (#16750) neither releases a record it never held
+          // nor gains a wait on the process it closed, save for one made
+          // while its question was out by this caller's own launch of the
+          // very run it closed: that run was the caller's after all.
+          if (!globalCloseAdmitted) recordDispatchOwnership(envelope);
+          else settleGlobalCloseLedger(envelope, closeGenerations.get(ownedResourceId!));
           // What it closed, so it can wait for those processes to exit after
           // `terminal.closeOwned` released them (#15728).
-          if (CLOSE_TOOLS.has(actionId)) {
+          if (CLOSE_TOOLS.has(actionId) && !globalCloseAdmitted) {
             noteClosedTerminals({ sessionId, sessionStore, ownershipOwner }, envelope, (id) =>
               closeGenerations.get(id)
             );
@@ -4048,6 +4328,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           outcome,
           confirmationDecision,
           dispatchAuthorization,
+          ...(globalCloseAudited ? { admission: "global-close" as const } : {}),
           started: toolCallStartedEmitted
             ? { danger: toolCallStartedDanger, asks: toolCallStartedAsks }
             : undefined,
