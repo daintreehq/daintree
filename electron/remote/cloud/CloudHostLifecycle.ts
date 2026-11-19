@@ -3520,7 +3520,7 @@ export class CloudHostLifecycle {
       const check = await provider.checkGuestPowerOff(credentials, resourceId);
       if (!holds() || !admits()) return;
       if (!check.eligible) {
-        // Its keeper says why on its next look, and takes the permission back.
+        // Its keeper looks again now: it says why, and takes the permission back.
         void this.deps.guestPowerOff?.arm(hostId, session);
         return;
       }
