@@ -62,9 +62,9 @@ describe("shellClockOffset and onShellClock", () => {
       onShellClock({ ...defaultReading, defaultLoginName: "Work\u202e\u0007Lab " }, 0)
         .defaultLoginName
     ).toBe("Work Lab");
-    expect(onShellClock({ ...defaultReading, defaultLoginName: "\u200b\u0001" }, 0)).not.toHaveProperty(
-      "defaultLoginName"
-    );
+    expect(
+      onShellClock({ ...defaultReading, defaultLoginName: "\u200b\u0001" }, 0)
+    ).not.toHaveProperty("defaultLoginName");
     expect(onShellClock({ ...codex, defaultLoginName: "Work" }, 0)).not.toHaveProperty(
       "defaultLoginName"
     );

@@ -261,7 +261,11 @@ describe("renameAgentAccount (#17080)", () => {
     });
     // Another view removes Company and adds Lab after this one opened the rename.
     removeAgentAccount("codex", account.id);
-    const lab = await addAgentAccount({ agentId: "codex", name: "Lab", folder: { kind: "create" } });
+    const lab = await addAgentAccount({
+      agentId: "codex",
+      name: "Lab",
+      folder: { kind: "create" },
+    });
 
     renameAgentAccount("codex", personal.account.id, "Home");
     expect(savedCodex().accounts).toEqual([{ ...personal.account, name: "Home" }, lab.account]);
@@ -282,7 +286,9 @@ describe("renameAgentAccount (#17080)", () => {
     broadcastMock.mockClear();
     const before = structuredClone(savedCodex());
 
-    expect(() => renameAgentAccount("codex", account.id, " \t ")).toThrow(/Give the account a name/);
+    expect(() => renameAgentAccount("codex", account.id, " \t ")).toThrow(
+      /Give the account a name/
+    );
     expect(() => renameAgentAccount("codex", null, undefined)).toThrow(/Invalid account name/);
     expect(() => renameAgentAccount("codex", "bad id", "Work")).toThrow(/Invalid account/);
     expect(() => renameAgentAccount("cursor", null, "Work")).toThrow(/no accounts/);

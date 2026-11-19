@@ -132,7 +132,10 @@ function codexReadings(quota: CodexHomeQuota, defaultLoginName?: string): AgentU
   }));
 }
 
-function claudeReadings(account: ClaudeUsageAccount, defaultLoginName?: string): AgentUsageReading[] {
+function claudeReadings(
+  account: ClaudeUsageAccount,
+  defaultLoginName?: string
+): AgentUsageReading[] {
   const accountNames = boundAgentUsageAccountNames(account.accountNames);
   const isDefault = account.kind === "default";
   return account.readings.map((reading) => ({
@@ -421,8 +424,7 @@ function defaultDeps(): AgentUsageWatchDeps {
         import("../../../shared/utils/agentAccounts.js"),
       ]);
       const settings = store.get("agentSettings") as
-        | { agents?: Record<string, { defaultLoginName?: unknown } | undefined> }
-        | undefined;
+        { agents?: Record<string, { defaultLoginName?: unknown } | undefined> } | undefined;
       const agents = settings && typeof settings === "object" ? settings.agents : undefined;
       return {
         codex: sanitizeAccountName(agents?.codex?.defaultLoginName),

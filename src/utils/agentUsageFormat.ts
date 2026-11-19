@@ -72,8 +72,7 @@ function accountLabel(readout: AgentUsageReadout): string {
     return names || (reading.agentId === "codex" ? "Other profile" : "Other config folder");
   }
   const name = loginName(readout);
-  const login =
-    reading.agentId === "codex" && !name ? "Default profile" : defaultLoginLabel(name);
+  const login = reading.agentId === "codex" && !name ? "Default profile" : defaultLoginLabel(name);
   return names ? `${login} · ${names}` : login;
 }
 

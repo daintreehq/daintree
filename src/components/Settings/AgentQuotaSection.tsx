@@ -233,7 +233,9 @@ function CodexQuota() {
   const { profiles, refresh } = useCodexQuota(true);
   const now = useGlobalMinuteClock();
   const unreadProjectPresets = useUnreadProjectCodexPresets();
-  const defaultLoginName = useAgentSettingsStore((s) => s.settings?.agents?.codex?.defaultLoginName);
+  const defaultLoginName = useAgentSettingsStore(
+    (s) => s.settings?.agents?.codex?.defaultLoginName
+  );
   const several = profiles !== null && profiles.length > 1;
   const named = sanitizeAccountName(defaultLoginName) !== undefined;
 
@@ -411,7 +413,9 @@ function ClaudeUsage() {
   const hasSavedAccounts = useAgentSettingsStore(
     (s) => (s.settings?.agents?.claude?.accounts?.length ?? 0) > 0
   );
-  const defaultLoginName = useAgentSettingsStore((s) => s.settings?.agents?.claude?.defaultLoginName);
+  const defaultLoginName = useAgentSettingsStore(
+    (s) => s.settings?.agents?.claude?.defaultLoginName
+  );
   const labels = accounts
     ? claudeUsageGroupLabels(accounts, hasSavedAccounts, defaultLoginName)
     : [];

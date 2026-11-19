@@ -526,7 +526,9 @@ describe("naming the default login and renaming accounts (#17080)", () => {
   });
 
   it("keeps the draft and says why when the save is refused", async () => {
-    const renameAccount = vi.fn().mockRejectedValue(new Error("That account isn't saved any more."));
+    const renameAccount = vi
+      .fn()
+      .mockRejectedValue(new Error("That account isn't saved any more."));
     useAgentSettingsStore.setState({ renameAccount });
     renderSection({ accounts: [COMPANY] });
 
