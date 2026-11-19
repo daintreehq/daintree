@@ -260,7 +260,9 @@ export function idleSleepTimerSentence(
   const own = lifetime?.kind === "idle-sleep" ? lifetime.idleSeconds : null;
   const ownTimer = `${name}'s own idle timer${own === null ? "" : ` (${durationLabel(own)})`}`;
   const afterIdle =
-    own === null ? "once it's been idle for a while" : `after ${durationLabel(own)} without activity`;
+    own === null
+      ? "once it's been idle for a while"
+      : `after ${durationLabel(own)} without activity`;
   const away = awaySentence(ownTimer, afterIdle, machine);
   const inCharge = machine.connected
     ? `The host's idle time is in charge while this device is connected, since the connection keeps ${ownTimer} from running: once it ends, Daintree checks with the host and puts the machine to sleep.${away.connected ? ` ${away.connected}` : ""}`

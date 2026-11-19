@@ -45,7 +45,10 @@ function said(error: unknown, fallback: string): string {
 }
 
 export interface CloudKeepAwakeLinksDeps {
-  store: Pick<CloudHostStore, "bindings" | "binding" | "bindingForHost" | "account" | "updateBinding">;
+  store: Pick<
+    CloudHostStore,
+    "bindings" | "binding" | "bindingForHost" | "account" | "updateBinding"
+  >;
   accounts: Pick<CloudAccountService, "provider" | "providerUnavailable" | "credentials">;
   hosts: { get(hostId: HostId): HostDescriptor | null };
   /** The host's open session, or null while it has none. */

@@ -491,10 +491,14 @@ export class Agent37Provider implements CloudProvider {
     resourceId: string,
     port: number
   ): Promise<{ url: string; expiresAt: number }> {
-    const signed = await this.clientFor(credentials.apiUrl).signedUrl(ctx(credentials), resourceId, {
-      port,
-      ttlSeconds: AGENT37_KEEP_AWAKE_TTL_SECONDS,
-    });
+    const signed = await this.clientFor(credentials.apiUrl).signedUrl(
+      ctx(credentials),
+      resourceId,
+      {
+        port,
+        ttlSeconds: AGENT37_KEEP_AWAKE_TTL_SECONDS,
+      }
+    );
     if (signed.port !== port || keepAwakeUrlProblem(signed.url, resourceId, port) !== null) {
       throw new Agent37ApiError(
         "bad-response",

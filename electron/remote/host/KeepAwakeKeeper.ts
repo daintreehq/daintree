@@ -1,9 +1,6 @@
 import crypto from "node:crypto";
 import { AppError } from "../../utils/errorTypes.js";
-import {
-  keepAwakeRequestUrl,
-  keepAwakeUrlProblem,
-} from "../cloud/agent37/agent37KeepAwake.js";
+import { keepAwakeRequestUrl, keepAwakeUrlProblem } from "../cloud/agent37/agent37KeepAwake.js";
 import type { KeepAwakeArmRequest, KeepAwakeStatus } from "../cloud/machineKeeperLink.js";
 import type { HostIdleActorSource } from "./HostIdleTracker.js";
 
