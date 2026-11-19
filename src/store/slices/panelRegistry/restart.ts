@@ -349,6 +349,7 @@ export const createRestartActions = (
   | "setHoldOnRestart"
   | "activateFallbackPreset"
   | "restartTerminalOnPreset"
+  | "restartTerminalOnOwnFallbackStep"
   | "restartTerminalOnAccount"
   | "dismissSessionLost"
   | "dismissAllSessionLost"

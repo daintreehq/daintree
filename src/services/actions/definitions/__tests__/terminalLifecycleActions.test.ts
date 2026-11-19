@@ -1209,7 +1209,9 @@ describe("terminal.restartOnPreset (#13746)", () => {
   });
 
   describe("unconfirmed, under the assistant's next-fallback tick (#17917)", () => {
-    const panels = [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }];
+    const panels: AgentPanel[] = [
+      { id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" },
+    ];
 
     it("takes only the pane's next own fallback step, never a switch", async () => {
       const { restartTerminalOnPreset, restartTerminalOnOwnFallbackStep } = setRichPanelState({

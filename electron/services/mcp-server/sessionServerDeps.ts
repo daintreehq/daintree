@@ -977,6 +977,9 @@ export function createSessionServerDeps(
                       }),
                   }
                 : {}),
+              ...(relay.local === true && relay.nextFallback && relayCallId !== undefined
+                ? { nextFallback: bindNextFallback(relay.nextFallback, relay.helpSessionId, relayCallId) }
+                : {}),
             },
           }
         : undefined;
@@ -1406,5 +1409,18 @@ export function createSessionServerDeps(
             noteToolListRoute(sessionId, boundWorkspaceId, preferredWebContentsId),
         }
       : {}),
+  };
+}
+
+/** A local relay's matcher, bound to the one call a dispatch runs (#17917). */
+function bindNextFallback(
+  nextFallback: import("./shared.js").RelayNextFallback,
+  helpSessionId: string,
+  callId: string
+): NonNullable<NonNullable<WorkspaceDispatchOptions["relay"]>["nextFallback"]> {
+  return {
+    offers: (projectId, actionId, args) =>
+      nextFallback.offers({ callId, helpSessionId, projectId, actionId, args }),
+    ran: () => nextFallback.ran(callId),
   };
 }

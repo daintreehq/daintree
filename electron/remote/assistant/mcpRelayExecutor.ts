@@ -16,7 +16,7 @@ import {
   relayCallArmsNotice,
   type RelayedNotice,
 } from "../../services/mcp-server/terminalNotify.js";
-import type { McpRelayCaller } from "../../services/mcp-server/shared.js";
+import type { McpRelayCaller, RelayNextFallback } from "../../services/mcp-server/shared.js";
 import type { ViewlessApprovalDecision } from "../../services/viewless/index.js";
 import type { RelayApprovalAsk } from "./relayApprovals.js";
 import { createLogger } from "../../utils/logger.js";
@@ -55,6 +55,8 @@ export interface RelayMcpSessionSpec {
   requestApproval(
     ask: Omit<RelayApprovalAsk, "helpSessionId" | "projectId">
   ): Promise<ViewlessApprovalDecision>;
+  /** Set only by the in-process relay (#17917): see `McpRelayCaller.nextFallback`. */
+  nextFallback?: RelayNextFallback;
 }
 
 /**
@@ -71,6 +73,7 @@ export function relayCallerOf(spec: RelayMcpSessionSpec): McpRelayCaller {
     ...(spec.global === true ? { global: true as const } : {}),
     deliverNotices: spec.deliverNotices,
     requestApproval: spec.requestApproval,
+    ...(spec.local === true && spec.nextFallback ? { nextFallback: spec.nextFallback } : {}),
   };
 }
 

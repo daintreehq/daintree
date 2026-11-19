@@ -21,6 +21,9 @@ const m = vi.hoisted(() => ({
       commit: () => boolean;
     } | null => null
   ),
+  // Whether it offers a preset move as one the view may run unasked (#17917).
+  offersNextFallback: vi.fn((_hostId: string, _dispatch: unknown) => false),
+  noteNextFallbackRan: vi.fn(),
   // The project each view of this Shell shows, keyed as the Shell keys it.
   viewProjects: new Map<number, string>(),
 }));
@@ -40,6 +43,8 @@ vi.mock("../../runtime.js", () => ({
             hasCallInFlight: (hostId: string) => m.callsOut.has(hostId),
             skipsRelayedDispatch: m.skipsRelayedDispatch,
             relayedDelegation: m.relayedDelegation,
+            offersNextFallback: m.offersNextFallback,
+            noteNextFallbackRan: m.noteNextFallbackRan,
           }
         : undefined,
 }));
@@ -81,6 +86,7 @@ beforeEach(() => {
   m.callsOut.clear();
   m.skipsRelayedDispatch.mockReturnValue(false);
   m.relayedDelegation.mockReturnValue(null);
+  m.offersNextFallback.mockReturnValue(false);
   m.viewProjects.clear();
   _resetReverseRequestMethodsForTesting();
 });
@@ -247,6 +253,107 @@ describe("view reverse requests", () => {
       expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ fixedDeadline: true });
     }
   );
+
+  describe("a preset move the view may run unasked as the pane's next own step (#17917)", () => {
+    const relayedMove = {
+      actionId: "terminal.restartOnPreset",
+      args: { terminalId: "t-9", presetId: "p-1" },
+      confirmed: false,
+      sessionOrigin: "external",
+      relayed: true,
+      relayCall: { callId: "call-1", helpSessionId: "help-a" },
+    };
+    const hostsOwnMove = {
+      actionId: "terminal.restartOnPreset",
+      args: { terminalId: "t-9", presetId: "p-1" },
+      confirmed: false,
+      sessionOrigin: "help",
+      confirmationCondition: "next-own-fallback",
+    };
+
+    beforeEach(() => {
+      installViewReverseRequests();
+      m.callsOut.add("studio");
+      m.viewProjects.set(11, toHostScopedKey("studio", "proj-2"));
+      m.requestManifestForHost.mockResolvedValue([
+        { id: "terminal.restartOnPreset", danger: "confirm" },
+      ]);
+    });
+
+    it("hands its own relayed move to the view to settle, and notes the run once the view ran it", async () => {
+      m.offersNextFallback.mockReturnValue(true);
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        authorization: "skip-preference",
+      });
+
+      const answer = await ask("mcp:dispatch-action", relayedMove);
+
+      // Never ask is asked first; the offer only when it won't skip outright.
+      expect(m.skipsRelayedDispatch).toHaveBeenCalledTimes(1);
+      expect(m.offersNextFallback).toHaveBeenCalledWith("studio", {
+        callId: "call-1",
+        helpSessionId: "help-a",
+        projectId: "proj-2",
+        actionId: "terminal.restartOnPreset",
+        args: { terminalId: "t-9", presetId: "p-1" },
+      });
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+        confirmationCondition: "next-own-fallback",
+        fixedDeadline: true,
+      });
+      expect(m.noteNextFallbackRan).toHaveBeenCalledWith("studio", "call-1");
+      expect(answer).toEqual({ result: { ok: true, result: 1 }, authorization: "skip-preference" });
+    });
+
+    it("reports the view's own dialog, and no run unasked, when the move wasn't the next step", async () => {
+      m.offersNextFallback.mockReturnValue(true);
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        confirmationDecision: "approved",
+      });
+
+      const answer = await ask("mcp:dispatch-action", relayedMove);
+
+      expect(m.noteNextFallbackRan).not.toHaveBeenCalled();
+      expect(answer).toEqual({ result: { ok: true, result: 1 }, confirmationDecision: "approved" });
+    });
+
+    it("takes the host's own assistant's offer for that move alone, and leaves the deciding to the view", async () => {
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        authorization: "skip-preference",
+      });
+
+      const answer = await ask("mcp:dispatch-action", hostsOwnMove);
+
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+        confirmationCondition: "next-own-fallback",
+        fixedDeadline: true,
+      });
+      expect(answer).toEqual({ result: { ok: true, result: 1 }, authorization: "skip-preference" });
+    });
+
+    it.each([
+      ["an agent pane or api-key client", { sessionOrigin: "external" }],
+      ["another action", { actionId: "worktree.delete", args: { worktreeId: "/srv/wt" } }],
+      ["a confirmed call", { confirmed: true }],
+      ["an unknown condition", { confirmationCondition: "anything" }],
+    ])("passes no offer on for %s", async (_label, fields) => {
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        authorization: "skip-preference",
+      });
+
+      const answer = await ask("mcp:dispatch-action", { ...hostsOwnMove, ...fields });
+
+      const options = m.dispatchActionForHost.mock.calls[0]?.[6] as Record<string, unknown>;
+      expect(options.confirmationCondition).toBeUndefined();
+      expect(answer).toEqual({ result: { ok: true, result: 1 } });
+    });
+  });
 
   describe("this Shell's own assistant's relayed call (#15698)", () => {
     const relayedDelete = {

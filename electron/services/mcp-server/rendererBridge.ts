@@ -2130,7 +2130,7 @@ export function createRendererBridge(
     sessionOrigin: McpSessionOrigin,
     options: WorkspaceDispatchOptions
   ): Promise<DispatchEnvelope> {
-    const call = localNextFallbackCall(resolveWebContents, actionId, args, confirmed, options);
+    const offered = offersLocalNextFallback(resolveWebContents, actionId, args, confirmed, options);
     const envelope = await sendDispatchRequest(
       resolveWebContents,
       actionId,
@@ -2140,49 +2140,39 @@ export function createRendererBridge(
       options.contextOverride,
       undefined,
       { kind: "workspace", workspaceId },
-      call !== null ? { ...options, confirmationCondition: "next-own-fallback" } : options
+      offered ? { ...options, confirmationCondition: "next-own-fallback" } : options
     );
-    if (call !== null && envelope.authorization === "skip-preference") {
-      getRemoteService("hostCallRelayClient")?.noteNextFallbackRan(LOCAL_HOST_ID, call);
-    }
+    if (offered && envelope.authorization === "skip-preference") options.relay?.nextFallback?.ran();
     return envelope;
   }
 
-  /** The local `host.call` a preset move may run unasked for, or null. */
-  function localNextFallbackCall(
+  /** Whether a local `host.call`'s preset move goes to its view as one it may run unasked. */
+  function offersLocalNextFallback(
     resolveWebContents: () => Electron.WebContents,
     actionId: string,
     args: unknown,
     confirmed: boolean,
     options: WorkspaceDispatchOptions
-  ): string | null {
-    const call = options.relay?.call;
+  ): boolean {
+    const nextFallback = options.relay?.nextFallback;
     if (
       confirmed ||
       options.approvalOnly === true ||
       options.relay?.local !== true ||
-      call === undefined ||
+      nextFallback === undefined ||
       actionId !== ASSISTANT_PRESET_MOVE_DELEGATE
     ) {
-      return null;
+      return false;
     }
     let key: string | null;
     try {
       key = getProjectForWebContents(resolveWebContents().id);
     } catch {
-      return null;
+      return false;
     }
-    if (key === null) return null;
+    if (key === null) return false;
     const view = parseHostScopedKey(key);
-    if (view.hostId !== LOCAL_HOST_ID) return null;
-    const offered = getRemoteService("hostCallRelayClient")?.offersNextFallback(LOCAL_HOST_ID, {
-      callId: call.callId,
-      helpSessionId: call.helpSessionId,
-      projectId: view.projectId,
-      actionId,
-      args,
-    });
-    return offered === true ? call.callId : null;
+    return view.hostId === LOCAL_HOST_ID && nextFallback.offers(view.projectId, actionId, args);
   }
 
   /**

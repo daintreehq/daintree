@@ -339,6 +339,63 @@ describe("createSessionServerDeps", () => {
     expect(relays()).toEqual([undefined]);
   });
 
+  // #17917: a local call's matcher reaches its dispatch bound to that one call,
+  // and another machine's relay never carries one.
+  it("binds a local relay's next-fallback matcher to the call each dispatch runs", async () => {
+    const offers = vi.fn(() => true);
+    const ran = vi.fn();
+    const bound = (relay: Record<string, unknown>) => {
+      const deps = fakeSource();
+      const dispatchActionForWorkspace = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+        dispatchActionForWorkspace;
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+        workspaceBinding: { workspaceId: WS_A },
+        relay: relay as never,
+      });
+      type Bound = { offers(p: string, a: string, x: unknown): boolean; ran(): void };
+      const matchers = () =>
+        dispatchActionForWorkspace.mock.calls.map(
+          (call) =>
+            ((call as unknown[])[5] as { relay?: { nextFallback?: Bound } } | undefined)?.relay
+              ?.nextFallback
+        );
+      return { sessionDeps, matchers };
+    };
+    const caller = {
+      linkSessionId: "local",
+      senderId: "local",
+      helpSessionId: "help-1",
+      shellName: "Mac",
+      nextFallback: { offers, ran },
+    };
+    const move = { terminalId: "t-1", presetId: "work" };
+
+    const local = bound({ ...caller, local: true });
+    await local.sessionDeps.dispatchAction("terminal.restartOnPreset", move, false, undefined, "call-1");
+    await local.sessionDeps.dispatchAction("terminal.restartOnPreset", move, false);
+    const [named, unnamed] = local.matchers();
+    expect(named?.offers("proj-1", "terminal.restartOnPreset", move)).toBe(true);
+    expect(offers).toHaveBeenCalledWith({
+      callId: "call-1",
+      helpSessionId: "help-1",
+      projectId: "proj-1",
+      actionId: "terminal.restartOnPreset",
+      args: move,
+    });
+    named?.ran();
+    expect(ran).toHaveBeenCalledWith("call-1");
+    expect(unnamed).toBeUndefined();
+
+    const remote = bound(caller);
+    await remote.sessionDeps.dispatchAction("terminal.restartOnPreset", move, false, undefined, "call-2");
+    expect(remote.matchers()).toEqual([undefined]);
+  });
+
   // #14551: only a relay caller its Shell's runtime named global is handed the
   // steer, from this machine's global Assistant or another's.
   const RELAY = {
