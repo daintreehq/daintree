@@ -13,7 +13,7 @@ import {
   HOST_IDLE_MINUTE_CHOICES,
   type HostIdleObservation,
 } from "@shared/types/hostIdle";
-import type { CloudLinkedIdleStop } from "@shared/types/cloudHosts";
+import type { CloudLifetimeModel, CloudLinkedIdleStop } from "@shared/types/cloudHosts";
 import type { HostSettingsSnapshot, HostSettingsUpdateResult } from "@shared/types/hostSettings";
 import type { HostId } from "@shared/types/remoteHosts";
 import { SettingsRow } from "../SettingsGroup";
@@ -71,6 +71,10 @@ interface HostIdleTimeRowProps {
   linkedIdleStop?: CloudLinkedIdleStop | null;
   /** The machine's provider; null while it isn't registered, which leaves what the idle time does unknown. */
   provider?: CloudProviderTerms | null;
+  /** The machine's own idle sleep, as its provider last reported it, for a provider that has one. */
+  lifetime?: CloudLifetimeModel | null;
+  /** The machine's own idle timeout follows the host's idle time (#17916). */
+  idleTimeFollowsHost?: boolean;
 }
 
 /**
@@ -87,6 +91,8 @@ export function HostIdleTimeRow({
   selfStopProblem = null,
   linkedIdleStop = null,
   provider = null,
+  lifetime = null,
+  idleTimeFollowsHost = false,
 }: HostIdleTimeRowProps) {
   const [setting, setSetting] = useState<IdleSetting | null>(null);
   // Read since the link last came up: an older reading is shown, not edited against.
@@ -140,7 +146,11 @@ export function HostIdleTimeRow({
   };
 
   // What its idle time ending does to the machine; the host's word that it stops it settles it.
-  const consequence = idleEndSentence(idle, provider, selfStopProblem, linkedIdleStop);
+  const consequence = idleEndSentence(idle, provider, selfStopProblem, linkedIdleStop, {
+    connected,
+    lifetime,
+    followsHost: idleTimeFollowsHost,
+  });
   const withConsequence = (text: string) =>
     consequence ? `${/[.!?]$/.test(text) ? text : `${text}.`} ${consequence}` : text;
 

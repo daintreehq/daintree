@@ -76,6 +76,7 @@ import {
 import { sshDeclarationProblem } from "./sshTunnel.js";
 import {
   canRenewLifetime,
+  canSleepIdle,
   sshKeyContractProblem,
   sshKeyTiming,
   type CloudProvider,
@@ -100,6 +101,9 @@ const STOP_DEADLINE_MS = 15 * 60_000;
 const DIAL_OBSERVATION_MS = 15_000;
 /** The same for a provider that sleeps idle machines, where a stale "running" can be a sleeper. */
 const SLEEPER_DIAL_OBSERVATION_MS = 2_000;
+/** Said while the host's Daintree can't confirm its idle time ended (#17916). */
+export const IDLE_SLEEP_HOST_TOO_OLD =
+  "The Daintree on this machine is too old to confirm it's idle, so Daintree doesn't put it to sleep while connected. Update it to let it.";
 /** SSH access is resolved again after this long, or after any start. */
 const ACCESS_TTL_MS = 10 * 60_000;
 const MAX_NAME_LENGTH = 64;
@@ -514,6 +518,11 @@ function machineLifetime(
   return { kind: "idle-sleep", idleSeconds: reported.idleSeconds ?? model.idleSeconds };
 }
 
+/** Whether the machine's own idle timeout follows its host's idle time: Daintree made it, or the person picked one. */
+export function followsHostIdleTime(binding: StoredCloudBinding): boolean {
+  return binding.ownership === "created-by-daintree" || binding.idleTimeChosen === true;
+}
+
 /** A mark given by main code, checked as strictly as one read back from disk. */
 function checkedCreatedFor(raw: CloudHostCreatedFor): CloudHostCreatedFor {
   const local = raw && typeof raw === "object" && isLocalHostId(raw.hostId);
@@ -574,6 +583,23 @@ interface RunningOperation extends CloudOperation {
  * a window restoring or a link redialling only ever reads. A dial to a
  * stopped machine fails with a reason and waits for Start.
  */
+/**
+ * Asks the host for the idle time that ended and, granted, runs `act` in the
+ * turn the grant arrives (`withHostIdleClaim`). Throws when the host couldn't
+ * be asked.
+ */
+export type IdleSleepClaim = (
+  act: () => Promise<void>
+) => Promise<"claimed" | "refused" | "unsupported" | "superseded">;
+
+/**
+ * What came of putting a machine to sleep by its host's idle time: asleep, as
+ * the provider now says; still awake after the request went out; nothing sent
+ * because the host refused or the link moved on, or because its Daintree is
+ * too old to ask; or not a machine to put to sleep now.
+ */
+export type IdleSleepOutcome = "asleep" | "awake" | "not-claimed" | "unsupported" | "skipped";
+
 export class CloudHostLifecycle {
   private readonly operations = new Map<string, RunningOperation>();
   private readonly nextPollAt = new Map<string, number>();
@@ -630,6 +656,12 @@ export class CloudHostLifecycle {
   private readonly observedTicket = new Map<string, number>();
   private stopWatchingHosts: (() => void) | null = null;
   private stopWatchingStore: (() => void) | null = null;
+  /** Machines being put to sleep by their host's idle time: no dial resolves access to them meanwhile (#17916). */
+  private readonly idleSleeping = new Set<string>();
+  /** Why the last sleep by idle time, or the last idle time sent, didn't take, by binding. */
+  private readonly idleSleepProblems = new Map<string, { kind: "sleep" | "idle-time"; message: string }>();
+  /** Idle times being sent to each machine's provider, so a later one never lands first. */
+  private readonly idleTimeWrites = new Map<string, Promise<void>>();
   private disposed = false;
 
   constructor(private readonly deps: CloudHostLifecycleDeps) {}
@@ -832,9 +864,11 @@ export class CloudHostLifecycle {
           selfStopProblem:
             this.deps.machineKeys?.problemFor(binding.id) ??
             this.deps.guestPowerOff?.problemFor(binding.id) ??
+            this.idleSleepProblems.get(binding.id)?.message ??
             null,
           linkedIdleStop: this.linkedIdleStopOf(binding),
           asleep: machineOf(binding) === "stopped" && observation?.asleep === true,
+          idleTimeFollowsHost: followsHostIdleTime(binding),
         };
       });
   }
@@ -2395,6 +2429,169 @@ export class CloudHostLifecycle {
     this.observe(binding.id, resource, ticket);
   }
 
+  // --- Sleeping by the host's idle time (#17916) ---------------------------
+
+  /**
+   * Puts the machine to sleep once its host grants the idle time that ended.
+   * Everything that waits (credentials, a fresh look at the machine) comes
+   * before `claim`, which asks the host and runs what it is handed in the turn
+   * the grant arrives, so the one sleep request goes out with nothing awaited
+   * in between. No dial resolves access to the machine meanwhile: one would
+   * wake it, or reach it just as it goes. What the provider says afterwards
+   * settles the outcome, so a busy or lost answer that still meant asleep is
+   * asleep, and the request is never sent again on the same claim.
+   */
+  async sleepIdleMachine(bindingId: string, claim: IdleSleepClaim): Promise<IdleSleepOutcome> {
+    const binding = this.deps.store.binding(bindingId);
+    if (this.disposed || !binding?.resourceId || !this.idleSleepable(bindingId)) return "skipped";
+    const resourceId = binding.resourceId;
+    const { provider, credentials } = await this.context(binding);
+    if (!canSleepIdle(provider)) return "skipped";
+    const seen = await this.inspectInto(bindingId, provider, credentials);
+    if (
+      seen?.machine !== "running" ||
+      seen.idleSleep?.enabled !== true ||
+      this.disposed ||
+      this.deps.store.binding(bindingId)?.resourceId !== resourceId ||
+      !this.idleSleepable(bindingId) ||
+      !this.stillRegistered(binding.providerId, provider)
+    ) {
+      return "skipped";
+    }
+    this.idleSleeping.add(bindingId);
+    try {
+      // A dial already resolving access may hand out a route to the machine as it goes.
+      if (this.accessInFlight.has(bindingId)) return "skipped";
+      let sent = false;
+      let failure: unknown = null;
+      let answer: Awaited<ReturnType<IdleSleepClaim>>;
+      try {
+        answer = await claim(() => {
+          sent = true;
+          return provider.sleepIdle(credentials, resourceId);
+        });
+      } catch (error) {
+        if (!sent) throw error;
+        failure = error;
+        answer = "claimed";
+      }
+      if (answer === "unsupported") {
+        this.setIdleSleepProblem(bindingId, "sleep", IDLE_SLEEP_HOST_TOO_OLD);
+        return "unsupported";
+      }
+      if (answer !== "claimed") {
+        this.setIdleSleepProblem(bindingId, "sleep", null);
+        return "not-claimed";
+      }
+      let looked = true;
+      try {
+        await this.inspectInto(bindingId, provider, credentials);
+      } catch {
+        looked = false;
+      }
+      const observed = this.deps.store.binding(bindingId)?.observation ?? null;
+      // Unread, it is asleep only on the provider's own answer to the request.
+      const asleep = looked
+        ? observed?.machine === "stopped" && observed.asleep
+        : failure === null;
+      if (asleep) {
+        this.setIdleSleepProblem(bindingId, "sleep", null);
+        return "asleep";
+      }
+      if (failure !== null) {
+        this.setIdleSleepProblem(
+          bindingId,
+          "sleep",
+          `When the host's idle time ended, ${nameOf(provider)} didn't put the machine to sleep: ${provider.describeError(failure).message}`
+        );
+      }
+      return "awake";
+    } finally {
+      this.idleSleeping.delete(bindingId);
+    }
+  }
+
+  /**
+   * Sends the machine's own idle timeout to its provider, turning its idle
+   * sleep on when `enable` (a person's pick), and keeps what the provider
+   * answered (#17916). One machine's sends never cross: a later one waits for
+   * the one before.
+   */
+  async setIdleTime(bindingId: string, idleSeconds: number, enable: boolean): Promise<void> {
+    const before = this.idleTimeWrites.get(bindingId) ?? Promise.resolve();
+    const write = before
+      .catch(() => {})
+      .then(() => this.writeIdleTime(bindingId, idleSeconds, enable));
+    this.idleTimeWrites.set(bindingId, write);
+    try {
+      await write;
+    } finally {
+      if (this.idleTimeWrites.get(bindingId) === write) this.idleTimeWrites.delete(bindingId);
+    }
+  }
+
+  /** Whether the machine's idle time is being sent to its provider now. */
+  idleTimeWriting(bindingId: string): boolean {
+    return this.idleTimeWrites.has(bindingId);
+  }
+
+  private async writeIdleTime(bindingId: string, idleSeconds: number, enable: boolean) {
+    const binding = this.deps.store.binding(bindingId);
+    if (this.disposed || !binding?.resourceId) return;
+    const resourceId = binding.resourceId;
+    const { provider, credentials } = await this.context(binding);
+    if (!canSleepIdle(provider)) return;
+    const ticket = this.ticket();
+    let resource: ProviderResource;
+    try {
+      resource = await provider.setIdleSleep(credentials, resourceId, idleSeconds, enable);
+    } catch (error) {
+      if (this.deps.store.binding(bindingId)?.resourceId === resourceId) {
+        this.setIdleSleepProblem(
+          bindingId,
+          "idle-time",
+          `${nameOf(provider)} didn't take the idle time: ${provider.describeError(error).message}`
+        );
+      }
+      throw this.deps.accounts.asAppError(provider, error);
+    }
+    if (
+      this.deps.store.binding(bindingId)?.resourceId !== resourceId ||
+      !this.stillRegistered(binding.providerId, provider)
+    ) {
+      return;
+    }
+    this.observe(bindingId, resource, ticket);
+    if (this.idleSleepProblems.get(bindingId)?.kind === "idle-time") {
+      this.setIdleSleepProblem(bindingId, "idle-time", null);
+    }
+  }
+
+  /** No start, stop, delete or removal under way that a sleep by idle time could cross. */
+  private idleSleepable(bindingId: string): boolean {
+    return (
+      !this.operations.has(bindingId) &&
+      !this.removing.has(bindingId) &&
+      !this.idleSleeping.has(bindingId)
+    );
+  }
+
+  private setIdleSleepProblem(
+    bindingId: string,
+    kind: "sleep" | "idle-time",
+    message: string | null
+  ): void {
+    const before = this.idleSleepProblems.get(bindingId);
+    if (message === null) {
+      if (before?.kind !== kind) return;
+      this.idleSleepProblems.delete(bindingId);
+    } else {
+      if (before?.kind === kind && before.message === message) return;
+      this.idleSleepProblems.set(bindingId, { kind, message });
+    }
+    this.deps.changed();
+  }
+
   // --- SSH access ----------------------------------------------------------
 
   /**
@@ -2461,6 +2658,13 @@ export class CloudHostLifecycle {
       }
       return found;
     };
+    // It is being put to sleep by its host's idle time: a dial now would wake it, or race it.
+    if (this.idleSleeping.has(bindingId)) {
+      throw new TransportError(
+        "The cloud machine is going to sleep",
+        "Daintree is putting the machine to sleep."
+      );
+    }
     let binding = current();
     if (!binding.resourceId) {
       // Retry is offered as Settings offers it; until then, the details say where setup is.
@@ -2490,8 +2694,11 @@ export class CloudHostLifecycle {
     binding = current();
     const { provider, credentials } = context;
     // A machine that sleeps by itself may have since a recent look, and a dial would wake it.
-    const freshFor =
-      lifetimeModelOf(provider).kind === "idle-sleep"
+    // One a device can put to sleep is looked at every time: a look answered just before
+    // its sleep began can arrive after, and read as fresh (#17916).
+    const freshFor = canSleepIdle(provider)
+      ? 0
+      : lifetimeModelOf(provider).kind === "idle-sleep"
         ? SLEEPER_DIAL_OBSERVATION_MS
         : DIAL_OBSERVATION_MS;
     const fresh = binding.observation && this.now() - binding.observation.observedAt < freshFor;
@@ -3774,6 +3981,7 @@ export class CloudHostLifecycle {
     this.admitted.delete(bindingId);
     this.idleAsked.delete(bindingId);
     this.idleUnsupported.delete(bindingId);
+    this.idleSleepProblems.delete(bindingId);
     void this.deps.machineKeys?.revokePending();
     await this.deps.files.forget(this.deps.clientDir, bindingId).catch(() => {});
   }

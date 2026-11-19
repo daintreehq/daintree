@@ -285,6 +285,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       client: client.client,
       sessionFor: usedSessionFor,
       holdHost: (hostId) => client.manager.hold(hostId),
+      onApplied: (hostId, settings) => client.idleSleep.settingsApplied(hostId, settings),
     })
   );
   const hostEntry = (hostId: string) =>
@@ -334,6 +335,12 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Reads its summaries, so it goes before them on teardown.
   teardowns.push(
     installIdleResourcePause({ registry: client.registry, sessionFor: client.sessionFor })
+  );
+  // A linked machine's host saying its idle time ended puts the machine to sleep (#17916).
+  teardowns.push(
+    getRemoteService("hostMetrics")?.onSummary((hostId) =>
+      client.idleSleep.summaryReceived(hostId)
+    ) ?? (() => {})
   );
   // Canopy reading a host the view isn't bound to, This Mac included.
   teardowns.push(

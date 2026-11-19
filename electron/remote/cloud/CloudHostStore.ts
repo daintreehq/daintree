@@ -167,6 +167,12 @@ export interface StoredCloudBinding {
   offeredHostKey: StoredHostKey | null;
   lastError: CloudHostError | null;
   createdAt: number;
+  /**
+   * The person picked the host's idle time here for an imported machine whose
+   * provider sleeps idle machines, so its own idle timeout follows the host's
+   * from then on (#17916). A machine Daintree created always follows it.
+   */
+  idleTimeChosen?: true;
 }
 
 /** Put on every machine a create asks for, naming its binding, so a lost answer is found again. */
@@ -632,6 +638,7 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
     offeredHostKey: readHostKey(value.offeredHostKey),
     lastError: readError(value.lastError),
     createdAt: num(value.createdAt) ?? 0,
+    ...(value.idleTimeChosen === true ? { idleTimeChosen: true as const } : {}),
   };
 }
 

@@ -240,6 +240,12 @@ export interface CloudProviderInfo {
    * provider implements, never from a declaration, so a plugin's is false.
    */
   hostIdleStop?: boolean;
+  /**
+   * This device puts a machine to sleep once its host's idle time ends while
+   * linked to it, and keeps the provider's own idle timer at the host's idle
+   * time: Agent 37's (#17916). Set by this device, like `hostIdleStop`.
+   */
+  sleepsWhenHostIdle?: boolean;
 }
 
 /**
@@ -708,6 +714,12 @@ export interface CloudHostStatus {
    * asked to stop it: a request to it would wake it, and it bills as stopped.
    */
   asleep: boolean;
+  /**
+   * The machine's own idle timeout follows its host's idle time: Daintree
+   * created it, or the person picked an idle time for it here (#17916). An
+   * imported machine keeps its own until then. Optional for snapshots from before it.
+   */
+  idleTimeFollowsHost?: boolean;
 }
 
 /**
