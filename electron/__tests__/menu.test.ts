@@ -2344,6 +2344,39 @@ describe("Finder Quick Action menu item (#11406)", () => {
 // #11409: a failed open must explain itself in plain language, name the folder,
 // and offer a way out — never hand the user simple-git's or GitService's
 // internal wording in a dead-end OK box.
+describe("Install Daintree Command Line Tool menu item (#17931)", () => {
+  const originalPlatform = process.platform;
+
+  function itemOn(platform: string): Electron.MenuItemConstructorOptions | undefined {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    capturedTemplate = [];
+    applicationMenu.installed = null;
+    createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+    return findMenuItem(capturedTemplate, "Terminal", "Install Daintree Command Line Tool");
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("is shown and actionable where it installs the command", () => {
+    for (const platform of ["darwin", "linux"]) {
+      const item = itemOn(platform);
+      expect(item, platform).toBeDefined();
+      expect(item!.visible, platform).not.toBe(false);
+      expect(item!.enabled, platform).not.toBe(false);
+    }
+  });
+
+  it("isn't shown on Windows, whose installer puts the command on PATH", () => {
+    expect(itemOn("win32")?.visible).toBe(false);
+  });
+});
+
 describe("handleDirectoryOpen failure dialogs", () => {
   const FOLDER = "/Volumes/Archive/repos/alpha";
 

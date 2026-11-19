@@ -671,6 +671,52 @@ function validateCanopyReaderModel(resourcesDir) {
 }
 exports.validateCanopyReaderModel = validateCanopyReaderModel;
 
+// The `daintree` command on Windows (#17931), relative to the install directory.
+// build/installer.nsh puts its folder on PATH and refuses to when the file is
+// missing, so the two must agree.
+const WINDOWS_CLI_SHIM = "bin/daintree.cmd";
+const WINDOWS_CLI_TEMPLATE = path.join(__dirname, "..", "build", "win", "daintree.cmd.in");
+exports.WINDOWS_CLI_SHIM = WINDOWS_CLI_SHIM;
+exports.WINDOWS_CLI_TEMPLATE = WINDOWS_CLI_TEMPLATE;
+
+/**
+ * The shim's text: the template with this build's version and executable
+ * filled in, CRLF throughout. The repo checks text out LF, and cmd.exe can
+ * misread labels in an LF-only batch file. Both values land in batch source
+ * unquoted or inside quotes, so anything a batch parser treats as syntax is
+ * refused rather than escaped.
+ */
+function renderWindowsCliShim(template, { version, executable }) {
+  if (typeof version !== "string" || !/^[0-9A-Za-z.+-]+$/.test(version)) {
+    throw new Error(
+      `[afterPack] CRITICAL: can't write version ${JSON.stringify(version)} into daintree.cmd`
+    );
+  }
+  if (typeof executable !== "string" || !/^[0-9A-Za-z._ -]+\.exe$/i.test(executable)) {
+    throw new Error(
+      `[afterPack] CRITICAL: can't write executable ${JSON.stringify(executable)} into daintree.cmd`
+    );
+  }
+  const text = template.replaceAll("@VERSION@", version).replaceAll("@EXE@", executable);
+  const unfilled = text.match(/@[A-Z]+@/);
+  if (unfilled) {
+    throw new Error(`[afterPack] CRITICAL: daintree.cmd template has no value for ${unfilled[0]}`);
+  }
+  return text.replace(/\r?\n/g, "\r\n");
+}
+exports.renderWindowsCliShim = renderWindowsCliShim;
+
+function writeWindowsCliShim(appOutDir, packager) {
+  const text = renderWindowsCliShim(fs.readFileSync(WINDOWS_CLI_TEMPLATE, "utf8"), {
+    version: packager.appInfo.version,
+    executable: `${packager.appInfo.productFilename}.exe`,
+  });
+  const shimPath = path.join(appOutDir, ...WINDOWS_CLI_SHIM.split("/"));
+  fs.mkdirSync(path.dirname(shimPath), { recursive: true });
+  fs.writeFileSync(shimPath, text);
+  console.log(`[afterPack] daintree command written: ${shimPath}`);
+}
+
 function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
   if (electronPlatformName === "darwin") {
     return path.join(appOutDir, `${appName}.app`, "Contents/Resources/app.asar.unpacked");
@@ -836,6 +882,10 @@ exports.default = async function afterPack(context) {
         )} package on ${process.arch} runner`
       );
     }
+
+    // Lands in the AppX package too, where nothing puts it on PATH: the NSIS and
+    // appx targets share this appOutDir.
+    writeWindowsCliShim(appOutDir, packager);
   } else {
     // macOS and Linux use pty.node
     const nativeBinaryPath = path.join(nodePtyPath, "build/Release/pty.node");
