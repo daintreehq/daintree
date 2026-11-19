@@ -346,6 +346,7 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
   /** `keepConversation` for a principal that ended, never one that aged out or was crowded out. */
   const retire = (senderId: string, helpSessionId: string, keepConversation = false): void => {
     const held = principals.get(senderId);
+    const record = held?.get(helpSessionId);
     held?.delete(helpSessionId);
     if (held?.size === 0) principals.delete(senderId);
     // Its watches go with its hold: a Shell still following one hears they are gone,
@@ -361,6 +362,9 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     } catch (error) {
       logger.warn("Couldn't retire a relay principal", { error });
     }
+    if (record?.conversationId !== undefined) {
+      leaveConversation(senderId, record.conversationId, record.usedAt, keepConversation);
+    }
   };
   const forgetConversation = (senderId: string, conversationId: string): void => {
     const asleep = dormant.get(senderId);
@@ -373,41 +377,57 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     }
   };
   /**
-   * A caller that ended keeps what its conversation made for that conversation
-   * resumed, within the hold it would have had (#17919). Another of the
-   * sender's principals still on that conversation keeps it anyway, and is
-   * what decides when it goes.
+   * A principal is off a conversation (#17919): retired, or on to another.
+   * Another of the sender's principals still on it keeps it, and decides when
+   * it goes. Otherwise one that ended keeps it for the conversation resumed,
+   * within the day from its last call its own hold would have had; any other
+   * way off it, nothing does.
    */
-  const retireEnded = (
+  const leaveConversation = (
     senderId: string,
-    helpSessionId: string,
-    record: { usedAt: number; conversationId?: string }
+    conversationId: string,
+    usedAt: number,
+    ended: boolean
   ): void => {
-    const { conversationId } = record;
-    const fresh = record.usedAt >= now() - RELAY_PRINCIPAL_RETENTION_MS;
-    retire(senderId, helpSessionId, conversationId !== undefined && fresh);
-    if (conversationId === undefined || !fresh) return;
     const shared = [...(principals.get(senderId)?.values() ?? [])].some(
       (other) => other.conversationId === conversationId
     );
     if (shared) return;
+    if (!ended || usedAt < now() - RELAY_PRINCIPAL_RETENTION_MS) {
+      forgetConversation(senderId, conversationId);
+      return;
+    }
     let asleep = dormant.get(senderId);
     if (!asleep) {
       asleep = new Map();
       dormant.set(senderId, asleep);
     }
-    asleep.delete(conversationId);
-    asleep.set(conversationId, { usedAt: record.usedAt });
+    asleep.set(conversationId, {
+      usedAt: Math.max(usedAt, asleep.get(conversationId)?.usedAt ?? 0),
+    });
     boundPrincipals(senderId);
   };
+  const retireEnded = (
+    senderId: string,
+    helpSessionId: string,
+    record: { usedAt: number; conversationId?: string }
+  ): void =>
+    retire(
+      senderId,
+      helpSessionId,
+      record.conversationId !== undefined && record.usedAt >= now() - RELAY_PRINCIPAL_RETENTION_MS
+    );
   /**
    * Holds a sender to its bound, ended conversations counted with live holds:
-   * the least recent ended conversation goes first, then the least recent
-   * principal not in use.
+   * the ended conversation whose last call is oldest goes first, then the least
+   * recent principal not in use.
    */
   const boundPrincipals = (senderId: string): void => {
     const size = () => (principals.get(senderId)?.size ?? 0) + (dormant.get(senderId)?.size ?? 0);
-    for (const conversationId of [...(dormant.get(senderId)?.keys() ?? [])]) {
+    const asleep = [...(dormant.get(senderId)?.entries() ?? [])].sort(
+      ([, a], [, b]) => a.usedAt - b.usedAt
+    );
+    for (const [conversationId] of asleep) {
       if (size() <= RELAY_PRINCIPALS_PER_SENDER) return;
       forgetConversation(senderId, conversationId);
     }
@@ -429,14 +449,24 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     }
     const record = held.get(helpSessionId) ?? { usedAt: now(), running: 0 };
     held.delete(helpSessionId);
+    const lastUsedAt = record.usedAt;
     record.usedAt = now();
     record.running += 1;
-    if (conversationId !== undefined) {
+    if (conversationId !== undefined && record.conversationId !== conversationId) {
+      const left = record.conversationId;
       record.conversationId = conversationId;
-      // Resumed: it is a live hold's again, no longer an ended one's.
-      const asleep = dormant.get(senderId);
-      asleep?.delete(conversationId);
-      if (asleep?.size === 0) dormant.delete(senderId);
+      // On to another conversation: the one it leaves is no longer its.
+      if (left !== undefined) leaveConversation(senderId, left, lastUsedAt, false);
+      // Resumed: an ended conversation's again, unless its day ran out first.
+      const asleep = dormant.get(senderId)?.get(conversationId);
+      if (asleep !== undefined) {
+        if (asleep.usedAt < now() - RELAY_PRINCIPAL_RETENTION_MS) {
+          forgetConversation(senderId, conversationId);
+        } else {
+          dormant.get(senderId)!.delete(conversationId);
+          if (dormant.get(senderId)!.size === 0) dormant.delete(senderId);
+        }
+      }
     }
     held.set(helpSessionId, record);
     boundPrincipals(senderId);

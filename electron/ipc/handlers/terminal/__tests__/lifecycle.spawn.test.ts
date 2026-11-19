@@ -272,7 +272,7 @@ const mockRecordLaneLaunchForToken = vi.hoisted(() =>
     (
       token: string,
       agentSessionId?: string,
-      options?: { freshConversation?: true }
+      options?: { freshConversation?: true; forkedConversation?: true }
     ) => Promise<void>
   >(() => Promise.resolve())
 );
@@ -3199,31 +3199,37 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     });
   });
 
-  it("records a launch that forks the conversation it reopens as a fresh one (#17919)", async () => {
-    const SESSION = "11111111-2222-3333-4444-555555555555";
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+  it.each([
+    ["bare", "--fork-session"],
+    ["quoted", "'--fork-session'"],
+  ])(
+    "records a launch that forks the conversation it reopens as forked, its flag %s (#17919)",
+    async (_form, flag) => {
+      const SESSION = "11111111-2222-3333-4444-555555555555";
+      mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
 
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
 
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: `claude --resume ${SESSION} --fork-session`,
-        launchAgentId: "claude",
-        agentSessionId: SESSION,
-        env: { DAINTREE_MCP_TOKEN: "help-token" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
+      const handler = getSpawnHandler();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command: `claude --resume ${SESSION} ${flag}`,
+          launchAgentId: "claude",
+          agentSessionId: SESSION,
+          env: { DAINTREE_MCP_TOKEN: "help-token" },
+        } as unknown as Parameters<typeof handler>[1]
+      );
 
-    expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith("help-token", SESSION, {
-      freshConversation: true,
-    });
-  });
+      expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith("help-token", SESSION, {
+        forkedConversation: true,
+      });
+    }
+  );
 
   it("does not record a lane pointer for a non-help launch (#13205)", async () => {
     mockValidateToken.mockReturnValue(false);

@@ -2037,19 +2037,24 @@ export class HelpSessionService {
   recordLaneLaunchForToken(
     token: string,
     agentSessionId?: string,
-    options?: { freshConversation?: true }
+    options?: { freshConversation?: true; forkedConversation?: true }
   ): Promise<void> {
     if (!token || !this.pendingHibernationStore) return Promise.resolve();
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return Promise.resolve();
     if (!getEffectiveAgentConfig(record.agentId)?.resume) return Promise.resolve();
     const slotKey = assistantSlotKey(record.projectId, record.slot);
-    const conversationOwnershipId = this.laneConversationFor(
-      slotKey,
-      record.agentId,
-      agentSessionId ?? "",
-      options?.freshConversation === true
-    );
+    // A fork runs a conversation its id names nothing of: what it launches is
+    // its bearer's alone, and the one it forked from stays the lane's previous.
+    const conversationOwnershipId =
+      options?.forkedConversation === true
+        ? this.parkLaneConversation(slotKey)
+        : this.laneConversationFor(
+            slotKey,
+            record.agentId,
+            agentSessionId ?? "",
+            options?.freshConversation === true
+          );
     record.agentSessionId = agentSessionId || undefined;
     record.conversationOwnershipId = conversationOwnershipId;
     this.bumpLaneRevision(slotKey);
@@ -2060,14 +2065,29 @@ export class HelpSessionService {
       agentSessionId: agentSessionId ?? "",
       cwd: record.sessionPath,
       capturedAt: Date.now(),
-      conversationOwnershipId,
+      ...(conversationOwnershipId !== undefined ? { conversationOwnershipId } : {}),
     });
-    try {
-      this.conversationOwnership?.bind(record.sessionId, conversationOwnershipId);
-    } catch (err) {
-      console.warn("[HelpSessionService] Binding a conversation's ownership failed:", err);
+    if (conversationOwnershipId !== undefined) {
+      try {
+        this.conversationOwnership?.bind(record.sessionId, conversationOwnershipId);
+      } catch (err) {
+        console.warn("[HelpSessionService] Binding a conversation's ownership failed:", err);
+      }
     }
     return written;
+  }
+
+  /** Keep the conversation the lane points at as its previous one, giving the launch none. */
+  private parkLaneConversation(slotKey: string): undefined {
+    const entry = this.pendingHibernationStore?.get(slotKey) ?? null;
+    if (entry?.conversationOwnershipId) {
+      this.setPreviousConversation(slotKey, {
+        agentId: entry.agentId,
+        agentSessionId: entry.agentSessionId,
+        conversationOwnershipId: entry.conversationOwnershipId,
+      });
+    }
+    return undefined;
   }
 
   /**

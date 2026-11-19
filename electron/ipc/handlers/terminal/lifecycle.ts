@@ -195,7 +195,7 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
  * another conversation, whatever id it was resumed by (#17919).
  */
 function forksClaudeConversation(command: string, agentId: string | undefined): boolean {
-  return agentId === "claude" && /(?:^|\s)--fork-session(?:[\s=]|$)/.test(command);
+  return agentId === "claude" && /(?:^|\s)["']?--fork-session(?:["'\s=]|$)/.test(command);
 }
 
 function isBoundHelpTerminal(terminalId: string): boolean {
@@ -1666,16 +1666,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // (#13205). Memory-first, so it is current before any later capture.
       // The PTY is already up, so a failure here must not fail the spawn.
       if (isHelpLaunch) {
-        // Nor can main count a launch as the same conversation when the
-        // Windows launch script may still start one fresh under its id, or the
-        // CLI forks the one it reopens into a new one (#17919).
-        startsFreshConversation ||=
-          windowsClaudeResume !== undefined || forksClaudeConversation(safeCommand, launchAgentId);
+        // A launch that forks the conversation it reopens runs a new one its id
+        // doesn't name (#17919).
+        const laneLaunch = forksClaudeConversation(safeCommand, launchAgentId)
+          ? ({ forkedConversation: true } as const)
+          : startsFreshConversation
+            ? ({ freshConversation: true } as const)
+            : undefined;
         try {
-          (startsFreshConversation
-            ? helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId, {
-                freshConversation: true,
-              })
+          (laneLaunch
+            ? helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId, laneLaunch)
             : helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
           ).catch((err) => {
             console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);

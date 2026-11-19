@@ -4066,9 +4066,33 @@ describe("HelpSessionService", () => {
 
           await service.noteQuitCapture(lanes.get("term-1")!, "conv-2");
 
+          expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("conv-2");
           expect(ownershipOfLane()).toBeUndefined();
           await launchLane("term-2", "conv-1");
           expect(ownershipOfLane()).toBe(id);
+        });
+
+        it("gives a fork no ownership of its own and keeps the conversation it forked from", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+
+          const fork = await service.provisionSession(provisionInput());
+          if (!fork) throw new Error("expected provision");
+          expect(service.markTerminalForToken(fork.token, "term-2")).toBe(true);
+          listener.bind.mockClear();
+          await service.recordLaneLaunchForToken(fork.token, "conv-1", {
+            forkedConversation: true,
+          });
+
+          expect(ownershipOfLane()).toBeUndefined();
+          expect(service.getConversationOwnershipId(fork.sessionId)).toBeNull();
+          expect(listener.bind).not.toHaveBeenCalled();
+          await service.revokeSession(fork.sessionId);
+          // The conversation it forked from, resumed, is still its own.
+          await launchLane("term-3", "conv-1");
+          expect(ownershipOfLane()).toBe(id);
+          expect(listener.forget).not.toHaveBeenCalled();
         });
 
         it("keeps the lane's id private to main", async () => {
