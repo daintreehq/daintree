@@ -399,9 +399,9 @@ describe("idleEndSentence (#17921)", () => {
     // The host's word that it stops the machine itself settles it.
     expect(idleEndSentence(armed, BOAT_PROVIDER, refused, { kind: "stops" })).toBeNull();
     // A reason with no closing stop still reads as two sentences.
-    expect(
-      idleEndSentence(idle, BOAT_PROVIDER, "It can't stop itself", { kind: "stops" })
-    ).toMatch(/^It can't stop itself\. While this device/);
+    expect(idleEndSentence(idle, BOAT_PROVIDER, "It can't stop itself", { kind: "stops" })).toMatch(
+      /^It can't stop itself\. While this device/
+    );
   });
 
   it("says why a machine can't stop itself, then why this device doesn't either, or the reason alone (#17924)", () => {

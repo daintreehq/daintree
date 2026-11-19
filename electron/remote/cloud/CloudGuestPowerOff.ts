@@ -274,7 +274,8 @@ export class CloudGuestPowerOff {
     }
     // Only the host's word that it is this machine and that only its OS refused: never a mismatch,
     // a metadata server it couldn't read, another OS, or a host from before it said so.
-    const standIn = !status.armed && status.problem !== null && status.powerOffProbeRefused === true;
+    const standIn =
+      !status.armed && status.problem !== null && status.powerOffProbeRefused === true;
     this.setStandIn(bindingId, standIn ? session : null);
     this.setProblem(
       bindingId,

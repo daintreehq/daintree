@@ -3350,7 +3350,8 @@ export class CloudHostLifecycle {
     if (persistence.stoppedComputeBilled || persistence.retentionDays === 0) return null;
     const keys = provider.machineKeys !== undefined;
     const guest = typeof provider.checkGuestPowerOff === "function";
-    if (cloudProviderNamespace(provider.id)?.kind === "plugin") return keys || guest ? null : "plugin";
+    if (cloudProviderNamespace(provider.id)?.kind === "plugin")
+      return keys || guest ? null : "plugin";
     if (keys) return this.deps.machineKeys?.standsInFor(binding.id) ? "stand-in" : null;
     if (guest) return this.deps.guestPowerOff?.standsInFor(binding.id) ? "stand-in" : null;
     return null;

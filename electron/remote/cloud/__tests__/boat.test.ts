@@ -662,9 +662,9 @@ describe("machine keys (#17361)", () => {
   it("sends an idle stop from the desktop once, where a person's stop retries (#17924)", async () => {
     const idle = clientWith([jsonResponse(429, { message: "slow down" })]);
     const provider = new BoatProvider(() => idle.client);
-    await expect(
-      provider.stop(credentials, "bx_23456789", { once: true })
-    ).rejects.toMatchObject({ kind: "rate-limited" });
+    await expect(provider.stop(credentials, "bx_23456789", { once: true })).rejects.toMatchObject({
+      kind: "rate-limited",
+    });
     expect(idle.fetch).toHaveBeenCalledTimes(1);
 
     const person = clientWith([

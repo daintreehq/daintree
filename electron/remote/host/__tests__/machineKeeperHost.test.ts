@@ -451,9 +451,9 @@ describe("the claim a Shell makes standing in for a refused self-stop (#17924)",
   it("takes no payload", async () => {
     const host = make();
     await host.idleOut();
-    await expect(host.link().call(LinkMethod.CLAIM_IDLE_STAND_IN, { owner: "keeper" })).rejects.toThrow(
-      "VALIDATION"
-    );
+    await expect(
+      host.link().call(LinkMethod.CLAIM_IDLE_STAND_IN, { owner: "keeper" })
+    ).rejects.toThrow("VALIDATION");
   });
 });
 

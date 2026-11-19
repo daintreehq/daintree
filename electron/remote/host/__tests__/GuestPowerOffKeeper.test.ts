@@ -462,7 +462,9 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     unreadable.tracker.dispose();
 
     const otherOs = make();
-    otherOs.system.unsupported.mockReturnValue("Only a Linux machine can power itself off when idle.");
+    otherOs.system.unsupported.mockReturnValue(
+      "Only a Linux machine can power itself off when idle."
+    );
     expect(await said(otherOs)).toBe(false);
     otherOs.keeper.dispose();
     otherOs.tracker.dispose();

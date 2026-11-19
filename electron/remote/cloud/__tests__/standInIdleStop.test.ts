@@ -230,9 +230,10 @@ function provider(kind: Kind) {
     secret: `boat_live_machinesecret${issue.mock.calls.length}`,
     expiresAt: Date.now() + MACHINE_KEY_TTL_DAYS * DAY,
   }));
-  const check = vi.fn(
-    async (): Promise<GuestPowerOffCheck> => ({ eligible: true, target: TARGET })
-  );
+  const check = vi.fn(async (): Promise<GuestPowerOffCheck> => ({
+    eligible: true,
+    target: TARGET,
+  }));
   const stop = vi.fn(async (_credentials: unknown, _resourceId: string, _options?: unknown) => {
     world.machine = resource(kind, { machine: "stopped", rawState: "stopped" });
     return resource(kind, { machine: "stopping", rawState: "stopping" });

@@ -723,9 +723,7 @@ describe("AwsClient", () => {
         `<StopInstancesResponse><instancesSet><item><currentState><name>stopping</name></currentState></item></instancesSet></StopInstancesResponse>`
       ),
     ]);
-    await expect(person.client.stopInstance(ctx, "i-0aaaaaaaaaaaaaaa1")).resolves.toBe(
-      "stopping"
-    );
+    await expect(person.client.stopInstance(ctx, "i-0aaaaaaaaaaaaaaa1")).resolves.toBe("stopping");
     expect(person.seen).toEqual(["StopInstances", "StopInstances"]);
   });
 
