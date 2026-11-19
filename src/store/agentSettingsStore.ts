@@ -101,6 +101,12 @@ interface AgentSettingsActions {
   addAccount: (request: AddAgentAccountRequest) => Promise<AgentAccount>;
   /** Forget an account and every choice that named it. Its folder stays. */
   removeAccount: (agentId: string, accountId: string) => Promise<void>;
+  /**
+   * Rename a saved account, or with `accountId` null name the default login
+   * (#17080); an empty name clears the default login's. Saved by id in main,
+   * never as a list this view holds, so another view's add or remove stands.
+   */
+  renameAccount: (agentId: string, accountId: string | null, name: string) => Promise<void>;
   reset: (agentId?: string) => Promise<void>;
 }
 
@@ -471,6 +477,14 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     ++normalizeEpoch;
     const heardAtStart = savedChangesHeard;
     const settings = await agentSettingsClient.removeAccount(agentId, accountId);
+    const next = settleWrite(normalizeSaved(settings), heardAtStart);
+    if (next) set({ settings: next });
+  },
+
+  renameAccount: async (agentId: string, accountId: string | null, name: string) => {
+    ++normalizeEpoch;
+    const heardAtStart = savedChangesHeard;
+    const settings = await agentSettingsClient.renameAccount(agentId, accountId, name);
     const next = settleWrite(normalizeSaved(settings), heardAtStart);
     if (next) set({ settings: next });
   },

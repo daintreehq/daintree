@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   accountFolderName,
+  defaultLoginLabel,
+  defaultLoginPhrase,
   isUsableAccountFolder,
   keepPaneAccount,
   paneAccountEnv,
@@ -29,6 +31,22 @@ describe("sanitizeAgentAccounts", () => {
       { id: "f", name: "Windows", configDir: "C:\\Users\\me\\.codex-f" },
     ]);
     expect(sanitizeAgentAccounts({ not: "an array" })).toEqual([]);
+  });
+});
+
+describe("defaultLoginLabel and defaultLoginPhrase (#17080)", () => {
+  it("falls back to the default login when no usable name is saved", () => {
+    for (const name of [undefined, null, "", "   ", "\u0000\n\t", 42, { name: "Work" }]) {
+      expect(defaultLoginLabel(name)).toBe("Default login");
+      expect(defaultLoginPhrase(name)).toBe("the default login");
+    }
+  });
+
+  it("keeps the default login beside the name, as an account name is cleaned", () => {
+    expect(defaultLoginLabel("  Work\u0007ChatGPT  ")).toBe("Work ChatGPT · default login");
+    expect(defaultLoginPhrase("Work")).toBe("Work (the default login)");
+    const long = "x".repeat(80);
+    expect(defaultLoginLabel(long)).toBe(`${"x".repeat(60)} · default login`);
   });
 });
 

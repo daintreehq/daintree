@@ -39,6 +39,22 @@ export function sanitizeAccountName(value: unknown): string | undefined {
   return name ? name.slice(0, ACCOUNT_NAME_MAX_CHARS) : undefined;
 }
 
+/**
+ * How the default login reads among an agent's logins (#17080): the name the
+ * user gave it, with "default login" kept beside it so nobody takes it for a
+ * saved account, else "Default login".
+ */
+export function defaultLoginLabel(name: unknown): string {
+  const safe = sanitizeAccountName(name);
+  return safe ? `${safe} · default login` : "Default login";
+}
+
+/** The default login inside a sentence: "on Work (the default login)". */
+export function defaultLoginPhrase(name: unknown): string {
+  const safe = sanitizeAccountName(name);
+  return safe ? `${safe} (the default login)` : "the default login";
+}
+
 /** The saved accounts that are well formed, first of each id. Never throws. */
 export function sanitizeAgentAccounts(value: unknown): AgentAccount[] {
   if (!Array.isArray(value)) return [];

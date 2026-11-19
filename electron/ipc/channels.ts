@@ -1522,6 +1522,7 @@ export const CHANNELS = {
   // An agent's accounts (#16040)
   AGENT_ACCOUNTS_ADD: "agent-accounts:add",
   AGENT_ACCOUNTS_REMOVE: "agent-accounts:remove",
+  AGENT_ACCOUNTS_RENAME: "agent-accounts:rename",
 
   // Every copy of an agent's CLI, read when its settings page is open (#16409)
   AGENT_CLI_COPIES_LIST: "agent-cli-copies:list",

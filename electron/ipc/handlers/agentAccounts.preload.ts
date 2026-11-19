@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const AGENT_ACCOUNTS_METHOD_CHANNELS = {
   add: "agent-accounts:add",
   remove: "agent-accounts:remove",
+  rename: "agent-accounts:rename",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof AGENT_ACCOUNTS_METHOD_CHANNELS;

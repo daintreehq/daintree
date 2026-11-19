@@ -81,6 +81,12 @@ export const agentSettingsClient = {
     return window.electron.agentAccounts.remove(agentId, accountId).finally(invalidate);
   },
 
+  /** Rename a saved account, or with `accountId` null the default login (#17080). */
+  renameAccount: (agentId: string, accountId: string | null, name: string): Promise<AgentSettings> => {
+    invalidate();
+    return window.electron.agentAccounts.rename(agentId, accountId, name).finally(invalidate);
+  },
+
   stampVersion: (version: number): Promise<Record<string, unknown>> => {
     invalidate();
     return window.electron.agentSettings.stampVersion(version).finally(invalidate);

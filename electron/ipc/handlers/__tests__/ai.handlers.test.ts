@@ -415,6 +415,24 @@ describe("ai handler payload validation", () => {
     expect(result.agents.claude).toEqual({ customFlags: "--new" });
   });
 
+  it("saves the default login's name clean, and drops one with nothing left (#17080)", async () => {
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) =>
+      key === "agentSettings" ? { agents: { codex: { defaultLoginName: "Work" } } } : defaultValue
+    );
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET);
+
+    await handler(
+      {} as never,
+      { agentType: "codex", settings: { defaultLoginName: "  Home\u0007Lab " } } as never
+    );
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", {
+      codex: { defaultLoginName: "Home Lab" },
+    });
+
+    await handler({} as never, { agentType: "codex", settings: { defaultLoginName: 7 } } as never);
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", { codex: {} });
+  });
+
   it("trims AGENT_SETTINGS_RESET agentType and blocks reserved values after trimming", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
 

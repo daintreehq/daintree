@@ -169,6 +169,13 @@ export interface AgentSettingsEntry {
    */
   accounts?: AgentAccount[];
   /**
+   * A name the user gave the CLI's own default login (#17080), shown beside
+   * "default login" wherever that login is offered. Display only: a launch on
+   * the default login still sets no account folder. Host-local, like
+   * `accounts`, since each machine's default login is its own.
+   */
+  defaultLoginName?: string;
+  /**
    * Agent-level default account; absent launches on the CLI's default login.
    * A preset's own pinned account wins over it (#16133).
    */

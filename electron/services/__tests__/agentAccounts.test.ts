@@ -27,7 +27,7 @@ vi.mock("../../store.js", () => ({ store: fakeStore }));
 const broadcastMock = vi.hoisted(() => vi.fn());
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
 
-import { addAgentAccount, removeAgentAccount } from "../agentAccounts.js";
+import { addAgentAccount, removeAgentAccount, renameAgentAccount } from "../agentAccounts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 
 let home: string;
@@ -200,5 +200,94 @@ describe("removeAgentAccount (#16040)", () => {
       { id: "plain", name: "Plain" },
       { id: "review", name: "Review" },
     ]);
+  });
+});
+
+describe("renameAgentAccount (#17080)", () => {
+  it("names the default login, cleaned as an account name is, and clears it on an empty name", () => {
+    renameAgentAccount("codex", null, "  Work\nChatGPT  ");
+    expect(savedCodex()).toEqual({ presetId: "keep-me", defaultLoginName: "Work ChatGPT" });
+    expect(broadcastMock).toHaveBeenCalledWith(
+      CHANNELS.AGENT_SETTINGS_CHANGED,
+      fakeStore.dump().agentSettings
+    );
+
+    const settings = renameAgentAccount("codex", null, "   ");
+    expect(savedCodex()).toEqual({ presetId: "keep-me" });
+    expect(settings.agents.codex).toEqual(savedCodex());
+  });
+
+  it("renames a saved account in place, and every choice that named it keeps naming it", async () => {
+    const { account } = await addAgentAccount({
+      agentId: "codex",
+      name: "Company",
+      folder: { kind: "create" },
+    });
+    const other = await addAgentAccount({
+      agentId: "codex",
+      name: "Personal",
+      folder: { kind: "create" },
+    });
+    fakeStore.set("agentSettings.agents", {
+      codex: {
+        ...savedCodex(),
+        accountId: account.id,
+        worktreeAccounts: { wt1: account.id },
+        customPresets: [{ id: "work", name: "Work", accountId: account.id }],
+      },
+    });
+
+    renameAgentAccount("codex", account.id, "Acme");
+
+    expect(savedCodex()).toEqual({
+      presetId: "keep-me",
+      accounts: [{ ...account, name: "Acme" }, other.account],
+      accountId: account.id,
+      worktreeAccounts: { wt1: account.id },
+      customPresets: [{ id: "work", name: "Work", accountId: account.id }],
+    });
+  });
+
+  it("reads the saved accounts when it runs, so another view's add and remove stand", async () => {
+    const { account } = await addAgentAccount({
+      agentId: "codex",
+      name: "Company",
+      folder: { kind: "create" },
+    });
+    const personal = await addAgentAccount({
+      agentId: "codex",
+      name: "Personal",
+      folder: { kind: "create" },
+    });
+    // Another view removes Company and adds Lab after this one opened the rename.
+    removeAgentAccount("codex", account.id);
+    const lab = await addAgentAccount({ agentId: "codex", name: "Lab", folder: { kind: "create" } });
+
+    renameAgentAccount("codex", personal.account.id, "Home");
+    expect(savedCodex().accounts).toEqual([{ ...personal.account, name: "Home" }, lab.account]);
+
+    broadcastMock.mockClear();
+    const before = structuredClone(savedCodex());
+    expect(() => renameAgentAccount("codex", account.id, "Back")).toThrow(/isn't saved/);
+    expect(savedCodex()).toEqual(before);
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a blank name for a saved account, a missing name, and an agent with no folder account", async () => {
+    const { account } = await addAgentAccount({
+      agentId: "codex",
+      name: "Company",
+      folder: { kind: "create" },
+    });
+    broadcastMock.mockClear();
+    const before = structuredClone(savedCodex());
+
+    expect(() => renameAgentAccount("codex", account.id, " \t ")).toThrow(/Give the account a name/);
+    expect(() => renameAgentAccount("codex", null, undefined)).toThrow(/Invalid account name/);
+    expect(() => renameAgentAccount("codex", "bad id", "Work")).toThrow(/Invalid account/);
+    expect(() => renameAgentAccount("cursor", null, "Work")).toThrow(/no accounts/);
+    expect(() => renameAgentAccount("__proto__", null, "Work")).toThrow(/Invalid agent/);
+    expect(savedCodex()).toEqual(before);
+    expect(broadcastMock).not.toHaveBeenCalled();
   });
 });

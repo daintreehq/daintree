@@ -36,6 +36,7 @@ export const CHANNEL_LEASE_POLICY = {
   // Host-wide agent settings, like `agent-settings:set` (#16040).
   "agent-accounts:add": "free",
   "agent-accounts:remove": "free",
+  "agent-accounts:rename": "free",
   "agent-cli-copies:changed": "free",
   "agent-cli-copies:choose": "free",
   "agent-cli-copies:list": "free",

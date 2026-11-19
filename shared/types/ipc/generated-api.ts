@@ -20,6 +20,9 @@ export interface GeneratedElectronAPI {
     remove(
       ...args: IpcInvokeMap["agent-accounts:remove"]["args"]
     ): Promise<IpcInvokeMap["agent-accounts:remove"]["result"]>;
+    rename(
+      ...args: IpcInvokeMap["agent-accounts:rename"]["args"]
+    ): Promise<IpcInvokeMap["agent-accounts:rename"]["result"]>;
   };
   agentCapabilities: {
     getAgentIds(

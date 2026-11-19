@@ -16,6 +16,10 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string, accountId: string];
     result: import("../agentSettings.js").AgentSettings;
   };
+  "agent-accounts:rename": {
+    args: [agentId: string, accountId: string | null, name: string];
+    result: import("../agentSettings.js").AgentSettings;
+  };
   "agent-capabilities:get-agent-ids": {
     args: [];
     result: string[];

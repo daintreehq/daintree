@@ -8,6 +8,7 @@ import {
   type UserAgentConfig,
 } from "../../../shared/types/index.js";
 import { isResumeOnRestart, type ResumeOnRestart } from "../../../shared/types/agentSettings.js";
+import { sanitizeAccountName } from "../../../shared/utils/agentAccounts.js";
 import { AgentHelpService } from "../../services/AgentHelpService.js";
 import { UserAgentRegistryService } from "../../services/UserAgentRegistryService.js";
 import type { AgentHelpRequest, AgentHelpResult } from "../../../shared/types/ipc/agent.js";
@@ -106,6 +107,13 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
       pinned: _p,
       ...safeEntry
     } = merged as Record<string, unknown>;
+    // The default login's name (#17080) is saved as clean as a rename saves it,
+    // whoever writes it here.
+    if ("defaultLoginName" in safeEntry) {
+      const name = sanitizeAccountName(safeEntry.defaultLoginName);
+      if (name) safeEntry.defaultLoginName = name;
+      else delete safeEntry.defaultLoginName;
+    }
     const updatedAgents = {
       ...currentSettings.agents,
       [safeAgentType]: safeEntry,
