@@ -675,7 +675,12 @@ export function stopScript(
   const live = `for q in $(pgrep -u "$(id -u)" -x ${name} 2>/dev/null) $lp; do if kill -0 "$q" 2>/dev/null && ${notZombieShell("q")}; then return 0; fi; done; return 1`;
   const stopLaunch =
     launch === "stop" ? `if [ -n "$lp" ]; then ${stopLaunchShell("lp")}; fi; ` : "";
-  return `${unitStop}${DETACHED_LAUNCH_READ}; alive() { ${live}; }; ${stopLaunch}if ${running}; then ${signalIt}; fi; i=0; while alive && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if alive; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
+  // One signal each: a second SIGTERM soon after the first makes Daintree exit at once.
+  const signalRest =
+    launch === "stop"
+      ? `if [ -z "$lp" ] && ${running}; then ${signalIt}; fi`
+      : `if ${running}; then ${signalIt}; fi`;
+  return `${unitStop}${DETACHED_LAUNCH_READ}; alive() { ${live}; }; ${stopLaunch}${signalRest}; i=0; while alive && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if alive; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
 }
 
 /**

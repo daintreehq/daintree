@@ -738,7 +738,10 @@ describe("runHostInstall", () => {
         /Host mode didn't come back/
       );
       const rolledAt = shell.scripts.findIndex((s) => s.includes("@@dt:rolledback"));
-      expect(shell.scripts[rolledAt - 1]).toContain(`kill -TERM "$lp"`);
+      const recoveryStop = shell.scripts[rolledAt - 1]!;
+      expect(recoveryStop).toContain(`kill -TERM "$lp"`);
+      // Signalled once: by name only when no start of its own is known.
+      expect(recoveryStop).toContain(`if [ -z "$lp" ] && pgrep`);
       // The new build started, then the old one again.
       expect(starts(shell.scripts)).toHaveLength(2);
       const lastStart = shell.scripts.reduce(

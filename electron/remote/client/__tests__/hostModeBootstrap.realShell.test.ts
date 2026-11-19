@@ -203,6 +203,23 @@ describe.skipIf(process.platform !== "linux")("the detached Host start under a r
     await until(() => !alive(runtime.pid), "its runtime to go");
   });
 
+  it("counts a start that handed over to a Daintree already running as still under way", async () => {
+    // A Daintree already running there, which the new start hands its request to.
+    const daintree = path.join(home, "bin", "daintree");
+    fs.copyFileSync(fs.realpathSync("/bin/sleep"), daintree);
+    fs.chmodSync(daintree, 0o755);
+    const running = spawn(daintree, ["600"], { stdio: "ignore" });
+    started.add(running.pid!);
+    // The start itself exits at once, as a second instance does once it has handed over.
+    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const handedOver = launch();
+    await until(() => !alive(handedOver.pid), "the start to hand over and exit");
+    expect(parseDetachedAlive(sh(detachedAliveScript(handedOver)).stdout)).toBe(true);
+    running.kill("SIGKILL");
+    await until(() => !alive(running.pid!), "the running Daintree to go");
+    expect(parseDetachedAlive(sh(detachedAliveScript(handedOver)).stdout)).toBe(false);
+  });
+
   it("ends only the start its receipt names when a host is removed before it listens", async () => {
     expect(sh(DETACHED_LAUNCH_STOP_SCRIPT).stdout).toContain("@@dt:stopped yes");
     const first = launch();

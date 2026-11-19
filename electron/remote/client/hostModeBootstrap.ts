@@ -337,15 +337,19 @@ function whileSameLaunch(launch: DetachedLaunch, then: string): string {
 }
 
 /**
- * Prints whether a launch is still running, a zombie left unreaped counting
- * as gone. Without a start time to tell it from a later process given its
+ * Prints whether a start is still under way: this launch, the last one the
+ * receipt names, or any Daintree there. A launch that handed its request to a
+ * Daintree already running, or lost to another device's start, exits at once
+ * while the one it gave way to comes up. A zombie left unreaped counts as
+ * gone; without a start time to tell the launch from a later process given its
  * pid, any process with it counts.
  */
 export function detachedAliveScript(launch: DetachedLaunch): string {
   const yes = `if ${notZombieShell("p")}; then echo "${MARK}alive yes"; fi`;
-  return launch.startedAt
+  const own = launch.startedAt
     ? whileSameLaunch(launch, yes)
     : `p=${launch.pid}; if kill -0 "$p" 2>/dev/null; then ${yes}; fi`;
+  return `${own}; ${DETACHED_LAUNCH_READ}; if [ -n "$lp" ]; then echo "${MARK}alive yes"; fi; for q in $(pgrep -u "$(id -u)" -x daintree 2>/dev/null); do if ${notZombieShell("q")}; then echo "${MARK}alive yes"; break; fi; done`;
 }
 
 export function parseDetachedAlive(stdout: string): boolean {
