@@ -21,10 +21,12 @@ const FULLY_QUALIFIED_PATH = /^(?:\/|[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTER = /[\x00-\x1F\x7F]/;
 // eslint-disable-next-line no-control-regex
-const NAME_CONTROL_CHARACTERS = /[\x00-\x1F\x7F-\x9F]+/g;
+const CONTROL_CHARACTERS = /[\x00-\x1F\x7F]+/g;
+// eslint-disable-next-line no-control-regex
+const LOGIN_NAME_CONTROL_CHARACTERS = /[\x00-\x1F\x7F-\x9F]+/g;
 // Directional marks and overrides would let a name reorder the words shown
 // beside it ("· default login"), or read as empty while it isn't.
-const NAME_FORMAT_CHARACTERS = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
+const LOGIN_NAME_FORMAT_CHARACTERS = /[\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
 
 /**
  * A folder an account can name: fully qualified, and one the launch env keeps
@@ -36,16 +38,35 @@ export function isUsableAccountFolder(value: string): boolean {
   return sanitizeAgentEnv({ ACCOUNT_FOLDER: value })?.ACCOUNT_FOLDER === value;
 }
 
+function capAccountName(name: string): string | undefined {
+  let capped = name.slice(0, ACCOUNT_NAME_MAX_CHARS);
+  // Never half of a character a cap, this one or an older one, cut through.
+  if (/[\ud800-\udbff]$/.test(capped)) capped = capped.slice(0, -1);
+  return capped.trimEnd() || undefined;
+}
+
+/**
+ * A saved account's name as every reader takes it. Kept as lenient as the
+ * names already saved, since one it refused would drop that account.
+ */
 export function sanitizeAccountName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  let name = value.replace(NAME_FORMAT_CHARACTERS, "").replace(NAME_CONTROL_CHARACTERS, " ").trim();
-  if (name.length > ACCOUNT_NAME_MAX_CHARS) {
-    name = name.slice(0, ACCOUNT_NAME_MAX_CHARS);
-    // Never half of a character the cap cut through.
-    if (/[\ud800-\udbff]$/.test(name)) name = name.slice(0, -1);
-    name = name.trimEnd();
-  }
-  return name || undefined;
+  return capAccountName(value.replace(CONTROL_CHARACTERS, " ").trim());
+}
+
+/**
+ * A name given to a login from now on (#17080): the default login's, or a
+ * saved account's rename. Stricter than {@link sanitizeAccountName}: marks that
+ * reorder or hide text go, so a name can't move the words shown beside it.
+ */
+export function sanitizeLoginName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return capAccountName(
+    value
+      .replace(LOGIN_NAME_FORMAT_CHARACTERS, "")
+      .replace(LOGIN_NAME_CONTROL_CHARACTERS, " ")
+      .trim()
+  );
 }
 
 /**
@@ -54,13 +75,13 @@ export function sanitizeAccountName(value: unknown): string | undefined {
  * saved account, else "Default login".
  */
 export function defaultLoginLabel(name: unknown): string {
-  const safe = sanitizeAccountName(name);
+  const safe = sanitizeLoginName(name);
   return safe ? `${safe} · default login` : "Default login";
 }
 
 /** The default login inside a sentence: "on Work (the default login)". */
 export function defaultLoginPhrase(name: unknown): string {
-  const safe = sanitizeAccountName(name);
+  const safe = sanitizeLoginName(name);
   return safe ? `${safe} (the default login)` : "the default login";
 }
 

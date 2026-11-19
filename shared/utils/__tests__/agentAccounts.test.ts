@@ -9,6 +9,7 @@ import {
   resolveEffectiveAccountId,
   resolveLaunchAccount,
   sanitizeAgentAccounts,
+  sanitizeLoginName,
   withAccountEnv,
 } from "../agentAccounts.js";
 
@@ -50,9 +51,15 @@ describe("defaultLoginLabel and defaultLoginPhrase (#17080)", () => {
     expect(defaultLoginPhrase("  Work\u0007Lab ")).toBe("Work Lab (the default login)");
   });
 
+  it("keeps a saved account whose name is only marks a login name now drops", () => {
+    const saved = { id: "a", name: "\u200b", configDir: "/Users/me/.codex-a" };
+    expect(sanitizeAgentAccounts([saved])).toEqual([saved]);
+    expect(sanitizeLoginName("\u200b")).toBeUndefined();
+  });
+
   it("drops marks that would reorder the words beside a name, or leave it looking empty", () => {
     expect(defaultLoginLabel("Work\u202enigol")).toBe("Worknigol · default login");
-    expect(defaultLoginLabel("\u200f\u202e\u2066")).toBe("Default login");
+    expect(defaultLoginLabel("\u200f\u202e\u2066\u00ad\u061c")).toBe("Default login");
     expect(defaultLoginLabel("Work\u0085Lab")).toBe("Work Lab · default login");
   });
 

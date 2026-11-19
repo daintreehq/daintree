@@ -35,6 +35,7 @@ import {
   isUsableAccountFolder,
   sanitizeAccountName,
   sanitizeAgentAccounts,
+  sanitizeLoginName,
 } from "../../shared/utils/agentAccounts.js";
 
 const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -249,7 +250,7 @@ export function renameAgentAccount(
   const { agentId: id } = folderAccount(agentId);
   // A missing argument is refused rather than read as clearing the name.
   if (typeof rawName !== "string") throw invalid("Invalid account name");
-  const name = sanitizeAccountName(rawName);
+  const name = sanitizeLoginName(rawName);
   const entry = readSettings().agents[id] ?? {};
 
   if (accountId === null) {

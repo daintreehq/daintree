@@ -1,5 +1,5 @@
 import type { AgentUsageReadout } from "@shared/types/ipc/agentUsage";
-import { defaultLoginLabel, sanitizeAccountName } from "@shared/utils/agentAccounts";
+import { defaultLoginLabel, sanitizeLoginName } from "@shared/utils/agentAccounts";
 import { AGENT_USAGE_STALE_AFTER_MS, isAgentUsagePastAttention } from "@shared/utils/agentUsage";
 import { claudeWindowLabel, formatResetClock } from "./agentAccountHeadroom";
 import { windowLabel } from "./codexQuotaFormat";
@@ -62,7 +62,7 @@ function limitLine(readout: AgentUsageReadout): string {
 /** The name the reading's own host gave its default login (#17080). */
 function loginName(readout: AgentUsageReadout): string | undefined {
   const { reading } = readout;
-  return reading.isDefault ? sanitizeAccountName(reading.defaultLoginName) : undefined;
+  return reading.isDefault ? sanitizeLoginName(reading.defaultLoginName) : undefined;
 }
 
 function accountLabel(readout: AgentUsageReadout): string {

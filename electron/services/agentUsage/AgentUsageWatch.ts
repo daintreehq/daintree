@@ -423,7 +423,7 @@ function defaultDeps(): AgentUsageWatchDeps {
       return readClaudeUsageAccountsWithoutPanes();
     },
     async readDefaultLoginNames() {
-      const [{ store }, { sanitizeAccountName }] = await Promise.all([
+      const [{ store }, { sanitizeLoginName }] = await Promise.all([
         import("../../store.js"),
         import("../../../shared/utils/agentAccounts.js"),
       ]);
@@ -431,8 +431,8 @@ function defaultDeps(): AgentUsageWatchDeps {
         { agents?: Record<string, { defaultLoginName?: unknown } | undefined> } | undefined;
       const agents = settings && typeof settings === "object" ? settings.agents : undefined;
       return {
-        codex: sanitizeAccountName(agents?.codex?.defaultLoginName),
-        claude: sanitizeAccountName(agents?.claude?.defaultLoginName),
+        codex: sanitizeLoginName(agents?.codex?.defaultLoginName),
+        claude: sanitizeLoginName(agents?.claude?.defaultLoginName),
       };
     },
     now: Date.now,

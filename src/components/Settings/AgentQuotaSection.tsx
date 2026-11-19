@@ -11,7 +11,7 @@ import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { useCodexQuota } from "@/hooks/useCodexQuota";
 import { useClaudeUsage } from "@/hooks/useClaudeUsage";
 import { windowLabel } from "@/utils/codexQuotaFormat";
-import { defaultLoginLabel, sanitizeAccountName } from "@shared/utils/agentAccounts";
+import { defaultLoginLabel, sanitizeLoginName } from "@shared/utils/agentAccounts";
 import { claudeWindowLabel } from "@/utils/agentAccountHeadroom";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import {
@@ -101,7 +101,7 @@ export function profileLabel(profile: CodexQuotaProfile, defaultLoginName?: stri
   // still name one follow.
   const names = [...(profile.accountNames ?? []), ...profile.presetNames].join(", ");
   if (!profile.isDefault) return names;
-  const login = sanitizeAccountName(defaultLoginName)
+  const login = sanitizeLoginName(defaultLoginName)
     ? defaultLoginLabel(defaultLoginName)
     : "Default profile";
   return names ? `${login} · ${names}` : login;
@@ -237,7 +237,7 @@ function CodexQuota() {
     (s) => s.settings?.agents?.codex?.defaultLoginName
   );
   const several = profiles !== null && profiles.length > 1;
-  const named = sanitizeAccountName(defaultLoginName) !== undefined;
+  const named = sanitizeLoginName(defaultLoginName) !== undefined;
 
   return (
     <SettingsSection
@@ -379,7 +379,7 @@ export function claudeUsageGroupLabels(
 ): (string | undefined)[] {
   const others = accounts.filter((account) => account.kind === "other").length;
   let otherIndex = 0;
-  const named = sanitizeAccountName(defaultLoginName) !== undefined;
+  const named = sanitizeLoginName(defaultLoginName) !== undefined;
   const lone =
     accounts.length === 1 && accounts[0]!.kind === "default" && !hasSavedAccounts && !named;
   return accounts.map((account) => {

@@ -646,7 +646,9 @@ describe("renaming against other views and a Settings close (#17080)", () => {
       failure = await flushers[0]!("close");
     });
     expect(renameAccount).toHaveBeenCalledWith("codex", "company", "Acme");
-    expect(failure).toEqual({ landOn: input.id });
+    // The landing focuses the first field in the element it names: this one.
+    const landOn = (failure as { landOn: string }).landOn;
+    expect(document.getElementById(landOn)?.querySelector("input")).toBe(input);
     expect(screen.getByRole("alert").textContent).toBe("This host can't rename accounts yet.");
 
     let saved: unknown;
@@ -655,5 +657,47 @@ describe("renaming against other views and a Settings close (#17080)", () => {
     });
     expect(saved).toBeUndefined();
     expect(flushers).toHaveLength(0);
+  });
+
+  it("sends a rename once when a close waits on it and another close follows", async () => {
+    const flushers: Array<(reason: "close" | "hide") => unknown> = [];
+    const register = vi.fn((_tab: string, fn: (reason: "close" | "hide") => unknown) => {
+      flushers.push(fn);
+      return () => flushers.splice(flushers.indexOf(fn), 1);
+    });
+    let finish: () => void = () => {};
+    const renameAccount = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    useAgentSettingsStore.setState({ renameAccount });
+    render(
+      <SettingsFlushContext.Provider value={{ register, flushAll: vi.fn() }}>
+        <AgentAccountsSection agentId="codex" agentName="Codex" entry={{ accounts: [COMPANY] }} />
+      </SettingsFlushContext.Provider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Rename Company" }));
+    const input = screen.getByRole("textbox", { name: "Account name" });
+    fireEvent.change(input, { target: { value: "Acme" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const flush = flushers[0]!;
+
+    // A close while the Enter's save is in flight waits on that save.
+    const first = flush("close") as Promise<unknown>;
+    expect(renameAccount).toHaveBeenCalledTimes(1);
+    let firstResult: unknown = "pending";
+    await act(async () => {
+      finish();
+      firstResult = await first;
+    });
+    expect(firstResult).toBeUndefined();
+
+    // A close queued behind it reaches the row before it unregisters.
+    await act(async () => {
+      await flush("close");
+    });
+    expect(renameAccount).toHaveBeenCalledTimes(1);
   });
 });

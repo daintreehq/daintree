@@ -3,7 +3,7 @@ import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { inlineRenameFieldInputProps } from "@/components/Panel/inlineRenameField";
-import { ACCOUNT_NAME_MAX_CHARS, sanitizeAccountName } from "@shared/utils/agentAccounts";
+import { ACCOUNT_NAME_MAX_CHARS, sanitizeLoginName } from "@shared/utils/agentAccounts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SETTINGS_CONTROL_WIDTH, SettingsRow, SettingsRowActions } from "./SettingsGroup";
 import { useSettingsTabFlush } from "./SettingsFlushRegistry";
@@ -59,7 +59,7 @@ export function AccountLoginRow({
   // Set, it also stops the blur the field's unmount brings from committing.
   const restoreFocusRef = useRef(false);
   const errorId = useId();
-  const inputId = useId();
+  const rowId = useId();
 
   // Select-all on entry: a new name usually replaces the old one.
   useEffect(() => {
@@ -75,7 +75,7 @@ export function AccountLoginRow({
   }, [editing]);
 
   const startEdit = () => {
-    startNameRef.current = sanitizeAccountName(name) ?? "";
+    startNameRef.current = sanitizeLoginName(name) ?? "";
     setDraft(name);
     setError(null);
     setEditing(true);
@@ -84,7 +84,7 @@ export function AccountLoginRow({
   /** Resolves true once the name is saved, or there was nothing to save. */
   const commit = (): Promise<boolean> => {
     if (savingRef.current) return savingRef.current;
-    const next = sanitizeAccountName(draft) ?? "";
+    const next = sanitizeLoginName(draft) ?? "";
     if (!next && requireName) {
       restoreFocusRef.current = false;
       setError("Give the account a name");
@@ -100,6 +100,9 @@ export function AccountLoginRow({
     const save = onRename(next).then(
       () => {
         savingRef.current = null;
+        // Saved: a flush that reaches this row again before it unregisters
+        // has nothing left to send.
+        startNameRef.current = next;
         setSaving(false);
         setEditing(false);
         return true;
@@ -120,17 +123,18 @@ export function AccountLoginRow({
   // Settings open on the field with its reason.
   useSettingsTabFlush(
     "agents",
-    async () => ((await commit()) ? undefined : { landOn: inputId }),
+    // The row, whose field the landing then focuses.
+    async () => ((await commit()) ? undefined : { landOn: rowId }),
     editing
   );
 
   return (
     <SettingsRow
+      id={rowId}
       label={
         editing ? (
           <Input
             ref={inputRef}
-            id={inputId}
             {...inlineRenameFieldInputProps}
             density="compact"
             className={`${SETTINGS_CONTROL_WIDTH.wide} max-w-full text-sm font-medium`}

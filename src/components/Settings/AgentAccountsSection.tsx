@@ -9,7 +9,7 @@ import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import type { AgentAccount, AgentSettingsEntry } from "@shared/types";
 import {
   defaultLoginLabel,
-  sanitizeAccountName,
+  sanitizeLoginName,
   sanitizeAgentAccounts,
 } from "@shared/utils/agentAccounts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -99,7 +99,7 @@ export function AgentAccountsSection({
   if (!declaration) return null;
 
   const accounts = sanitizeAgentAccounts(entry.accounts);
-  const defaultLoginName = sanitizeAccountName(entry.defaultLoginName);
+  const defaultLoginName = sanitizeLoginName(entry.defaultLoginName);
   const defaultLogin = defaultLoginLabel(defaultLoginName);
   const defaultId = accounts.find((account) => account.id === entry.accountId)?.id ?? DEFAULT_LOGIN;
   // A saved default no account answers to any more refuses every launch, so
