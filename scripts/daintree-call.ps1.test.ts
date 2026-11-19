@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import net, { type AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -429,6 +430,8 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
     [{ DAINTREE_MCP_URL: "http://127.0.0.1:65536/mcp" }, "local endpoint"],
     [{ DAINTREE_MCP_TOKEN: "bad\nInjected: header" }, "malformed"],
     [{ DAINTREE_MCP_TOKEN: "two words" }, "malformed"],
+    [{ DAINTREE_MCP_TOKEN: "pane-bearer-é" }, "malformed"],
+    [{ DAINTREE_MCP_URL: "http://127.0.0.1:45454/mcp\n" }, "local endpoint"],
   ])(
     "exits 4 without contacting Daintree when the credential is unusable (%j)",
     async (env, message) => {
@@ -563,6 +566,26 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
       '{"jsonrpc":"2.0","id":2,"result":{"iserror":true,"content":[]}}',
       0,
     ],
+    [
+      "a key that only differs by an escaped control character",
+      '{"jsonrpc":"2.0","id":2,"result":{"isError":true,"isError\\u0000":false,"content":[]}}',
+      1,
+    ],
+    [
+      "an id past the range of a double before the answer",
+      'data: {"jsonrpc":"2.0","id":1e400,"result":{"content":[]}}\n\ndata: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"yes"}]}}\n\n',
+      0,
+      "yes\n",
+    ],
+    [
+      "surrogates that aren't an escaped pair",
+      sse({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "x" }] } }).replace(
+        '"text":"x"',
+        '"text":"\\ud83d\\u0000\\ude00"'
+      ),
+      0,
+      "\ufffd\ufffd\n",
+    ],
     ["a null result", sse({ jsonrpc: "2.0", id: 2, result: null }), 3],
     ["no jsonrpc version", sse({ id: 2, result: text("x") }), 3],
     ["only another request's answer", sse({ jsonrpc: "2.0", id: 1, result: text("x") }), 3],
@@ -601,6 +624,40 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
     if (stdout !== undefined) expect(run.stdout).toBe(stdout);
     if (stderr !== undefined) expect(run.stderr).toBe(stderr);
   });
+
+  it("gives up on a handshake whose reply is still trickling in after 10 seconds, and closes its session", async () => {
+    const seen: { method: string | undefined; sessionId: string | string[] | undefined }[] = [];
+    const trickling = http.createServer((req, res) => {
+      seen.push({ method: req.method, sessionId: req.headers["mcp-session-id"] });
+      if (req.method === "DELETE") {
+        res.writeHead(200).end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Mcp-Session-Id": "trickling" });
+      res.write(": opening\n");
+      const drip = setInterval(() => res.write(": still here\n"), 200);
+      res.on("close", () => clearInterval(drip));
+    });
+    await new Promise<void>((resolve) => trickling.listen(0, "127.0.0.1", resolve));
+    const { port } = trickling.address() as AddressInfo;
+    try {
+      const started = Date.now();
+      const run = await call(["fixture.echo"], {
+        DAINTREE_MCP_URL: `http://127.0.0.1:${port}/mcp`,
+      });
+
+      expect(run.status).toBe(3);
+      expect(run.stderr).toContain("no answer within 10 seconds");
+      expect(Date.now() - started).toBeLessThan(25_000);
+      expect(seen).toEqual([
+        { method: "POST", sessionId: undefined },
+        { method: "DELETE", sessionId: "trickling" },
+      ]);
+    } finally {
+      trickling.closeAllConnections();
+      await new Promise<void>((resolve) => trickling.close(() => resolve()));
+    }
+  }, 40_000);
 
   it("exits 3 when the connection drops without an answer", async () => {
     const dropping = net.createServer((socket) => socket.destroy());
@@ -843,6 +900,23 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
       expect(fixture.sessions.size).toBe(0);
     });
 
+    it("closes the session when the reader of its handle has gone", async () => {
+      // The console stream reports a write to a closed pipe as written; the
+      // handle would never arrive, and the session would be handed to no one.
+      const { child, done } = start(["start"], {}, undefined, "session");
+      child.stdout.destroy();
+
+      const run = await done;
+
+      expect(run.status).toBe(3);
+      expect(run.stderr).toContain("could not print the session's handle");
+      expect(fixture.seen.at(-1)).toMatchObject({
+        method: "DELETE",
+        sessionId: fixture.seen[1].sessionId,
+      });
+      expect(fixture.sessions.size).toBe(0);
+    });
+
     it.each([
       [[], "start or end"],
       [["bogus"], "start or end"],
@@ -867,16 +941,20 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
       expect(fixture.seen).toEqual([]);
     });
 
-    it.each(["no-version", "2025-06-18:", ":abc", "2025-06-18:has space", "v 1:abc"])(
-      "refuses a malformed handle %j before contacting Daintree",
-      async (handle) => {
-        const run = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: handle });
+    it.each([
+      "no-version",
+      "2025-06-18:",
+      ":abc",
+      "2025-06-18:has space",
+      "v 1:abc",
+      "2025-06-18:abc\n",
+    ])("refuses a malformed handle %j before contacting Daintree", async (handle) => {
+      const run = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: handle });
 
-        expect(run.status).toBe(2);
-        expect(run.stderr).toContain("DAINTREE_MCP_SESSION");
-        expect(fixture.seen).toEqual([]);
-      }
-    );
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain("DAINTREE_MCP_SESSION");
+      expect(fixture.seen).toEqual([]);
+    });
 
     it("makes a one-shot call when the handle is empty", async () => {
       const run = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: "" });
@@ -949,7 +1027,7 @@ describe.skipIf(process.platform !== "win32" || POWERSHELL === null)(
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                `& '${shim}' ${commandLine}; exit $LASTEXITCODE`,
+                `& '${shim.replaceAll("'", "''")}' ${commandLine}; exit $LASTEXITCODE`,
               ],
               { env: merged }
             );
@@ -958,7 +1036,8 @@ describe.skipIf(process.platform !== "win32" || POWERSHELL === null)(
       const stderr: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
       child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-      return new Promise<Run>((resolve) => {
+      return new Promise<Run>((resolve, reject) => {
+        child.on("error", reject);
         child.on("close", (status) =>
           resolve({
             status,
@@ -1031,8 +1110,47 @@ describe.skipIf(process.platform !== "win32" || POWERSHELL === null)(
       const result = await run("cmd", "call fixture.echo");
 
       expect(result.status).toBe(3);
-      expect(result.stderr).toContain("daintree-call.ps1");
+      expect(result.stderr).toContain("couldn't run");
+      expect(result.stderr).toContain("(exit status 1)");
       expect(fixture.seen).toEqual([]);
+    });
+
+    it("takes inline JSON and holds a session from PowerShell", async () => {
+      const inline = await run("powershell", `call fixture.echo --args '{\\"limit\\":5}'`);
+      expect(inline.stderr).toBe("");
+      expect(inline.status).toBe(0);
+      expect(JSON.parse(inline.stdout)).toEqual({ limit: 5 });
+
+      const quoted = shim.replaceAll("'", "''");
+      const script = [
+        `$handle = & '${quoted}' session start`,
+        "if ($LASTEXITCODE -ne 0) { exit 10 + $LASTEXITCODE }",
+        "$env:DAINTREE_MCP_SESSION = $handle",
+        `& '${quoted}' call fixture.launch --arg terminalId=t-1`,
+        "if ($LASTEXITCODE -ne 0) { exit 20 + $LASTEXITCODE }",
+        `& '${quoted}' call fixture.send --arg terminalId=t-1`,
+        "if ($LASTEXITCODE -ne 0) { exit 30 + $LASTEXITCODE }",
+        `& '${quoted}' session end`,
+        "exit $LASTEXITCODE",
+      ].join("; ");
+      const held = await new Promise<Run>((resolve, reject) => {
+        const child = spawn(POWERSHELL!, ["-NoProfile", "-NonInteractive", "-Command", script], {
+          env: { ...baseEnv(), DAINTREE_MCP_URL: fixture.url, DAINTREE_MCP_TOKEN: TOKEN },
+        });
+        child.stdin.end();
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+        child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+        child.on("error", reject);
+        child.on("close", (status) => resolve({ status, stdout, stderr }));
+      });
+
+      expect(held.stderr).toBe("");
+      expect(held.status).toBe(0);
+      expect(held.stdout).toContain("sent to t-1");
+      expect(fixture.seen.filter((r) => r.rpc?.method === "initialize")).toHaveLength(1);
+      expect(fixture.sessions.size).toBe(0);
     });
   }
 );

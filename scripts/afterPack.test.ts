@@ -1670,6 +1670,7 @@ describe("renderWindowsCliShim (#17931)", () => {
     for (; at < lines.length; at++) {
       const match = lines[at].match(/^if "%status%"=="(\d+)" exit \/b (\d+)$/);
       if (!match) break;
+      expect(mapped.has(match[1]), lines[at]).toBe(false);
       mapped.set(match[1], Number(match[2]));
     }
     // The client exits 40 plus its status, and 170 for an interrupt.

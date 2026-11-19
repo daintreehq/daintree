@@ -37,24 +37,34 @@ $script:JsonToken = New-Object System.Text.RegularExpressions.Regex (
   '\G[ \t\r\n]*(?:(?<s>"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4}))*")|(?<l>true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?![^ \t\r\n,\]}:])|(?<p>[{}\[\],:]))'
 )
 $script:JsonSpace = New-Object System.Text.RegularExpressions.Regex ('\G[ \t\r\n]*')
-$script:JsonEscape = New-Object System.Text.RegularExpressions.Regex ('\\(?:u([0-9A-Fa-f]{4})|(.))')
-$script:JsonUnescape = [System.Text.RegularExpressions.MatchEvaluator] {
-  param($m)
+# A surrogate pair counts only when it is escaped as one; any other surrogate
+# becomes U+FFFD, as the bash client's awk decodes them.
+$script:JsonEscape = New-Object System.Text.RegularExpressions.Regex (
+  '\\u([Dd][89ABab][0-9A-Fa-f]{2})\\u([Dd][C-Fc-f][0-9A-Fa-f]{2})|\\u([0-9A-Fa-f]{4})|\\(.)'
+)
+function ConvertFrom-DtcEscape($m, [bool]$keepNul) {
   if ($m.Groups[1].Success) {
-    $code = [Convert]::ToInt32($m.Groups[1].Value, 16)
-    # NUL is dropped, as the bash client's awk does.
-    if ($code -eq 0) { return '' }
+    return [string][char][Convert]::ToInt32($m.Groups[1].Value, 16) + [string][char][Convert]::ToInt32($m.Groups[2].Value, 16)
+  }
+  if ($m.Groups[3].Success) {
+    $code = [Convert]::ToInt32($m.Groups[3].Value, 16)
+    if ($code -ge 0xD800 -and $code -le 0xDFFF) { return [string][char]0xFFFD }
+    # A value drops NUL, as the bash client's awk can't carry it. A key keeps
+    # it, so "isError\u0000" stays a key of its own rather than becoming isError.
+    if ($code -eq 0 -and -not $keepNul) { return '' }
     return [string][char]$code
   }
-  switch -CaseSensitive ($m.Groups[2].Value) {
+  switch -CaseSensitive ($m.Groups[4].Value) {
     'n' { return "`n" }
     't' { return "`t" }
     'r' { return "`r" }
     'b' { return [string][char]8 }
     'f' { return [string][char]12 }
-    default { return $m.Groups[2].Value }
+    default { return $m.Groups[4].Value }
   }
 }
+$script:JsonUnescape = [System.Text.RegularExpressions.MatchEvaluator] { param($m) ConvertFrom-DtcEscape $m $false }
+$script:JsonUnescapeKey = [System.Text.RegularExpressions.MatchEvaluator] { param($m) ConvertFrom-DtcEscape $m $true }
 $script:JsonQuote = [System.Text.RegularExpressions.MatchEvaluator] {
   param($m)
   $c = [int][char]$m.Value
@@ -163,6 +173,29 @@ Exit status:
 '@
 }
 
+# stdout as a stream that fails when the reader has gone. The console stream
+# .NET hands out reports a broken pipe as a successful write, which would let
+# `session start` hand over a session whose handle never arrived; a FileStream
+# over the same handle reports it. Falls back to the console stream.
+function Get-DtcStdOut {
+  if ($null -ne $script:StdOut) { return $script:StdOut }
+  $console = [Console]::OpenStandardOutput()
+  $script:StdOut = $console
+  try {
+    $field = $console.GetType().GetField('_handle', [System.Reflection.BindingFlags]'NonPublic, Instance')
+    if ($null -ne $field) {
+      $handle = $field.GetValue($console)
+      if ($handle -is [IntPtr]) { $handle = New-Object Microsoft.Win32.SafeHandles.SafeFileHandle($handle, $false) }
+      if ($handle -is [Microsoft.Win32.SafeHandles.SafeFileHandle] -and -not $handle.IsInvalid) {
+        $script:StdOut = New-Object System.IO.FileStream($handle, [System.IO.FileAccess]::Write, 1)
+      }
+    }
+  } catch {
+    $script:StdOut = $console
+  }
+  return $script:StdOut
+}
+
 # Text to stdout or stderr: UTF-8 when redirected, as the agent or script that
 # captures it reads it, and the console's own encoding when it is a console.
 function Write-DtcText([string]$text, [bool]$toErr) {
@@ -177,10 +210,10 @@ function Write-DtcText([string]$text, [bool]$toErr) {
     }
   } else {
     if ([Console]::IsOutputRedirected) {
-      if ($null -eq $script:StdOut) { $script:StdOut = [Console]::OpenStandardOutput() }
+      $stream = Get-DtcStdOut
       $bytes = $script:Utf8.GetBytes($text)
-      $script:StdOut.Write($bytes, 0, $bytes.Length)
-      $script:StdOut.Flush()
+      $stream.Write($bytes, 0, $bytes.Length)
+      $stream.Flush()
     } else {
       [Console]::Out.Write($text)
     }
@@ -264,7 +297,7 @@ function Get-DtcStringProblem([string]$text, [int]$at) {
       if ($i + 1 -ge $text.Length) { return 'unterminated string' }
       $e = $text[$i + 1]
       if ($e -ceq 'u') {
-        if ($i + 5 -ge $text.Length -or $text.Substring($i + 2, 4) -cnotmatch '^[0-9A-Fa-f]{4}$') { return 'bad \u escape' }
+        if ($i + 5 -ge $text.Length -or $text.Substring($i + 2, 4) -cnotmatch '^[0-9A-Fa-f]{4}\z') { return 'bad \u escape' }
         $i += 6
         continue
       }
@@ -351,7 +384,7 @@ function Read-DtcJson([string]$text) {
         continue
       }
       if (-not $string.Success) { $script:JsonError = 'expected a key'; return $null }
-      $top.Key = Get-DtcStringValue $text @{ S = $string.Index; E = $string.Index + $string.Length }
+      $top.Key = Get-DtcStringValue $text @{ S = $string.Index; E = $string.Index + $string.Length } $true
       $state = 'colon'
       continue
     }
@@ -403,10 +436,11 @@ function Get-DtcRaw([string]$text, $node) {
   return $text.Substring($node.S, $node.E - $node.S)
 }
 
-# A string value's text, decoded; $node spans it with its quotes.
-function Get-DtcStringValue([string]$text, $node) {
+# A string's text, decoded; $node spans it with its quotes. `isKey` keeps NUL.
+function Get-DtcStringValue([string]$text, $node, [bool]$isKey = $false) {
   $inner = $text.Substring($node.S + 1, $node.E - $node.S - 2)
   if ($inner.IndexOf([char]'\') -lt 0) { return $inner }
+  if ($isKey) { return $script:JsonEscape.Replace($inner, $script:JsonUnescapeKey) }
   return $script:JsonEscape.Replace($inner, $script:JsonUnescape)
 }
 
@@ -421,9 +455,18 @@ function Test-DtcType($node, [string]$type) {
 
 # The JSON-RPC response whose id is `want` in one reply body, plain JSON or an
 # SSE stream: @{ Root; Text } for a well-formed one, or $null.
-function Find-DtcResponse([string]$body, [string]$want) {
+# The body's lines as awk reads them: split on LF, one trailing CR off each.
+function Get-DtcLines([string]$body) {
   $lines = New-Object System.Collections.Generic.List[string]
-  foreach ($line in $body.Split([char]10)) { $lines.Add($line.TrimEnd([char]13)) }
+  foreach ($line in $body.Split([char]10)) {
+    if ($line.EndsWith("`r")) { $line = $line.Substring(0, $line.Length - 1) }
+    $lines.Add($line)
+  }
+  return , $lines
+}
+
+function Find-DtcResponse([string]$body, [string]$want) {
+  $lines = Get-DtcLines $body
   $sse = $false
   foreach ($line in $lines) {
     if ($line -cmatch '^(data|event|id|retry):') { $sse = $true; break }
@@ -461,9 +504,14 @@ function Test-DtcEvent([string]$data, [string]$want) {
   if (-not (Test-DtcType $version 'string') -or (Get-DtcStringValue $data $version) -cne '2.0') { return $null }
   $id = Get-DtcMember $root 'id'
   if (-not (Test-DtcType $id 'number')) { return $null }
+  # .NET Framework refuses a number past the double range where .NET reads it as
+  # infinity: either way it isn't the id asked for.
   $invariant = [System.Globalization.CultureInfo]::InvariantCulture
   $float = [System.Globalization.NumberStyles]::Float
-  if ([double]::Parse((Get-DtcRaw $data $id), $float, $invariant) -ne [double]::Parse($want, $float, $invariant)) { return $null }
+  $got = 0.0
+  $asked = 0.0
+  if (-not [double]::TryParse((Get-DtcRaw $data $id), $float, $invariant, [ref]$got) -or [double]::IsInfinity($got)) { return $null }
+  if (-not [double]::TryParse($want, $float, $invariant, [ref]$asked) -or $got -ne $asked) { return $null }
   if ((Test-DtcType (Get-DtcMember $root 'result') 'object') -eq (Test-DtcType (Get-DtcMember $root 'error') 'object')) { return $null }
   return @{ Root = $root; Text = $data }
 }
@@ -482,7 +530,7 @@ function Get-DtcRpcError($found) {
 # A refused handshake or call: one JSON body carrying a JSON-RPC error, whatever
 # its id. The error's words, or $null when the body is anything else.
 function Get-DtcRefusal([string]$body) {
-  $text = $body.Replace("`r", '')
+  $text = [string]::Join("`n", (Get-DtcLines $body).ToArray())
   $root = Read-DtcJson $text
   if (-not (Test-DtcType $root 'object')) { return $null }
   $version = Get-DtcMember $root 'jsonrpc'
@@ -507,16 +555,14 @@ function Get-DtcFailure($task) {
 }
 
 # Waits on a task in short steps, so Ctrl+C can stop the script between them.
-# Past `deadline` (a tick count; 0 for none) it disposes `owner`, which ends
-# whatever the task is reading.
-function Wait-DtcTask($task, [long]$deadline, $owner) {
+# False once `deadline` (a tick count; 0 for none) has passed, without waiting
+# for the task: the caller cancels the request, which aborts it.
+function Wait-DtcTask($task, [long]$deadline) {
   while (-not $task.IsCompleted) {
-    if ($deadline -gt 0 -and [DateTime]::UtcNow.Ticks -gt $deadline -and $null -ne $owner) {
-      try { $owner.Dispose() } catch { }
-      $owner = $null
-    }
+    if ($deadline -gt 0 -and [DateTime]::UtcNow.Ticks -gt $deadline) { return $false }
     try { [void]$task.Wait(100) } catch { }
   }
+  return $true
 }
 
 function Initialize-DtcHttp {
@@ -540,6 +586,8 @@ function Initialize-DtcHttp {
 # when no headers arrived); Body; Error ('' when the exchange completed) }.
 function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
   $result = @{ Status = 0; Body = ''; Error = '' }
+  $late = 'no answer within ' + [int]($timeoutMs / 1000) + ' seconds'
+  $complete = $false
   $method = [System.Net.Http.HttpMethod]::Delete
   if ($body -cne '') { $method = [System.Net.Http.HttpMethod]::Post }
   $request = New-Object System.Net.Http.HttpRequestMessage($method, $script:Endpoint)
@@ -563,20 +611,23 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
       $request.Content = $content
     }
     $send = $script:Http.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token)
-    Wait-DtcTask $send 0 $null
-    if (-not $send.IsCompleted -or $send.IsFaulted -or $send.IsCanceled) {
+    if (-not (Wait-DtcTask $send $deadline)) { $result.Error = $late; return $result }
+    if ($send.IsFaulted -or $send.IsCanceled) {
       $result.Error = Get-DtcFailure $send
+      if ($send.IsCanceled -and $timeoutMs -gt 0) { $result.Error = $late }
       return $result
     }
     $response = $send.Result
     $result.Status = [int]$response.StatusCode
     $values = $null
     if ($adopt -and $script:Session -ceq '' -and $response.Headers.TryGetValues('Mcp-Session-Id', [ref]$values)) {
-      $id = (@($values) -join ',').Trim()
-      if ($id -cmatch '^[!-~]+$') { $script:Session = $id }
+      # The last one, as the bash client reads a repeated header.
+      $id = [string](@($values)[-1])
+      $id = $id.Trim()
+      if ($id -cmatch '^[!-~]+\z') { $script:Session = $id }
     }
     $open = $response.Content.ReadAsStreamAsync()
-    Wait-DtcTask $open $deadline $response
+    if (-not (Wait-DtcTask $open $deadline)) { $result.Error = $late; return $result }
     if ($open.IsFaulted -or $open.IsCanceled) {
       $result.Error = Get-DtcFailure $open
       return $result
@@ -585,8 +636,11 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
     $buffer = New-Object byte[] 65536
     $bytes = New-Object System.IO.MemoryStream
     while ($true) {
+      # Checked on every read, not only on a stalled one: a body that keeps
+      # trickling in must still end at the deadline.
+      if ($deadline -gt 0 -and [DateTime]::UtcNow.Ticks -gt $deadline) { $result.Error = $late; return $result }
       $read = $stream.ReadAsync($buffer, 0, $buffer.Length)
-      Wait-DtcTask $read $deadline $response
+      if (-not (Wait-DtcTask $read $deadline)) { $result.Error = $late; return $result }
       if ($read.IsFaulted -or $read.IsCanceled) {
         $result.Error = Get-DtcFailure $read
         return $result
@@ -601,8 +655,13 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
       return $result
     }
     $result.Body = $script:Utf8.GetString($bytes.ToArray())
+    $complete = $true
     return $result
   } finally {
+    # An exchange cut off by the deadline, an error or Ctrl+C is cancelled
+    # first: on .NET Framework that aborts the connection, where disposing a
+    # half-read response would try to drain it.
+    if (-not $complete) { try { $cts.Cancel() } catch { } }
     if ($null -ne $stream) { try { $stream.Dispose() } catch { } }
     if ($null -ne $response) { try { $response.Dispose() } catch { } }
     try { $request.Dispose() } catch { }
@@ -648,7 +707,7 @@ function Read-DtcHandle([string]$handle) {
     $version = $handle.Substring(0, $colon)
     $session = $handle.Substring($colon + 1)
   }
-  if ($colon -lt 0 -or $version -cnotmatch '^[0-9A-Za-z.-]+$' -or $session -cnotmatch '^[!-~]+$') {
+  if ($colon -lt 0 -or $version -cnotmatch '^[0-9A-Za-z.-]+\z' -or $session -cnotmatch '^[!-~]+\z') {
     Stop-Dtc 2 "DAINTREE_MCP_SESSION isn't a handle printed by daintree session start"
   }
   return @{ Version = $version; Session = $session }
@@ -677,12 +736,14 @@ function Initialize-Dtc {
   if ($token -ceq '') {
     Stop-Dtc 4 'DAINTREE_MCP_TOKEN is not set. Run it in an agent pane of a project with Daintree MCP on, or export the key from Settings > MCP server as DAINTREE_MCP_TOKEN (with DAINTREE_MCP_URL too, for a dev build or another profile).'
   }
-  if ($token -cmatch '[\x00-\x1f\x7f ]') { Stop-Dtc 4 'DAINTREE_MCP_TOKEN is malformed' }
+  # Printable ASCII only: .NET Framework writes each header character as one
+  # byte, so anything wider would reach the server changed.
+  if ($token -cnotmatch '^[!-~]+\z') { Stop-Dtc 4 'DAINTREE_MCP_TOKEN is malformed' }
   if ($url -ceq '') {
     Stop-Dtc 4 "DAINTREE_MCP_URL is not set. Outside an agent pane, set it to the URL in Settings > MCP server as well as DAINTREE_MCP_TOKEN: on Windows the running Daintree's port isn't found by itself."
   }
   $port = 0
-  if ($url -cmatch '^http://(127\.0\.0\.1|localhost):([0-9]{1,5})(/mcp|/sse)?/?$') { $port = [int]$Matches[2] }
+  if ($url -cmatch '^http://(127\.0\.0\.1|localhost):([0-9]{1,5})(/mcp|/sse)?/?\z') { $port = [int]$Matches[2] }
   if ($port -lt 1 -or $port -gt 65535) {
     Stop-Dtc 4 "DAINTREE_MCP_URL must be Daintree's local endpoint, like http://127.0.0.1:45454/mcp"
   }
@@ -717,7 +778,7 @@ function Open-DtcSession {
   $version = ''
   # As sent, escapes and all: an escaped version is refused, not decoded.
   if (Test-DtcType $negotiated 'string') { $version = $found.Text.Substring($negotiated.S + 1, $negotiated.E - $negotiated.S - 2) }
-  if ($version -cnotmatch '^[0-9A-Za-z.-]+$') { Stop-Dtc 3 "Daintree's reply to initialize wasn't understood" }
+  if ($version -cnotmatch '^[0-9A-Za-z.-]+\z') { Stop-Dtc 3 "Daintree's reply to initialize wasn't understood" }
   if ($script:Session -ceq '') { Stop-Dtc 3 'Daintree opened no session' }
   $script:Version = $version
 
@@ -780,7 +841,7 @@ function Invoke-DtcCall($argv) {
       if ($eq -lt 0) { Stop-Dtc 2 ("--arg needs key=value, got '" + $pair + "'") }
       $key = $pair.Substring(0, $eq)
       $value = $pair.Substring($eq + 1)
-      if ($key -cnotmatch '^[A-Za-z0-9_.-]+$') {
+      if ($key -cnotmatch '^[A-Za-z0-9_.-]+\z') {
         Stop-Dtc 2 ("--arg key '" + $key + "' must be letters, digits, '_', '.' or '-' (use --args for anything else)")
       }
       if (-not $keys.Add($key)) { Stop-Dtc 2 ('--arg ' + $key + ' is given twice') }
@@ -809,12 +870,12 @@ function Invoke-DtcCall($argv) {
   if ($tool -ceq '') { Stop-Dtc 2 'missing the tool to call (see daintree call --help)' }
   if ($argsGiven -and $pairs.Count -gt 0) { Stop-Dtc 2 'use --arg or --args, not both' }
   if ($argsStdin) {
+    # Read in the background and waited on in steps, so Ctrl+C still works
+    # while a writer holds the pipe open.
     $buffer = New-Object System.IO.MemoryStream
-    try {
-      [Console]::OpenStandardInput().CopyTo($buffer)
-    } catch {
-      Stop-Dtc 2 "--args - couldn't read stdin"
-    }
+    $copy = [Console]::OpenStandardInput().CopyToAsync($buffer)
+    [void](Wait-DtcTask $copy 0)
+    if ($copy.IsFaulted -or $copy.IsCanceled) { Stop-Dtc 2 "--args - couldn't read stdin" }
     $bytes = $buffer.ToArray()
     $skip = 0
     if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $skip = 3 }
@@ -943,11 +1004,11 @@ function Stop-DtcSession {
   Stop-Dtc 3 ("Daintree didn't end the session (HTTP " + $reply.Status + '): ' + (Get-DtcExcerpt $reply.Body))
 }
 
-$argv = Split-DtcCommandLine ([string]$env:DAINTREE_CLI_ARGS)
-$rest = New-Object System.Collections.Generic.List[string]
-for ($k = 1; $k -lt $argv.Count; $k++) { $rest.Add($argv[$k]) }
 try {
   try {
+    $argv = Split-DtcCommandLine ([string]$env:DAINTREE_CLI_ARGS)
+    $rest = New-Object System.Collections.Generic.List[string]
+    for ($k = 1; $k -lt $argv.Count; $k++) { $rest.Add($argv[$k]) }
     if ($argv.Count -gt 0 -and $argv[0] -ceq 'call') {
       Invoke-DtcCall $rest
     } elseif ($argv.Count -gt 0 -and $argv[0] -ceq 'session') {
