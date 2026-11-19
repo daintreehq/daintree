@@ -6841,8 +6841,7 @@ interface PluginAgentCanopyNote {
     /**
      * Which ask the reading saw, when it read one: an approval of something the
      * agent is about to do, or a question only the user can answer. Absent when
-     * the reading isn't an ask, or came from a Remote Host whose build doesn't
-     * report it.
+     * the reading isn't an ask, or didn't say which.
      */
     readonly ask?: "approval" | "question";
     /**
