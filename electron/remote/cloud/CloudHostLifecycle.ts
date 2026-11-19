@@ -2541,6 +2541,7 @@ export class CloudHostLifecycle {
           `SSH access couldn't be set up: ${formatErrorMessage(error, "the SSH key couldn't be read")}`
         );
       }
+      stillHere();
       if (present) return null;
       return refuse(
         `This host's SSH key is missing from this device. ${nameOf(provider)} only gives a machine its key when it's created, so Daintree can't give this one a new key. Restore the key from a backup and connect again, or create a new machine.`

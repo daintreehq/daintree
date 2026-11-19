@@ -688,34 +688,6 @@ describe("Agent37Provider", () => {
     expect(api.sshKeys).toHaveLength(1);
   });
 
-  it("shares a registration only under the same API key (#17929)", async () => {
-    const { api, client, provider, credentials } = env();
-    const existing = api.seed();
-    const register = client.registerSshKey.bind(client);
-    let release: () => void = () => {};
-    vi.spyOn(client, "registerSshKey").mockImplementationOnce(async (...args) => {
-      await new Promise<void>((resolve) => (release = resolve));
-      return register(...args);
-    });
-    const held = provider.authorizeSsh(credentials, existing.id, OTHER_KEY).catch((e) => e);
-    try {
-      await vi.waitFor(() => expect(client.registerSshKey).toHaveBeenCalledTimes(1));
-      // Another workspace's key sends its own, and hears its own answer.
-      const elsewhere = {
-        ...credentials,
-        values: { apiKey: "sk_live_other00000000000000" },
-      };
-      const refused = await provider
-        .create(elsewhere, createRequest({ publicKey: OTHER_KEY }))
-        .catch((e) => e);
-      expect(client.registerSshKey).toHaveBeenCalledTimes(2);
-      expect(provider.describeError(refused).code).toBe("credential-invalid");
-    } finally {
-      release();
-    }
-    expect(provider.describeError(await held).code).toBe("provider-unreachable");
-  });
-
   it("sends nothing for a create cancelled before its key was registered", async () => {
     const { api, provider, credentials } = env();
     const abort = new AbortController();

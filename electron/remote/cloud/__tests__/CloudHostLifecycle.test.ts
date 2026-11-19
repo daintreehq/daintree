@@ -3588,6 +3588,32 @@ describe("CloudHostLifecycle SSH key at create", () => {
     expect(await files.hasKey(account.id)).toBe(false);
   });
 
+  it("authorizes nothing for a created host removed while its key was read (#17929)", async () => {
+    const { lifecycle, provider, store, files, bindingId, keyPath } = await createdAndReached();
+    await fs.rm(keyPath);
+    const make = files.publicKey.bind(files);
+    vi.spyOn(files, "publicKey").mockImplementationOnce(async (accountId) => {
+      store.removeBinding(bindingId);
+      return make(accountId);
+    });
+    const error = await lifecycle.ensureAccess(bindingId).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+  });
+
+  it("puts the key on again when its route couldn't be written after it was put on (#17929)", async () => {
+    const { lifecycle, provider, files, bindingId, keyPath } = await createdAndReached();
+    await fs.rm(keyPath);
+    vi.spyOn(files, "write").mockRejectedValueOnce(new Error("disk full"));
+    await expect(lifecycle.ensureAccess(bindingId)).rejects.toThrow("disk full");
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    // Nothing vouches for the route on disk: the next dial bypasses it and asks again.
+    await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+    await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+  });
+
   it("puts the key on a created machine once after a restart, which can't know what it holds (#17929)", async () => {
     const { lifecycle, provider, store, run, bindingId, createKey, restart } =
       await createdAndReached();
