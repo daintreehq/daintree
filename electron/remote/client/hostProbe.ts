@@ -18,6 +18,7 @@ import {
   HOST_SOCKET_NAME,
   LINUX_RUNTIME_DIR_NAME,
   MAC_APP_DIR_NAME,
+  PID1_COMM_PATH,
 } from "../host/hostSocketPath.js";
 import type { CommandOptions } from "./commandRunner.js";
 import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -87,9 +88,17 @@ function buildInfoRead(asar: string): string {
 }
 
 /** One line of `sh` (see remoteShell.ts). Only markers are parsed. */
+/**
+ * Sets `$d` to where a Linux host listens, and `$pid1` to what PID 1 is: under
+ * the home's cache where PID 1 isn't systemd, else the uid's runtime
+ * directory (see host/hostSocketPath.ts).
+ */
+export function linuxHostDirShell(dirName: string = LINUX_RUNTIME_DIR_NAME): string {
+  return `pid1=$(head -c 64 ${PID1_COMM_PATH} 2>/dev/null); if [ -n "$pid1" ] && [ "$pid1" != systemd ]; then d="$HOME/.cache/${dirName}/run"; else d="/run/user/$(id -u)/${dirName}"; fi`;
+}
+
 export function buildHostProbeScript(): string {
   const macDir = `"$HOME/Library/Application Support/${MAC_APP_DIR_NAME}"`;
-  const linuxDir = `"/run/user/$(id -u)/${LINUX_RUNTIME_DIR_NAME}"`;
   const mac = [
     `d=${macDir}`,
     // Settings there mean Daintree has run as this user, who may have chosen its update channel.
@@ -106,7 +115,7 @@ export function buildHostProbeScript(): string {
     `if [ -f "$HOME/${MAC_LAUNCH_AGENT_RELATIVE}" ]; then echo "${MARK}launchagent yes"; else echo "${MARK}launchagent no"; fi`,
   ].join("; ");
   const linux = [
-    `d=${linuxDir}`,
+    linuxHostDirShell(),
     `if [ -f "\${XDG_CONFIG_HOME:-$HOME/.config}/${LINUX_SETTINGS_DIR_NAME}/config.json" ]; then echo "${MARK}settings yes"; else echo "${MARK}settings no"; fi`,
     `if [ -d ${DEB_INSTALL_DIR} ]; then echo "${MARK}install deb ${DEB_INSTALL_DIR}"`,
     `echo "${MARK}version $(dpkg-query -W -f='\${Version}' daintree 2>/dev/null)"`,
@@ -126,7 +135,7 @@ export function buildHostProbeScript(): string {
     `f=no; if [ -e /dev/fuse ]; then for b in fusermount3 fusermount; do p=$(command -v $b 2>/dev/null) && [ -u "$p" ] && { f=yes; break; }; done; fi; echo "${MARK}fuse $f"`,
     `echo "${MARK}linger $(loginctl show-user "$(id -un)" -p Linger 2>/dev/null)"`,
     // Host mode runs as a systemd user service; a WSL distro may boot without systemd.
-    `echo "${MARK}init $(head -c 64 /proc/1/comm 2>/dev/null)"`,
+    `echo "${MARK}init $pid1"`,
     // Only this SSH user's processes: another user's keyring is no use here.
     `k=none; for n in gnome-keyring-d kwalletd5 kwalletd6; do if pgrep -u "$(id -u)" -x $n >/dev/null 2>&1; then k=$n; break; fi; done; echo "${MARK}keyring $k"`,
   ].join("; ");
@@ -476,6 +485,18 @@ export interface ProbeOutcome {
   parsed: ParsedProbe | null;
 }
 
+/**
+ * Daintree there runs in the background once started, and a connection from
+ * here starts it again: Linux reached over SSH or a cloud route, with PID 1
+ * seen not to be systemd. A WSL distro keeps the systemd path, as before.
+ */
+export function startsOnConnect(
+  connection: HostConnection,
+  probe: Pick<ParsedProbe, "platform" | "advice">
+): boolean {
+  return connection.kind !== "wsl" && probe.platform === "linux" && probe.advice.systemd === false;
+}
+
 export async function probeHost(params: {
   connection: HostConnection;
   shell: HostCommandChannel;
@@ -550,6 +571,7 @@ export async function probeHost(params: {
       stagedUpdate: liveHostRecord(observed)?.stagedUpdate ?? null,
       advice: observed.advice,
       hostModeState: observed.hostModeState,
+      startsOnConnect: startsOnConnect(connection, observed),
     },
   };
 }

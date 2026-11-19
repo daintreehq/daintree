@@ -5,6 +5,7 @@ import type {
 import { formatHostConnection, type HostConnection } from "../../../shared/types/remoteHosts.js";
 import {
   ENABLE_HOST_MODE_FLAG,
+  HEADLESS_OZONE_SWITCH,
   HOST_MODE_FLAG,
   HOST_MODE_HANDOFF_FLAG,
   HOST_MODE_HANDOFF_NOBODY_EXIT_CODE,
@@ -12,9 +13,20 @@ import {
 } from "../../boot/hostModeLaunch.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { APPIMAGE_EXTRACT_AND_RUN_ENV, systemdUnitFor } from "../host/startAtLogin.js";
+import { LINUX_RUNTIME_DIR_NAME } from "../host/hostSocketPath.js";
+import {
+  APPIMAGE_EXTRACT_AND_RUN_ENV,
+  hostModeLaunchArguments,
+  systemdUnitFor,
+} from "../host/startAtLogin.js";
 import type { CommandResult } from "./commandRunner.js";
-import { DEB_EXECUTABLE, LINUX_UNIT_NAME, MAC_APP_PATH, type ProbeOutcome } from "./hostProbe.js";
+import {
+  DEB_EXECUTABLE,
+  LINUX_UNIT_NAME,
+  MAC_APP_PATH,
+  processStartShell,
+  type ProbeOutcome,
+} from "./hostProbe.js";
 import type { UpdateChannel } from "./installPlan.js";
 import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 
@@ -33,6 +45,10 @@ import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
  *   started, and lingering asked for so it outlives the login. The request
  *   then goes to the running Daintree with `--host-mode-handoff`, which quits
  *   at once instead of starting a backend under SSH if nothing is running.
+ * - Linux with no init system (PID 1 isn't systemd, so no unit can run):
+ *   Daintree is started in a session of its own that outlives the SSH login,
+ *   carrying the enable request itself. Nothing restarts it after a reboot
+ *   or a stop; a Shell's connection starts it again (see `ensureHostRunning`).
  */
 
 const MARK = "@@dt:";
@@ -77,16 +93,21 @@ function failed(message: string, detail?: string): AppError {
   });
 }
 
-/** The Linux launch target for what the probe found installed. */
-export function linuxLaunchTarget(probe: HostProbeResult): {
+export interface LinuxLaunchTarget {
   executable: string;
   appPath: null;
   appImageExtractAndRun: boolean;
-} {
-  const install = probe.install;
-  let executable: string | null = null;
-  if (install?.packaging === "deb") executable = DEB_EXECUTABLE;
-  else if (install?.packaging === "appimage") executable = install.path;
+}
+
+/**
+ * A Linux launch target for an executable: a deb's, or an AppImage (unpacked
+ * to run where there is no FUSE). Refuses a path that isn't plainly one.
+ */
+export function linuxTargetFor(
+  executable: string | null,
+  appImage: boolean,
+  fuse: boolean | null
+): LinuxLaunchTarget {
   if (!executable || !SAFE_EXECUTABLE.test(executable) || executable.includes("..")) {
     throw new AppError({
       code: "UNSUPPORTED",
@@ -95,11 +116,18 @@ export function linuxLaunchTarget(probe: HostProbeResult): {
         "Daintree on this host isn't a deb or an AppImage setup knows how to start. Install it from here first.",
     });
   }
-  return {
-    executable,
-    appPath: null,
-    appImageExtractAndRun: install?.packaging === "appimage" && probe.advice.fuse === false,
-  };
+  return { executable, appPath: null, appImageExtractAndRun: appImage && fuse === false };
+}
+
+/** The Linux launch target for what the probe found installed. */
+export function linuxLaunchTarget(
+  probe: Pick<HostProbeResult, "install" | "advice">
+): LinuxLaunchTarget {
+  const install = probe.install;
+  let executable: string | null = null;
+  if (install?.packaging === "deb") executable = DEB_EXECUTABLE;
+  else if (install?.packaging === "appimage") executable = install.path;
+  return linuxTargetFor(executable, install?.packaging === "appimage", probe.advice.fuse);
 }
 
 /** The script that writes the unit from stdin and enables it; one line of sh. */
@@ -208,11 +236,118 @@ function channelArg(updateChannel: UpdateChannel | undefined): string {
 
 /** Hand `--enable-host-mode` to the Daintree running on a Linux host; prints its exit status. */
 export function linuxHandoffScript(
-  target: ReturnType<typeof linuxLaunchTarget>,
+  target: LinuxLaunchTarget,
   updateChannel?: UpdateChannel
 ): string {
   const env = target.appImageExtractAndRun ? `${APPIMAGE_EXTRACT_AND_RUN_ENV}=1 ` : "";
   return `${env}${sq(target.executable)} ${HOST_MODE_FLAG} ${ENABLE_HOST_MODE_FLAG}${channelArg(updateChannel)} ${HOST_MODE_HANDOFF_FLAG} </dev/null >/dev/null 2>&1; echo "${MARK}handoff $?"`;
+}
+
+const CACHE_DIR = `$HOME/.cache/${LINUX_RUNTIME_DIR_NAME}`;
+const RECEIPT = `"${CACHE_DIR}/host-launch.pid"`;
+
+/**
+ * Sets `$lp` to the pid of the last start {@link detachedStartScript} made,
+ * while that process still runs (by its recorded start time), else to nothing.
+ */
+export const DETACHED_LAUNCH_READ = `lp=""; if [ -f ${RECEIPT} ]; then lt=""; read -r lp lt < ${RECEIPT}; case "$lp" in ''|*[!0-9]*) lp="" ;; *) ${processStartShell("lp", "ln")}; if [ -z "$lt" ] || [ "$ln" != "$lt" ]; then lp=""; fi ;; esac; fi`;
+/** Where a host started on connect writes its output: what a failed start is read from. */
+export const DETACHED_LOG_PATH = `~/.cache/${LINUX_RUNTIME_DIR_NAME}/host.log`;
+const DETACHED_LOG_ROTATE_BYTES = 1024 * 1024;
+/** The end of that log, enough to find the last start's first error. */
+export const DETACHED_LOG_SCRIPT = `tail -c 16384 "${CACHE_DIR}/host.log" 2>/dev/null`;
+/** systemd's own default for a user manager's services. */
+const SERVICE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/**
+ * Start Daintree in Host mode where no init system can (see the file
+ * comment), as a unit would run it: headless, in a clean environment, in a
+ * session of its own so the SSH login ending doesn't take it along, with its
+ * output appended to {@link DETACHED_LOG_PATH} and nothing left on the SSH
+ * channel. Prints `launched <pid> <start time> <new|running>`.
+ *
+ * The launch is recorded (pid and start time) in `host-launch.pid`, and one
+ * still alive is reported rather than started again: an AppImage unpacking
+ * without FUSE takes minutes before it is a `daintree` process or listens,
+ * and a second launch meanwhile would come back after the first had quit.
+ */
+export function detachedStartScript(
+  target: LinuxLaunchTarget,
+  flags: readonly string[] = []
+): string {
+  const argv = [...hostModeLaunchArguments(target), HEADLESS_OZONE_SWITCH, ...flags];
+  const env = [
+    `HOME="$HOME"`,
+    `USER="$u"`,
+    `LOGNAME="$u"`,
+    `SHELL="\${SHELL:-/bin/sh}"`,
+    `PATH=${SERVICE_PATH}`,
+    ...(target.appImageExtractAndRun ? [`${APPIMAGE_EXTRACT_AND_RUN_ENV}=1`] : []),
+  ];
+  return [
+    `umask 077`,
+    `c="${CACHE_DIR}"`,
+    `mkdir -p "$c" || exit 1`,
+    `cd "$HOME" || exit 1`,
+    `r="$c/host-launch.pid"`,
+    `l="$c/host.log"`,
+    DETACHED_LAUNCH_READ,
+    `if [ -n "$lp" ]; then echo "${MARK}launched $lp $lt running"; exit 0; fi`,
+    `if [ -f "$l" ] && [ "$(wc -c < "$l")" -gt ${DETACHED_LOG_ROTATE_BYTES} ]; then mv -f "$l" "$l.1"; fi`,
+    `echo "Started Daintree host $(date)" >> "$l"`,
+    `u=$(id -un)`,
+    `set -- ${env.join(" ")}`,
+    // Only what a user manager would hand a service; any setting it knows about too.
+    `if [ -n "\${LANG:-}" ]; then set -- "$@" LANG="$LANG"; fi`,
+    `if [ -n "\${XDG_CONFIG_HOME:-}" ]; then set -- "$@" XDG_CONFIG_HOME="$XDG_CONFIG_HOME"; fi`,
+    `s=""; if command -v setsid >/dev/null 2>&1; then s=setsid; fi`,
+    `nohup $s env -i "$@" ${argv.map(sq).join(" ")} </dev/null >>"$l" 2>&1 &`,
+    `lp=$!`,
+    processStartShell("lp", "ln"),
+    `printf '%s %s\\n' "$lp" "$ln" > "$r.tmp" && mv -f "$r.tmp" "$r"`,
+    `echo "${MARK}launched $lp $ln new"`,
+  ].join("; ");
+}
+
+export interface DetachedLaunch {
+  pid: number;
+  /** When it started, as /proc says; null when that couldn't be read. */
+  startedAt: string | null;
+  /** This call started it, rather than finding an earlier launch still alive. */
+  fresh: boolean;
+}
+
+/** What {@link detachedStartScript} reported; null when it didn't say. */
+export function parseDetachedLaunch(stdout: string): DetachedLaunch | null {
+  const value = markerValue(stdout, "launched");
+  const match = value ? /^(\d{1,10}) (\d{1,20})? ?(new|running)$/.exec(value) : null;
+  if (!match) return null;
+  return { pid: Number(match[1]), startedAt: match[2] ?? null, fresh: match[3] === "new" };
+}
+
+/** Runs `then` while the launch is still the process it was, by its start time. */
+function whileSameLaunch(launch: DetachedLaunch, then: string): string {
+  return `p=${launch.pid}; ${processStartShell("p", "n")}; if [ -n "$n" ] && [ "$n" = ${sq(launch.startedAt ?? "")} ]; then ${then}; fi`;
+}
+
+/**
+ * Prints whether a launch is still running. Without a start time to tell it
+ * from a later process given its pid, any process with it counts.
+ */
+export function detachedAliveScript(launch: DetachedLaunch): string {
+  const yes = `echo "${MARK}alive yes"`;
+  return launch.startedAt
+    ? whileSameLaunch(launch, yes)
+    : `if kill -0 ${launch.pid} 2>/dev/null; then ${yes}; fi`;
+}
+
+export function parseDetachedAlive(stdout: string): boolean {
+  return markerValue(stdout, "alive") === "yes";
+}
+
+/** Ask a launch that is still the process it was to quit; anything since given its pid is left alone. */
+export function detachedStopScript(launch: DetachedLaunch): string {
+  return `${whileSameLaunch(launch, `kill -TERM "$p" 2>/dev/null`)}; true`;
 }
 
 /**
@@ -238,13 +373,17 @@ export function macEnableScript(
 
 export const MAC_ENABLE_SCRIPT = macEnableScript();
 
-/** Host mode is on for good there: listening, saved, and start at login in place. */
+/**
+ * Host mode is on for good there: listening, saved, and start at login in
+ * place, or, where nothing can start it at login, recorded as started on connect.
+ */
 export function hostModeConfirmed(outcome: ProbeOutcome): boolean {
   const { result, parsed } = outcome;
   const state = result.hostModeState;
   if (!result.hostModeListening || !state) return false;
   // Recorded by the live process that is listening now, not left from an earlier run.
   if (parsed?.hostPid == null || state.pid !== parsed.hostPid) return false;
+  if (result.startsOnConnect) return state.enabled && state.startMethod === "on-connect";
   return (
     state.enabled &&
     state.startAtLogin &&
@@ -264,6 +403,9 @@ function unconfirmedReason(outcome: ProbeOutcome, hostName: string): string {
   }
   if (!state.enabled) {
     return `Host mode is listening on ${hostName}, but its setting there didn't read back as on`;
+  }
+  if (result.startsOnConnect) {
+    return `Host mode is on at ${hostName}, but Daintree there didn't record that it runs without systemd. Update Daintree there, then try again`;
   }
   if (state.startAtLoginError) {
     return `Host mode is on at ${hostName}, but start at login couldn't be installed there: ${state.startAtLoginError}`;
@@ -308,6 +450,29 @@ export async function bootstrapHostMode(
   }
   // A different build is turned on as it is: it connects best effort, with a warning.
 
+  /** Hand `--enable-host-mode` to the Daintree running there. */
+  const handOver = async (target: LinuxLaunchTarget): Promise<void> => {
+    // Unpacking an AppImage without FUSE takes a while before it can hand over.
+    const handoff = await run(
+      deps.channel,
+      linuxHandoffScript(target, updateChannel),
+      "Couldn't reach Daintree on the host",
+      target.appImageExtractAndRun ? 5 * 60_000 : 120_000
+    );
+    const code = markerValue(handoff.stdout, "handoff");
+    if (code === String(HOST_MODE_HANDOFF_NOBODY_EXIT_CODE)) {
+      throw failed(
+        `Daintree stopped running on ${hostLabel} before Host mode could be switched on`
+      );
+    }
+    if (code !== "0") {
+      throw failed(
+        `Daintree on ${hostLabel} didn't take the request`,
+        `exit status ${code ?? "?"}`
+      );
+    }
+  };
+
   const pollUntil = async (
     done: (outcome: ProbeOutcome) => boolean,
     timeoutMs: number,
@@ -326,6 +491,8 @@ export async function bootstrapHostMode(
   let lingerRefused: string | null = null;
   // What the unit was before this setup touched it: put back if setup fails.
   let previousUnit: PreviousUnit | null = null;
+  // A Daintree this setup started on a machine with no init system: stopped if setup fails.
+  let launched: DetachedLaunch | null = null;
   let confirmed: ProbeOutcome;
   try {
     if (probe.platform === "darwin") {
@@ -340,6 +507,53 @@ export async function bootstrapHostMode(
           userMessage: `Couldn't start Daintree on ${hostLabel}. Log in there once and open it.`,
         });
       }
+    } else if (probe.startsOnConnect) {
+      const target = linuxLaunchTarget(probe);
+      // A fresh launch carries the request itself; anything already running is handed it.
+      let handOff = probe.hostModeListening || probe.appRunning;
+      if (!handOff) {
+        const started = await run(
+          deps.channel,
+          detachedStartScript(target, [
+            ENABLE_HOST_MODE_FLAG,
+            ...(updateChannel ? [`${UPDATE_CHANNEL_FLAG}=${updateChannel}`] : []),
+          ]),
+          "Couldn't start Daintree on the host"
+        );
+        const launch = parseDetachedLaunch(started.stdout);
+        if (!launch) {
+          throw failed(`Couldn't start Daintree on ${hostLabel}`, "it didn't say what it started");
+        }
+        if (launch.fresh) launched = launch;
+        // An earlier start still unpacking took no request: it is handed over once listening.
+        else handOff = true;
+        let exited = false;
+        const up = await pollUntil(
+          (o) => o.result.hostModeListening,
+          LISTEN_TIMEOUT_MS,
+          async () => {
+            const alive = await deps.channel
+              .exec(detachedAliveScript(launch), { timeoutMs: 15_000, signal })
+              .catch(() => null);
+            exited = alive !== null && alive.code === 0 && !parseDetachedAlive(alive.stdout);
+            return exited;
+          }
+        );
+        if (!up.result.hostModeListening) {
+          const log = await deps.channel
+            .exec(DETACHED_LOG_SCRIPT, { timeoutMs: 15_000, signal })
+            .catch(() => null);
+          const error = log ? lastRunError(log.stdout) : null;
+          const where = `${DETACHED_LOG_PATH} there`;
+          throw failed(
+            exited
+              ? `Daintree exited on ${hostLabel} as it started`
+              : `Daintree started on ${hostLabel}, but didn't start listening`,
+            error ? `${error} (more in ${where})` : `see ${where}`
+          );
+        }
+      }
+      if (handOff) await handOver(target);
     } else {
       const target = linuxLaunchTarget(probe);
       // Without lingering the user's services stop with their last login. A WSL
@@ -404,30 +618,17 @@ export async function bootstrapHostMode(
           );
         }
       }
-      // Unpacking an AppImage without FUSE takes a while before it can hand over.
-      const handoff = await run(
-        deps.channel,
-        linuxHandoffScript(target, updateChannel),
-        "Couldn't reach Daintree on the host",
-        target.appImageExtractAndRun ? 5 * 60_000 : 120_000
-      );
-      const code = markerValue(handoff.stdout, "handoff");
-      if (code === String(HOST_MODE_HANDOFF_NOBODY_EXIT_CODE)) {
-        throw failed(
-          `Daintree stopped running on ${hostLabel} before Host mode could be switched on`
-        );
-      }
-      if (code !== "0") {
-        throw failed(
-          `Daintree on ${hostLabel} didn't take the request`,
-          `exit status ${code ?? "?"}`
-        );
-      }
+      await handOver(target);
     }
 
     confirmed = await pollUntil(hostModeConfirmed, CONFIRM_TIMEOUT_MS);
     if (!hostModeConfirmed(confirmed)) throw failed(unconfirmedReason(confirmed, hostLabel));
   } catch (error) {
+    if (launched) {
+      await deps.channel
+        .exec(detachedStopScript(launched), { timeoutMs: 30_000, signal })
+        .catch(() => undefined);
+    }
     if (previousUnit && !previousUnit.existed) {
       await deps.channel
         .exec(REMOVE_UNIT_SCRIPT, { timeoutMs: 60_000, signal })

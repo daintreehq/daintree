@@ -37,10 +37,16 @@ import {
 import { discoverHosts, discoverWslDistros } from "./discovery.js";
 import { listSshConfigAliases } from "./sshConfig.js";
 import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
-import { runHostInstall } from "./hostInstaller.js";
+import { runHostInstall, stopScript } from "./hostInstaller.js";
 import { RestartImpactSchema } from "../metrics/linkMethods.js";
-import { bootstrapHostMode, LINUX_START_SCRIPT, macStartScript } from "./hostModeBootstrap.js";
-import { probeHost, type ProbeOutcome } from "./hostProbe.js";
+import {
+  bootstrapHostMode,
+  detachedStartScript,
+  LINUX_START_SCRIPT,
+  linuxLaunchTarget,
+  macStartScript,
+} from "./hostModeBootstrap.js";
+import { liveHostRecord, probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
 import { sshExecutable } from "./sshExecutable.js";
@@ -93,6 +99,8 @@ export interface HostSetupDeps {
   cloudChannel?(bindingId: string): HostCommandChannel;
   /** Drops what reaching a cloud machine left here: its master and ssh files. */
   forgetCloud?(bindingId: string): Promise<void>;
+  /** Every check that reached a host, so what it saw can be kept with the host's record. */
+  onProbed?(connection: HostConnection, result: HostProbeResult): void;
 }
 
 /** Per-machine cache key: an ssh host keeps the key of its target alone. */
@@ -418,12 +426,24 @@ export class HostSetupService {
     if (probe.hostModeState?.stopped === true && options.explicit !== true) {
       return unstartable("quit");
     }
-    const script =
-      probe.platform === "darwin" && probe.hostModeState?.enabled === true
-        ? macStartScript(probe.install.path)
-        : probe.platform === "linux" && probe.advice.hostModeUnit === true
-          ? LINUX_START_SCRIPT
-          : null;
+    let script: string | null = null;
+    if (probe.platform === "darwin" && probe.hostModeState?.enabled === true) {
+      script = macStartScript(probe.install.path);
+    } else if (probe.platform === "linux" && probe.startsOnConnect) {
+      // Only where Daintree there recorded Host mode on, started on connect: nothing else asked for it.
+      if (probe.hostModeState?.startMethod === "on-connect" && probe.hostModeState.enabled) {
+        if (outcome.parsed.appImageConflict) {
+          throw new AppError({
+            code: "UNSUPPORTED",
+            message: "Which AppImage to start on the host is ambiguous",
+            userMessage: `Couldn't tell which Daintree to start on ${formatHostConnection(connection)}. ${outcome.parsed.appImageConflict}`,
+          });
+        }
+        script = detachedStartScript(linuxLaunchTarget(probe));
+      }
+    } else if (probe.platform === "linux" && probe.advice.hostModeUnit === true) {
+      script = LINUX_START_SCRIPT;
+    }
     if (!script) return unstartable("host-mode-off");
     // Last look before changing anything on the host.
     if (
@@ -443,7 +463,9 @@ export class HostSetupService {
         userMessage:
           probe.platform === "darwin"
             ? `Couldn't start Daintree on ${label}. Log in there (or turn on automatic login), then connect again.`
-            : `Couldn't start Daintree's service on ${label}: ${failureDetail(started, "systemctl failed")}`,
+            : probe.startsOnConnect
+              ? `Couldn't start Daintree on ${label}: ${failureDetail(started, "ssh failed")}`
+              : `Couldn't start Daintree's service on ${label}: ${failureDetail(started, "systemctl failed")}`,
       });
     }
     const sleep = this.deps.sleep ?? abortableSleep;
@@ -459,6 +481,27 @@ export class HostSetupService {
       message: "The host's Daintree started but never listened",
       userMessage: `Daintree started on ${label} but didn't begin listening within a minute.`,
     });
+  }
+
+  /**
+   * Removing a host whose Daintree runs started on connect: nothing else
+   * would ever stop it, so the listener there is asked to quit, as an update
+   * stops it. Only one its own record says was started on connect; one kept
+   * by a service or a login item, a WSL distro, or a host that can't be
+   * reached is left as it is. Resolves whether it was stopped.
+   */
+  async stopStartedOnConnect(connection: HostConnection, signal?: AbortSignal): Promise<boolean> {
+    if (connection.kind === "wsl") return false;
+    const channel = this.shellFor(connection);
+    const outcome = await this.probeOutcome(connection, channel, signal);
+    const parsed = outcome.parsed;
+    if (!parsed || !outcome.result.startsOnConnect || signal?.aborted) return false;
+    if (liveHostRecord(parsed)?.startMethod !== "on-connect") return false;
+    const stopped = await channel.exec(
+      stopScript("linux", parsed.hostPid, false, parsed.hostStartedAt),
+      { timeoutMs: 90_000, signal }
+    );
+    return stopped.code === 0 && stopped.stdout.includes("@@dt:stopped yes");
   }
 
   /**
@@ -560,12 +603,14 @@ export class HostSetupService {
     signal?: AbortSignal
   ): Promise<ProbeOutcome> {
     await fs.mkdir(this.deps.clientDir, { recursive: true, mode: 0o700 }).catch(() => {});
-    return probeHost({
+    const outcome = await probeHost({
       connection,
       shell,
       client: this.deps.clientBuild(),
       options: signal ? { signal } : undefined,
     });
+    if (outcome.result.reachable) this.deps.onProbed?.(connection, outcome.result);
+    return outcome;
   }
 }
 

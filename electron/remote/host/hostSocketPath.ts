@@ -3,9 +3,12 @@ import path from "node:path";
 /**
  * Where Host mode listens. macOS keeps the socket in the app's userData
  * directory; Linux uses the per-user runtime directory, derived from the uid
- * because minimal SSH sessions often don't export XDG_RUNTIME_DIR. The
- * discovery file sits next to the socket so a client that can derive one can
- * derive the other.
+ * because minimal SSH sessions often don't export XDG_RUNTIME_DIR. A Linux
+ * machine whose PID 1 isn't systemd has no login manager to make that
+ * directory, and nothing there restarts the host after a reboot, so its
+ * socket goes under the home's cache instead, where `host-mode.json` lasts
+ * across one. The discovery file sits next to the socket so a client that can
+ * derive one can derive the other.
  */
 
 export const HOST_SOCKET_NAME = "host.sock";
@@ -29,15 +32,42 @@ export function linuxRuntimeDir(uid: number): string {
   return `/run/user/${uid}`;
 }
 
+/** Where a Linux host with no init system to start it keeps its socket: `~/.cache/<dir>/run`. */
+export function linuxHomeRuntimeDir(home: string, dirName: string = LINUX_RUNTIME_DIR_NAME): string {
+  return path.posix.join(home, ".cache", dirName, "run");
+}
+
+/** What `/proc/1/comm` says PID 1 is. */
+export const PID1_COMM_PATH = "/proc/1/comm";
+
+/**
+ * Whether a Linux machine starts its host on connect: PID 1 was read and
+ * isn't systemd. An unreadable PID 1 keeps the systemd layout. The probe and
+ * the discovery read apply the same test in shell.
+ */
+export function startsOnConnectForInit(pid1Comm: string | null): boolean {
+  const comm = pid1Comm?.trim() ?? "";
+  return comm !== "" && comm !== "systemd";
+}
+
 export function hostSocketLocation(
   params:
     | { platform: "darwin"; userDataDir: string }
-    | { platform: "linux"; uid: number; dirName?: string }
+    | {
+        platform: "linux";
+        uid: number;
+        dirName?: string;
+        /** With {@link home}: the machine starts its host on connect (see {@link startsOnConnectForInit}). */
+        startsOnConnect?: boolean;
+        home?: string;
+      }
 ): HostSocketLocation {
   const dir =
     params.platform === "darwin"
       ? params.userDataDir
-      : path.posix.join(linuxRuntimeDir(params.uid), params.dirName ?? LINUX_RUNTIME_DIR_NAME);
+      : params.startsOnConnect && params.home
+        ? linuxHomeRuntimeDir(params.home, params.dirName)
+        : path.posix.join(linuxRuntimeDir(params.uid), params.dirName ?? LINUX_RUNTIME_DIR_NAME);
   return {
     dir,
     socketPath: path.posix.join(dir, HOST_SOCKET_NAME),
@@ -55,6 +85,7 @@ export function remoteHostSocketLocation(params: {
   home: string;
   macAppDirName?: string;
   linuxDirName?: string;
+  startsOnConnect?: boolean;
 }): HostSocketLocation {
   if (params.platform === "darwin") {
     return hostSocketLocation({
@@ -67,7 +98,13 @@ export function remoteHostSocketLocation(params: {
       ),
     });
   }
-  return hostSocketLocation({ platform: "linux", uid: params.uid, dirName: params.linuxDirName });
+  return hostSocketLocation({
+    platform: "linux",
+    uid: params.uid,
+    dirName: params.linuxDirName,
+    startsOnConnect: params.startsOnConnect,
+    home: params.home,
+  });
 }
 
 export class SocketPathTooLongError extends Error {
