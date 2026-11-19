@@ -922,6 +922,17 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
       "Agent 37 keeps its own idle timer until you pick an idle time here."
     );
 
+    // One that follows the host is on its way to the host's: nothing is said of the gap.
+    cleanup();
+    cloud.snapshot = { providers: [agent37], accounts: [], hosts: [sleeper()] };
+    await act(async () => {
+      render(
+        <CloudMachineSection hostId="build" hostName="build" connected liveSummary={summary} />
+      );
+    });
+    expect(idleRow()).toContain("The host's idle time is in charge while this device is connected");
+    expect(idleRow()).not.toContain("keeps its own idle timer");
+
     cleanup();
     show(sleeper({ lifetime: { kind: "none" } }), [agent37]);
     expect(idleRow()).toContain(
