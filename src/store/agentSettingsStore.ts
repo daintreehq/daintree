@@ -12,7 +12,7 @@ import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { setAgentSettingsEntryAccessor } from "./storeAccessors";
+import { setAgentSettingsEntryAccessor, setGlobalSkipPermissionsAccessor } from "./storeAccessors";
 
 /**
  * In-memory normalization: once real CLI availability exists, every registered
@@ -526,4 +526,7 @@ export function cleanupAgentSettingsStore() {
 // as soon as this store exists, mirroring projectStore's path-index accessor.
 setAgentSettingsEntryAccessor(
   (agentId) => useAgentSettingsStore.getState().settings?.agents?.[agentId]
+);
+setGlobalSkipPermissionsAccessor(
+  () => useAgentSettingsStore.getState().settings?.globalSkipPermissions === true
 );

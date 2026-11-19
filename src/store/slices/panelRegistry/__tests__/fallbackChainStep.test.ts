@@ -99,14 +99,27 @@ describe("ownFallbackChainRoot (#17917)", () => {
     ).toBe("a");
   });
 
-  it("never moves a later step into a slot an unresolved one holds", () => {
-    // `team` is the project's, still loading; `gone` was deleted. Either way
-    // the merge would drop it and put `b` first.
-    for (const missing of ["team", "gone"]) {
-      const loading = presets([preset("a", [missing, "b"]), preset("b")]);
-      expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, "b", loading)).toBeNull();
-      expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, missing, loading)).toBeNull();
-    }
+  it("never moves a later step into a slot a step still loading holds", () => {
+    // `team` may be the project's, not read yet: the merge would drop it and put `b` first.
+    const loading = {
+      ...presets([preset("a", ["team", "b"]), preset("b")]),
+      inventoryReady: false,
+    };
+    expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, "b", loading)).toBeNull();
+    expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, "team", loading)).toBeNull();
+  });
+
+  it("walks past a deleted step once everything has loaded, as a usage-limit hop does", () => {
+    const loaded = { ...presets([preset("a", ["gone", "b"]), preset("b")]), inventoryReady: true };
+    expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, "b", loaded)).toBe("a");
+    expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, "gone", loaded)).toBeNull();
+    // A loaded project step still asks, and holds its slot.
+    const shared = {
+      ...presets([preset("a", ["team", "b"]), preset("b")], { projectPresets: [preset("team")] }),
+      inventoryReady: true,
+    };
+    expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, "team", shared)).toBeNull();
+    expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, "b", shared)).toBeNull();
   });
 
   it("asks when a project preset takes over a CCR id the chain names", () => {

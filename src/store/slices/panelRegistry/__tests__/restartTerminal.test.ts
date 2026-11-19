@@ -2850,6 +2850,8 @@ describe("restartTerminalOnOwnFallbackStep (#17917)", () => {
     { id: "other", name: "Other" },
   ];
   let mirror: Preset[] = custom;
+  let mirrorAgent: Record<string, unknown> = {};
+  let mirrorGlobalSkip = false;
 
   async function savedPresets(presets: Preset[]): Promise<void> {
     const { agentSettingsClient } = await import("@/clients");
@@ -2863,8 +2865,12 @@ describe("restartTerminalOnOwnFallbackStep (#17917)", () => {
     vi.clearAllMocks();
     projectPresetsByAgent.current = {};
     mirror = custom;
-    const { setAgentSettingsEntryAccessor } = await import("@/store/storeAccessors");
-    setAgentSettingsEntryAccessor(() => ({ customPresets: mirror }) as never);
+    const { setAgentSettingsEntryAccessor, setGlobalSkipPermissionsAccessor } =
+      await import("@/store/storeAccessors");
+    setAgentSettingsEntryAccessor(() => ({ customPresets: mirror, ...mirrorAgent }) as never);
+    mirrorAgent = {};
+    mirrorGlobalSkip = false;
+    setGlobalSkipPermissionsAccessor(() => mirrorGlobalSkip);
     getMergedPresetMock.mockImplementation(
       (_agentId: string, presetId: string, customPresets?: Preset[]) =>
         [...(customPresets ?? custom), ...(projectPresetsByAgent.current.claude ?? [])].find(
@@ -3037,6 +3043,29 @@ describe("restartTerminalOnOwnFallbackStep (#17917)", () => {
     expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
     expect(mockSpawn).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["the agent's own", () => (mirrorAgent = { dangerousMode: "off" })],
+    ["every agent's", () => (mirrorGlobalSkip = true)],
+  ])(
+    "asks when this view heard %s permission setting change during the read",
+    async (_label, change) => {
+      seed();
+      // Agreeing with the launch's read until the change lands.
+      mirrorAgent = { dangerousMode: "on" };
+      const { agentSettingsClient } = await import("@/clients");
+      vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+        change();
+        return {
+          agents: { claude: { customPresets: custom, dangerousMode: "on" } },
+          globalSkipPermissions: false,
+        } as never;
+      });
+
+      expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+      expect(mockSpawn).not.toHaveBeenCalled();
+    }
+  );
 
   it("starts a new conversation, as the owned move does: a caller's resume selector stays behind", async () => {
     seed({

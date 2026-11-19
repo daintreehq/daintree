@@ -34,6 +34,7 @@ import {
   agentClipboardDirectory,
   dropRetiredAgentModel,
   dropUnselectedAgentModel,
+  resolveDangerousMode,
   supportsConversationKeepingSwitch,
   supportsCrossDirectoryResume,
 } from "@shared/types/agentSettings";
@@ -87,7 +88,10 @@ import {
   markTerminalRestarting,
   unmarkTerminalRestarting,
 } from "@/store/restartExitSuppression";
-import { getAgentSettingsEntrySnapshot } from "@/store/storeAccessors";
+import {
+  getAgentSettingsEntrySnapshot,
+  getGlobalSkipPermissionsSnapshot,
+} from "@/store/storeAccessors";
 import { ownFallbackChainRoot } from "./fallbackChainStep";
 import { saveNormalized } from "./persistence";
 import { buildAgentLaunchContext } from "./agentLaunchContext";
@@ -1855,6 +1859,7 @@ interface OwnStepInputs {
   agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>>;
   tmpDir: string;
   launchConfigDir: string | undefined;
+  cliDetail: Awaited<ReturnType<typeof getCurrentLaunchCliDetail>>;
 }
 
 /**
@@ -1878,13 +1883,16 @@ async function readOwnStepInputs(
   agentId: string,
   keepConversation: boolean
 ): Promise<OwnStepInputs> {
-  const [agentSettings, tmpDir, launchConfigDir] = await Promise.all([
+  // Everything the launch awaits, so nothing yields between its check, its
+  // claim and the teardown: no exit, replacement or edit can land in between.
+  const [agentSettings, tmpDir, launchConfigDir, cliDetail] = await Promise.all([
     agentSettingsClient.get(),
     resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
     // Read while the launch still runs, as a kept conversation needs (#17087).
     keepConversation && reopensFromConversationStore(agentId) ? readLaunchConfigDir(id) : undefined,
+    getCurrentLaunchCliDetail(agentId),
   ]);
-  return { agentSettings, tmpDir, launchConfigDir };
+  return { agentSettings, tmpDir, launchConfigDir, cliDetail };
 }
 
 /**
@@ -1900,12 +1908,19 @@ function ownFallbackStepRoot(
 ): string | null {
   const agentId = panel.launchAgentId;
   if (!agentId) return null;
-  const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[agentId];
-  const projectPresets = useProjectPresetsStore.getState().presetsByAgent[agentId];
+  const ccr = useCcrPresetsStore.getState();
+  const project = useProjectPresetsStore.getState();
+  const ccrPresets = ccr.ccrPresetsByAgent[agentId];
+  const projectPresets = project.presetsByAgent[agentId];
+  const viewWorkspaceId = getViewWorkspaceId();
   const root = ownFallbackChainRoot(agentId, panel, presetId, {
     customPresets,
     ccrPresets,
     projectPresets,
+    inventoryReady:
+      ccr.isInitialized === true &&
+      viewWorkspaceId !== null &&
+      project.hydratedProjectId === viewWorkspaceId,
   });
   if (root === null) return null;
   const target = getMergedPreset(agentId, presetId, customPresets, ccrPresets, projectPresets);
@@ -1962,6 +1977,17 @@ function settleRespawnMode(
     projectPresets
   );
   if (!launching || !known || presetLaunchContent(launching) !== presetLaunchContent(known)) {
+    return needsConfirmation();
+  }
+  // And so for skipping permission prompts on the agent, or for every agent.
+  const launchSettings = requested.inputs.agentSettings;
+  const knownGlobal = getGlobalSkipPermissionsSnapshot();
+  if (
+    knownGlobal === null ||
+    knownGlobal !== (launchSettings?.globalSkipPermissions === true) ||
+    resolveDangerousMode(launchSettings?.agents?.[agentId] ?? {}) !==
+      resolveDangerousMode(getAgentSettingsEntrySnapshot(agentId) ?? {})
+  ) {
     return needsConfirmation();
   }
   return { kind: "fallback", originalPresetId: root, ownChainStep: true };
@@ -2161,7 +2187,9 @@ async function respawnAgentOnPreset(
     const agentConfig = getAgentConfig(effectiveAgentId);
     const baseCommand = resolveAgentLaunchBaseCommand(
       agentConfig?.command || effectiveAgentId,
-      await getCurrentLaunchCliDetail(effectiveAgentId)
+      requested.kind === "own-chain-step"
+        ? requested.inputs.cliDetail
+        : await getCurrentLaunchCliDetail(effectiveAgentId)
     );
     const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
     // A failover swaps the provider, not the caller's standing instruction
@@ -2225,25 +2253,6 @@ async function respawnAgentOnPreset(
     // agent is the one the pane launched (as in `restartTerminal`).
     const captureTrusted =
       livePanel.detectedAgentId === undefined || livePanel.detectedAgentId === effectiveAgentId;
-
-    // An assistant's hop whose caller gave up while it prepared (#17917) ends
-    // here, before anything is torn down: it was told the call failed.
-    if (
-      requested.kind === "own-chain-step" &&
-      requested.deadlineAt !== undefined &&
-      Date.now() >= requested.deadlineAt
-    ) {
-      unmarkTerminalRestarting(id);
-      set((state) =>
-        updateTerminal(state, id, (t) => ({
-          ...t,
-          isRestarting: false,
-          restartError: livePanel.restartError,
-          spawnError: livePanel.spawnError,
-        }))
-      );
-      return { success: false, error: "the call's deadline passed before the move started" };
-    }
 
     peekTerminalService()?.destroy(id);
     withTerminalService((service) => service.suppressNextExit(id, 10000), id);
