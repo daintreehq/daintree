@@ -960,6 +960,19 @@ describe("ResourceOwnershipLedger and what a restart keeps (#16845)", () => {
     }
   });
 
+  it("lets a late creation end a given-back record whenever it was given back, in its workspace only", () => {
+    const ledger = new ResourceOwnershipLedger();
+    const conversation = helpConversationKey("c");
+    ledger.restoreIfUnclaimed(conversation, { kind: "terminal", id: "here" }, "p");
+    ledger.restoreIfUnclaimed(conversation, { kind: "terminal", id: "there" }, "q");
+
+    ledger.supersedeOlder([{ kind: "terminal", id: "here" }], 0, "p");
+    ledger.supersedeOlder([{ kind: "terminal", id: "there" }], Date.now() + 1, "p");
+
+    expect(ledger.creatorOf("terminal", "here")).toBeUndefined();
+    expect(ledger.creatorOf("terminal", "there")).toBe(conversation);
+  });
+
   it("ends a given-back record when its id starts in another workspace, never this run's or its own", () => {
     const ledger = new ResourceOwnershipLedger();
     const owner = principalOwnerKey(helpOwnershipPrincipal("help-a"));

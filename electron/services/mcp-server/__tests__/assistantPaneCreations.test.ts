@@ -658,6 +658,42 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     expect(disk.read()).toEqual({});
   });
 
+  it("ends a given-back record, but nothing kept on disk, for a launch whose workspace isn't known", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    const owner = bindHelp(first, "help-a", "conv-1");
+    first.record(owner, [{ kind: "terminal", id: "t1" }], "proj-1");
+    first.record(owner, [{ kind: "terminal", id: "t2" }], "proj-1");
+    await flush();
+
+    const second = startRun(disk);
+    admitRestoredAssistantPanes("proj-1", [byHelp("t1")], new Set(["conv-1"]));
+    supersedeByPluginLaunch("agent.launch", { ok: true, result: { terminalId: "t1" } }, null);
+    supersedeByPluginLaunch("agent.launch", { ok: true, result: { terminalId: "t2" } }, null);
+    await flush();
+
+    expect(second.creatorOf("terminal", "t1")).toBeUndefined();
+    expect(Object.keys(disk.read())).toEqual(["t2"]);
+  });
+
+  it("lets an early relay call that came back in time keep nothing a day after it", async () => {
+    const disk = makeDisk();
+    const first = startRun(disk);
+    first.record(
+      bindLocalRelay(first, "help-a", "conv-1"),
+      [{ kind: "terminal", id: "t1" }],
+      "proj-1"
+    );
+    await flush();
+
+    _resetAssistantPaneCreationsForTests();
+    noteLocalRelayCall("conv-1", T0 + 60 * 60_000);
+    vi.setSystemTime(T0 + LOCAL_RELAY_CONVERSATION_RETENTION_MS + 2 * 60 * 60_000);
+    attachAssistantPaneCreationPersistence(disk.persistence);
+
+    expect(isKeptAssistantPane("t1")).toBe(false);
+  });
+
   it("tries a failed write again at the quit, a dropped record included", async () => {
     const disk = makeDisk();
     const ledger = startRun(disk);

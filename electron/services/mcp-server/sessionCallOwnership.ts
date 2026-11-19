@@ -742,7 +742,7 @@ export function recordOwnershipFromDispatch(
     // this call was asked is of what it replaced (#16845).
     sessionStore.resourceOwnership.supersedeOlder(
       drafts,
-      call.askedAt ?? Date.now(),
+      call.askedAt ?? 0,
       envelope.dispatchedWorkspace?.workspaceId
     );
     return;

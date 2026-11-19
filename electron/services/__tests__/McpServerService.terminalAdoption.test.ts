@@ -214,7 +214,7 @@ describe("McpServerService terminal hand-over (#12490)", () => {
       type: "spawned",
       terminalId: "kept-1",
       projectId: "proj-a",
-      kind: "terminal",
+      kind: "agent",
       timestamp: Date.now(),
     });
     expect(ownership.creatorOf("terminal", "kept-1")).toBeDefined();
@@ -222,7 +222,7 @@ describe("McpServerService terminal hand-over (#12490)", () => {
       type: "spawned",
       terminalId: "kept-1",
       projectId: "proj-b",
-      kind: "terminal",
+      kind: "agent",
       timestamp: Date.now(),
     });
 

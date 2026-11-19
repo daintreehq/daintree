@@ -372,8 +372,9 @@ export function attachAssistantPaneCreationPersistence(
       firstBack !== undefined
         ? firstBack <= onDisk + LOCAL_RELAY_CONVERSATION_RETENTION_MS
         : onDisk >= now - LOCAL_RELAY_CONVERSATION_RETENTION_MS;
-    if (cameBackInTime) {
-      relayLastCall.set(conversationId, Math.max(onDisk, earlyLast.get(conversationId) ?? 0));
+    const last = Math.max(onDisk, earlyLast.get(conversationId) ?? 0);
+    if (cameBackInTime && last >= now - LOCAL_RELAY_CONVERSATION_RETENTION_MS) {
+      relayLastCall.set(conversationId, last);
     }
   }
   relayEarlyFirst.clear();
@@ -509,9 +510,13 @@ export function admitRestoredAssistantPanes(
  * or given back, is of the pane it replaced.
  */
 export function supersedeAssistantPane(terminalId: string, workspaceId?: string | null): void {
-  // Where the pane runs isn't known: a terminal starting elsewhere ends what was
-  // given back for its id there, and the hydrate tells a kept pane apart.
-  if (!isBoundedId(terminalId) || workspaceId == null) return;
+  if (!isBoundedId(terminalId)) return;
+  // Where the pane runs isn't known: whatever was given back for the id goes,
+  // and the hydrate tells a pane kept on disk apart by who launched it.
+  if (workspaceId == null) {
+    ledger?.supersedeRestored([{ kind: TERMINAL, id: terminalId }]);
+    return;
+  }
   if (ledger !== null) {
     ledger.supersedeRestored([{ kind: TERMINAL, id: terminalId }], workspaceId ?? undefined);
   } else {

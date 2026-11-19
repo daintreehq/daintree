@@ -478,7 +478,12 @@ export class ResourceOwnershipLedger {
       this.notify((observer) => observer.superseded(draft.kind, draft.id, workspaceId));
       const key = resourceKey(draft.kind, draft.id);
       const record = this.recordFor(key);
-      if (record !== undefined && (this.recordedAt.get(record) ?? 0) < askedAt) this.evict(key);
+      const elsewhere = record?.workspaceId !== undefined && workspaceId !== undefined;
+      if (record === undefined || (elsewhere && record.workspaceId !== workspaceId)) continue;
+      // An earlier run's is older than anything this run made, whenever given back.
+      if (this.restored.has(record) || (this.recordedAt.get(record) ?? 0) < askedAt) {
+        this.evict(key);
+      }
     }
   }
 
