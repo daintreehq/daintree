@@ -3,7 +3,10 @@ import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { readAssistantConfirmationPolicy } from "./assistantConfirmationsPreference.js";
+import {
+  prepareAssistantDelegation,
+  readAssistantConfirmationPolicy,
+} from "./assistantConfirmationsPreference.js";
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import type { McpSessionRole } from "../../../shared/types/mcpSurface.js";
@@ -172,7 +175,12 @@ export interface SessionServerDepsSource {
     sessionOrigin?: McpSessionOrigin,
     approval?: Pick<
       WorkspaceDispatchOptions,
-      "approvalOnly" | "approvalReason" | "authorization" | "requester" | "actionsListWalk"
+      | "approvalOnly"
+      | "approvalReason"
+      | "authorization"
+      | "requester"
+      | "delegationOffer"
+      | "actionsListWalk"
     >
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
@@ -885,11 +893,12 @@ export function createSessionServerDeps(
     confirmed,
     authorization,
     relayCallId,
-    walk
+    callOptions
   ) => {
     // Main's own `actions.list` walk (#17036), carried only on the routes
     // that can reach a local view. A view-less host's catalog is one page.
-    const actionsListWalk = walk?.actionsListWalk === true;
+    const actionsListWalk = callOptions?.actionsListWalk === true;
+    const delegationOffer = callOptions?.delegationOffer;
     if (boundWorkspaceId !== null) {
       // A bound external session records no context: unlike a help session,
       // which replays the ActionContext snapshot taken when the user launched
@@ -1002,11 +1011,18 @@ export function createSessionServerDeps(
       // the model's turn (#8317). Absent for context-less sessions, in
       // which case pinned dispatch falls back to live renderer context.
       const boundContext = deps.sessionStore.sessionContextMap.get(sessionId);
-      return authorization !== undefined || assistantRequester !== undefined || actionsListWalk
+      // "Don't ask again" (#16752) only on this route, and only for this
+      // machine's own help session, never one relayed from another Shell.
+      const offer = assistantRequester !== undefined ? delegationOffer : undefined;
+      return authorization !== undefined ||
+        assistantRequester !== undefined ||
+        actionsListWalk ||
+        offer !== undefined
         ? pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin, {
             ...(authorization !== undefined ? { authorization } : {}),
             ...(assistantRequester !== undefined ? { requester: assistantRequester } : {}),
             ...(actionsListWalk ? { actionsListWalk: true } : {}),
+            ...(offer !== undefined ? { delegationOffer: offer } : {}),
           })
         : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
     }
@@ -1360,6 +1376,14 @@ export function createSessionServerDeps(
         (helpSessionId !== null
           ? host.assistantControlBinding()?.sessionAgent?.(helpSessionId)
           : null) ?? null
+      ),
+    // The same preference, for the agent the same session runs (#16752).
+    prepareAssistantDelegation: (calledActionId) =>
+      prepareAssistantDelegation(
+        (helpSessionId !== null
+          ? host.assistantControlBinding()?.sessionAgent?.(helpSessionId)
+          : null) ?? null,
+        calledActionId
       ),
     notifyToolCallStarted,
     notifyToolCallSettled,

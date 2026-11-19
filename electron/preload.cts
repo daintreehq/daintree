@@ -28,6 +28,7 @@ import type {
   McpApprovalReason,
   McpHostPreview,
   McpRequester,
+  McpDelegationOffer,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
   McpHelpDisplayImagePayload,
@@ -3447,6 +3448,7 @@ function buildElectronApi(): ElectronAPI {
           hostPreview?: McpHostPreview;
           authorization?: McpDispatchAuthorization;
           requester?: McpRequester;
+          delegationOffer?: McpDelegationOffer;
           dispatchDeadlineAt?: number;
           actionsListWalk?: boolean;
         }) => void
@@ -3456,7 +3458,7 @@ function buildElectronApi(): ElectronAPI {
         requestId: string;
         result: unknown;
         confirmationDecision?: "approved" | "rejected" | "timeout";
-        approvalScope?: "once" | "session";
+        approvalScope?: "once" | "session" | "delegate";
       }) => {
         ipcRenderer.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, payload);
       },

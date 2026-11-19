@@ -965,6 +965,7 @@ export function createRendererBridge(
       | "fixedDeadline"
       | "holdUntil"
       | "requester"
+      | "delegationOffer"
       | "actionsListWalk"
     >
   ): Promise<DispatchEnvelope> {
@@ -1010,6 +1011,7 @@ export function createRendererBridge(
       | "fixedDeadline"
       | "holdUntil"
       | "requester"
+      | "delegationOffer"
       | "actionsListWalk"
     >
   ): Promise<DispatchEnvelope> {
@@ -1104,6 +1106,7 @@ export function createRendererBridge(
         webContentsId,
         destroyedCleanup: settle,
         hold,
+        ...(approval?.delegationOffer ? { offeredDelegation: true as const } : {}),
       });
 
       const send = () => {
@@ -1123,6 +1126,10 @@ export function createRendererBridge(
             // Only on this local send: another machine's view has none of
             // this machine's panes to look the id up in.
             ...(approval?.requester ? { requester: approval.requester } : {}),
+            // "Don't ask again for this kind of action" (#16752). Local-only
+            // as well: it writes this machine's preference, which another
+            // machine's view has no business offering to change.
+            ...(approval?.delegationOffer ? { delegationOffer: approval.delegationOffer } : {}),
             // When this call ends unless the view reports a confirm (#15648),
             // capped by whoever is timing it. Also local-only: it is an
             // instant on this machine's clock, which another machine's isn't.
@@ -1361,6 +1368,7 @@ export function createRendererBridge(
       | "fixedDeadline"
       | "holdUntil"
       | "requester"
+      | "delegationOffer"
       | "actionsListWalk"
     >,
     callerInfo?: McpBearerIdentity
@@ -2162,6 +2170,13 @@ export function createRendererBridge(
       // report it, and main checks that again before minting anything.
       ...(payload.confirmationDecision === "approved" && payload.approvalScope === "session"
         ? { approvalScope: "session" as const }
+        : {}),
+      // Only for a request this bridge sent the offer with (#16752): a view
+      // can't hand over an action on a request it was never asked to.
+      ...(payload.confirmationDecision === "approved" &&
+      payload.approvalScope === "delegate" &&
+      pending.offeredDelegation === true
+        ? { approvalScope: "delegate" as const }
         : {}),
       ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
     });

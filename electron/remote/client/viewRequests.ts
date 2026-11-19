@@ -3,8 +3,11 @@ import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/
 import type {
   McpBearerIdentity,
   McpConfirmationDecision,
+  McpDelegationOffer,
 } from "../../../shared/types/ipc/mcpServer.js";
 import type { RelayApprovalQuestion } from "../assistant/HostCallRuntime.js";
+import type { WindowApprovalAnswer } from "../assistant/HostSettingsRequests.js";
+import type { PreparedAssistantDelegation } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import {
   MCP_DISPATCH_ACTION_METHOD,
   MCP_GET_MANIFEST_METHOD,
@@ -136,6 +139,52 @@ async function skipsOwnRelayedCall(
       args: request.args,
     }) === true
   );
+}
+
+/**
+ * "Don't ask again for this kind of action" (#16752) for one of this Shell's
+ * own assistant's relayed calls the view will ask about, matched to the call
+ * this Shell has out to that host in the project this view shows of it, for
+ * the tool that assistant called. Null for anything else, a host's own
+ * assistant's call included: its preference isn't this Shell's to change.
+ */
+function relayedCallDelegation(
+  hostId: string,
+  webContentsId: number,
+  request: McpDispatchPayload
+): PreparedAssistantDelegation | null {
+  const call = request.relayCall;
+  if (call === undefined || request.approvalOnly === true) return null;
+  const viewKey = getProjectForWebContents(webContentsId);
+  if (viewKey === null) return null;
+  const view = parseHostScopedKey(viewKey);
+  if (view.hostId !== hostId) return null;
+  try {
+    return (
+      getRemoteService("hostCallRelayClient")?.relayedDelegation(hostId, {
+        callId: call.callId,
+        helpSessionId: call.helpSessionId,
+        projectId: view.projectId,
+        actionId: request.actionId,
+        args: request.args,
+      }) ?? null
+    );
+  } catch (error) {
+    logger.warn("Couldn't work out a relayed call's hand-over", { error });
+    return null;
+  }
+}
+
+/** The person's answer as the window reported it, with the tick only beside an approval. */
+function windowAnswer(envelope: {
+  confirmationDecision?: McpConfirmationDecision;
+  approvalScope?: string;
+}): WindowApprovalAnswer | null {
+  const decision = envelope.confirmationDecision;
+  if (decision === undefined) return null;
+  return decision === "approved" && envelope.approvalScope === "delegate"
+    ? { decision, delegate: true }
+    : { decision };
 }
 
 /** Whether this view raises a confirmation for the dispatch, by its own registry's danger. */
@@ -294,6 +343,9 @@ async function dispatchAction(
   const hostSkip = honoursSkipPreference(request);
   const ownSkip = !hostSkip && (await skipsOwnRelayedCall(service, hostId, webContentsId, request));
   const skipPreference = hostSkip || ownSkip;
+  const delegation = skipPreference
+    ? null
+    : relayedCallDelegation(hostId, webContentsId, request);
   const envelope = await service.dispatchActionForHost(
     webContentsId,
     request.actionId,
@@ -311,13 +363,17 @@ async function dispatchAction(
             ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
             ...deadline,
           }
-        : deadline,
+        : delegation !== null
+          ? { ...deadline, delegationOffer: delegation.offer }
+          : deadline,
     describeHost(
       hostId,
       request.relayed === true &&
         getRemoteService("hostCallRelayClient")?.hasCallInFlight(hostId) === true
     )
   );
+  // This Shell's own preference, written here: the host hears only the decision.
+  if (windowAnswer(envelope)?.delegate === true) delegation?.commit();
   // Only what the host reads back: this machine's view identity stays here,
   // and no approval is ever handed out for the host to reuse. A skip this
   // Shell granted is said, so the host's audit doesn't read it as unasked; a
@@ -341,7 +397,7 @@ async function dispatchAction(
 export async function askHostApprovalInWindow(
   webContentsId: number,
   ask: RelayApprovalQuestion
-): Promise<McpConfirmationDecision | null> {
+): Promise<WindowApprovalAnswer | null> {
   const service = await loadMcpServerService();
   try {
     const envelope = await service.dispatchActionForHost(
@@ -357,10 +413,11 @@ export async function askHostApprovalInWindow(
         // Inside the host's own wait for the answer (#15699), so the dialog
         // never outlasts it; a host too old to say waits about the plain deadline.
         ...(ask.holdUntil !== undefined ? { holdUntil: ask.holdUntil } : { fixedDeadline: true }),
+        ...(ask.delegation ? { delegationOffer: ask.delegation } : {}),
       },
       describeHost(ask.hostId, true)
     );
-    return envelope.confirmationDecision ?? null;
+    return windowAnswer(envelope);
   } catch (error) {
     logger.warn("Couldn't ask about a host's call in its assistant's window", { error });
     return null;
@@ -375,8 +432,14 @@ export async function askHostApprovalInWindow(
  */
 export async function askSettingsApprovalInWindow(
   webContentsId: number,
-  ask: { actionId: string; args: Record<string, unknown>; subject: string; lines: string[] }
-): Promise<McpConfirmationDecision | null> {
+  ask: {
+    actionId: string;
+    args: Record<string, unknown>;
+    subject: string;
+    lines: string[];
+    delegation?: McpDelegationOffer;
+  }
+): Promise<WindowApprovalAnswer | null> {
   const service = await loadMcpServerService();
   try {
     const envelope = await service.dispatchActionForHost(
@@ -386,10 +449,14 @@ export async function askSettingsApprovalInWindow(
       false,
       undefined,
       "external",
-      { approvalOnly: true, hostPreview: { lines: ask.lines, subject: ask.subject } },
+      {
+        approvalOnly: true,
+        hostPreview: { lines: ask.lines, subject: ask.subject },
+        ...(ask.delegation ? { delegationOffer: ask.delegation } : {}),
+      },
       { userAgent: "Your assistant, here", token4LastChars: "" }
     );
-    return envelope.confirmationDecision ?? null;
+    return windowAnswer(envelope);
   } catch (error) {
     logger.warn("Couldn't ask about a host settings change in its assistant's window", { error });
     return null;

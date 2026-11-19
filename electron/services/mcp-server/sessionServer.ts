@@ -25,6 +25,7 @@ import {
   assistantPolicySkips,
   type AssistantConfirmationPolicy,
 } from "../../../shared/utils/assistantDaintreeConfirmations.js";
+import type { PreparedAssistantDelegation } from "./assistantConfirmationsPreference.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { SendKeysArgsSchema } from "../../../shared/utils/terminalKeys.js";
@@ -817,6 +818,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     clearDenialState,
     getCurrentTurnId,
     readAssistantConfirmationPolicy,
+    prepareAssistantDelegation,
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,
@@ -1192,6 +1194,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     }
     const confirmationsSkipped = assistantPolicySkips(confirmationPolicy, actionId);
     const itemsSkipConfirmations = confirmationPolicy.skipsAll;
+    // "Don't ask again for this kind of action" on the dialog this call may
+    // raise (#16752): settled on the id it called, for the assistant's own
+    // call only. A batch item's dialog is its batch's, never its own.
+    let delegation: PreparedAssistantDelegation | null = null;
+    if (
+      !confirmationsSkipped &&
+      batchItem === undefined &&
+      relayCallId === undefined &&
+      prepareAssistantDelegation !== undefined &&
+      sessionStore.getOrigin(sessionId) === "help"
+    ) {
+      try {
+        delegation = prepareAssistantDelegation(actionId);
+      } catch (err) {
+        console.error("[MCP] Failed to prepare the assistant's confirmation hand-over:", err);
+      }
+    }
     // Whose ownership records this call reads and writes (#12487): the
     // bearer's principal for a pane session, else the session itself. Captured
     // at admission so the ownership gate, an `owned` listing and the
@@ -1566,6 +1585,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
 
     // Read at call time, not captured: the skip preference is settled once the
     // manifest entry is known, well after this is defined.
+    // The hand-over is offered only on a dispatch that can still raise a
+    // dialog: one already confirmed shows nobody anything to tick.
     const dispatchToRenderer = (id: string, dispatchArgs: unknown): Promise<DispatchEnvelope> =>
       relayCallId !== undefined
         ? dispatchAction(
@@ -1577,7 +1598,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           )
         : dispatchAuthorization === "skip-preference"
           ? dispatchAction(id, dispatchArgs, dispatchConfirmed, dispatchAuthorization)
-          : dispatchAction(id, dispatchArgs, dispatchConfirmed);
+          : delegation !== null && !dispatchConfirmed
+            ? dispatchAction(id, dispatchArgs, dispatchConfirmed, undefined, undefined, {
+                delegationOffer: delegation.offer,
+              })
+            : dispatchAction(id, dispatchArgs, dispatchConfirmed);
 
     const { askForApproval, askToClose, mintSessionApproval } = createCallApprovals(
       { sessionStore, requestApproval, requestCloseApproval },
@@ -3838,6 +3863,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             envelope.approvalScope === "session"
           ) {
             mintSessionApproval();
+          }
+          // "Don't ask again for this kind of action" (#16752). The bridge
+          // reports the scope only for a request it sent the offer with; the
+          // write is this call's own, for the id it called.
+          if (
+            delegation !== null &&
+            envelope.confirmationDecision === "approved" &&
+            envelope.approvalScope === "delegate"
+          ) {
+            delegation.commit();
           }
           dispatchedWorkspace = envelope.dispatchedWorkspace;
           // A raise that did not happen is reported, not swallowed (#12315).
