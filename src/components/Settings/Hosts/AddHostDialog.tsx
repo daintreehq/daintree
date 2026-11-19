@@ -541,7 +541,7 @@ export function AddHostDialog({
   const machine = cloudExisting ? cloudStatusFor(cloudHosts.snapshot, existing?.hostId) : null;
   const machineDown =
     machine !== null && machine.providerUnavailable === null && canStartMachine(machine);
-  /** Its start from here: asked of the provider, or done with the fresh check it owes not yet run. */
+  /** A start asked for from here: under way, or done with its fresh check still to run. */
   const [machineStart, setMachineStart] = useState<"starting" | "started" | null>(null);
   // A trust asks for a check as soon as none is running, and only while the dialog is open.
   const [checkAfterTrust, setCheckAfterTrust] = useState(false);
