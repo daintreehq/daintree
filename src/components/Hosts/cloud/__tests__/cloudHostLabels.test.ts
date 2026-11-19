@@ -17,6 +17,7 @@ import {
   formatHourly,
   lifetimeSentence,
   providerStopSentence,
+  startBillingSentence,
   stopKeepsSentence,
   stoppedBillingSentence,
   machineSpecLabel,
@@ -546,5 +547,30 @@ describe("a machine that sleeps when idle and bills its disk while parked (#1734
       "$0.036/h",
       "sleeps when idle",
     ]);
+  });
+});
+
+describe("startBillingSentence", () => {
+  const billed = provider({ stoppedComputeBilled: true, deletion: true });
+
+  it("says what a start bills, and that a stopped machine already bills where it does", () => {
+    expect(startBillingSentence(status({ machine: "stopped" }), billed)).toBe(
+      "It bills Personal about $0.036 an hour while it runs. Acme keeps billing a stopped machine for compute until it's deleted. To stop paying for it, remove the host and delete its machine."
+    );
+  });
+
+  it("claims no stopped billing for a machine that isn't stopped, or a provider that has none", () => {
+    expect(startBillingSentence(status({ machine: "error" }), billed)).toBe(
+      "Starting it bills Personal about $0.036 an hour while it runs."
+    );
+    expect(startBillingSentence(status({ machine: "running", accountName: "Team" }), billed)).toBe(
+      "Starting it bills Team about $0.036 an hour while it runs."
+    );
+    expect(startBillingSentence(status({ machine: "stopped" }), BOAT_PROVIDER)).toBe(
+      "Starting it bills Personal about $0.036 an hour while it runs."
+    );
+    expect(startBillingSentence(status({ machine: "stopped", hourlyDollars: null }), null)).toBe(
+      "Starting it bills Personal for the time it runs while it runs."
+    );
   });
 });
