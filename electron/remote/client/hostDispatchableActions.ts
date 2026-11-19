@@ -68,6 +68,10 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.listAvailable",
   "agent.listModels",
   "agent.listPresets",
+  // The host's own accounts, read through the host's agent settings (#17079).
+  // Adding one stays out: its checklist names folders on the host while the
+  // dialog sits on this Shell.
+  "agent.listAccounts",
   // The host's own user presets: agent settings are host channels, so the write
   // lands where the agent runs, and each one raises this Shell's dialog (#16047).
   "agent.createPreset",
@@ -130,6 +134,8 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "terminal.restart",
   "terminal.restartOnPreset",
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccount",
+  "terminal.restartOnAccountOwned",
   "terminal.revealOwned",
   "terminal.sendCommand",
   "terminal.sendCommandMany",

@@ -29,6 +29,17 @@ import {
 } from "./terminalLifecycleActionArgs";
 import type { TerminalLifecycleActionRunId } from "./terminalLifecycleActions.impl";
 
+const RestartOnAccountResultSchema = z.object({
+  terminalId: z.string().describe("The panel, respawned in place."),
+  agentAccountId: z
+    .string()
+    .nullable()
+    .describe("Account it now runs on; null is the CLI's default login."),
+  agentSessionIdCleared: z
+    .boolean()
+    .describe("false: asked to reopen it; true: re-send the brief."),
+});
+
 const RestartOnPresetResultSchema = z.object({
   terminalId: z.string().describe("The panel, respawned in place."),
   agentPresetId: z.string().describe("Preset it now runs on."),
@@ -461,16 +472,7 @@ export function registerTerminalLifecycleActions(
     // the rate-limit chip carry their own picker and confirm.
     palette: { mode: "hidden" },
     argsSchema: RestartOnAccountArgsSchema,
-    resultSchema: z.object({
-      terminalId: z.string().describe("The panel, respawned in place."),
-      agentAccountId: z
-        .string()
-        .nullable()
-        .describe("Account it now runs on; null is the CLI's default login."),
-      agentSessionIdCleared: z
-        .boolean()
-        .describe("false: asked to reopen it; true: re-send the brief."),
-    }),
+    resultSchema: RestartOnAccountResultSchema,
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.restartOnAccount", args, ctx),
   }));
@@ -509,6 +511,46 @@ export function registerTerminalLifecycleActions(
     run: async () => {
       throw new Error(
         "terminal.restartOnPresetOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  // The account twin (#17079), executed in main the same way: main checks the
+  // session launched the pane, then dispatches `terminal.restartOnAccount`
+  // with the account alone, never `confirmed`.
+  actions.set("terminal.restartOnAccountOwned", () => ({
+    id: "terminal.restartOnAccountOwned",
+    title: "Move owned agent to another account",
+    description:
+      "Move a panel this session launched (not a handed one) to another of its agent's accounts once the user confirms, keeping its preset. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    dangerRationale:
+      "Interrupts the agent and respawns it on another account, in a new conversation unless asked to keep it. Scrollback is lost.",
+    keywords: ["account", "login", "rate limit", "owned"],
+    // Hidden for the same reason as `terminal.closeOwned`: only the MCP
+    // main-process path can reach it.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe("Panel `id` this session got when launching it. Required."),
+      accountId: z
+        .string()
+        .min(1)
+        .nullable()
+        .describe("An account id from the account listing; null is the CLI's default login."),
+      keepConversation: KeepConversationArgSchema,
+    }),
+    resultSchema: RestartOnAccountResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.restartOnAccountOwned must be invoked through the MCP main-process path, not renderer dispatch."
       );
     },
   }));

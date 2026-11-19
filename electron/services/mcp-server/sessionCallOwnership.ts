@@ -138,6 +138,17 @@ export const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     releasesOwnership: false,
     acceptsAdoption: false,
   },
+  // The account twin (#17079): the same check and the same reach, with the
+  // account and whether to keep the conversation forwarded, never `confirmed`.
+  "terminal.restartOnAccountOwned": {
+    resourceKind: "terminal",
+    executor: "renderer",
+    delegateTo: "terminal.restartOnAccount",
+    idArg: "terminalId",
+    forwardArgs: ["accountId", "keepConversation"],
+    releasesOwnership: false,
+    acceptsAdoption: false,
+  },
   "worktree.deleteOwned": {
     resourceKind: "worktree",
     executor: "renderer",
