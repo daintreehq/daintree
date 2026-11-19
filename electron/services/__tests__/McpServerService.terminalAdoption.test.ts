@@ -42,6 +42,11 @@ import {
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { getMcpServerServiceRef, setPtyClientRef } from "../../window/serviceRefs.js";
 import { events } from "../events.js";
+import {
+  _resetAssistantPaneCreationsForTests,
+  attachAssistantPaneCreationPersistence,
+  isKeptAssistantPane,
+} from "../mcp-server/assistantPaneCreations.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { OrchestratorPaneIdentity } from "../McpPaneConfigService.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "../pty/PtyEventRouter.js";
@@ -173,6 +178,55 @@ describe("McpServerService terminal hand-over (#12490)", () => {
     service.revokeOwnershipPrincipal(ORCHESTRATOR.principalId);
 
     expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("lets no restart give a trashed pane back to the conversation that launched it (#16845)", () => {
+    _resetAssistantPaneCreationsForTests();
+    attachAssistantPaneCreationPersistence({
+      load: () => ({
+        "terminal-9": { scope: "help", conversationId: "c", projectId: "p", seenAt: Date.now() },
+      }),
+      save: () => {},
+    });
+    expect(isKeptAssistantPane("terminal-9")).toBe(true);
+
+    events.emit("terminal:trashed", { id: "terminal-9", expiresAt: Date.now() + 60_000 });
+
+    expect(isKeptAssistantPane("terminal-9")).toBe(false);
+    _resetAssistantPaneCreationsForTests();
+  });
+
+  it("ends what an earlier run kept for an id once it starts in another project (#16845)", () => {
+    const ownership = (
+      service as unknown as {
+        sessionStore: {
+          resourceOwnership: import("../mcp-server/resourceOwnership.js").ResourceOwnershipLedger;
+        };
+      }
+    ).sessionStore.resourceOwnership;
+    ownership.restoreIfUnclaimed(
+      "conversation\u0000help\u0000c",
+      { kind: "terminal", id: "kept-1" },
+      "proj-a"
+    );
+
+    events.emit("terminal:lifecycle", {
+      type: "spawned",
+      terminalId: "kept-1",
+      projectId: "proj-a",
+      kind: "agent",
+      timestamp: Date.now(),
+    });
+    expect(ownership.creatorOf("terminal", "kept-1")).toBeDefined();
+    events.emit("terminal:lifecycle", {
+      type: "spawned",
+      terminalId: "kept-1",
+      projectId: "proj-b",
+      kind: "agent",
+      timestamp: Date.now(),
+    });
+
+    expect(ownership.creatorOf("terminal", "kept-1")).toBeUndefined();
   });
 
   it("ends when the handed-over terminal is trashed", () => {

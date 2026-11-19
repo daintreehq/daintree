@@ -85,6 +85,9 @@ export class PendingHelpHibernationStore {
   private resumeAtLaunch: LaunchResume | null = null;
   // What this launch read back, handed out once by `takeResumeAtLaunch`.
   private loadedResumeAtLaunch: LaunchResume | null = null;
+  // The conversations the entries read back could resume (#16845), as read: a
+  // lane that moves on later in this run doesn't take one out.
+  private readonly loadedConversationIds = new Set<string>();
   private filePath: string;
   // Serialize writes so a rapid capture-then-clear can't race on disk.
   private writeChain: Promise<void> = Promise.resolve();
@@ -125,12 +128,20 @@ export class PendingHelpHibernationStore {
           ...safeEntry
         } = entry as PendingHelpHibernation;
         // A malformed ownership id costs only the ownership, never the conversation.
+        const ownershipId =
+          typeof conversationOwnershipId === "string" && conversationOwnershipId !== ""
+            ? conversationOwnershipId
+            : undefined;
         this.entries.set(
           key,
-          typeof conversationOwnershipId === "string" && conversationOwnershipId !== ""
-            ? { ...safeEntry, conversationOwnershipId }
+          ownershipId !== undefined
+            ? { ...safeEntry, conversationOwnershipId: ownershipId }
             : safeEntry
         );
+        // Only a lane that names its conversation can reopen it by that id.
+        if (ownershipId !== undefined && safeEntry.agentSessionId !== "") {
+          this.loadedConversationIds.add(ownershipId);
+        }
       }
       if (parsed.resumeAtLaunch !== undefined) {
         // Off disk before anything can resume from it: a crash during this
@@ -143,6 +154,15 @@ export class PendingHelpHibernationStore {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
       console.warn("[PendingHelpHibernationStore] Failed to load:", err);
     }
+  }
+
+  /**
+   * The conversation ownership ids the entries this launch loaded could resume
+   * (#16845): what an earlier run's kept creations may be given back under.
+   * Read once `load()` settles; later lane changes leave it as loaded.
+   */
+  loadedConversationOwnershipIds(): ReadonlySet<string> {
+    return this.loadedConversationIds;
   }
 
   /** `slotKey` is `assistantSlotKey(projectId, slot)` — see #12108. */

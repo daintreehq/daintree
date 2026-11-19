@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CLOSED_TERMINAL_TTL_MS,
   ResourceOwnershipLedger,
   helpConversationKey,
+  helpOwnershipPrincipal,
+  principalOwnerKey,
   relayConversationKey,
   extractOwnedResources,
   extractOwnedResourcesFromDispatch,
@@ -823,5 +825,187 @@ describe("ownership recording coverage", () => {
         `${id} is attributed but no non-assistant session can call it`
       ).toBe(true);
     }
+  });
+});
+
+describe("ResourceOwnershipLedger and what a restart keeps (#16845)", () => {
+  const readable = (holder: string) => holder.split("\u0000").join("|");
+
+  function observed() {
+    const events: string[] = [];
+    const ledger = new ResourceOwnershipLedger({
+      created: (kind, id) => events.push(`created ${kind}:${id}`),
+      held: (holder, record, durable) =>
+        events.push(`held ${readable(holder)} ${record.id}${durable ? "" : " named"}`),
+      released: (holder, record) => events.push(`released ${readable(holder)} ${record.id}`),
+      dropped: (holder) => events.push(`dropped ${readable(holder)}`),
+      superseded: (kind, id, workspaceId) =>
+        events.push(`superseded ${kind}:${id} ${workspaceId ?? "-"}`),
+    });
+    return { ledger, events };
+  }
+
+  it("reports each creation, what a conversation comes to hold, and what it stops holding", () => {
+    const { ledger, events } = observed();
+    const principal = helpOwnershipPrincipal("help-a");
+    ledger.bindPrincipal("s-a", principal);
+    const owner = principalOwnerKey(principal);
+    ledger.record(owner, [{ kind: "terminal", id: "t1" }], "p");
+    ledger.attachConversation(principal, helpConversationKey("c"));
+    ledger.record(owner, [{ kind: "terminal", id: "t2" }], "p", { callerNamedId: true });
+    ledger.release(owner, "terminal", "t1");
+    ledger.forgetConversation(helpConversationKey("c"));
+
+    expect(events).toEqual([
+      "created terminal:t1",
+      "held principal|help|help-a t1",
+      "held conversation|help|c t1",
+      "created terminal:t2",
+      "held conversation|help|c t2 named",
+      "released conversation|help|c t1",
+      "dropped conversation|help|c",
+    ]);
+  });
+
+  it("gives a conversation a kept record back only while nothing holds the id", () => {
+    const ledger = new ResourceOwnershipLedger();
+    const principal = helpOwnershipPrincipal("help-b");
+    ledger.bindPrincipal("s-b", principal);
+    ledger.attachConversation(principal, helpConversationKey("c"));
+    const other = principalOwnerKey(helpOwnershipPrincipal("help-x"));
+    ledger.bindPrincipal("s-x", helpOwnershipPrincipal("help-x"));
+    ledger.record(other, [{ kind: "terminal", id: "taken" }], "p");
+
+    expect(
+      ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "taken" }, "p")
+    ).toBe(false);
+    expect(
+      ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "t1" }, "p")
+    ).toBe(true);
+    expect(
+      ledger.restoreIfUnclaimed(principalOwnerKey(principal), { kind: "terminal", id: "t2" }, "p")
+    ).toBe(false);
+    expect(ledger.get(principalOwnerKey(principal), "terminal", "t1")).toEqual({
+      kind: "terminal",
+      id: "t1",
+      workspaceId: "p",
+    });
+    expect(ledger.creatorOf("terminal", "t1")).toBe(helpConversationKey("c"));
+    expect(
+      ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "t1" }, "p")
+    ).toBe(false);
+    expect(ledger.get(other, "terminal", "taken")).toBeDefined();
+  });
+
+  it("lets a pane no one recorded end only a record an earlier run kept, in its workspace", () => {
+    const { ledger, events } = observed();
+    const principal = helpOwnershipPrincipal("help-a");
+    ledger.bindPrincipal("s-a", principal);
+    const owner = principalOwnerKey(principal);
+    ledger.attachConversation(principal, helpConversationKey("c"));
+    ledger.record(owner, [{ kind: "terminal", id: "made" }], "p");
+    ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "kept" }, "p");
+    events.length = 0;
+
+    ledger.supersedeRestored(
+      [
+        { kind: "terminal", id: "made" },
+        { kind: "terminal", id: "kept" },
+      ],
+      "other"
+    );
+    expect(ledger.get(owner, "terminal", "kept")).toBeDefined();
+    ledger.supersedeRestored([
+      { kind: "terminal", id: "made" },
+      { kind: "terminal", id: "kept" },
+    ]);
+
+    expect(ledger.get(owner, "terminal", "made")).toBeDefined();
+    expect(ledger.get(owner, "terminal", "kept")).toBeUndefined();
+    expect(ledger.creatorOf("terminal", "kept")).toBeUndefined();
+    expect(events).toEqual([
+      "superseded terminal:made other",
+      "superseded terminal:kept other",
+      "superseded terminal:made -",
+      "superseded terminal:kept -",
+      "released conversation|help|c kept",
+    ]);
+  });
+
+  it("lets a creation that landed after its session was gone end only what was recorded before it was asked", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const ledger = new ResourceOwnershipLedger();
+      const older = principalOwnerKey(helpOwnershipPrincipal("help-a"));
+      ledger.bindPrincipal("s-a", helpOwnershipPrincipal("help-a"));
+      ledger.record(older, [{ kind: "terminal", id: "t1" }], "p");
+      vi.setSystemTime(2_000);
+      const newer = principalOwnerKey(helpOwnershipPrincipal("help-b"));
+      ledger.bindPrincipal("s-b", helpOwnershipPrincipal("help-b"));
+      ledger.record(newer, [{ kind: "worktree", id: "/wt" }], "p");
+
+      ledger.supersedeOlder(
+        [
+          { kind: "terminal", id: "t1" },
+          { kind: "worktree", id: "/wt" },
+        ],
+        1_500
+      );
+
+      expect(ledger.get(older, "terminal", "t1")).toBeUndefined();
+      expect(ledger.get(newer, "worktree", "/wt")).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a late creation end a given-back record whenever it was given back, in its workspace only", () => {
+    const ledger = new ResourceOwnershipLedger();
+    const conversation = helpConversationKey("c");
+    ledger.restoreIfUnclaimed(conversation, { kind: "terminal", id: "here" }, "p");
+    ledger.restoreIfUnclaimed(conversation, { kind: "terminal", id: "there" }, "q");
+
+    ledger.supersedeOlder([{ kind: "terminal", id: "here" }], 0, "p");
+    ledger.supersedeOlder([{ kind: "terminal", id: "there" }], Date.now() + 1, "p");
+
+    expect(ledger.creatorOf("terminal", "here")).toBeUndefined();
+    expect(ledger.creatorOf("terminal", "there")).toBe(conversation);
+  });
+
+  it("ends a given-back record when its id starts in another workspace, never this run's or its own", () => {
+    const ledger = new ResourceOwnershipLedger();
+    const owner = principalOwnerKey(helpOwnershipPrincipal("help-a"));
+    ledger.bindPrincipal("s-a", helpOwnershipPrincipal("help-a"));
+    ledger.attachConversation(helpOwnershipPrincipal("help-a"), helpConversationKey("c"));
+    ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "kept" }, "p");
+    ledger.record(owner, [{ kind: "terminal", id: "made" }], "p");
+
+    ledger.supersedeRestoredOutside("kept", "p");
+    ledger.supersedeRestoredOutside("made", "q");
+    expect(ledger.get(owner, "terminal", "kept")).toBeDefined();
+    expect(ledger.get(owner, "terminal", "made")).toBeDefined();
+
+    ledger.supersedeRestoredOutside("kept", "q");
+    expect(ledger.get(owner, "terminal", "kept")).toBeUndefined();
+  });
+
+  it("reports a creation that replaces the holder's own record of the id", () => {
+    const { ledger, events } = observed();
+    const principal = helpOwnershipPrincipal("help-a");
+    ledger.bindPrincipal("s-a", principal);
+    const owner = principalOwnerKey(principal);
+    ledger.record(owner, [{ kind: "terminal", id: "t1" }], "p");
+    const first = ledger.get(owner, "terminal", "t1");
+    events.length = 0;
+
+    ledger.record(owner, [{ kind: "terminal", id: "t1" }], "p");
+
+    expect(ledger.get(owner, "terminal", "t1")).not.toBe(first);
+    expect(events).toEqual([
+      "created terminal:t1",
+      "released principal|help|help-a t1",
+      "held principal|help|help-a t1",
+    ]);
   });
 });

@@ -441,6 +441,17 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     console.warn("[MAIN] Rate-limit queue drain at quit failed:", err);
   }
 
+  // Before anything below ends a relay hold, a bearer or a session: none of that
+  // is a decision about what an Assistant launched, so the panes it kept for the
+  // next run stay kept (#16845). Guarded like the drain above.
+  try {
+    const { beginAssistantPaneCreationQuit } =
+      await import("../services/mcp-server/assistantPaneCreations.js");
+    beginAssistantPaneCreationQuit();
+  } catch (err) {
+    console.warn("[MAIN] Keeping Assistant pane creations at quit failed:", err);
+  }
+
   if (deps.stopRemoteHosts) {
     const stopRemoteHosts = deps.stopRemoteHosts;
     await settleWithin(

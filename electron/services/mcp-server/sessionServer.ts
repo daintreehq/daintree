@@ -915,6 +915,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   ): Promise<CallToolResult> => {
     const actionId = request.params.name;
     const { args, requestKey } = parseToolArguments(request.params.arguments);
+    // Read before main writes a short id of its own into a launch that named
+    // none: a pane the caller named is never kept past a restart (#16845).
+    const callerNamedId = readStringArg(args, "requestedId") !== undefined;
     // A relayed call's callId from its Shell (#13493), on every record of it and of its items.
     const relayMeta = request.params._meta?.[RELAY_CALL_ID_META_KEY];
     const relayCallId =
@@ -1445,7 +1448,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const askedAt = Date.now();
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void =>
       recordOwnershipFromDispatch(
-        { sessionId, actionId, sessionStore, ownershipOwner, args, askedAt },
+        { sessionId, actionId, sessionStore, ownershipOwner, args, askedAt, callerNamedId },
         { ownedResource, ownedResourceId, ownedResourceRecord },
         envelope
       );

@@ -13,6 +13,10 @@ import { isProjectlessAppView } from "../../window/projectlessViews.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
 import {
+  keptLocalRelayConversations,
+  noteLocalRelayCall,
+} from "../../services/mcp-server/assistantPaneCreations.js";
+import {
   prepareAssistantDelegation,
   readAssistantChecksNextFallback,
   readAssistantConfirmationsSkipped,
@@ -323,6 +327,14 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           logger.warn("Couldn't forget a local relay conversation", { error });
         });
     },
+    // What a conversation here launched before a restart keeps the day its
+    // caller would have had (#16845).
+    keptConversations: () =>
+      keptLocalRelayConversations()?.map((kept) => ({
+        senderId: LOCAL_RELAY_SENDER_ID,
+        ...kept,
+      })) ?? null,
+    noteConversationCall: (_senderId, conversationId, at) => noteLocalRelayCall(conversationId, at),
     receiveNotices: (payload) => runtime.receiveNotices(LOCAL_HOST_ID, payload),
     receiveApproval: (payload) => runtime.receiveApproval(LOCAL_HOST_ID, payload),
     nextFallback: (dispatch) => runtime.offersNextFallback(LOCAL_HOST_ID, dispatch),
