@@ -9,6 +9,7 @@ import {
 } from "../HostCallRuntime.js";
 import { MAX_RELAY_ARGS_BYTES, MAX_RELAY_RUN_MS, type McpCallAnswer } from "../linkMethods.js";
 import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../../shared/types/terminalExitWait.js";
+import { CLAUDE_UPDATE_AFTER_APPROVAL_MS } from "../../../../shared/types/claudeUpdateApply.js";
 import {
   MCP_DISPATCH_TIMEOUT_MS,
   MCP_REMOTE_CONFIRM_MARGIN_MS,
@@ -461,6 +462,17 @@ describe("relayRunMs", () => {
     ).toBe(30_000);
     expect(relayRunMs("worktree.retireOwned", {})).toBe(
       relayRunMs("worktree.retireOwned", { timeoutMs: DEFAULT_TERMINAL_EXIT_WAIT_MS })
+    );
+  });
+
+  it("gives a Claude Code update a whole confirmation and then its wait and read (#17908)", () => {
+    // The host types `/restart` only while the answer can still reach this
+    // Shell, so the call must outlast the confirmation, the wait and the read.
+    expect(
+      relayRunMs("terminal.applyClaudeUpdateOwned", {}) - MCP_REMOTE_CONFIRM_MARGIN_MS
+    ).toBeGreaterThan(MCP_REMOTE_DISPATCH_TIMEOUT_MS + CLAUDE_UPDATE_AFTER_APPROVAL_MS);
+    expect(relayRunMs("terminal.applyClaudeUpdateOwned", {})).toBeGreaterThan(
+      relayRunMs("terminal.restartOnPresetOwned", {})
     );
   });
 
