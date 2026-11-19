@@ -69,6 +69,7 @@ describe("refinementOf", () => {
     const observed = run({ agentState: "completed", waitingReason: undefined });
     expect(refinementOf(entry(observed), observed, null, 2_000)).toEqual({
       kind: "asked",
+      ask: "question",
       quote: "Which file should I edit?",
       readAt: 1_000,
       seen: true,
@@ -84,12 +85,13 @@ describe("refinementOf", () => {
       run({ agentState: "waiting", waitingReason: "approval" }),
     ];
 
-    it("is read at any stop that could be asking, whatever wait the patterns named", () => {
+    it("is read at any stop that could be asking, and says which ask it saw", () => {
       for (const observed of stops) {
         for (const category of ["question", "approval"] as const) {
           const input = entry(observed, { classified: reading({ category }) });
           expect(refinementOf(input, observed, null, 2_000)).toEqual({
             kind: "asked",
+            ask: category,
             quote: "Which file should I edit?",
             readAt: 1_000,
             seen: true,

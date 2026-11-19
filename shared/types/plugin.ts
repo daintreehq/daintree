@@ -5438,6 +5438,72 @@ export type PluginSendToAgentRefusalReason =
   | "busy";
 
 /**
+ * Where Pilot places an agent run, worst-first: the same band every Daintree
+ * surface sorts the run into, so a plugin's list and Pilot agree on which run
+ * needs the user. Read from the user's own decisions first, then the agent's
+ * own report, then Canopy's reading when it is on, then the state the host
+ * observed off the terminal — an ordering, never a guarantee about what the
+ * agent is doing.
+ *
+ * - `blocked` — stopped on an error.
+ * - `needs-you` — asking the user something: the agent printed that it needs
+ *   them, or Canopy read its stop as an approval or question the user hasn't
+ *   had in front of them.
+ * - `quiet` — working, but its terminal has been silent long enough to look
+ *   stalled.
+ * - `review` — stopped after work, or on an approval or question wait, that
+ *   the user hasn't looked at since.
+ * - `running` — working.
+ * - `done` — stopped after work the user has seen.
+ * - `parked` — the user parked it.
+ * - `snoozed` — the user snoozed it.
+ * - `idle` — nothing to report: a shell at its prompt, a session restored
+ *   with no work since, an ask already seen.
+ */
+export type PluginAgentBand =
+  // `FleetBand`, spelled out so the SDK bundle never pulls the fleet types and
+  // their panel imports; pinned to it by a type test.
+  | "blocked"
+  | "needs-you"
+  | "quiet"
+  | "review"
+  | "running"
+  | "done"
+  | "parked"
+  | "snoozed"
+  | "idle";
+
+/**
+ * Canopy's reading, when it is what placed a run in its band: a suggestion
+ * from the local model the user turned on, never an observation. Advisory —
+ * show it as "read by Canopy", not as fact.
+ *
+ * What it read follows from the band it placed the run in: an ask for
+ * `needs-you` (or `idle` once seen), a wait that asks nothing for `review`
+ * (or `done` once seen), a screen standing still behind its spinner for
+ * `quiet`.
+ */
+export interface PluginAgentCanopyNote {
+  /** When the screen behind the reading was read (epoch ms). */
+  readonly readAt: number;
+  /**
+   * Which ask the reading saw, when it read one: an approval of something the
+   * agent is about to do, or a question only the user can answer. Absent when
+   * the reading isn't an ask, or came from a Remote Host whose build doesn't
+   * report it.
+   */
+  readonly ask?: "approval" | "question";
+  /**
+   * The question, verbatim from the screen. Only on an ask, and only for a
+   * plugin that declares `terminal:read` and holds the user's lasting grant
+   * of it ("Allow and remember" at a {@link PluginTerminalsApi.readScreen}
+   * prompt): reading the list never raises the consent prompt itself. Up to
+   * 160 characters.
+   */
+  readonly quote?: string;
+}
+
+/**
  * One agent pane in the plugin's project, as {@link PluginAgentsApi.list}
  * reports it.
  *
@@ -5479,14 +5545,26 @@ export interface PluginAgentPane {
    * sent there with `{ hostId }` since this machine last started.
    */
   readonly launchedByThisPlugin: boolean;
+  /**
+   * The band Pilot places the run in. Absent when the host has no place for
+   * it: before it has read its agents once, for a pane it hasn't read yet, and
+   * in a view of a Remote Host's project.
+   */
+  readonly band?: PluginAgentBand;
+  /** Present when Canopy's reading is what placed the run in {@link band}. */
+  readonly canopy?: PluginAgentCanopyNote;
 }
 
 /**
- * An agent pane without `launchedByThisPlugin`: what the project's view
- * reports, and what a `createMockHost` fixture supplies. Who launched a pane is
- * answered only from the host's own launch record, never from the pane itself.
+ * An agent pane as the project's view reports it: without
+ * `launchedByThisPlugin`, `band` or `canopy`. Who launched a pane, and where
+ * Pilot places it, are answered only from the host's own records, never from
+ * the pane itself.
  */
-export type PluginAgentPaneObservation = Omit<PluginAgentPane, "launchedByThisPlugin">;
+export type PluginAgentPaneObservation = Omit<
+  PluginAgentPane,
+  "launchedByThisPlugin" | "band" | "canopy"
+>;
 
 /**
  * One agent run anywhere in the app, as {@link PluginAgentsApi.listAll}
@@ -5515,6 +5593,13 @@ export interface PluginAgentRun {
   readonly agentId?: string;
   /** Last observed agent state, when there is one. An observation, not a fact. */
   readonly observedState?: AgentState;
+  /**
+   * The band Pilot places the run in. Present on every run the host reports;
+   * optional only so a test fixture written before it still compiles.
+   */
+  readonly band?: PluginAgentBand;
+  /** Present when Canopy's reading is what placed the run in {@link band}. */
+  readonly canopy?: PluginAgentCanopyNote;
 }
 
 /**

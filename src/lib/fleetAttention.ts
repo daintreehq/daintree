@@ -2,6 +2,7 @@ import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import {
   FLEET_BANDS,
   bandForRun,
+  canopyPlacingRun,
   isAgentReportedNeed,
   runCanopyPlacement,
   runUnseenAsk,
@@ -13,6 +14,7 @@ import { isHandBackStop } from "@shared/utils/runHandBack";
 export {
   FLEET_BANDS,
   bandForRun,
+  canopyPlacingRun,
   isAgentReportedNeed,
   runCanopyPlacement,
   runUnseenAsk,

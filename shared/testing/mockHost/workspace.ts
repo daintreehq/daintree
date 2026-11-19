@@ -5,7 +5,10 @@
  */
 
 import { validateAgentContextPayload } from "../../utils/agentContextDrag.js";
-import { normalizePluginAllAgentsSnapshot } from "../../utils/pluginAllAgentsSnapshot.js";
+import {
+  normalizePluginAgentPlacement,
+  normalizePluginAllAgentsSnapshot,
+} from "../../utils/pluginAllAgentsSnapshot.js";
 import { pluginFocusedPanelEquals, toPluginFocusedPanel } from "../../utils/pluginFocusedPanel.js";
 import { toPluginProjectPresence } from "../../utils/pluginProjectPresence.js";
 import { toPluginTerminalLifecycleEvent } from "../../utils/pluginTerminalLifecycle.js";
@@ -23,6 +26,7 @@ import type {
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginTerminalLifecycleEvent,
+  PluginAgentPane,
   PluginAgentPaneObservation,
   PluginAllAgentsSnapshot,
   PluginFocusedPanel,
@@ -212,10 +216,14 @@ export function createWorkspaceFacet(
   const sentToAgentCalls: SentToAgentRecord[] = [];
   const runRecipeCalls: RunRecipeRecord[] = [];
   let runRecipeResult: PluginRunRecipeResult = { status: "cancelled" };
-  let agentPanes: PluginAgentPaneObservation[] = options.agents ?? [];
+  let agentPanes: Omit<PluginAgentPane, "launchedByThisPlugin">[] = options.agents ?? [];
   const remoteHosts: PluginRemoteHost[] = options.remoteHosts ?? [];
+  // Declaring `terminal:read` stands in for the user's grant, as it does for
+  // screen reads: the mock never prompts.
+  const placementOptions = { withQuotes: capabilities.has("terminal:read") };
   let allAgentsSnapshot: PluginAllAgentsSnapshot = normalizePluginAllAgentsSnapshot(
-    options.allAgents ?? { agents: [], degraded: false, lastSuccessfulAt: 0 }
+    options.allAgents ?? { agents: [], degraded: false, lastSuccessfulAt: 0 },
+    placementOptions
   );
   const allAgentsSubs = new Set<(snapshot: PluginAllAgentsSnapshot) => void>();
   let focusedPanel: PluginFocusedPanel = toPluginFocusedPanel(options.focusedPanel);
@@ -424,9 +432,10 @@ export function createWorkspaceFacet(
           );
         }
         // Answered from the mock's own launch record, as main answers it from its own.
-        return agentPanes.map((pane) => ({
+        return agentPanes.map(({ band, canopy, ...pane }) => ({
           ...pane,
           launchedByThisPlugin: launchedAgents.has(launchKey(pane.terminalId, null)),
+          ...normalizePluginAgentPlacement({ band, canopy }, placementOptions),
         }));
       },
       async listAll() {
@@ -856,7 +865,7 @@ export function createWorkspaceFacet(
       launchedAgents.add(terminalId);
     },
     simulateAllAgentsChange(snapshot) {
-      allAgentsSnapshot = normalizePluginAllAgentsSnapshot(snapshot);
+      allAgentsSnapshot = normalizePluginAllAgentsSnapshot(snapshot, placementOptions);
       for (const cb of [...allAgentsSubs]) cb(allAgentsSnapshot);
     },
     simulateFocusedPanelChange(focus) {

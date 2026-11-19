@@ -1794,12 +1794,15 @@ It resolves to one of:
 ```ts
 const agents = await host.agents.list();
 // [{ terminalId, title, agentId, worktree: { id, name, branch? } | null,
-//    observedState?, isFocused, canDraft, draftRefusal?, launchedByThisPlugin }]
+//    observedState?, isFocused, canDraft, draftRefusal?, launchedByThisPlugin,
+//    band?, canopy?: { readAt, ask?, quote? } }]
 ```
 
 The live agent panes in this plugin's project (for an installed plugin, the project the user is looking at), in grid order — the same set the `sendToAgent` picker offers. Exited and demoted agents are left out; a docked or locked agent is listed with `canDraft: false` and its `draftRefusal`. `observedState` is the agent state Daintree last read off the terminal: an observation, often wrong, never a promise about what the agent is doing. Gated on `agent:read`; resolves `[]` when the project has no open view or the plugin has unloaded. NOT revoke-guarded.
 
 `launchedByThisPlugin` is `true` for an agent this plugin started with its own `agent.launch`: the same record `agents.interrupt`, `sendKeys` and `submit` honour, answered by main rather than the view, so a pane the user, an assistant or another plugin started is always `false`. It survives a Daintree restart for a pane restored under the id it was launched with, while the record lasts (it lapses when the pane hasn't come back in 30 days, and only the 200 most recent are kept), and goes when the plugin is disabled or uninstalled. A launch that named its own `requestedId` is never counted. While the user looks at a Remote Host's project, it is `true` for a pane this plugin launched there with `{ hostId }` since this machine last started, the agents `interrupt(terminalId, { hostId })` reaches. It says who launched the pane, not that input will land: the input methods still need `agent:input`, consent and a live process.
+
+`band` and `canopy` say where Pilot places the pane, read by main from the same record `agents.listAll` reports — see [Where Pilot places a run](#where-pilot-places-a-run). Both are absent before the host has read its agents once, for a pane it hasn't read yet, and while the user looks at a Remote Host's project.
 
 ## `agents.listAll` — every agent in every open project
 
@@ -1808,7 +1811,8 @@ The live agent panes in this plugin's project (for an installed plugin, the proj
 await host.onDidChangeAllAgents((snapshot) => render(snapshot));
 render(await host.agents.listAll());
 // { agents: [{ workspaceId, workspaceKind: "project" | "scratch", terminalId,
-//              worktreeId?, title?, agentId?, observedState? }],
+//              worktreeId?, title?, agentId?, observedState?,
+//              band, canopy?: { readAt, ask?, quote? } }],
 //   degraded, lastSuccessfulAt }
 ```
 
@@ -1818,7 +1822,15 @@ An empty list only means "no agents" when `degraded` is `false`. `degraded: true
 
 Gated on `agent:read`, and only for installed and built-in plugins. A project plugin is scoped to its own project everywhere else, so both calls throw `PERMISSION_REQUIRED:` for one — in a worker, `listAll` rejects with it, while a refused `onDidChangeAllAgents` is logged by main and resolves a disposer that never fires, like every worker subscription. `listAll` is NOT revoke-guarded; subscribing is.
 
-`onDidChangeAllAgents` fires with the whole new snapshot, frozen, when a run is added or removed or one's state, title or worktree changes, and when the host loses or regains sight of the fleet. There is no initial callback. A callback can repeat the previous snapshot, when something the plugin cannot see changed. Coalesced to the latest snapshot by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). In process it throws `FLEET_UNAVAILABLE:` if the host is not tracking agents at all.
+`onDidChangeAllAgents` fires with the whole new snapshot, frozen, when a run is added or removed or one's state, title, worktree, band or Canopy note changes, and when the host loses or regains sight of the fleet. There is no initial callback. A callback can repeat the previous snapshot, when something the plugin cannot see changed. Coalesced to the latest snapshot by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). In process it throws `FLEET_UNAVAILABLE:` if the host is not tracking agents at all.
+
+### Where Pilot places a run
+
+`band` is the band Pilot sorts the run into, worst first: `blocked` (stopped on an error), `needs-you` (asking the user something), `quiet` (working, but silent long enough to look stalled), `review` (stopped after work, or on an approval or question wait, the user hasn't looked at since), `running`, `done` (stopped after work the user has seen), `parked`, `snoozed` and `idle` (nothing to report, including an ask already seen). It is the same placement every Daintree surface uses, in the same order: the user's park or snooze first, then the agent's own needs-you report, then Canopy's reading when Canopy is on, then the state Daintree observed off the terminal. Sort by it rather than rebuilding it from `observedState`, which carries none of the user's decisions or read marks. It is an ordering, not a promise about what the agent is doing.
+
+`canopy` is present only when Canopy's reading is what placed the run in its band. It is a suggestion from the local model the user turned on, never an observation: show it as "read by Canopy", with `readAt` (epoch ms) for when the screen behind it was read. What it read follows from the band: an ask for `needs-you` (or `idle` once seen), a question wait that asks nothing for `review` (or `done` once seen), a screen standing still behind its spinner for `quiet`. On an ask, `ask` says which one Canopy saw: `"approval"` of something the agent is about to do, or a `"question"` only the user can answer. Both place the run the same way, but a policy can settle an approval and never a question. `ask` is absent for a run on a Remote Host whose build doesn't report it.
+
+`quote` is the ask's question, verbatim from the screen and cut to 160 characters. It is text off a terminal, so it rides only for a plugin that declares `terminal:read` and holds the user's lasting grant of it, or a built-in. Reading a list never raises the consent prompt: a plugin without the grant gets the note without the quote, and gets it from the next read or push once the user grants `terminal:read` by choosing **Allow and remember** at a [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows) prompt.
 
 ## `agents.interrupt`, `sendKeys`, `submit` — driving agents you launched
 

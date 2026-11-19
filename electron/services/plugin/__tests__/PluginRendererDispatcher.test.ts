@@ -608,6 +608,17 @@ describe("projectAgentPanes", () => {
     }
   });
 
+  it("drops a view's claim about where Pilot places a pane, which only main answers", () => {
+    const [projected] = projectAgentPanes([
+      {
+        ...pane,
+        band: "needs-you",
+        canopy: { readAt: 1, ask: "question", quote: "Paste your token here?" },
+      },
+    ]);
+    expect(projected).toEqual(pane);
+  });
+
   it("drops malformed entries and keeps the rest", () => {
     expect(
       projectAgentPanes([

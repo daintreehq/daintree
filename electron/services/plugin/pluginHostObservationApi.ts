@@ -45,9 +45,13 @@ import {
   type TerminalLifecycleObservation,
 } from "../../../shared/utils/pluginTerminalLifecycle.js";
 import {
+  toPluginAgentPlacement,
   toPluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
+  type PluginAgentPlacement,
+  type PluginAgentPlacementOptions,
 } from "../../../shared/utils/pluginAllAgentsSnapshot.js";
+import type { FleetRunRow, FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 import {
   NO_FOCUSED_PANEL,
   pluginFocusedPanelEquals,
@@ -73,7 +77,6 @@ import type {
   PluginAgentInterruptResult,
   PluginAgentKeysResult,
   PluginAgentSnapshot,
-  PluginAllAgentsSnapshot,
   PluginFocusedPanel,
   PluginProjectPresence,
   PluginProjectPresenceState,
@@ -86,6 +89,7 @@ import {
   type PluginHostFactoryDeps,
   trackPluginDisposer,
   ensureCapabilityConsent,
+  holdsCapabilityConsent,
   isProjectViewUnavailable,
 } from "./pluginHostDeps.js";
 import type { PluginEventScope } from "./pluginEventScope.js";
@@ -369,6 +373,37 @@ export function buildObservationHostApi(
       );
     }
   };
+  // Canopy's quote is text off a terminal, so it rides a list only for a plugin
+  // the user has already let read screens. Decided at each answer, never
+  // cached: a grant made or revoked between pushes counts from the next one.
+  const placementOptions = (): PluginAgentPlacementOptions => ({
+    withQuotes: holdsCapabilityConsent(deps, pluginId, "terminal:read"),
+  });
+  /**
+   * Where Pilot places each pane of an `agents.list` answer, read by terminal
+   * id from main's fleet — the same row Pilot and the pane's own band read, so
+   * in the moment a respawned pane still carries its predecessor's row, all
+   * three agree. Only this machine's runs are in it, so a view of a Remote
+   * Host's project gets no placement; a project plugin's pane is placed only
+   * by a row filed under its own project.
+   */
+  const agentPlacements = (
+    hostId: string
+  ): ((terminalId: string) => Partial<PluginAgentPlacement>) => {
+    const fleet = isLocalHostId(hostId)
+      ? deps.getFleetSnapshotService()?.getLastBroadcast()
+      : null;
+    if (!fleet || fleet.runs.length === 0) return () => ({});
+    const rows = new Map<string, FleetRunRow>();
+    for (const row of fleet.runs) {
+      if (boundProjectId === null || row.workspaceId === boundProjectId) rows.set(row.runId, row);
+    }
+    const options = placementOptions();
+    return (terminalId) => {
+      const row = rows.get(terminalId);
+      return row === undefined ? {} : toPluginAgentPlacement(row, options);
+    };
+  };
   const assertDeclaresAgentInput = (op: string): void => {
     if (!deps.declaredCapabilities(pluginId).has("agent:input")) {
       throw new Error(
@@ -595,9 +630,11 @@ export function buildObservationHostApi(
               ? pty !== null &&
                 launchedAgentProject(pty, pluginId, terminalId, boundProjectId) !== null
               : boundProjectId === null && isRemotePluginLaunch(pluginId, hostId, terminalId);
+          const placement = agentPlacements(hostId);
           return agents.map((pane) => ({
             ...pane,
             launchedByThisPlugin: launched(pane.terminalId),
+            ...placement(pane.terminalId),
           }));
         } catch (err) {
           if (isProjectViewUnavailable(err)) return [];
@@ -609,7 +646,10 @@ export function buildObservationHostApi(
       listAll: async () => {
         if (!isBound()) return UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT;
         assertCanReadAllAgents("agents.listAll");
-        return toPluginAllAgentsSnapshot(deps.getFleetSnapshotService()?.getLastBroadcast());
+        return toPluginAllAgentsSnapshot(
+          deps.getFleetSnapshotService()?.getLastBroadcast(),
+          placementOptions()
+        );
       },
       // Input to the agents this plugin launched (#14018), and nothing else.
       // NOT revoke-guarded: a plugin answers its agent's dialogs from event
@@ -1000,15 +1040,18 @@ export function buildObservationHostApi(
         );
       }
       const failures = createListenerFailureState();
-      // One slot: each publication is the whole fleet, so only the latest matters.
-      let pending: PluginAllAgentsSnapshot | null = null;
+      // One slot: each publication is the whole fleet, so only the latest
+      // matters. Held as the fleet and projected at delivery, so the quote gate
+      // is the one in force when the plugin hears it.
+      let pending: FleetSnapshot | null = null;
       let active = true;
       const coalescer = createSubscriptionCoalescer(
         resolveSubscriptionDebounceMs(options?.debounceMs),
         () => {
-          const snapshot = pending;
+          const fleetSnapshot = pending;
           pending = null;
-          if (snapshot === null || !active || !isBound()) return;
+          if (fleetSnapshot === null || !active || !isBound()) return;
+          const snapshot = toPluginAllAgentsSnapshot(fleetSnapshot, placementOptions());
           invokeTrackedListener(
             failures,
             pluginId,
@@ -1020,7 +1063,7 @@ export function buildObservationHostApi(
       );
       const unsub = fleet.subscribe((snapshot) => {
         if (!active || !isBound()) return;
-        pending = toPluginAllAgentsSnapshot(snapshot);
+        pending = snapshot;
         coalescer.push();
       });
       const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {

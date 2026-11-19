@@ -897,8 +897,15 @@ describe("FleetSnapshotService", () => {
 
   it("decorates a run with Canopy's refinement for its incarnation, and re-publishes when it changes", async () => {
     const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
-    let refinement: { kind: "asked"; quote: string; readAt: number; seen: boolean } | undefined =
-      undefined;
+    let refinement:
+      | {
+          kind: "asked";
+          ask: "approval" | "question";
+          quote: string;
+          readAt: number;
+          seen: boolean;
+        }
+      | undefined = undefined;
     const source = vi.fn((_id: string, _spawnedAt: number) => refinement);
     setCanopyRefinementSource(source);
     const service = new FleetSnapshotService(client as never);
@@ -912,6 +919,7 @@ describe("FleetSnapshotService", () => {
 
       refinement = {
         kind: "asked",
+        ask: "question",
         quote: "Want me to update the tests too?",
         readAt: NOW,
         seen: false,
@@ -931,6 +939,14 @@ describe("FleetSnapshotService", () => {
       notifyCanopyRefinementsChanged();
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 2);
+      expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
+
+      // So is a reading of the same words as the other kind of ask: a plugin
+      // sorting approvals from questions must hear it.
+      refinement = { ...refinement, ask: "approval" };
+      notifyCanopyRefinementsChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 3);
       expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
 
       // Canopy going away takes every refinement with it.

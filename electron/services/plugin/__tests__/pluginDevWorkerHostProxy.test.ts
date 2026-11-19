@@ -473,6 +473,8 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
           terminalId: "t-1",
           observedState: "working",
           cwd: "/leaked",
+          band: "needs-you",
+          canopy: { readAt: 4, ask: "approval", quote: "Run it?", seen: false },
         },
       ],
       degraded: false,
@@ -486,6 +488,9 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
           workspaceKind: "project",
           terminalId: "t-1",
           observedState: "working",
+          // Main decided the quote before the clone; the worker keeps what it sent.
+          band: "needs-you",
+          canopy: { readAt: 4, ask: "approval", quote: "Run it?" },
         },
       ],
       degraded: false,
@@ -493,6 +498,7 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.agents[0])).toBe(true);
+    expect(Object.isFrozen(result.agents[0]!.canopy)).toBe(true);
   });
 
   it.each([
@@ -580,7 +586,9 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
       type: "subscription-event",
       subscriptionId: sub.subscriptionId,
       payload: {
-        agents: [{ workspaceId: "p1", terminalId: "t-1" }],
+        agents: [
+          { workspaceId: "p1", terminalId: "t-1", band: "quiet", canopy: { readAt: 2, extra: 1 } },
+        ],
         degraded: true,
         lastSuccessfulAt: null,
       },
@@ -592,6 +600,8 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
       workspaceId: "p1",
       workspaceKind: "project",
       terminalId: "t-1",
+      band: "quiet",
+      canopy: { readAt: 2 },
     });
     expect(Object.isFrozen(snapshot)).toBe(true);
   });

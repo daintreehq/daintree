@@ -7,6 +7,9 @@ import path from "node:path";
 const consentMock = vi.hoisted(() => ({
   ensureAllowed: vi.fn(async (..._args: unknown[]) => undefined),
 }));
+const grantStoreMock = vi.hoisted(() => ({
+  hasGrant: vi.fn((_identity: { pluginId: string; capability: string; scopeKey: string }) => false),
+}));
 const ptyMock = vi.hoisted(() => ({
   client: null as null | {
     getTerminalProjectId: (id: string) => string | null;
@@ -44,7 +47,7 @@ vi.mock("../../PluginActionAuditService.js", () => ({
 }));
 vi.mock("../../plugin-capability/instances.js", () => ({
   getPluginCapabilityConsentService: vi.fn(() => consentMock),
-  getPluginCapabilityConsentStore: vi.fn(() => ({ hasGrant: vi.fn(() => false) })),
+  getPluginCapabilityConsentStore: vi.fn(() => grantStoreMock),
 }));
 vi.mock("../../forge/forgeCredentialUtils.js", () => ({
   buildStoredCredentials: vi.fn(() => null),
@@ -78,6 +81,8 @@ import type { LoadedPlugin } from "../PluginServiceTypes.js";
 beforeEach(() => {
   ptyMock.client = null;
   consentMock.ensureAllowed.mockReset();
+  grantStoreMock.hasGrant.mockReset();
+  grantStoreMock.hasGrant.mockReturnValue(false);
 });
 
 describe("app-wide agent list", () => {
@@ -241,8 +246,9 @@ describe("app-wide agent list", () => {
             title: "Fix auth",
             agentId: "claude",
             observedState: "working",
+            band: "parked",
           },
-          { workspaceId: SCRATCH_ID, workspaceKind: "scratch", terminalId: "t-2" },
+          { workspaceId: SCRATCH_ID, workspaceKind: "scratch", terminalId: "t-2", band: "idle" },
         ],
         degraded: false,
         lastSuccessfulAt: 20,
@@ -315,6 +321,110 @@ describe("app-wide agent list", () => {
       revoke();
 
       await expect(host.agents.listAll()).resolves.toMatchObject({ degraded: false });
+    });
+  });
+
+  describe("where Pilot places each run", () => {
+    const ASK = {
+      kind: "asked",
+      ask: "question",
+      quote: "Which branch should I use?",
+      readAt: 30,
+      seen: false,
+    } as const;
+    const askingRow = (overrides: Partial<FleetRunRow> = {}) =>
+      row({ agentState: "waiting", waitingReason: "prompt", canopy: ASK, ...overrides });
+
+    function asInstalled(h: Harness, capabilities: string[]): void {
+      h.plugins.set(PLUGIN_ID, {
+        isBuiltin: false,
+        manifest: { name: PLUGIN_ID, capabilities, contributes: {} },
+      } as unknown as LoadedPlugin);
+      h.capabilities.clear();
+      for (const capability of capabilities) h.capabilities.add(capability);
+    }
+
+    it("gives each run its band, and a note only where Canopy's reading placed it", async () => {
+      const h = makeHarness(
+        makeFleet(
+          fleetSnapshot([
+            askingRow({ runId: "t-1" }),
+            askingRow({ runId: "t-2", park: { parkedAt: 4 } }),
+            askingRow({ runId: "t-3", handbackReport: "needs-you" }),
+          ])
+        )
+      );
+      h.capabilities.add("terminal:read");
+      const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+      const { agents } = await host.agents.listAll();
+
+      expect(agents.map(({ terminalId, band, canopy }) => ({ terminalId, band, canopy }))).toEqual([
+        {
+          terminalId: "t-1",
+          band: "needs-you",
+          canopy: { readAt: 30, ask: "question", quote: "Which branch should I use?" },
+        },
+        { terminalId: "t-2", band: "parked", canopy: undefined },
+        { terminalId: "t-3", band: "needs-you", canopy: undefined },
+      ]);
+      expect(Object.isFrozen(agents[0]!.canopy)).toBe(true);
+    });
+
+    it("keeps the quote back from a plugin that doesn't declare terminal:read", async () => {
+      const h = makeHarness(makeFleet(fleetSnapshot([askingRow()])));
+      const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+      const { agents } = await host.agents.listAll();
+
+      expect(agents[0]!.canopy).toEqual({ readAt: 30, ask: "question" });
+    });
+
+    it("quotes for an installed plugin only on the user's lasting grant, and never asks for one", async () => {
+      const h = makeHarness(makeFleet(fleetSnapshot([askingRow()])));
+      asInstalled(h, ["agent:read", "terminal:read"]);
+      const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+      expect((await host.agents.listAll()).agents[0]!.canopy).toEqual({
+        readAt: 30,
+        ask: "question",
+      });
+
+      grantStoreMock.hasGrant.mockImplementation(
+        (identity) =>
+          identity.pluginId === PLUGIN_ID &&
+          identity.capability === "terminal:read" &&
+          identity.scopeKey === "global"
+      );
+      expect((await host.agents.listAll()).agents[0]!.canopy?.quote).toBe(
+        "Which branch should I use?"
+      );
+      expect(consentMock.ensureAllowed).not.toHaveBeenCalled();
+    });
+
+    it("decides the quote when a push is delivered, not when the fleet published it", async () => {
+      vi.useFakeTimers();
+      try {
+        const h = makeHarness();
+        asInstalled(h, ["agent:read", "terminal:read"]);
+        grantStoreMock.hasGrant.mockReturnValue(true);
+        const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+        const received: PluginAllAgentsSnapshot[] = [];
+        await host.onDidChangeAllAgents((snapshot) => received.push(snapshot));
+
+        h.fleet!.publish(fleetSnapshot([askingRow()]));
+        // The grant is revoked inside the debounce window.
+        grantStoreMock.hasGrant.mockReturnValue(false);
+        vi.advanceTimersByTime(100);
+
+        expect(received).toHaveLength(1);
+        const run = received[0]!.agents[0]!;
+        expect(run.band).toBe("needs-you");
+        expect(run.canopy).toEqual({ readAt: 30, ask: "question" });
+        expect(consentMock.ensureAllowed).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -752,7 +862,8 @@ describe("send to agent", () => {
 
   function makeHarness(
     capabilities: string[] = ["agent:input", "agent:read"],
-    displayName = "Acme Board"
+    displayName = "Acme Board",
+    fleet: FleetSnapshot | null = null
   ) {
     const plugin = {
       // Not builtin, so the just-in-time consent gate actually runs.
@@ -804,6 +915,7 @@ describe("send to agent", () => {
       getHostGitFactory: () => undefined,
       getProcessManager: vi.fn(),
       declaredCapabilities: () => new Set(capabilities),
+      getFleetSnapshotService: () => ({ getLastBroadcast: () => fleet }),
       fetchWorktreeSnapshotsResult: vi.fn(),
       fetchWorktreeSnapshotsForProjectResult: vi.fn(),
       recordPluginLog: vi.fn(),
@@ -994,6 +1106,64 @@ describe("send to agent", () => {
       );
       const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
       await expect(host.agents.list()).resolves.toEqual([]);
+    });
+
+    describe("where Pilot places each pane", () => {
+      const ASKING: FleetRunRow = {
+        runId: "t-1",
+        workspaceId: PROJECT_A,
+        spawnedAt: 1,
+        cwd: "/repo",
+        agentState: "completed",
+        canopy: { kind: "asked", ask: "approval", quote: "Run the migration?", readAt: 9, seen: false },
+      };
+      const fleet = (...runs: FleetRunRow[]): FleetSnapshot => ({
+        runs,
+        changedAt: 1,
+        degraded: false,
+        lastSuccessfulAt: 1,
+      });
+
+      it("places a pane by main's fleet row for its terminal", async () => {
+        const h = makeHarness(undefined, undefined, fleet(ASKING));
+        const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+        await expect(host.agents.list()).resolves.toEqual([
+          {
+            ...PANE,
+            launchedByThisPlugin: false,
+            band: "needs-you",
+            canopy: { readAt: 9, ask: "approval" },
+          },
+        ]);
+      });
+
+      it("quotes the ask only on a lasting terminal:read grant for the plugin's project", async () => {
+        const h = makeHarness(["agent:read", "terminal:read"], undefined, fleet(ASKING));
+        const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+        expect((await host.agents.list())[0]!.canopy).toEqual({ readAt: 9, ask: "approval" });
+
+        grantStoreMock.hasGrant.mockImplementation(
+          (identity) => identity.capability === "terminal:read" && identity.scopeKey === PROJECT_A
+        );
+        expect((await host.agents.list())[0]!.canopy?.quote).toBe("Run the migration?");
+        expect(consentMock.ensureAllowed).not.toHaveBeenCalled();
+      });
+
+      it.each<[string, FleetSnapshot | null, string]>([
+        ["no fleet read yet", null, "local"],
+        ["no row for the pane", fleet({ ...ASKING, runId: "t-9" }), "local"],
+        ["a row filed under another project", fleet({ ...ASKING, workspaceId: "project-b" }), "local"],
+        ["a view of a Remote Host's project", fleet(ASKING), "host-1"],
+      ])("leaves the pane unplaced with %s", async (_label, snapshot, hostId) => {
+        const h = makeHarness(undefined, undefined, snapshot);
+        h.sendAgentsListWithHost.mockResolvedValue({ hostId, agents: [PANE] });
+        const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+        await expect(host.agents.list()).resolves.toEqual([
+          { ...PANE, launchedByThisPlugin: false },
+        ]);
+      });
     });
   });
 });

@@ -1,5 +1,8 @@
 import { isAppError } from "../../utils/errorTypes.js";
-import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
+import {
+  getPluginCapabilityConsentService,
+  getPluginCapabilityConsentStore,
+} from "../plugin-capability/instances.js";
 import type { PluginArtifactService } from "./PluginArtifactService.js";
 import { type HostGitFactory } from "./pluginHostGit.js";
 import type { PluginProcessManager } from "./PluginProcessManager.js";
@@ -321,6 +324,30 @@ export async function ensureCapabilityConsent(
     plugin.manifest.capabilities ?? [],
     scopeKey
   );
+}
+
+/**
+ * Whether a plugin may already use a consent-gated capability without being
+ * asked: it declares it, and is a built-in or holds the user's lasting grant
+ * under the same scope {@link ensureCapabilityConsent} keys one by. Never
+ * prompts, so a read the user didn't ask for — a list, a push — can carry what
+ * the capability covers without raising a dialog. A one-time approval grants
+ * only the call that asked, and answers false here.
+ */
+export function holdsCapabilityConsent(
+  deps: Pick<PluginHostFactoryDeps, "plugins" | "declaredCapabilities">,
+  pluginId: string,
+  capability: BuiltInPluginCapability
+): boolean {
+  if (!deps.declaredCapabilities(pluginId).has(capability)) return false;
+  const plugin = deps.plugins.get(pluginId);
+  if (!plugin) return false;
+  if (plugin.isBuiltin) return true;
+  return getPluginCapabilityConsentStore().hasGrant({
+    pluginId,
+    capability,
+    scopeKey: plugin.binding?.projectId ?? "global",
+  });
 }
 
 /**
