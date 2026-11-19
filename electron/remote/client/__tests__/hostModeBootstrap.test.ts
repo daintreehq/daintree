@@ -888,8 +888,8 @@ describe("detached start reports", () => {
     expect(detachedStopScript({ pid: 42, startedAt: null, fresh: true })).toContain(
       `if [ -n "$n" ] && [ "$n" = '' ]; then`
     );
-    expect(detachedAliveScript({ pid: 42, startedAt: null, fresh: true })).toBe(
-      'if kill -0 42 2>/dev/null; then echo "@@dt:alive yes"; fi'
+    expect(detachedAliveScript({ pid: 42, startedAt: null, fresh: true })).toMatch(
+      /^p=42; if kill -0 "\$p" 2>\/dev\/null; then /
     );
   });
 });

@@ -24,6 +24,7 @@ import {
   DEB_EXECUTABLE,
   LINUX_UNIT_NAME,
   MAC_APP_PATH,
+  notZombieShell,
   processStartShell,
   type ProbeOutcome,
 } from "./hostProbe.js";
@@ -250,7 +251,7 @@ const RECEIPT = `"${CACHE_DIR}/host-launch.pid"`;
  * Sets `$lp` to the pid of the last start {@link detachedStartScript} made,
  * while that process still runs (by its recorded start time), else to nothing.
  */
-export const DETACHED_LAUNCH_READ = `lp=""; if [ -f ${RECEIPT} ]; then lt=""; read -r lp lt < ${RECEIPT}; case "$lp" in ''|*[!0-9]*) lp="" ;; *) ${processStartShell("lp", "ln")}; if [ -z "$lt" ] || [ "$ln" != "$lt" ]; then lp=""; fi ;; esac; fi`;
+export const DETACHED_LAUNCH_READ = `lp=""; if [ -f ${RECEIPT} ]; then lt=""; read -r lp lt < ${RECEIPT}; case "$lp" in ''|*[!0-9]*) lp="" ;; *) ${processStartShell("lp", "ln")}; if [ -z "$lt" ] || [ "$ln" != "$lt" ] || ! ${notZombieShell("lp")}; then lp=""; fi ;; esac; fi`;
 /** Where a host started on connect writes its output: what a failed start is read from. */
 export const DETACHED_LOG_PATH = `~/.cache/${LINUX_RUNTIME_DIR_NAME}/host.log`;
 const DETACHED_LOG_ROTATE_BYTES = 1024 * 1024;
@@ -331,14 +332,15 @@ function whileSameLaunch(launch: DetachedLaunch, then: string): string {
 }
 
 /**
- * Prints whether a launch is still running. Without a start time to tell it
- * from a later process given its pid, any process with it counts.
+ * Prints whether a launch is still running, a zombie left unreaped counting
+ * as gone. Without a start time to tell it from a later process given its
+ * pid, any process with it counts.
  */
 export function detachedAliveScript(launch: DetachedLaunch): string {
-  const yes = `echo "${MARK}alive yes"`;
+  const yes = `if ${notZombieShell("p")}; then echo "${MARK}alive yes"; fi`;
   return launch.startedAt
     ? whileSameLaunch(launch, yes)
-    : `if kill -0 ${launch.pid} 2>/dev/null; then ${yes}; fi`;
+    : `p=${launch.pid}; if kill -0 "$p" 2>/dev/null; then ${yes}; fi`;
 }
 
 export function parseDetachedAlive(stdout: string): boolean {

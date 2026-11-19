@@ -290,7 +290,8 @@ describe("parseHostProbe", () => {
   it("counts only this SSH user's Daintree as running, never another user's", () => {
     const script = buildHostProbeScript();
     expect(script).toContain('pgrep -u "$(id -u)" -x Daintree >/dev/null');
-    expect(script).toContain('pgrep -u "$(id -u)" -x daintree >/dev/null');
+    // Linux lists them to pass over any its PID 1 left unreaped.
+    expect(script).toContain('for q in $(pgrep -u "$(id -u)" -x daintree 2>/dev/null)');
     expect(script).not.toMatch(/pgrep -x [Dd]aintree/);
   });
 

@@ -82,6 +82,16 @@ export function processStartShell(pidVar: string, into: string): string {
   return `if [ "$(uname -s)" = Darwin ]; then ${into}=$(LC_ALL=C /bin/ps -o lstart= -p "$${pidVar}" 2>/dev/null | sed 's/^ *//; s/  */ /g; s/ *$//'); else ${into}=$(sed 's/.*) //' "/proc/$${pidVar}/stat" 2>/dev/null | cut -d' ' -f20); fi`;
 }
 
+/**
+ * Shell test that process `$<pidVar>` isn't a zombie. A host started on
+ * connect is left to PID 1, which on a machine with no init system may never
+ * reap it: what it leaves when it exits still answers `kill -0` and `pgrep`.
+ * True where /proc can't be read (macOS).
+ */
+export function notZombieShell(pidVar: string): string {
+  return `[ "$(sed 's/.*) //' "/proc/$${pidVar}/stat" 2>/dev/null | cut -d' ' -f1)" != Z ]`;
+}
+
 function buildInfoRead(asar: string): string {
   // Assigned first: bash 3.2 (macOS /bin/sh) brace-expands inside "$(...)".
   return `b=$(grep -a -o -m 1 -E ${sq(BUILD_INFO_PATTERN)} ${asar} 2>/dev/null | head -n 1); echo "${MARK}buildinfo $b"`;
@@ -126,7 +136,7 @@ export function buildHostProbeScript(): string {
     `u=""; if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then u=$(sed -n 's/^ExecStart="\\([^"]*\\)".*/\\1/p' "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" | head -n 1); echo "${MARK}unitexec $u"; fi`,
     `r=""; p=$(pgrep -u "$(id -u)" -o -x daintree 2>/dev/null); if [ -n "$p" ]; then r=$(tr '\\000' '\\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^APPIMAGE=//p' | head -n 1); echo "${MARK}runningappimage $r"; fi`,
     `for f in "$HOME"/Applications/Daintree*.AppImage "$HOME"/Applications/daintree*.AppImage "$u" "$r"; do case "$f" in /*.AppImage) if [ -f "$f" ]; then b=""; i="$f${APPIMAGE_BUILD_INFO_SUFFIX}"; if [ -f "$i" ] && [ "$i" -nt "$f" ]; then b=$(head -c 512 "$i"); fi; echo "${MARK}appimage $f"; echo "${MARK}appimageinfo $b"; fi ;; esac; done`,
-    `if pgrep -u "$(id -u)" -x daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
+    `for q in $(pgrep -u "$(id -u)" -x daintree 2>/dev/null); do if ${notZombieShell("q")}; then echo "${MARK}running yes"; break; fi; done`,
     `echo "${MARK}sleep $(systemctl is-enabled sleep.target 2>/dev/null)"`,
     `if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then echo "${MARK}unit yes"; echo "${MARK}unitenabled $(systemctl --user is-enabled ${LINUX_UNIT_NAME} 2>/dev/null)"; else echo "${MARK}unit no"; fi`,
     // What an AppImage needs to mount itself: the device and a setuid
@@ -146,7 +156,7 @@ export function buildHostProbeScript(): string {
     // and the pid can be reused since. A file that records when its process started
     // must match it; one that doesn't (an older host) is taken on the pid alone,
     // but then no start time is reported and nothing is ever signalled by pid.
-    `if [ -f "$d/${HOST_DISCOVERY_NAME}" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then s=$(sed -n 's/.*"startedAt":"\\([^"]*\\)".*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); ${processStartShell("p", "n")}; if [ -z "$s" ] || [ -z "$n" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; elif [ "$n" = "$s" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; echo "${MARK}hoststart $s"; fi; fi; fi`,
+    `if [ -f "$d/${HOST_DISCOVERY_NAME}" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null && ${notZombieShell("p")}; then s=$(sed -n 's/.*"startedAt":"\\([^"]*\\)".*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); ${processStartShell("p", "n")}; if [ -z "$s" ] || [ -z "$n" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; elif [ "$n" = "$s" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; echo "${MARK}hoststart $s"; fi; fi; fi`,
     `if [ -f "$d/${HOST_MODE_STATUS_NAME}" ]; then printf '%s %s\\n' "${MARK}hostmodestate" "$(head -c 4096 "$d/${HOST_MODE_STATUS_NAME}" | tr -d '\\n')"; fi`,
     `if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then echo "${MARK}download yes"; fi`,
     `echo "${MARK}end"`,

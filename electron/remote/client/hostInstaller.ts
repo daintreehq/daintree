@@ -22,6 +22,7 @@ import {
   MAC_APP_PATH,
   formatBuildInfo,
   liveHostRecord,
+  notZombieShell,
   processStartShell,
   runningHostBuild,
   type ParsedProbe,
@@ -669,10 +670,11 @@ export function stopScript(
   if (launch === null || platform !== "linux") {
     return `${unitStop}if ${running}; then ${signalIt}; fi; i=0; while ${running} && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if ${running}; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
   }
-  const alive = `{ ${running} || { [ -n "$lp" ] && kill -0 "$lp" 2>/dev/null; }; }`;
+  // A zombie its PID 1 never reaps is gone, whatever pgrep and kill -0 say.
+  const live = `for q in $(pgrep -u "$(id -u)" -x ${name} 2>/dev/null) $lp; do if kill -0 "$q" 2>/dev/null && ${notZombieShell("q")}; then return 0; fi; done; return 1`;
   const stopLaunch =
     launch === "stop" ? `if [ -n "$lp" ]; then kill -TERM "$lp" 2>/dev/null; fi; ` : "";
-  return `${unitStop}${DETACHED_LAUNCH_READ}; ${stopLaunch}if ${running}; then ${signalIt}; fi; i=0; while ${alive} && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if ${alive}; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
+  return `${unitStop}${DETACHED_LAUNCH_READ}; alive() { ${live}; }; ${stopLaunch}if ${running}; then ${signalIt}; fi; i=0; while alive && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if alive; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
 }
 
 /**
