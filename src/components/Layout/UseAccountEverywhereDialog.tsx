@@ -158,19 +158,22 @@ function UseAccountEverywhereConfirm({
     UI_DOHERTY_THRESHOLD
   );
 
-  // The boxes belong to the list they were cleared on: another read lists afresh, all checked.
+  // The boxes belong to the account they were cleared for, so a re-read of
+  // its list (a retry, the check after a save) keeps what the user left out;
+  // another account starts all checked.
+  const targetValue = targetId === undefined ? null : loginValue(targetId);
   const [unticked, setUnticked] = useState<{
-    list: AccountChoicesAway;
+    target: string;
     keys: ReadonlySet<string>;
   } | null>(null);
   const isTicked = (key: string) =>
-    !(unticked !== null && unticked.list === listed && unticked.keys.has(key));
+    !(unticked !== null && unticked.target === targetValue && unticked.keys.has(key));
   const toggle = (key: string) => {
-    if (listed === null) return;
+    if (targetValue === null) return;
     setUnticked((current) => {
-      const keys = new Set(current?.list === listed ? current.keys : []);
+      const keys = new Set(current?.target === targetValue ? current.keys : []);
       if (!keys.delete(key)) keys.add(key);
-      return { list: listed, keys };
+      return { target: targetValue, keys };
     });
   };
 
@@ -290,10 +293,26 @@ function UseAccountEverywhereConfirm({
         <Callout
           severity="warning"
           className="mt-3"
-          title={`${pluralize(changedMeanwhile, "checked choice")} changed while this was open`}
+          title={`${pluralize(changedMeanwhile, "checked choice")} wasn't cleared`}
+          action={
+            target && (
+              // The default is saved, so leaving these as they are moves on
+              // to the running terminals without another write.
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isApplying}
+                onClick={() => onDone({ id: target.id, name: accountName })}
+              >
+                Keep {changedMeanwhile === 1 ? "it" : "them"}
+              </Button>
+            )
+          }
         >
-          {changedMeanwhile === 1 ? "It keeps" : "Each keeps"} the account it was changed to. The
-          default is saved; check the list again to clear what's left.
+          {changedMeanwhile === 1 ? "It" : "Each"} changed elsewhere while this was open. The
+          default is saved; clear what's left below, or keep{" "}
+          {changedMeanwhile === 1 ? "it" : "them"} as{" "}
+          {changedMeanwhile === 1 ? "it is" : "they are"}.
         </Callout>
       )}
       {readError !== null && (

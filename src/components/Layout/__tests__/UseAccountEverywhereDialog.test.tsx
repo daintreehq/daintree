@@ -252,14 +252,25 @@ describe("UseAccountEverywhereDialog (#17893)", () => {
     });
   });
 
-  it("lists again, open, when a checked choice was changed elsewhere while it was open", async () => {
+  it("lists again, open, when a checked choice was changed elsewhere, keeping what was left out", async () => {
     applyMock.mockResolvedValue({
-      agents: { claude: { accountId: "fresh", worktreeAccounts: { "/work/app/main": "other" } } },
+      agents: {
+        claude: {
+          accountId: "fresh",
+          worktreeAccounts: { "/work/app/main": "other", "/work/site/old": null },
+        },
+      },
     });
     const { onClose, onSaved } = renderDialog(FRESH);
     await screen.findByRole("checkbox", { name: "Review" });
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "/work/site/old" }));
+    });
     listMock.mockResolvedValue({
-      worktrees: [{ worktreeId: "/work/app/main", accountId: "other", gone: false }],
+      worktrees: [
+        { worktreeId: "/work/app/main", accountId: "other", gone: false },
+        { worktreeId: "/work/site/old", accountId: null, gone: true },
+      ],
       presets: [],
     });
 
@@ -269,7 +280,7 @@ describe("UseAccountEverywhereDialog (#17893)", () => {
 
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByText("1 checked choice changed while this was open")).toBeTruthy();
+    expect(screen.getByText("1 checked choice wasn't cleared")).toBeTruthy();
     expect(listMock).toHaveBeenCalledTimes(2);
     expect(
       await screen.findByRole("checkbox", {
@@ -277,7 +288,55 @@ describe("UseAccountEverywhereDialog (#17893)", () => {
         description: "On a removed account",
       })
     ).toBeTruthy();
+    expect(checked("/work/app/main")).toBe("true");
+    // Left out before the save, so still left out.
+    expect(checked("/work/site/old")).toBe("false");
     expect(screen.queryByRole("checkbox", { name: "Review" })).toBeNull();
+
+    // Keeping it moves on without another write.
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    });
+    expect(applyMock).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves on to the running terminals from a list with nothing left to clear", async () => {
+    seedPanes([{ title: "Parser", agentAccountId: "spent" }]);
+    applyMock.mockResolvedValue({
+      agents: {
+        claude: {
+          accountId: "fresh",
+          customPresets: [
+            { id: "review", name: "Review", accountId: "spent" },
+            { id: "review", name: "Review copy", accountId: "spent" },
+          ],
+        },
+      },
+    });
+    listMock.mockResolvedValueOnce({
+      worktrees: [],
+      presets: [{ presetId: "review", presetName: "Review", accountId: "spent" }],
+    });
+    renderDialog(FRESH);
+    await screen.findByRole("checkbox", { name: "Review" });
+    listMock.mockResolvedValue({
+      worktrees: [],
+      presets: [{ presetId: "review", presetName: "Review", accountId: "spent", sharedId: true }],
+    });
+
+    await act(async () => {
+      fireEvent.click(confirmButton("Use Fresh everywhere"));
+    });
+    await screen.findByRole("checkbox", {
+      name: "Review",
+      description: "On Spent Another preset has its id, so it stays",
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    });
+    expect(screen.getByText("Restart 1 terminal on 'Fresh'?")).toBeTruthy();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("offers this project's running terminals afterwards, and restarts none by itself", async () => {

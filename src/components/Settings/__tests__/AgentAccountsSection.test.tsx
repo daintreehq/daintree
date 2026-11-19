@@ -257,9 +257,14 @@ describe("AgentAccountsSection (#16040)", () => {
     });
 
     it("leaves the account to the dialog when the saved default is gone", () => {
-      renderSection({ accounts: [COMPANY], accountId: "gone" });
+      renderSection({ accounts: [], accountId: "gone" });
       open();
       expect(screen.getByTestId("use-everywhere-dialog")).toBeTruthy();
+      expect(everywhereDialog.props?.account).toBeUndefined();
+
+      cleanup();
+      renderSection({ accounts: [COMPANY], accountId: "gone" });
+      open();
       expect(everywhereDialog.props?.account).toBeUndefined();
     });
 
