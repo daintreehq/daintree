@@ -243,7 +243,7 @@ export interface SleepRequestWorking {
    * starts a new process's count of runs again, so it takes both to keep a
    * later run from being credited with it.
    */
-  spawnedAt?: number;
+  spawnedAt: number;
   agentIncarnation?: number;
 }
 

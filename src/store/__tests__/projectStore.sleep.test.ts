@@ -179,7 +179,7 @@ describe("projectStore.sleepProject", () => {
 
     it("passes on what the user's request saw of its agents (#17886)", async () => {
       setCurrentProject({ id: "proj-2", name: "Two", path: "/repo/two" });
-      const options = { workingAtRequest: [{ terminalId: "t1", at: 10 }] };
+      const options = { workingAtRequest: [{ terminalId: "t1", at: 10, spawnedAt: 5 }] };
 
       await useProjectStore.getState().sleepProject("proj-1", options);
 

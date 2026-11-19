@@ -561,18 +561,27 @@ export async function startSleepWait(
     pauseNote: options.pauseNote,
   });
   const targetIds = new Set(targets.map((t) => t.id));
-  // Presence is read beside the request, as every poll reads it, so a project
-  // opened while the listing is still coming counts as one the user came back to.
-  const [listing, presence] = await Promise.allSettled([terminalClient.getAll(), readShown()]);
-  if (presence.status === "fulfilled") {
-    for (const id of targetIds) {
-      if (!presence.value.has(id)) run.trackers.get(id)!.hiddenSeen = true;
-    }
+  // Presence is read beside the request, as every poll reads it, and counts as
+  // soon as it lands: a project opened while the listing is still coming is one
+  // the user came back to, Sleep now included.
+  const presence = readShown().then(
+    (shown) => {
+      for (const id of targetIds) {
+        if (!shown.has(id)) run.trackers.get(id)!.hiddenSeen = true;
+      }
+    },
+    () => {}
+  );
+  let listing: BackendTerminalInfo[] | null = null;
+  try {
+    listing = await terminalClient.getAll();
+  } catch {
+    // Unread: each agent's stop is recorded from Main's own pre-kill reading.
   }
-  // Unread: each agent's stop is recorded from Main's own pre-kill reading.
-  if (listing.status === "fulfilled") {
-    recordWorkingAtRequest(run, listing.value, targetIds);
-    if (options.pauseNote) await sendPauseNotes(run, listing.value, targetIds);
+  await presence;
+  if (listing) {
+    recordWorkingAtRequest(run, listing, targetIds);
+    if (options.pauseNote) await sendPauseNotes(run, listing, targetIds);
   }
   if (active !== run) return;
   await tick(run);

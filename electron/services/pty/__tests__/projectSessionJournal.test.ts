@@ -50,6 +50,7 @@ interface FakeTerminal {
   agentState?: string;
   lastStateChange?: number;
   agentIncarnation?: number;
+  isExited?: boolean;
 }
 
 function makePtyClient(config: {
@@ -663,6 +664,17 @@ describe("gracefulTeardownAndJournalProject", () => {
           },
           // A plain shell has no agent to have been doing anything.
           { id: "shell", projectId: "proj", cwd: "/s", spawnedAt: 1, agentState: "idle" },
+          // Exited on its own before the stop, so the stop stopped nothing there.
+          {
+            id: "exitedEarlier",
+            projectId: "proj",
+            launchAgentId: "claude",
+            cwd: "/x",
+            spawnedAt: 1,
+            isExited: true,
+            agentState: "exited",
+            lastStateChange: 35,
+          },
           // The assistant isn't a grid pane.
           {
             id: "assistant",
@@ -691,6 +703,7 @@ describe("gracefulTeardownAndJournalProject", () => {
             { id: "working", agentSessionId: null },
             { id: "idle", agentSessionId: "s-idle" },
             { id: "shell", agentSessionId: null },
+            { id: "exitedEarlier", agentSessionId: null },
             { id: "assistant", agentSessionId: null },
           ],
         },
@@ -707,6 +720,7 @@ describe("gracefulTeardownAndJournalProject", () => {
           { id: "idle" },
           { id: "shell" },
           { id: "survivor" },
+          { id: "exitedEarlier", stopObservation: { agentState: "working", at: 20 } },
           { id: "assistant" },
         ],
       };
@@ -716,6 +730,7 @@ describe("gracefulTeardownAndJournalProject", () => {
         { id: "idle", agentSessionId: "s-idle", stopObservation: { agentState: "idle", at: 30 } },
         { id: "shell" },
         { id: "survivor" },
+        { id: "exitedEarlier", stopObservation: { agentState: "working", at: 20 } },
         { id: "assistant" },
       ]);
     });
@@ -805,6 +820,59 @@ describe("gracefulTeardownAndJournalProject", () => {
         { id: "unasked", stopObservation: { agentState: "waiting", at: 50 } },
         { id: "notStopped" },
       ]);
+    });
+
+    it("bails out of the updater when the scope has no saved terminals", async () => {
+      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      expect(updater(null)).toBeNull();
+      expect(updater({})).toBeNull();
+    });
+
+    it("waits for the writeback to land before journaling", async () => {
+      // Comparing invocation order would still pass if the writeback were fired
+      // without being awaited, which is the bug worth catching: the snapshot and
+      // the journal are the two halves of a resume and must not interleave.
+      let releaseWriteback!: () => void;
+      projectStoreMock.enqueueProjectStateUpdate.mockReturnValue(
+        new Promise<void>((resolve) => {
+          releaseWriteback = resolve;
+        })
+      );
+      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
+
+      const pending = gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalled();
+      expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
+
+      releaseWriteback();
+      await pending;
+
+      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("still journals when the writeback throws", async () => {
+      // Best-effort, exactly as shutdown behaves: losing the in-place resume
+      // must not also cost the picker's resume record.
+      projectStoreMock.enqueueProjectStateUpdate.mockRejectedValue(new Error("disk full"));
+      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
+
+      const result = await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      expect(result.confirmed).toBe(true);
+      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
     });
   });
 

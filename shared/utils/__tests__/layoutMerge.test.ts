@@ -406,7 +406,7 @@ describe("field-level merge for out-of-band fields (#11461)", () => {
     const base: Stopped[] = [{ id: "1", stopObservation: { agentState: "working", at: 4 } }];
     const same: Stopped[] = [{ id: "1", stopObservation: { agentState: "working", at: 4 } }];
     const cleared: Stopped[] = [{ id: "1" }];
-    const changed: Stopped[] = [{ id: "1", stopObservation: { agentState: "idle", at: 9 } }];
+    const changed: Stopped[] = [{ id: "1", stopObservation: { agentState: "working", at: 9 } }];
     const eq = deepEqualIgnoringUndefined;
 
     expect(computeIdArrayDelta(base, same, eq, ["stopObservation"]).fieldEdits).toBeUndefined();

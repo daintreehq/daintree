@@ -42,7 +42,6 @@ vi.mock("electron", () => ({
 
 const projectStoreMock = vi.hoisted(() => ({
   getAllProjects: vi.fn(() => []),
-  getProjectById: vi.fn<(id: string) => { status?: string } | undefined>(() => undefined),
   getProjectState: vi.fn(),
   saveProjectState: vi.fn(),
   enqueueProjectStateUpdate: vi.fn<
@@ -2895,9 +2894,6 @@ describe("registerShutdownHandler", () => {
         { id: "proj-1" },
         { id: "asleep" },
       ] as never);
-      projectStoreMock.getProjectById.mockImplementation((id: string) =>
-        id === "asleep" ? { status: "closed" } : { status: "active" }
-      );
       const ptyClient = makePtyClient({
         // Read before the kill; the quit keys move the agents on afterwards.
         getAllTerminalsAsync: vi.fn(async () => [
@@ -2905,11 +2901,12 @@ describe("registerShutdownHandler", () => {
           { ...agentTerminal, id: "t2", agentState: "completed", lastStateChange: 30 },
           { ...agentTerminal, id: "assistant", isAssistantTerminal: true, agentState: "working" },
           { id: "shell", projectId: "proj-1", cwd: "/repo", agentState: "idle" },
-          // What a session-preserving Sleep left registered: its own Sleep recorded it.
+          // What a session-preserving Sleep left registered: no process this quit stops.
           {
             ...agentTerminal,
             id: "retained",
             projectId: "asleep",
+            isExited: true,
             agentState: "exited",
             lastStateChange: 50,
           },

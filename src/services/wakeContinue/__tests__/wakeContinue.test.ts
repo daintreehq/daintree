@@ -128,6 +128,7 @@ describe("publishWakeCandidates", () => {
       candidate("working"),
       candidate("waiting", { lastSeen: { agentState: "waiting", at: 1 } }),
       candidate("done", { lastSeen: { agentState: "completed", at: 1 } }),
+      candidate("gone", { lastSeen: { agentState: "exited", at: 1 } }),
       // A snapshot from before observations were kept says nothing either way.
       candidate("unknown", { lastSeen: undefined }),
       candidate("fresh", { outcome: "fresh" }),
@@ -141,7 +142,7 @@ describe("publishWakeCandidates", () => {
     const offer = useWakeContinueStore.getState().offer!;
     expect(offer.entries.map((e) => e.terminalId)).toEqual(["working", "fresh"]);
 
-    for (const id of ["idle", "working", "waiting", "done", "unknown", "fresh"]) {
+    for (const id of ["idle", "working", "waiting", "done", "gone", "unknown", "fresh"]) {
       setPane(id, { disposition: id === "fresh" ? "fresh" : "resume" });
     }
     const sending = sendWakeContinueNotes("Carry on");

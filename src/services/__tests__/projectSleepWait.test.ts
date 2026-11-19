@@ -548,6 +548,26 @@ describe("startSleepWait", () => {
     expect(sleepProjectMock).not.toHaveBeenCalled();
   });
 
+  it("spares on Sleep now a project opened while the request was still being read", async () => {
+    let release!: (rows: BackendTerminalInfo[]) => void;
+    getAllMock.mockImplementationOnce(
+      () =>
+        new Promise<BackendTerminalInfo[]>((resolve) => {
+          release = resolve;
+        })
+    );
+    terminals = [agent("a1", "a", { agentState: "working" })];
+    const starting = startSleepWait(["a"], { pauseNote: false });
+    await advance(0);
+    shown = [{ projectId: "a", state: "foreground" }];
+
+    await sleepWaitingNow();
+    release(terminals);
+    await starting;
+
+    expect(sleepProjectMock).not.toHaveBeenCalled();
+  });
+
   it("reports a project that failed to sleep, and its retry waits for the agents again", async () => {
     terminals = [agent("a1", "a"), agent("b1", "b")];
     sleepProjectMock.mockRejectedValueOnce(new Error("boom"));

@@ -11,6 +11,7 @@ export interface StoppedTerminal {
   lastStateChange?: number;
   spawnedAt?: number;
   agentIncarnation?: number;
+  isExited?: boolean;
 }
 
 /** No project has this many agents; anything past it is not a real request. */
@@ -26,7 +27,9 @@ const MAX_REQUEST_ENTRIES = 1_000;
  * another process or agent run has taken the pane since: a Sleep that waited for it
  * to settle must not turn it into one that was idle all along. A stopped pane
  * with no usable reading maps to `null`: whatever an earlier stop left on it
- * no longer describes it.
+ * no longer describes it. A record whose process had already exited is no
+ * process this stop stopped, and gets nothing: the host keeps such records
+ * through a session-preserving Sleep, so a later quit still lists them.
  */
 export function stopObservationsFor(
   stoppedIds: Iterable<string>,
@@ -37,6 +40,7 @@ export function stopObservationsFor(
   const observations = new Map<string, TerminalAgentObservation | null>();
   for (const id of stoppedIds) {
     const terminal = inventory.get(id);
+    if (terminal?.isExited === true) continue;
     if (!terminal?.launchAgentId) {
       observations.set(id, null);
       continue;
@@ -44,7 +48,7 @@ export function stopObservationsFor(
     const request = requested.get(id);
     const sameRun =
       request !== undefined &&
-      (request.spawnedAt === undefined || request.spawnedAt === terminal.spawnedAt) &&
+      request.spawnedAt === terminal.spawnedAt &&
       (request.agentIncarnation === undefined ||
         request.agentIncarnation === terminal.agentIncarnation);
     const observation = sameRun
@@ -93,8 +97,8 @@ const isCount = (value: unknown): value is number =>
 
 /**
  * Read the renderer's list of agents its Sleep request found working; untrusted.
- * An entry whose identity can't be read is dropped rather than left to match
- * whatever runs in the pane now.
+ * An entry whose process can't be told apart from a later one is dropped rather
+ * than left to match whatever runs in the pane now.
  */
 export function sanitizeWorkingAtRequest(value: unknown): SleepRequestWorking[] {
   if (!Array.isArray(value)) return [];
@@ -103,13 +107,13 @@ export function sanitizeWorkingAtRequest(value: unknown): SleepRequestWorking[] 
     if (entry === null || typeof entry !== "object") continue;
     const { terminalId, at, spawnedAt, agentIncarnation } = entry as Record<string, unknown>;
     if (typeof terminalId !== "string" || terminalId === "") continue;
-    if (spawnedAt !== undefined && !isCount(spawnedAt)) continue;
+    if (!isCount(spawnedAt)) continue;
     if (agentIncarnation !== undefined && !isCount(agentIncarnation)) continue;
     const reading = readLastSeen("working", at);
     entries.push({
       terminalId,
       ...(reading?.at !== undefined && { at: reading.at }),
-      ...(spawnedAt !== undefined && { spawnedAt }),
+      spawnedAt,
       ...(agentIncarnation !== undefined && { agentIncarnation }),
     });
   }

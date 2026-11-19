@@ -656,17 +656,12 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             .map((t) => t.id),
           ...results.map((r) => r.id),
         ]);
-        // A project already asleep was recorded by its own Sleep; what the host
-        // still holds for it is exited records a session-preserving kill keeps.
-        const asleep = projectStore.getProjectById(projectIds[i]!)?.status === "closed";
-        const observations = asleep
-          ? new Map()
-          : stopObservationsFor(
-              [...stoppedIds].filter(
-                (id) => !isAssistantTerminalRecord(terminalInfoById.get(id) ?? { id })
-              ),
-              terminalInfoById
-            );
+        const observations = stopObservationsFor(
+          [...stoppedIds].filter(
+            (id) => !isAssistantTerminalRecord(terminalInfoById.get(id) ?? { id })
+          ),
+          terminalInfoById
+        );
         if (captured.length === 0 && !hasStopReading(observations)) continue;
 
         try {
