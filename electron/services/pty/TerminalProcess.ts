@@ -385,6 +385,7 @@ export class TerminalProcess {
     this.terminalInfo = {
       id,
       projectId: options.projectId,
+      unplaced: options.unplaced,
       ptyProcess,
       cwd: options.cwd,
       shell,

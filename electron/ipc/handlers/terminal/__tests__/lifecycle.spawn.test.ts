@@ -506,19 +506,42 @@ describe("terminal spawn handler - projectId resolution", () => {
     expect(noteTerminalLaunchMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to current project when projectId is not provided", async () => {
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
+  it("places a spawn naming no project in the window that asked, not the Host's current one", async () => {
+    mockGetProjectById.mockImplementation((id: string) => (id === projectA.id ? projectA : null));
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
 
-    const handler = getSpawnHandler();
-    await handler({} as Electron.IpcMainInvokeEvent, {
+    await getSpawnHandler()({ projectId: projectA.id } as unknown as Electron.IpcMainInvokeEvent, {
       cols: 80,
       rows: 24,
     });
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.projectId).toBe("project-b-id");
+    expect(ptyClient.spawn.mock.calls[0][1].projectId).toBe(projectA.id);
+    expect(mockGetProjectSettings).toHaveBeenCalledWith(projectA.id);
+    expect(mockGetCurrentProject).not.toHaveBeenCalled();
+  });
+
+  // #17926: a window showing no project has nothing anyone controls, so its
+  // terminal is placed in none, never in whatever project some window last showed.
+  it("places a spawn from a window showing no project in none", async () => {
+    const os = await import("os");
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+    // A blank binding is no project either, as the lease gate reads it.
+    for (const event of [{}, { projectId: "  " }]) {
+      await getSpawnHandler()(event as unknown as Electron.IpcMainInvokeEvent, {
+        cols: 80,
+        rows: 24,
+      });
+    }
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    for (const [, spawnArgs] of ptyClient.spawn.mock.calls) {
+      // Null, not left out: PtyClient hands a spawn naming nothing its active project.
+      expect(spawnArgs.projectId).toBeNull();
+      expect(spawnArgs.cwd).toBe(os.homedir());
+    }
+    expect(mockGetProjectSettings).not.toHaveBeenCalled();
   });
 
   // A scratch id is a legitimate owner that resolves to no Project. Retargeting it to
@@ -676,12 +699,18 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
   // the mock service instead.
   const spawnWith = async (
     options: Record<string, unknown>,
-    svc: unknown = worktreeService
+    svc: unknown = worktreeService,
+    callerProjectId?: string
   ): Promise<void> => {
     const deps = { ptyClient, worktreeService: svc } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
-    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24, ...options });
+    const event = callerProjectId ? { projectId: callerProjectId } : {};
+    await handler(event as unknown as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      ...options,
+    });
   };
 
   it("checks the claim against the resolved project's own path and id", async () => {
@@ -793,14 +822,14 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
   });
 
   // The pair that gets journaled is the one that matters. A caller sending only
-  // a worktreeId still gets the current project stamped beside it, so that
+  // a worktreeId still gets its window's project stamped beside it, so that
   // derived pair is checked too — otherwise the identical corruption arrives by
   // omitting a field.
   it("checks the pair it is about to stamp, even when the project was only derived", async () => {
-    mockGetCurrentProject.mockReturnValue(projectB);
+    mockGetProjectById.mockReturnValue(projectB);
     worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
 
-    await spawnWith({ worktreeId: "wt-b1" });
+    await spawnWith({ worktreeId: "wt-b1" }, worktreeService, projectB.id);
 
     expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledWith(
       "wt-b1",
@@ -809,27 +838,28 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
     );
   });
 
-  // #5182: a worktreeId with no project resolved anywhere stamps no pair, so
-  // there is nothing to check and nothing to drop.
-  it("checks nothing when no project resolves at all", async () => {
-    mockGetCurrentProject.mockReturnValue(null);
+  // #17926: a terminal placed in no project has no project to check a worktree
+  // against, and a journaled one would count against that worktree's history.
+  it("drops the worktree claim of a terminal placed in no project", async () => {
     mockGetProjectById.mockReturnValue(null);
 
     await spawnWith({ worktreeId: "wt-a1" });
 
     expect(worktreeService.isWorktreeOwnedByProject).not.toHaveBeenCalled();
-    expect(spawnArgsOf().worktreeId).toBe("wt-a1");
+    expect(spawnArgsOf().projectId).toBeNull();
+    expect(spawnArgsOf().worktreeId).toBeUndefined();
   });
 
   // A blank id is treated as absent everywhere else in the spawn path, so it
   // must resolve — and be audited — exactly like an omitted one rather than
   // being audited against the empty string.
   it("treats a blank projectId as absent rather than as a claim on nothing", async () => {
-    mockGetCurrentProject.mockReturnValue(projectA);
+    mockGetProjectById.mockReturnValue(projectA);
     worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
 
-    await spawnWith({ projectId: "   ", worktreeId: "wt-a1" });
+    await spawnWith({ projectId: "   ", worktreeId: "wt-a1" }, worktreeService, projectA.id);
 
+    expect(mockGetProjectById).toHaveBeenCalledWith(projectA.id);
     expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledWith(
       "wt-a1",
       projectA.path,
@@ -960,16 +990,16 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     mockGetProjectSettings.mockResolvedValue({});
   });
 
-  it("falls back to the current project path when cwd is inaccessible", async () => {
+  it("falls back to the project's path when cwd is inaccessible", async () => {
     const os = await import("os");
     const tmpDir = os.tmpdir();
-    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
+    mockGetProjectById.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
-    await handler({} as Electron.IpcMainInvokeEvent, {
+    await handler({ projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent, {
       cwd: "/nonexistent/path",
       cols: 80,
       rows: 24,
@@ -1001,8 +1031,9 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
     const handler = getSpawnHandler();
     const os = await import("os");
+    // From a window showing a project: one placed in none carries no worktree.
     await handler(
-      {} as Electron.IpcMainInvokeEvent,
+      { projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent,
       {
         cwd: os.homedir(),
         cols: 80,
@@ -2494,12 +2525,14 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     });
     mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
+    // The pane's window shows p1, so the launch reads p1's settings.
+    mockGetProjectById.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
     await handler(
-      {} as Electron.IpcMainInvokeEvent,
+      { projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent,
       {
         id: "restored-pane",
         cols: 80,
@@ -2547,12 +2580,14 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       });
       mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: stored });
 
+      // The pane's window shows p1, so the launch reads p1's settings.
+      mockGetProjectById.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
       const deps = { ptyClient } as unknown as HandlerDependencies;
       registerTerminalLifecycleHandlers(deps);
 
       const handler = getSpawnHandler();
       await handler(
-        {} as Electron.IpcMainInvokeEvent,
+        { projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent,
         {
           id: "legacy-tier-pane",
           cols: 80,
@@ -2594,12 +2629,14 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       });
       mockGetProjectSettings.mockResolvedValue(settings);
 
+      // The pane's window shows p1, so the launch reads p1's settings.
+      mockGetProjectById.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
       const deps = { ptyClient } as unknown as HandlerDependencies;
       registerTerminalLifecycleHandlers(deps);
 
       const handler = getSpawnHandler();
       await handler(
-        {} as Electron.IpcMainInvokeEvent,
+        { projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent,
         {
           id: "skip-confirm-pane",
           cols: 80,
@@ -2624,12 +2661,14 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockEnsureReady.mockResolvedValue(false);
     mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
+    // The pane's window shows p1, so the launch reads p1's settings.
+    mockGetProjectById.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
     await handler(
-      {} as Electron.IpcMainInvokeEvent,
+      { projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent,
       {
         cols: 80,
         rows: 24,
@@ -2662,12 +2701,14 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     });
     mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
+    // The pane's window shows p1, so the launch reads p1's settings.
+    mockGetProjectById.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
     await handler(
-      {} as Electron.IpcMainInvokeEvent,
+      { projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent,
       {
         id: "url-pane",
         cols: 80,
@@ -4050,10 +4091,12 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
       token: "pane-token",
     });
     mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
+    // The pane's window shows p1, so the launch reads p1's settings.
+    mockGetProjectById.mockReturnValue({ id: "p1", path: "/projects/p", name: "p" });
     const handler = spawnHandlerForTest();
 
     await handler(
-      {} as Electron.IpcMainInvokeEvent,
+      { projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent,
       {
         cols: 80,
         rows: 24,

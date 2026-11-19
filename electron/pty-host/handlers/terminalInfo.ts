@@ -56,6 +56,7 @@ export function mapTerminalInfo(
   return {
     id: t.id,
     projectId: t.projectId,
+    unplaced: t.unplaced,
     kind: t.kind,
     // Null (unknown) is normalised to absent so the field means "the host did
     // not report a grid" on both the old-host and dead-handle paths.

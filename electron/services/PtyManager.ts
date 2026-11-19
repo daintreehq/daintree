@@ -1341,6 +1341,8 @@ export class PtyManager extends EventEmitter {
     // terminal's project would have cost an await and with it the ordering
     // that makes two rapid moves settle on the second one.
     if ((terminal.getInfo().projectId ?? null) !== expectedProjectId) return;
+    // Placed in no project, nothing can vouch for a worktree (#17926).
+    if (terminal.getInfo().unplaced === true && worktreeId !== null) return;
     terminal.setWorktreeId(worktreeId);
   }
 

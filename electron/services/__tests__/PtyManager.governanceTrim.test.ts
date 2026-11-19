@@ -209,10 +209,13 @@ describe("PtyManager drive lease", () => {
  * settle on the second one.
  */
 describe("PtyManager.updateWorktreeId", () => {
-  function managerWith(record: { projectId?: string | null } | undefined) {
+  function managerWith(record: { projectId?: string | null; unplaced?: true } | undefined) {
     const setWorktreeId = vi.fn();
     const terminal = record
-      ? { getInfo: () => ({ projectId: record.projectId }), setWorktreeId }
+      ? {
+          getInfo: () => ({ projectId: record.projectId, unplaced: record.unplaced }),
+          setWorktreeId,
+        }
       : undefined;
     const manager = Object.create(PtyManager.prototype) as PtyManager;
     Object.defineProperty(manager, "registry", {
@@ -239,6 +242,17 @@ describe("PtyManager.updateWorktreeId", () => {
     manager.updateWorktreeId("t1", "/project-a/.worktrees/feature", "project-a");
 
     expect(setWorktreeId).not.toHaveBeenCalled();
+  });
+
+  // #17926: a journaled worktree would count against that worktree's history.
+  it("never stamps a worktree on a terminal placed in no project, but lets one be cleared", () => {
+    const { manager, setWorktreeId } = managerWith({ projectId: undefined, unplaced: true });
+
+    manager.updateWorktreeId("t1", "/repo/.worktrees/feature", null);
+    expect(setWorktreeId).not.toHaveBeenCalled();
+
+    manager.updateWorktreeId("t1", null, null);
+    expect(setWorktreeId).toHaveBeenCalledExactlyOnceWith(null);
   });
 
   it("treats null as an identity, not a wildcard, in both directions", () => {

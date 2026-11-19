@@ -154,17 +154,24 @@ async function projectsForPathOwnership(
 /**
  * What the host knows of a terminal: gone, or the project it belongs to (null
  * for one with none). A lookup that fails answers "no project", which no call
- * or view can be traced to.
+ * or view can be traced to; only main's own record of placing it in none
+ * answers `unplaced`.
  */
 function describeTerminal(terminalId: string): TerminalRecord | Promise<TerminalRecord> {
   const pty = getPtyClient();
   if (!pty) return "missing";
   const tracked = pty.getTerminalProjectId(terminalId);
   if (tracked) return { projectId: tracked };
+  if (pty.isUnplacedTerminal(terminalId)) return { projectId: null, unplaced: true };
   // Strict: a lookup that times out throws rather than reading as "no such terminal".
   return pty.getTerminalAsync(terminalId, undefined, { strict: true }).then(
     (info): TerminalRecord => {
-      if (info) return { projectId: info.projectId || null };
+      if (info) {
+        // The host's record carries it past main's, which a preserved exit drops.
+        return info.unplaced === true && !info.projectId
+          ? { projectId: null, unplaced: true }
+          : { projectId: info.projectId || null };
+      }
       // A pty-host that answers nothing for a spawn main still holds (a dead
       // one answers null too) hasn't confirmed it gone.
       return pty.hasTerminal(terminalId) ? { projectId: null } : "missing";
@@ -197,10 +204,6 @@ export function createLeaseTargetResolvers(): LeaseTargetResolvers {
     async projectsForDevPreviewPanel(panelId) {
       const { getDevPreviewProjectsForPanel } = await import("../ipc/handlers/devPreview.js");
       return getDevPreviewProjectsForPanel(panelId);
-    },
-
-    currentProjectId() {
-      return projectStore.getCurrentProjectId();
     },
 
     async projectsForHelpSession(sessionId) {

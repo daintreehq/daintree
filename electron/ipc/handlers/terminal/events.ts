@@ -5,6 +5,7 @@
 import { CHANNELS } from "../../channels.js";
 import {
   broadcastToProjectRenderers,
+  broadcastToLocalRenderersExcept,
   broadcastToProjectRenderersExcept,
   broadcastToRenderer,
   broadcastSlicedToProjectRenderers,
@@ -127,8 +128,13 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     // the host actually wrote to, so no re-derivation can go stale here.
     const delivered = routing?.portDeliveredWebContentsIds;
     const exclude = delivered && delivered.length > 0 ? new Set(delivered) : null;
+    const projectId = ptyClient.getTerminalProjectId(id);
+    if (projectId === null && ptyClient.isUnplacedTerminal(id)) {
+      broadcastToLocalRenderersExcept(exclude, CHANNELS.TERMINAL_DATA, id, data, ...offsetArg);
+      return;
+    }
     broadcastToProjectRenderersExcept(
-      ptyClient.getTerminalProjectId(id),
+      projectId,
       exclude,
       CHANNELS.TERMINAL_DATA,
       id,

@@ -102,6 +102,17 @@ describe("mapTerminalInfo", () => {
     expect(mapTerminalInfo(makeTerminal(), ctx).isAssistantTerminal).toBeUndefined();
   });
 
+  // #17926: main's lease gate reads it here once a preserved exit has dropped its own record.
+  it("reports a terminal placed in no project back to main", () => {
+    const ctx = createCtx();
+    for (const isExited of [false, true]) {
+      expect(
+        mapTerminalInfo(makeTerminal({ projectId: undefined, unplaced: true, isExited }), ctx)
+      ).toMatchObject({ unplaced: true });
+    }
+    expect(mapTerminalInfo(makeTerminal(), ctx).unplaced).toBeUndefined();
+  });
+
   it("reports a scheduled run's ids back to main, which stamps them on the session record", () => {
     // #15977: main's kill, shutdown and project-close captures read the run only
     // through this mapper.

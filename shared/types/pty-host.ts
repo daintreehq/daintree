@@ -82,6 +82,12 @@ export interface PtyHostSpawnOptions {
   /** Title ownership rung at spawn — lets the backend skip its own default-title rewrites for pinned titles. */
   titleMode?: PanelTitleMode;
   projectId?: string;
+  /**
+   * Placed in no project on purpose, by a window that shows none (#17926), so
+   * its cwd never makes it a project's as an unstamped record's can. Set by
+   * PtyClient from a spawn whose projectId is null.
+   */
+  unplaced?: true;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
   restore?: boolean;
   /** Whether to kill the PTY when the frontend disconnects (no terminal registry entry) */
@@ -1339,6 +1345,8 @@ export interface PtyHostTerminalInfo {
    */
   submission?: TerminalSubmissionRecord;
   projectId?: string;
+  /** Placed in no project on purpose (#17926), as its spawn said. */
+  unplaced?: true;
   kind?: PanelKind;
   /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
   isAssistantTerminal?: boolean;

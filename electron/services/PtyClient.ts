@@ -160,6 +160,8 @@ const __dirname = path.dirname(__filename);
 interface TerminalInfoResponse {
   id: string;
   projectId?: string;
+  /** Placed in no project on purpose (#17926), as its spawn said. */
+  unplaced?: true;
   kind?: PanelKind;
   launchAgentId?: AgentId;
   /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
@@ -267,6 +269,14 @@ export type PtySubmitDecorator = (
   text: string,
   handbackCode: string | undefined
 ) => { text: string; handbackCode: string; handbackInstruction: "run" } | null;
+
+/**
+ * What a spawn is handed: `projectId: null` places the terminal in no project
+ * on purpose (#17926), where an absent one takes the active project.
+ */
+export type PtyClientSpawnOptions = Omit<PtyHostSpawnOptions, "projectId" | "unplaced"> & {
+  projectId?: string | null;
+};
 
 export interface PtyIncarnationExit {
   terminalId: string;
@@ -1571,7 +1581,7 @@ export class PtyClient extends EventEmitter {
     return null;
   }
 
-  spawn(id: string, options: PtyHostSpawnOptions): void {
+  spawn(id: string, options: PtyClientSpawnOptions): void {
     if (!this.pendingSpawns.has(id) && this.pendingSpawns.size >= this.MAX_PENDING_SPAWNS) {
       logWarn(
         `[PtyClient] spawn rejected — pendingSpawns at cap (${this.MAX_PENDING_SPAWNS}), id=${id}`
@@ -1588,13 +1598,16 @@ export class PtyClient extends EventEmitter {
       return;
     }
 
-    const activeProjectId = this.activeProjectId ?? undefined;
+    const { projectId: requestedProjectId, ...placeless } = options;
     const normalizedProjectId =
-      typeof options.projectId === "string" && options.projectId.trim()
-        ? options.projectId
+      typeof requestedProjectId === "string" && requestedProjectId.trim()
+        ? requestedProjectId
         : undefined;
-
-    const resolvedProjectId = normalizedProjectId ?? activeProjectId;
+    // A spawn that names no project takes the active one, for callers that
+    // never name one; one placed in none on purpose never does.
+    const unplaced = requestedProjectId === null;
+    const resolvedProjectId =
+      normalizedProjectId ?? (unplaced ? undefined : (this.activeProjectId ?? undefined));
     // Every launch path ends here: a project still awaiting its clone has no
     // folder, and the pty-host would quietly fall back to another cwd (#16352).
     // Only a named project is checked: a spawn naming none isn't asking for
@@ -1611,8 +1624,14 @@ export class PtyClient extends EventEmitter {
       this.emit("spawn-result", id, result);
       return;
     }
+    // Stored for crash replay as sent, so a replay can't take whichever
+    // project is active by then either.
     const projectResolvedOptions: PtyHostSpawnOptions =
-      resolvedProjectId !== undefined ? { ...options, projectId: resolvedProjectId } : options;
+      resolvedProjectId !== undefined
+        ? { ...placeless, projectId: resolvedProjectId }
+        : unplaced
+          ? { ...placeless, unplaced: true }
+          : placeless;
     // Mint the launch generation here — every spawn (fresh, restart, resume)
     // funnels through this method, so the ledger sees each incarnation exactly
     // once. The pty-host adopts the stamped generation and echoes it on exits
@@ -2017,8 +2036,22 @@ export class PtyClient extends EventEmitter {
    * Null for unknown terminals — callers fall back to unscoped delivery.
    */
   getTerminalProjectId(id: string): string | null {
-    const projectId = this.pendingSpawns.get(id)?.projectId;
+    // The running incarnation's, while a duplicate awaits the host's answer:
+    // its output, input and lease are still that project's (#17926).
+    const projectId = (this.displacedSpawns.get(id)?.entry ?? this.pendingSpawns.get(id))
+      ?.projectId;
     return typeof projectId === "string" && projectId.length > 0 ? projectId : null;
+  }
+
+  /** Whether main holds `id`'s spawn record as one placed in no project on purpose (#17926). */
+  isUnplacedTerminal(id: string): boolean {
+    // A duplicate still awaiting the host's answer doesn't speak for the
+    // terminal it would displace, which may still be running in a project.
+    const displaced = this.displacedSpawns.get(id)?.entry;
+    return (
+      this.pendingSpawns.get(id)?.unplaced === true &&
+      (displaced === undefined || displaced.unplaced === true)
+    );
   }
 
   /**
