@@ -19,6 +19,7 @@ import { installHostFileClient } from "./files/clientInstall.js";
 import { folderPackDir, sweepFolderPacks } from "./files/localFolderPack.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
+import { installIdleResourcePause } from "./client/idleResourcePauseInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
 import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js";
 import { installDecisionsHostsClient } from "./decisions/clientInstall.js";
@@ -329,6 +330,10 @@ function startClient(options: StartRemoteHostsOptions): void {
       hostForView: client.hostForView,
       openHostForNotice: (windowId, notice) => client.client.openHostForNotice(windowId, notice),
     })
+  );
+  // Reads its summaries, so it goes before them on teardown.
+  teardowns.push(
+    installIdleResourcePause({ registry: client.registry, sessionFor: client.sessionFor })
   );
   // Canopy reading a host the view isn't bound to, This Mac included.
   teardowns.push(

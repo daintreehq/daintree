@@ -27,6 +27,16 @@ export type IdlePauseRunOutcome =
   | { ran: false; reason: string }
   | { ran: true; success: boolean; error?: string };
 
+/** An idle pause checked on the worktree's workspace host, ready to send to that same host. */
+export type IdlePausePreparation =
+  | {
+      ok: true;
+      guard: IdlePauseGuard;
+      /** Posts the pause before it returns, so a claim's grant can start it in its own turn. */
+      run(): Promise<IdlePauseRunOutcome>;
+    }
+  | { ok: false; reason: string };
+
 export type IdlePauseUnavailableReason = "no-environment" | "repository" | "no-pause";
 
 /** What the worktree card's idle pause dialog shows for the worktree's environment. */
