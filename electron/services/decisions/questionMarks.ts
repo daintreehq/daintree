@@ -31,8 +31,6 @@ export function markKey(
   return JSON.stringify([reference.hostId, reference.questionId]);
 }
 
-const QUESTION_ID = /^[A-Za-z0-9_-]{8,80}$/;
-
 function boundedId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 256;
 }
@@ -40,9 +38,7 @@ function boundedId(value: unknown): value is string {
 function markOf(value: unknown): QuestionMark | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const { hostId, questionId, ask, seen, cleared } = value as Record<string, unknown>;
-  if (!boundedId(hostId) || typeof questionId !== "string" || !QUESTION_ID.test(questionId)) {
-    return null;
-  }
+  if (!boundedId(hostId) || !boundedId(questionId)) return null;
   if (ask !== null && !boundedId(ask)) return null;
   if (typeof seen !== "boolean" || typeof cleared !== "boolean" || (!seen && !cleared)) return null;
   return { hostId, questionId, ask, seen, cleared };

@@ -105,7 +105,12 @@ export function useListedQuestion(
   const [list, setList] = useState<DecisionQuestionList | null>(null);
   useEffect(() => {
     if (!active) return;
-    return decisionsClient.watchQuestions(setList);
+    // Seeing is a convenience: a bridge that is missing or throws never takes the view down.
+    try {
+      return decisionsClient.watchQuestions(setList);
+    } catch {
+      return;
+    }
   }, [active]);
   if (!active || shown === null || list === null) return null;
   const { hostId, questionId } = shown.reference;

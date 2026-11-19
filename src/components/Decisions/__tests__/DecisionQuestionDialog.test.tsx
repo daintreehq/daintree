@@ -279,6 +279,104 @@ afterEach(() => {
   Reflect.deleteProperty(window, "electron");
 });
 
+describe("DecisionQuestionDialog seen on this computer (#17895)", () => {
+  /** This computer's list of `qa`, asked in pane t1 and listed under the reference its read names. */
+  const LISTED = { hostId: "host_1", projectId: "project-1", terminalId: "t1", questionId: "qa" };
+  function listing(inbox: { ask: string | null; seen: boolean; cleared: boolean }) {
+    return {
+      revision: 1,
+      questions: [
+        {
+          reference: LISTED,
+          alias: 7,
+          agentKind: "claude",
+          projectLabel: null,
+          worktreeId: "w1",
+          worktreeRoot: "/repo",
+          requirement: "human-required" as const,
+          askedAt: "2026-11-02T10:00:00.000Z",
+          expiresAt: null,
+          settledAt: null,
+          standing: { kind: "waiting" as const, reason: "open" as const },
+          replyRequest: null,
+          stall: null,
+          inbox,
+        },
+      ],
+    };
+  }
+  let markQuestions: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    markQuestions = vi.fn(async ({ questions }: { questions: unknown[] }) => ({
+      result: "marked",
+      marked: questions.length,
+    }));
+    const decisions = Reflect.get(window, "electron").decisions as Record<string, unknown>;
+    decisions.markQuestions = markQuestions;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("marks a pane's question seen once read, at the ask this computer's list names", async () => {
+    const decisions = Reflect.get(window, "electron").decisions as Record<string, unknown>;
+    // The agent's follow-up in its thread, `m1`, is what it asks now.
+    decisions.listQuestions = vi.fn(async () =>
+      listing({ ask: "m1", seen: false, cleared: false })
+    );
+    openView(["qa"], "qa");
+    await waitFor(() =>
+      expect(markQuestions).toHaveBeenCalledWith({
+        action: "seen",
+        questions: [{ reference: LISTED, ask: "m1" }],
+      })
+    );
+  });
+
+  it("reads a question opened by reference again when its ask moves, never for a mark alone", async () => {
+    const at = (revision: number, inbox: { ask: string | null; seen: boolean; cleared: boolean }) =>
+      act(() => {
+        const listed = listing(inbox);
+        for (const listener of [...listListeners]) {
+          listener({
+            revision,
+            questions: [{ ...listed.questions[0]!, reference: OTHER_PROJECT }],
+          });
+        }
+      });
+    openReference([OTHER_PROJECT]);
+    await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(1));
+    at(1, { ask: null, seen: false, cleared: false });
+    await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(2));
+
+    at(2, { ask: null, seen: true, cleared: true });
+    await act(async () => {});
+    expect(getQuestionContentByReference).toHaveBeenCalledTimes(2);
+
+    at(3, { ask: "m2", seen: false, cleared: false });
+    await waitFor(() => expect(getQuestionContentByReference).toHaveBeenCalledTimes(3));
+  });
+
+  it("marks nothing for a question the list doesn't hold, or one already seen", async () => {
+    const decisions = Reflect.get(window, "electron").decisions as Record<string, unknown>;
+    decisions.listQuestions = vi.fn(async () => listing({ ask: "m1", seen: true, cleared: false }));
+    openView(["qa", "qb"], "qa");
+    await waitFor(() =>
+      expect(screen.getByTestId("decision-question-body").textContent).toContain("Merged")
+    );
+    // qb isn't on this computer's list at all.
+    fireEvent.click(screen.getByTestId("decision-question-next"));
+    await waitFor(() =>
+      expect(screen.getByTestId("decision-question-body").textContent).not.toContain("Merged")
+    );
+    await act(async () => {});
+    expect(markQuestions).not.toHaveBeenCalled();
+  });
+});
+
 describe("DecisionQuestionDialog", () => {
   it("shows the whole question: text, notes, options, requirement, times and thread", async () => {
     openView(["qa"], "qa");

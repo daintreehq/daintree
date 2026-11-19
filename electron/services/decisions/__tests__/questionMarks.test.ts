@@ -252,7 +252,7 @@ describe("the stored record", () => {
       JSON.stringify({
         marks: [
           good,
-          { ...good, questionId: "bad id" },
+          { ...good, questionId: "" },
           { ...mark(item(2)), seen: false, cleared: false },
           { ...mark(item(3)), ask: 7 },
         ],

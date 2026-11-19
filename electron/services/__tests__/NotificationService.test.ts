@@ -1239,6 +1239,40 @@ describe("NotificationService", () => {
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
     });
 
+    it("stops counting a question once the person has seen or cleared what it asks, until it asks again (#17895)", async () => {
+      const win = windowWithViews(11);
+      notificationService.initialize(createRegistryMock([win]) as never);
+      await questionsLoaded();
+      const marked = (
+        terminalId: string,
+        inbox: NonNullable<DecisionQuestionListItem["inbox"]>,
+        questionId?: string
+      ) => ({ ...question("project-11", terminalId, open, questionId), inbox });
+
+      setDecisionQuestions([
+        marked("terminal-a", { ask: null, seen: true, cleared: false }),
+        marked("terminal-b", { ask: null, seen: false, cleared: true }),
+        marked("terminal-c", { ask: null, seen: false, cleared: false }),
+      ]);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+
+      // A pane still counts for a question there that hasn't been seen, beside one that has.
+      setDecisionQuestions([
+        marked("terminal-a", { ask: null, seen: true, cleared: false }),
+        marked("terminal-a", { ask: "note-2", seen: false, cleared: false }, "q-second"),
+      ]);
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+
+      // Seen and cleared everywhere: nothing waits on the person.
+      setDecisionQuestions([
+        marked("terminal-a", { ask: null, seen: true, cleared: false }),
+        marked("terminal-b", { ask: null, seen: true, cleared: true }),
+      ]);
+      expect(win.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
+    });
+
     it("keeps counting a waiting question when its window is focused, as agents' counts don't", async () => {
       const win = windowWithViews(11);
       notificationService.initialize(createRegistryMock([win]) as never);

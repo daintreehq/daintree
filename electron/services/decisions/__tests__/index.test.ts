@@ -530,6 +530,7 @@ import {
   getDecisionsService,
   getDecisionsStatus,
   listHosts,
+  markDecisionQuestions,
   getSetupCheck,
   noteHostIdentity,
   onDecisionsHostRuntimeChanged,
@@ -568,6 +569,10 @@ import {
   setDecisionQuestions,
 } from "../../decisionsQuestionList.js";
 import { RetiredAttemptError } from "../relayTransport.js";
+import { QUESTION_MARKS_META_KEY, readQuestionMarks } from "../questionMarks.js";
+
+/** A question in Needs you as the owner lists it before the person has marked it (#17895). */
+const UNMARKED = { ask: null, seen: false, cleared: false };
 
 const RELAY = {
   relayOrigin: "https://relay.example.com",
@@ -720,7 +725,9 @@ describe("Decisions entry", () => {
     try {
       statusView.send.mockClear();
       publish([item("q_quit_000001")]);
-      expect(getDecisionQuestionList().questions).toEqual([item("q_quit_000001")]);
+      expect(getDecisionQuestionList().questions).toEqual([
+        { ...item("q_quit_000001"), inbox: UNMARKED },
+      ]);
       expect(listPushes()).toHaveLength(1);
 
       await stopDecisions();
@@ -809,10 +816,10 @@ describe("Decisions entry", () => {
       publish([own]);
       // Oldest first across every machine, each Host's named.
       expect(getDecisionQuestionList().questions).toEqual([
-        { ...theirs, remoteHost: studio },
-        { ...lab, remoteHost: { hostId: "lab", name: "Lab", connected: true } },
-        own,
-        { ...theirsLater, remoteHost: studio },
+        { ...theirs, remoteHost: studio, inbox: UNMARKED },
+        { ...lab, remoteHost: { hostId: "lab", name: "Lab", connected: true }, inbox: UNMARKED },
+        { ...own, inbox: UNMARKED },
+        { ...theirsLater, remoteHost: studio, inbox: UNMARKED },
       ]);
 
       // The Host's link goes: its questions stay, as not connected, and every window hears it.
@@ -850,6 +857,117 @@ describe("Decisions entry", () => {
       expect(getDecisionQuestionList().questions).toEqual([]);
     } finally {
       withdraw();
+      setDecisionQuestions([]);
+    }
+  });
+
+  it("records the person's marks on this computer only, each at the ask it was shown with (#17895)", async () => {
+    expect(
+      await markDecisionQuestions({
+        action: "seen",
+        questions: [
+          {
+            reference: { hostId: RELAY.hostId, projectId: "p", terminalId: "t", questionId: "q" },
+            ask: null,
+          },
+        ],
+      })
+    ).toEqual({ result: "not-running" });
+
+    saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    const meta = new Map<string, string>();
+    Object.assign(service.getStore()!, {
+      getMeta: async (key: string) => meta.get(key) ?? null,
+      setMeta: async (key: string, value: string) => void meta.set(key, value),
+    });
+    const publish = Reflect.get(service, "publishQuestions") as (
+      questions: DecisionQuestionListItem[],
+      listing?: boolean,
+      inbox?: { asks: ReadonlyMap<string, string | null>; marks: ReadonlyMap<string, unknown> }
+    ) => void;
+    const own: DecisionQuestionListItem = {
+      reference: {
+        hostId: RELAY.hostId,
+        projectId: "project-1",
+        terminalId: "pane-a",
+        questionId: "q_own_000001",
+      },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-02T10:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+    };
+    const asks = new Map([[own.reference.questionId, "note-1"]]);
+    try {
+      publish([own], true, { asks, marks: new Map() });
+      expect(getDecisionQuestionList().questions[0]?.inbox).toEqual({
+        ask: "note-1",
+        seen: false,
+        cleared: false,
+      });
+
+      // Shown before the agent's follow-up: what it asks now wasn't seen, so nothing is kept.
+      expect(
+        await markDecisionQuestions({
+          action: "clear",
+          questions: [{ reference: own.reference, ask: null }],
+        })
+      ).toEqual({ result: "marked", marked: 0 });
+      expect(meta.has(QUESTION_MARKS_META_KEY)).toBe(false);
+
+      expect(
+        await markDecisionQuestions({
+          action: "clear",
+          questions: [{ reference: own.reference, ask: "note-1" }],
+        })
+      ).toEqual({ result: "marked", marked: 1 });
+      const record = await readQuestionMarks(service.getStore()!);
+      expect([...record.values()]).toEqual([
+        {
+          hostId: RELAY.hostId,
+          questionId: "q_own_000001",
+          ask: "note-1",
+          seen: false,
+          cleared: true,
+        },
+      ]);
+
+      // Listed with what the store now reads, it is cleared until it asks something new.
+      publish([own], true, { asks, marks: record });
+      expect(getDecisionQuestionList().questions[0]?.inbox?.cleared).toBe(true);
+      publish([own], true, {
+        asks: new Map([[own.reference.questionId, "note-2"]]),
+        marks: record,
+      });
+      expect(getDecisionQuestionList().questions[0]?.inbox).toEqual({
+        ask: "note-2",
+        seen: false,
+        cleared: false,
+      });
+
+      // A store that can't save it changes nothing, and says so.
+      Object.assign(service.getStore()!, {
+        setMeta: async () => {
+          throw new Error("disk full");
+        },
+      });
+      expect(
+        await markDecisionQuestions({
+          action: "seen",
+          questions: [{ reference: own.reference, ask: "note-2" }],
+        })
+      ).toEqual({ result: "failed" });
+    } finally {
       setDecisionQuestions([]);
     }
   });
