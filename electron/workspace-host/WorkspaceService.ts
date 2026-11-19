@@ -177,7 +177,18 @@ import {
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 import { ForgeRemoteDetector } from "./ForgeRemoteDetector.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
-import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
+import {
+  ResourceActionExecutor,
+  type ResourceActionOptions,
+  type ResourceActionResult,
+} from "./ResourceActionExecutor.js";
+import { IdlePauseService } from "./idlePause.js";
+import type {
+  IdlePauseCheck,
+  IdlePauseGuard,
+  IdlePausePolicy,
+  IdlePauseRunOutcome,
+} from "../../shared/types/idlePause.js";
 import { AttachmentService, type AttachmentActionResult } from "./AttachmentService.js";
 import {
   FileProjectAttachmentStore,
@@ -609,6 +620,7 @@ export class WorkspaceService {
       ? this.projectSettingsFilePath(this.projectId)
       : null
   );
+  private readonly idlePause = new IdlePauseService(this.lifecycleService);
   private readonly setupCoordinator: WorktreeSetupCoordinator;
   private listService = new WorktreeListService();
   private readonly fileDiffCache = new FileDiffCache();
@@ -1040,6 +1052,7 @@ export class WorkspaceService {
       emitUpdate: (monitor) => this.emitUpdate(monitor),
       sendEvent: (event) => this.sendEvent(event),
       lifecycleService: this.lifecycleService,
+      idlePause: this.idlePause,
     });
 
     this.setupCoordinator = new WorktreeSetupCoordinator({
@@ -4039,6 +4052,54 @@ export class WorkspaceService {
     return this.setupCoordinator.approveLifecycleCommands(worktreeId, fingerprint);
   }
 
+  /** Whether idle pause can be on for the worktree's environment, and what it runs (#17925). */
+  async getIdlePausePolicy(worktreeId: string): Promise<IdlePausePolicy> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor || !this.projectRootPath) {
+      return { status: "unavailable", reason: "no-environment" };
+    }
+    return this.idlePause.policy(monitor.path, this.projectRootPath, monitor.worktreeMode);
+  }
+
+  async setIdlePause(worktreeId: string, enabled: boolean, fingerprint?: string): Promise<void> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor || !this.projectRootPath) throw new Error("Worktree not found");
+    await this.idlePause.setEnabled(
+      monitor.path,
+      this.projectRootPath,
+      monitor.worktreeMode,
+      enabled,
+      fingerprint
+    );
+  }
+
+  checkIdlePause(worktreeId: string): Promise<IdlePauseCheck> {
+    return this.resourceActionExecutor.checkIdlePause(worktreeId);
+  }
+
+  /** Main's pause once the worktree's host granted its ended idle time: a manual pause, guarded. */
+  async runIdlePause(
+    requestId: string,
+    worktreeId: string,
+    guard: IdlePauseGuard
+  ): Promise<IdlePauseRunOutcome> {
+    const result = await this.resourceActionExecutor.runResourceAction(
+      requestId,
+      worktreeId,
+      "pause",
+      undefined,
+      { origin: "idle-pause", guard }
+    );
+    if (result.skipped) return { ran: false, reason: result.error ?? "Refused" };
+    // Cut short by the worktree's removal, which is no failure of the pause to report.
+    if (!result.success && result.error === "Aborted") return { ran: false, reason: "Aborted" };
+    return {
+      ran: true,
+      success: result.success,
+      ...(result.error !== undefined ? { error: result.error } : {}),
+    };
+  }
+
   /**
    * Clone the directories the lifecycle config's `cloneIgnored` names into a
    * new worktree, from the same config file its setup commands come from.
@@ -5938,8 +5999,8 @@ export class WorkspaceService {
     worktreeId: string,
     action: "provision" | "teardown" | "resume" | "pause" | "status",
     environmentId?: string,
-    options?: { origin?: "auto-poll" }
-  ): Promise<{ success: boolean; error?: string; output?: string }> {
+    options?: ResourceActionOptions
+  ): Promise<ResourceActionResult> {
     return this.resourceActionExecutor.runResourceAction(
       requestId,
       worktreeId,

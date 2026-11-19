@@ -4,13 +4,14 @@ import PQueue from "p-queue";
 import type { WorkspaceHostEvent } from "../../shared/types/workspace-host.js";
 import type { WorktreeResourceStatus } from "../../shared/types/worktree.js";
 import { WorktreeMonitor } from "./WorktreeMonitor.js";
+import type { IdlePauseCheck, IdlePauseGuard } from "../../shared/types/idlePause.js";
 import {
   LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
   WorktreeLifecycleService,
-  ownResource,
   publishRunningOutput,
-  type ResolvedResourceEnvironments,
+  type ResolvedResourceSelection,
 } from "./WorktreeLifecycleService.js";
+import type { IdlePauseService } from "./idlePause.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isValidSshTarget } from "../../shared/utils/sshTarget.js";
@@ -43,7 +44,21 @@ export interface ResourceActionContext {
   emitUpdate(monitor: WorktreeMonitor): void;
   sendEvent(event: WorkspaceHostEvent): void;
   readonly lifecycleService: WorktreeLifecycleService;
+  readonly idlePause: IdlePauseService;
 }
+
+/** A resource action's result; `skipped` when an idle pause was refused before anything ran. */
+export interface ResourceActionResult {
+  success: boolean;
+  error?: string;
+  output?: string;
+  skipped?: true;
+}
+
+export type ResourceActionOptions =
+  | { origin?: "auto-poll" }
+  /** Asked for by main once the worktree's own host granted its ended idle time (#17925). */
+  | { origin: "idle-pause"; guard: IdlePauseGuard };
 
 /**
  * Encapsulates resource-action coordination and execution (`provision` /
@@ -54,6 +69,12 @@ export interface ResourceActionContext {
 export class ResourceActionExecutor {
   private resourceActionQueues = new Map<string, PQueue>();
   private resourceActionAbortControllers = new Map<string, AbortController>();
+  /**
+   * Resource actions other than `status` each worktree has started. An idle
+   * pause checked before one started and asked for after it finished would
+   * pause a box someone just resumed or replaced.
+   */
+  private mutationGenerations = new Map<string, number>();
   private disposed = false;
 
   constructor(private readonly ctx: ResourceActionContext) {}
@@ -64,9 +85,12 @@ export class ResourceActionExecutor {
     action: "provision" | "teardown" | "resume" | "pause" | "status",
     environmentId: string | undefined,
     environmentEpoch: number,
-    signal: AbortSignal
-  ): Promise<{ success: boolean; error?: string; output?: string }> {
+    signal: AbortSignal,
+    idleGuard?: IdlePauseGuard
+  ): Promise<ResourceActionResult> {
     if (this.disposed) return { success: false, error: "Aborted" };
+    const generationAtStart = this.generationOf(worktreeId);
+    if (action !== "status") this.mutationGenerations.set(worktreeId, generationAtStart + 1);
 
     // What this action learns describes the environment it was asked about, so
     // once the worktree has moved to another one it stops writing (#15005).
@@ -92,38 +116,29 @@ export class ResourceActionExecutor {
       return { success: false, error: "Aborted" };
     }
 
-    const resolvedConfig = await this.ctx.lifecycleService.resolveConfig(
-      monitor.path,
-      projectRootPath
-    );
-    const config = resolvedConfig?.config ?? null;
-    let resourceEnvironments: ResolvedResourceEnvironments | null = null;
+    const { resolvedConfig, selection } =
+      await this.ctx.lifecycleService.resolveResourceSelection(
+        monitor.path,
+        projectRootPath,
+        environmentId,
+        monitor.worktreeMode
+      );
+    const resourceConfig = selection?.resource;
+    const resourceEnvironments = selection?.environments ?? null;
 
-    // Resolve resource config: prefer resources (plural) over resource (singular)
-    let resourceConfig = config?.resource;
-    if (config?.resources) {
-      const named = ownResource(config.resources, environmentId);
-      if (named) {
-        resourceConfig = named;
-      } else if (config.resources["default"]) {
-        resourceConfig = config.resources["default"];
-      } else {
-        const keys = Object.keys(config.resources);
-        if (keys.length > 0) {
-          resourceConfig = config.resources[keys[0]];
-        }
-      }
-    }
-
-    // Fallback: resolve from project settings resourceEnvironments
-    if (!resourceConfig) {
-      const envKey = monitor.worktreeMode;
-      if (envKey && envKey !== "local") {
-        const envs =
-          await this.ctx.lifecycleService.resolveProjectResourceEnvironments(projectRootPath);
-        resourceConfig = ownResource(envs?.environments, envKey);
-        if (resourceConfig) resourceEnvironments = envs;
-      }
+    if (idleGuard) {
+      const check = await this.idlePauseCheck(monitor, selection, projectRootPath);
+      const refusal = !check.ok
+        ? check.reason
+        : generationAtStart !== idleGuard.generation
+          ? "Another resource action ran since the pause was checked"
+          : check.selector !== idleGuard.selector ||
+              check.fingerprint !== idleGuard.fingerprint ||
+              check.sshTarget !== idleGuard.sshTarget ||
+              monitor.resourceEnvironmentEpoch !== idleGuard.environmentEpoch
+            ? "The environment changed since the pause was checked"
+            : null;
+      if (refusal !== null) return { success: false, error: refusal, skipped: true };
     }
 
     if (!resourceConfig) {
@@ -510,6 +525,73 @@ export class ResourceActionExecutor {
     return controller;
   }
 
+  private generationOf(worktreeId: string): number {
+    return this.mutationGenerations.get(worktreeId) ?? 0;
+  }
+
+  /**
+   * Whether an idle pause of this worktree may run now, asked before main
+   * claims the host's idle time so a pause that would be refused spends none.
+   */
+  async checkIdlePause(worktreeId: string): Promise<IdlePauseCheck> {
+    const monitor = this.ctx.getMonitor(worktreeId);
+    const projectRootPath = this.ctx.getProjectRootPath();
+    if (this.disposed || !monitor || !projectRootPath) {
+      return { ok: false, reason: "Worktree not found" };
+    }
+    const queue = this.resourceActionQueues.get(worktreeId);
+    if (queue && (queue.pending > 0 || queue.size > 0)) {
+      return { ok: false, reason: "Another resource action is queued or running" };
+    }
+    const generation = this.generationOf(worktreeId);
+    const environmentEpoch = monitor.resourceEnvironmentEpoch;
+    const { selection } = await this.ctx.lifecycleService.resolveResourceSelection(
+      monitor.path,
+      projectRootPath,
+      undefined,
+      monitor.worktreeMode
+    );
+    if (
+      this.ctx.getMonitor(worktreeId) !== monitor ||
+      monitor.resourceEnvironmentEpoch !== environmentEpoch
+    ) {
+      return { ok: false, reason: "The environment changed while it was checked" };
+    }
+    const check = await this.idlePauseCheck(monitor, selection, projectRootPath);
+    if (!check.ok) return check;
+    return {
+      ok: true,
+      guard: {
+        selector: check.selector,
+        fingerprint: check.fingerprint,
+        sshTarget: check.sshTarget,
+        generation,
+        environmentEpoch,
+      },
+    };
+  }
+
+  private async idlePauseCheck(
+    monitor: WorktreeMonitor,
+    selection: ResolvedResourceSelection | null,
+    projectRootPath: string
+  ): Promise<
+    | { ok: true; selector: string; fingerprint: string; sshTarget: string }
+    | { ok: false; reason: string }
+  > {
+    const confirmed = await this.ctx.idlePause.confirmed(selection, projectRootPath);
+    if (!confirmed.ok) return confirmed;
+    // Setup, or a delete's teardown, runs outside the queue but holds this slot.
+    if (monitor.lifecycleStatus?.state === "running") {
+      return { ok: false, reason: "Another lifecycle command is running" };
+    }
+    // Reported only for a ready box and dropped once one is paused or torn
+    // down: the box main's host must be, or this worktree has none to pause.
+    const sshTarget = monitor.resourceStatus?.ssh;
+    if (!sshTarget) return { ok: false, reason: "The environment reports no ready machine" };
+    return { ok: true, selector: selection!.selector, fingerprint: confirmed.fingerprint, sshTarget };
+  }
+
   /** Resolves once no resource action for this worktree is queued or running. */
   whenIdle(worktreeId: string): Promise<void> {
     return this.resourceActionQueues.get(worktreeId)?.onIdle() ?? Promise.resolve();
@@ -533,11 +615,12 @@ export class ResourceActionExecutor {
     worktreeId: string,
     action: "provision" | "teardown" | "resume" | "pause" | "status",
     environmentId?: string,
-    options?: { origin?: "auto-poll" }
-  ): Promise<{ success: boolean; error?: string; output?: string }> {
+    options?: ResourceActionOptions
+  ): Promise<ResourceActionResult> {
     if (this.disposed) {
       return { success: false, error: "Aborted" };
     }
+    const idleGuard = options?.origin === "idle-pause" ? options.guard : undefined;
 
     const monitor = this.ctx.getMonitor(worktreeId);
     if (!monitor) {
@@ -565,6 +648,21 @@ export class ResourceActionExecutor {
     if (options?.origin === "auto-poll" && (queue.pending > 0 || queue.size > 0)) {
       return { success: true };
     }
+    // Never queued behind another action, and never one queued behind it:
+    // the claim it acts on is the host's decision at one moment, not later.
+    if (idleGuard) {
+      const refusal =
+        action !== "pause"
+          ? "Only a pause runs on an idle claim"
+          : queue.pending > 0 || queue.size > 0
+            ? "Another resource action is queued or running"
+            : this.generationOf(worktreeId) !== idleGuard.generation
+              ? "Another resource action ran since the pause was checked"
+              : monitor.resourceEnvironmentEpoch !== idleGuard.environmentEpoch
+                ? "The environment changed since the pause was checked"
+                : null;
+      if (refusal !== null) return { success: false, error: refusal, skipped: true };
+    }
 
     const controller = this.getResourceActionAbortController(worktreeId);
     // Taken at request time: an action queued for one environment must not run
@@ -580,7 +678,8 @@ export class ResourceActionExecutor {
             action,
             environmentId,
             environmentEpoch,
-            controller.signal
+            controller.signal,
+            idleGuard
           ),
         { signal: controller.signal }
       )
