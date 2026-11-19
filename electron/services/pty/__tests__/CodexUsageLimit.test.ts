@@ -7,6 +7,7 @@ import type {
 import {
   codexBannerResetCandidates,
   codexLaunchZone,
+  codexSystemZone,
   readCodexLimitEvidence,
   resolveCodexLimitReset,
   scanCodexLimitBanner,
@@ -167,8 +168,47 @@ describe("scanCodexLimitBanner", () => {
       scanCodexLimitBanner(["■ You’ve hit your usage limit. Try again at Nov 21th, 2026 3:40 PM."])
     ).toEqual({ kind: "unreadable" });
     expect(
-      scanCodexLimitBanner(["You’ve hit your usage limit. Try again at 3:40 PM. Odd."])
+      scanCodexLimitBanner(["■ You’ve hit your usage limit. Try again at 3:40 PM. Odd."])
     ).toEqual({ kind: "unreadable" });
+  });
+
+  it("never joins a half-drawn banner with the next cell's prose", () => {
+    // The blank row between the cells never reaches the scan.
+    expect(
+      scanCodexLimitBanner([
+        "■ You’ve hit your usage limit.",
+        "⚠ Service unavailable. Reconnect now or try again at 9:00 PM.",
+      ])
+    ).toEqual({ kind: "unreadable" });
+    expect(
+      scanCodexLimitBanner(["■ You’ve hit your usage limit.", "› or try again at 3:40 PM."])
+    ).toEqual({ kind: "unreadable" });
+  });
+
+  it("reads a stop the terminal wrapped inside its opener, masking the older one above", () => {
+    const cols = 32;
+    const stop = "■ Your workspace is out of credits. Add credits to continue.";
+    expect(
+      scanCodexLimitBanner(
+        [
+          "■ You’ve hit your usage limit. Try again at 3:40 PM.",
+          "› continue",
+          stop.slice(0, cols),
+          stop.slice(cols),
+        ],
+        cols
+      )
+    ).toEqual({ kind: "no-reset" });
+  });
+
+  it("won't pick a model name out of a wrap that reads two ways", () => {
+    const cols = 40;
+    const first = "■ You’ve hit your usage limit for ModelA";
+    const rows = [first, "BC. Switch to another model now, or try again at 3:40 PM."];
+    expect(rows[0]).toHaveLength(cols);
+    expect(scanCodexLimitBanner(rows, cols)).toEqual({ kind: "unreadable" });
+    // Narrower, the same split only reads one way.
+    expect(scanCodexLimitBanner(rows, cols + 1)).toMatchObject({ limitName: "ModelA BC" });
   });
 
   it("reads another error behind the marker as no banner, and finds the stop above it", () => {
@@ -192,6 +232,10 @@ describe("scanCodexLimitBanner", () => {
     ["an agent reply", ["• You’ve hit your usage limit. Try again at 3:40 PM."]],
     ["an indented row", ["  You’ve hit your usage limit. Try again at 3:40 PM."]],
     ["a question", ["Have you hit your usage limit? Try again at 3:40 PM."]],
+    [
+      "a banner's words without Codex's marker",
+      ["You’ve hit your usage limit. Try again at 3:40 PM."],
+    ],
   ])("reads %s as no banner", (_label, lines) => {
     expect(scanCodexLimitBanner(lines)).toBeNull();
   });
@@ -284,13 +328,8 @@ describe("codexBannerResetCandidates", () => {
 });
 
 describe("codexLaunchZone", () => {
-  it("is this process's zone when neither the launch nor this process names one", () => {
-    expect(codexLaunchZone({}, "darwin", undefined)).toBeUndefined();
-  });
-
-  it("won't take this process's zone for the system's when it has a TZ of its own", () => {
-    expect(codexLaunchZone({}, "linux", "Asia/Tokyo")).toBeNull();
-    expect(codexLaunchZone({ TZ: "Asia/Tokyo" }, "win32", "Asia/Tokyo")).toBeNull();
+  it("follows the system zone when the launch names none", () => {
+    expect(codexLaunchZone({}, "darwin")).toBeUndefined();
   });
 
   it.each([
@@ -300,18 +339,45 @@ describe("codexLaunchZone", () => {
     [":/usr/share/zoneinfo/America/New_York", "America/New_York"],
     ["", "UTC"],
   ])("reads TZ=%j as %s", (tz, zone) => {
-    expect(codexLaunchZone({ TZ: tz }, "linux", undefined)).toBe(zone);
+    expect(codexLaunchZone({ TZ: tz }, "linux")).toBe(zone);
   });
 
-  it.each([":", "CET-1CEST,M3.5.0,M10.5.0/3", "/etc/localtime", "Not/AZone"])(
-    "won't guess TZ=%j",
-    (tz) => {
-      expect(codexLaunchZone({ TZ: tz }, "darwin", undefined)).toBeNull();
-    }
-  );
+  it.each([
+    ":",
+    "CET-1CEST,M3.5.0,M10.5.0/3",
+    "/etc/localtime",
+    "/tmp/zoneinfo/America/New_York",
+    "Not/AZone",
+  ])("won't guess TZ=%j", (tz) => {
+    expect(codexLaunchZone({ TZ: tz }, "darwin")).toBeNull();
+  });
 
   it("ignores TZ on Windows, as Codex does", () => {
-    expect(codexLaunchZone({ TZ: "Asia/Tokyo" }, "win32", undefined)).toBeUndefined();
+    expect(codexLaunchZone({ TZ: "Asia/Tokyo" }, "win32")).toBeUndefined();
+  });
+});
+
+describe("codexSystemZone", () => {
+  const link = (target: string) => () => target;
+  const noLink = () => {
+    throw new Error("EINVAL");
+  };
+
+  it("reads the system zone off /etc/localtime, whatever this process's zone is", () => {
+    expect(codexSystemZone("darwin", undefined, link("/var/db/timezone/zoneinfo/Asia/Tokyo"))).toBe(
+      "Asia/Tokyo"
+    );
+    expect(codexSystemZone("linux", "Europe/Paris", link("/usr/share/zoneinfo/Asia/Tokyo"))).toBe(
+      "Asia/Tokyo"
+    );
+  });
+
+  it("stands this process's zone in only while it has no TZ of its own", () => {
+    expect(codexSystemZone("linux", undefined, noLink)).toBeUndefined();
+    expect(codexSystemZone("linux", "Asia/Tokyo", noLink)).toBeNull();
+    expect(codexSystemZone("linux", undefined, link("/opt/zones/Asia/Tokyo"))).toBeUndefined();
+    expect(codexSystemZone("win32", undefined, noLink)).toBeUndefined();
+    expect(codexSystemZone("win32", "Asia/Tokyo", noLink)).toBeNull();
   });
 });
 
@@ -380,13 +446,20 @@ describe("resolveCodexLimitReset", () => {
     ).toMatchObject({ status: "known", resetsAt: exact, precision: "second", source: "quota" });
   });
 
-  it("takes the later reset when two windows are spent", () => {
-    expect(
-      resolveCodexLimitReset(
-        observation(at()),
-        reading(bucket("codex", [spent(fiveHourReset + 10_000), spent(weeklyReset)]))
-      )
-    ).toMatchObject({ status: "known", resetsAt: weeklyReset, source: "quota" });
+  it("takes the latest reset when two windows are spent, whatever their order", () => {
+    const weeklyFirst = bucket("codex", [
+      { usedPercent: 101, resetsAt: weeklyReset },
+      spent(fiveHourReset + 10_000),
+    ]);
+    expect(resolveCodexLimitReset(observation(at()), reading(weeklyFirst))).toMatchObject({
+      status: "known",
+      resetsAt: weeklyReset,
+      source: "quota",
+    });
+    expect(resolveCodexLimitReset(observation(later()), reading(weeklyFirst))).toMatchObject({
+      status: "known",
+      resetsAt: weeklyReset,
+    });
   });
 
   it("never stretches the answer with a spent model bucket the banner doesn't name", () => {
@@ -394,7 +467,8 @@ describe("resolveCodexLimitReset", () => {
       observation(at()),
       reading(
         bucket("codex", [spent(fiveHourReset), healthy(weeklyReset)]),
-        bucket("codex_bengalfox", [spent(weeklyReset + 86_400_000)], "GPT-5.5-Codex")
+        // Spent in the very minute the banner prints, and for days after.
+        bucket("codex_bengalfox", [spent(fiveHourReset + 5_000), spent(weeklyReset)], "Model A")
       )
     );
     expect(result).toMatchObject({ status: "known", resetsAt: fiveHourReset });
@@ -402,39 +476,75 @@ describe("resolveCodexLimitReset", () => {
 
   it("reads a model limit against the bucket of the name it printed", () => {
     const result = resolveCodexLimitReset(
-      observation(at("GPT-5.5-Codex")),
+      observation(at("Model A")),
       reading(
         bucket("codex", [spent(weeklyReset + 86_400_000)]),
-        bucket("codex_other", [spent(fiveHourReset + 1_000)], "Other"),
-        bucket("codex_bengalfox", [spent(fiveHourReset), spent(weeklyReset)], "GPT-5.5-Codex")
+        bucket("codex_other", [spent(fiveHourReset + 1_000), spent(weeklyReset + 1)], "Other"),
+        bucket("codex_bengalfox", [spent(fiveHourReset), spent(weeklyReset)], "Model A")
       )
     );
     expect(result).toMatchObject({ status: "known", resetsAt: weeklyReset });
   });
 
+  it("knows a bucket by the name Codex prints for it, not by its id", () => {
+    // Codex names "Model A" whatever the id, and prints the general banner for a bucket with no name.
+    const named = bucket("codex", [spent(fiveHourReset), spent(weeklyReset)], "Model A");
+    const unnamed = bucket("family-a", [spent(fiveHourReset + 2_000)]);
+    expect(resolveCodexLimitReset(observation(at()), reading(named, unnamed))).toMatchObject({
+      status: "known",
+      resetsAt: fiveHourReset + 2_000,
+    });
+    expect(
+      resolveCodexLimitReset(observation(at("Model A")), reading(named, unnamed))
+    ).toMatchObject({ status: "known", resetsAt: weeklyReset });
+    expect(
+      resolveCodexLimitReset(
+        observation(at()),
+        reading(bucket("x", [spent(fiveHourReset)], " GPT-Reserve "))
+      )
+    ).toMatchObject({ status: "known", resetsAt: fiveHourReset });
+  });
+
   it("answers a model limit from the banner when no bucket of that name was read", () => {
     expect(
       resolveCodexLimitReset(
-        observation(at("GPT-5.5-Codex")),
-        reading(bucket("codex", [spent(weeklyReset)]))
+        observation(at("Model A")),
+        reading(
+          bucket("codex", [spent(weeklyReset)]),
+          bucket("codex_other", [spent(fiveHourReset + 3_000), spent(weeklyReset)], "Other")
+        )
       )
     ).toMatchObject({ status: "known", resetsAt: fiveHourReset + MINUTE, source: "banner" });
   });
 
-  it("answers unknown when the reading shows no spent window at the banner's time", () => {
+  it("confirms only a spent window inside the printed minute", () => {
+    const resolve = (...windows: CodexLimitWindowEvidence[]) =>
+      resolveCodexLimitReset(observation(at()), reading(bucket("codex", windows)));
+    expect(resolve(spent(fiveHourReset + 59_999))).toMatchObject({ status: "known" });
+    expect(resolve(spent(fiveHourReset + MINUTE))).toEqual({
+      status: "unknown",
+      reason: "quota-disagrees",
+      observedAt: seenAt,
+    });
+    expect(resolve(spent(fiveHourReset - 1))).toMatchObject({ reason: "quota-disagrees" });
+    // A healthy window resetting that minute is no confirmation, a spent one beside it neither.
+    expect(resolve(healthy(fiveHourReset), spent(weeklyReset))).toMatchObject({
+      status: "unknown",
+      reason: "quota-disagrees",
+    });
+  });
+
+  it("won't let a spent window whose reset already passed confirm the banner", () => {
+    const asked = { requestedAt: fiveHourReset + 30_000 };
     expect(
-      resolveCodexLimitReset(
-        observation(at()),
-        reading(bucket("codex", [spent(fiveHourReset + 3 * MINUTE)]))
-      )
-    ).toEqual({ status: "unknown", reason: "quota-disagrees", observedAt: seenAt });
-    // A healthy window that happens to reset that minute is no confirmation either.
-    expect(
-      resolveCodexLimitReset(observation(at()), reading(bucket("codex", [healthy(fiveHourReset)])))
+      resolveCodexLimitReset(observation(at()), {
+        ...asked,
+        buckets: [bucket("codex", [spent(fiveHourReset + 10_000)])],
+      })
     ).toMatchObject({ status: "unknown", reason: "quota-disagrees" });
   });
 
-  it("answers unknown when the reading can't say all it needs to", () => {
+  it("answers unknown when a bucket the banner could mean can't say all it needs to", () => {
     expect(
       resolveCodexLimitReset(
         observation(at()),
@@ -443,6 +553,16 @@ describe("resolveCodexLimitReset", () => {
     ).toMatchObject({ status: "unknown", reason: "quota-incomplete" });
     expect(
       resolveCodexLimitReset(observation(at()), reading(bucket("codex", [], null, true)))
+    ).toMatchObject({ status: "unknown", reason: "quota-incomplete" });
+    // The reserve's unknown reset may be the one the banner printed.
+    expect(
+      resolveCodexLimitReset(
+        observation(at()),
+        reading(
+          bucket("codex", [spent(fiveHourReset + 5_000)]),
+          bucket("gpt-reserve", [spent(null), spent(weeklyReset)], "gpt-reserve")
+        )
+      )
     ).toMatchObject({ status: "unknown", reason: "quota-incomplete" });
   });
 
@@ -458,7 +578,7 @@ describe("resolveCodexLimitReset", () => {
     ).toMatchObject({ status: "unknown", reason: "ambiguous-bucket" });
   });
 
-  it("lets a reading pick between the two showings of a fold, and answers unknown when none does", () => {
+  it("lets a reading pick between the two showings of a fold only while both are to come", () => {
     const first = Date.UTC(2026, 10, 1, 5, 30);
     const second = Date.UTC(2026, 10, 1, 6, 30);
     const fold: CodexLimitObservation = {
@@ -478,14 +598,15 @@ describe("resolveCodexLimitReset", () => {
       status: "unknown",
       reason: "ambiguous-time",
     });
-    // Read after the first showing passed, a spent window at the second can't rule the first out.
+    // Read after the first showing passed, a window spent until the second can't
+    // rule the first out: it may have been another one's, spent since.
     const late = { requestedAt: Date.UTC(2026, 10, 1, 6, 5) };
     expect(
       resolveCodexLimitReset(fold, {
         ...late,
-        buckets: [bucket("codex", [healthy(second + 12_000)])],
+        buckets: [bucket("codex", [spent(second + 12_000)])],
       })
-    ).toMatchObject({ status: "unknown", reason: "quota-disagrees" });
+    ).toMatchObject({ status: "unknown", reason: "ambiguous-time" });
   });
 
   it("ignores a reading asked for before the banner showed", () => {
@@ -513,7 +634,7 @@ describe("resolveCodexLimitReset", () => {
     });
   });
 
-  it("resolves try-again-later only from a timely reading of the pane's spent bucket", () => {
+  it("resolves try-again-later only from a prompt reading of the pane's spent bucket", () => {
     expect(resolveCodexLimitReset(observation(later()), null)).toMatchObject({
       status: "unknown",
       reason: "no-reset-stated",
@@ -523,15 +644,18 @@ describe("resolveCodexLimitReset", () => {
     ).toMatchObject({ status: "unknown", reason: "no-reset-stated" });
     expect(
       resolveCodexLimitReset(
-        observation(later()),
-        reading(bucket("codex", [spent(fiveHourReset), spent(weeklyReset)]))
+        observation(later("Model A")),
+        reading(
+          bucket("codex", [spent(weeklyReset + 1)]),
+          bucket("codex_bengalfox", [spent(fiveHourReset)], "Model A")
+        )
       )
-    ).toMatchObject({ status: "known", resetsAt: weeklyReset, source: "quota" });
-    const stale = {
-      requestedAt: seenAt + 60 * MINUTE,
+    ).toMatchObject({ status: "known", resetsAt: fiveHourReset, source: "quota" });
+    const slow = {
+      requestedAt: seenAt + 3 * MINUTE,
       buckets: [bucket("codex", [spent(weeklyReset)])],
     };
-    expect(resolveCodexLimitReset(observation(later()), stale)).toMatchObject({
+    expect(resolveCodexLimitReset(observation(later()), slow)).toMatchObject({
       status: "unknown",
       reason: "no-reset-stated",
     });
@@ -554,20 +678,28 @@ describe("resolveCodexLimitReset", () => {
 });
 
 describe("readCodexLimitEvidence", () => {
-  it("keeps evidence and refuses anything else", () => {
-    const evidence = {
-      requestedAt: 1,
-      buckets: [
-        {
-          limitId: "codex",
-          limitName: null,
-          windows: [{ usedPercent: 100, resetsAt: 5 }],
-          unreadable: false,
-        },
-      ],
-    };
+  const window = { usedPercent: 100, resetsAt: 5 };
+  const bucket = { limitId: "codex", limitName: null, windows: [window], unreadable: false };
+
+  it("keeps evidence", () => {
+    const evidence = { requestedAt: 1, buckets: [bucket] };
     expect(readCodexLimitEvidence(evidence)).toEqual(evidence);
-    expect(readCodexLimitEvidence(null)).toBeNull();
-    expect(readCodexLimitEvidence({ requestedAt: 1, buckets: [{ windows: "x" }] })).toBeNull();
+  });
+
+  it.each([
+    ["no evidence", null],
+    ["no request time", { buckets: [bucket] }],
+    ["windows that aren't a list", { requestedAt: 1, buckets: [{ ...bucket, windows: "x" }] }],
+    ["a window that isn't one", { requestedAt: 1, buckets: [{ ...bucket, windows: [null] }] }],
+    [
+      "a window with no number",
+      { requestedAt: 1, buckets: [{ ...bucket, windows: [{ ...window, usedPercent: "full" }] }] },
+    ],
+    [
+      "a reset that isn't a time",
+      { requestedAt: 1, buckets: [{ ...bucket, windows: [{ ...window, resetsAt: "soon" }] }] },
+    ],
+  ])("refuses %s", (_label, value) => {
+    expect(readCodexLimitEvidence(value)).toBeNull();
   });
 });

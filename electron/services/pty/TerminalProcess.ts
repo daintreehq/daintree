@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod/mini";
 import type * as pty from "node-pty";
 import type {
@@ -55,6 +55,7 @@ import {
 import {
   codexBannerResetCandidates,
   codexLaunchZone,
+  codexSystemZone,
   readCodexLimitEvidence,
   resolveCodexLimitReset,
   scanCodexLimitBanner,
@@ -63,6 +64,7 @@ import {
 import type {
   CodexLimitAnswer,
   CodexLimitQuery,
+  CodexLimitReset,
   CodexLimitUnknownReason,
 } from "../../../shared/types/codexLimitReset.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
@@ -292,20 +294,31 @@ export class TerminalProcess {
   /**
    * The Codex stop banner on screen (#17906), held from its first sighting,
    * which fixes the day a bare time is read on, for as long as it stays.
-   * `seq` names this sighting for a read that resolves it against a reading.
+   * `seq` names this sighting for a read that resolves it against a reading;
+   * `incarnation` and `observedSince` tie it to the agent run and the unbroken
+   * read of the output it was seen in. A quota answer that confirmed it is
+   * kept, since a later reading can no longer see a window that has rolled.
    */
   private codexLimit: {
     key: string;
     seq: number;
+    incarnation: number;
+    observedSince: number | null;
     observation: CodexLimitObservation;
-    visible: boolean;
-    lastSeenAt: number;
+    /** When the last look stopped showing it; null while it shows. */
+    hiddenSince: number | null;
+    confirmed: CodexLimitReset | null;
   } | null = null;
   private codexLimitSeq = 0;
+  /** This process, as a stamp names it: a replacement pane counts its sequence from zero again. */
+  private readonly codexLimitRun = randomUUID();
   /** The zone a Codex launched here writes its local times in; see {@link codexLaunchZone}. */
   private readonly codexZone: string | null | undefined;
-  /** When the viewport was last looked at: a banner absent then printed after it. */
-  private lastViewportAt: number | null = null;
+  /**
+   * When the pane was last looked at without a banner being drawn: a banner
+   * that shows next was printed after it. A half-drawn one doesn't count.
+   */
+  private codexSettledLookAt: number | null = null;
   /** True only while the exit path settles the mirror's last frame. */
   private samplingFinalFrame = false;
 
@@ -2026,7 +2039,6 @@ export class TerminalProcess {
     this.observeUpdateFooter(lines, now);
     this.observeCodexUsageLimit(lines, now);
     this.observeHandback(now);
-    this.lastViewportAt = now;
   }
 
   /**
@@ -2200,41 +2212,49 @@ export class TerminalProcess {
    */
   private observeCodexUsageLimit(lines: readonly string[], now: number): void {
     const t = this.terminalInfo;
-    if (getLiveAgentId(t) !== "codex" || !this.isAgentLive) {
+    const printedAfter = this.codexSettledLookAt ?? t.spawnedAt;
+    const live = getLiveAgentId(t) === "codex" && this.isAgentLive && this.lifecycle.isAlive;
+    const cols = live ? (readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined) : undefined;
+    const banner = live ? scanCodexLimitBanner(lines, cols) : null;
+    if (banner?.kind !== "unreadable") this.codexSettledLookAt = now;
+    if (!live) {
       this.codexLimit = null;
       return;
     }
-    const cols = readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined;
-    const banner = scanCodexLimitBanner(lines, cols);
     const held = this.codexLimit;
     if (banner === null) {
-      if (held) held.visible = false;
+      if (held) held.hiddenSince ??= now;
       return;
     }
+    const incarnation = t.agentIncarnation ?? 0;
+    const observedSince = this.analysis.observedSince();
     const key = JSON.stringify(banner);
     if (
       held?.key === key &&
-      (held.visible || now - held.lastSeenAt < CODEX_LIMIT_REPAINT_GRACE_MS)
+      held.incarnation === incarnation &&
+      held.observedSince === observedSince &&
+      (held.hiddenSince === null || now - held.hiddenSince < CODEX_LIMIT_REPAINT_GRACE_MS)
     ) {
-      held.visible = true;
-      held.lastSeenAt = now;
+      held.hiddenSince = null;
       return;
     }
-    const printedAfter = this.lastViewportAt ?? t.spawnedAt;
+    const zone = this.codexZone === undefined ? codexSystemZone() : this.codexZone;
     this.codexLimit = {
       key,
       seq: ++this.codexLimitSeq,
-      visible: true,
-      lastSeenAt: now,
+      incarnation,
+      observedSince,
+      hiddenSince: null,
+      confirmed: null,
       observation: {
         banner,
         observedAt: now,
         candidates:
-          banner.kind !== "at" || this.codexZone === null
+          banner.kind !== "at" || zone === null
             ? null
-            : codexBannerResetCandidates(banner.time, now, printedAfter, this.codexZone),
+            : codexBannerResetCandidates(banner.time, now, printedAfter, zone),
         // Only the Codex Daintree launched runs on the launch's home and zone.
-        attributed: t.launchAgentId === "codex" && (t.agentIncarnation ?? 0) === 0,
+        attributed: t.launchAgentId === "codex" && incarnation === 0,
       },
     };
   }
@@ -2244,15 +2264,26 @@ export class TerminalProcess {
    * outright when no quota reading could change the answer, and otherwise
    * names the banner for a second read that brings a reading of the pane's
    * Codex home. `observedSince` is since when the pane's output has been read
-   * without a gap: a banner last seen before that may have been replaced.
+   * without a gap (null while it isn't): a banner seen before a gap may have
+   * been replaced unseen.
    */
   answerCodexLimit(query: CodexLimitQuery, observedSince: number | null): CodexLimitAnswer {
     const held = this.codexLimit;
+    const t = this.terminalInfo;
     const unknown = (reason: CodexLimitUnknownReason): CodexLimitAnswer => ({
       reset: { status: "unknown", reason },
     });
-    if (held === null || !held.visible || !this.isAgentLive) return unknown("no-banner");
-    if (observedSince === null || observedSince > held.lastSeenAt) return unknown("not-observed");
+    const live =
+      getLiveAgentId(t) === "codex" &&
+      this.isAgentLive &&
+      this.lifecycle.isAlive &&
+      held !== null &&
+      held.incarnation === (t.agentIncarnation ?? 0);
+    if (!live || held.hiddenSince !== null) return unknown("no-banner");
+    if (observedSince === null || observedSince !== held.observedSince) {
+      return unknown("not-observed");
+    }
+    if (held.confirmed !== null) return { reset: held.confirmed };
     const { observation } = held;
     if (query.seq === undefined) {
       const { banner, candidates } = observation;
@@ -2260,11 +2291,15 @@ export class TerminalProcess {
         observation.attributed &&
         (banner.kind === "later" || (banner.kind === "at" && (candidates?.length ?? 0) > 0));
       return wantsReading
-        ? { stamp: { seq: held.seq, observedAt: observation.observedAt } }
+        ? { stamp: { seq: held.seq, run: this.codexLimitRun, observedAt: observation.observedAt } }
         : { reset: resolveCodexLimitReset(observation, null) };
     }
-    if (query.seq !== held.seq) return unknown("banner-changed");
-    return { reset: resolveCodexLimitReset(observation, readCodexLimitEvidence(query.evidence)) };
+    if (query.seq !== held.seq || query.run !== this.codexLimitRun) {
+      return unknown("banner-changed");
+    }
+    const reset = resolveCodexLimitReset(observation, readCodexLimitEvidence(query.evidence));
+    if (reset.status === "known" && reset.source === "quota") held.confirmed = reset;
+    return { reset };
   }
 
   /**

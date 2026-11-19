@@ -11,7 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import {
   CodexAppServerError,
   runCodexAppServerSession,
@@ -283,8 +283,7 @@ function cacheEntry(home: string): HomeCacheEntry {
 
 function startRead(owner: HomeCacheEntry, codexHome: string | undefined): Promise<HomeReading> {
   const request = enqueue(() => fetchCodexQuota(codexHome)).then((result) => {
-    // A read that went out earlier and came back later doesn't replace a newer one.
-    if (!owner.cached || owner.cached.requestedAt <= result.requestedAt) owner.cached = result;
+    owner.cached = result;
     return result;
   });
   owner.inFlight = request;
@@ -579,8 +578,19 @@ export async function readCodexHomeLimitEvidence(
   notBefore: number
 ): Promise<CodexLimitEvidence | null> {
   if (!(await isDirectory(home))) return null;
-  const reading = await readHomeSince(await canonicalCodexHomeKey(home), home, notBefore);
-  return reading.evidence;
+  // Resolved once, so the home asked about and the key its answer is kept
+  // under can't part if a link in the path is repointed while the read waits.
+  let physical: string;
+  try {
+    physical = await realpath(home);
+  } catch {
+    return null;
+  }
+  const reading = await readHomeSince(await canonicalCodexHomeKey(physical), physical, notBefore);
+  // A clock stepped back while the read waited can still date it too early.
+  return reading.evidence !== null && reading.evidence.requestedAt >= notBefore
+    ? reading.evidence
+    : null;
 }
 
 /** The queue is kept: a read still running from before the reset must still finish first. */

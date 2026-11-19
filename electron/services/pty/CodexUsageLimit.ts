@@ -5,6 +5,7 @@ import type {
   CodexLimitUnknownReason,
   CodexLimitWindowEvidence,
 } from "../../../shared/types/codexLimitReset.js";
+import { readlinkSync } from "node:fs";
 import { stripAnsi } from "./AgentPatternDetector.js";
 import { instantsOf, wallTime, zoneFormat, type WallTime } from "./zonedWallTime.js";
 
@@ -33,17 +34,24 @@ const SCAN_LINES = 12;
 const MAX_BANNER_ROWS = 10;
 
 // Codex draws its error as one history line, `■ {message}`, flush left and
-// word-wrapped with no indent (codex-rs/tui/src/history_cell/notices.rs).
+// word-wrapped with no indent (codex-rs/tui/src/history_cell/notices.rs). The
+// marker is required: text that only reads like a banner is someone's.
 const MARKER = /^■ ?/;
+// Glyphs reach the String.raw patterns below as `${}` strings, which the build
+// escapes; a tagged template's own text ships as written, and one glyph there
+// makes the pty host's whole chunk a two-byte string (#17023).
+const APOSTROPHES = "'’";
 const OPENERS = [
-  /^You['’]ve hit your usage limit\b/,
+  new RegExp(String.raw`^You[${APOSTROPHES}]ve hit your usage limit\b`),
   /^Your workspace is out of credits\./,
   /^You hit your spend cap\b/,
 ];
-// A row that opens another history cell, a prompt or a footer: an indent or a
-// marker glyph (• ■ › ❯ │ └ ─). Codex's agent replies sit behind "• " with
-// indented continuations, so neither reads as part of a banner.
-const CELL_BOUNDARY = /^(?:\s|[•■›❯│└─])/;
+// A row that opens another history cell, a prompt or a footer: an indent, a
+// box or pointer glyph (• ■ › ❯ │ └ ─), or any other symbol set off by a space
+// (⚠, a list dash). The rows reach here without the blank ones between cells,
+// so this is what ends a banner. A wrapped banner's own rows start with a word,
+// a number, or a URL in parentheses.
+const CELL_BOUNDARY = /^(?:\s|[•■›❯│└─]|[^\p{L}\p{N}(["'[]\s)/u;
 
 // chrono's `%-I:%M %p`, after `%b %-d{st|nd|rd|th}, %Y ` when the reset isn't
 // on the day Codex printed it (codex-rs/protocol/src/error.rs).
@@ -55,10 +63,10 @@ const RETRY = String.raw`(?:at ${TIME}|later)\.`;
 // limit names it and offers a switch. Credit and spend-cap stops state no
 // reset at all.
 const GENERAL = new RegExp(
-  String.raw`^You['’]ve hit your usage limit\.(?: Try again| .+?,? or try again) ${RETRY}$`
+  String.raw`^You[${APOSTROPHES}]ve hit your usage limit\.(?: Try again| .+?,? or try again) ${RETRY}$`
 );
 const MODEL = new RegExp(
-  String.raw`^You['’]ve hit your usage limit for (.+?)\. Switch to another model now, or try again ${RETRY}$`
+  String.raw`^You[${APOSTROPHES}]ve hit your usage limit for (.+?)\. Switch to another model now, or try again ${RETRY}$`
 );
 const NO_RESET = [
   /^Your workspace is out of credits\. .*\bcontinue\.$/,
@@ -137,8 +145,7 @@ export function scanCodexLimitBanner(
   const tailStart = Math.max(0, rows.length - SCAN_LINES);
   const firstStart = Math.max(0, tailStart - MAX_BANNER_ROWS + 1);
   for (let i = rows.length - 1; i >= firstStart; i--) {
-    const marker = MARKER.exec(rows[i]!);
-    if (marker === null && !OPENERS.some((opener) => opener.test(rows[i]!))) continue;
+    if (!MARKER.test(rows[i]!)) continue;
     // Whole rows, the marker kept, so a row's width still tells the terminal's wrap.
     const parts = [rows[i]!];
     for (let j = i + 1; j < rows.length && parts.length < MAX_BANNER_ROWS; j++) {
@@ -147,12 +154,22 @@ export function scanCodexLimitBanner(
     }
     const message = (text: string) => text.replace(MARKER, "");
     // Another error behind the marker, or an opener's words split mid-cell.
-    if (!OPENERS.some((opener) => opener.test(message(collapse(parts.join(" ")))))) continue;
+    const opens = joinings(parts, cols).some((text) =>
+      OPENERS.some((opener) => opener.test(message(text)))
+    );
+    if (!opens) continue;
     for (let end = 1; end <= parts.length; end++) {
+      const read = new Map<string, CodexLimitBanner>();
       for (const text of joinings(parts.slice(0, end), cols)) {
         const banner = classify(message(text));
-        if (banner !== undefined) return i + end - 1 >= tailStart ? banner : null;
+        if (banner !== undefined) read.set(JSON.stringify(banner), banner);
       }
+      if (read.size === 0) continue;
+      const ends = i + end - 1 >= tailStart;
+      // Two ways of joining the wrap that say different things (a model name
+      // split at the edge) can't be told apart.
+      if (read.size > 1) return ends ? { kind: "unreadable" } : null;
+      return ends ? [...read.values()][0]! : null;
     }
     return i + parts.length - 1 >= tailStart ? { kind: "unreadable" } : null;
   }
@@ -214,30 +231,60 @@ export function codexBannerResetCandidates(
   return [...new Set(instants)].filter((instant) => instant >= earliest).sort((a, b) => a - b);
 }
 
+const ZONEINFO_DIRS = [
+  "/usr/share/zoneinfo/",
+  "/usr/share/lib/zoneinfo/",
+  "/var/db/timezone/zoneinfo/",
+];
+
+function zoneFromFile(file: string): string | null {
+  const dir = ZONEINFO_DIRS.find((prefix) => file.startsWith(prefix));
+  const zone = dir === undefined ? "" : file.slice(dir.length);
+  return zone !== "" && zoneFormat(zone) !== null ? zone : null;
+}
+
 /**
- * The zone a Codex process started with `env` writes its local times in:
- * undefined for this process's own, a named zone for a launch `TZ`, or null
- * when it can't be told, which is never guessed. Codex reads the system zone
- * when the launch sets no `TZ` (on a Remote Host, that host's), and `Intl`
- * here only follows the system zone while this process has no `TZ` of its
- * own. An empty `TZ` is UTC to Codex's chrono; a POSIX rule string or a bare
- * file path isn't a zone `Intl` can read. Codex on Windows ignores `TZ`.
+ * The zone a Codex process started with `env` writes its local times in: a
+ * named zone for a launch `TZ`, undefined when it sets none and so follows
+ * the system's (see {@link codexSystemZone}), or null when the launch names
+ * one that can't be read here, which is never guessed. An empty `TZ` is UTC
+ * to Codex's chrono; a POSIX rule string, or a zone file outside the system's
+ * zoneinfo, isn't one `Intl` can vouch for. Codex on Windows ignores `TZ`.
  */
 export function codexLaunchZone(
   env: Readonly<Record<string, string | undefined>>,
-  platform: NodeJS.Platform = process.platform,
-  ownTz: string | undefined = process.env.TZ
+  platform: NodeJS.Platform = process.platform
 ): string | null | undefined {
-  const systemZone = ownTz === undefined ? undefined : null;
-  if (platform === "win32") return systemZone;
+  if (platform === "win32") return undefined;
   const raw = env.TZ;
-  if (raw === undefined) return systemZone;
+  if (raw === undefined) return undefined;
   if (raw === "") return "UTC";
-  let zone = raw.startsWith(":") ? raw.slice(1) : raw;
-  const fromFile = /\/zoneinfo\/(.+)$/.exec(zone);
-  if (fromFile !== null) zone = fromFile[1]!;
-  if (zone === "" || zone.startsWith("/")) return null;
-  return zoneFormat(zone) === null ? null : zone;
+  const zone = raw.startsWith(":") ? raw.slice(1) : raw;
+  if (zone.startsWith("/")) return zoneFromFile(zone);
+  return zone !== "" && zoneFormat(zone) !== null ? zone : null;
+}
+
+/**
+ * The system zone, read now, since a Codex with no `TZ` of its own prints in
+ * whatever the system's is at that moment, and this process's `Intl` keeps
+ * the zone it started in. On macOS and Linux it is `/etc/localtime`'s link;
+ * without one, and on Windows, this process's `Intl` zone (undefined) stands
+ * in only while this process has no `TZ` of its own. Null when neither can.
+ */
+export function codexSystemZone(
+  platform: NodeJS.Platform = process.platform,
+  ownTz: string | undefined = process.env.TZ,
+  readLink: (file: string) => string = readlinkSync
+): string | null | undefined {
+  if (platform !== "win32") {
+    try {
+      const zone = zoneFromFile(readLink("/etc/localtime"));
+      if (zone !== null) return zone;
+    } catch {
+      // Not a link: fall back to this process's zone.
+    }
+  }
+  return ownTz === undefined ? undefined : null;
 }
 
 /** A banner as the pty host holds it, with what was known when it first showed. */
@@ -254,20 +301,18 @@ export interface CodexLimitObservation {
  * How long after the banner a reading may still speak for `Try again later.`:
  * with no time to tie it to, a window spent long after is another stop's.
  */
-const LATER_EVIDENCE_MS = 15 * MINUTE_MS;
+const LATER_EVIDENCE_MS = 2 * MINUTE_MS;
 
 const GENERAL_BUCKETS = new Set(["codex", "gpt-reserve"]);
 
 /**
- * Whether a bucket is one whose limit Codex reports without a name: the
- * ordinary `codex` limit, the reserve behind it, or a bucket that names
- * nothing.
+ * Whether a bucket's limit prints the general banner: Codex names a model only
+ * for a `limitName` that is neither empty nor `codex`/`gpt-reserve`, whatever
+ * the bucket's id.
  */
 function isGeneralBucket(bucket: CodexLimitBucketEvidence): boolean {
-  const id = bucket.limitId?.trim().toLowerCase() ?? "";
   const name = bucket.limitName?.trim().toLowerCase() ?? "";
-  if (id === "" && name === "") return true;
-  return GENERAL_BUCKETS.has(id) || GENERAL_BUCKETS.has(name);
+  return name === "" || GENERAL_BUCKETS.has(name);
 }
 
 /** The buckets the banner can be about: by the name Codex printed, never by time. */
@@ -385,25 +430,28 @@ export function resolveCodexLimitReset(
   const pending = candidates.filter((candidate) => candidate + MINUTE_MS > reading.requestedAt);
   if (pending.length === 0) return fromBanner();
 
+  // A showing that passed before the reading may have been the one meant, and
+  // the reading can no longer show its window.
+  if (pending.length < candidates.length) return unknown("ambiguous-time");
+  // Any bucket the banner could mean with a window that can't be read, or a
+  // spent one with no reset, may be the one that stopped it.
+  const incomplete = buckets.some(
+    (bucket) =>
+      bucket.unreadable ||
+      spentWindows(bucket, reading.requestedAt).some((window) => window.resetsAt === null)
+  );
+  if (incomplete) return unknown("quota-incomplete");
   const answers = new Set<number>();
-  let incomplete = false;
   for (const bucket of buckets) {
     const spent = spentWindows(bucket, reading.requestedAt);
-    const matched = spent.some(
-      (window) =>
-        window.resetsAt !== null &&
-        pending.some(
-          (candidate) => window.resetsAt! >= candidate && window.resetsAt! < candidate + MINUTE_MS
-        )
+    const matched = spent.some((window) =>
+      pending.some(
+        (candidate) => window.resetsAt! >= candidate && window.resetsAt! < candidate + MINUTE_MS
+      )
     );
-    if (bucket.unreadable || (matched && spent.some((window) => window.resetsAt === null))) {
-      incomplete = true;
-      continue;
-    }
     if (matched) answers.add(Math.max(...spent.map((window) => window.resetsAt!)));
   }
   if (answers.size > 1) return unknown("ambiguous-bucket");
-  if (incomplete) return unknown("quota-incomplete");
   const [answer] = answers;
   return answer === undefined ? unknown("quota-disagrees") : known(answer, "quota");
 }

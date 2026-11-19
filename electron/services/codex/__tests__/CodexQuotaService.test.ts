@@ -14,7 +14,15 @@ vi.mock("../CodexAppServerClient.js", async () => {
   return { ...actual, runCodexAppServerSession: runSession };
 });
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexAppServerError } from "../CodexAppServerClient.js";
@@ -846,6 +854,11 @@ describe("toCodexLimitEvidence (#17906)", () => {
             primary: { usedPercent: 100, windowDurationMins: null, resetsAt: 1_700_000_100 },
             secondary: null,
           },
+          // No id inside the snapshot, and a spent window with no reset.
+          "gpt-reserve": {
+            limitName: "gpt-reserve",
+            primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: null },
+          },
         },
       },
       7
@@ -866,6 +879,12 @@ describe("toCodexLimitEvidence (#17906)", () => {
           limitId: "codex_bengalfox",
           limitName: "GPT-5.5-Codex",
           windows: [{ usedPercent: 100, resetsAt: 1_700_000_100_000 }],
+          unreadable: false,
+        },
+        {
+          limitId: "gpt-reserve",
+          limitName: "gpt-reserve",
+          windows: [{ usedPercent: 100, resetsAt: null }],
           unreadable: false,
         },
       ],
@@ -912,7 +931,7 @@ describe("readCodexHomeLimitEvidence (#17906)", () => {
   it("asks the pane's own home, stamped with when the request went out", async () => {
     runSession.mockImplementation(
       async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
-        expect(options.codexHome).toBe(home);
+        expect(options.codexHome).toBe(realpathSync(home));
         // Queued behind other work: the request leaves later than the caller asked.
         vi.setSystemTime(1_000_500);
         return run(async () => {
@@ -927,36 +946,77 @@ describe("readCodexHomeLimitEvidence (#17906)", () => {
     expect(evidence?.buckets).toHaveLength(1);
   });
 
+  it("asks the directory a link names, as it named it when asked", async () => {
+    const link = path.join(root, "current");
+    symlinkSync(home, link, "junction");
+    const asked: Array<string | undefined> = [];
+    runSession.mockImplementation(
+      async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
+        asked.push(options.codexHome);
+        return run(async () => ({ rateLimits: { primary: FIVE_HOURS } }));
+      }
+    );
+    await readCodexHomeLimitEvidence(link, 999_000);
+    expect(asked).toEqual([realpathSync(home)]);
+  });
+
+  it("keeps the evidence when the session dies during the account read", async () => {
+    runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) => {
+      void run(async (method) => {
+        if (method === "account/rateLimits/read") {
+          return { rateLimits: { primary: FIVE_HOURS }, accountId: "ws-1" };
+        }
+        return new Promise(() => {});
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      throw new CodexAppServerError("timeout", "session deadline");
+    });
+    const evidence = await readCodexHomeLimitEvidence(home, 999_000);
+    expect(evidence).toMatchObject({ requestedAt: 1_000_000, buckets: [{ limitId: null }] });
+  });
+
   it("reuses a reading asked for after the banner, and reads past one asked for before", async () => {
     respondWith(() => ({ rateLimits: { primary: FIVE_HOURS } }));
-    await readCodexHomeLimitEvidence(home, 999_000);
+    const first = await readCodexHomeLimitEvidence(home, 999_000);
     expect(runSession).toHaveBeenCalledTimes(1);
     vi.setSystemTime(1_005_000);
-    await readCodexHomeLimitEvidence(home, 999_500);
+    expect(await readCodexHomeLimitEvidence(home, 999_500)).toBe(first);
     expect(runSession).toHaveBeenCalledTimes(1);
     const later = await readCodexHomeLimitEvidence(home, 1_004_000);
     expect(runSession).toHaveBeenCalledTimes(2);
     expect(later?.requestedAt).toBe(1_005_000);
   });
 
-  it("waits out a read that went out before the banner rather than joining it", async () => {
+  it("waits out a read that went out before the banner, and its waiters share one new read", async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) =>
-      run(async () => {
-        if (runSession.mock.calls.length === 1) await gate;
-        return { rateLimits: { primary: FIVE_HOURS } };
-      })
+    runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) => {
+      const call = runSession.mock.calls.length;
+      return run(async () => {
+        if (call === 1) await gate;
+        return { rateLimits: { primary: { ...FIVE_HOURS, usedPercent: call } } };
+      });
+    });
+    const earlier = readCodexQuotaForHomes(
+      new Map([[await canonicalCodexHomeKey(realpathSync(home)), realpathSync(home)]])
     );
-    const earlier = readCodexQuotaForHomes(new Map([[await canonicalCodexHomeKey(home), home]]));
     await vi.waitFor(() => expect(runSession).toHaveBeenCalledTimes(1));
     vi.setSystemTime(1_010_000);
-    const evidence = readCodexHomeLimitEvidence(home, 1_009_000);
+    const waiters = [
+      readCodexHomeLimitEvidence(home, 1_009_000),
+      readCodexHomeLimitEvidence(home, 1_009_000),
+    ];
+    // Let both reach the read in flight before it answers.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(runSession).toHaveBeenCalledTimes(1);
     release();
     await earlier;
-    expect((await evidence)?.requestedAt).toBe(1_010_000);
+    const [a, b] = await Promise.all(waiters);
+    expect(a).toBe(b);
+    expect(a?.requestedAt).toBe(1_010_000);
+    expect(a?.buckets[0]?.windows[0]?.usedPercent).toBe(2);
     expect(runSession).toHaveBeenCalledTimes(2);
   });
 

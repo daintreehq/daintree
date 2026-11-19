@@ -28,7 +28,7 @@ export interface CodexLimitEvidence {
 export type CodexLimitUnknownReason =
   /** No Codex stop banner is on screen, or the pane is gone. */
   | "no-banner"
-  /** Nothing has read the pane's output continuously since the banner was last seen. */
+  /** Nothing has read the pane's output continuously since the banner showed, or the host didn't answer. */
   | "not-observed"
   /** A workspace credit or spend-cap stop: Codex names no reset. */
   | "no-reset"
@@ -48,7 +48,7 @@ export type CodexLimitUnknownReason =
   | "quota-incomplete"
   /** More than one bucket the banner could mean gives a different answer. */
   | "ambiguous-bucket"
-  /** The banner changed between the two reads; asking again reads the new one. */
+  /** The banner, or the pane's process, changed between the two reads; asking again reads the new one. */
   | "banner-changed";
 
 export type CodexLimitReset =
@@ -69,6 +69,8 @@ export type CodexLimitReset =
 /** The banner the pty host holds, named for a second read that resolves it against a reading. */
 export interface CodexLimitStamp {
   seq: number;
+  /** The pane process that holds it: a sequence alone repeats in a replacement. */
+  run: string;
   observedAt: number;
 }
 
@@ -77,4 +79,4 @@ export type CodexLimitAnswer = { stamp: CodexLimitStamp } | { reset: CodexLimitR
 
 /** The question: a first read, or a resolve of a stamped banner against a reading. */
 export type CodexLimitQuery =
-  { seq?: undefined } | { seq: number; evidence: CodexLimitEvidence | null };
+  { seq?: undefined } | { seq: number; run: string; evidence: CodexLimitEvidence | null };

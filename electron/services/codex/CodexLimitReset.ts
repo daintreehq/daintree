@@ -12,6 +12,7 @@ export interface CodexLimitTerminalRead extends LiveAgentTerminal {
 }
 
 export interface CodexLimitResetDeps {
+  /** Null for a pane that is gone; rejects when its host didn't answer. */
   readTerminal(terminalId: string, query: CodexLimitQuery): Promise<CodexLimitTerminalRead | null>;
   readEvidence(home: string, notBefore: number): Promise<CodexLimitEvidence | null>;
 }
@@ -24,7 +25,9 @@ function defaultDeps(): CodexLimitResetDeps {
     async readTerminal(terminalId, query) {
       const { getPtyClient } = await import("../../window/serviceRefs.js");
       const pty = getPtyClient();
-      return pty ? pty.getTerminalAsync(terminalId, undefined, { codexLimit: query }) : null;
+      return pty
+        ? pty.getTerminalAsync(terminalId, undefined, { strict: true, codexLimit: query })
+        : null;
     },
     async readEvidence(home, notBefore) {
       const { readCodexHomeLimitEvidence } = await import("./CodexQuotaService.js");
@@ -46,19 +49,21 @@ export async function readCodexLimitReset(
   terminalId: string,
   deps: CodexLimitResetDeps = defaultDeps()
 ): Promise<CodexLimitReset> {
+  const read = (query: CodexLimitQuery) =>
+    deps.readTerminal(terminalId, query).catch(() => "unanswered" as const);
   let answer: CodexLimitReset = { status: "unknown", reason: "no-banner" };
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    const first = await deps.readTerminal(terminalId, {}).catch(() => null);
+    const first = await read({});
+    if (first === "unanswered") return { status: "unknown", reason: "not-observed" };
     const asked = first?.codexLimit;
-    if (!asked) return { status: "unknown", reason: "no-banner" };
+    if (!first || !asked) return { status: "unknown", reason: "no-banner" };
     if ("reset" in asked) return asked.reset;
     const home = liveAgentOf(first) === "codex" ? first.codexHome : undefined;
     const evidence = home
       ? await deps.readEvidence(home, asked.stamp.observedAt).catch(() => null)
       : null;
-    const second = await deps
-      .readTerminal(terminalId, { seq: asked.stamp.seq, evidence })
-      .catch(() => null);
+    const second = await read({ seq: asked.stamp.seq, run: asked.stamp.run, evidence });
+    if (second === "unanswered") return { status: "unknown", reason: "not-observed" };
     const resolved = second?.codexLimit;
     if (!resolved || !("reset" in resolved)) return { status: "unknown", reason: "no-banner" };
     answer = resolved.reset;

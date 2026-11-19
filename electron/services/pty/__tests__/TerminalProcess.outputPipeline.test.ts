@@ -7,7 +7,6 @@ import { RATE_LIMIT_SETTLE_MS, TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
 import { AgentOutputForwarder } from "../AgentOutputForwarder.js";
-import { codexBannerResetCandidates, codexLaunchZone } from "../CodexUsageLimit.js";
 
 vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
@@ -1561,10 +1560,14 @@ describe("TerminalProcess in-thread bracketed paste (#15629)", () => {
 });
 
 describe("TerminalProcess Codex limit reset (#17906)", () => {
+  // 10:00 in New York (EST, UTC-5), where the pane's Codex runs.
   const seenAt = Date.UTC(2026, 10, 19, 15, 0);
   const env = { TZ: "America/New_York" };
-  const banner = "■ You’ve hit your usage limit. Try again at Nov 21st, 2026 3:40 PM.\r\n";
-  const time = { date: { year: 2026, month: 10, day: 21 }, hour: 15, minute: 40 };
+  const banner = "■ You’ve hit your usage limit. Try again at 3:40 PM.\r\n";
+  const resetMinute = Date.UTC(2026, 10, 19, 20, 40);
+  const weeklyReset = Date.UTC(2026, 10, 21, 20, 40);
+  // Codex ignores TZ on Windows, so the fixture's zone only holds elsewhere.
+  const itWithTz = it.skipIf(process.platform === "win32");
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -1582,53 +1585,130 @@ describe("TerminalProcess Codex limit reset (#17906)", () => {
       ...defaultSpawnContext(),
       env,
     });
+  const stampOf = (terminal: TerminalProcess) => {
+    const answer = terminal.answerCodexLimit({}, terminal.analysisObservedSince());
+    if (!("stamp" in answer)) throw new Error(`expected a stamp, got ${JSON.stringify(answer)}`);
+    return answer.stamp;
+  };
+  const codexBucket = (...windows: Array<{ usedPercent: number; resetsAt: number | null }>) => ({
+    limitId: "codex",
+    limitName: null,
+    windows,
+    unreadable: false,
+  });
 
-  it("holds a banner from its first sighting and resolves it against a reading", async () => {
+  itWithTz("keeps the day of the first sighting through an idle night and a repaint", async () => {
     const terminal = codexPane();
     ptyOnDataCallback!(banner);
     await vi.advanceTimersByTimeAsync(250);
-    const sighted = terminal.answerCodexLimit({}, terminal.analysisObservedSince());
-    expect(sighted).toEqual({ stamp: { seq: expect.any(Number), observedAt: expect.any(Number) } });
-    const { observedAt } = (sighted as { stamp: { observedAt: number } }).stamp;
-    expect(observedAt).toBeGreaterThan(seenAt);
+    const sighted = stampOf(terminal);
 
-    // More output under it, much later, is still the banner first seen.
-    await vi.advanceTimersByTimeAsync(3_600_000);
-    ptyOnDataCallback!("› \r\n");
+    // Nothing all night, then a repaint after local midnight blanks it for a frame.
+    vi.setSystemTime(Date.UTC(2026, 10, 20, 5, 30));
+    ptyOnDataCallback!("\x1b[2J\x1b[H");
     await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.answerCodexLimit({}, terminal.analysisObservedSince())).toEqual({
+      reset: { status: "unknown", reason: "no-banner" },
+    });
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(stampOf(terminal)).toEqual(sighted);
 
     const since = terminal.analysisObservedSince();
-    const first = terminal.answerCodexLimit({}, since);
-    expect(first).toEqual(sighted);
-    const { seq } = (first as { stamp: { seq: number } }).stamp;
+    const answer = terminal.answerCodexLimit({ ...sighted, evidence: null }, since);
+    expect(answer).toEqual({
+      reset: {
+        status: "known",
+        resetsAt: resetMinute + 60_000,
+        precision: "minute",
+        source: "banner",
+        observedAt: sighted.observedAt,
+      },
+    });
+    // Only the answer leaves: no banner text.
+    expect(JSON.stringify(answer)).not.toMatch(/usage limit|PM/);
+    terminal.dispose();
+  });
 
-    const [candidate] = codexBannerResetCandidates(
-      time,
-      observedAt,
-      observedAt - 1,
-      codexLaunchZone(env)
-    )!;
-    const exact = candidate! + 42_000;
+  itWithTz("keeps a reading's confirmation once the printed minute has passed", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const stamp = stampOf(terminal);
+    const since = terminal.analysisObservedSince();
     const evidence = {
       requestedAt: Date.now(),
       buckets: [
-        {
-          limitId: "codex",
-          limitName: null,
-          windows: [{ usedPercent: 100, resetsAt: exact }],
-          unreadable: false,
-        },
+        codexBucket(
+          { usedPercent: 100, resetsAt: resetMinute + 42_000 },
+          { usedPercent: 100, resetsAt: weeklyReset }
+        ),
       ],
     };
-    const answer = terminal.answerCodexLimit({ seq, evidence }, since);
-    expect(answer).toEqual({
-      reset: { status: "known", resetsAt: exact, precision: "second", source: "quota", observedAt },
+    expect(terminal.answerCodexLimit({ ...stamp, evidence }, since)).toMatchObject({
+      reset: { status: "known", resetsAt: weeklyReset, source: "quota" },
     });
-    // Only the answer leaves: no banner text, nothing it named.
-    expect(JSON.stringify(answer)).not.toMatch(/usage limit|Nov/);
 
-    expect(terminal.answerCodexLimit({ seq: seq + 1, evidence }, since)).toEqual({
-      reset: { status: "unknown", reason: "banner-changed" },
+    vi.setSystemTime(resetMinute + 5 * 60_000);
+    expect(terminal.answerCodexLimit({}, since)).toMatchObject({
+      reset: { status: "known", resetsAt: weeklyReset, source: "quota" },
+    });
+    terminal.dispose();
+  });
+
+  itWithTz("offers the evening before for a banner half-drawn across midnight", async () => {
+    vi.setSystemTime(Date.UTC(2026, 10, 20, 4, 58, 30));
+    const terminal = codexPane();
+    ptyOnDataCallback!("• Working\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    vi.setSystemTime(Date.UTC(2026, 10, 20, 5, 0, 10));
+    ptyOnDataCallback!("■ You’ve hit your usage limit.");
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!(" Try again at 11:59 PM.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    const stamp = stampOf(terminal);
+    const since = terminal.analysisObservedSince();
+    expect(terminal.answerCodexLimit({ ...stamp, evidence: null }, since)).toMatchObject({
+      reset: { status: "unknown", reason: "ambiguous-time" },
+    });
+    const evidence = {
+      requestedAt: Date.now(),
+      buckets: [codexBucket({ usedPercent: 100, resetsAt: Date.UTC(2026, 10, 21, 4, 59, 30) })],
+    };
+    expect(terminal.answerCodexLimit({ ...stamp, evidence }, since)).toMatchObject({
+      reset: { status: "unknown", reason: "ambiguous-time" },
+    });
+    terminal.dispose();
+  });
+
+  it("answers for its own process and agent run only", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const stamp = stampOf(terminal);
+    const since = terminal.analysisObservedSince();
+
+    expect(
+      terminal.answerCodexLimit({ seq: stamp.seq, run: "another-pane", evidence: null }, since)
+    ).toEqual({ reset: { status: "unknown", reason: "banner-changed" } });
+    expect(
+      terminal.answerCodexLimit({ ...stamp, seq: stamp.seq + 1, evidence: null }, since)
+    ).toEqual({ reset: { status: "unknown", reason: "banner-changed" } });
+    expect(terminal.answerCodexLimit({}, null)).toEqual({
+      reset: { status: "unknown", reason: "not-observed" },
+    });
+    expect(terminal.answerCodexLimit({}, (since ?? 0) + 1)).toEqual({
+      reset: { status: "unknown", reason: "not-observed" },
+    });
+
+    // Another Codex took over the pane before any look at its screen.
+    (
+      terminal as unknown as { terminalInfo: { agentIncarnation: number } }
+    ).terminalInfo.agentIncarnation = 1;
+    expect(terminal.answerCodexLimit({}, since)).toEqual({
+      reset: { status: "unknown", reason: "no-banner" },
     });
     terminal.dispose();
   });
@@ -1646,19 +1726,6 @@ describe("TerminalProcess Codex limit reset (#17906)", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(terminal.answerCodexLimit({}, since)).toEqual({
       reset: { status: "unknown", reason: "no-banner" },
-    });
-    terminal.dispose();
-  });
-
-  it("won't vouch for a banner the pane's output wasn't read through", async () => {
-    const terminal = codexPane();
-    ptyOnDataCallback!(banner);
-    await vi.advanceTimersByTimeAsync(250);
-    expect(terminal.answerCodexLimit({}, null)).toEqual({
-      reset: { status: "unknown", reason: "not-observed" },
-    });
-    expect(terminal.answerCodexLimit({}, Date.now() + 1)).toEqual({
-      reset: { status: "unknown", reason: "not-observed" },
     });
     terminal.dispose();
   });
