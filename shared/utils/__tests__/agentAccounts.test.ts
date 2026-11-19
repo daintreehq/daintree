@@ -5,6 +5,7 @@ import {
   defaultLoginPhrase,
   describeLaunchAccount,
   isUsableAccountFolder,
+  launchAnswer,
   listAgentAccountIdentities,
   keepPaneAccount,
   paneAccountEnv,
@@ -272,6 +273,23 @@ describe("describeLaunchAccount (#17079)", () => {
       accountId: null,
       source: "cliDefault",
     });
+  });
+
+  it("flags an id whose saved row has an unusable folder, as a launch reads it", () => {
+    const broken = { accounts: [{ id: "relative", name: "Rel", configDir: ".claude-rel" }] };
+    expect(describeLaunchAccount({ ...broken, accountId: "relative" }, "wt", undefined)).toEqual({
+      accountId: "relative",
+      source: "agentDefault",
+      missing: true,
+    });
+  });
+
+  it("names no account while presets load, unless the worktree's own pick decides", () => {
+    const viaPreset = describeLaunchAccount(entry, "wt-other", pinned);
+    expect(launchAnswer(viaPreset, false)).toEqual({ presetsComplete: false });
+    expect(launchAnswer(viaPreset, true)).toEqual({ ...viaPreset, presetsComplete: true });
+    const viaWorktree = describeLaunchAccount(entry, "wt-company", pinned);
+    expect(launchAnswer(viaWorktree, false)).toEqual({ ...viaWorktree, presetsComplete: false });
   });
 
   it("flags an id no saved account answers to, which a launch refuses", () => {

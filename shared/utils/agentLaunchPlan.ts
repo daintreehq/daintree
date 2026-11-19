@@ -19,6 +19,7 @@ import {
   applyPresetBehaviorOverrides,
   getMergedPresetIdentities,
   isPresetAbsenceSettled,
+  resolveRequestedPresetId,
   sanitizeAgentEnv,
   settleLaunchPreset,
   type PresetInventoryState,
@@ -253,17 +254,24 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     // A worktree slot saved as `null` is the same explicit default as a
     // caller's `null`, so the agent-level and registry defaults stay out of
     // this worktree's launches.
-    const settled = settleLaunchPreset(
-      agentId,
-      entry,
-      worktreeId,
-      options?.presetId,
-      input.ccrPresets,
-      input.projectPresets
-    );
-    const { resolvedPresetId } = settled;
-    const primaryFound = isAgent && settled.primaryFound;
-    preset = isAgent ? settled.preset : undefined;
+    // Only an agent's launch looks a preset up; anything else keeps the id it
+    // asked for, so a vanished one is still cleared.
+    const settled = isAgent
+      ? settleLaunchPreset(
+          agentId,
+          entry,
+          worktreeId,
+          options?.presetId,
+          input.ccrPresets,
+          input.projectPresets
+        )
+      : {
+          preset: undefined,
+          resolvedPresetId: resolveRequestedPresetId(entry, worktreeId, options?.presetId),
+          primaryFound: false,
+        };
+    const { resolvedPresetId, primaryFound } = settled;
+    preset = settled.preset;
 
     // Stale presetId cleanup: clear whichever scope held the vanished ID. The
     // worktree slot wins at resolution time, so only fall through to clearing

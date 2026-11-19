@@ -49,7 +49,11 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { accountRowId, planAgentAccountAdd } from "./agentAccountAdd";
 import type { ActionContext } from "@shared/types/actions";
 import { getAgentConfigFolderAccount, type AgentPreset } from "@shared/config/agentRegistry";
-import { describeLaunchAccount, listAgentAccountIdentities } from "@shared/utils/agentAccounts";
+import {
+  describeLaunchAccount,
+  launchAnswer,
+  listAgentAccountIdentities,
+} from "@shared/utils/agentAccounts";
 import { settleLaunchPreset } from "@shared/utils/agentPresets";
 import { findUnloadedLaunchPreset } from "@shared/utils/agentLaunchPlan";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
@@ -1057,22 +1061,21 @@ export const agentActionRuns = {
       sources.ccrPresets,
       sources.projectPresets
     );
+    const presetsComplete =
+      findUnloadedLaunchPreset({
+        agentId,
+        isAgent: true,
+        worktreeId,
+        settings,
+        options: undefined,
+        ...sources,
+      }) === undefined;
     return {
       accounts,
-      worktreeLaunch: {
-        ...describeLaunchAccount(entry, worktreeId, settled.preset),
-        // A launch waits for a preset it can't find yet, so the pin it
-        // would read may not be known.
-        presetsComplete:
-          findUnloadedLaunchPreset({
-            agentId,
-            isAgent: true,
-            worktreeId,
-            settings,
-            options: undefined,
-            ...sources,
-          }) === undefined,
-      },
+      worktreeLaunch: launchAnswer(
+        describeLaunchAccount(entry, worktreeId, settled.preset),
+        presetsComplete
+      ),
     };
   },
   "agent.addAccount": async (args: unknown, ctx: ActionContext) => {

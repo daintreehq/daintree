@@ -15,6 +15,10 @@ const view = vi.hoisted(() => ({
   worktrees: new Map<string, unknown>(),
   isInitialized: true,
 }));
+const projectPresets = vi.hoisted(() => ({
+  presetsByAgent: {} as Record<string, unknown>,
+  hydratedProjectId: "proj-1" as string | null,
+}));
 
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: {
@@ -30,9 +34,7 @@ vi.mock("@/store/ccrPresetsStore", () => ({
   useCcrPresetsStore: { getState: () => ({ ccrPresetsByAgent: {}, isInitialized: true }) },
 }));
 vi.mock("@/store/projectPresetsStore", () => ({
-  useProjectPresetsStore: {
-    getState: () => ({ presetsByAgent: {}, hydratedProjectId: "proj-1" }),
-  },
+  useProjectPresetsStore: { getState: () => projectPresets },
 }));
 vi.mock("@/store/createWorktreeStore", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/store/createWorktreeStore")>()),
@@ -119,6 +121,19 @@ describe("planAgentAccountAdd (#17079)", () => {
     expect(plan.rows[0]).toMatchObject({ name: "Team Blue", destination: "~/.codex-team-blue" });
   });
 
+  it("treats a trailing separator as the same existing folder", () => {
+    const plan = planAgentAccountAdd({
+      accounts: [
+        { agentId: "codex", name: "Team", folder: { kind: "existing", path: "/tmp/team" } },
+        { agentId: "codex", name: "Team 2", folder: { kind: "existing", path: "/tmp/team/" } },
+      ],
+    });
+    expect(plan).toEqual({
+      ok: false,
+      message: "Accounts 1 and 2 name the same folder. Nothing was added.",
+    });
+  });
+
   it.each([
     [
       "an agent with no folder accounts",
@@ -170,11 +185,29 @@ describe("agent.addAccount run (#17079)", () => {
     });
   });
 
-  it("adds nothing when no dialog named the rows, whatever confirmed it", async () => {
-    await expect(run("agent.addAccount", ISSUE_BATCH, { confirmed: true })).rejects.toThrow(
-      "Nothing was added."
-    );
+  it("adds nothing when no dialog named the rows", async () => {
+    await expect(run("agent.addAccount", ISSUE_BATCH)).rejects.toThrow("Nothing was added.");
     expect(store.addAccount).not.toHaveBeenCalled();
+  });
+
+  it("starts no later row once the call's time runs out mid-batch", async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    store.addAccount.mockImplementation(async (request: unknown) => {
+      const { name } = request as AddAgentAccountRequest;
+      now += 600;
+      return { id: `id-${name}`, name, configDir: "/Users/me/.x" };
+    });
+
+    const result = await run("agent.addAccount", ISSUE_BATCH, {
+      hostApprovedTargets: approved(0, 1, 2),
+      dispatchDeadlineAt: 2_000,
+    });
+    clock.mockRestore();
+
+    const rows = (result as { accounts: Array<{ status: string }> }).accounts;
+    expect(rows.slice(0, 3).map((row) => row.status)).toEqual(["added", "added", "notAttempted"]);
+    expect(store.addAccount).toHaveBeenCalledTimes(2);
   });
 
   it("adds only the ticked rows, in order, and reports the rest as declined", async () => {
@@ -271,6 +304,8 @@ describe("agent.listAccounts run (#17079)", () => {
     vi.clearAllMocks();
     store.isInitialized = true;
     view.isInitialized = true;
+    projectPresets.presetsByAgent = {};
+    projectPresets.hydratedProjectId = "proj-1";
     view.worktrees = new Map([
       ["wt-1", {}],
       ["wt-2", {}],
@@ -314,6 +349,34 @@ describe("agent.listAccounts run (#17079)", () => {
     const cliLogin = await run("agent.listAccounts", { agentId: "claude", worktreeId: "wt-2" });
     expect(cliLogin).toMatchObject({
       worktreeLaunch: { accountId: null, source: "worktree", presetsComplete: true },
+    });
+  });
+
+  // A launch waits for a preset whose inventory hasn't loaded, so the listing
+  // names no account it might not use; the worktree's own pick still decides.
+  it("names no account while the worktree's preset is still loading", async () => {
+    projectPresets.hydratedProjectId = null;
+    const settings = store.settings as unknown as {
+      agents: { claude: Record<string, unknown> };
+    };
+    settings.agents.claude.worktreePresets = { "wt-1": "repo-team", "wt-2": "repo-team" };
+
+    const loading = await run("agent.listAccounts", { agentId: "claude", worktreeId: "wt-1" });
+    expect(loading).toMatchObject({ worktreeLaunch: { presetsComplete: false } });
+    expect(
+      (loading as { worktreeLaunch: Record<string, unknown> }).worktreeLaunch
+    ).not.toHaveProperty("accountId");
+
+    const decided = await run("agent.listAccounts", { agentId: "claude", worktreeId: "wt-2" });
+    expect(decided).toMatchObject({
+      worktreeLaunch: { accountId: null, source: "worktree", presetsComplete: false },
+    });
+
+    projectPresets.presetsByAgent = { claude: [{ id: "repo-team", name: "Team" }] };
+    projectPresets.hydratedProjectId = "proj-1";
+    const loaded = await run("agent.listAccounts", { agentId: "claude", worktreeId: "wt-1" });
+    expect(loaded).toMatchObject({
+      worktreeLaunch: { accountId: "personal", source: "agentDefault", presetsComplete: true },
     });
   });
 

@@ -58,6 +58,8 @@ type DispatchPayload = {
   args?: unknown;
   confirmed?: boolean;
   authorization?: string;
+  approvalOnly?: boolean;
+  approvalReason?: string;
   sessionOrigin?: "help" | "external";
 };
 
@@ -172,6 +174,35 @@ describe("agent.addAccount through the MCP bridge (#17079)", () => {
       BATCH,
       expect.objectContaining({
         hostApprovedTargets: [{ id: "row-7", observedAgentRunning: false }],
+      })
+    );
+  });
+
+  // A core pane reaching the add above its tier is asked about it first, and
+  // main then runs it unconfirmed, so its checklist follows. Ticks offered in
+  // the first dialog would be lost between the two, so it offers none.
+  it("lists the rows without ticks when a pane asks to reach the add above its tier", async () => {
+    const dispatched = send({ approvalOnly: true, approvalReason: "above-tier" });
+    await vi.waitFor(() =>
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false)
+    );
+
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.selectableTargets).toBeUndefined();
+    expect(pending?.previewTitle).toBe("Accounts to be added");
+    expect(pending?.preview).toContain(
+      "google:me@example.com (Claude account): New folder ~/.claude-google-me-example-com"
+    );
+    expect(pending?.preview).toContain("Lab (Codex account): Existing folder /Users/me/.codex-lab");
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req",
+        result: { ok: true, result: null },
+        confirmationDecision: "approved",
       })
     );
   });

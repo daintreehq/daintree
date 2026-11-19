@@ -3355,6 +3355,18 @@ describe("agent-pane approval (#12692)", () => {
   // The person ticks each account's folder in the add's own checklist (#17079),
   // so a full pane reaches it and a core pane may ask, but nothing a pane holds
   // (a per-tool approval, Skip confirmations, a session grant) waives the dialog.
+  // #17079: the add is Full only and never on the api-key surface; listing
+  // and the owned move are where a launch's `accountId` is.
+  it("keeps the account add off core and the external surface", () => {
+    expect(isTierPermitted("full", "agent.addAccount")).toBe(true);
+    expect(isTierPermitted("core", "agent.addAccount")).toBe(false);
+    expect(isTierPermitted("external", "agent.addAccount")).toBe(false);
+    for (const id of ["agent.listAccounts", "terminal.restartOnAccountOwned"]) {
+      expect(isTierPermitted("core", id), id).toBe(true);
+      expect(isTierPermitted("external", id), id).toBe(true);
+    }
+  });
+
   it("reaches the account add from a pane and never waives its checklist", () => {
     const add = makeEntry({ id: "agent.addAccount", kind: "command", danger: "confirm" });
     expect(getReachableActionIds("full", false, true).has("agent.addAccount")).toBe(true);

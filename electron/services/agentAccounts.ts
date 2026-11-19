@@ -167,18 +167,23 @@ async function folderIdentity(folder: string): Promise<string> {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-// Adds run one at a time. The folder check awaits between reading the saved
-// accounts and writing the new one, so two adds at once (a batch from an agent
-// and the Settings dialog, say) could each pass it for the same folder.
-let addQueue: Promise<unknown> = Promise.resolve();
-
-export function addAgentAccount(request: AddAgentAccountRequest): Promise<AddAgentAccountResult> {
-  const result = addQueue.then(() => addAgentAccountNow(request));
-  addQueue = result.catch(() => undefined);
-  return result;
+/** The saved accounts a folder check reads: each id with its folder. */
+function savedFolders(agentId: string): AgentAccount[] {
+  return sanitizeAgentAccounts(readSettings().agents[agentId]?.accounts);
 }
 
-async function addAgentAccountNow(request: AddAgentAccountRequest): Promise<AddAgentAccountResult> {
+function sameFolders(a: AgentAccount[], b: AgentAccount[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((account, i) => account.id === b[i]?.id && account.configDir === b[i]?.configDir)
+  );
+}
+
+const FOLDER_CHECK_ATTEMPTS = 8;
+
+export async function addAgentAccount(
+  request: AddAgentAccountRequest
+): Promise<AddAgentAccountResult> {
   if (!isPlainRecord(request)) throw invalid("Invalid account");
   const { agentId, declaration } = folderAccount(request.agentId);
   const name = sanitizeAccountName(request.name);
@@ -188,19 +193,31 @@ async function addAgentAccountNow(request: AddAgentAccountRequest): Promise<AddA
   if (request.folder?.kind === "existing") {
     configDir = await checkExistingFolder(request.folder.path);
     const identity = await folderIdentity(configDir);
-    const current = sanitizeAgentAccounts(readSettings().agents[agentId]?.accounts);
-    for (const account of current) {
-      if ((await folderIdentity(account.configDir)) === identity) {
-        throw invalid(`That folder is already the account '${account.name}'.`);
+    // The check awaits between reading the saved accounts and writing the new
+    // one, so another add can land meanwhile (a batch from an agent and the
+    // Settings dialog, say) and both would pass it for one folder. It runs
+    // again until the accounts it checked are the ones the write below reads,
+    // with nothing awaited between that read and the write.
+    let checked = false;
+    for (let attempt = 0; attempt < FOLDER_CHECK_ATTEMPTS && !checked; attempt++) {
+      const current = savedFolders(agentId);
+      for (const account of current) {
+        if ((await folderIdentity(account.configDir)) === identity) {
+          throw invalid(`That folder is already the account '${account.name}'.`);
+        }
       }
+      checked = sameFolders(current, savedFolders(agentId));
     }
+    if (!checked)
+      throw invalid("The accounts kept changing while this one was checked. Try again.");
   } else if (request.folder?.kind === "create") {
     configDir = await createFolder(declaration.defaultDir, name);
   } else {
     throw invalid("Choose where the account's folder is");
   }
 
-  // Read again after the folder step: another view may have written meanwhile.
+  // Read again after the folder step, in the same turn as the write: another
+  // view may have written meanwhile.
   const entry = readSettings().agents[agentId] ?? {};
   const account: AgentAccount = { id: `account-${randomUUID()}`, name, configDir };
   const accounts = [...sanitizeAgentAccounts(entry.accounts), account];

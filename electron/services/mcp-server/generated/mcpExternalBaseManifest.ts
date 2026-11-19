@@ -555,7 +555,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "object",
           properties: {
             accountId: {
-              description: "null is the CLI's default login.",
+              description: "null: no saved account; the preset's env may still name a folder.",
               type: ["string", "null"],
             },
             source: {
@@ -573,10 +573,10 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             },
             presetsComplete: {
               type: "boolean",
-              description: "false: presets loading, a pin may be missed.",
+              description: "false: a preset is loading; with no accountId, ask again.",
             },
           },
-          required: ["accountId", "source", "presetsComplete"],
+          required: ["presetsComplete"],
           additionalProperties: false,
         },
       },

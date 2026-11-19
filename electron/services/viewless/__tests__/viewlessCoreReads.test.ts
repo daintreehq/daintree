@@ -480,6 +480,8 @@ describe("core reads with no frontend", () => {
 
     it("lists each account's id, name and default, and no folder", async () => {
       const { deps } = accountDeps();
+      const ccr = vi.fn(deps.agents.getCcrPresets);
+      deps.agents.getCcrPresets = ccr;
 
       const result = await executeViewlessAction(
         request("agent.listAccounts", { agentId: "claude" }),
@@ -496,6 +498,8 @@ describe("core reads with no frontend", () => {
         },
       });
       expect(JSON.stringify(result)).not.toContain("/Users/me");
+      // With no worktree there is no launch to answer for, so no preset is read.
+      expect(ccr).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -520,6 +524,7 @@ describe("core reads with no frontend", () => {
           launch
         );
         const call = invoke.mock.calls.find(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN);
+        expect(call).toBeDefined();
         const spawned = call?.[2][0] as { env?: Record<string, string> } | undefined;
         expect(spawned?.env?.CLAUDE_CONFIG_DIR).toBe(
           launched === undefined ? undefined : `/Users/me/.claude-${launched}`

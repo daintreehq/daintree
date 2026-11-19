@@ -1477,11 +1477,12 @@ function TargetChecklist({
                   {target.agentRunning && <Badge size="xs">Agent running</Badge>}
                 </span>
                 {target.detail !== undefined ? (
-                  // Wraps rather than truncates: a folder cut short is not the
-                  // folder being approved.
+                  // Wraps rather than truncates, and keeps every space: a folder
+                  // cut short or with two spaces read as one is not the folder
+                  // being approved.
                   <span className="text-2xs text-text-secondary">
                     {target.kindLabel} <FactSeparator />{" "}
-                    <span className="font-mono break-all">{target.detail}</span>
+                    <span className="font-mono break-all whitespace-pre-wrap">{target.detail}</span>
                   </span>
                 ) : (
                   // The id is the column's tiebreaker, so it never truncates: two

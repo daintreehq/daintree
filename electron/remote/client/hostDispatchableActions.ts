@@ -68,10 +68,11 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.listAvailable",
   "agent.listModels",
   "agent.listPresets",
-  // The host's own accounts, read through the host's agent settings (#17079).
-  // Adding one stays out: its checklist names folders on the host while the
-  // dialog sits on this Shell.
+  // The host's own accounts (#17079): agent settings and the account add are
+  // host channels, so a listing reads the host's accounts and an add makes or
+  // checks the folder on the host. Each add asks the person here, below.
   "agent.listAccounts",
+  "agent.addAccount",
   // The host's own user presets: agent settings are host channels, so the write
   // lands where the agent runs, and each one raises this Shell's dialog (#16047).
   "agent.createPreset",
@@ -167,11 +168,14 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
 
 /**
  * Host-dispatchable actions that always ask the person at this Shell, even
- * when the host says its assistant runs under "Never ask" (#13368). Both move
+ * when the host says its assistant runs under "Never ask" (#13368). Two move
  * or reopen this window, which the list above admits only because the person
- * here approves every move.
+ * here approves every move; the account add is admitted only because the
+ * person here ticks every folder it makes (#17079).
  */
 export const HOST_ALWAYS_ASKS_ACTION_IDS: ReadonlySet<string> = new Set([
   "host.switch",
   "project.openOnHost",
+  // The person here ticks each account's folder on the host before it is made (#17079).
+  "agent.addAccount",
 ]);

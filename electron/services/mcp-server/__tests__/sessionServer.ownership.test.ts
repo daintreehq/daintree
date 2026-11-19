@@ -1233,14 +1233,19 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
 
-    it("keeps ownership across the restart", async () => {
-      const { store, server } = restartHarness("s-account-keeps");
+    it("forwards a saved account's id and keeps ownership across the restart", async () => {
+      const { store, server, dispatchAction } = restartHarness("s-account-keeps");
 
       await callTool(server, {
         name: "terminal.restartOnAccountOwned",
         arguments: { terminalId: "terminal-1", accountId: "account-1" },
       });
 
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnAccount",
+        { accountId: "account-1", terminalId: "terminal-1" },
+        false
+      );
       expect(store.resourceOwnership.owns("s-account-keeps", "terminal", "terminal-1")).toBe(true);
     });
   });

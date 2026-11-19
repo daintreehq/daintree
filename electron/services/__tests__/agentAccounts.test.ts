@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -134,6 +134,9 @@ describe("addAgentAccount (#16040)", () => {
     });
     const folder = path.join(home, "codex-team");
     await mkdir(folder);
+    // Another name for the same folder, which only its real path gives away.
+    const alias = path.join(home, "codex-team-link");
+    await symlink(folder, alias);
 
     const results = await Promise.allSettled([
       addAgentAccount({
@@ -144,7 +147,7 @@ describe("addAgentAccount (#16040)", () => {
       addAgentAccount({
         agentId: "codex",
         name: "Team again",
-        folder: { kind: "existing", path: `${folder}/` },
+        folder: { kind: "existing", path: alias },
       }),
     ]);
 

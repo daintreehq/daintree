@@ -68,7 +68,8 @@ export function planAgentAccountAdd(args: unknown): AccountAddPlan {
       }
       folder = { kind: "existing", path };
       destination = path;
-      key = `existing:${request.agentId}:${path}`;
+      // `/team` and `/team/` are one folder; main resolves symlinks besides.
+      key = `existing:${request.agentId}:${path.replace(/(?<=[^\\/])[\\/]+$/, "")}`;
     }
     const earlier = claimed.get(key);
     if (earlier !== undefined) {
@@ -87,6 +88,23 @@ export function planAgentAccountAdd(args: unknown): AccountAddPlan {
   return { ok: true, rows };
 }
 
+function rowFolder(row: PlannedAccountRow): string {
+  return `${row.folder.kind === "create" ? "New folder" : "Existing folder"} ${row.destination}`;
+}
+
+/**
+ * The rows read-only, for the dialog that asks whether a pane may reach the
+ * add above its tier. Nothing is ticked there: the checklist that follows is
+ * the one choice of which accounts to add, so an untick can't be lost between
+ * the two.
+ */
+export function accountRowLines(rows: readonly PlannedAccountRow[]): string[] {
+  return [
+    ...rows.map((row) => `${row.name} (${row.agentTitle} account): ${rowFolder(row)}`),
+    "You choose which to add in the next step.",
+  ];
+}
+
 /** A row as the confirm dialog's checklist shows it, every one ticked to start. */
 export function accountRowTarget(row: PlannedAccountRow): McpConfirmSelectableTarget {
   return {
@@ -94,6 +112,6 @@ export function accountRowTarget(row: PlannedAccountRow): McpConfirmSelectableTa
     name: row.name,
     kindLabel: `${row.agentTitle} account`,
     agentRunning: false,
-    detail: `${row.folder.kind === "create" ? "New folder" : "Existing folder"} ${row.destination}`,
+    detail: rowFolder(row),
   };
 }

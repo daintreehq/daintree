@@ -81,6 +81,7 @@ import {
 } from "@/services/actions/definitions/agentPresetMutationIds";
 import type { AgentPresetMutation } from "@/services/actions/definitions/agentPresetMutation";
 import {
+  accountRowLines,
   accountRowTarget,
   planAgentAccountAdd,
   type PlannedAccountRow,
@@ -328,8 +329,9 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   terminalStartHeld: "Held panel to be started",
   // Replaced per operation below. Present so the map stays exhaustive.
   agentPreset: "Launch preset",
-  // Unused, like the panel checklists above.
-  agentAccountAdd: "Accounts",
+  // Shown only when a pane asks to reach the add above its tier; otherwise the
+  // checklist carries its own heading, like the panel ones above.
+  agentAccountAdd: "Accounts to be added",
 };
 
 const AGENT_PRESET_PREVIEW_TITLES: Record<AgentPresetMutation["operation"], string> = {
@@ -1037,13 +1039,9 @@ export async function buildMcpConfirmPreview(
 ): Promise<McpConfirmPreviewResult> {
   // The checklist IS this kind's preview, and it is already on the item before
   // the modal opens. There is nothing to fetch and nothing to patch in later.
-  if (
-    target.kind === "terminalKillBatch" ||
-    target.kind === "terminalClose" ||
-    target.kind === "agentAccountAdd"
-  ) {
-    return { lines: [] };
-  }
+  if (target.kind === "terminalKillBatch" || target.kind === "terminalClose") return { lines: [] };
+  // Built only for an above-tier ask, which lists the rows without ticks.
+  if (target.kind === "agentAccountAdd") return { lines: accountRowLines(target.rows) };
   if (target.kind === "recipe") {
     const { formatRecipePreviewLines } =
       await import("@/components/TerminalRecipe/recipeConfirmPreview");
@@ -1659,12 +1657,17 @@ export function useMcpBridge(): void {
               // lines to fetch, so it must not arm the pending-preview gate —
               // that would leave its approve button disabled with nothing in
               // flight to ever re-enable it.
+              // An account add asked about above its tier lists its rows
+              // without ticks (#17079): main runs it unconfirmed once allowed,
+              // so its own checklist follows and is the one selection.
+              const accountChecklist =
+                previewTarget?.kind === "agentAccountAdd" && approvalOnly !== true;
               const hasAsyncPreview =
                 hostLines === undefined &&
                 previewTarget !== undefined &&
                 previewTarget.kind !== "terminalKillBatch" &&
                 previewTarget.kind !== "terminalClose" &&
-                previewTarget.kind !== "agentAccountAdd";
+                !accountChecklist;
               const previewPending = hasAsyncPreview;
               // One runner for the open-time fetch and every Retry (#16436).
               // Only the latest fetch may land, and nothing lands once the
@@ -1727,7 +1730,7 @@ export function useMcpBridge(): void {
                 previewTarget?.kind === "terminalKillBatch" ||
                 previewTarget?.kind === "terminalClose"
                   ? buildTerminalKillBatchTargets(previewTarget.terminalIds)
-                  : previewTarget?.kind === "agentAccountAdd"
+                  : accountChecklist && previewTarget?.kind === "agentAccountAdd"
                     ? previewTarget.rows.map(accountRowTarget)
                     : undefined;
               let resolution: McpConfirmResolution;

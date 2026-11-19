@@ -398,6 +398,24 @@ export function getMergedPreset(
   return merged.find((f) => f.id === presetId);
 }
 
+/**
+ * The preset id a launch asks for before any lookup: the caller's, else the
+ * worktree's pick, else the agent's default. `undefined` when the caller or
+ * the worktree asked for the bare CLI with `null`, or nothing is saved.
+ */
+export function resolveRequestedPresetId(
+  entry: AgentSettingsEntry,
+  worktreeId: string | null | undefined,
+  requestedPresetId: string | null | undefined
+): string | undefined {
+  const scopedId =
+    worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
+  if (requestedPresetId === null || (requestedPresetId === undefined && scopedId === null)) {
+    return undefined;
+  }
+  return requestedPresetId ?? resolveEffectivePresetId(entry, worktreeId);
+}
+
 export interface SettledLaunchPreset {
   /** The preset the launch runs, fallback included. `undefined` is the bare CLI. */
   preset: AgentPreset | undefined;
@@ -425,12 +443,12 @@ export function settleLaunchPreset(
 ): SettledLaunchPreset {
   const scopedId =
     worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
-  const explicitDefault =
-    requestedPresetId === null || (requestedPresetId === undefined && scopedId === null);
-  if (explicitDefault) {
+  // `null`, asked or saved for the worktree, is the bare CLI. Nothing saved
+  // still looks up the registry's own default below.
+  if (requestedPresetId === null || (requestedPresetId === undefined && scopedId === null)) {
     return { preset: undefined, resolvedPresetId: undefined, primaryFound: false };
   }
-  const resolvedPresetId = requestedPresetId ?? resolveEffectivePresetId(entry, worktreeId);
+  const resolvedPresetId = resolveRequestedPresetId(entry, worktreeId, requestedPresetId);
   const primary = getMergedPreset(
     agentId,
     resolvedPresetId,

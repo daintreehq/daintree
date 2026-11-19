@@ -786,11 +786,17 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       ),
       worktreeLaunch: z
         .object({
-          accountId: z.string().nullable().describe("null is the CLI's default login."),
-          source: z.enum(["worktree", "preset", "agentDefault", "cliDefault"]),
+          accountId: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("null: no saved account; the preset's env may still name a folder."),
+          source: z.enum(["worktree", "preset", "agentDefault", "cliDefault"]).optional(),
           presetId: z.string().optional().describe("The preset whose pin chose it."),
           missing: z.literal(true).optional().describe("No such account: a launch is refused."),
-          presetsComplete: z.boolean().describe("false: presets loading, a pin may be missed."),
+          presetsComplete: z
+            .boolean()
+            .describe("false: a preset is loading; with no accountId, ask again."),
         })
         .optional(),
     }),

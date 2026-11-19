@@ -187,6 +187,21 @@ export function describeLaunchAccount(
   };
 }
 
+/**
+ * What a listing says about a worktree's launch (#17079). A launch waits for
+ * a preset whose inventory hasn't loaded, so unless the worktree's own pick
+ * decides, the account it will use isn't known yet and none is named: a
+ * provisional id copied into a launch would force an account the launch
+ * itself wouldn't pick.
+ */
+export function launchAnswer(
+  choice: LaunchAccountChoice,
+  presetsComplete: boolean
+): (LaunchAccountChoice & { presetsComplete: boolean }) | { presetsComplete: false } {
+  if (!presetsComplete && choice.source !== "worktree") return { presetsComplete: false };
+  return { ...choice, presetsComplete };
+}
+
 export type LaunchAccountResolution =
   | { kind: "default" }
   | { kind: "account"; account: AgentAccount; envVar: string }

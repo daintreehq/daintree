@@ -157,6 +157,7 @@ function enqueue(
       worktree?: string;
       kindLabel: string;
       agentRunning: boolean;
+      detail?: string;
     }[];
   } = {},
   deadline?: McpConfirmDeadline

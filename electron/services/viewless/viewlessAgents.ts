@@ -28,6 +28,7 @@ import {
 } from "../../../shared/utils/agentLaunchPlan.js";
 import {
   describeLaunchAccount,
+  launchAnswer,
   listAgentAccountIdentities,
 } from "../../../shared/utils/agentAccounts.js";
 import {
@@ -735,25 +736,26 @@ export async function runAgentListAccounts(
       `${getAgentDisplayTitle(agentId)} has no accounts: it signs in one way only.`
     );
   }
-  const sources = await readPresetSources(
-    agentId,
-    worktreeId === undefined ? undefined : project.path,
-    deps
+  const unread = failure(
+    "EXECUTION_ERROR",
+    "Couldn't read the agent settings, so no accounts were listed."
   );
-  // An unread settings file is a failure, never an agent with no accounts.
-  if (!sources.settings) {
-    return failure(
-      "EXECUTION_ERROR",
-      "Couldn't read the agent settings, so no accounts were listed."
-    );
-  }
-  const { settings } = sources;
-  const entry =
+  const entryOf = (settings: AgentSettings) =>
     settings.agents && Object.hasOwn(settings.agents, agentId)
       ? settings.agents[agentId]
       : undefined;
+  // The identities need only the settings; presets matter only to a worktree's answer.
+  if (worktreeId === undefined) {
+    const settings = await deps.agents.getSettings().catch(() => null);
+    // An unread settings file is a failure, never an agent with no accounts.
+    if (!settings) return unread;
+    return success({ accounts: listAgentAccountIdentities(entryOf(settings)) });
+  }
+  const sources = await readPresetSources(agentId, project.path, deps);
+  if (!sources.settings) return unread;
+  const { settings } = sources;
+  const entry = entryOf(settings);
   const accounts = listAgentAccountIdentities(entry);
-  if (worktreeId === undefined) return success({ accounts });
 
   let worktrees: Awaited<ReturnType<typeof readProjectWorktrees>>;
   try {
@@ -776,22 +778,23 @@ export async function runAgentListAccounts(
     sources.ccrPresets,
     sources.projectPresets
   );
+  const presetsComplete =
+    findUnloadedLaunchPreset({
+      agentId,
+      isAgent: true,
+      worktreeId,
+      settings,
+      ccrPresets: sources.ccrPresets,
+      projectPresets: sources.projectPresets,
+      presetInventory: sources.presetInventory,
+      options: undefined,
+    }) === undefined;
   return success({
     accounts,
-    worktreeLaunch: {
-      ...describeLaunchAccount(entry, worktreeId, settled.preset),
-      presetsComplete:
-        findUnloadedLaunchPreset({
-          agentId,
-          isAgent: true,
-          worktreeId,
-          settings,
-          ccrPresets: sources.ccrPresets,
-          projectPresets: sources.projectPresets,
-          presetInventory: sources.presetInventory,
-          options: undefined,
-        }) === undefined,
-    },
+    worktreeLaunch: launchAnswer(
+      describeLaunchAccount(entry, worktreeId, settled.preset),
+      presetsComplete
+    ),
   });
 }
 
