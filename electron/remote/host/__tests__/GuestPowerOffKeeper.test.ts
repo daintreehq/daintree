@@ -328,7 +328,10 @@ describe("GuestPowerOffKeeper (#17362)", () => {
 
       // Taken back after a refusal: given again, it holds no claim to retry on.
       const other = make();
-      other.outcomes.push({ kind: "refused", problem: "This machine refused to power itself off." });
+      other.outcomes.push({
+        kind: "refused",
+        problem: "This machine refused to power itself off.",
+      });
       await other.keeper.set({ target: TARGET, enabled: true });
       await other.idleOut();
       await other.keeper.set({ target: TARGET, enabled: false });

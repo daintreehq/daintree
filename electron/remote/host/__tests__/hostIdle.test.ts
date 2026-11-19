@@ -242,18 +242,33 @@ describe("installHostIdle (#17357)", () => {
     };
 
     it.each([
-      ["working agent", { terminals: [{ id: "t1", detectedAgentId: "claude", agentState: "working" }], degraded: false }],
-      ["agent whose state can't be read", { terminals: [{ id: "t1", detectedAgentId: "claude", agentState: "thinking" }], degraded: false }],
+      [
+        "working agent",
+        {
+          terminals: [{ id: "t1", detectedAgentId: "claude", agentState: "working" }],
+          degraded: false,
+        },
+      ],
+      [
+        "agent whose state can't be read",
+        {
+          terminals: [{ id: "t1", detectedAgentId: "claude", agentState: "thinking" }],
+          degraded: false,
+        },
+      ],
       ["degraded read", { terminals: [], degraded: true }],
-    ])("is refused for a %s the PTY host reports, whatever the shared snapshot says", async (_name, live) => {
-      const dispose = installHostIdle(fakeSessionHost());
-      await vi.advanceTimersByTimeAsync(31 * MINUTE);
-      expect(idle().busy).toBe(false);
-      terminals.live = live;
-      expect(await claim()).toBe(false);
-      expect(idle().busy).toBe(true);
-      dispose();
-    });
+    ])(
+      "is refused for a %s the PTY host reports, whatever the shared snapshot says",
+      async (_name, live) => {
+        const dispose = installHostIdle(fakeSessionHost());
+        await vi.advanceTimersByTimeAsync(31 * MINUTE);
+        expect(idle().busy).toBe(false);
+        terminals.live = live;
+        expect(await claim()).toBe(false);
+        expect(idle().busy).toBe(true);
+        dispose();
+      }
+    );
 
     it("is spent across a link only dropping, and restarted by a view opening", async () => {
       const sessionHost = fakeSessionHost();

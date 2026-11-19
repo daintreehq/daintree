@@ -417,9 +417,15 @@ describe("HostIdleTracker claims (#17922)", () => {
 
   it.each([
     ["an agent at work", { agents: { active: 1, unreadable: 0 }, shellViews: false }],
-    ["an agent whose state can't be read", { agents: { active: 0, unreadable: 1 }, shellViews: false }],
+    [
+      "an agent whose state can't be read",
+      { agents: { active: 0, unreadable: 1 }, shellViews: false },
+    ],
     ["a degraded terminal read", { agents: null, shellViews: false }],
-    ["a Shell's window open on the host", { agents: { active: 0, unreadable: 0 }, shellViews: true }],
+    [
+      "a Shell's window open on the host",
+      { agents: { active: 0, unreadable: 0 }, shellViews: true },
+    ],
   ] satisfies Array<[string, HostWorkReading]>)(
     "refuses when the claim's own reading finds %s, though the last check found none",
     async (_name, reading) => {
@@ -484,9 +490,7 @@ describe("HostIdleTracker claims (#17922)", () => {
   it("refuses a reading that work overtook, while it was out or before the claim", async () => {
     // The clock stands still: only the work itself, not a later time, can tell the reading is stale.
     let release: (reading: HostWorkReading) => void = () => {};
-    const h = await ended(
-      () => new Promise<HostWorkReading>((resolve) => (release = resolve))
-    );
+    const h = await ended(() => new Promise<HostWorkReading>((resolve) => (release = resolve)));
     const pending = h.tracker.checkFresh();
     await vi.waitFor(() => expect(h.readFresh).toHaveBeenCalledTimes(1));
     h.tracker.noteWork();
@@ -529,9 +533,7 @@ describe("HostIdleTracker claims (#17922)", () => {
 
   it("grants nothing once disposed, a claim already reading included", async () => {
     let release: (reading: HostWorkReading) => void = () => {};
-    const h = await ended(
-      () => new Promise<HostWorkReading>((resolve) => (release = resolve))
-    );
+    const h = await ended(() => new Promise<HostWorkReading>((resolve) => (release = resolve)));
     const pending = h.tracker.checkFresh();
     await vi.waitFor(() => expect(h.readFresh).toHaveBeenCalledTimes(1));
     h.tracker.dispose();
