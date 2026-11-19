@@ -593,7 +593,8 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
     if (-not (Wait-DtcTask $send $deadline)) { $result.Error = $late; return $result }
     if ($send.IsFaulted -or $send.IsCanceled) {
       $result.Error = Get-DtcFailure $send
-      if ($send.IsCanceled -and $timeoutMs -gt 0) { $result.Error = $late }
+      # The deadline's own timer can abort the exchange before the poll sees it.
+      if ($timeoutMs -gt 0 -and $cts.IsCancellationRequested) { $result.Error = $late }
       return $result
     }
     $response = $send.Result
@@ -609,6 +610,7 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
     if (-not (Wait-DtcTask $open $deadline)) { $result.Error = $late; return $result }
     if ($open.IsFaulted -or $open.IsCanceled) {
       $result.Error = Get-DtcFailure $open
+      if ($timeoutMs -gt 0 -and $cts.IsCancellationRequested) { $result.Error = $late }
       return $result
     }
     $stream = $open.Result
@@ -622,6 +624,7 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
       if (-not (Wait-DtcTask $read $deadline)) { $result.Error = $late; return $result }
       if ($read.IsFaulted -or $read.IsCanceled) {
         $result.Error = Get-DtcFailure $read
+        if ($timeoutMs -gt 0 -and $cts.IsCancellationRequested) { $result.Error = $late }
         return $result
       }
       if ($read.Result -eq 0) { break }
