@@ -526,7 +526,7 @@ describe("NSIS installer — the daintree command on PATH (#17931)", () => {
 
   it("adds the entry on install and drops it only once an uninstall has succeeded", async () => {
     const nsh = await repoFile("build/installer.nsh");
-    expect(macroBody(nsh, "customInstall")).toContain("Call daintreeAddCliToPath");
+    expect(macroBody(nsh, "customInstall")).toMatch(/^\s*Call daintreeAddCliToPath\s*$/m);
     // customUnInstall runs before the files go, and the uninstall can still
     // restore them and abort; an update's uninstall must drop it too, or a
     // reinstall to another folder leaves the old bin on PATH.
@@ -549,19 +549,49 @@ describe("NSIS installer — the daintree command on PATH (#17931)", () => {
   it("never rebuilds PATH from a read that could have come back short", async () => {
     const nsh = await repoFile("build/installer.nsh");
     const edit = macroBody(nsh, "daintreeEditPath");
-    // ReadRegStr returns "" for a value longer than its buffer, exactly as for
-    // a missing one: the size has to be known, and fit, before it reads.
-    const measure = edit.search(/^\s*System::Call 'advapi32::RegGetValueW/m);
-    const fits = edit.search(/^\s*\$\{If\} \$R8 >= \$\{NSIS_MAX_STRLEN\}/m);
-    const reads = [...edit.matchAll(/^\s*ReadRegStr /gm)].map((match) => match.index);
+    const lines = edit.split("\n").map((line) => line.trim());
+    const at = (pattern) => lines.findIndex((line) => pattern.test(line));
+    // ReadRegStr returns "" for a value longer than its buffer exactly as for a
+    // missing one: the registry's own status tells them apart before it reads,
+    // and the error flag after it is checked before anything uses the text.
+    const status = at(/^System::Call 'advapi32::RegGetValueW/);
+    const missing = at(/^\$\{If\} \$4 = 2\b/);
+    const reads = lines.flatMap((line, i) => (/^ReadRegStr /.test(line) ? [i] : []));
+    expect(status).toBeGreaterThan(-1);
+    expect(missing).toBeGreaterThan(status);
     expect(reads.length).toBeGreaterThan(0);
-    expect(measure).toBeGreaterThan(-1);
-    expect(fits).toBeGreaterThan(measure);
-    for (const read of reads) expect(read).toBeGreaterThan(fits);
+    for (const read of reads) expect(read).toBeGreaterThan(missing);
+    const errorCheck = at(/^\$\{If\} \$\{Errors\}$/);
+    expect(errorCheck).toBeGreaterThan(Math.max(...reads));
+    expect(lines[errorCheck + 1]).toBe("Goto daintreePathSkip");
+    // The appended PATH has to fit the string buffer, measured on what was read.
+    const capacity = at(/^\$\{If\} \$R8 >= \$\{NSIS_MAX_STRLEN\}$/);
+    const append = at(/^StrCpy \$6 "\$5;\$9"$/);
+    expect(capacity).toBeGreaterThan(errorCheck);
+    expect(append).toBeGreaterThan(capacity);
+    expect(lines[capacity + 1]).toBe("Goto daintreePathSkip");
     // The write carries the type that was read, not a fixed one.
     expect(edit).toMatch(/RegGetValueW\(p r0, w r1, w "Path", i 0x1000FFFF, \*i \.r2,/);
     expect(edit).toMatch(/RegSetKeyValueW\(p r0, w r1, w "Path", i r2,/);
     expect(edit).not.toMatch(/WriteReg(Expand)?Str\b/);
+  });
+
+  it("leaves a new install's entry alone and puts no user-writable folder on the machine PATH", async () => {
+    const nsh = await repoFile("build/installer.nsh");
+    const edit = macroBody(nsh, "daintreeEditPath");
+    const removal = edit.slice(
+      edit.indexOf("!else"),
+      edit.indexOf("!endif", edit.indexOf("!else"))
+    );
+    // An uninstall whose files are gone but whose folder holds the command
+    // again is looking at a reinstall.
+    expect(removal).toMatch(
+      /\$\{If\} \$\{FileExists\} "\$9\\daintree\.cmd"\s+Goto daintreePathDone/
+    );
+    const adding = edit.slice(edit.indexOf("!if ${ADD} == 1"), edit.indexOf("!else"));
+    expect(adding).toContain('${If} $installMode == "all"');
+    expect(adding).toContain('StrCpy $R8 "$PROGRAMFILES64\\"');
+    expect(adding).toContain('StrCpy $R8 "$PROGRAMFILES\\"');
   });
 });
 

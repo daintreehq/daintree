@@ -698,7 +698,7 @@ function renderWindowsCliShim(template, { version, executable }) {
     );
   }
   const text = template.replaceAll("@VERSION@", version).replaceAll("@EXE@", executable);
-  const unfilled = text.match(/@[A-Z]+@/);
+  const unfilled = text.match(/@[A-Z][A-Z0-9_]*@/);
   if (unfilled) {
     throw new Error(`[afterPack] CRITICAL: daintree.cmd template has no value for ${unfilled[0]}`);
   }

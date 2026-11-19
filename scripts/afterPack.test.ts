@@ -360,15 +360,17 @@ describe("afterPack", () => {
     it("writes the daintree command into the install's bin with this build's version (#17931)", async () => {
       mockExistsSync.mockReturnValue(true);
 
-      await afterPack(createContext("win32", "/build/win", "Daintree"));
+      await afterPack(createContext("win32", "/build/win", "Daintree Dev"));
 
       const shimPath = path.join("/build/win", ...WINDOWS_CLI_SHIM.split("/"));
       expect(mockMkdirSync).toHaveBeenCalledWith(path.dirname(shimPath), { recursive: true });
-      const write = mockWriteFileSync.mock.calls.find(([file]) => file === shimPath);
-      expect(write).toBeDefined();
-      const text = String(write![1]);
+      expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+      const [file, contents] = mockWriteFileSync.mock.calls[0];
+      expect(file).toBe(shimPath);
+      const text = String(contents);
       expect(text).toContain("\r\necho daintree 1.2.3-beta.4\r\n");
-      expect(text).toContain('..\\Daintree.exe"');
+      // The executable comes from the package's product filename.
+      expect(text).toContain('..\\Daintree Dev.exe"');
     });
   });
 
@@ -392,10 +394,11 @@ describe("afterPack", () => {
       );
     });
 
-    it("writes no Windows command: Linux ships daintree-cli.sh instead", async () => {
+    it("writes no Windows command on Linux or macOS", async () => {
       mockExistsSync.mockReturnValue(true);
 
       await afterPack(createContext("linux", "/build/linux"));
+      await afterPack(createContext("darwin", "/build/mac"));
 
       expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
@@ -1521,7 +1524,7 @@ describe("renderWindowsCliShim (#17931)", () => {
   const template = readFileSync(WINDOWS_CLI_TEMPLATE, "utf8");
   const render = (version = "1.2.3", executable = "Daintree.exe") =>
     renderWindowsCliShim(template, { version, executable });
-  const isComment = (line: string) => /^\s*rem(\s|$)/i.test(line);
+  const isComment = (line: string) => /^\s*@?rem(\s|$)/i.test(line);
   const isEcho = (line: string) => /^\s*(>&2\s+)?echo\b/i.test(line);
   const isLabel = (line: string) => /^:[A-Za-z]/.test(line);
   const labelName = (line: string) => line.slice(1).trim().toLowerCase();
@@ -1530,6 +1533,16 @@ describe("renderWindowsCliShim (#17931)", () => {
     text.split("\r\n").filter((line) => line.trim() !== "" && !isComment(line));
 
   it("ships CRLF-only ASCII with every placeholder filled", () => {
+    // A template checked out CRLF must not come out with doubled carriage returns.
+    const mixed = renderWindowsCliShim(
+      template.replace(/\n/g, (lf, at) => (at % 2 ? "\r\n" : lf)),
+      {
+        version: "1.0.0",
+        executable: "Other App.exe",
+      }
+    );
+    expect(mixed).not.toMatch(/\r\r|[^\r]\n/);
+    expect(mixed).toContain('..\\Other App.exe"');
     const text = render("2.0.0-beta.1+build.7");
     expect(text.replace(/\r\n/g, "")).not.toMatch(/[\r\n]/);
     // No BOM: cmd would read it as part of the first command.
@@ -1540,6 +1553,9 @@ describe("renderWindowsCliShim (#17931)", () => {
 
   it("refuses a version or executable a batch parser would read as syntax", () => {
     expect(() => render("1.0.0&calc")).toThrow(/version/);
+    expect(() => render("1.0.0\r\ncalc")).toThrow(/version/);
+    expect(() => render("1.0.0", "Dain\ntree.exe")).toThrow(/executable/);
+    expect(() => render("1.0.0", "Daintree.cmd")).toThrow(/executable/);
     expect(() =>
       renderWindowsCliShim(template, {
         version: undefined as unknown as string,
@@ -1551,12 +1567,14 @@ describe("renderWindowsCliShim (#17931)", () => {
   });
 
   it("refuses a template placeholder it has no value for", () => {
-    expect(() =>
-      renderWindowsCliShim(`${template}echo @CHANNEL@\n`, {
-        version: "1.0.0",
-        executable: "Daintree.exe",
-      })
-    ).toThrow(/@CHANNEL@/);
+    for (const placeholder of ["@CHANNEL@", "@BUILD_CHANNEL@", "@VERSION2@"]) {
+      expect(() =>
+        renderWindowsCliShim(`${template}echo ${placeholder}\n`, {
+          version: "1.0.0",
+          executable: "Daintree.exe",
+        })
+      ).toThrow(placeholder);
+    }
   });
 
   it("jumps only to labels that exist, each defined once", () => {
@@ -1565,7 +1583,7 @@ describe("renderWindowsCliShim (#17931)", () => {
     expect(new Set(labels).size).toBe(labels.length);
     const targets = lines
       .filter((line) => !isEcho(line))
-      .flatMap((line) => [...line.matchAll(/\b(?:goto|call)\s+:?([A-Za-z]\w*)/gi)])
+      .flatMap((line) => [...line.matchAll(/\b(?:goto|call)\s+:?(\S+)/gi)])
       .map((match) => match[1].toLowerCase());
     expect(targets.length).toBeGreaterThan(0);
     for (const target of targets) expect(labels).toContain(target);
@@ -1596,7 +1614,7 @@ describe("renderWindowsCliShim (#17931)", () => {
     // parsed as batch syntax.
     for (const line of statements(render())) {
       const unquoted = line.replace(/"[^"]*"/g, "");
-      expect(unquoted, line).not.toMatch(/%(target|app)[%:]|%~[a-z]*[0-9]/i);
+      expect(unquoted, line).not.toMatch(/%(target|app)[%:]|%%?~/i);
     }
   });
 
@@ -1611,6 +1629,7 @@ describe("renderWindowsCliShim (#17931)", () => {
     const lines = statements(render());
     const launches = lines.filter((line) => /^start\b/i.test(line));
     expect(launches).toHaveLength(1);
+    expect(launches[0].match(/--cli-path/g)).toHaveLength(1);
     const operand = launches[0].match(/ --cli-path="([^"]*)"$/)?.[1];
     expect(operand).toBeDefined();
     // The template strips one trailing backslash from what %~f1 resolved first.

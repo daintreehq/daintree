@@ -15,14 +15,15 @@
 
 ; Adds (ADD 1) or removes (ADD 0) $INSTDIR\bin in the Path of the scope this copy
 ; was installed for: HKCU for a per-user install, the machine environment for an
-; all-users one. Entries compare whole and case-insensitively, ignoring
-; surrounding quotes and trailing backslashes; every other entry, empty ones
-; included, is written back exactly as read.
+; all-users one. Entries compare whole, ordinally and case-insensitively, the
+; way file names do, ignoring surrounding quotes and trailing backslashes; every
+; other entry, empty ones included, is written back exactly as read.
 !macro daintreeEditPath ADD
   System::Store "s"
   StrCpy $9 "$INSTDIR\bin"
   StrCpy $6 "" ; the entries that aren't $9
   StrCpy $7 0 ; how many are
+  StrCpy $R1 0 ; inside quotes at the end of the scan
   StrCpy $0 0x80000001 ; HKEY_CURRENT_USER
   StrCpy $1 "Environment"
   ${If} $installMode == "all"
@@ -34,11 +35,46 @@
     ${IfNot} ${FileExists} "$9\daintree.cmd"
       Goto daintreePathSkip
     ${EndIf}
+    ; The machine PATH reaches every account, so it only gets a folder that
+    ; standard users can't write to. A custom all-users folder elsewhere
+    ; (C:\Tools, D:\Apps) usually inherits their Modify right.
+    ${If} $installMode == "all"
+      StrCpy $R8 "$PROGRAMFILES64\"
+      StrLen $R9 $R8
+      StrCpy $R7 $INSTDIR $R9
+      ${If} $R7 != $R8
+        StrCpy $R8 "$PROGRAMFILES\"
+        StrLen $R9 $R8
+        StrCpy $R7 $INSTDIR $R9
+        ${If} $R7 != $R8
+          Goto daintreePathSkip
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    ; An entry can't carry a bare semicolon, and Windows (and Daintree's own
+    ; PATH refresh) can expand a percent sign in it.
+    StrCpy $R8 0
+    ${Do}
+      StrCpy $R4 $9 1 $R8
+      ${If} $R4 == ""
+        ${ExitDo}
+      ${ElseIf} $R4 == ";"
+      ${OrIf} $R4 == "%"
+        Goto daintreePathSkip
+      ${EndIf}
+      IntOp $R8 $R8 + 1
+    ${Loop}
+  !else
+    ; A copy installed here again since this uninstall removed the files (the
+    ; uninstaller's last page can still be open) owns the entry now.
+    ${If} ${FileExists} "$9\daintree.cmd"
+      Goto daintreePathDone
+    ${EndIf}
   !endif
 
-  ; Type and size first, without the data (RRF_RT_ANY | RRF_NOEXPAND).
-  ; ReadRegStr returns "" both for a missing value and for one longer than its
-  ; buffer, and a PATH rebuilt from that "" would wipe the user's.
+  ; Status and type first, without the data (RRF_RT_ANY | RRF_NOEXPAND):
+  ; ReadRegStr returns "" both for a missing value and for one too long for
+  ; its buffer, and a PATH rebuilt from that "" would wipe the user's.
   System::Call 'advapi32::RegGetValueW(p r0, w r1, w "Path", i 0x1000FFFF, *i .r2, p 0, *i .r3) i .r4'
   ${If} $4 = 2 ; ERROR_FILE_NOT_FOUND: no Path value yet
     !if ${ADD} == 1
@@ -55,18 +91,9 @@
   ${AndIf} $2 <> 2 ; REG_EXPAND_SZ
     Goto daintreePathSkip
   ${EndIf}
-  ; The value (and, when adding, a separator and $9) must fit NSIS's string
-  ; buffer, or the string operations below would truncate what gets written.
-  IntOp $R8 $3 / 2
-  !if ${ADD} == 1
-    StrLen $R9 $9
-    IntOp $R8 $R8 + $R9
-    IntOp $R8 $R8 + 1
-  !endif
-  ${If} $R8 >= ${NSIS_MAX_STRLEN}
-    Goto daintreePathSkip
-  ${EndIf}
 
+  ; A value longer than NSIS_MAX_STRLEN fails here with the error flag set
+  ; rather than coming back truncated.
   ClearErrors
   ${If} $installMode == "all"
     ReadRegStr $5 HKLM "${DAINTREE_MACHINE_ENV_KEY}" "Path"
@@ -87,7 +114,6 @@
   ; Split on semicolons outside double quotes.
   StrCpy $8 0 ; scan index
   StrCpy $R0 0 ; start of the current entry
-  StrCpy $R1 0 ; inside quotes
   StrCpy $R2 0 ; entries kept
   StrCmp $5 "" daintreePathScanned
 daintreePathScan:
@@ -114,7 +140,10 @@ daintreePathTrim:
   StrCpy $R7 $R7 -1
   Goto daintreePathTrim
 daintreePathCompare:
-  StrCmp $R7 $9 0 daintreePathKeep
+  ; Not StrCmp: lstrcmpi is linguistic, and can call two names equal that
+  ; are different files.
+  System::Call 'kernel32::CompareStringOrdinal(w R7, i -1, w r9, i -1, i 1) i .R8'
+  IntCmp $R8 2 0 daintreePathKeep daintreePathKeep ; CSTR_EQUAL
   IntOp $7 $7 + 1
   Goto daintreePathKept
 daintreePathKeep:
@@ -136,21 +165,20 @@ daintreePathScanned:
     ${If} $7 > 0
       Goto daintreePathDone
     ${EndIf}
-    ; An entry can't carry a bare semicolon, and in a REG_EXPAND_SZ value a
-    ; percent sign in the install directory could expand on load.
-    StrCpy $R8 0
-    ${Do}
-      StrCpy $R4 $9 1 $R8
-      ${If} $R4 == ""
-        ${ExitDo}
-      ${ElseIf} $R4 == ";"
-        Goto daintreePathSkip
-      ${ElseIf} $R4 == "%"
-      ${AndIf} $2 = 2
-        Goto daintreePathSkip
-      ${EndIf}
-      IntOp $R8 $R8 + 1
-    ${Loop}
+    ; After an unclosed quote the new entry would be inside it: no command
+    ; search would see it, and the uninstaller couldn't find it to remove.
+    ${If} $R1 <> 0
+      Goto daintreePathSkip
+    ${EndIf}
+    ; The result and its terminator must fit NSIS's string buffer, or the
+    ; concatenation would truncate what gets written.
+    StrLen $R8 $5
+    StrLen $R9 $9
+    IntOp $R8 $R8 + $R9
+    IntOp $R8 $R8 + 1
+    ${If} $R8 >= ${NSIS_MAX_STRLEN}
+      Goto daintreePathSkip
+    ${EndIf}
     ; Always a new separator, even after a trailing one: the empty entry
     ; that trailing ";" stood for is then still there after an uninstall.
     ${If} $5 == ""
