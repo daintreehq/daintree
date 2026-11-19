@@ -515,6 +515,15 @@ export class CloudAccountService {
     }
   }
 
+  /**
+   * Runs `step`, which must not wait on anything, between this account's
+   * credential replacements and its removal, never during one: what it reads
+   * of the account holds while it runs (#17928).
+   */
+  betweenCommits<T>(accountId: string, step: () => T): Promise<T> {
+    return this.serialize(accountId, async () => step());
+  }
+
   /** Runs `commit` once the account's previous replace or remove has finished. */
   private serialize<T>(accountId: string, commit: () => Promise<T>): Promise<T> {
     const previous = this.commits.get(accountId) ?? Promise.resolve();

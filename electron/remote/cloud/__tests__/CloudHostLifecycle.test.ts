@@ -4107,7 +4107,9 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     );
     expect(next.lifecycle.statuses()[0]!.lastError!.message).toContain("asks for it again");
     vi.mocked(env.provider.list).mockResolvedValue([]);
+    const looked = vi.mocked(env.provider.list).mock.calls.length;
     await next.lifecycle.retryCreate("build");
+    expect(vi.mocked(env.provider.list).mock.calls.length).toBe(looked + 1);
     expect(env.provider.create).toHaveBeenCalledTimes(2);
     expect(vi.mocked(env.provider.create).mock.calls[1]![1].idempotencyKey).toBe(key);
     expect(vi.mocked(env.provider.list).mock.invocationCallOrder.at(-1)!).toBeLessThan(
@@ -4172,9 +4174,9 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
   function readies(env: Awaited<ReturnType<typeof setup>>) {
     const send = vi.fn(async () => resource({ machine: "running" }));
     let finish: () => void = () => {};
-    const prepareCreate = vi.fn(
+    const prepareCreate = vi.fn<NonNullable<CloudProvider["prepareCreate"]>>(
       () =>
-        new Promise<() => Promise<ProviderResource>>((resolve) => {
+        new Promise((resolve) => {
           finish = () => resolve(send);
         })
     );
@@ -4217,7 +4219,65 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     prepareCreate.mockImplementationOnce(async () => send);
     await env.lifecycle.retryCreate("build");
     expect(send).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(prepareCreate).mock.calls[1]![0].values).toEqual({ apiKey: "boat_live_y" });
+    expect(prepareCreate.mock.calls[1]![0].values).toEqual({ apiKey: "boat_live_y" });
+  });
+
+  it("waits out a credential replacement still being saved when the create is readied, then asks with nothing (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const { send, prepareCreate, finish } = readies(env);
+    await create(env);
+    await vi.waitFor(() => expect(prepareCreate).toHaveBeenCalled());
+    let saved: () => void = () => {};
+    const put = MemoryCloudCredentialVault.prototype.put;
+    const holding = vi
+      .spyOn(MemoryCloudCredentialVault.prototype, "put")
+      .mockImplementationOnce(async function (this: MemoryCloudCredentialVault, ...args) {
+        await new Promise<void>((resolve) => {
+          saved = resolve;
+        });
+        return put.apply(this, args);
+      });
+    onTestFinished(() => holding.mockRestore());
+    const replacing = env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_y" });
+    await vi.waitFor(() => expect(holding).toHaveBeenCalled());
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+    saved();
+    await replacing;
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError?.message).toContain("credentials were replaced")
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+  });
+
+  it("refuses a Retry while the host is being removed, so nothing is made after its look (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+    let answer: (found: ProviderResource[]) => void = () => {};
+    vi.mocked(env.provider.list).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    const removing = env.lifecycle.deleteMachine("build", null);
+    await vi.waitFor(() => expect(env.provider.list).toHaveBeenCalled());
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/being removed/);
+    answer([]);
+    await removing;
+    expect(env.hosts).toHaveLength(0);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
   });
 
   it("marks nothing and sends nothing when the create is stopped while it is readied (#17928)", async () => {
@@ -4240,7 +4300,7 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     const send = vi
       .fn<() => Promise<ProviderResource>>()
       .mockRejectedValueOnce(new BoatApiError("network", "lost", null, null, null));
-    const prepareCreate = vi.fn(async () => send);
+    const prepareCreate = vi.fn<NonNullable<CloudProvider["prepareCreate"]>>(async () => send);
     (env.provider as CloudProvider).prepareCreate = prepareCreate;
     await create(env);
     await vi.waitFor(() =>

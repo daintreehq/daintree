@@ -69,12 +69,9 @@ async function agent37() {
     savedWhenSent.set(route, structuredClone(creationSaved()));
     const mode = unanswered.get(route);
     if (!mode) return api.fetch(input, init);
-    if (mode === "lost") {
-      void api.fetch(input, init).catch((error: unknown) => {
-        throw new Error(`The fake refused a request it should have taken: ${String(error)}`);
-      });
-    }
     return new Promise((_resolve, reject) => {
+      // Taken by Agent 37, and only the answer lost; a fake that fails it fails the request.
+      if (mode === "lost") void api.fetch(input, init).catch(reject);
       init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
     });
   };

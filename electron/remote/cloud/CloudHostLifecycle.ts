@@ -519,6 +519,8 @@ export class CloudHostLifecycle {
   private readonly reconciling = new Set<string>();
   /** Lookups a provider change overtook: a failure may be the old provider's, not the machine's. */
   private readonly reconcileOvertaken = new Set<string>();
+  /** Bindings whose host a person is removing, from its first look until it's forgotten or fails. */
+  private readonly removing = new Set<string>();
   /** Worktree cleanups carrying out now, which every caller joins. */
   private readonly cleanupRuns = new Map<string, Promise<CloudWorktreeCleanupOutcome | null>>();
   /** Keeps chosen in Settings, by binding and delete: that delete's replay never arms it again. */
@@ -859,6 +861,8 @@ export class CloudHostLifecycle {
     const binding = this.requireBindingForHost(hostId);
     if (binding.resourceId) return;
     if (!binding.creation) throw invalid("This host has no machine to create.");
+    // A machine made now would be one the removal under way never looks for.
+    if (this.removing.has(binding.id)) throw invalid("This host is being removed.");
     await this.operate(binding.id, "creating", (signal) => this.runCreate(binding.id, signal));
   }
 
@@ -960,52 +964,65 @@ export class CloudHostLifecycle {
       idempotencyKey: creation.idempotencyKey,
       publicKey,
     };
+    const sentBefore = creation.sentAt !== null;
+    // Stopped before the machine was asked for (a removal, say, that may yet fail): the host
+    // says nothing was, so Retry is there if it survives.
+    const stopped = () => {
+      this.recordUnsentCreate(bindingId, sentBefore, {
+        code: "failed",
+        reason: "Setup was stopped while the machine was readied",
+      });
+      return new AppError({ code: "CANCELLED", message: "Cancelled" });
+    };
     let send = () => provider.create(credentials, request);
     if (provider.prepareCreate) {
       this.stage(bindingId, `Getting ${nameOf(provider)} ready to make the machine`);
-      // Stopped while readied (a removal, say, that may yet fail): the host says nothing was asked for.
-      const stopped = () => {
-        this.recordUnsentCreate(bindingId, creation.sentAt !== null, {
-          code: "failed",
-          reason: "Setup was stopped while the machine was readied",
-        });
-        return new AppError({ code: "CANCELLED", message: "Cancelled" });
-      };
       try {
         send = await provider.prepareCreate(credentials, request);
       } catch (error) {
         if (signal.aborted) throw stopped();
-        this.recordUnpreparedCreate(bindingId, provider, creation.sentAt !== null, error);
+        this.recordUnpreparedCreate(bindingId, provider, sentBefore, error);
         throw error;
       }
-      if (signal.aborted) throw stopped();
-      this.requireSameProvider(
-        binding,
-        provider,
-        creation.sentAt !== null,
-        "the machine was readied"
-      );
-    }
-    // Nothing marked as sent stops a replacement, so one made since the read is caught here:
-    // asked with the old set, the machine would be made where the account no longer looks.
-    if ((this.deps.store.account(binding.accountId)?.credentialRevision ?? null) !== revision) {
-      const reason = "This account's credentials were replaced while the machine was readied";
-      this.recordUnsentCreate(bindingId, creation.sentAt !== null, { code: "failed", reason });
-      throw invalid(`${reason}. Retry to create it.`);
     }
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
-    // Written before the request: a lost answer is then found again, never sent blind.
-    const marked = this.deps.store.updateBinding(bindingId, (current) => ({
-      ...current,
-      creation: current.creation
-        ? { ...current.creation, sentAt: current.creation.sentAt ?? this.now() }
-        : null,
-      lastError: null,
-    }));
-    if (!marked?.creation) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    // Between the account's credential changes, never during one: a replacement either ended
+    // before this reads the account, or starts after the mark, which refuses it for this create.
+    // Nothing marked as sent stopped one while the create was readied, so it's caught here:
+    // asked with the old set, the machine would be made where the account no longer looks.
+    const sending = await this.deps.accounts.betweenCommits(binding.accountId, () => {
+      if (signal.aborted) return "stopped" as const;
+      this.requireSameProvider(binding, provider, sentBefore, "the machine was readied");
+      if ((this.deps.store.account(binding.accountId)?.credentialRevision ?? null) !== revision) {
+        return "replaced" as const;
+      }
+      // Written before the request: a lost answer is then found again, never sent blind.
+      const marked = this.deps.store.updateBinding(bindingId, (current) => ({
+        ...current,
+        creation: current.creation
+          ? { ...current.creation, sentAt: current.creation.sentAt ?? this.now() }
+          : null,
+        lastError: null,
+      }));
+      if (!marked?.creation) return "stopped" as const;
+      // Sent in the same step: nothing comes between the mark and the request. Awaited below,
+      // a few ticks on; a rejection before then is that await's to handle.
+      const answer = new Promise<ProviderResource>((resolve) => resolve(send()));
+      answer.catch(() => {});
+      return { answer };
+    });
+    if (sending === "stopped") throw stopped();
+    if (sending === "replaced") {
+      throw invalid(
+        this.recordUnsentCreate(bindingId, sentBefore, {
+          code: "failed",
+          reason: "This account's credentials were replaced while the machine was readied",
+        })
+      );
+    }
     let resource: ProviderResource;
     try {
-      resource = await send();
+      resource = await sending.answer;
     } catch (error) {
       const described = provider.describeError(error);
       // Only the provider's own refusal proves nothing was made; anything else (lost answer,
@@ -1080,14 +1097,16 @@ export class CloudHostLifecycle {
     bindingId: string,
     sentBefore: boolean,
     { code, reason }: { code: CloudHostErrorCode; reason: string }
-  ): void {
+  ): string {
+    const message = sentBefore
+      ? `${reason}, so the create wasn't sent again. Retry looks for a machine from the earlier request first.`
+      : `${reason}, so no machine was asked for. Retry to create it.`;
     this.recordError(bindingId, {
       code: sentBefore ? "outcome-unknown" : code,
-      message: sentBefore
-        ? `${reason}, so the create wasn't sent again. Retry looks for a machine from the earlier request first.`
-        : `${reason}, so no machine was asked for. Retry to create it.`,
+      message,
       at: this.now(),
     });
+    return message;
   }
 
   /** The provider leaving, or another registering in its place, while a create was readied: ask nobody. */
@@ -1501,6 +1520,21 @@ export class CloudHostLifecycle {
     if (confirmed.resourceId && confirmResourceId !== confirmed.resourceId) {
       throw invalid("The machine to delete changed since you confirmed. Check it and try again.");
     }
+    // Held until the host is forgotten: a Retry meanwhile (the create this aborts leaves one)
+    // could make a machine after the look below found none.
+    const claimed = !this.removing.has(confirmed.id);
+    if (claimed) this.removing.add(confirmed.id);
+    try {
+      await this.removeMachine(confirmed, confirmResourceId);
+    } finally {
+      if (claimed) this.removing.delete(confirmed.id);
+    }
+  }
+
+  private async removeMachine(
+    confirmed: StoredCloudBinding & { hostId: HostId },
+    confirmResourceId: unknown
+  ): Promise<void> {
     const running = this.operations.get(confirmed.id);
     if (running && running.kind !== "deleting") {
       running.controller.abort();
