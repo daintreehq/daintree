@@ -82,15 +82,19 @@ describe("IdlePauseDialog (#17925)", () => {
     open();
 
     await screen.findByText(/changed since idle pause was turned on/);
-    expect(screen.getByRole("button", { name: "Turn on idle pause" }).hasAttribute("disabled")).toBe(
-      false
-    );
+    expect(
+      screen.getByRole("button", { name: "Turn on idle pause" }).hasAttribute("disabled")
+    ).toBe(false);
   });
 
   it("shows what the host has now when the commands changed before the confirm", async () => {
     worktreeClientMock.getIdlePause
       .mockResolvedValueOnce(OFF)
-      .mockResolvedValueOnce({ ...OFF, commands: ["stop-box --force"], fingerprint: "b".repeat(64) });
+      .mockResolvedValueOnce({
+        ...OFF,
+        commands: ["stop-box --force"],
+        fingerprint: "b".repeat(64),
+      });
     worktreeClientMock.setIdlePause.mockRejectedValueOnce(
       new Error("These pause commands changed after you reviewed them. Review them again.")
     );
@@ -124,8 +128,8 @@ describe("IdlePauseDialog (#17925)", () => {
     open();
 
     await screen.findByText(/comes from the repository/);
-    expect(screen.getByRole("button", { name: "Turn on idle pause" }).hasAttribute("disabled")).toBe(
-      true
-    );
+    expect(
+      screen.getByRole("button", { name: "Turn on idle pause" }).hasAttribute("disabled")
+    ).toBe(true);
   });
 });

@@ -1,7 +1,4 @@
-import type {
-  IdlePausePreparation,
-  IdlePauseRunOutcome,
-} from "../../../shared/types/idlePause.js";
+import type { IdlePausePreparation, IdlePauseRunOutcome } from "../../../shared/types/idlePause.js";
 import {
   sameHostAccount,
   sshConnection,

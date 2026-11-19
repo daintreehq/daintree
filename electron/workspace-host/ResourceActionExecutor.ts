@@ -116,13 +116,12 @@ export class ResourceActionExecutor {
       return { success: false, error: "Aborted" };
     }
 
-    const { resolvedConfig, selection } =
-      await this.ctx.lifecycleService.resolveResourceSelection(
-        monitor.path,
-        projectRootPath,
-        environmentId,
-        monitor.worktreeMode
-      );
+    const { resolvedConfig, selection } = await this.ctx.lifecycleService.resolveResourceSelection(
+      monitor.path,
+      projectRootPath,
+      environmentId,
+      monitor.worktreeMode
+    );
     const resourceConfig = selection?.resource;
     const resourceEnvironments = selection?.environments ?? null;
 
@@ -589,7 +588,12 @@ export class ResourceActionExecutor {
     // down: the box main's host must be, or this worktree has none to pause.
     const sshTarget = monitor.resourceStatus?.ssh;
     if (!sshTarget) return { ok: false, reason: "The environment reports no ready machine" };
-    return { ok: true, selector: selection!.selector, fingerprint: confirmed.fingerprint, sshTarget };
+    return {
+      ok: true,
+      selector: selection!.selector,
+      fingerprint: confirmed.fingerprint,
+      sshTarget,
+    };
   }
 
   /** Resolves once no resource action for this worktree is queued or running. */

@@ -79,7 +79,8 @@ export class FileIdlePauseConsentStore implements IdlePauseConsentStore {
   revoke(projectRootPath: string, selector: string, fingerprint: string): Promise<void> {
     return this.update(projectRootPath, (consents) => {
       const current = consents.get(selector);
-      if (current?.fingerprint === fingerprint) consents.set(selector, { fingerprint, revoked: true });
+      if (current?.fingerprint === fingerprint)
+        consents.set(selector, { fingerprint, revoked: true });
     });
   }
 

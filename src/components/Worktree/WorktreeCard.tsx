@@ -1033,7 +1033,9 @@ export function WorktreeCard({
     onResourcePause: hasPauseCommand ? handleResourcePause : undefined,
     // Only where this window can open the box as a host: that host's idleness is what it acts on.
     onIdlePause:
-      hasPauseCommand && canOfferResourceBoxHandoff() ? () => setShowIdlePauseDialog(true) : undefined,
+      hasPauseCommand && canOfferResourceBoxHandoff()
+        ? () => setShowIdlePauseDialog(true)
+        : undefined,
     onResourceConnect: worktree.resourceConnectCommand ? handleResourceConnect : undefined,
     onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
     onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,

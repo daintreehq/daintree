@@ -36,7 +36,10 @@ function ownedHost(overrides: Partial<HostDescriptor> = {}): HostDescriptor {
   } as HostDescriptor;
 }
 
-function summary(idle: Partial<NonNullable<HostMetricsSummary["idle"]>> | null, sampledAt = 10_000) {
+function summary(
+  idle: Partial<NonNullable<HostMetricsSummary["idle"]>> | null,
+  sampledAt = 10_000
+) {
   return {
     hostId: HOST,
     sampledAt,
@@ -202,7 +205,11 @@ describe("watchIdleResourcePause (#17925)", () => {
   });
 
   it("asks nothing when the environment reports another machine", async () => {
-    prepare.mockResolvedValue({ ok: true, guard: { ...guard, sshTarget: "dev@box-2.example" }, run });
+    prepare.mockResolvedValue({
+      ok: true,
+      guard: { ...guard, sshTarget: "dev@box-2.example" },
+      run,
+    });
 
     await hear();
 
@@ -258,7 +265,10 @@ describe("watchIdleResourcePause (#17925)", () => {
     await hear();
 
     expect(onFailed).toHaveBeenCalledTimes(1);
-    expect(onFailed).toHaveBeenCalledWith(expect.objectContaining({ id: HOST }), "Command timed out");
+    expect(onFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ id: HOST }),
+      "Command timed out"
+    );
     expect(run).toHaveBeenCalledTimes(1);
   });
 

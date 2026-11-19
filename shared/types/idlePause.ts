@@ -24,8 +24,7 @@ export type IdlePauseCheck = { ok: true; guard: IdlePauseGuard } | { ok: false; 
 
 /** How an idle pause ended; `ran` is false when it was refused before any command started. */
 export type IdlePauseRunOutcome =
-  | { ran: false; reason: string }
-  | { ran: true; success: boolean; error?: string };
+  { ran: false; reason: string } | { ran: true; success: boolean; error?: string };
 
 /** An idle pause checked on the worktree's workspace host, ready to send to that same host. */
 export type IdlePausePreparation =

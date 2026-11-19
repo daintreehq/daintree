@@ -2773,7 +2773,11 @@ describe("WorkspaceService idle pause (#17925)", () => {
 
     const outcome = await service.runIdlePause("req-idle", "/test/worktree", guard);
 
-    expect(outcome).toEqual({ ran: true, success: false, error: "Command failed with exit code 1" });
+    expect(outcome).toEqual({
+      ran: true,
+      success: false,
+      error: "Command failed with exit code 1",
+    });
     expect(monitor.lifecycleStatus).toMatchObject({ phase: "resource-pause", state: "failed" });
     expect(monitor.resourceStatus?.ssh).toBe("dev@box-1");
   });

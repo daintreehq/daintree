@@ -134,7 +134,6 @@ const IDLE_PAUSE_CHECK_TIMEOUT_MS = 30_000;
 /** A manual pause's own budget: its commands are bounded host-side by the environment's timeout. */
 const IDLE_PAUSE_RUN_TIMEOUT_MS = 15 * 60_000;
 
-
 /**
  * A host's worktree snapshot read plus its own "is there a repository here"
  * verdict. `gitBacked: null` is "not classified" — never read it as `false`

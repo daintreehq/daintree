@@ -108,9 +108,9 @@ describe("idle pause consent (#17925)", () => {
     });
 
     expect(await policy()).toMatchObject({ status: "unavailable", reason: "repository" });
-    await expect(
-      service.setEnabled(worktree, project, MODE, true, "a".repeat(64))
-    ).rejects.toThrow(/repository/);
+    await expect(service.setEnabled(worktree, project, MODE, true, "a".repeat(64))).rejects.toThrow(
+      /repository/
+    );
     expect(await confirmed()).toEqual({ ok: false, reason: expect.stringMatching(/repository/) });
   });
 
@@ -186,7 +186,10 @@ describe("FileIdlePauseConsentStore", () => {
 
     await writeFile(
       join(consentsDir, file!),
-      JSON.stringify({ version: 99, environments: { "settings:gpu": { fingerprint: "b".repeat(64) } } }),
+      JSON.stringify({
+        version: 99,
+        environments: { "settings:gpu": { fingerprint: "b".repeat(64) } },
+      }),
       "utf-8"
     );
     expect(await store.get(project, "settings:gpu")).toBeNull();
