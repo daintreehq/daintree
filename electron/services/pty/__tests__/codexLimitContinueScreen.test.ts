@@ -95,7 +95,10 @@ describe("judgeCodexLimitScreen (#17909)", () => {
   it("types nothing at a different stop drawn since the one the wait was for", () => {
     const later = screen({ banner: "■ You’ve hit your usage limit. Try again at 9:05 PM." });
     expect(judgeCodexLimitScreen(later, 80, KEY)).toEqual({ skip: "banner-changed" });
-    const spendCap = screen({ banner: "■ You hit your spend cap. Raise it to continue." });
+    const spendCap = screen({
+      banner:
+        "■ You hit your spend cap set in your workspace. Increase your spend cap to continue.",
+    });
     expect(judgeCodexLimitScreen(spendCap, 80, KEY)).toEqual({ skip: "banner-changed" });
   });
 
