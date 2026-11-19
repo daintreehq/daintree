@@ -14,7 +14,8 @@ export interface CodexLimitTerminalRead extends LiveAgentTerminal {
 export interface CodexLimitResetDeps {
   /** Null for a pane that is gone; rejects when its host didn't answer. */
   readTerminal(terminalId: string, query: CodexLimitQuery): Promise<CodexLimitTerminalRead | null>;
-  readEvidence(home: string, notBefore: number): Promise<CodexLimitEvidence | null>;
+  /** A new reading of `home`, asked for now; null when there is none. */
+  readEvidence(home: string): Promise<CodexLimitEvidence | null>;
 }
 
 /** A banner replaced between the two reads is read again, once. */
@@ -29,9 +30,9 @@ function defaultDeps(): CodexLimitResetDeps {
         ? pty.getTerminalAsync(terminalId, undefined, { strict: true, codexLimit: query })
         : null;
     },
-    async readEvidence(home, notBefore) {
+    async readEvidence(home) {
       const { readCodexHomeLimitEvidence } = await import("./CodexQuotaService.js");
-      return readCodexHomeLimitEvidence(home, notBefore);
+      return readCodexHomeLimitEvidence(home);
     },
   };
 }
@@ -59,9 +60,8 @@ export async function readCodexLimitReset(
     if (!first || !asked) return { status: "unknown", reason: "no-banner" };
     if ("reset" in asked) return asked.reset;
     const home = liveAgentOf(first) === "codex" ? first.codexHome : undefined;
-    const evidence = home
-      ? await deps.readEvidence(home, asked.stamp.observedAt).catch(() => null)
-      : null;
+    // Asked for only now, after the stamp read: so after the banner showed.
+    const evidence = home ? await deps.readEvidence(home).catch(() => null) : null;
     const second = await read({ seq: asked.stamp.seq, run: asked.stamp.run, evidence });
     if (second === "unanswered") return { status: "unknown", reason: "not-observed" };
     const resolved = second?.codexLimit;

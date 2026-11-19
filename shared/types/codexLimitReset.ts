@@ -22,6 +22,8 @@ export interface CodexLimitBucketEvidence {
 export interface CodexLimitEvidence {
   /** When the quota request was sent: a reading asked for before the stop says nothing about it. */
   requestedAt: number;
+  /** When its reply came back: the server took the reading somewhere in between. */
+  receivedAt: number;
   buckets: CodexLimitBucketEvidence[];
 }
 
@@ -41,7 +43,7 @@ export type CodexLimitUnknownReason =
   | "unreadable-time"
   /** The printed time names more than one instant (a fold, midnight) and no reading picks one. */
   | "ambiguous-time"
-  /** The printed reset passed before the reading, which shows a window spent that may not have stopped it. */
+  /** The printed reset's minute had begun before the question was answered: what was spent at the stop can't be told. */
   | "late-reading"
   /** `Try again later.` with no reading showing this pane's window spent. */
   | "no-reset-stated"

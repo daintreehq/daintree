@@ -5,7 +5,7 @@ import type {
   CodexLimitUnknownReason,
   CodexLimitWindowEvidence,
 } from "../../../shared/types/codexLimitReset.js";
-import { readlinkSync } from "node:fs";
+import { existsSync, readlinkSync } from "node:fs";
 import { stripAnsi } from "./AgentPatternDetector.js";
 import { instantsOf, wallTime, zoneFormat, type WallTime } from "./zonedWallTime.js";
 
@@ -121,6 +121,40 @@ function classify(text: string): CodexLimitBanner | undefined {
 
 const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
 
+/** Whether a code point takes two cells: CJK, Hangul, fullwidth forms. */
+function isWide(code: number): boolean {
+  return (
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe30 && code <= 0xfe4f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    code >= 0x20000
+  );
+}
+
+/** The cells a row's text takes, as the terminal laid it out. */
+function cellWidth(text: string): number {
+  let width = 0;
+  for (const char of text) width += isWide(char.codePointAt(0)!) ? 2 : 1;
+  return width;
+}
+
+/**
+ * Whether `next` carries on the line `row` started. Codex word-wraps, so a row
+ * that still had room for the next row's first word didn't wrap into it; the
+ * terminal's own wrap fills a row to the edge. Without a width, any row that
+ * isn't a cell boundary carries on.
+ */
+function continues(row: string, next: string, cols: number | undefined): boolean {
+  if (next === "" || CELL_BOUNDARY.test(next)) return false;
+  if (cols === undefined) return true;
+  const firstWord = next.split(" ", 1)[0]!;
+  return cellWidth(row) + 1 + cellWidth(firstWord) > cols;
+}
+
 /**
  * Rows read back as the line Codex wrapped. Word wrap ate a space at each
  * break; a row filled to the pane's edge may instead be the terminal's own
@@ -128,11 +162,10 @@ const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
  */
 function joinings(rows: readonly string[], cols: number | undefined): string[] {
   const spaced = collapse(rows.join(" "));
-  if (cols === undefined || !rows.slice(0, -1).some((row) => row.length === cols)) {
-    return [spaced];
-  }
+  const filled = (row: string) => cols !== undefined && cellWidth(row) === cols;
+  if (!rows.slice(0, -1).some(filled)) return [spaced];
   const tight = rows
-    .map((row, i) => (i < rows.length - 1 && row.length !== cols ? `${row} ` : row))
+    .map((row, i) => (i < rows.length - 1 && !filled(row) ? `${row} ` : row))
     .join("");
   return [spaced, collapse(tight)];
 }
@@ -157,14 +190,17 @@ export function scanCodexLimitBanner(
     // Whole rows, the marker kept, so a row's width still tells the terminal's wrap.
     const parts = [rows[i]!];
     for (let j = i + 1; j < rows.length && parts.length < MAX_BANNER_ROWS; j++) {
-      if (rows[j] === "" || CELL_BOUNDARY.test(rows[j]!)) break;
+      if (!continues(rows[j - 1]!, rows[j]!, cols)) break;
       parts.push(rows[j]!);
     }
     const message = (text: string) => text.replace(MARKER, "");
     const texts = joinings(parts, cols).map(message);
     if (!texts.some((text) => OPENERS.some((opener) => opener.test(text)))) {
-      // A stop caught half-drawn, before its first words are all there.
-      const drawing = texts.some((text) => OPENER_TEXTS.some((opener) => opener.startsWith(text)));
+      // A stop caught half-drawn, before its first words are all there, its
+      // own row read alone too in case an older row below got joined to it.
+      const drawing = [...texts, collapse(message(rows[i]!))].some((text) =>
+        OPENER_TEXTS.some((opener) => opener.startsWith(text))
+      );
       if (drawing) return i + parts.length - 1 >= tailStart ? { kind: "unreadable" } : null;
       // Another error behind the marker.
       continue;
@@ -242,16 +278,36 @@ export function codexBannerResetCandidates(
   return [...new Set(instants)].filter((instant) => instant >= earliest).sort((a, b) => a - b);
 }
 
+// Where Codex's chrono looks a zone name up, and where a system's
+// /etc/localtime links to.
 const ZONEINFO_DIRS = [
   "/usr/share/zoneinfo/",
+  "/share/zoneinfo/",
+  "/etc/zoneinfo/",
   "/usr/share/lib/zoneinfo/",
   "/var/db/timezone/zoneinfo/",
 ];
 
-function zoneFromFile(file: string): string | null {
+type Exists = (file: string) => boolean;
+
+/** The zone `Intl` reads for `name`, as it names it; null when it reads none. */
+function canonicalZone(name: string): string | null {
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: name }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The zone a zone file holds, read off its path: only a file chrono can open
+ * there, in a system zoneinfo folder, under a name `Intl` reads. Named as
+ * `Intl` names it, so one zone spelled many ways is one zone here.
+ */
+function zoneFromFile(file: string, exists: Exists): string | null {
   const dir = ZONEINFO_DIRS.find((prefix) => file.startsWith(prefix));
-  const zone = dir === undefined ? "" : file.slice(dir.length);
-  return zone !== "" && isZoneName(zone) ? zone : null;
+  const name = dir === undefined ? "" : file.slice(dir.length);
+  return name !== "" && exists(file) ? canonicalZone(name) : null;
 }
 
 /**
@@ -259,32 +315,26 @@ function zoneFromFile(file: string): string | null {
  * named zone for a launch `TZ`, undefined when it sets none and so follows
  * the system's (see {@link codexSystemZone}), or null when the launch names
  * one that can't be read here, which is never guessed. An empty `TZ` is UTC
- * to Codex's chrono; a POSIX rule string, or a zone file outside the system's
- * zoneinfo, isn't one `Intl` can vouch for. Codex on Windows ignores `TZ`.
+ * to Codex's chrono. A name counts only when a zone file of exactly that name
+ * is there for chrono to open, since `Intl` also takes spellings no file has;
+ * a POSIX rule string isn't one. Codex on Windows ignores `TZ`.
  */
 export function codexLaunchZone(
   env: Readonly<Record<string, string | undefined>>,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  exists: Exists = existsSync
 ): string | null | undefined {
   if (platform === "win32") return undefined;
   const raw = env.TZ;
   if (raw === undefined) return undefined;
   if (raw === "") return "UTC";
   const zone = raw.startsWith(":") ? raw.slice(1) : raw;
-  if (zone.startsWith("/")) return zoneFromFile(zone);
-  return zone !== "" && isZoneName(zone) ? zone : null;
-}
-
-/**
- * Whether Codex's chrono finds the same zone `Intl` reads for `zone`. Chrono
- * opens the zone file by that exact name, so a spelling only `Intl`'s
- * case-insensitive lookup accepts may be another zone, or none, to Codex.
- */
-function isZoneName(zone: string): boolean {
-  const format = zoneFormat(zone);
-  if (format === null) return false;
-  const canonical = format.resolvedOptions().timeZone;
-  return canonical === zone || canonical.toLowerCase() !== zone.toLowerCase();
+  if (zone === "" || zone.includes("..")) return null;
+  if (zone.startsWith("/")) return zoneFromFile(zone, exists);
+  for (const dir of ZONEINFO_DIRS) {
+    if (exists(dir + zone)) return canonicalZone(zone);
+  }
+  return null;
 }
 
 /**
@@ -297,11 +347,12 @@ function isZoneName(zone: string): boolean {
 export function codexSystemZone(
   platform: NodeJS.Platform = process.platform,
   ownTz: string | undefined = process.env.TZ,
-  readLink: (file: string) => string = readlinkSync
+  readLink: (file: string) => string = readlinkSync,
+  exists: Exists = existsSync
 ): string | null | undefined {
   if (platform !== "win32") {
     try {
-      const zone = zoneFromFile(readLink("/etc/localtime"));
+      const zone = zoneFromFile(readLink("/etc/localtime"), exists);
       if (zone !== null) return zone;
     } catch {
       // Not a link: fall back to this process's zone.
@@ -348,14 +399,18 @@ function bucketsFor(limitName: string | null, buckets: readonly CodexLimitBucket
   );
 }
 
-/** Windows spent when the reading was asked for; a reset already past is a stale reading. */
+/**
+ * Windows spent when the reading was taken. The server took it some time
+ * between the request and the reply, so a reset before the reply may have
+ * rolled already and doesn't count.
+ */
 function spentWindows(
   bucket: CodexLimitBucketEvidence,
-  requestedAt: number
+  receivedAt: number
 ): CodexLimitWindowEvidence[] {
   return bucket.windows.filter(
     (window) =>
-      window.usedPercent >= 100 && (window.resetsAt === null || window.resetsAt > requestedAt)
+      window.usedPercent >= 100 && (window.resetsAt === null || window.resetsAt > receivedAt)
   );
 }
 
@@ -384,29 +439,33 @@ function isBucket(value: unknown): value is CodexLimitBucketEvidence {
 /** Evidence from across the process boundary, or null when it isn't evidence. */
 export function readCodexLimitEvidence(value: unknown): CodexLimitEvidence | null {
   if (!value || typeof value !== "object") return null;
-  const { requestedAt, buckets } = value as Record<string, unknown>;
+  const { requestedAt, receivedAt, buckets } = value as Record<string, unknown>;
   if (typeof requestedAt !== "number" || !Number.isFinite(requestedAt)) return null;
+  if (typeof receivedAt !== "number" || !Number.isFinite(receivedAt)) return null;
+  if (receivedAt < requestedAt) return null;
   if (!Array.isArray(buckets) || !buckets.every(isBucket)) return null;
-  return { requestedAt, buckets };
+  return { requestedAt, receivedAt, buckets };
 }
 
 /**
  * When the window that stopped the pane resets, from its banner and a reading
  * of its own Codex home, or why that can't be told (#17906).
  *
- * The banner names the bucket and the minute; a reading asked for after it
- * showed, before that minute began, confirms the window and adds every other
- * spent window of the same bucket, the latest reset winning, to the second. A
- * reading of a bucket the banner can't mean never stretches it. Where the
- * reading contradicts the banner, can't settle a time the banner prints
- * twice, came too late to tell what was spent at the stop, or is missing a
- * reset it needs, the answer is unknown, never a guess. So the question is
- * best asked when the stop shows. `Try again later.` resolves only from a
- * prompt reading that shows the bucket spent.
+ * The banner names the bucket and the minute. A reading asked for after it
+ * showed, and back before that minute began, confirms the window and adds
+ * every other spent window of the same bucket, the latest reset winning, to
+ * the second; with no reading, the answer is the end of the printed minute. A
+ * reading of a bucket the banner can't mean never stretches it. Once the
+ * printed minute has begun, what was spent at the stop can't be told any
+ * more, so the question is one to ask when the stop shows. Where the reading
+ * contradicts the banner, can't settle a time the banner prints twice, or is
+ * missing a reset it needs, the answer is unknown, never a guess. `Try again
+ * later.` resolves only from a prompt reading that shows the bucket spent.
  */
 export function resolveCodexLimitReset(
   observation: CodexLimitObservation,
-  evidence: CodexLimitEvidence | null
+  evidence: CodexLimitEvidence | null,
+  now: number
 ): CodexLimitReset {
   const { banner, observedAt, candidates } = observation;
   const unknown = (reason: CodexLimitUnknownReason): CodexLimitReset => ({
@@ -427,19 +486,27 @@ export function resolveCodexLimitReset(
 
   const reading = evidence !== null && evidence.requestedAt >= observedAt ? evidence : null;
   const buckets = reading === null ? [] : bucketsFor(banner.limitName, reading.buckets);
+  const incomplete = (receivedAt: number) =>
+    buckets.some(
+      (bucket) =>
+        bucket.unreadable ||
+        spentWindows(bucket, receivedAt).some((window) => window.resetsAt === null)
+    );
 
   if (banner.kind === "later") {
     if (reading === null || reading.requestedAt - observedAt > LATER_EVIDENCE_MS) {
       return unknown("no-reset-stated");
     }
-    const answers = new Set<number>();
-    for (const bucket of buckets) {
-      const spent = spentWindows(bucket, reading.requestedAt);
-      if (bucket.unreadable || spent.some((window) => window.resetsAt === null)) {
-        return unknown("quota-incomplete");
-      }
-      if (spent.length > 0) answers.add(Math.max(...spent.map((window) => window.resetsAt!)));
+    if (incomplete(reading.receivedAt)) return unknown("quota-incomplete");
+    const spent = buckets.map((bucket) => spentWindows(bucket, reading.receivedAt));
+    // One bucket the banner could mean is spent and another isn't: which
+    // stopped the pane can't be told.
+    if (spent.some((windows) => windows.length === 0) && spent.some((w) => w.length > 0)) {
+      return unknown("ambiguous-bucket");
     }
+    const answers = new Set(
+      spent.filter((w) => w.length > 0).map((w) => Math.max(...w.map((window) => window.resetsAt!)))
+    );
     if (answers.size > 1) return unknown("ambiguous-bucket");
     const [answer] = answers;
     return answer === undefined ? unknown("no-reset-stated") : known(answer, "quota");
@@ -447,31 +514,24 @@ export function resolveCodexLimitReset(
 
   if (candidates === null) return unknown("zone-unknown");
   if (candidates.length === 0) return unknown("unreadable-time");
-  const fromBanner = () =>
-    candidates.length === 1
+  // A reading vouches only for a reset whose minute hadn't begun when it came
+  // back; within or after that minute the window may have rolled already, and
+  // what else was spent at the stop can't be told.
+  const asOf = reading === null ? now : reading.receivedAt;
+  if (candidates.some((candidate) => candidate <= asOf)) {
+    return unknown(candidates.length > 1 ? "ambiguous-time" : "late-reading");
+  }
+  if (reading === null || buckets.length === 0) {
+    return candidates.length === 1
       ? known(candidates[0]! + MINUTE_MS, "banner")
       : unknown("ambiguous-time");
-  if (reading === null || buckets.length === 0) return fromBanner();
+  }
   // Any bucket the banner could mean with a window that can't be read, or a
   // spent one with no reset, may be the one that stopped it.
-  const incomplete = buckets.some(
-    (bucket) =>
-      bucket.unreadable ||
-      spentWindows(bucket, reading.requestedAt).some((window) => window.resetsAt === null)
-  );
-  if (incomplete) return unknown("quota-incomplete");
-  // A reading can only vouch for a reset whose minute hadn't begun when it was
-  // asked for: within or after it, the window may have rolled already.
-  if (candidates.some((candidate) => candidate <= reading.requestedAt)) {
-    if (candidates.length > 1) return unknown("ambiguous-time");
-    // Nothing spent now: the banner's window has reset and nothing else blocks.
-    // Something spent may have been spent since, or all along; it can't be told.
-    const spentNow = buckets.some((bucket) => spentWindows(bucket, reading.requestedAt).length > 0);
-    return spentNow ? unknown("late-reading") : fromBanner();
-  }
+  if (incomplete(reading.receivedAt)) return unknown("quota-incomplete");
   const answers = new Set<number>();
   for (const bucket of buckets) {
-    const spent = spentWindows(bucket, reading.requestedAt);
+    const spent = spentWindows(bucket, reading.receivedAt);
     const matched = spent.some((window) =>
       candidates.some(
         (candidate) => window.resetsAt! >= candidate && window.resetsAt! < candidate + MINUTE_MS

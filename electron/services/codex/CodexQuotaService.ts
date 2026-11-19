@@ -58,10 +58,6 @@ interface CodexAccountIdentity {
 interface HomeReading {
   result: CodexQuotaResult;
   identity: CodexAccountIdentity | null;
-  /** When the quota request went out, which is what says what a reading can speak for. */
-  requestedAt: number;
-  /** The home the app-server was started against: undefined for main's own env. */
-  askedHome: string | undefined;
   /** Every bucket as the server sent it, for a stopped pane's reset (#17906); null with no answer. */
   evidence: CodexLimitEvidence | null;
 }
@@ -69,9 +65,6 @@ interface HomeReading {
 interface HomeCacheEntry {
   cached: HomeReading | null;
   inFlight: Promise<HomeReading> | null;
-  /** When the read in flight was queued: it can't ask any earlier. */
-  inFlightQueuedAt: number;
-  inFlightHome: string | undefined;
 }
 
 /** Keyed by realpath'd home, never by preset: presets sharing a home share a reading. */
@@ -178,7 +171,11 @@ function toEvidenceBucket(raw: unknown, key: string | null): CodexLimitBucketEvi
  * buckets, since the banner names the one it means, and a window with no
  * duration. Null when the response isn't one.
  */
-export function toCodexLimitEvidence(raw: unknown, requestedAt: number): CodexLimitEvidence | null {
+export function toCodexLimitEvidence(
+  raw: unknown,
+  requestedAt: number,
+  receivedAt: number
+): CodexLimitEvidence | null {
   if (!raw || typeof raw !== "object") return null;
   const { rateLimits, rateLimitsByLimitId } = raw as Record<string, unknown>;
   const buckets =
@@ -189,7 +186,7 @@ export function toCodexLimitEvidence(raw: unknown, requestedAt: number): CodexLi
       : rateLimits && typeof rateLimits === "object"
         ? [toEvidenceBucket(rateLimits, null)]
         : null;
-  return buckets === null ? null : { requestedAt, buckets };
+  return buckets === null ? null : { requestedAt, receivedAt, buckets };
 }
 
 function toUnavailableReason(error: unknown): CodexQuotaUnavailableReason {
@@ -250,12 +247,11 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
       codexHome === undefined ? {} : { codexHome }
     );
     const result = normalizeCodexRateLimits(raw, Date.now());
+    const answered = quota as { raw: unknown; fetchedAt: number } | null;
     return {
       result,
       identity: result.status === "ok" && accountId && email ? { accountId, email } : null,
-      requestedAt,
-      askedHome: codexHome,
-      evidence: toCodexLimitEvidence(raw, requestedAt),
+      evidence: toCodexLimitEvidence(raw, requestedAt, answered?.fetchedAt ?? Date.now()),
     };
   } catch (error) {
     const answered = quota as { raw: unknown; fetchedAt: number } | null;
@@ -263,42 +259,15 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
       return {
         result: normalizeCodexRateLimits(answered.raw, answered.fetchedAt),
         identity: null,
-        requestedAt,
-        askedHome: codexHome,
-        evidence: toCodexLimitEvidence(answered.raw, requestedAt),
+        evidence: toCodexLimitEvidence(answered.raw, requestedAt, answered.fetchedAt),
       };
     }
     return {
       result: { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() },
       identity: null,
-      requestedAt,
-      askedHome: codexHome,
       evidence: null,
     };
   }
-}
-
-function cacheEntry(home: string): HomeCacheEntry {
-  let entry = cacheByHome.get(home);
-  if (!entry) {
-    entry = { cached: null, inFlight: null, inFlightQueuedAt: 0, inFlightHome: undefined };
-    cacheByHome.set(home, entry);
-  }
-  return entry;
-}
-
-function startRead(owner: HomeCacheEntry, codexHome: string | undefined): Promise<HomeReading> {
-  const request = enqueue(() => fetchCodexQuota(codexHome)).then((result) => {
-    owner.cached = result;
-    return result;
-  });
-  owner.inFlight = request;
-  owner.inFlightQueuedAt = Date.now();
-  owner.inFlightHome = codexHome;
-  void request.finally(() => {
-    if (owner.inFlight === request) owner.inFlight = null;
-  });
-  return request;
 }
 
 function readHome(
@@ -306,7 +275,11 @@ function readHome(
   codexHome: string | undefined,
   force: boolean
 ): Promise<HomeReading> {
-  const entry = cacheEntry(home);
+  let entry = cacheByHome.get(home);
+  if (!entry) {
+    entry = { cached: null, inFlight: null };
+    cacheByHome.set(home, entry);
+  }
   const { cached } = entry;
   if (!force && cached) {
     const ttl = cached.result.status === "ok" ? CACHE_TTL_MS : UNAVAILABLE_CACHE_TTL_MS;
@@ -314,43 +287,16 @@ function readHome(
   }
   // A refresh still joins a read already in flight rather than queueing a second.
   if (entry.inFlight) return entry.inFlight;
-  return startRead(entry, codexHome);
-}
-
-/**
- * A reading of `codexHome` asked for no earlier than `notBefore`, behind the
- * same cache and queue: a recent enough cached one, a read queued since, or a
- * new one. A read that went out before then is waited out rather than joined,
- * since what it says predates the moment it is asked to speak for; so is one
- * asked of another spelling of the home, which a link repointed meanwhile may
- * have sent elsewhere, and one dated ahead of the clock, which stepped back.
- */
-async function readHomeSince(
-  home: string,
-  codexHome: string,
-  notBefore: number
-): Promise<HomeReading> {
-  const entry = cacheEntry(home);
-  const usable = (reading: HomeReading | null): reading is HomeReading => {
-    if (reading === null || reading.askedHome !== codexHome || reading.evidence === null) {
-      return false;
-    }
-    const age = Date.now() - reading.requestedAt;
-    return reading.requestedAt >= notBefore && age >= 0 && age < CACHE_TTL_MS;
-  };
-  const joinable = () =>
-    entry.inFlight !== null &&
-    entry.inFlightHome === codexHome &&
-    entry.inFlightQueuedAt >= notBefore &&
-    entry.inFlightQueuedAt <= Date.now();
-  if (usable(entry.cached)) return entry.cached;
-  if (entry.inFlight) {
-    if (joinable()) return entry.inFlight;
-    await entry.inFlight;
-    if (usable(entry.cached)) return entry.cached;
-    if (joinable()) return entry.inFlight!;
-  }
-  return startRead(entry, codexHome);
+  const owner = entry;
+  const request = enqueue(() => fetchCodexQuota(codexHome)).then((result) => {
+    owner.cached = result;
+    return result;
+  });
+  owner.inFlight = request;
+  void request.finally(() => {
+    if (owner.inFlight === request) owner.inFlight = null;
+  });
+  return request;
 }
 
 async function readCodexSettings(): Promise<AgentSettingsEntry | undefined> {
@@ -584,32 +530,24 @@ export async function readCodexQuotaForHomes(
 }
 
 /**
- * A reading of the Codex home a stopped pane runs on, asked for no earlier
- * than `notBefore` (when the pane first showed its banner), for judging that
- * banner by (#17906). `home` is the absolute home the pane's env named; one
- * Codex hasn't made is never read. Null when there is no reading. Never rejects.
+ * A reading of the Codex home a stopped pane runs on, for judging its banner
+ * by (#17906). Always a new request, through the same queue but past the
+ * cache: one asked for now is after the banner showed whatever the clock
+ * says, and a stopped pane's home is kept nowhere after. `home` is the
+ * absolute home the pane's env named, resolved once to the folder it names
+ * now; one Codex hasn't made is never read. Null when there is no reading.
+ * Never rejects.
  */
-export async function readCodexHomeLimitEvidence(
-  home: string,
-  notBefore: number
-): Promise<CodexLimitEvidence | null> {
+export async function readCodexHomeLimitEvidence(home: string): Promise<CodexLimitEvidence | null> {
   if (!(await isDirectory(home))) return null;
-  // Resolved once, so the home asked about and the key its answer is kept
-  // under can't part if a link in the path is repointed while the read waits.
   let physical: string;
   try {
     physical = await realpath(home);
   } catch {
     return null;
   }
-  const reading = await readHomeSince(await canonicalCodexHomeKey(physical), physical, notBefore);
-  // A clock stepped back while the read waited can still date it out of range.
-  const { evidence } = reading;
-  return evidence !== null &&
-    evidence.requestedAt >= notBefore &&
-    evidence.requestedAt <= Date.now()
-    ? evidence
-    : null;
+  const reading = await enqueue(() => fetchCodexQuota(physical));
+  return reading.evidence;
 }
 
 /** The queue is kept: a read still running from before the reset must still finish first. */

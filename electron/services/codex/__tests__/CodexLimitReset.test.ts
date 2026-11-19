@@ -20,7 +20,7 @@ const launched: CodexLimitTerminalRead = {
   agentIncarnation: 0,
   codexHome: HOME,
 };
-const evidence: CodexLimitEvidence = { requestedAt: 2_000, buckets: [] };
+const evidence: CodexLimitEvidence = { requestedAt: 2_000, receivedAt: 2_500, buckets: [] };
 const known: CodexLimitReset = {
   status: "known",
   resetsAt: 9_000,
@@ -34,7 +34,7 @@ type Reply = CodexLimitAnswer | "gone" | "timeout";
 /** A host holding pane `t1`; each read takes the next reply. */
 function deps(replies: Reply[], terminal: CodexLimitTerminalRead = launched) {
   const reads: Array<[string, CodexLimitQuery]> = [];
-  const homes: Array<[string, number]> = [];
+  const homes: string[] = [];
   const fake: CodexLimitResetDeps = {
     readTerminal: vi.fn(async (id: string, query: CodexLimitQuery) => {
       reads.push([id, query]);
@@ -43,8 +43,8 @@ function deps(replies: Reply[], terminal: CodexLimitTerminalRead = launched) {
       if (reply === "timeout") throw new Error("timed out");
       return reply === undefined || reply === "gone" ? null : { ...terminal, codexLimit: reply };
     }),
-    readEvidence: vi.fn(async (home: string, notBefore: number) => {
-      homes.push([home, notBefore]);
+    readEvidence: vi.fn(async (home: string) => {
+      homes.push(home);
       return evidence;
     }),
   };
@@ -58,7 +58,7 @@ describe("readCodexLimitReset", () => {
       { reset: known },
     ]);
     expect(await readCodexLimitReset("t1", fake)).toEqual(known);
-    expect(homes).toEqual([[HOME, 1_000]]);
+    expect(homes).toEqual([HOME]);
     expect(reads).toEqual([
       ["t1", {}],
       ["t1", { seq: 4, run: "r1", evidence }],
@@ -100,7 +100,7 @@ describe("readCodexLimitReset", () => {
       { reset: known },
     ]);
     expect(await readCodexLimitReset("t1", fake)).toEqual(known);
-    expect(homes.map(([, notBefore]) => notBefore)).toEqual([1_000, 1_500]);
+    expect(homes).toEqual([HOME, HOME]);
     expect(reads[3]).toEqual(["t1", { seq: 2, run: "r2", evidence }]);
   });
 
@@ -138,6 +138,7 @@ describe("readCodexLimitReset", () => {
       throw new Error("boom");
     });
     expect(await readCodexLimitReset("t1", fake)).toEqual(known);
+    expect(fake.readEvidence).toHaveBeenCalledWith(HOME);
     expect(reads[1]).toEqual(["t1", { seq: 1, run: "r1", evidence: null }]);
   });
 });

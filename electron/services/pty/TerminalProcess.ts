@@ -303,9 +303,12 @@ export class TerminalProcess {
     incarnation: number;
     observedSince: number | null;
     observation: CodexLimitObservation;
-    /** When the last look stopped showing it; null while it shows. */
+    /** When a look last showed it, and when one first stopped showing it (null while shown). */
+    lastSeenAt: number;
     hiddenSince: number | null;
   } | null = null;
+  /** Whether the latest look showed a readable stop, a half-drawn or unreadable one, or none. */
+  private codexLimitLook: "banner" | "unreadable" | "none" = "none";
   private codexLimitSeq = 0;
   /** This process, as a stamp names it: a replacement pane counts its sequence from zero again. */
   private readonly codexLimitRun = randomUUID();
@@ -971,6 +974,7 @@ export class TerminalProcess {
     // ignores included (#17905).
     clearUpdateInstalled(this.terminalInfo, Date.now());
     this.codexLimit = null;
+    this.codexLimitLook = "none";
 
     if (this.ptyDataDisposable) {
       try {
@@ -2216,23 +2220,40 @@ export class TerminalProcess {
     if (banner?.kind !== "unreadable") this.codexSettledLookAt = now;
     if (!live) {
       this.codexLimit = null;
+      this.codexLimitLook = "none";
       return;
     }
     const held = this.codexLimit;
-    if (banner === null) {
+    // A half-drawn or unreadable stop answers for itself, but doesn't replace
+    // the one held: a repaint that passes through it may bring that one back.
+    if (banner === null || banner.kind === "unreadable") {
+      this.codexLimitLook = banner === null ? "none" : "unreadable";
       if (held) held.hiddenSince ??= now;
       return;
     }
+    this.codexLimitLook = "banner";
     const incarnation = t.agentIncarnation ?? 0;
     const observedSince = this.analysis.observedSince();
     const key = JSON.stringify(banner);
+    // Back after a moment off screen with no prompt typed or sent in between,
+    // the same banner is a repaint; after one, it may be the same stop again.
+    const promptedAt = Math.max(
+      t.lastTypedInputAt ?? 0,
+      t.lastOwnedPromptInput?.at ?? 0,
+      t.lastForeignPromptInputAt ?? 0
+    );
+    const repaint =
+      held !== null &&
+      (held.hiddenSince === null ||
+        (now - held.hiddenSince < CODEX_LIMIT_REPAINT_GRACE_MS && promptedAt <= held.lastSeenAt));
     if (
-      held?.key === key &&
+      repaint &&
+      held.key === key &&
       held.incarnation === incarnation &&
-      held.observedSince === observedSince &&
-      (held.hiddenSince === null || now - held.hiddenSince < CODEX_LIMIT_REPAINT_GRACE_MS)
+      held.observedSince === observedSince
     ) {
       held.hiddenSince = null;
+      held.lastSeenAt = now;
       return;
     }
     const launchZone = codexLaunchZone({ TZ: this.launchTz });
@@ -2242,6 +2263,7 @@ export class TerminalProcess {
       seq: ++this.codexLimitSeq,
       incarnation,
       observedSince,
+      lastSeenAt: now,
       hiddenSince: null,
       observation: {
         banner,
@@ -2270,30 +2292,41 @@ export class TerminalProcess {
     const unknown = (reason: CodexLimitUnknownReason): CodexLimitAnswer => ({
       reset: { status: "unknown", reason },
     });
-    const live =
-      getLiveAgentId(t) === "codex" &&
-      this.isAgentLive &&
-      this.lifecycle.isAlive &&
-      held !== null &&
-      held.incarnation === (t.agentIncarnation ?? 0);
-    if (!live || held.hiddenSince !== null) return unknown("no-banner");
+    const live = getLiveAgentId(t) === "codex" && this.isAgentLive && this.lifecycle.isAlive;
+    if (live && this.codexLimitLook === "unreadable") return unknown("unreadable-banner");
+    if (
+      !live ||
+      this.codexLimitLook !== "banner" ||
+      held === null ||
+      held.hiddenSince !== null ||
+      held.incarnation !== (t.agentIncarnation ?? 0)
+    ) {
+      return unknown("no-banner");
+    }
     if (observedSince === null || observedSince !== held.observedSince) {
       return unknown("not-observed");
     }
     const { observation } = held;
     if (query.seq === undefined) {
       const { banner, candidates } = observation;
+      // A printed minute already begun is answered as it stands: no reading
+      // taken now can tell what was spent at the stop.
+      const now = Date.now();
       const wantsReading =
         observation.attributed &&
-        (banner.kind === "later" || (banner.kind === "at" && (candidates?.length ?? 0) > 0));
+        (banner.kind === "later" ||
+          (banner.kind === "at" &&
+            (candidates?.length ?? 0) > 0 &&
+            candidates!.every((candidate) => candidate > now)));
       return wantsReading
         ? { stamp: { seq: held.seq, run: this.codexLimitRun, observedAt: observation.observedAt } }
-        : { reset: resolveCodexLimitReset(observation, null) };
+        : { reset: resolveCodexLimitReset(observation, null, now) };
     }
     if (query.seq !== held.seq || query.run !== this.codexLimitRun) {
       return unknown("banner-changed");
     }
-    return { reset: resolveCodexLimitReset(observation, readCodexLimitEvidence(query.evidence)) };
+    const evidence = readCodexLimitEvidence(query.evidence);
+    return { reset: resolveCodexLimitReset(observation, evidence, Date.now()) };
   }
 
   /**
