@@ -390,9 +390,7 @@ export function buildObservationHostApi(
   const agentPlacements = (
     hostId: string
   ): ((terminalId: string) => Partial<PluginAgentPlacement>) => {
-    const fleet = isLocalHostId(hostId)
-      ? deps.getFleetSnapshotService()?.getLastBroadcast()
-      : null;
+    const fleet = isLocalHostId(hostId) ? deps.getFleetSnapshotService()?.getLastBroadcast() : null;
     if (!fleet || fleet.runs.length === 0) return () => ({});
     const rows = new Map<string, FleetRunRow>();
     for (const row of fleet.runs) {

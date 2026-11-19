@@ -1117,7 +1117,13 @@ describe("send to agent", () => {
         spawnedAt: 1,
         cwd: "/repo",
         agentState: "completed",
-        canopy: { kind: "asked", ask: "approval", quote: "Run the migration?", readAt: 9, seen: false },
+        canopy: {
+          kind: "asked",
+          ask: "approval",
+          quote: "Run the migration?",
+          readAt: 9,
+          seen: false,
+        },
       };
       const fleet = (...runs: FleetRunRow[]): FleetSnapshot => ({
         runs,
@@ -1155,7 +1161,11 @@ describe("send to agent", () => {
       it.each<[string, FleetSnapshot | null, string]>([
         ["no fleet read yet", null, "local"],
         ["no row for the pane", fleet({ ...ASKING, runId: "t-9" }), "local"],
-        ["a row filed under another project", fleet({ ...ASKING, workspaceId: "project-b" }), "local"],
+        [
+          "a row filed under another project",
+          fleet({ ...ASKING, workspaceId: "project-b" }),
+          "local",
+        ],
         ["a view of a Remote Host's project", fleet(ASKING), "host-1"],
       ])("leaves the pane unplaced with %s", async (_label, snapshot, hostId) => {
         const h = makeHarness(undefined, undefined, snapshot);

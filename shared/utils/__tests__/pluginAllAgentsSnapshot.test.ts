@@ -223,7 +223,10 @@ describe("toPluginAgentPlacement", () => {
   });
 
   it("keeps the screen's words back from a plugin without the screen-read grant", () => {
-    const placement = toPluginAgentPlacement(row({ canopy: { ...ASK, ask: "question" } }), NO_QUOTES);
+    const placement = toPluginAgentPlacement(
+      row({ canopy: { ...ASK, ask: "question" } }),
+      NO_QUOTES
+    );
     expect(placement).toEqual({ band: "needs-you", canopy: { readAt: 40, ask: "question" } });
     expect(Object.keys(placement.canopy!)).not.toContain("quote");
   });
@@ -252,16 +255,27 @@ describe("toPluginAgentPlacement", () => {
       seen: false,
     } as const;
     const wait = row({ waitingReason: "question", canopy: notAsking });
-    expect(toPluginAgentPlacement(wait, QUOTES)).toEqual({ band: "review", canopy: { readAt: 50 } });
+    expect(toPluginAgentPlacement(wait, QUOTES)).toEqual({
+      band: "review",
+      canopy: { readAt: 50 },
+    });
     // An approval Daintree observed itself is never cleared by a reading.
     const approval = row({ waitingReason: "approval", canopy: notAsking });
     expect(toPluginAgentPlacement(approval, QUOTES).canopy).toBeUndefined();
   });
 
   it("credits a stall to the reading only while the host's own silence check hasn't", () => {
-    const stalled = { kind: "stalled", quote: "Running tests", readAt: 60, stalledSince: 30 } as const;
+    const stalled = {
+      kind: "stalled",
+      quote: "Running tests",
+      readAt: 60,
+      stalledSince: 30,
+    } as const;
     const working = row({ agentState: "working", waitingReason: undefined, canopy: stalled });
-    expect(toPluginAgentPlacement(working, QUOTES)).toEqual({ band: "quiet", canopy: { readAt: 60 } });
+    expect(toPluginAgentPlacement(working, QUOTES)).toEqual({
+      band: "quiet",
+      canopy: { readAt: 60 },
+    });
     expect(toPluginAgentPlacement({ ...working, quietSince: 20 }, QUOTES)).toEqual({
       band: "quiet",
     });
@@ -312,7 +326,13 @@ describe("normalizing placement after a clone", () => {
           spawnedAt: 1,
           cwd: "/repo",
           agentState: "completed",
-          canopy: { kind: "asked", ask: "question", quote: "Which branch?", readAt: 7, seen: false },
+          canopy: {
+            kind: "asked",
+            ask: "question",
+            quote: "Which branch?",
+            readAt: 7,
+            seen: false,
+          },
         },
       ],
       changedAt: 1,
@@ -343,12 +363,22 @@ describe("normalizing placement after a clone", () => {
           canopy: { readAt: 7, ask: "question", quote: "Which?", seen: true, kind: "asked" },
         },
         // A quote rides only an ask.
-        { workspaceId: PROJECT_ID, terminalId: "t-2", band: "review", canopy: { readAt: 7, quote: "Done." } },
+        {
+          workspaceId: PROJECT_ID,
+          terminalId: "t-2",
+          band: "review",
+          canopy: { readAt: 7, quote: "Done." },
+        },
         // No band, so nothing for a note to say it placed.
         { workspaceId: PROJECT_ID, terminalId: "t-3", canopy: { readAt: 7 } },
         { workspaceId: PROJECT_ID, terminalId: "t-4", band: "urgent", canopy: { readAt: 7 } },
         { workspaceId: PROJECT_ID, terminalId: "t-5", band: "idle", canopy: { readAt: "now" } },
-        { workspaceId: PROJECT_ID, terminalId: "t-6", band: "idle", canopy: { readAt: 7, ask: "maybe" } },
+        {
+          workspaceId: PROJECT_ID,
+          terminalId: "t-6",
+          band: "idle",
+          canopy: { readAt: 7, ask: "maybe" },
+        },
       ],
       degraded: false,
       lastSuccessfulAt: 1,

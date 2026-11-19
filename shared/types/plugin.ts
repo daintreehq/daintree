@@ -5463,15 +5463,7 @@ export type PluginSendToAgentRefusalReason =
 export type PluginAgentBand =
   // `FleetBand`, spelled out so the SDK bundle never pulls the fleet types and
   // their panel imports; pinned to it by a type test.
-  | "blocked"
-  | "needs-you"
-  | "quiet"
-  | "review"
-  | "running"
-  | "done"
-  | "parked"
-  | "snoozed"
-  | "idle";
+  "blocked" | "needs-you" | "quiet" | "review" | "running" | "done" | "parked" | "snoozed" | "idle";
 
 /**
  * Canopy's reading, when it is what placed a run in its band: a suggestion
