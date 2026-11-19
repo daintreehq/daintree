@@ -58,7 +58,8 @@ function windowsCommandLine(args: string[]): string {
           backslashes++;
           continue;
         }
-        out += ch === '"' ? `${"\\".repeat(backslashes * 2 + 1)}"` : `${"\\".repeat(backslashes)}${ch}`;
+        out +=
+          ch === '"' ? `${"\\".repeat(backslashes * 2 + 1)}"` : `${"\\".repeat(backslashes)}${ch}`;
         backslashes = 0;
       }
       return `${out}${"\\".repeat(backslashes * 2)}"`;
@@ -262,11 +263,15 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
     expect(plain.status).toBe(0);
     expect(fixture.seen[2].rpc?.params?.arguments).toEqual(typed);
 
-    const marked = await call(["fixture.echo", "--args", "-"], {}, `\ufeff${JSON.stringify(typed)}`);
-    expect(marked.status).toBe(0);
-    expect(fixture.seen.filter((r) => r.rpc?.method === "tools/call")[1].rpc?.params?.arguments).toEqual(
-      typed
+    const marked = await call(
+      ["fixture.echo", "--args", "-"],
+      {},
+      `\ufeff${JSON.stringify(typed)}`
     );
+    expect(marked.status).toBe(0);
+    expect(
+      fixture.seen.filter((r) => r.rpc?.method === "tools/call")[1].rpc?.params?.arguments
+    ).toEqual(typed);
   });
 
   it("prints the whole result, exactly as sent, with --json", async () => {
@@ -379,8 +384,11 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
   });
 
   it("reports a usage error before a missing credential, without waiting on stdin", async () => {
-    const run = await start(["fixture.echo", "--args", "-", "--bogus"], { DAINTREE_MCP_TOKEN: undefined }, null)
-      .done;
+    const run = await start(
+      ["fixture.echo", "--args", "-", "--bogus"],
+      { DAINTREE_MCP_TOKEN: undefined },
+      null
+    ).done;
 
     expect(run.status).toBe(2);
     expect(run.stderr).toContain("unknown option");
@@ -405,7 +413,9 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
 
     expect(run.status).toBe(4);
     const bash = fs.readFileSync(path.join(HERE, "daintree-cli.sh"), "utf8");
-    const message = bash.match(/daintree_call_fail 4 "(DAINTREE_MCP_TOKEN is not set\.[^"]*)"/)?.[1];
+    const message = bash.match(
+      /daintree_call_fail 4 "(DAINTREE_MCP_TOKEN is not set\.[^"]*)"/
+    )?.[1];
     expect(message).toBeDefined();
     expect(run.stderr).toBe(`daintree call: ${message}\n`);
   });
@@ -548,7 +558,11 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
       '{"jsonrpc":"2.0","id":2,"result":{"is\\u0045rror":true,"content":[]}}',
       1,
     ],
-    ["a key that differs only in case", '{"jsonrpc":"2.0","id":2,"result":{"iserror":true,"content":[]}}', 0],
+    [
+      "a key that differs only in case",
+      '{"jsonrpc":"2.0","id":2,"result":{"iserror":true,"content":[]}}',
+      0,
+    ],
     ["a null result", sse({ jsonrpc: "2.0", id: 2, result: null }), 3],
     ["no jsonrpc version", sse({ id: 2, result: text("x") }), 3],
     ["only another request's answer", sse({ jsonrpc: "2.0", id: 1, result: text("x") }), 3],
@@ -627,7 +641,11 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
 
     it("keeps the bearer and the request body off every command line while a call is out", async () => {
       const marker = `prompt-${Date.now()}`;
-      const { child, done } = start(["fixture.slow", "--args", "-"], {}, JSON.stringify({ marker }));
+      const { child, done } = start(
+        ["fixture.slow", "--args", "-"],
+        {},
+        JSON.stringify({ marker })
+      );
       await fixture.callArrived;
       const commandLines = execFileSync("ps", ["-A", "-ww", "-o", "args="], { encoding: "utf8" });
       expect(commandLines).toContain(CLIENT);
@@ -769,7 +787,9 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
       expect(after.stderr).toContain("session start");
       const again = await session(["end"], { DAINTREE_MCP_SESSION: handle });
       expect(again.status).toBe(5);
-      expect(fixture.seen.filter((request) => request.rpc?.method === "initialize")).toHaveLength(1);
+      expect(fixture.seen.filter((request) => request.rpc?.method === "initialize")).toHaveLength(
+        1
+      );
     });
 
     it("fails a handle sent with another credential, leaving the session to its own", async () => {
@@ -790,7 +810,9 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
 
       expect((await call(["fixture.echo"], rotated)).status).toBe(4);
       expect((await session(["end"], rotated)).status).toBe(4);
-      expect(fixture.seen.some((request) => request.method === "DELETE" && request.sessionId)).toBe(true);
+      expect(fixture.seen.some((request) => request.method === "DELETE" && request.sessionId)).toBe(
+        true
+      );
       expect(fixture.sessions.size).toBe(1);
     });
 
@@ -947,14 +969,22 @@ describe.skipIf(process.platform !== "win32" || POWERSHELL === null)(
       });
     }
 
-    it.each(["cmd", "powershell"] as const)("makes a call from %s, with --args - on stdin", async (shell) => {
-      const result = await run(shell, "call fixture.echo --args -", {}, '{"limit":5,"q":"a & b"}');
+    it.each(["cmd", "powershell"] as const)(
+      "makes a call from %s, with --args - on stdin",
+      async (shell) => {
+        const result = await run(
+          shell,
+          "call fixture.echo --args -",
+          {},
+          '{"limit":5,"q":"a & b"}'
+        );
 
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ limit: 5, q: "a & b" });
-      expect(fixture.sessions.size).toBe(0);
-    });
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({ limit: 5, q: "a & b" });
+        expect(fixture.sessions.size).toBe(0);
+      }
+    );
 
     it("takes a quoted --arg and inline --args from cmd", async () => {
       const spaced = await run("cmd", 'call fixture.echo --arg "query=send to an owned terminal"');
@@ -966,15 +996,24 @@ describe.skipIf(process.platform !== "win32" || POWERSHELL === null)(
       expect(JSON.parse(inline.stdout)).toEqual({ limit: 5 });
     });
 
-    it.each(["cmd", "powershell"] as const)("carries each exit status through %s", async (shell) => {
-      expect((await run(shell, "call fixture.refuse")).status).toBe(1);
-      expect((await run(shell, "call")).status).toBe(2);
-      expect((await run(shell, "call fixture.echo", { DAINTREE_MCP_URL: "http://127.0.0.1:1/mcp" })).status).toBe(3);
-      const missing = await run(shell, "call fixture.echo", { DAINTREE_MCP_TOKEN: undefined });
-      expect(missing.status).toBe(4);
-      expect(missing.stderr).toContain("DAINTREE_MCP_TOKEN is not set");
-      expect((await run(shell, "call fixture.echo", { DAINTREE_MCP_SESSION: "2025-06-18:gone" })).status).toBe(5);
-    });
+    it.each(["cmd", "powershell"] as const)(
+      "carries each exit status through %s",
+      async (shell) => {
+        expect((await run(shell, "call fixture.refuse")).status).toBe(1);
+        expect((await run(shell, "call")).status).toBe(2);
+        expect(
+          (await run(shell, "call fixture.echo", { DAINTREE_MCP_URL: "http://127.0.0.1:1/mcp" }))
+            .status
+        ).toBe(3);
+        const missing = await run(shell, "call fixture.echo", { DAINTREE_MCP_TOKEN: undefined });
+        expect(missing.status).toBe(4);
+        expect(missing.stderr).toContain("DAINTREE_MCP_TOKEN is not set");
+        expect(
+          (await run(shell, "call fixture.echo", { DAINTREE_MCP_SESSION: "2025-06-18:gone" }))
+            .status
+        ).toBe(5);
+      }
+    );
 
     it("ignores a DAINTREE_CLI_ARGS the caller already had", async () => {
       const result = await run("cmd", "call fixture.echo --arg a=1", {
