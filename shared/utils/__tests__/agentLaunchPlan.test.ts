@@ -11,6 +11,8 @@ import {
 } from "../../types/agentSettings.js";
 import type { PluginAgentContribution } from "../../types/plugin.js";
 import { buildAgentLaunchPlan, type AgentLaunchPlanInput } from "../agentLaunchPlan.js";
+import { describeLaunchAccount } from "../agentAccounts.js";
+import { settleLaunchPreset } from "../agentPresets.js";
 import {
   clearPluginAgentRegistryForTests,
   registerPluginAgents,
@@ -889,6 +891,39 @@ describe("accounts (#16040)", () => {
 
       const pinned = await buildAgentLaunchPlan(input({ settings, worktreeId: "/repo-wt/b" }));
       expect(pinned.account?.id).toBe("company");
+    });
+
+    // The listing's worktree answer (#17079) has to be the account this very
+    // plan launches on, across every step that can choose it.
+    it.each([
+      ["the worktree's pick", { presetId: "work", worktreeAccounts: { "/repo-wt/a": "personal" } }],
+      ["the worktree's CLI login", { presetId: "work", worktreeAccounts: { "/repo-wt/a": null } }],
+      ["the agent preset's pin", { accountId: "personal", presetId: "work" }],
+      ["a worktree preset's pin", { worktreePresets: { "/repo-wt/a": "work" } }],
+      [
+        "the pin after a stale worktree preset",
+        { presetId: "work", worktreePresets: { "/repo-wt/a": "deleted" } },
+      ],
+      ["the agent's default", { accountId: "personal", presetId: "plain" }],
+      [
+        "a worktree's bare CLI over a pinned default",
+        { presetId: "work", worktreePresets: { "/repo-wt/a": null } },
+      ],
+      ["the CLI's login", {}],
+    ])("lists the account a plain launch uses: %s", async (_label, choices) => {
+      const settings = settingsWith({
+        accounts: [COMPANY, PERSONAL],
+        customPresets: pinnedPresets,
+        ...choices,
+      });
+      const plan = await buildAgentLaunchPlan(input({ settings }));
+      const entry = settings.agents.claude ?? {};
+      const settled = settleLaunchPreset("claude", entry, "/repo-wt/a", undefined);
+
+      expect(settled.preset?.id).toBe(plan.preset?.id);
+      expect(describeLaunchAccount(entry, "/repo-wt/a", settled.preset).accountId).toBe(
+        plan.account?.id ?? null
+      );
     });
 
     it("reads the pin of the preset the launch settled on, after a stale worktree pick falls back", async () => {
