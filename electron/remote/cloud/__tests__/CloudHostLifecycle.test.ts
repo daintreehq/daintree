@@ -4200,56 +4200,22 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
   });
 
-  it("asks with nothing when the account's credentials were replaced while the create was readied (#17928)", async () => {
-    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
-    const { send, prepareCreate, finish } = readies(env);
-    await create(env);
-    await vi.waitFor(() => expect(prepareCreate).toHaveBeenCalledTimes(1));
-    await env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_y" });
-    finish();
-    await vi.waitFor(() =>
-      expect(env.lifecycle.statuses()[0]).toMatchObject({
-        operation: null,
-        lastError: { message: expect.stringContaining("credentials were replaced") },
-      })
-    );
-    expect(send).not.toHaveBeenCalled();
-    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
-    // Retry readies it again, with the new set.
-    prepareCreate.mockImplementationOnce(async () => send);
-    await env.lifecycle.retryCreate("build");
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(prepareCreate.mock.calls[1]![0].values).toEqual({ apiKey: "boat_live_y" });
-  });
-
-  it("waits out a credential replacement still being saved when the create is readied, then asks with nothing (#17928)", async () => {
+  it("refuses a key replacement for a provider that can't say whose a key is while a create is readied (#17928)", async () => {
     const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
     const { send, prepareCreate, finish } = readies(env);
     await create(env);
     await vi.waitFor(() => expect(prepareCreate).toHaveBeenCalled());
-    let saved: () => void = () => {};
-    const put = MemoryCloudCredentialVault.prototype.put;
-    const holding = vi
-      .spyOn(MemoryCloudCredentialVault.prototype, "put")
-      .mockImplementationOnce(async function (this: MemoryCloudCredentialVault, ...args) {
-        await new Promise<void>((resolve) => {
-          saved = resolve;
-        });
-        return put.apply(this, args);
-      });
-    onTestFinished(() => holding.mockRestore());
-    const replacing = env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_y" });
-    await vi.waitFor(() => expect(holding).toHaveBeenCalled());
+    vi.mocked(env.provider.checkCredentials).mockResolvedValueOnce({
+      identity: null,
+      scopes: [{ scope: { kind: "personal", id: "personal", name: "Personal" }, active: true }],
+    });
+    // Nothing is marked as sent yet, but the create is about to be sent with this account's key.
+    await expect(
+      env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_y" })
+    ).rejects.toThrow(/hasn't been confirmed yet/);
     finish();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
-    saved();
-    await replacing;
-    await vi.waitFor(() =>
-      expect(env.lifecycle.statuses()[0]?.lastError?.message).toContain("credentials were replaced")
-    );
-    expect(send).not.toHaveBeenCalled();
-    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(prepareCreate.mock.calls[0]![0].values).toEqual({ apiKey: "boat_live_x" });
   });
 
   it("refuses a Retry while the host is being removed, so nothing is made after its look (#17928)", async () => {
@@ -4278,6 +4244,69 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     await removing;
     expect(env.hosts).toHaveLength(0);
     expect(env.provider.create).toHaveBeenCalledTimes(1);
+  });
+
+  /** A sent create whose answer was lost, with Retry on offer. */
+  async function lostAnswer(env: Awaited<ReturnType<typeof setup>>) {
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+  }
+
+  /** Each `list` from now on held until the test answers it, in the order they were asked. */
+  function holdLists(env: Awaited<ReturnType<typeof setup>>) {
+    const held: Array<{ answer: (found: ProviderResource[]) => void; fail: (e: unknown) => void }> =
+      [];
+    vi.mocked(env.provider.list).mockImplementation(
+      () =>
+        new Promise((answer, fail) => {
+          held.push({ answer, fail });
+        })
+    );
+    return held;
+  }
+
+  it("keeps Retry refused while a second removal of the host is still looking (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    await lostAnswer(env);
+    const held = holdLists(env);
+    const first = env.lifecycle.deleteMachine("build", null).catch((error: unknown) => error);
+    const second = env.lifecycle.deleteMachine("build", null);
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    held[0]!.fail(new BoatApiError("network", "offline", null, null, null));
+    expect(await first).toBeInstanceOf(Error);
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/being removed/);
+    held[1]!.answer([]);
+    await second;
+    expect(env.hosts).toHaveLength(0);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes the machine a restart's lookup bound while the removal looked (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    await quitWhileSent(env);
+    const held = holdLists(env);
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const bindingId = next.store.bindings()[0]!.id;
+    const removing = next.lifecycle.deleteMachine("build", null);
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    held[0]!.answer([
+      resource({ resourceId: "bx_found0001", labels: { "daintree-binding": bindingId } }),
+    ]);
+    await vi.waitFor(() => expect(next.store.bindings()[0]?.resourceId).toBe("bx_found0001"));
+    held[1]!.answer([]);
+    await removing;
+    expect(env.provider.delete).toHaveBeenCalledWith(expect.anything(), "bx_found0001");
+    expect(env.hosts).toHaveLength(0);
+    next.lifecycle.dispose();
   });
 
   it("marks nothing and sends nothing when the create is stopped while it is readied (#17928)", async () => {

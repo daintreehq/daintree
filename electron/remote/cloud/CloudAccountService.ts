@@ -515,15 +515,6 @@ export class CloudAccountService {
     }
   }
 
-  /**
-   * Runs `step`, which must not wait on anything, between this account's
-   * credential replacements and its removal, never during one: what it reads
-   * of the account holds while it runs (#17928).
-   */
-  betweenCommits<T>(accountId: string, step: () => T): Promise<T> {
-    return this.serialize(accountId, async () => step());
-  }
-
   /** Runs `commit` once the account's previous replace or remove has finished. */
   private serialize<T>(accountId: string, commit: () => Promise<T>): Promise<T> {
     const previous = this.commits.get(accountId) ?? Promise.resolve();
@@ -781,8 +772,9 @@ export class CloudAccountService {
     values: CloudCredentialValues
   ): Promise<void> {
     const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
-    // A create sent and not yet found is looked for, and deleted, with the account's key.
-    if (bound.some((binding) => binding.resourceId === null && binding.creation?.sentAt != null)) {
+    // A create sent and not yet found is looked for, and deleted, with the account's key; one
+    // still being readied (Agent 37 registers its key first) is about to be sent with it (#17928).
+    if (bound.some((binding) => binding.resourceId === null && binding.creation)) {
       throw invalid(
         "A machine this account asked for hasn't been confirmed yet, and a new key may not see it. Replace the key once it has, or remove that host first."
       );
