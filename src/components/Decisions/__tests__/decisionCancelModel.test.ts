@@ -10,6 +10,7 @@ import {
   dismissProgressText,
   dismissTitle,
   dismissVerdict,
+  hostAwayNote,
   noLongerWaiting,
   type DecisionCancelTarget,
 } from "../decisionCancelModel";
@@ -222,6 +223,83 @@ describe("decisionCancelModel", () => {
       expect(dismissProgressText(settled({ status: "declined" }))).toMatch(/^Dismissed/);
       expect(dismissProgressText(settled({ status: "unsupported", by: "relay" }))).toBeNull();
       expect(dismissProgressText({ kind: "refused", reason: "not-owner" })).toBeNull();
+    });
+  });
+
+  describe("a dismissal of a Remote Host's question while its Host is away (#17946)", () => {
+    const AWAY: DecisionCancelTarget = { ...TARGET, revision: 3, lastReadAt: 1_000 };
+
+    it("says it goes by what was last read here, and the agent hears once the Host is back", () => {
+      const body = dismissBody(AWAY);
+      expect(body).toMatch(/isn't connected, so it's dismissed as this computer last read it/);
+      expect(body).toMatch(/If it hasn't changed since/);
+      expect(body).toMatch(/once the Host is back/);
+      expect(body).toMatch(/Nothing is decided or approved/);
+      expect(dismissBody({ ...AWAY, lastReadAt: null })).toBe(dismissBody());
+    });
+
+    it("never offers withdrawing in its place, and says plainly why it wasn't taken", () => {
+      const notTaken: Array<[DeclinePhase, RegExp]> = [
+        [settled({ status: "unsupported", by: "relay" }), /^Your relay needs an update/],
+        [
+          settled({ status: "unsupported", by: "asking-desktop" }),
+          /^Daintree on the computer that asked q-42 needs an update/,
+        ],
+        [settled({ status: "closed", reason: "not-found" }), /^The relay doesn't hold q-42,/],
+        [{ kind: "refused", reason: "not-owner" }, /^This computer doesn't sign for you/],
+        [settled({ status: "already-answered" }), /^q-42 was answered first/],
+        [settled({ status: "closed", reason: "expired" }), /^q-42 expired first/],
+      ];
+      for (const [phase, message] of notTaken) {
+        expect(dismissFallback("q-42", phase, "open", false)).toBeNull();
+        const verdict = dismissVerdict(AWAY, { kind: "submitted", key: "k", phase });
+        expect(verdict).toEqual({
+          kind: "problem",
+          problem: expect.objectContaining({ message: expect.stringMatching(message) }),
+        });
+        expect(JSON.stringify(verdict)).not.toMatch(/withdraw it instead/);
+      }
+    });
+
+    it("sends a changed one back for review once the Host is back, never to dismiss again now", () => {
+      for (const attempt of [
+        { kind: "changed" } as const,
+        { kind: "submitted", key: "k", phase: settled({ status: "changed" }) } as const,
+      ]) {
+        expect(dismissVerdict(AWAY, attempt)).toEqual({
+          kind: "problem",
+          problem: {
+            severity: "info",
+            message: expect.stringMatching(
+              /changed after this computer last read it.*Host is back/
+            ),
+            retry: false,
+          },
+        });
+      }
+    });
+
+    it("says it closes here only once the Host is back, after the relay took it", () => {
+      expect(dismissProgressText(settled({ status: "declined" }), true)).toMatch(
+        /^Dismissed\. It closes here once its Remote Host is back/
+      );
+      expect(dismissProgressText(settled({ status: "queued" }), true)).toBe(
+        dismissProgressText(settled({ status: "queued" }))
+      );
+    });
+
+    it("says beside the Host being away whether it can still be dismissed, and why not", () => {
+      const now = 10 * 60_000;
+      expect(
+        hostAwayNote({ result: "read", revision: 3, alias: 42, readAt: now - 5 * 60_000 }, now)
+      ).toMatch(/last read it 5 minutes ago, so you can still dismiss it/);
+      expect(hostAwayNote({ result: "not-sent" }, now)).toMatch(
+        /hadn't reached the relay.*can't be dismissed until the Host is back/
+      );
+      expect(hostAwayNote({ result: "not-read" }, now)).toMatch(
+        /can't be dismissed until the Host is back/
+      );
+      expect(hostAwayNote(undefined, now)).toBeNull();
     });
   });
 });
