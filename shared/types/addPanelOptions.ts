@@ -19,6 +19,7 @@ import type {
 import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
+import type { UpdateInstalledObservation } from "./ipc/agent.js";
 import type {
   ConversationStore,
   TerminalSpawnSource,
@@ -212,6 +213,8 @@ export interface AddPanelOptionsBase {
    * never read absence as zero.
    */
   agentIncarnation?: number;
+  /** The host's update-installed observation at hydration time (#17905). */
+  updateInstalled?: UpdateInstalledObservation;
   /** Runtime-detected agent identity at hydration time; cleared when the agent exits. Rehydrated from backend reconnect payload. */
   detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.) at hydration time; cleared when the process exits. */

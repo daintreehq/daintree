@@ -117,6 +117,7 @@ export async function buildTerminalInventory(
         originalAgentPresetId: terminal.originalAgentPresetId,
         everDetectedAgent: terminal.everDetectedAgent,
         agentIncarnation: terminal.agentIncarnation,
+        updateInstalled: terminal.updateInstalled,
         detectedAgentId: terminal.detectedAgentId,
         detectedProcessId: terminal.detectedProcessId,
       });

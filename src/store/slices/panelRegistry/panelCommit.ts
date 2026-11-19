@@ -326,6 +326,9 @@ export function commitPtyPanel(
               // `??`, not `||`: zero is a real reading of this pty, and the
               // backend read outranks what the panel learned from an event.
               agentIncarnation: ptyTerminal.agentIncarnation ?? existingPty?.agentIncarnation,
+              // As the count: a partial payload carries none, and the live
+              // listener keeps the panel's copy current, clears included.
+              updateInstalled: ptyTerminal.updateInstalled ?? existingPty?.updateInstalled,
               // Stamped once at creation and never re-derivable: an orphan or
               // partial reconnect payload carries none, so keep what we have
               // rather than letting the spread blank it (#12419).
@@ -414,6 +417,9 @@ export function commitPtyPanel(
               // `??`, not `||`: zero is a real reading of this pty, and the
               // backend read outranks what the panel learned from an event.
               agentIncarnation: ptyTerminal.agentIncarnation ?? existingPty2?.agentIncarnation,
+              // As the count: a partial payload carries none, and the live
+              // listener keeps the panel's copy current, clears included.
+              updateInstalled: ptyTerminal.updateInstalled ?? existingPty2?.updateInstalled,
               // Stamped once at creation and never re-derivable: an orphan or
               // partial reconnect payload carries none, so keep what we have
               // rather than letting the spread blank it (#12419).

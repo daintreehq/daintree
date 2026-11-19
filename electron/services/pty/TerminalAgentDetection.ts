@@ -14,6 +14,7 @@ import { buildPatternConfig } from "./terminalActivityPatterns.js";
 import type { AgentEndObservation } from "../../../shared/types/ipc/agent.js";
 import { captureAgentEndSession } from "./agentEndCapture.js";
 import { isDetectableAgentId } from "../ProcessDetector/registries.js";
+import { clearUpdateInstalled } from "./claudeUpdateObservation.js";
 
 export interface TerminalAgentDetectionHost {
   readonly id: string;
@@ -95,6 +96,8 @@ export function handleAgentDetection(
       }
 
       terminal.detectedAgentId = detectedAgentId;
+      // Another agent took the pane: an update footer was its predecessor's (#17905).
+      clearUpdateInstalled(terminal, Date.now());
       // A shell's mirror starts at the plain-shell ceiling; an agent gets the
       // agent size. Grown only on the identity change so a governor trim of
       // a live agent isn't undone by the next poll. Never shrunk on demotion.
@@ -202,6 +205,8 @@ export function handleAgentDetection(
       });
       host.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });
       terminal.detectedAgentId = undefined;
+      // Even when the exit transition above was dropped, the run is over.
+      clearUpdateInstalled(terminal, Date.now());
       justClearedDetection = true;
     }
 

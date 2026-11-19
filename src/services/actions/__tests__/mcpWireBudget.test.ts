@@ -616,7 +616,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // it is the listing's closed output schema, whose worktree answer names the
   // account, the step that chose it and whether presets were still loading; the
   // field descriptions were cut to a clause or dropped first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_200;
+  // 63_200 → 63_500 for #17905, measured at 63_413 B (+290 over develop's
+  // 63_123): `updateInstalled` on `terminal.getStatus`, so an assistant can see
+  // that a Claude Code pane drew its "Update installed" footer without reading
+  // the screen. The result schema is closed, so the field must be advertised;
+  // its one description was cut to a clause first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_500;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -1071,7 +1076,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `agent.addAccount`, in-app only, whose rows each carry an agent, a name and
   // a create-or-existing folder, and whose closed output schema reports every
   // row's outcome.
-  const MAX_COHORT_PAYLOAD_BYTES = 199_400;
+  // 199_400 → 200_000 for #17905, measured at 199_916 B (+580 over develop's
+  // 199_336): the same `updateInstalled` the external half above pays for, on
+  // `terminal.getStatus` and on the host status read, whose terminal rows
+  // extend the same entry schema. Both are in-app; only the first is external.
+  const MAX_COHORT_PAYLOAD_BYTES = 200_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -717,6 +717,7 @@ export const agentActionRuns = {
           spawnedAt: panel.startedAt ?? null,
           terminalId: panel.id,
           found: true,
+          ...(panel.updateInstalled !== undefined && { updateInstalled: panel.updateInstalled }),
         };
       }
     }

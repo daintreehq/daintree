@@ -71,6 +71,8 @@ vi.mock("@/store/panelStore", () => ({
       watchedPanels: new Set<string>(),
       updateAgentState,
       setRuntimeStatus,
+      // The update-installed copy resync makes for each listed terminal (#17905).
+      setUpdateInstalled: () => {},
     }),
   },
 }));

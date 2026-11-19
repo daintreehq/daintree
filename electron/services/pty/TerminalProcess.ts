@@ -46,6 +46,12 @@ import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
 import { resolveResetsAt, scanClaudeUsageMessages } from "./ClaudeUsageWarnings.js";
+import { hasClaudeComposer, scanClaudeUpdateFooter } from "./ClaudeUpdateFooter.js";
+import {
+  clearUpdateInstalled,
+  noteUpdateFooter,
+  noteUpdateFooterProcess,
+} from "./claudeUpdateObservation.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -915,6 +921,9 @@ export class TerminalProcess {
     this.flushAgentOutput();
     this.inThreadAnalysis?.cancelAgentOutputNote();
     this.cancelRateLimitSettle();
+    // The run is over however it ended, an idle kill the state machine
+    // ignores included (#17905).
+    clearUpdateInstalled(this.terminalInfo, Date.now());
 
     if (this.ptyDataDisposable) {
       try {
@@ -1035,6 +1044,7 @@ export class TerminalProcess {
       detectedProcessIconId: t.detectedProcessIconId,
       everDetectedAgent: t.everDetectedAgent,
       agentIncarnation: t.agentIncarnation,
+      updateInstalled: t.updateInstalled,
       restartCount: t.restartCount,
       activityTier: this._activityTier,
       hasPty,
@@ -1976,6 +1986,7 @@ export class TerminalProcess {
     }
     this.observeRateLimitBanner(lines, now);
     this.observeClaudeUsage(lines, now);
+    this.observeUpdateFooter(lines, now);
     this.observeHandback(now);
   }
 
@@ -2122,6 +2133,27 @@ export class TerminalProcess {
   }
 
   /**
+   * Note Claude Code's "Update installed" footer (#17905). Only a detected,
+   * live Claude Code run is read: the launch hint alone doesn't make a pane
+   * Claude's, and the exit path's last frame belongs to a run that is over.
+   * Anything else ends the observation, so a shell or another CLI taking the
+   * pane clears it on its first frame.
+   */
+  private observeUpdateFooter(lines: readonly string[], now: number): void {
+    const t = this.terminalInfo;
+    const cols = readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined;
+    if (t.detectedAgentId !== "claude" || !this.isAgentLive || this.samplingFinalFrame) {
+      clearUpdateInstalled(t, now);
+      // A fenced footer the shell scrolled away no longer belongs to anyone.
+      if (t.updateFooterSighting?.fenced && scanClaudeUpdateFooter(lines, cols) === null) {
+        t.updateFooterSighting.fenced = false;
+      }
+      return;
+    }
+    noteUpdateFooter(t, scanClaudeUpdateFooter(lines, cols), now);
+  }
+
+  /**
    * Offer the pane's fallback chain once its rate-limit banner has sat still
    * (#14370). Kept apart from the chip's cooldown: a banner blanked by one
    * repaint restarts the settle without waiting a minute for a new observation.
@@ -2257,6 +2289,9 @@ export class TerminalProcess {
       const seen = this.agentProcessSeen;
       if (seen?.pid === observation.pid && seen.run !== run) return;
       this.agentProcessSeen = { pid: observation.pid, run };
+      if (observation.agentType === "claude") {
+        noteUpdateFooterProcess(info, observation.pid, Date.now());
+      }
     }
     if (this.argvReadRun === run) return;
     this.argvReadRun = run;
@@ -2265,7 +2300,18 @@ export class TerminalProcess {
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {
     this.flushAgentOutput();
+    const before = this.terminalInfo.detectedAgentId;
     runHandleAgentDetection(this.agentDetectionHost(), result, spawnedAt);
+    // A quiet pane may already show the footer from before detection caught
+    // up (#17905); read the screen now rather than wait for output. Only a
+    // screen showing Claude's composer counts, and any other says nothing,
+    // not even that the footer is gone: it may still be what the shell left
+    // before Claude's first frame reached the mirror.
+    if (before !== "claude" && this.terminalInfo.detectedAgentId === "claude") {
+      const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
+      const lines = this.analysis.getViewportLines(rows);
+      if (hasClaudeComposer(lines)) this.observeUpdateFooter(lines, Date.now());
+    }
   }
 
   /**

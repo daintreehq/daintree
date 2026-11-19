@@ -5,6 +5,10 @@ import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/stor
 import { cancelDriveLeaseHold, isHeldForDriveLease } from "@/store/driveLeaseWaitStore";
 import { logWarn } from "@/utils/logger";
 import {
+  updateInstalledChangedSince,
+  updateInstalledEventMark,
+} from "@/store/updateInstalledEvents";
+import {
   load as loadTerminalService,
   with as withTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -54,6 +58,7 @@ export async function resyncHostTerminals(
   const exitedBefore = new Set(
     options.follow ? [...knownBefore].filter((id) => showsExited(before, id)) : []
   );
+  const updateMark = updateInstalledEventMark();
   const infos = await window.electron.terminal.getForProject(projectId);
   if (!options.isCurrent()) return;
 
@@ -61,6 +66,11 @@ export async function resyncHostTerminals(
   const store = usePanelStore.getState();
 
   for (const info of infos) {
+    // Whatever its agent state: the footer comes and goes without a
+    // transition. An event since the read is newer than the record.
+    if (!updateInstalledChangedSince(info.id, updateMark)) {
+      store.setUpdateInstalled(info.id, info.updateInstalled);
+    }
     takeHostAgentState(info.id, info, store, terminalInstanceService);
   }
 
@@ -300,6 +310,8 @@ async function observeVanishedTerminals(
       // No exit code: none was seen. Left undefined, a restart relaunches an
       // agent as the agent rather than demoting it to a shell.
       state.setRuntimeStatus(id, "exited");
+      // Its run is gone with it, and no clear will come for it (#17905).
+      state.setUpdateInstalled(id, undefined);
       terminalInstanceService.reportLost(id, "The host no longer has this terminal");
       if (panel.agentState !== "exited") options.onLost?.(id, panel.restartKey ?? 0);
     }

@@ -13,6 +13,7 @@ import type {
   AddPanelOptions,
 } from "@/types";
 import type { PanelInstance, PanelWorktreeMoveNotice } from "@shared/types/panel";
+import type { UpdateInstalledObservation } from "@shared/types/ipc/agent";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 
 export type { AddPanelOptions };
@@ -199,6 +200,11 @@ export interface PanelRegistrySlice {
    * alike, so the pane never names the wrong session beside that state.
    */
   setAgentIncarnation: (id: string, agentIncarnation: number) => void;
+  /**
+   * Copy the host's update-installed observation for a terminal (#17905);
+   * undefined clears it. Written by the live listener and by resync alike.
+   */
+  setUpdateInstalled: (id: string, updateInstalled: UpdateInstalledObservation | undefined) => void;
   updateActivity: (
     id: string,
     headline: string,

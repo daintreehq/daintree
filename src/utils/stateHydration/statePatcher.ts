@@ -23,6 +23,7 @@ import type {
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
+import type { UpdateInstalledObservation } from "@shared/types/ipc/agent";
 import type { ResumeOnRestart } from "@shared/types/agentSettings";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import { isAccountId } from "@shared/utils/agentAccounts";
@@ -329,6 +330,7 @@ interface BackendTerminalData {
    * never read absence as zero.
    */
   agentIncarnation?: number;
+  updateInstalled?: UpdateInstalledObservation;
   detectedAgentId?: AgentId;
   detectedProcessId?: string;
   /** False once the host's record outlived its process. */
@@ -358,6 +360,7 @@ interface ReconnectedTerminalData {
    * never read absence as zero.
    */
   agentIncarnation?: number;
+  updateInstalled?: UpdateInstalledObservation;
   detectedAgentId?: AgentId;
   detectedProcessId?: string;
 }
@@ -510,6 +513,7 @@ export function buildArgsForBackendTerminal(
     ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     everDetectedAgent: backendTerminal.everDetectedAgent,
     agentIncarnation: backendTerminal.agentIncarnation,
+    updateInstalled: backendTerminal.updateInstalled,
     detectedAgentId: backendTerminal.detectedAgentId,
     detectedProcessId: backendTerminal.detectedProcessId,
     agentPresetId: readPresetId(saved) ?? backendTerminal.agentPresetId,
@@ -612,6 +616,7 @@ export function buildArgsForReconnectedFallback(
     ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
     agentIncarnation: reconnectedTerminal.agentIncarnation,
+    updateInstalled: reconnectedTerminal.updateInstalled,
     detectedAgentId: reconnectedTerminal.detectedAgentId,
     detectedProcessId: reconnectedTerminal.detectedProcessId,
     agentPresetId: readPresetId(saved) ?? reconnectedTerminal.agentPresetId,
@@ -1331,6 +1336,7 @@ export function buildArgsForOrphanedTerminal(
     agentModelId: terminal.agentModelId,
     everDetectedAgent: terminal.everDetectedAgent,
     agentIncarnation: terminal.agentIncarnation,
+    updateInstalled: terminal.updateInstalled,
     detectedAgentId: terminal.detectedAgentId,
     detectedProcessId: terminal.detectedProcessId,
     agentPresetId: terminal.agentPresetId,

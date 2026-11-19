@@ -187,6 +187,9 @@ const PTY_FIELD_CLASSIFICATION = {
   // the host re-derives from zero for every new one, so persisting it would
   // restore a session count for a session that no longer exists.
   agentIncarnation: false,
+  // Update-installed footer (#17905) — a live reading of the running agent,
+  // cleared with its run, so it is never persisted.
+  updateInstalled: false,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not the PTY serializer.
   createdAt: false,

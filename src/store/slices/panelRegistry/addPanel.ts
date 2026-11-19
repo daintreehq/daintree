@@ -409,6 +409,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       agentModelId: options.agentModelId,
       everDetectedAgent: options.everDetectedAgent,
       agentIncarnation: options.agentIncarnation,
+      updateInstalled: options.updateInstalled,
       detectedAgentId: options.detectedAgentId,
       detectedProcessId: options.detectedProcessId,
       runtimeIdentity:

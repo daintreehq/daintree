@@ -23,6 +23,7 @@ import {
   type HandbackHit,
 } from "./HandbackDetector.js";
 import { reportRunHandback } from "./runHandback.js";
+import { clearUpdateInstalled } from "./claudeUpdateObservation.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 
@@ -477,6 +478,17 @@ export class AgentStateService {
       if (event.type === "exit" || event.type === "kill") {
         terminal.handbackTracker?.clear();
       }
+    }
+
+    // A respawn starts a run and an exit or kill ends one: an update footer
+    // belongs to the run that showed it (#17905).
+    if (
+      event.type === "respawn" ||
+      event.type === "exit" ||
+      event.type === "kill" ||
+      newState === "exited"
+    ) {
+      clearUpdateInstalled(terminal, timestamp);
     }
 
     // Refresh the hysteresis lock only when a high-confidence transition

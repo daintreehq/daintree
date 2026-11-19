@@ -125,6 +125,7 @@ export const createCorePanelActions = (
   | "updateAgentState"
   | "noteAgentObservation"
   | "setAgentIncarnation"
+  | "setUpdateInstalled"
   | "updateActivity"
   | "updateLastCommand"
   | "updateVisibility"
@@ -512,6 +513,23 @@ export const createCorePanelActions = (
       if (terminal.agentIncarnation === agentIncarnation) return state;
       return {
         panelsById: { ...state.panelsById, [id]: { ...terminal, agentIncarnation } },
+      };
+    });
+  },
+
+  setUpdateInstalled: (id, updateInstalled) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal) || terminal.isRestarting) return state;
+      const current = terminal.updateInstalled;
+      if (
+        current?.observedAt === updateInstalled?.observedAt &&
+        current?.namesRestart === updateInstalled?.namesRestart
+      ) {
+        return state;
+      }
+      return {
+        panelsById: { ...state.panelsById, [id]: { ...terminal, updateInstalled } },
       };
     });
   },

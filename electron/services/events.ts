@@ -7,7 +7,10 @@ import type {
   TerminalFlowStatus,
 } from "../../shared/types/pty-host.js";
 import type { ExitReason } from "./pty/types.js";
-import type { AgentEndObservation } from "../../shared/types/ipc/agent.js";
+import type {
+  AgentEndObservation,
+  AgentUpdateInstalledChangedPayload,
+} from "../../shared/types/ipc/agent.js";
 import type { ClaudeUsageObservation } from "../../shared/types/ipc/agentQuota.js";
 import type { ActionSource } from "../../shared/types/actions.js";
 
@@ -236,6 +239,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresContext: false,
     requiresTimestamp: true,
     description: "A pane's output showed an agent rate-limit banner",
+  },
+  "agent:update-installed-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A Claude Code pane's update-installed footer was observed, or its run ended",
   },
   "agent:claude-usage-observed": {
     category: "agent",
@@ -791,6 +800,13 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A Claude Code pane showed its "Update installed" footer, or what it says
+   * about `/restart` changed, or the run that showed it ended (#17905). The
+   * footer's text never leaves the pty host.
+   */
+  "agent:update-installed-changed": AgentUpdateInstalledChangedPayload;
+
+  /**
    * A Claude Code pane showed a usage message (#15727): the limit it names,
    * what it says about use and its reset, as parsed fields. The line itself
    * never leaves the pty host. Main records it for `agent.readQuota` and
@@ -1344,6 +1360,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "agent:state-transition-dropped",
   "agent:all-clear",
   "agent:rate-limit-observed",
+  "agent:update-installed-changed",
   "agent:handback-observed",
   "agent:detected",
   "agent:exited",

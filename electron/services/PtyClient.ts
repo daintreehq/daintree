@@ -84,6 +84,7 @@ import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycle
 import { BrokerError } from "./rpc/index.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
+import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
 import type { TerminalLaunchAttribution } from "./pty/TerminalLifecycleObserver.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { RecentTerminalExits } from "./pty/RecentTerminalExits.js";
@@ -150,6 +151,7 @@ import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
+import type { UpdateInstalledObservation } from "../../shared/types/ipc/agent.js";
 import { withoutHandbackInstruction } from "../../shared/utils/handback.js";
 import { buildFirstPrompt, sanitizeFirstPrompt } from "../../shared/utils/firstPrompt.js";
 import { isCheckoutPendingProject } from "./projectClone/checkoutGate.js";
@@ -232,6 +234,11 @@ interface TerminalInfoResponse {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905). Absent when not seen, or once that run ended.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Lifecycle-ledger generation of the record that answered. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
@@ -672,6 +679,14 @@ export class PtyClient extends EventEmitter {
       incarnationLost: (id, launchGeneration) => {
         const fact: PtyIncarnationLost = { terminalId: id, launchGeneration };
         this.emit("incarnation-lost", fact);
+        // The host that observed this run's update footer died with it, so no
+        // clear will come from there (#17905).
+        bridgePtyEvent({
+          type: "agent-update-installed-changed",
+          terminalId: id,
+          updateInstalled: null,
+          timestamp: Date.now(),
+        });
       },
       logWarn,
     });

@@ -451,6 +451,267 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
   });
 });
 
+describe("TerminalProcess update-installed observation (#17905)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+  });
+
+  const unsubscribers: Array<() => void> = [];
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  function collect() {
+    const seen: Array<Record<string, unknown>> = [];
+    unsubscribers.push(
+      events.on("agent:update-installed-changed", (payload) => seen.push({ ...payload }))
+    );
+    return seen;
+  }
+
+  // Claude's footer on the 80-column pane: hints left, the notice flush right.
+  const footer = (notice = "✔ Update installed · /restart to apply") => {
+    const left = "  ? for shortcuts";
+    return `${left}${" ".repeat(79 - left.length - notice.length)}${notice}\r\n`;
+  };
+
+  function claudeTerminal(updateAgentState = vi.fn()) {
+    const terminal = createTerminal({ launchAgentId: "claude" }, undefined, {
+      updateAgentState,
+    });
+    terminal.getInfo().detectedAgentId = "claude";
+    terminal.getInfo().agentState = "working";
+    return terminal;
+  }
+
+  it("records the footer on a working Claude pane without touching its state", async () => {
+    const seen = collect();
+    const updateAgentState = vi.fn();
+    const terminal = claudeTerminal(updateAgentState);
+
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    const observedAt = seen[0]?.timestamp;
+    expect(seen).toEqual([
+      {
+        terminalId: "t1",
+        updateInstalled: { observedAt, namesRestart: true },
+        timestamp: observedAt,
+      },
+    ]);
+    expect(terminal.getInfo().updateInstalled).toEqual({ observedAt, namesRestart: true });
+    expect(terminal.getInfo().agentState).toBe("working");
+    expect(updateAgentState).not.toHaveBeenCalled();
+
+    // Repaints with the footer still up are the same observation.
+    ptyOnDataCallback!("more output\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("reads which offer the footer made", async () => {
+    const seen = collect();
+    const terminal = claudeTerminal();
+
+    ptyOnDataCallback!(footer("✔ Update installed · Restart to update"));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getInfo().updateInstalled?.namesRestart).toBe(false);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it.each([
+    ["a pane launched as Claude before detection names it", "claude", undefined],
+    ["a pane whose detected agent is Codex", "codex", "codex"],
+    ["a plain shell", undefined, undefined],
+  ] as const)("ignores the footer on %s", async (_name, launchAgentId, detectedAgentId) => {
+    const seen = collect();
+    const terminal = createTerminal(launchAgentId ? { launchAgentId } : undefined);
+    if (detectedAgentId) terminal.getInfo().detectedAgentId = detectedAgentId;
+
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(seen).toEqual([]);
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+
+    terminal.dispose();
+  });
+
+  it("clears on the first frame after another CLI takes the pane", async () => {
+    const seen = collect();
+    const terminal = claudeTerminal();
+
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    terminal.getInfo().detectedAgentId = "codex";
+    ptyOnDataCallback!("codex output\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)).toEqual({
+      terminalId: "t1",
+      updateInstalled: null,
+      timestamp: expect.any(Number),
+    });
+
+    terminal.dispose();
+  });
+
+  const detect = (terminal: TerminalProcess, agentType: "claude" | "codex") =>
+    terminal.handleAgentDetection(
+      { detectionState: "agent", detected: true, agentType, processName: agentType },
+      terminal.getInfo().spawnedAt
+    );
+
+  it("reads a footer already on screen the moment Claude is first detected", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    // Claude's screen, drawn before detection caught up, then nothing more.
+    ptyOnDataCallback!(`${"─".repeat(79)}\r\n❯ \r\n${"─".repeat(79)}\r\n${footer()}`);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([]);
+
+    detect(terminal, "claude");
+
+    expect(terminal.getInfo().updateInstalled?.namesRestart).toBe(true);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("doesn't credit footer text a shell left on screen to a Claude detected before it draws", async () => {
+    const seen = collect();
+    const terminal = createTerminal();
+
+    ptyOnDataCallback!(
+      "$ tail notes.txt\r\n  ✔ Update installed · /restart to apply\r\n$ claude\r\n"
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    detect(terminal, "claude");
+
+    expect(seen).toEqual([]);
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+
+    terminal.dispose();
+  });
+
+  it("keeps the last run's fence through a first-detection screen it can't read", async () => {
+    const terminal = claudeTerminal();
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    // Claude exits; its footer stays up above the shell prompt.
+    terminal.getInfo().detectedAgentId = undefined;
+    terminal.getInfo().launchAgentId = undefined;
+    ptyOnDataCallback!("$ claude\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(true);
+
+    // The next Claude is detected before it draws: no composer in view.
+    detect(terminal, "claude");
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(true);
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+
+    terminal.dispose();
+  });
+
+  it("clears the moment another agent is detected, with no frame after", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    detect(terminal, "claude");
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    detect(terminal, "codex");
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)?.updateInstalled).toBeNull();
+
+    terminal.dispose();
+  });
+
+  it("clears when an idle Claude pane is killed", async () => {
+    const seen = collect();
+    const terminal = claudeTerminal();
+    terminal.getInfo().agentState = "idle";
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    terminal.kill();
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)?.updateInstalled).toBeNull();
+
+    terminal.dispose();
+  });
+
+  it("lets the next run read its own footer once the shell has scrolled the old one away", async () => {
+    const terminal = claudeTerminal();
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    // Claude exits to the shell, which keeps drawing under the old footer.
+    terminal.getInfo().detectedAgentId = undefined;
+    terminal.getInfo().launchAgentId = undefined;
+    ptyOnDataCallback!("$ ls\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(true);
+
+    ptyOnDataCallback!("\x1b[2J\x1b[H$ clear\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(false);
+
+    terminal.dispose();
+  });
+
+  it("clears when a detection pass names a different Claude process", async () => {
+    const seen = collect();
+    const terminal = claudeTerminal();
+
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    const spawnedAt = terminal.getInfo().spawnedAt;
+    terminal.handleAgentProcessObservation(
+      { agentType: "claude", command: "claude", pid: 4242 },
+      spawnedAt
+    );
+    terminal.handleAgentProcessObservation(
+      { agentType: "claude", command: "claude", pid: 4242 },
+      spawnedAt
+    );
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    terminal.handleAgentProcessObservation(
+      { agentType: "claude", command: "claude", pid: 5151 },
+      spawnedAt
+    );
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)?.updateInstalled).toBeNull();
+
+    terminal.dispose();
+  });
+});
+
 describe("TerminalProcess Claude usage observation (#15727)", () => {
   // 10am on Nov 2 in Sydney.
   const now = Date.UTC(2026, 10, 1, 23, 0);

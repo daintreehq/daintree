@@ -1182,6 +1182,15 @@ events.on("agent:rate-limit-observed", (payload) => {
   });
 });
 
+events.on("agent:update-installed-changed", (payload) => {
+  sendEvent({
+    type: "agent-update-installed-changed",
+    terminalId: payload.terminalId,
+    updateInstalled: payload.updateInstalled,
+    timestamp: payload.timestamp,
+  });
+});
+
 events.on("agent:claude-usage-observed", (payload) => {
   sendEvent({
     type: "agent-claude-usage-observed",

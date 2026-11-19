@@ -55,6 +55,7 @@ import type {
   AgentStateTransitionDroppedPayload,
   AgentDetectedPayload,
   AgentRateLimitObservedPayload,
+  AgentUpdateInstalledChangedPayload,
   AgentExitedPayload,
   AgentFallbackTriggeredPayload,
   ArtifactDetectedPayload,
@@ -1707,6 +1708,7 @@ export interface IpcEventMap {
   "agent:all-clear": { timestamp: number; shouldFlash: boolean };
   "agent:detected": AgentDetectedPayload;
   "agent:rate-limit-observed": AgentRateLimitObservedPayload;
+  "agent:update-installed-changed": AgentUpdateInstalledChangedPayload;
   "agent:exited": AgentExitedPayload;
   "agent:fallback-triggered": AgentFallbackTriggeredPayload;
 
@@ -2724,6 +2726,7 @@ export type IpcEventBusMap = Pick<
   | "agent:all-clear"
   | "agent:detected"
   | "agent:rate-limit-observed"
+  | "agent:update-installed-changed"
   | "agent:exited"
   | "agent:fallback-triggered"
   // Window lifecycle (window-scoped)

@@ -17,6 +17,7 @@ import {
 } from "@shared/types/agentSessionSchemas";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { AgentLaunchManyArgsSchema } from "@shared/types/mcpBatch";
+import { UpdateInstalledObservationSchema } from "@shared/types/terminalStatusSchemas";
 import {
   AwaitedReplySchema,
   REPLY_WAIT_MAX_SECONDS,
@@ -475,6 +476,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       spawnedAt: z.number().nullable(),
       terminalId: z.string().nullable(),
       found: z.boolean(),
+      updateInstalled: UpdateInstalledObservationSchema.optional(),
     }),
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.getState", args, ctx, callbacks),

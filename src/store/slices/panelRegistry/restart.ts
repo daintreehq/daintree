@@ -1186,6 +1186,8 @@ export const createRestartActions = (
           // leave this surface disagreeing with the host about a session
           // neither of them is holding any more.
           agentIncarnation: undefined,
+          // An update footer was the old run's (#17905).
+          updateInstalled: undefined,
           startedAt: Date.now(),
         };
         const newById = { ...state.panelsById, [id]: updated };
@@ -2201,6 +2203,8 @@ async function respawnAgentOnPreset(
         // leave this surface disagreeing with the host about a session
         // neither of them is holding any more.
         agentIncarnation: undefined,
+        // An update footer was the old run's (#17905).
+        updateInstalled: undefined,
         startedAt: Date.now(),
       };
       const newById = { ...state.panelsById, [id]: updated };

@@ -152,6 +152,29 @@ export interface AgentRateLimitObservedPayload {
   timestamp: number;
 }
 
+/**
+ * Claude Code's "Update installed" footer as a pane showed it (#17905): when
+ * it was seen, and whether the text after its `·` named `/restart`. Never the
+ * line itself, and never a version.
+ */
+export interface UpdateInstalledObservation {
+  /** Epoch ms the footer appeared, or changed, or came back after a while off screen. */
+  observedAt: number;
+  /** The text after the footer's `·` named `/restart`; it is server-set wording. */
+  namesRestart: boolean;
+}
+
+/**
+ * A pane's update-installed observation was set, re-stamped or cleared
+ * (#17905). Not a state transition: the agent keeps whatever state it is in.
+ */
+export interface AgentUpdateInstalledChangedPayload {
+  terminalId: string;
+  /** Null once the agent's run ended or changed. */
+  updateInstalled: UpdateInstalledObservation | null;
+  timestamp: number;
+}
+
 export interface AgentDetectedPayload {
   /** Terminal ID where agent was detected */
   terminalId: string;
