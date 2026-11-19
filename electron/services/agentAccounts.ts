@@ -167,9 +167,18 @@ async function folderIdentity(folder: string): Promise<string> {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-export async function addAgentAccount(
-  request: AddAgentAccountRequest
-): Promise<AddAgentAccountResult> {
+// Adds run one at a time. The folder check awaits between reading the saved
+// accounts and writing the new one, so two adds at once (a batch from an agent
+// and the Settings dialog, say) could each pass it for the same folder.
+let addQueue: Promise<unknown> = Promise.resolve();
+
+export function addAgentAccount(request: AddAgentAccountRequest): Promise<AddAgentAccountResult> {
+  const result = addQueue.then(() => addAgentAccountNow(request));
+  addQueue = result.catch(() => undefined);
+  return result;
+}
+
+async function addAgentAccountNow(request: AddAgentAccountRequest): Promise<AddAgentAccountResult> {
   if (!isPlainRecord(request)) throw invalid("Invalid account");
   const { agentId, declaration } = folderAccount(request.agentId);
   const name = sanitizeAccountName(request.name);

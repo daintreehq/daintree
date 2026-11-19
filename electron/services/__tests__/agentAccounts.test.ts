@@ -123,6 +123,48 @@ describe("addAgentAccount (#16040)", () => {
     expect(savedCodex().accounts as unknown[]).toHaveLength(1);
   });
 
+  it("registers one folder once when two adds of it start together (#17079)", async () => {
+    // An account already saved, so each add awaits its folder before writing.
+    const other = path.join(home, "codex-other");
+    await mkdir(other);
+    await addAgentAccount({
+      agentId: "codex",
+      name: "Other",
+      folder: { kind: "existing", path: other },
+    });
+    const folder = path.join(home, "codex-team");
+    await mkdir(folder);
+
+    const results = await Promise.allSettled([
+      addAgentAccount({
+        agentId: "codex",
+        name: "Team",
+        folder: { kind: "existing", path: folder },
+      }),
+      addAgentAccount({
+        agentId: "codex",
+        name: "Team again",
+        folder: { kind: "existing", path: `${folder}/` },
+      }),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+    const saved = savedCodex().accounts as Array<{ name: string }>;
+    expect(saved.map((account) => account.name)).toEqual(["Other", "Team"]);
+  });
+
+  it("still adds after an add before it failed", async () => {
+    await mkdir(path.join(home, ".codex-company"));
+    const [failed, added] = await Promise.allSettled([
+      addAgentAccount({ agentId: "codex", name: "Company", folder: { kind: "create" } }),
+      addAgentAccount({ agentId: "codex", name: "Lab", folder: { kind: "create" } }),
+    ]);
+
+    expect(failed.status).toBe("rejected");
+    expect(added.status).toBe("fulfilled");
+    expect((savedCodex().accounts as Array<{ name: string }>).map((a) => a.name)).toEqual(["Lab"]);
+  });
+
   it("refuses an agent whose CLI holds no folder account", async () => {
     await expect(
       addAgentAccount({ agentId: "cursor", name: "Work", folder: { kind: "create" } })
