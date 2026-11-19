@@ -22,7 +22,7 @@ import {
   MAC_APP_PATH,
   formatBuildInfo,
   liveHostRecord,
-  notZombieShell,
+  liveProcessShell,
   processStartShell,
   runningHostBuild,
   type ParsedProbe,
@@ -672,7 +672,7 @@ export function stopScript(
     return `${unitStop}if ${running}; then ${signalIt}; fi; i=0; while ${running} && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if ${running}; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
   }
   // A zombie its PID 1 never reaps is gone, whatever pgrep and kill -0 say.
-  const live = `for q in $(pgrep -u "$(id -u)" -x ${name} 2>/dev/null) $lp; do if kill -0 "$q" 2>/dev/null && ${notZombieShell("q")}; then return 0; fi; done; return 1`;
+  const live = `for q in $(pgrep -u "$(id -u)" -x ${name} 2>/dev/null) $lp; do if ${liveProcessShell("q")}; then return 0; fi; done; return 1`;
   const stopLaunch =
     launch === "stop" ? `if [ -n "$lp" ]; then ${stopLaunchShell("lp")}; fi; ` : "";
   // One signal each: a second SIGTERM soon after the first makes Daintree exit at once.

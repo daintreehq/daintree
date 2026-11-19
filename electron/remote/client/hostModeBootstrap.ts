@@ -23,8 +23,8 @@ import type { CommandResult } from "./commandRunner.js";
 import {
   DEB_EXECUTABLE,
   LINUX_UNIT_NAME,
+  liveProcessShell,
   MAC_APP_PATH,
-  notZombieShell,
   processStartShell,
   type ProbeOutcome,
 } from "./hostProbe.js";
@@ -253,7 +253,7 @@ const RECEIPT = `"${CACHE_DIR}/host-launch.pid"`;
  * Sets `$lp` to the pid of the last start {@link detachedStartScript} made,
  * while that process still runs (by its recorded start time), else to nothing.
  */
-export const DETACHED_LAUNCH_READ = `lp=""; if [ -f ${RECEIPT} ]; then lt=""; read -r lp lt < ${RECEIPT}; case "$lp" in ''|*[!0-9]*) lp="" ;; *) ${processStartShell("lp", "ln")}; if [ -z "$lt" ] || [ "$ln" != "$lt" ] || ! ${notZombieShell("lp")}; then lp=""; fi ;; esac; fi`;
+export const DETACHED_LAUNCH_READ = `lp=""; if [ -f ${RECEIPT} ]; then lt=""; read -r lp lt < ${RECEIPT}; case "$lp" in ''|*[!0-9]*) lp="" ;; *) ${processStartShell("lp", "ln")}; if [ -z "$lt" ] || [ "$ln" != "$lt" ] || ! ${liveProcessShell("lp")}; then lp=""; fi ;; esac; fi`;
 /** Where a host started on connect writes its output: what a failed start is read from. */
 export const DETACHED_LOG_PATH = `~/.cache/${LINUX_RUNTIME_DIR_NAME}/host.log`;
 const DETACHED_LOG_ROTATE_BYTES = 1024 * 1024;
@@ -345,11 +345,11 @@ function whileSameLaunch(launch: DetachedLaunch, then: string): string {
  * pid, any process with it counts.
  */
 export function detachedAliveScript(launch: DetachedLaunch): string {
-  const yes = `if ${notZombieShell("p")}; then echo "${MARK}alive yes"; fi`;
+  const yes = `if ${liveProcessShell("p")}; then echo "${MARK}alive yes"; fi`;
   const own = launch.startedAt
     ? whileSameLaunch(launch, yes)
     : `p=${launch.pid}; if kill -0 "$p" 2>/dev/null; then ${yes}; fi`;
-  return `${own}; ${DETACHED_LAUNCH_READ}; if [ -n "$lp" ]; then echo "${MARK}alive yes"; fi; for q in $(pgrep -u "$(id -u)" -x daintree 2>/dev/null); do if ${notZombieShell("q")}; then echo "${MARK}alive yes"; break; fi; done`;
+  return `${own}; ${DETACHED_LAUNCH_READ}; if [ -n "$lp" ]; then echo "${MARK}alive yes"; fi; for q in $(pgrep -u "$(id -u)" -x daintree 2>/dev/null); do if ${liveProcessShell("q")}; then echo "${MARK}alive yes"; break; fi; done`;
 }
 
 export function parseDetachedAlive(stdout: string): boolean {
@@ -372,7 +372,7 @@ export function stopLaunchShell(pidVar: string): string {
  * none. Removing a host whose Daintree isn't listening yet (still unpacking,
  * or not yet recorded) touches nothing else on the account.
  */
-export const DETACHED_LAUNCH_STOP_SCRIPT = `${DETACHED_LAUNCH_READ}; if [ -n "$lp" ]; then ${stopLaunchShell("lp")}; i=0; while kill -0 "$lp" 2>/dev/null && ${notZombieShell("lp")} && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; fi; if [ -n "$lp" ] && kill -0 "$lp" 2>/dev/null && ${notZombieShell("lp")}; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
+export const DETACHED_LAUNCH_STOP_SCRIPT = `${DETACHED_LAUNCH_READ}; if [ -n "$lp" ]; then ${stopLaunchShell("lp")}; i=0; while ${liveProcessShell("lp")} && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; fi; if [ -n "$lp" ] && ${liveProcessShell("lp")}; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
 
 /** Ask a launch that is still the process it was to quit; anything since given its pid is left alone. */
 export function detachedStopScript(launch: DetachedLaunch): string {

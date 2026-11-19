@@ -92,6 +92,15 @@ export function notZombieShell(pidVar: string): string {
   return `[ "$(sed 's/.*) //' "/proc/$${pidVar}/stat" 2>/dev/null | cut -d' ' -f1)" != Z ]`;
 }
 
+/**
+ * Linux shell test that process `$<pidVar>` is there and not a zombie, read
+ * from /proc alone: a `kill -0` before it can see one that is reaped before
+ * its state is read.
+ */
+export function liveProcessShell(pidVar: string): string {
+  return `{ st=$(sed 's/.*) //' "/proc/$${pidVar}/stat" 2>/dev/null | cut -d' ' -f1); [ -n "$st" ] && [ "$st" != Z ]; }`;
+}
+
 function buildInfoRead(asar: string): string {
   // Assigned first: bash 3.2 (macOS /bin/sh) brace-expands inside "$(...)".
   return `b=$(grep -a -o -m 1 -E ${sq(BUILD_INFO_PATTERN)} ${asar} 2>/dev/null | head -n 1); echo "${MARK}buildinfo $b"`;
@@ -136,7 +145,7 @@ export function buildHostProbeScript(): string {
     `u=""; if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then u=$(sed -n 's/^ExecStart="\\([^"]*\\)".*/\\1/p' "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" | head -n 1); echo "${MARK}unitexec $u"; fi`,
     `r=""; p=$(pgrep -u "$(id -u)" -o -x daintree 2>/dev/null); if [ -n "$p" ]; then r=$(tr '\\000' '\\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^APPIMAGE=//p' | head -n 1); echo "${MARK}runningappimage $r"; fi`,
     `for f in "$HOME"/Applications/Daintree*.AppImage "$HOME"/Applications/daintree*.AppImage "$u" "$r"; do case "$f" in /*.AppImage) if [ -f "$f" ]; then b=""; i="$f${APPIMAGE_BUILD_INFO_SUFFIX}"; if [ -f "$i" ] && [ "$i" -nt "$f" ]; then b=$(head -c 512 "$i"); fi; echo "${MARK}appimage $f"; echo "${MARK}appimageinfo $b"; fi ;; esac; done`,
-    `for q in $(pgrep -u "$(id -u)" -x daintree 2>/dev/null); do if ${notZombieShell("q")}; then echo "${MARK}running yes"; break; fi; done`,
+    `for q in $(pgrep -u "$(id -u)" -x daintree 2>/dev/null); do if ${liveProcessShell("q")}; then echo "${MARK}running yes"; break; fi; done`,
     `echo "${MARK}sleep $(systemctl is-enabled sleep.target 2>/dev/null)"`,
     `if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then echo "${MARK}unit yes"; echo "${MARK}unitenabled $(systemctl --user is-enabled ${LINUX_UNIT_NAME} 2>/dev/null)"; else echo "${MARK}unit no"; fi`,
     // What an AppImage needs to mount itself: the device and a setuid
