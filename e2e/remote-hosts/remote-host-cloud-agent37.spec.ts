@@ -243,7 +243,7 @@ test.describe.serial("Cloud hosts: an Agent 37 instance as a Remote Host", () =>
     // Agent 37 sleeps it rather than asking for a lifetime.
     await expect(dialog.getByTestId("add-cloud-host-lifetime")).toHaveCount(0);
     await expect(dialog.getByTestId("add-cloud-host-review")).toContainText(
-      "It sleeps by itself after 15 minutes without activity."
+      "It sleeps by itself after 30 minutes without activity."
     );
     expect(calls("POST", /^\/instances$/)).toHaveLength(0);
 
@@ -267,7 +267,8 @@ test.describe.serial("Cloud hosts: an Agent 37 instance as a Remote Host", () =>
       resources: { cpu: 2, memory: 4, disk: 12 },
       name: HOST_NAME,
       auto_sleep: true,
-      idle_timeout_seconds: 900,
+      // The host's own idle time, which its Idle after starts at (#17916).
+      idle_timeout_seconds: 1800,
       metadata: { daintree: "1" },
     });
 
