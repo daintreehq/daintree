@@ -110,5 +110,6 @@ export {
   TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors; also a WARNING alert in rendered Markdown
   Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there; also detaching a project attachment (Cable) from the worktree holding it
   UserRound, // an agent's account — who it signs in as, chosen apart from its preset (#16040)
+  UserRoundCheck, // one account used everywhere — the agent's default, with every worktree pick and preset pin on another account cleared (#17893)
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

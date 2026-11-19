@@ -97,7 +97,8 @@ export const agentSettingsClient = {
   listAccountChoicesAway: (
     agentId: string,
     accountId: string | null
-  ): Promise<AccountChoicesAway> => window.electron.agentAccounts.listChoicesAway(agentId, accountId),
+  ): Promise<AccountChoicesAway> =>
+    window.electron.agentAccounts.listChoicesAway(agentId, accountId),
 
   /** Make the account the default and clear the ticked choices, in one write in main (#17893). */
   applyAccountEverywhere: (request: ApplyAccountEverywhereRequest): Promise<AgentSettings> => {

@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { BrandMark } from "@/components/icons";
+import { BrandMark, UserRoundCheck } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import {
@@ -103,6 +103,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { UseAccountEverywhereDialog } from "./UseAccountEverywhereDialog";
 import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 
 import { resolveEffectivePresetId } from "@shared/types";
@@ -351,6 +352,12 @@ export function AgentButton({
   const [accountSwitchRequest, setAccountSwitchRequest] = useState<AccountSwitchRequest | null>(
     null
   );
+  // "Use account everywhere" (#17893), new on every opening so each starts
+  // from its own account and boxes.
+  const [everywhereOpening, setEverywhereOpening] = useState<{
+    key: number;
+    account: { id: string | null; name: string };
+  } | null>(null);
   const panesLeftOnPreset = usePanesLeftOnPreset(type, presetNotice);
   const panesOnAccountNotice = useAccountSwitchPaneIds(accountNotice);
   const isRestoringFocusRef = useRef(false);
@@ -1239,6 +1246,33 @@ export function AgentButton({
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
+          {hasAccounts && (
+            // The account new launches use, in every project (#17893): the
+            // default, and the worktree picks and preset pins the confirm
+            // leaves checked. Running terminals move only through the offer after.
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <UserRoundCheck data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Use account everywhere
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                {[{ id: null, name: defaultLogin }, ...accounts].map((account) => (
+                  <ContextMenuItem
+                    key={account.id ?? DEFAULT_LOGIN_VALUE}
+                    onSelect={() =>
+                      setEverywhereOpening((current) => ({
+                        key: (current?.key ?? 0) + 1,
+                        account: { id: account.id, name: account.name },
+                      }))
+                    }
+                  >
+                    <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                    {account.name}
+                  </ContextMenuItem>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
           <ContextMenuSeparator />
           <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
           <ContextMenuActionItem
@@ -1266,6 +1300,14 @@ export function AgentButton({
         request={accountSwitchRequest}
         onClose={() => setAccountSwitchRequest(null)}
       />
+      {everywhereOpening && (
+        <UseAccountEverywhereDialog
+          key={everywhereOpening.key}
+          agentId={type}
+          account={everywhereOpening.account}
+          onClose={() => setEverywhereOpening(null)}
+        />
+      )}
     </>
   );
 }

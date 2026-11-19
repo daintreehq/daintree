@@ -25,6 +25,8 @@ import {
   type AccountSwitchNoticeState,
   type AccountSwitchRequest,
 } from "@/components/Layout/AccountSwitchNotice";
+import { UseAccountEverywhereDialog } from "@/components/Layout/UseAccountEverywhereDialog";
+import type { RestartAccountChoice } from "@/components/Terminal/RestartOnAccount";
 import { AccountLoginRow } from "./AccountLoginRow";
 import { AddAccountDialog } from "./AddAccountDialog";
 import { SettingsSection } from "./SettingsSection";
@@ -91,6 +93,11 @@ export function AgentAccountsSection({
   const [switchRequest, setSwitchRequest] = useState<AccountSwitchRequest | null>(null);
   const offerPaneIds = useAccountSwitchPaneIds(offer);
   const offerAccountName = useCurrentAccountName(agentId, offer?.account) ?? "";
+  // "Use account everywhere" (#17893), new on every opening.
+  const [everywhereOpening, setEverywhereOpening] = useState<{
+    key: number;
+    account: RestartAccountChoice | undefined;
+  } | null>(null);
   // Quota is read only while the list of accounts is showing (#16407).
   const [defaultListOpen, setDefaultListOpen] = useState(false);
   const headroomFor = useAgentAccountHeadroom(agentId, defaultListOpen);
@@ -206,7 +213,7 @@ export function AgentAccountsSection({
             description={
               hasSavedDefault && defaultId === DEFAULT_LOGIN
                 ? "The saved account was removed, so launches are refused until this is reset"
-                : "What a new launch signs in as, unless its worktree picks another in the toolbar"
+                : "What a new launch signs in as, unless its worktree picks another in the toolbar or its preset pins one"
             }
             value={defaultId}
             onValueChange={(value) => {
@@ -257,6 +264,31 @@ export function AgentAccountsSection({
                 : `Use ${agentName}'s default login`
             }
           />
+          <SettingsRow
+            label="Use one account everywhere"
+            description="Makes an account the default in every project. Lists each worktree pick and preset pin on another account, and clears the ones you leave checked."
+            control={
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  // The saved default is where it starts; one that's gone leaves the choice open.
+                  const account =
+                    defaultId !== DEFAULT_LOGIN
+                      ? accounts.find((candidate) => candidate.id === defaultId)
+                      : hasSavedDefault
+                        ? undefined
+                        : { id: null, name: defaultLogin };
+                  setEverywhereOpening((current) => ({
+                    key: (current?.key ?? 0) + 1,
+                    account: account ? { id: account.id, name: account.name } : undefined,
+                  }));
+                }}
+              >
+                Use everywhere…
+              </Button>
+            }
+          />
         </SettingsGroup>
       )}
 
@@ -305,6 +337,20 @@ export function AgentAccountsSection({
       />
 
       <AccountSwitchDialog request={switchRequest} onClose={() => setSwitchRequest(null)} />
+
+      {everywhereOpening && (
+        <UseAccountEverywhereDialog
+          key={everywhereOpening.key}
+          agentId={agentId}
+          account={everywhereOpening.account}
+          onSaved={() => {
+            // The default picked there replaces any offer the select raised.
+            beginOffer();
+            onSettingsChange?.();
+          }}
+          onClose={() => setEverywhereOpening(null)}
+        />
+      )}
 
       <ConfirmDialog
         isOpen={removing !== null}
