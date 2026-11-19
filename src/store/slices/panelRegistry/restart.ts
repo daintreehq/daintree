@@ -1741,19 +1741,36 @@ export const createRestartActions = (
   restartTerminalOnPreset: (id, presetId, options) =>
     respawnAgentOnPreset(set, get, id, presetId, { kind: "switch" }, options),
 
-  restartTerminalOnOwnFallbackStep: (id, presetId, options) => {
-    const root = ownFallbackStepRootNow(get, id, presetId);
-    // Claimed by the respawn's synchronous start, in this same turn.
-    return root === null
-      ? Promise.resolve({ success: false, needsConfirmation: true })
-      : respawnAgentOnPreset(
-          set,
-          get,
-          id,
-          presetId,
-          { kind: "fallback", originalPresetId: root, ownChainStep: true },
-          options
-        );
+  restartTerminalOnOwnFallbackStep: async (id, presetId, options) => {
+    // A move this view's settings already rule out reads nothing. Otherwise
+    // the launch's inputs are read before anything is claimed: a claim held
+    // through that read would swallow a natural exit if the move then asked.
+    const panel = get().panelsById[id];
+    if (
+      !panel ||
+      !isPtyPanel(panel) ||
+      !panel.launchAgentId ||
+      mirroredOwnFallbackStepRoot(get, id, presetId) === null
+    ) {
+      return needsConfirmation();
+    }
+    const inputs = await readOwnStepInputs(
+      id,
+      panel.launchAgentId,
+      options?.keepConversation === true
+    );
+    return respawnAgentOnPreset(
+      set,
+      get,
+      id,
+      presetId,
+      {
+        kind: "own-chain-step",
+        inputs,
+        ...(options?.deadlineAt !== undefined ? { deadlineAt: options.deadlineAt } : {}),
+      },
+      options
+    );
   },
 
   restartTerminalOnAccount: (id, account, options) =>
@@ -1826,46 +1843,108 @@ function isPresetStamp(
 }
 
 type PresetRespawnMode =
-  /**
-   * `ownChainStep`: a move the assistant made without asking (#17917), which
-   * holds only while the launch's own settings still make it the pane's next
-   * step; otherwise nothing changes and it asks.
-   */
+  /** `ownChainStep`: a move the assistant made without asking (#17917). */
   | { kind: "fallback"; originalPresetId: string; ownChainStep?: true }
   | { kind: "switch" }
   /** Same preset, only the account changed (#16040). */
   | { kind: "account"; account: AccountSwitchTarget };
 
+/** What an assistant's hop reads before it claims the pane (#17917). */
+interface OwnStepInputs {
+  agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>>;
+  tmpDir: string;
+  launchConfigDir: string | undefined;
+}
+
+/**
+ * An assistant's move to the pane's next own fallback step (#17917), settled
+ * in the turn that claims the pane, against the inputs read before it.
+ */
+interface OwnChainStepRequest {
+  kind: "own-chain-step";
+  inputs: OwnStepInputs;
+  deadlineAt?: number;
+}
+
+function needsConfirmation(): PresetRespawnResult {
+  return { success: false, needsConfirmation: true };
+}
+
+async function readOwnStepInputs(
+  id: string,
+  agentId: string,
+  keepConversation: boolean
+): Promise<OwnStepInputs> {
+  const [agentSettings, tmpDir, launchConfigDir] = await Promise.all([
+    agentSettingsClient.get(),
+    resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
+    // Read while the launch still runs, as a kept conversation needs (#17087).
+    keepConversation && reopensFromConversationStore(agentId) ? readLaunchConfigDir(id) : undefined,
+  ]);
+  return { agentSettings, tmpDir, launchConfigDir };
+}
+
 /**
  * The root of the chain a pane would hop along to `presetId` without asking
- * (#17917), read from this view's own settings the way a usage-limit hop reads
- * them, or null. Nothing is claimed here: a claim held through a settings read
- * would swallow a natural exit, and a move that doesn't qualify must leave the
- * pane as it was.
+ * (#17917), given the person's own presets, or null. The step's launch has to
+ * be one a plugin's approval of the pane still covers.
  */
-function ownFallbackStepRootNow(get: Get, id: string, presetId: string): string | null {
-  const panel = get().panelsById[id];
-  if (!panel || !isPtyPanel(panel) || !panel.launchAgentId) return null;
-  if (panel.isRestarting || isTerminalRestarting(id) || panel.restoreRecovery) return null;
+function ownFallbackStepRoot(
+  id: string,
+  panel: PtyPanelData,
+  presetId: string,
+  customPresets: AgentPreset[] | undefined
+): string | null {
   const agentId = panel.launchAgentId;
-  const entry = getAgentSettingsEntrySnapshot(agentId);
-  if (entry === null) return null;
+  if (!agentId) return null;
   const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[agentId];
   const projectPresets = useProjectPresetsStore.getState().presetsByAgent[agentId];
   const root = ownFallbackChainRoot(agentId, panel, presetId, {
-    customPresets: entry.customPresets,
+    customPresets,
     ccrPresets,
     projectPresets,
   });
   if (root === null) return null;
-  const target = getMergedPreset(
-    agentId,
-    presetId,
-    entry.customPresets,
-    ccrPresets,
-    projectPresets
-  );
+  const target = getMergedPreset(agentId, presetId, customPresets, ccrPresets, projectPresets);
   return target && fallbackHopApproved(id, target.id, presetLaunchContent(target)) ? root : null;
+}
+
+/** {@link ownFallbackStepRoot} for the pane as it stands, from this view's own settings. */
+function mirroredOwnFallbackStepRoot(get: Get, id: string, presetId: string): string | null {
+  const panel = get().panelsById[id];
+  if (!panel || !isPtyPanel(panel) || !panel.launchAgentId) return null;
+  if (panel.isRestarting || isTerminalRestarting(id) || panel.restoreRecovery) return null;
+  const entry = getAgentSettingsEntrySnapshot(panel.launchAgentId);
+  return entry === null ? null : ownFallbackStepRoot(id, panel, presetId, entry.customPresets);
+}
+
+/**
+ * The mode an assistant's hop runs in, settled just before the claim and in
+ * its turn (#17917): the next step both by what this view knows now and by the
+ * settings the launch is built from, so either having moved on asks. A call
+ * whose deadline passed changes nothing: whoever made it was told it failed.
+ */
+function settleRespawnMode(
+  get: Get,
+  id: string,
+  terminal: PtyPanelData,
+  presetId: string | undefined,
+  requested: PresetRespawnMode | OwnChainStepRequest
+): PresetRespawnMode | PresetRespawnResult {
+  if (requested.kind !== "own-chain-step") return requested;
+  if (requested.deadlineAt !== undefined && Date.now() >= requested.deadlineAt) {
+    return { success: false, error: "the call's deadline passed before the move started" };
+  }
+  if (presetId === undefined || !terminal.launchAgentId) return needsConfirmation();
+  const root = mirroredOwnFallbackStepRoot(get, id, presetId);
+  const launchEntry = requested.inputs.agentSettings?.agents?.[terminal.launchAgentId];
+  if (
+    root === null ||
+    ownFallbackStepRoot(id, terminal, presetId, launchEntry?.customPresets) !== root
+  ) {
+    return needsConfirmation();
+  }
+  return { kind: "fallback", originalPresetId: root, ownChainStep: true };
 }
 
 /** The config folder the pane's running Claude launch writes to (#16269), if it can be read. */
@@ -1882,7 +1961,7 @@ async function respawnAgentOnPreset(
   get: Get,
   id: string,
   requestedPresetId: string | undefined,
-  mode: PresetRespawnMode,
+  requested: PresetRespawnMode | OwnChainStepRequest,
   options?: PresetRespawnOptions
 ): Promise<PresetRespawnResult> {
   const livePanel = get().panelsById[id];
@@ -1920,11 +1999,14 @@ async function respawnAgentOnPreset(
   if (keepConversation && !supportsConversationKeepingSwitch(effectiveAgentId)) {
     return {
       success: false,
-      error: `agent can't keep its conversation on another ${mode.kind === "account" ? "account" : "preset"}`,
+      error: `agent can't keep its conversation on another ${requested.kind === "account" ? "account" : "preset"}`,
     };
   }
   // An account switch keeps the pane's own preset; the others name the next one.
-  const nextPresetId = mode.kind === "account" ? terminal.agentPresetId : requestedPresetId;
+  const nextPresetId = requested.kind === "account" ? terminal.agentPresetId : requestedPresetId;
+  const settled = settleRespawnMode(get, id, terminal, nextPresetId, requested);
+  if ("success" in settled) return settled;
+  const mode = settled;
 
   markTerminalRestarting(id);
   set((state) =>
@@ -1966,22 +2048,32 @@ async function respawnAgentOnPreset(
   let resumedSessionId: string | undefined;
 
   try {
-    const [agentSettings, tmpDir, titleModels, launchConfigDir] = await Promise.all([
-      agentSettingsClient.get(),
-      resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
-      // Read before teardown: only a switch retitles the pane. A renamed one
-      // reads it too, as the rename can be cleared before the spawn.
-      mode.kind === "switch"
-        ? loadModelTitleCatalog(effectiveAgentId, terminal.agentModelId, (agentId) =>
-            agentCapabilitiesClient.getResolvedModelList(agentId)
-          )
-        : undefined,
-      // The folder the running launch writes its conversation to, read while it
-      // still runs: a kept conversation reopens from there (#17087).
-      keepConversation && reopensFromConversationStore(effectiveAgentId)
-        ? readLaunchConfigDir(id)
-        : undefined,
-    ]);
+    // An assistant's hop already read these before its claim (#17917), and
+    // takes them without an await, so the claim and the launch read one turn.
+    const [agentSettings, tmpDir, titleModels, launchConfigDir] =
+      requested.kind === "own-chain-step"
+        ? ([
+            requested.inputs.agentSettings,
+            requested.inputs.tmpDir,
+            undefined,
+            requested.inputs.launchConfigDir,
+          ] as const)
+        : await Promise.all([
+            agentSettingsClient.get(),
+            resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
+            // Read before teardown: only a switch retitles the pane. A renamed one
+            // reads it too, as the rename can be cleared before the spawn.
+            mode.kind === "switch"
+              ? loadModelTitleCatalog(effectiveAgentId, terminal.agentModelId, (agentId) =>
+                  agentCapabilitiesClient.getResolvedModelList(agentId)
+                )
+              : undefined,
+            // The folder the running launch writes its conversation to, read while it
+            // still runs: a kept conversation reopens from there (#17087).
+            keepConversation && reopensFromConversationStore(effectiveAgentId)
+              ? readLaunchConfigDir(id)
+              : undefined,
+          ]);
     const entry = agentSettings?.agents?.[effectiveAgentId] ?? {};
     const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[effectiveAgentId];
     const projectPresets = useProjectPresetsStore.getState().presetsByAgent[effectiveAgentId];
@@ -1993,31 +2085,6 @@ async function respawnAgentOnPreset(
       projectPresets,
     });
     const nextPreset = runtimeSettings.preset;
-    if (
-      mode.kind === "fallback" &&
-      mode.ownChainStep === true &&
-      (!nextPreset ||
-        ownFallbackChainRoot(effectiveAgentId, terminal, nextPreset.id, {
-          customPresets: entry.customPresets,
-          ccrPresets,
-          projectPresets,
-        }) !== mode.originalPresetId ||
-        !fallbackHopApproved(id, nextPreset.id, presetLaunchContent(nextPreset)))
-    ) {
-      // The settings changed between the check and this read. Released as it
-      // was claimed: an exit that landed meanwhile went unrecorded, the one
-      // cost of a window this narrow.
-      unmarkTerminalRestarting(id);
-      set((state) =>
-        updateTerminal(state, id, (t) => ({
-          ...t,
-          isRestarting: false,
-          restartError: livePanel.restartError,
-          spawnError: livePanel.spawnError,
-        }))
-      );
-      return { success: false, needsConfirmation: true };
-    }
     // An account switch keeps the pane's preset, so one that can't be found —
     // gone, or a project or CCR preset still loading — refuses the switch
     // before anything is torn down, as a preset switch does. A pane with no
@@ -2087,8 +2154,11 @@ async function respawnAgentOnPreset(
     // (#16045), and so does a hop that moves the pane into its worktree
     // (#14954), so a caller's own resume selector (`--continue`,
     // `resume --last`) can't ride along into the new home.
+    // An assistant's hop (#17917) is the owned move, which promised the same.
     const keptCallerFlags =
-      mode.kind !== "fallback" || filedLaunchCwd(get, id, terminal) !== terminal.cwd
+      mode.kind !== "fallback" ||
+      mode.ownChainStep === true ||
+      filedLaunchCwd(get, id, terminal) !== terminal.cwd
         ? stripConversationSelectorFlags(storedCallerFlags, effectiveAgentId)
         : storedCallerFlags;
     const systemPromptArgs = extractSystemPromptArgs(storedBaseFlags, effectiveAgentId);
@@ -2504,6 +2574,10 @@ async function respawnAgentOnPreset(
         nextPresetId,
       }
     );
-    return { success: false, error: errorMessage };
+    return {
+      success: false,
+      error: errorMessage,
+      ...(mode.kind === "fallback" && mode.ownChainStep === true ? { admitted: true } : {}),
+    };
   }
 }

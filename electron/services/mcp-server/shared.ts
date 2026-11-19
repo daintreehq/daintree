@@ -275,10 +275,7 @@ export interface WorkspaceDispatchOptions {
      * once it finds it the pane's next own step (#17917): bound to this one
      * call, so the view's project is all it is told.
      */
-    nextFallback?: {
-      offers(projectId: string, actionId: string, args: unknown): boolean;
-      ran(): void;
-    };
+    nextFallback?: (projectId: string, actionId: string, args: unknown) => (() => void) | null;
   };
 }
 export type { HelpAssistantTier };
@@ -1359,25 +1356,26 @@ export interface McpRelayCaller {
    */
   callDeadline?: (callId: string) => number | undefined;
   /**
-   * Whether this machine's assistant may have its call `callId` run unasked
-   * once the view holding the pane finds it the next own fallback step
-   * (#17917), and the note that it ran. Set only by the in-process relay:
-   * another machine's call is matched on its own Shell.
+   * Whether this machine's assistant may have a call run unasked once the
+   * view holding the pane finds it the next own fallback step (#17917). Set
+   * only by the in-process relay: another machine's call is matched on its
+   * own Shell.
    */
   nextFallback?: RelayNextFallback;
 }
 
-/** One of this machine's own `host.call`s, matched to a dispatch it runs (#17917). */
-export interface RelayNextFallback {
-  offers(dispatch: {
-    callId: string;
-    helpSessionId: string;
-    projectId: string;
-    actionId: string;
-    args: unknown;
-  }): boolean;
-  ran(callId: string): void;
-}
+/**
+ * One of this machine's own `host.call`s matched to a dispatch it runs
+ * (#17917): what to call once the view says it ran the move, or null when the
+ * move isn't offered.
+ */
+export type RelayNextFallback = (dispatch: {
+  callId: string;
+  helpSessionId: string;
+  projectId: string;
+  actionId: string;
+  args: unknown;
+}) => (() => void) | null;
 
 const RESOURCE_URI_PATTERN =
   /^daintree:\/\/(worktree|terminal|agent|project|workspace)\/([^/]+)\/(pulse|scrollback|state|issues|binding)$/;

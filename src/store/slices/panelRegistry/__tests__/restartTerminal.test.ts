@@ -2951,23 +2951,91 @@ describe("restartTerminalOnOwnFallbackStep (#17917)", () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
-  it("asks after all, releasing its claim, when the saved chain moved on before the launch read it", async () => {
-    const { markTerminalRestarting, unmarkTerminalRestarting } =
-      await import("@/store/restartExitSuppression");
+  it("asks, having claimed nothing, when the saved chain moved on before the launch read it", async () => {
+    const { markTerminalRestarting } = await import("@/store/restartExitSuppression");
     seed({ restartError: { message: "earlier", timestamp: 1, recoverable: true } });
+    const before = pane();
     await savedPresets([{ ...custom[0]!, fallbacks: ["backup"] }, ...custom.slice(1)]);
 
     expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
 
-    expect(vi.mocked(markTerminalRestarting)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(unmarkTerminalRestarting)).toHaveBeenCalledWith("test-1");
+    // No claim was ever held, so no exit could have been swallowed meanwhile.
+    expect(vi.mocked(markTerminalRestarting)).not.toHaveBeenCalled();
     expect(mockKill).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
-    expect(pane()).toMatchObject({
-      agentPresetId: "personal",
-      isRestarting: false,
-      restartError: { message: "earlier" },
+    expect(pane()).toEqual(before);
+  });
+
+  it("asks when this view heard of a change the launch's read came back without", async () => {
+    seed();
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+      mirror = [{ ...custom[0]!, fallbacks: ["backup"] }, ...custom.slice(1)];
+      return { agents: { claude: { customPresets: custom } } } as never;
     });
+
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("asks when a usage-limit hop moved the pane on while the launch's inputs were read", async () => {
+    seed();
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "test-1": {
+            ...state.panelsById["test-1"]!,
+            agentPresetId: "work",
+            fallbackChainIndex: 1,
+          } as PtyPanelData,
+        },
+      }));
+      return { agents: { claude: { customPresets: custom } } } as never;
+    });
+
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(pane()).toMatchObject({ agentPresetId: "work", fallbackChainIndex: 1 });
+  });
+
+  it("starts a new conversation, as the owned move does: a caller's resume selector stays behind", async () => {
+    seed({
+      agentLaunchFlags: ["--persisted-flag", "--continue", "--verbose"],
+      callerLaunchFlags: ["--continue", "--verbose"],
+    });
+
+    await move("work");
+
+    expect(pane().callerLaunchFlags).toEqual(["--verbose"]);
+    expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
+  });
+
+  it("starts nothing once the call's deadline has passed", async () => {
+    const { markTerminalRestarting } = await import("@/store/restartExitSuppression");
+    seed();
+
+    const result = await usePanelStore
+      .getState()
+      .restartTerminalOnOwnFallbackStep("test-1", "work", { deadlineAt: Date.now() - 1 });
+
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining("deadline") });
+    expect(result.admitted).toBeUndefined();
+    expect(vi.mocked(markTerminalRestarting)).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("says a hop that claimed the pane and then failed was admitted, and rolls it back", async () => {
+    seed();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const result = await move("work");
+
+    expect(result).toMatchObject({ success: false, admitted: true });
+    expect(pane()).toMatchObject({ agentPresetId: "personal", originalPresetId: "personal" });
+    expect(pane().fallbackChainIndex).toBeUndefined();
   });
 
   it("leaves a pane that is already restarting alone", async () => {

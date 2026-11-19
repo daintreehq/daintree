@@ -553,55 +553,44 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
 
         it("offers the move once, spending the call's ask, and notes a skip only once it ran", async () => {
           nextFallback = new Set([MOVE]);
+          const offers: Array<(() => void) | null> = [];
           during((r, callId) => {
-            verdicts.push(r.offersNextFallback("studio", restart(callId)));
-            verdicts.push(r.offersNextFallback("studio", restart(callId)));
+            offers.push(r.offersNextFallback("studio", restart(callId)));
+            offers.push(r.offersNextFallback("studio", restart(callId)));
             verdicts.push(r.skipsRelayedDispatch("studio", restart(callId)));
             expect(skipNotes).toBe(0);
-            r.noteNextFallbackRan("studio", callId);
+            offers[0]?.();
+            offers[0]?.();
           });
 
           await deleteCall(MOVE, moveArgs);
 
-          expect(verdicts).toEqual([true, false, false]);
+          expect(offers.map((ran) => ran !== null)).toEqual([true, false]);
+          expect(verdicts).toEqual([false]);
           expect(skipNotes).toBe(1);
         });
 
         it("offers nothing without the tick, for other arguments, another host, or an unreadable preference", async () => {
-          during((r, callId) => verdicts.push(r.offersNextFallback("studio", restart(callId))));
+          const offered = (ran: (() => void) | null) => verdicts.push(ran !== null);
+          during((r, callId) => offered(r.offersNextFallback("studio", restart(callId))));
           await deleteCall(MOVE, moveArgs);
           expect(verdicts).toEqual([false]);
 
           nextFallback = new Set([MOVE]);
           during((r, callId) => {
-            verdicts.push(
+            offered(
               r.offersNextFallback("studio", restart(callId, { ...moveArgs, presetId: "p-2" }))
             );
-            verdicts.push(r.offersNextFallback("elsewhere", restart(callId)));
-            verdicts.push(r.offersNextFallback("studio", dispatch(callId)));
+            offered(r.offersNextFallback("elsewhere", restart(callId)));
+            offered(r.offersNextFallback("studio", dispatch(callId)));
           });
           await deleteCall(MOVE, moveArgs);
           expect(verdicts).toEqual([false, false, false]);
 
           nextFallback = new Error("store unreadable");
-          during((r, callId) => verdicts.push(r.offersNextFallback("studio", restart(callId))));
+          during((r, callId) => offered(r.offersNextFallback("studio", restart(callId))));
           await deleteCall(MOVE, moveArgs);
           expect(verdicts).toEqual([false]);
-        });
-
-        it("never notes a skip for a call it didn't offer, nor on another host's word", async () => {
-          skips = new Set();
-          nextFallback = new Set([MOVE]);
-          during((r, callId) => {
-            r.noteNextFallbackRan("studio", callId);
-            verdicts.push(r.offersNextFallback("studio", restart(callId)));
-            r.noteNextFallbackRan("elsewhere", callId);
-          });
-
-          await deleteCall(MOVE, moveArgs);
-
-          expect(verdicts).toEqual([true]);
-          expect(skipNotes).toBe(0);
         });
       });
 

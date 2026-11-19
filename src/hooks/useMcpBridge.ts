@@ -89,6 +89,7 @@ import {
 import { pluralize } from "@/lib/pluralize";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { ASSISTANT_PRESET_MOVE_DELEGATE } from "@shared/config/assistantConfirmationDelegation";
+import { OwnFallbackStepFailedError } from "@/services/actions/ownFallbackStep";
 
 /**
  * What the approver reads when a preview could not be built at all, such as a
@@ -1581,10 +1582,14 @@ export function useMcpBridge(): void {
             });
             if (disposed) return;
             if (attempt.ok || attempt.error.code !== "CONFIRMATION_REQUIRED") {
+              // Ran, or failed once admitted: either way the tick authorized
+              // it. A refusal before admission ran on nobody's say-so.
+              const admitted =
+                attempt.ok || attempt.error.details instanceof OwnFallbackStepFailedError;
               window.electron.mcpBridge.sendDispatchActionResponse({
                 requestId,
                 result: attempt,
-                ...(attempt.ok ? { authorization: "skip-preference" as const } : {}),
+                ...(admitted ? { authorization: "skip-preference" as const } : {}),
               });
               return;
             }

@@ -342,8 +342,8 @@ describe("createSessionServerDeps", () => {
   // #17917: a local call's matcher reaches its dispatch bound to that one call,
   // and another machine's relay never carries one.
   it("binds a local relay's next-fallback matcher to the call each dispatch runs", async () => {
-    const offers = vi.fn(() => true);
     const ran = vi.fn();
+    const offers = vi.fn(() => ran);
     const bound = (relay: Record<string, unknown>) => {
       const deps = fakeSource();
       const dispatchActionForWorkspace = vi.fn(async () => ({
@@ -357,7 +357,7 @@ describe("createSessionServerDeps", () => {
         workspaceBinding: { workspaceId: WS_A },
         relay: relay as never,
       });
-      type Bound = { offers(p: string, a: string, x: unknown): boolean; ran(): void };
+      type Bound = (p: string, a: string, x: unknown) => (() => void) | null;
       const matchers = () =>
         dispatchActionForWorkspace.mock.calls.map(
           (call) =>
@@ -371,7 +371,7 @@ describe("createSessionServerDeps", () => {
       senderId: "local",
       helpSessionId: "help-1",
       shellName: "Mac",
-      nextFallback: { offers, ran },
+      nextFallback: offers,
     };
     const move = { terminalId: "t-1", presetId: "work" };
 
@@ -385,7 +385,7 @@ describe("createSessionServerDeps", () => {
     );
     await local.sessionDeps.dispatchAction("terminal.restartOnPreset", move, false);
     const [named, unnamed] = local.matchers();
-    expect(named?.offers("proj-1", "terminal.restartOnPreset", move)).toBe(true);
+    expect(named?.("proj-1", "terminal.restartOnPreset", move)).toBe(ran);
     expect(offers).toHaveBeenCalledWith({
       callId: "call-1",
       helpSessionId: "help-1",
@@ -393,8 +393,6 @@ describe("createSessionServerDeps", () => {
       actionId: "terminal.restartOnPreset",
       args: move,
     });
-    named?.ran();
-    expect(ran).toHaveBeenCalledWith("call-1");
     expect(unnamed).toBeUndefined();
 
     const remote = bound(caller);

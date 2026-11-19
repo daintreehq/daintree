@@ -112,6 +112,12 @@ describe("assistantPolicyChecksNextFallback (#17917)", () => {
   });
 
   it("is off without its tick, and a stored plain move id hands over nothing", () => {
+    const others = resolveAssistantConfirmationPolicy(
+      "ask-except",
+      ["worktree.deleteOwned"],
+      false
+    );
+    expect(assistantPolicyChecksNextFallback(others, MOVE)).toBe(false);
     const policy = resolveAssistantConfirmationPolicy("ask-except", [MOVE], false);
     expect(policy.delegated.has(MOVE)).toBe(false);
     expect(assistantPolicySkips(policy, MOVE)).toBe(false);

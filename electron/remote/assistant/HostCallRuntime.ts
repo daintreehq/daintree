@@ -418,8 +418,6 @@ interface CallInFlight {
   asked: boolean;
   /** It runs under the skip preference (#15698), so a resend that joins it later does too. */
   skipped: boolean;
-  /** Its one ask went to the view as a preset move it may run unasked (#17917). */
-  nextFallbackOffered?: true;
   /**
    * Tells each `host.call` send still out for it that it ran under the skip
    * preference, for that send's audit record (#15698).
@@ -1177,31 +1175,26 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * {@link skipsRelayedDispatch} matches it, is a preset move its view may
    * run unasked if that view finds it the pane's next own fallback step
    * (#17917). The call's one ask goes to that view, which either runs the
-   * move or asks itself; {@link noteNextFallbackRan} records the first.
+   * move or asks itself. Answers with what to call once the view says it ran
+   * the move, bound to this call's own record so a resend that replaces it
+   * under the id can't take the note; null when nothing is offered.
    */
-  offersNextFallback(hostId: HostId, dispatch: RelayedDispatch): boolean {
-    if (dispatch.actionId !== ASSISTANT_PRESET_MOVE_DELEGATE) return false;
+  offersNextFallback(hostId: HostId, dispatch: RelayedDispatch): (() => void) | null {
+    if (dispatch.actionId !== ASSISTANT_PRESET_MOVE_DELEGATE) return null;
     const call = this.relayedDispatchCall(hostId, dispatch);
-    if (call === undefined) return false;
+    if (call === undefined) return null;
     let offered: boolean;
     try {
       offered = this.deps.checksNextFallback?.(call.helpSessionId, call.tool) === true;
     } catch (error) {
       logger.warn("Couldn't read the assistant's confirmations preference", { error });
-      return false;
+      return null;
     }
-    if (!offered) return false;
+    if (!offered) return null;
     call.asked = true;
-    call.nextFallbackOffered = true;
-    return true;
-  }
-
-  /** The view ran a move {@link offersNextFallback} offered it, so nobody was asked. */
-  noteNextFallbackRan(hostId: HostId, callId: string): void {
-    const call = this.callsInFlight.get(callId);
-    if (call?.hostId === hostId && call.nextFallbackOffered === true && !call.skipped) {
-      this.grantSkip(call);
-    }
+    return () => {
+      if (!call.skipped) this.grantSkip(call);
+    };
   }
 
   /** The call a host's dispatch runs, while it may still be answered without asking. */

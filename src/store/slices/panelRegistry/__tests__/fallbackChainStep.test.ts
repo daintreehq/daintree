@@ -99,7 +99,17 @@ describe("ownFallbackChainRoot (#17917)", () => {
     ).toBe("a");
   });
 
-  it("asks when a project preset takes over a built-in id the chain names", () => {
+  it("never moves a later step into a slot an unresolved one holds", () => {
+    // `team` is the project's, still loading; `gone` was deleted. Either way
+    // the merge would drop it and put `b` first.
+    for (const missing of ["team", "gone"]) {
+      const loading = presets([preset("a", [missing, "b"]), preset("b")]);
+      expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, "b", loading)).toBeNull();
+      expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, missing, loading)).toBeNull();
+    }
+  });
+
+  it("asks when a project preset takes over a CCR id the chain names", () => {
     const builtIn = {
       customPresets: [preset("a", ["shared-id"])],
       ccrPresets: [preset("shared-id")],

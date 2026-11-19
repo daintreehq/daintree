@@ -101,7 +101,9 @@ describe("the assistant's next-fallback tick through the MCP bridge (#17917)", (
     await offered();
 
     expect(mocks.dispatch).toHaveBeenCalledTimes(1);
-    const [, , options] = mocks.dispatch.mock.calls[0]!;
+    const [actionId, args, options] = mocks.dispatch.mock.calls[0]!;
+    expect(actionId).toBe(MOVE);
+    expect(args).toEqual(ARGS);
     expect(options).toMatchObject({ source: "agent", ownFallbackStep: true });
     expect(options.confirmed).toBeUndefined();
     expect(useMcpConfirmStore.getState().current).toBeNull();
@@ -128,7 +130,8 @@ describe("the assistant's next-fallback tick through the MCP bridge (#17917)", (
     await dispatched;
 
     expect(mocks.dispatch).toHaveBeenCalledTimes(2);
-    const [, , approved] = mocks.dispatch.mock.calls[1]!;
+    const [, approvedArgs, approved] = mocks.dispatch.mock.calls[1]!;
+    expect(approvedArgs).toEqual({ terminalId: "t-1", presetId: "other" });
     expect(approved).toMatchObject({ source: "agent", confirmed: true });
     expect(approved.ownFallbackStep).toBeUndefined();
     const response = sendDispatchActionResponse.mock.calls.at(-1)![0];
@@ -136,8 +139,37 @@ describe("the assistant's next-fallback tick through the MCP bridge (#17917)", (
     expect(response.authorization).toBeUndefined();
   });
 
-  it("answers with a hop that failed once admitted, never asking or trying again", async () => {
-    const failed = { ok: false, error: { code: "EXECUTION_ERROR", message: "spawn failed" } };
+  it("answers with a hop that failed once admitted, saying the tick authorized it, never asking again", async () => {
+    const { OwnFallbackStepFailedError } = await import("@/services/actions/ownFallbackStep");
+    const failed = {
+      ok: false,
+      error: {
+        code: "EXECUTION_ERROR",
+        message: "spawn failed",
+        details: new OwnFallbackStepFailedError("spawn failed"),
+      },
+    };
+    mocks.dispatch.mockResolvedValue(failed);
+
+    await offered();
+
+    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+    expect(useMcpConfirmStore.getState().current).toBeNull();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req",
+      result: failed,
+      authorization: "skip-preference",
+    });
+  });
+
+  it.each([
+    [
+      "an execution error before admission",
+      { code: "EXECUTION_ERROR", message: "deadline passed" },
+    ],
+    ["a refused target", { code: "VALIDATION_ERROR", message: "Terminal 't-1' is gone" }],
+  ])("answers %s as it is, claiming no authorization", async (_label, error) => {
+    const failed = { ok: false, error };
     mocks.dispatch.mockResolvedValue(failed);
 
     await offered();

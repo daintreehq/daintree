@@ -1424,9 +1424,6 @@ function bindNextFallback(
   helpSessionId: string,
   callId: string
 ): NonNullable<NonNullable<WorkspaceDispatchOptions["relay"]>["nextFallback"]> {
-  return {
-    offers: (projectId, actionId, args) =>
-      nextFallback.offers({ callId, helpSessionId, projectId, actionId, args }),
-    ran: () => nextFallback.ran(callId),
-  };
+  return (projectId, actionId, args) =>
+    nextFallback({ callId, helpSessionId, projectId, actionId, args });
 }

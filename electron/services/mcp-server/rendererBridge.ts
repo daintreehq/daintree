@@ -2130,7 +2130,7 @@ export function createRendererBridge(
     sessionOrigin: McpSessionOrigin,
     options: WorkspaceDispatchOptions
   ): Promise<DispatchEnvelope> {
-    const offered = offersLocalNextFallback(resolveWebContents, actionId, args, confirmed, options);
+    const ran = offersLocalNextFallback(resolveWebContents, actionId, args, confirmed, options);
     const envelope = await sendDispatchRequest(
       resolveWebContents,
       actionId,
@@ -2140,20 +2140,23 @@ export function createRendererBridge(
       options.contextOverride,
       undefined,
       { kind: "workspace", workspaceId },
-      offered ? { ...options, confirmationCondition: "next-own-fallback" } : options
+      ran !== null ? { ...options, confirmationCondition: "next-own-fallback" } : options
     );
-    if (offered && envelope.authorization === "skip-preference") options.relay?.nextFallback?.ran();
+    if (ran !== null && envelope.authorization === "skip-preference") ran();
     return envelope;
   }
 
-  /** Whether a local `host.call`'s preset move goes to its view as one it may run unasked. */
+  /**
+   * A local `host.call`'s preset move offered to its view as one it may run
+   * unasked: what to call once the view ran it, or null when not offered.
+   */
   function offersLocalNextFallback(
     resolveWebContents: () => Electron.WebContents,
     actionId: string,
     args: unknown,
     confirmed: boolean,
     options: WorkspaceDispatchOptions
-  ): boolean {
+  ): (() => void) | null {
     const nextFallback = options.relay?.nextFallback;
     if (
       confirmed ||
@@ -2162,17 +2165,17 @@ export function createRendererBridge(
       nextFallback === undefined ||
       actionId !== ASSISTANT_PRESET_MOVE_DELEGATE
     ) {
-      return false;
+      return null;
     }
     let key: string | null;
     try {
       key = getProjectForWebContents(resolveWebContents().id);
     } catch {
-      return false;
+      return null;
     }
-    if (key === null) return false;
+    if (key === null) return null;
     const view = parseHostScopedKey(key);
-    return view.hostId === LOCAL_HOST_ID && nextFallback.offers(view.projectId, actionId, args);
+    return view.hostId === LOCAL_HOST_ID ? nextFallback(view.projectId, actionId, args) : null;
   }
 
   /**

@@ -71,6 +71,11 @@ export interface PresetRespawnOptions {
   keepConversation?: boolean;
 }
 
+export interface OwnFallbackStepOptions extends PresetRespawnOptions {
+  /** When the call asking for the move gave up (#17917): nothing starts after it. */
+  deadlineAt?: number;
+}
+
 export interface PresetRespawnResult {
   success: boolean;
   error?: string;
@@ -79,6 +84,11 @@ export interface PresetRespawnResult {
    * was changed: the caller asks the person instead.
    */
   needsConfirmation?: boolean;
+  /**
+   * An assistant's hop that claimed the pane and then failed (#17917): the
+   * tick authorized it, and the old process may already have been ended.
+   */
+  admitted?: boolean;
   /** The conversation the relaunch asked the CLI to reopen, when it kept one. */
   resumedSessionId?: string;
 }
@@ -363,7 +373,7 @@ export interface PanelRegistrySlice {
   restartTerminalOnOwnFallbackStep: (
     id: string,
     presetId: string,
-    options?: PresetRespawnOptions
+    options?: OwnFallbackStepOptions
   ) => Promise<PresetRespawnResult>;
   /**
    * Respawn an agent pane in place on another account (#16040), keeping its

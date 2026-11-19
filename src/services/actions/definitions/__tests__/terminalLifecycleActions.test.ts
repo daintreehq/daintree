@@ -1255,6 +1255,57 @@ describe("terminal.restartOnPreset (#13746)", () => {
       expect(restartTerminalOnPreset).not.toHaveBeenCalled();
     });
 
+    it("takes only the step when `confirmed` rides in the args beside the offer", async () => {
+      const { restartTerminalOnPreset, restartTerminalOnOwnFallbackStep } = setRichPanelState({
+        focusedId: "p1",
+        panels,
+      });
+      const run = setupActions();
+
+      await run(
+        "terminal.restartOnPreset",
+        { terminalId: "p1", presetId: "other", confirmed: true },
+        { hostOwnFallbackStep: true, dispatchDeadlineAt: 1_234 }
+      );
+
+      expect(restartTerminalOnOwnFallbackStep).toHaveBeenCalledWith("p1", "other", {
+        keepConversation: false,
+        deadlineAt: 1_234,
+      });
+      expect(restartTerminalOnPreset).not.toHaveBeenCalled();
+    });
+
+    it("marks a step that was admitted and then failed, and only that", async () => {
+      const { restartTerminalOnOwnFallbackStep } = setRichPanelState({ focusedId: "p1", panels });
+      const run = setupActions();
+      const { OwnFallbackStepFailedError } = await import("@/services/actions/ownFallbackStep");
+
+      restartTerminalOnOwnFallbackStep.mockResolvedValueOnce({
+        success: false,
+        error: "spawn failed",
+        admitted: true,
+      });
+      const admitted = run(
+        "terminal.restartOnPreset",
+        { terminalId: "p1", presetId: "work" },
+        { hostOwnFallbackStep: true }
+      );
+      await expect(admitted).rejects.toBeInstanceOf(OwnFallbackStepFailedError);
+      await expect(admitted).rejects.toThrow(/spawn failed/);
+
+      restartTerminalOnOwnFallbackStep.mockResolvedValueOnce({
+        success: false,
+        error: "the call's deadline passed before the move started",
+      });
+      const refused = run(
+        "terminal.restartOnPreset",
+        { terminalId: "p1", presetId: "work" },
+        { hostOwnFallbackStep: true }
+      );
+      await expect(refused).rejects.toThrow(/deadline/);
+      await expect(refused).rejects.not.toBeInstanceOf(OwnFallbackStepFailedError);
+    });
+
     it("switches as before once a person confirmed, whatever the offer said", async () => {
       const { restartTerminalOnPreset, restartTerminalOnOwnFallbackStep } = setRichPanelState({
         focusedId: "p1",

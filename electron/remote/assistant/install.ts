@@ -55,7 +55,6 @@ declare module "../runtime.js" {
       | "skipsRelayedDispatch"
       | "relayedDelegation"
       | "offersNextFallback"
-      | "noteNextFallbackRan"
       | "awaitsNotices"
       | "holdsThrowawayRuns"
       | "holdsLaunchedAgents"
@@ -313,10 +312,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     },
     receiveNotices: (payload) => runtime.receiveNotices(LOCAL_HOST_ID, payload),
     receiveApproval: (payload) => runtime.receiveApproval(LOCAL_HOST_ID, payload),
-    nextFallback: {
-      offers: (dispatch) => runtime.offersNextFallback(LOCAL_HOST_ID, dispatch),
-      ran: (callId) => runtime.noteNextFallbackRan(LOCAL_HOST_ID, callId),
-    },
+    nextFallback: (dispatch) => runtime.offersNextFallback(LOCAL_HOST_ID, dispatch),
     throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
     readAgents: (options) => getLocalAgentDirectory().read(options),
   });

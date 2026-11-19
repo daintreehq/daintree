@@ -22,8 +22,9 @@ const m = vi.hoisted(() => ({
     } | null => null
   ),
   // Whether it offers a preset move as one the view may run unasked (#17917).
-  offersNextFallback: vi.fn((_hostId: string, _dispatch: unknown) => false),
-  noteNextFallbackRan: vi.fn(),
+  offersNextFallback: vi.fn((_hostId: string, _dispatch: unknown): (() => void) | null => null),
+  // What the offer hands back, called once the view ran the move.
+  ranOffered: vi.fn(),
   // The project each view of this Shell shows, keyed as the Shell keys it.
   viewProjects: new Map<number, string>(),
 }));
@@ -44,7 +45,6 @@ vi.mock("../../runtime.js", () => ({
             skipsRelayedDispatch: m.skipsRelayedDispatch,
             relayedDelegation: m.relayedDelegation,
             offersNextFallback: m.offersNextFallback,
-            noteNextFallbackRan: m.noteNextFallbackRan,
           }
         : undefined,
 }));
@@ -86,7 +86,7 @@ beforeEach(() => {
   m.callsOut.clear();
   m.skipsRelayedDispatch.mockReturnValue(false);
   m.relayedDelegation.mockReturnValue(null);
-  m.offersNextFallback.mockReturnValue(false);
+  m.offersNextFallback.mockReturnValue(null);
   m.viewProjects.clear();
   _resetReverseRequestMethodsForTesting();
 });
@@ -281,7 +281,7 @@ describe("view reverse requests", () => {
     });
 
     it("hands its own relayed move to the view to settle, and notes the run once the view ran it", async () => {
-      m.offersNextFallback.mockReturnValue(true);
+      m.offersNextFallback.mockReturnValue(m.ranOffered);
       m.dispatchActionForHost.mockResolvedValue({
         result: { ok: true, result: 1 },
         authorization: "skip-preference",
@@ -303,12 +303,12 @@ describe("view reverse requests", () => {
         confirmationCondition: "next-own-fallback",
         fixedDeadline: true,
       });
-      expect(m.noteNextFallbackRan).toHaveBeenCalledWith("studio", "call-1");
+      expect(m.ranOffered).toHaveBeenCalledTimes(1);
       expect(answer).toEqual({ result: { ok: true, result: 1 }, authorization: "skip-preference" });
     });
 
     it("reports the view's own dialog, and no run unasked, when the move wasn't the next step", async () => {
-      m.offersNextFallback.mockReturnValue(true);
+      m.offersNextFallback.mockReturnValue(m.ranOffered);
       m.dispatchActionForHost.mockResolvedValue({
         result: { ok: true, result: 1 },
         confirmationDecision: "approved",
@@ -316,7 +316,7 @@ describe("view reverse requests", () => {
 
       const answer = await ask("mcp:dispatch-action", relayedMove);
 
-      expect(m.noteNextFallbackRan).not.toHaveBeenCalled();
+      expect(m.ranOffered).not.toHaveBeenCalled();
       expect(answer).toEqual({ result: { ok: true, result: 1 }, confirmationDecision: "approved" });
     });
 
@@ -340,6 +340,7 @@ describe("view reverse requests", () => {
       ["an agent pane or api-key client", { sessionOrigin: "external" }],
       ["another action", { actionId: "worktree.delete", args: { worktreeId: "/srv/wt" } }],
       ["a confirmed call", { confirmed: true }],
+      ["a call marked as relayed with no call of this Shell's named", { relayed: true }],
       ["an unknown condition", { confirmationCondition: "anything" }],
     ])("passes no offer on for %s", async (_label, fields) => {
       m.dispatchActionForHost.mockResolvedValue({

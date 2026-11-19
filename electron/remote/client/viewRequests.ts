@@ -125,6 +125,7 @@ function honoursNextFallback(request: McpDispatchPayload): boolean {
     request.confirmationCondition === "next-own-fallback" &&
     request.actionId === ASSISTANT_PRESET_MOVE_DELEGATE &&
     request.approvalOnly !== true &&
+    request.relayed !== true &&
     request.relayCall === undefined
   );
 }
@@ -143,7 +144,7 @@ async function ownRelayedCallSkip(
   hostId: string,
   webContentsId: number,
   request: McpDispatchPayload
-): Promise<"skip" | "next-fallback" | null> {
+): Promise<{ kind: "skip" } | { kind: "next-fallback"; ran: () => void } | null> {
   const call = request.relayCall;
   if (call === undefined || request.approvalOnly === true) return null;
   const viewKey = getProjectForWebContents(webContentsId);
@@ -161,8 +162,9 @@ async function ownRelayedCallSkip(
     actionId: request.actionId,
     args: request.args,
   };
-  if (relay?.skipsRelayedDispatch(hostId, dispatch) === true) return "skip";
-  return relay?.offersNextFallback(hostId, dispatch) === true ? "next-fallback" : null;
+  if (relay?.skipsRelayedDispatch(hostId, dispatch) === true) return { kind: "skip" };
+  const ran = relay?.offersNextFallback(hostId, dispatch) ?? null;
+  return ran !== null ? { kind: "next-fallback", ran } : null;
 }
 
 /**
@@ -369,11 +371,12 @@ async function dispatchAction(
   const offered = hostSkip ? null : relayedCallDelegation(hostId, webContentsId, request);
   const service = await loadMcpServerService();
   const own = hostSkip ? null : await ownRelayedCallSkip(service, hostId, webContentsId, request);
-  const ownSkip = own === "skip";
+  const ownSkip = own?.kind === "skip";
   const skipPreference = hostSkip || ownSkip;
   const delegation = skipPreference ? null : offered;
   // Settled by this view, which holds the pane (#17917).
-  const nextFallback = !skipPreference && (own === "next-fallback" || honoursNextFallback(request));
+  const nextFallback =
+    !skipPreference && (own?.kind === "next-fallback" || honoursNextFallback(request));
   const envelope = await service.dispatchActionForHost(
     webContentsId,
     request.actionId,
@@ -413,9 +416,7 @@ async function dispatchAction(
     nextFallback &&
     envelope.confirmationDecision === undefined &&
     envelope.authorization === "skip-preference";
-  if (ranUnasked && own === "next-fallback" && request.relayCall !== undefined) {
-    getRemoteService("hostCallRelayClient")?.noteNextFallbackRan(hostId, request.relayCall.callId);
-  }
+  if (ranUnasked && own?.kind === "next-fallback") own.ran();
   // Only what the host reads back: this machine's view identity stays here,
   // and no approval is ever handed out for the host to reuse. A skip this
   // Shell granted is said, so the host's audit doesn't read it as unasked; a

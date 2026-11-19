@@ -1682,19 +1682,15 @@ describe("rendererBridge — this machine's assistant in another of its projects
       return sent;
     }
 
-    function relayWith(offers: () => boolean) {
+    function relayWith(offered: boolean) {
       const ran = vi.fn();
-      const offer = vi.fn(offers);
-      return {
-        ran,
-        offer,
-        options: { relay: { ...write.relay, nextFallback: { offers: offer, ran } } },
-      };
+      const offer = vi.fn(() => (offered ? ran : null));
+      return { ran, offer, options: { relay: { ...write.relay, nextFallback: offer } } };
     }
 
     it("offers the move to this machine's own view, and notes the run the view reports", async () => {
       const sent = answeringView(7, { authorization: "skip-preference" });
-      const { ran, offer, options } = relayWith(() => true);
+      const { ran, offer, options } = relayWith(true);
 
       const envelope = await bridge.dispatchActionForWorkspace(
         WORKSPACE,
@@ -1717,7 +1713,7 @@ describe("rendererBridge — this machine's assistant in another of its projects
 
     it("offers nothing the call doesn't match, and nothing for another action", async () => {
       const sent = answeringView(7, { authorization: "skip-preference" });
-      const refused = relayWith(() => false);
+      const refused = relayWith(false);
 
       const envelope = await bridge.dispatchActionForWorkspace(
         WORKSPACE,
@@ -1731,7 +1727,7 @@ describe("rendererBridge — this machine's assistant in another of its projects
       expect(envelope.authorization).toBeUndefined();
       expect(refused.ran).not.toHaveBeenCalled();
 
-      const other = relayWith(() => true);
+      const other = relayWith(true);
       await bridge.dispatchActionForWorkspace(
         WORKSPACE,
         "terminal.new",

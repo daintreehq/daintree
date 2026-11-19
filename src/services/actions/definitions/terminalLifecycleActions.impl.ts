@@ -44,6 +44,7 @@ import {
   launchFromRestoreRecovery,
 } from "@/services/terminal/restoreRecoveryLaunch";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { OwnFallbackStepFailedError } from "@/services/actions/ownFallbackStep";
 import { logWarn } from "@/utils/logger";
 import {
   ResetModesArgsSchema,
@@ -370,9 +371,11 @@ export const terminalLifecycleActionRuns = {
     // conversation follows the pane to another preset's home only when asked
     // to and when that home can find it (#16045), and a rate-limited agent is
     // rarely `working` (#13746). Unasked, the one move it makes is the
-    // assistant's next own fallback step, when main offered that (#17917).
-    const ownFallbackStep = !isConfirmed(args, ctx) && ctx?.hostOwnFallbackStep === true;
-    if (!isConfirmed(args, ctx) && !ownFallbackStep) {
+    // assistant's next own fallback step, when main offered that (#17917):
+    // the offer, not anything in the args, decides it, so `confirmed` sent
+    // alongside it still takes only that step.
+    const ownFallbackStep = ctx?.hostOwnFallbackStep === true && ctx.hostConfirmed !== true;
+    if (!ownFallbackStep && !isConfirmed(args, ctx)) {
       throw new Error(
         "Restarting on another preset interrupts the agent and discards its scrollback; pass confirmed: true"
       );
@@ -383,11 +386,19 @@ export const terminalLifecycleActionRuns = {
     const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
     const options = { keepConversation: keepConversation === true };
     const result = ownFallbackStep
-      ? await state.restartTerminalOnOwnFallbackStep(targetId, presetId, options)
+      ? await state.restartTerminalOnOwnFallbackStep(targetId, presetId, {
+          ...options,
+          ...(ctx?.dispatchDeadlineAt !== undefined ? { deadlineAt: ctx.dispatchDeadlineAt } : {}),
+        })
       : await state.restartTerminalOnPreset(targetId, presetId, options);
     if (result.needsConfirmation === true) {
       throw new ConfirmationStagedError(
         `Moving '${targetId}' to preset '${presetId}' wasn't the next step of its own fallback chain, so it needs confirmation. Nothing changed.`
+      );
+    }
+    if (ownFallbackStep && result.admitted === true) {
+      throw new OwnFallbackStepFailedError(
+        result.error ?? "Couldn't restart the terminal on that preset"
       );
     }
     if (!result.success) {

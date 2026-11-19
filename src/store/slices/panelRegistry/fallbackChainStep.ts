@@ -1,5 +1,5 @@
 import type { AgentPreset } from "@shared/config/agentRegistry";
-import { getMergedPresetIdentities, getMergedPresets } from "@shared/utils/agentPresets";
+import { getMergedPresetIdentities, sanitizePreset } from "@shared/utils/agentPresets";
 
 /** The pane fields a fallback chain is walked by. */
 export interface FallbackChainPane {
@@ -19,12 +19,14 @@ export interface FallbackChainPresets {
  * The preset a pane hops from when `presetId` is the next step of the chain it
  * walks, on one of the person's own presets (#17917); null for any other move.
  *
- * The chain is the one a usage-limit hop walks (the root's `fallbacks` in the
- * full merge), so the two share one index, and only a pane still on the step
- * before it counts: an edited chain no longer describes where the pane is. The
- * root must be the person's own, since a project's chain never qualifies. A
- * project preset as the step doesn't either: a team file can put other flags
- * under an id the person chose.
+ * The chain is the root's `fallbacks` as the person saved them, the list a
+ * usage-limit hop walks once every step resolves, so the two share one index.
+ * Read unmerged: the merge drops a step it can't resolve yet, and a project or
+ * CCR list still loading would then move a later step into an earlier slot.
+ * Only a pane still on the step before counts, since an edited chain no longer
+ * describes where the pane is. The root must be the person's own: a project's
+ * chain never qualifies. Nor does a project preset as the step, or one not yet
+ * known: a team file can put other flags under an id the person chose.
  */
 export function ownFallbackChainRoot(
   agentId: string,
@@ -49,10 +51,10 @@ export function ownFallbackChainRoot(
   const step = sources.get(presetId);
   if (step === undefined || step === "project") return null;
 
+  // The first valid custom preset with the id, as the merge picks it.
   const chain =
-    getMergedPresets(agentId, customPresets, ccrPresets, projectPresets).find(
-      (preset) => preset.id === root
-    )?.fallbacks ?? [];
+    (customPresets ?? []).map(sanitizePreset).find((preset) => preset?.id === root)?.fallbacks ??
+    [];
   const current = index === 0 ? root : chain[index - 1];
   if (current === undefined || pane.agentPresetId !== current) return null;
   return chain[index] === presetId ? root : null;
