@@ -533,6 +533,46 @@ describe("createSessionServerDeps", () => {
       expect((dispatchActionForWebContents.mock.calls[0] as unknown[])[6]).toEqual(WALK);
     });
 
+    it("carries the dialog's hand-over offer to this machine's own help session's view only (#16752)", async () => {
+      const offer = { label: "Delete a worktree it created", detail: "Only a clean one" };
+      const dispatchActionForWebContents = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      const deps = fakeSource();
+      (deps as { dispatchActionForWebContents?: unknown }).dispatchActionForWebContents =
+        dispatchActionForWebContents;
+      deps.sessionStore.sessionOriginMap.set("s", "help");
+      deps.sessionStore.sessionWebContentsMap.set("s", 7);
+      deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
+      const help = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+      });
+
+      await help.dispatchAction("worktree.delete", {}, false, undefined, undefined, {
+        delegationOffer: offer,
+      });
+
+      expect((dispatchActionForWebContents.mock.calls[0] as unknown[])[6]).toMatchObject({
+        delegationOffer: offer,
+      });
+
+      // A pinned session that isn't one of this machine's help sessions never carries it.
+      deps.sessionStore.sessionOriginMap.set("p", "external");
+      deps.sessionStore.sessionWebContentsMap.set("p", 8);
+      const other = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "p",
+        role: ROLE,
+      });
+      await other.dispatchAction("worktree.delete", {}, false, undefined, undefined, {
+        delegationOffer: offer,
+      });
+
+      const sent = (dispatchActionForWebContents.mock.calls[1] as unknown[])[6] as
+        Record<string, unknown> | undefined;
+      expect(sent?.delegationOffer).toBeUndefined();
+    });
+
     it("rides a workspace-bound dispatch's options without dropping a pane's own", async () => {
       const deps = fakeSource();
       const dispatchActionForWorkspace = vi.fn(async () => ({
