@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalArgsHash } from "../../../services/mcp-server/sessionDedup.js";
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
+import { ASSISTANT_GLOBAL_CLOSE_CONFIRMATION } from "../../../../shared/config/assistantConfirmationDelegation.js";
 import {
   HostCallRuntime,
   type ObservedHost,
@@ -262,19 +263,19 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       });
 
     it("asks the person about one close, offering its own tick", async () => {
-      delegable = new Set(["terminal.closeOwned"]);
+      delegable = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
       duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId));
 
       await closeCall();
 
       expect(asked).toHaveLength(1);
       expect(asked[0]).toMatchObject({ actionId: "terminal.close", args: { terminalId: "t-1" } });
-      expect(asked[0]?.delegation?.label).toBe("terminal.closeOwned");
+      expect(asked[0]?.delegation?.label).toBe(ASSISTANT_GLOBAL_CLOSE_CONFIRMATION);
       expect(answers[0]?.decision).toBe("approved");
     });
 
     it("answers for the person under their Never ask, or the close's own tick", async () => {
-      skips = new Set(["terminal.closeOwned"]);
+      skips = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
       duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId));
 
       await closeCall();
@@ -284,8 +285,8 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       expect(skipNotes).toBe(1);
     });
 
-    it("settles a batch on the owned close's tick, asked about whole", async () => {
-      skips = new Set(["terminal.closeOwned"]);
+    it("settles a batch on the same tick as one close, asked about whole", async () => {
+      skips = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
       const args = { terminalIds: ["t-1", "t-2"] };
       duringCall = (r, callId) =>
         r.receiveApproval(
@@ -304,7 +305,7 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
 
     it("puts an agent stopped on an error to the person, past any skip and with no tick", async () => {
       skips = true;
-      delegable = new Set(["terminal.closeOwned"]);
+      delegable = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
       reply = { delegate: true };
       duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId, "requires-person"));
 
