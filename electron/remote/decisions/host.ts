@@ -89,7 +89,13 @@ const LONGEST_OWNER = { installationId: "x".repeat(64), ownerDeviceId: "x".repea
 function bounded(list: HostQuestionList): HostQuestionList {
   const kept: HostQuestionList["questions"] = [];
   let bytes = Buffer.byteLength(
-    JSON.stringify({ hostId: list.hostId, owner: LONGEST_OWNER, questions: [], asks: [] })
+    JSON.stringify({
+      hostId: list.hostId,
+      owner: LONGEST_OWNER,
+      questions: [],
+      asks: [],
+      seq: Number.MAX_SAFE_INTEGER,
+    })
   );
   for (let i = list.questions.length - 1; i >= 0 && kept.length < MAX_HOST_QUESTIONS; i--) {
     const question = list.questions[i]!;

@@ -1864,6 +1864,44 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     expect(shell.client.hostQuestions()[0]?.asks?.get(first)).toBe("msg_agent_0003");
   });
 
+  it("lets a reply that lists nothing put no list still on its way out of date", async () => {
+    const { host, client } = await pair();
+    const first = item(1).reference.questionId;
+    let reads = 0;
+    host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+      runtime: RUNNING,
+    }));
+    // The first read lists the question; the second comes while the Host's Decisions has stopped.
+    host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V2, z.unknown(), () => {
+      reads += 1;
+      return reads === 1
+        ? {
+            hostId: QHOST,
+            owner: SERVED,
+            questions: [item(1)],
+            asks: [{ questionId: first, ask: null }],
+            seq: 1,
+          }
+        : { hostId: null, owner: null, questions: [], asks: [], seq: 3 };
+    });
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()[0]?.asks?.get(first)).toBeNull());
+    shell.client.announceOwnerState();
+    await vi.waitFor(() => expect(reads).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // A push sent before that reply, carrying the agent's follow-up, lands after it.
+    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED_V2, {
+      hostId: QHOST,
+      owner: SERVED,
+      questions: [item(1)],
+      asks: [{ questionId: first, ask: "msg_agent_0002" }],
+      seq: 2,
+    });
+    expect(shell.client.hostQuestions()[0]?.asks?.get(first)).toBe("msg_agent_0002");
+  });
+
   it("reads a Host from before #17895 without asks, asking for them once per link", async () => {
     const { host, client } = await pair();
     answerAnnouncements(

@@ -529,7 +529,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       const parsed = HostQuestionListV2Schema.safeParse(raw);
       if (!parsed.success) return;
       this.listsAsks.add(session);
-      if (this.newerList(session, parsed.data.seq)) {
+      if (this.listCounts(hostId, session, parsed.data)) {
         this.hearQuestions(hostId, session, parsed.data, parsed.data.asks);
       }
       return;
@@ -582,10 +582,20 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     this.questionsChanged();
   }
 
-  /** Whether `seq` is newer than any v2 list `session` delivered, taking it as the newest when it is. */
-  private newerList(session: DecisionsHostSession, seq: number): boolean {
-    if (seq <= (this.listSeqs.get(session) ?? 0)) return false;
-    this.listSeqs.set(session, seq);
+  /**
+   * Whether a v2 list is newer than any `session` delivered, taking it as the
+   * newest when it is. Only a list counts: one that serves none (`hostId`
+   * null), or was served to another owner, changes nothing, so it never puts
+   * an older list still on its way out of date.
+   */
+  private listCounts(
+    hostId: string,
+    session: DecisionsHostSession,
+    payload: HostQuestionListPayload & { seq: number }
+  ): boolean {
+    if (payload.hostId === null || !this.takesList(hostId, session, payload)) return false;
+    if (payload.seq <= (this.listSeqs.get(session) ?? 0)) return false;
+    this.listSeqs.set(session, payload.seq);
     return true;
   }
 
@@ -650,7 +660,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       (payload) => {
         if (!this.takesList(hostId, session, payload)) return null;
         this.listsAsks.add(session);
-        if (!this.newerList(session, payload.seq)) return null;
+        if (!this.listCounts(hostId, session, payload)) return null;
         this.hearQuestions(hostId, session, payload, payload.asks);
         return null;
       }
