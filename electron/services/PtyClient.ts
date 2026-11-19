@@ -230,6 +230,11 @@ interface TerminalInfoResponse {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905). Absent when not seen, or once that run ended.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Lifecycle-ledger generation of the record that answered. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */

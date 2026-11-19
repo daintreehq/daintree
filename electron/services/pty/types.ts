@@ -14,6 +14,8 @@ import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.
 import { PTY_MIRROR_SCROLLBACK } from "../../../shared/config/scrollback.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 import type { HandbackTracker } from "./HandbackTracker.js";
+import type { UpdateInstalledObservation } from "../../../shared/types/ipc/agent.js";
+import type { UpdateFooterSighting } from "./claudeUpdateObservation.js";
 
 // Re-export PtyHostSpawnOptions as PtySpawnOptions for backward compatibility/internal usage
 export type PtySpawnOptions = PtyHostSpawnOptions;
@@ -199,6 +201,13 @@ export interface TerminalPublicState {
    * appearance, cleared in `AgentStateService`; ephemeral (not persisted).
    */
   usageLimitObservedAt?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane showed it (#17905).
+   * Kept while its run lives, on screen or not, and cleared when the run ends
+   * or changes; set and cleared only through `claudeUpdateObservation.ts`.
+   * Ephemeral (not persisted).
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
@@ -260,6 +269,11 @@ export interface TerminalInfo extends TerminalPublicState {
    * terminal asks for one. Not persisted, not crossed over IPC.
    */
   handbackTracker?: HandbackTracker;
+  /**
+   * What the update-footer observer remembers between frames (#17905).
+   * Runtime-only; not persisted, not crossed over IPC.
+   */
+  updateFooterSighting?: UpdateFooterSighting;
   /**
    * Final serialized buffer captured when a preserved terminal exits and its
    * headless xterm is disposed to reclaim memory. Served by

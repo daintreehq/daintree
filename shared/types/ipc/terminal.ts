@@ -12,6 +12,7 @@ import type {
 import type { AgentId } from "../agent.js";
 import type { AgentState, WaitingReason } from "../agent.js";
 import type { ActionContext } from "../actions.js";
+import type { UpdateInstalledObservation } from "./agent.js";
 
 /** Terminal spawn options */
 export interface TerminalSpawnOptions {
@@ -329,6 +330,11 @@ export interface BackendTerminalInfo {
    */
   agentIncarnation?: number;
   /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905). Absent when not seen, or once that run ended.
+   */
+  updateInstalled?: UpdateInstalledObservation;
+  /**
    * Live detected identity — the agent currently running in this terminal.
    * The single source of truth for chrome. Not persisted; rehydrated here on
    * reconnect. See `docs/architecture/terminal-identity.md`.
@@ -382,6 +388,11 @@ export interface TerminalReconnectResult {
    * never read absence as zero.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905). Absent when not seen, or once that run ended.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Live detected identity; the single chrome source of truth. See `docs/architecture/terminal-identity.md`. */
   detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
@@ -485,6 +496,11 @@ export interface TerminalInfoPayload {
    * printed text, kept far longer than the header chip's window.
    */
   usageLimitObservedAt?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905). Absent when not seen, or once that run ended.
+   */
+  updateInstalled?: UpdateInstalledObservation;
 }
 
 import type { TerminalActivityPayload } from "../terminal.js";

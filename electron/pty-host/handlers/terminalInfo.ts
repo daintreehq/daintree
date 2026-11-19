@@ -110,6 +110,7 @@ export function mapTerminalInfo(
     originalAgentPresetId: t.originalAgentPresetId,
     everDetectedAgent: t.everDetectedAgent,
     agentIncarnation: t.agentIncarnation,
+    updateInstalled: t.updateInstalled,
     launchGeneration: t.launchGeneration,
     detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
     detectedProcessId: t.detectedProcessIconId,

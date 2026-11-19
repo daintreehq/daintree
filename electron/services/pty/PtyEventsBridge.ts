@@ -21,6 +21,7 @@ import type { AgentStateChangeTrigger } from "../../types/index.js";
 import type {
   AgentFallbackReason,
   AgentFallbackTriggeredPayload,
+  UpdateInstalledObservation,
 } from "../../../shared/types/ipc/agent.js";
 import {
   CLAUDE_USAGE_STATEMENTS,
@@ -120,6 +121,22 @@ function claudeUsageObservation(
 }
 
 /** The terminal an agent event is about, wherever its shape carries it. */
+/**
+ * The observation an `agent-update-installed-changed` event carries, rebuilt
+ * from its two fields so nothing else rides to the renderer. Undefined when it
+ * isn't one.
+ */
+function updateInstalledObservation(
+  value: unknown
+): UpdateInstalledObservation | null | undefined {
+  if (value === null) return null;
+  if (!value || typeof value !== "object") return undefined;
+  const { observedAt, namesRestart } = value as Partial<UpdateInstalledObservation>;
+  if (typeof observedAt !== "number" || !Number.isFinite(observedAt)) return undefined;
+  if (typeof namesRestart !== "boolean") return undefined;
+  return { observedAt, namesRestart };
+}
+
 function agentEventTerminalId(event: PtyHostEvent): string {
   const fields = event as {
     id?: unknown;
@@ -273,6 +290,17 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         timestamp: event.timestamp,
       });
       return true;
+
+    case "agent-update-installed-changed": {
+      const updateInstalled = updateInstalledObservation(event.updateInstalled);
+      if (updateInstalled === undefined || typeof event.terminalId !== "string") return true;
+      events.emit("agent:update-installed-changed", {
+        terminalId: event.terminalId,
+        updateInstalled,
+        timestamp: event.timestamp,
+      });
+      return true;
+    }
 
     // Main's record for `agent.readQuota` and Settings, not the bus: no
     // plugin or notice has a use for it.

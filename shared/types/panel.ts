@@ -4,6 +4,7 @@ import type { TerminalHandback } from "./handback.js";
 import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { ScheduledRunRef } from "./scheduledRunRef.js";
+import type { UpdateInstalledObservation } from "./ipc/agent.js";
 import {
   BUILT_IN_PANEL_KINDS,
   panelKindIsDockable,
@@ -813,6 +814,12 @@ export interface PtyPanelData extends BasePanelData {
    * classified leaves it unchanged.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905), owned by the host and only ever copied here. Not persisted, and
+   * cleared when the run ends or a restart re-stamps `startedAt`.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */

@@ -46,6 +46,12 @@ import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
 import { resolveResetsAt, scanClaudeUsageMessages } from "./ClaudeUsageWarnings.js";
+import { scanClaudeUpdateFooter } from "./ClaudeUpdateFooter.js";
+import {
+  clearUpdateInstalled,
+  noteUpdateFooter,
+  noteUpdateFooterProcess,
+} from "./claudeUpdateObservation.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -1975,6 +1981,7 @@ export class TerminalProcess {
     }
     this.observeRateLimitBanner(lines, now);
     this.observeClaudeUsage(lines, now);
+    this.observeUpdateFooter(lines, now);
     this.observeHandback(now);
   }
 
@@ -2121,6 +2128,23 @@ export class TerminalProcess {
   }
 
   /**
+   * Note Claude Code's "Update installed" footer (#17905). Only a detected,
+   * live Claude Code run is read: the launch hint alone doesn't make a pane
+   * Claude's, and the exit path's last frame belongs to a run that is over.
+   * Anything else ends the observation, so a shell or another CLI taking the
+   * pane clears it on its first frame.
+   */
+  private observeUpdateFooter(lines: readonly string[], now: number): void {
+    const t = this.terminalInfo;
+    if (t.detectedAgentId !== "claude" || !this.isAgentLive || this.samplingFinalFrame) {
+      clearUpdateInstalled(t, now);
+      return;
+    }
+    const cols = readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined;
+    noteUpdateFooter(t, scanClaudeUpdateFooter(lines, cols), now);
+  }
+
+  /**
    * Offer the pane's fallback chain once its rate-limit banner has sat still
    * (#14370). Kept apart from the chip's cooldown: a banner blanked by one
    * repaint restarts the settle without waiting a minute for a new observation.
@@ -2251,6 +2275,9 @@ export class TerminalProcess {
     const info = this.terminalInfo;
     if (info.spawnedAt !== spawnedAt || info.wasKilled || info.isExited) return;
     if (info.detectedAgentId !== observation.agentType) return;
+    if (observation.agentType === "claude" && observation.pid !== undefined) {
+      noteUpdateFooterProcess(info, observation.pid, Date.now());
+    }
     const run = `${info.launchGeneration ?? "?"}:${info.agentIncarnation}`;
     if (observation.pid !== undefined) {
       const seen = this.agentProcessSeen;

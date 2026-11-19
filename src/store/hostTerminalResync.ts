@@ -61,6 +61,8 @@ export async function resyncHostTerminals(
   const store = usePanelStore.getState();
 
   for (const info of infos) {
+    // Whatever its agent state: the footer comes and goes without a transition.
+    store.setUpdateInstalled(info.id, info.updateInstalled);
     takeHostAgentState(info.id, info, store, terminalInstanceService);
   }
 

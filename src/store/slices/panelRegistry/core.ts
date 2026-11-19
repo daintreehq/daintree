@@ -516,6 +516,23 @@ export const createCorePanelActions = (
     });
   },
 
+  setUpdateInstalled: (id, updateInstalled) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal) || terminal.isRestarting) return state;
+      const current = terminal.updateInstalled;
+      if (
+        current?.observedAt === updateInstalled?.observedAt &&
+        current?.namesRestart === updateInstalled?.namesRestart
+      ) {
+        return state;
+      }
+      return {
+        panelsById: { ...state.panelsById, [id]: { ...terminal, updateInstalled } },
+      };
+    });
+  },
+
   updateActivity: (id, headline, status, type, lastCommand) => {
     set((state) => {
       const terminal = state.panelsById[id];

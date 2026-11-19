@@ -2,6 +2,7 @@ import type { AgentState, WaitingReason } from "./agent.js";
 import type { TerminalCheckResult } from "./checkResult.js";
 import type { TerminalHandback } from "./handback.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
+import type { UpdateInstalledObservation } from "./ipc/agent.js";
 
 /**
  * Which surface answered a `terminal.getStatus` call (#12316).
@@ -70,6 +71,10 @@ export const INPUT_LINE_DESCRIPTION =
 /** Model-facing description of `inputLine.truncated`. */
 export const INPUT_LINE_TRUNCATED_DESCRIPTION = "`text` was cut to its first 200 characters.";
 
+/** Model-facing description of `updateInstalled` (#17905), on `terminal.getStatus` and `agent.getState`. */
+export const UPDATE_INSTALLED_DESCRIPTION =
+  'Claude Code\'s "Update installed" footer, seen this run: when, and if its text named /restart. Not a state.';
+
 /** Model-facing description of `inputLine.text`. */
 export const INPUT_LINE_TEXT_DESCRIPTION =
   "Text after the prompt glyph; empty for `empty` and `unknown`.";
@@ -132,6 +137,12 @@ export interface TerminalStatusEntry {
    * record, main from the pty-host record.
    */
   lastHandback?: TerminalHandback;
+  /**
+   * Claude Code's "Update installed" footer as this terminal's run showed it
+   * (#17905). Beside `waitingReason`, never one: the agent may still be
+   * working. Read on both surfaces, from the panel and from the pty-host record.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   recentOutput?: string | null;
   /**
    * The input box as `recentOutput`'s screen showed it (#16189). Read off the

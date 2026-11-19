@@ -1536,6 +1536,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "agent:fallback-triggered": "host",
   "agent:state-changed": "host",
   "agent:rate-limit-observed": "host",
+  "agent:update-installed-changed": "host",
   "agent:state-transition-dropped": "host",
   "app-agent:confirmation-request": "host",
   "app-agent:dispatch-action-request": "host",

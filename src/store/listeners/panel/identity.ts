@@ -77,6 +77,19 @@ export function setupIdentityListeners(): DisposableStore {
 
   d.add(toDisposable(subscribeToPluginAgentRegistry(syncPluginAgentDefaultTitles)));
 
+  // The host owns the observation and sends every set and clear (#17905); a
+  // view attached later reads it off the terminal's record instead.
+  d.add(
+    toDisposable(
+      window.electron.events.on("agent:update-installed-changed", (payload) => {
+        if (!payload || typeof payload.terminalId !== "string") return;
+        usePanelStore
+          .getState()
+          .setUpdateInstalled(payload.terminalId, payload.updateInstalled ?? undefined);
+      })
+    )
+  );
+
   d.add(
     toDisposable(
       terminalRegistryController.onAgentStateChanged((data: AgentStateChangePayload) => {

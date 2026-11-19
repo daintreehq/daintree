@@ -34,6 +34,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "agent:detected": "bus",
   // Pane-attributed rate-limit observation (#12797); timestamps only.
   "agent:rate-limit-observed": "bus",
+  // A Claude Code pane's update footer (#17905); the observation, never the text.
+  "agent:update-installed-changed": "bus",
   "agent:exited": "bus",
   "agent:fallback-triggered": "bus",
 

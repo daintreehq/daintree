@@ -23,6 +23,7 @@ import {
 } from "./terminalHeaderChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
 import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
+import { TerminalUpdateInstalledBadge } from "./TerminalUpdateInstalledBadge";
 import { TerminalWhenDoneBadge } from "./TerminalWhenDoneBadge";
 import { TerminalNotifyChip } from "./TerminalNotifyChip";
 import { TerminalDecisionsChip } from "./TerminalDecisionsChip";
@@ -414,6 +415,9 @@ export function TerminalHeaderContent({
 
       {/* Pane-observed rate-limit banner (#12797). Self-gating and expiring. */}
       {hasPtyKind && <TerminalRateLimitBadge terminalId={id} />}
+
+      {/* Claude Code's "Update installed" footer (#17905). Self-gating; goes with its run. */}
+      {hasPtyKind && <TerminalUpdateInstalledBadge terminalId={id} />}
 
       {/* What the pane does once its agent reports done (#16171). Self-gating. */}
       {hasPtyKind && <TerminalWhenDoneBadge terminalId={id} />}

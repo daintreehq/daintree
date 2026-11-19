@@ -20,7 +20,11 @@ import type { ResourceProfile } from "./resourceProfile.js";
 import type { PowerPolicyLevel } from "./powerPolicy.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
-import type { AgentEndObservation, AgentFallbackTriggeredPayload } from "./ipc/agent.js";
+import type {
+  AgentEndObservation,
+  AgentFallbackTriggeredPayload,
+  UpdateInstalledObservation,
+} from "./ipc/agent.js";
 import type { RequiredPluginToolStatus } from "./ipc/pluginAgentMcp.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
@@ -907,6 +911,13 @@ export type PtyHostEvent =
       timestamp: number;
     }
   | {
+      /** This pane's update-installed observation was set or cleared (#17905). */
+      type: "agent-update-installed-changed";
+      terminalId: string;
+      updateInstalled: UpdateInstalledObservation | null;
+      timestamp: number;
+    }
+  | {
       /** A Claude Code usage message in this pane (#15727), as parsed fields only. */
       type: "agent-claude-usage-observed";
       terminalId: string;
@@ -1439,6 +1450,11 @@ export interface PtyHostTerminalInfo {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905). Absent when not seen, or once that run ended.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Lifecycle-ledger generation this record belongs to, so a reader can tell it from a relaunch's. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */

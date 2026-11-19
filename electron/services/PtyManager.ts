@@ -1290,6 +1290,7 @@ export class PtyManager extends EventEmitter {
       exitCode: terminalInfo.exitCode,
       everDetectedAgent: terminalInfo.everDetectedAgent,
       usageLimitObservedAt: terminalInfo.usageLimitObservedAt,
+      updateInstalled: terminalInfo.updateInstalled,
     };
   }
 
