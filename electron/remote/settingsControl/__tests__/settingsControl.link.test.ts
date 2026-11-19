@@ -450,6 +450,24 @@ describe("host settings over a link, with no project or window on the host", () 
       expect(result).toMatchObject({ outcome: "applied", confirmedBy: "readback" });
     });
 
+    it("tells what follows a change the host confirmed, and keeps it applied when what follows throws", async () => {
+      const applied = vi.fn(() => {
+        throw new Error("follower failed");
+      });
+      const direct = clientOver(() => sessions.client, applied);
+      const before = await direct.read({ hostId: HOST, keys: ["idleTerminalNotify.enabled"] });
+      const result = await direct.update({
+        hostId: HOST,
+        patch: { "idleTerminalNotify.enabled": true },
+        expect: {
+          instanceId: before.instanceId,
+          revisions: { "idleTerminalNotify.enabled": before.settings[0]!.revision },
+        },
+      });
+      expect(result).toMatchObject({ outcome: "applied", confirmedBy: "reply" });
+      expect(applied).toHaveBeenCalledWith(HOST, result.settings);
+    });
+
     it("tells what follows a change that landed, as the readback shows it, and nothing of one refused", async () => {
       const applied = vi.fn();
       const lossy = clientOver(losingReplies, applied);

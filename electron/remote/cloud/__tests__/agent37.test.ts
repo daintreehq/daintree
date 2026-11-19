@@ -573,6 +573,23 @@ describe("Agent37Provider", () => {
     expect(api.instances.get(stopped.id)!.status).toBe("stopped");
   });
 
+  it("never takes a sleep Agent 37 says it did to another instance as this one's", async () => {
+    const { api, provider, credentials } = env();
+    const instance = api.seed();
+    api.fail(
+      "POST",
+      /\/sleep$/,
+      () =>
+        new Response(JSON.stringify({ id: "zzzzzzzzzz", status: "sleeping" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+    );
+    await expect(provider.sleepIdle(credentials, instance.id)).rejects.toMatchObject({
+      kind: "bad-response",
+    });
+  });
+
   it("says a sleep that met another operation on the instance found Agent 37 busy, asking once", async () => {
     const { api, provider, credentials } = env();
     const instance = api.seed();

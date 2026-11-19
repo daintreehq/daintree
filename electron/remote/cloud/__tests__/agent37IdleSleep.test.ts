@@ -79,8 +79,11 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
     return { granted: said };
   });
   const session = { isOpen: true, call: claims } as unknown as LinkSession;
+  let current: LinkSession = session;
   let reading: IdleReading | null = null;
   const release = vi.fn();
+  const reconnect = vi.fn();
+  let later = 0;
   const hosts: HostDescriptor[] = [];
   const lifecycle = new CloudHostLifecycle({
     store,
@@ -101,12 +104,13 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
     },
     changed: () => {},
     idleClaims: {
-      sessionFor: () => (session.isOpen ? session : null),
+      sessionFor: () => (current.isOpen ? current : null),
       idleOn: () => reading,
       release,
+      reconnect,
     },
     sleep: async () => {},
-    now: () => Date.now() - skew,
+    now: () => Date.now() - skew + later,
   });
   disposers.push(() => lifecycle.dispose());
 
@@ -146,6 +150,7 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
     session,
     claims,
     release,
+    reconnect,
     bindingId,
     machine: api.instances.get(seeded.id)!,
     summary,
@@ -157,6 +162,14 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
     },
     newWork: () => {
       lastWorkAt += 60 * 60_000;
+    },
+    /** Another link takes the host's place. */
+    relink: () => {
+      current = { isOpen: true, call: claims } as unknown as LinkSession;
+    },
+    /** Daintree's clock moves on. */
+    advance: (ms: number) => {
+      later += ms;
     },
     status: () => lifecycle.statuses()[0]!,
   };
@@ -188,6 +201,8 @@ describe("putting a linked Agent 37 instance to sleep once its host is idle (#17
   it("leaves a busy host's instance awake, and one whose host refuses the claim", async () => {
     const env = await agent37();
     await env.summary({ busy: true, idleEndsAt: null });
+    // Busy now, whatever an earlier deadline said.
+    await env.summary({ busy: true });
     // Ended by its own figures, but taken before the host's clock got there.
     await env.summary({}, 1_000_000 + 29 * 60_000);
     expect(env.claims).not.toHaveBeenCalled();
@@ -226,6 +241,9 @@ describe("putting a linked Agent 37 instance to sleep once its host is idle (#17
     expect(env.status().lastError?.message).toBe(
       "Agent 37 didn't put the machine to sleep once the host's idle time ended: Agent 37 was busy with another change to the machine."
     );
+    // Let go as the sleep went out, the link comes back for a machine still awake.
+    expect(env.release).toHaveBeenCalledTimes(1);
+    expect(env.reconnect).toHaveBeenCalledWith("build");
     // The claim spent that idle time: nothing is sent again until new work ends another.
     await env.summary();
     expect(env.claims).toHaveBeenCalledTimes(1);
@@ -233,6 +251,7 @@ describe("putting a linked Agent 37 instance to sleep once its host is idle (#17
     await env.summary();
     expect(env.sleeps()).toHaveLength(2);
     expect(env.status()).toMatchObject({ asleep: true, lastError: null });
+    expect(env.reconnect).toHaveBeenCalledTimes(1);
   });
 
   it("refuses every dial while the sleep is under way", async () => {
@@ -271,6 +290,28 @@ describe("putting a linked Agent 37 instance to sleep once its host is idle (#17
     expect(env.claims).not.toHaveBeenCalled();
   });
 
+  it("sends nothing once Agent 37 says its idle sleep was turned off since it was last read", async () => {
+    const env = await agent37();
+    env.machine.auto_sleep = false;
+    await env.summary();
+    expect(env.claims).not.toHaveBeenCalled();
+    expect(env.sleeps()).toHaveLength(0);
+  });
+
+  it("sends nothing on a grant that came over a link since replaced", async () => {
+    const env = await agent37();
+    let grant!: (granted: boolean) => void;
+    env.answerClaim(() => new Promise<boolean>((resolve) => (grant = resolve)));
+    const pass = env.summary();
+    await env.until(() => env.claims.mock.calls.length === 1);
+    env.relink();
+    grant(true);
+    await pass;
+    expect(env.sleeps()).toHaveLength(0);
+    expect(env.release).not.toHaveBeenCalled();
+    expect(env.machine.status).toBe("running");
+  });
+
   it("leaves an instance whose own idle sleep is off awake", async () => {
     const env = await agent37({ auto_sleep: false });
     await env.summary();
@@ -305,6 +346,9 @@ describe("keeping an Agent 37 instance's own idle timeout at its host's idle tim
     await env.until(() => env.patches().length === 2);
     expect(env.patches()[1]!.body).toEqual({ idle_timeout_seconds: 3600, auto_sleep: true });
     await env.until(() => env.machine.idle_timeout_seconds === 3600);
+    // A summary taken before the pick reached the host doesn't send the old value back.
+    await env.summary({ busy: true, idleEndsAt: null, idleAfterMinutes: 30 });
+    expect(env.patches()).toHaveLength(2);
   });
 
   it("leaves an imported instance's own idle timeout alone until the person picks one, then follows the host", async () => {
@@ -314,20 +358,20 @@ describe("keeping an Agent 37 instance's own idle timeout at its host's idle tim
     expect(env.status().idleTimeFollowsHost).toBe(false);
 
     env.lifecycle.idleTimePicked("build", [
-      { key: "hostIdle.idleAfterMinutes", value: 30, revision: "r2" },
+      { key: "hostIdle.idleAfterMinutes", value: 60, revision: "r2" },
     ]);
     await env.until(() => env.patches().length === 1);
-    expect(env.patches()[0]!.body).toEqual({ idle_timeout_seconds: 1800, auto_sleep: true });
+    expect(env.patches()[0]!.body).toEqual({ idle_timeout_seconds: 3600, auto_sleep: true });
     expect(env.store.bindings()[0]!.idleTimeChosen).toBe(true);
     expect(env.status().idleTimeFollowsHost).toBe(true);
 
-    // Changed on the host from elsewhere: it follows now.
-    await env.until(() => env.status().lifetime?.kind === "idle-sleep");
+    // Changed on the host from elsewhere, once the pick has had time to show in its summaries.
     await vi.waitFor(() =>
-      expect(env.status().lifetime).toEqual({ kind: "idle-sleep", idleSeconds: 1800 })
+      expect(env.status().lifetime).toEqual({ kind: "idle-sleep", idleSeconds: 3600 })
     );
-    // Each keeper pass reads the latest summary; the one after the pick settles sends it.
+    // Each keeper pass reads the latest summary; one past the pick's pause sends it.
     await env.until(() => {
+      env.advance(60_000);
       void env.summary({ busy: true, idleEndsAt: null, idleAfterMinutes: 120 });
       return env.patches().length === 2;
     });
@@ -351,9 +395,9 @@ describe("keeping an Agent 37 instance's own idle timeout at its host's idle tim
     expect(env.machine.idle_timeout_seconds).toBe(3600);
   });
 
-  it("says when Agent 37 didn't take the idle time, and clears it once it does", async () => {
-    const env = await agent37();
-    env.api.fail("PATCH", /^\/instances\/[^/]+$/, FakeAgent37Api.error(403, "forbidden"));
+  it("says when Agent 37 didn't take a pick, and sends it again, idle sleep and all, until it lands", async () => {
+    const env = await agent37({ auto_sleep: false });
+    env.api.fail("PATCH", /^\/instances\/[^/]+$/, FakeAgent37Api.error(503, "unavailable"), 3);
     env.lifecycle.idleTimePicked("build", [
       { key: "hostIdle.idleAfterMinutes", value: 60, revision: "r2" },
     ]);
@@ -361,10 +405,33 @@ describe("keeping an Agent 37 instance's own idle timeout at its host's idle tim
     expect(env.status().lastError?.message).toContain(
       "Agent 37 didn't take the host's idle time as the machine's own:"
     );
-    env.lifecycle.idleTimePicked("build", [
-      { key: "hostIdle.idleAfterMinutes", value: 60, revision: "r3" },
-    ]);
+    expect(env.machine.auto_sleep).toBe(false);
+    // Its own idle sleep still reads as off, but the pick is sent again once the pause is over.
+    await env.until(() => {
+      env.advance(60_000);
+      void env.summary({ busy: true, idleEndsAt: null, idleAfterMinutes: 60 });
+      return env.machine.auto_sleep;
+    });
+    expect(env.patches().at(-1)!.body).toEqual({ idle_timeout_seconds: 3600, auto_sleep: true });
     await env.until(() => env.status().lastError === null);
-    expect(env.machine.idle_timeout_seconds).toBe(3600);
+  });
+
+  it("doesn't send a value Agent 37 refused again until the host's idle time changes", async () => {
+    const env = await agent37({ idle_timeout_seconds: 900 });
+    env.store.updateBinding(env.bindingId, (current) => ({
+      ...current,
+      ownership: "created-by-daintree",
+    }));
+    env.api.fail("PATCH", /^\/instances\/[^/]+$/, FakeAgent37Api.error(403, "forbidden"), 10);
+    await env.summary({ busy: true, idleEndsAt: null });
+    await env.until(() => env.status().lastError !== null);
+    expect(env.patches()).toHaveLength(1);
+    env.advance(10 * 60_000);
+    await env.summary({ busy: true, idleEndsAt: null });
+    await env.summary({ busy: true, idleEndsAt: null });
+    expect(env.patches()).toHaveLength(1);
+    await env.summary({ busy: true, idleEndsAt: null, idleAfterMinutes: 60 });
+    await env.until(() => env.patches().length === 2);
+    expect(env.patches()[1]!.body).toEqual({ idle_timeout_seconds: 3600 });
   });
 });

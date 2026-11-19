@@ -1164,6 +1164,9 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
         // Not a person's disconnect: anything that dials it later reads it asleep and stops there.
         void manager.disconnect(hostId).catch(() => {});
       },
+      reconnect: (hostId) => {
+        if (registry.get(hostId)) manager.connect(hostId);
+      },
     },
     hosts: {
       add: (name, connection, pendingPlacement) =>
