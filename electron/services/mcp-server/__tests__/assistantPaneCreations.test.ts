@@ -98,8 +98,9 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     );
     admitRestoredAssistantPanes("proj-1", ["claude-7f3a"], new Set(["conv-1"]));
 
-    expect(second.get(principalOwnerKey(helpOwnershipPrincipal("help-b")), "terminal", "claude-7f3a"))
-      .toMatchObject({ id: "claude-7f3a", workspaceId: "proj-1" });
+    expect(
+      second.get(principalOwnerKey(helpOwnershipPrincipal("help-b")), "terminal", "claude-7f3a")
+    ).toMatchObject({ id: "claude-7f3a", workspaceId: "proj-1" });
     // Another conversation's bearer gets nothing.
     expect(second.get(bindHelp(second, "help-c", "conv-2"), "terminal", "claude-7f3a")).toBe(
       undefined
@@ -196,7 +197,11 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     const owner = bindHelp(first, "help-a", "conv-1");
     first.record(owner, [{ kind: "terminal", id: "t1" }], "proj-1");
     first.record(owner, [{ kind: "terminal", id: "t2" }], "proj-1");
-    first.record(bindHelp(first, "help-z", "conv-gone"), [{ kind: "terminal", id: "t3" }], "proj-1");
+    first.record(
+      bindHelp(first, "help-z", "conv-gone"),
+      [{ kind: "terminal", id: "t3" }],
+      "proj-1"
+    );
     await flush();
 
     const second = startRun(disk);
@@ -360,7 +365,9 @@ describe("assistant pane creations kept across a restart (#16845)", () => {
     const second = startRun(disk);
     admitRestoredAssistantPanes("proj-1", ["t1", "t2"], new Set(["conv-1", "conv-2"]));
 
-    expect(second.get(bindLocalRelay(second, "help-c", "conv-1"), "terminal", "t1")).toBeUndefined();
+    expect(
+      second.get(bindLocalRelay(second, "help-c", "conv-1"), "terminal", "t1")
+    ).toBeUndefined();
     expect(second.get(bindLocalRelay(second, "help-d", "conv-2"), "terminal", "t2")).toBeDefined();
   });
 

@@ -334,8 +334,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
         senderId: LOCAL_RELAY_SENDER_ID,
         ...kept,
       })) ?? null,
-    noteConversationCall: (_senderId, conversationId, at) =>
-      noteLocalRelayCall(conversationId, at),
+    noteConversationCall: (_senderId, conversationId, at) => noteLocalRelayCall(conversationId, at),
     receiveNotices: (payload) => runtime.receiveNotices(LOCAL_HOST_ID, payload),
     receiveApproval: (payload) => runtime.receiveApproval(LOCAL_HOST_ID, payload),
     nextFallback: (dispatch) => runtime.offersNextFallback(LOCAL_HOST_ID, dispatch),

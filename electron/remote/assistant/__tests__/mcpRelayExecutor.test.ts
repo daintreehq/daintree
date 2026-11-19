@@ -470,7 +470,11 @@ describe("createMcpRelayExecutor and conversations a restart kept (#16845)", () 
     executor = createMcpRelayExecutor({
       acceptsRemoteControl: () => true,
       hasProject: async () => true,
-      openSession: async () => ({ isOpen: () => true, callTool: async () => ANSWER, close: () => {} }),
+      openSession: async () => ({
+        isOpen: () => true,
+        callTool: async () => ANSWER,
+        close: () => {},
+      }),
       forgetConversation: (senderId, conversationId) => forgotten.push([senderId, conversationId]),
       keptConversations: kept,
       noteConversationCall: (...args) => calls.push(args),

@@ -55,7 +55,11 @@ export interface AssistantPaneCreationPersistence {
 
 /** What a restored record is given back to: the MCP server's ownership ledger. */
 export interface AssistantPaneCreationLedger {
-  restoreIfUnclaimed(conversationKey: string, draft: OwnedResourceDraft, workspaceId: string): boolean;
+  restoreIfUnclaimed(
+    conversationKey: string,
+    draft: OwnedResourceDraft,
+    workspaceId: string
+  ): boolean;
   supersede(drafts: readonly OwnedResourceDraft[]): void;
 }
 
@@ -92,9 +96,7 @@ function isBoundedId(value: unknown): value is string {
 }
 
 function isTime(value: unknown, now: number): value is number {
-  return (
-    typeof value === "number" && Number.isFinite(value) && value <= now + FUTURE_SKEW_MS
-  );
+  return typeof value === "number" && Number.isFinite(value) && value <= now + FUTURE_SKEW_MS;
 }
 
 function readStoredRecord(
@@ -157,7 +159,10 @@ function persist(): void {
 function capStored(): boolean {
   if (stored.size <= MAX_STORED_ASSISTANT_PANE_CREATIONS) return false;
   const oldestFirst = [...stored].sort(([, a], [, b]) => a.seenAt - b.seenAt);
-  for (const [terminalId] of oldestFirst.slice(0, stored.size - MAX_STORED_ASSISTANT_PANE_CREATIONS)) {
+  for (const [terminalId] of oldestFirst.slice(
+    0,
+    stored.size - MAX_STORED_ASSISTANT_PANE_CREATIONS
+  )) {
     forgetRow(terminalId);
   }
   return true;

@@ -134,7 +134,9 @@ export class PendingHelpHibernationStore {
             : undefined;
         this.entries.set(
           key,
-          ownershipId !== undefined ? { ...safeEntry, conversationOwnershipId: ownershipId } : safeEntry
+          ownershipId !== undefined
+            ? { ...safeEntry, conversationOwnershipId: ownershipId }
+            : safeEntry
         );
         // Only a lane that names its conversation can reopen it by that id.
         if (ownershipId !== undefined && safeEntry.agentSessionId !== "") {

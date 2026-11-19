@@ -834,7 +834,9 @@ describe("ResourceOwnershipLedger and what a restart keeps (#16845)", () => {
     const ledger = new ResourceOwnershipLedger({
       created: (kind, id) => events.push(`created ${kind}:${id}`),
       held: (holder, record, durable) =>
-        events.push(`held ${holder.replace(/\u0000/g, "|")} ${record.id}${durable ? "" : " named"}`),
+        events.push(
+          `held ${holder.replace(/\u0000/g, "|")} ${record.id}${durable ? "" : " named"}`
+        ),
       released: (holder, record) =>
         events.push(`released ${holder.replace(/\u0000/g, "|")} ${record.id}`),
       dropped: (holder) => events.push(`dropped ${holder.replace(/\u0000/g, "|")}`),
@@ -879,9 +881,9 @@ describe("ResourceOwnershipLedger and what a restart keeps (#16845)", () => {
     expect(
       ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "t1" }, "p")
     ).toBe(true);
-    expect(ledger.restoreIfUnclaimed(principalOwnerKey(principal), { kind: "terminal", id: "t2" }, "p")).toBe(
-      false
-    );
+    expect(
+      ledger.restoreIfUnclaimed(principalOwnerKey(principal), { kind: "terminal", id: "t2" }, "p")
+    ).toBe(false);
     expect(ledger.get(principalOwnerKey(principal), "terminal", "t1")).toEqual({
       kind: "terminal",
       id: "t1",
