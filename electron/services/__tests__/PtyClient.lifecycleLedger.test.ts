@@ -223,6 +223,25 @@ describe("PtyClient lifecycle ledger", () => {
     expect(spawnMessages(restartedChild)[0]?.options.launchGeneration).toBe(2);
   });
 
+  it("clears the update footer a crashed host observed, since that host can't (#17905)", () => {
+    const client = createReadyClient();
+    const cleared: unknown[] = [];
+    const unsub = events.on("agent:update-installed-changed", (payload) => cleared.push(payload));
+    client.spawn("t1", baseOptions);
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    restartedChild.emit("message", { type: "ready" });
+    unsub();
+
+    expect(cleared).toEqual([
+      { terminalId: "t1", updateInstalled: null, timestamp: expect.any(Number) },
+    ]);
+  });
+
   it("re-injects postSpawnInput on crash respawn so wrapper-less shells resume (#11339)", () => {
     const client = createReadyClient();
     // A command launch on a shell that can't host a startup wrapper (fish,

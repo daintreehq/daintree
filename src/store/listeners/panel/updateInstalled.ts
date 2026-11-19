@@ -104,6 +104,8 @@ export function setupUpdateInstalledListeners(): DisposableStore {
           unclaimed.delete(terminalId);
           const current = "updateInstalled" in panel ? panel.updateInstalled : undefined;
           if (!isNewer(payload, current)) continue;
+          // Newer than the record restored, so newer than any read in flight.
+          noteUpdateInstalledEvent(terminalId);
           usePanelStore
             .getState()
             .setUpdateInstalled(terminalId, payload.updateInstalled ?? undefined);

@@ -51,6 +51,37 @@ function isRule(row: string): boolean {
   return RULE_RUN.test(row) && RULE_ONLY.test(row);
 }
 
+// The composer's first row: its prompt glyph, inside a box edge on older builds.
+const PROMPT_ROW = /^\s*[│┃]?\s*[❯>](?:\s|$)/;
+/** Rows a multi-line draft may take between the composer's edges. */
+const MAX_INPUT_ROWS = 8;
+
+function tailOf(lines: readonly string[]): string[] {
+  return lines.slice(-SCAN_LINES).map((line) => stripAnsi(line));
+}
+
+/** The lowest rule in view: the composer's bottom edge, when Claude is drawn. */
+function lastRuleIndex(tail: readonly string[]): number {
+  for (let i = tail.length - 1; i >= 0; i--) {
+    if (isRule(tail[i]!)) return i;
+  }
+  return -1;
+}
+
+/**
+ * Whether the viewport's tail shows Claude's composer: a top edge, a prompt
+ * row under it and a bottom edge within a draft's height. A lone rule isn't
+ * enough; a shell's output can end with one.
+ */
+export function hasClaudeComposer(lines: readonly string[]): boolean {
+  const tail = tailOf(lines);
+  const bottom = lastRuleIndex(tail);
+  for (let i = bottom - 1; i >= 1 && bottom - i <= MAX_INPUT_ROWS; i--) {
+    if (PROMPT_ROW.test(tail[i]!) && isRule(tail[i - 1]!)) return true;
+  }
+  return false;
+}
+
 function offerOf(rest: string): string {
   const end = OFFER_END.exec(rest);
   return (end === null ? rest : rest.slice(0, end.index)).trim();
@@ -60,26 +91,16 @@ function offerOf(rest: string): string {
  * The "Update installed" footer at the tail of a viewport, below the
  * composer's border when one is in view, the lowest on screen winning, or
  * null. `cols` is the pane's width: a footer row that fills it may continue
- * on the next row, so it is read across the wrap. `underComposer` reads
- * nothing unless the border is in view, for a screen not yet known to be
- * Claude's drawing.
+ * on the next row, so it is read across the wrap.
  */
 export function scanClaudeUpdateFooter(
   lines: readonly string[],
-  cols?: number,
-  options: { underComposer?: boolean } = {}
+  cols?: number
 ): ClaudeUpdateFooter | null {
-  const tail = lines.slice(-SCAN_LINES).map((line) => stripAnsi(line));
+  const tail = tailOf(lines);
   // The footer sits under the composer. With its border in view, rows above
   // it are the transcript, where the agent may well quote the footer.
-  let floor = -1;
-  for (let i = tail.length - 1; i >= 0; i--) {
-    if (isRule(tail[i]!)) {
-      floor = i;
-      break;
-    }
-  }
-  if (floor < 0 && options.underComposer) return null;
+  const floor = lastRuleIndex(tail);
   for (let i = tail.length - 1; i > floor; i--) {
     const row = tail[i]!;
     const next = tail[i + 1];

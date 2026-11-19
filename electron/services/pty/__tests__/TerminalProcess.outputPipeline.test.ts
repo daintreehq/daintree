@@ -608,6 +608,29 @@ describe("TerminalProcess update-installed observation (#17905)", () => {
     terminal.dispose();
   });
 
+  it("keeps the last run's fence through a first-detection screen it can't read", async () => {
+    const terminal = claudeTerminal();
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    // Claude exits; its footer stays up above the shell prompt.
+    terminal.getInfo().detectedAgentId = undefined;
+    terminal.getInfo().launchAgentId = undefined;
+    ptyOnDataCallback!("$ claude\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(true);
+
+    // The next Claude is detected before it draws: no composer in view.
+    detect(terminal, "claude");
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(true);
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+
+    terminal.dispose();
+  });
+
   it("clears the moment another agent is detected, with no frame after", async () => {
     const seen = collect();
     const terminal = createTerminal({ launchAgentId: "claude" });

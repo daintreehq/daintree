@@ -84,6 +84,7 @@ import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycle
 import { BrokerError } from "./rpc/index.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
+import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
 import type { TerminalLaunchAttribution } from "./pty/TerminalLifecycleObserver.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { RecentTerminalExits } from "./pty/RecentTerminalExits.js";
@@ -668,6 +669,14 @@ export class PtyClient extends EventEmitter {
       incarnationLost: (id, launchGeneration) => {
         const fact: PtyIncarnationLost = { terminalId: id, launchGeneration };
         this.emit("incarnation-lost", fact);
+        // The host that observed this run's update footer died with it, so no
+        // clear will come from there (#17905).
+        bridgePtyEvent({
+          type: "agent-update-installed-changed",
+          terminalId: id,
+          updateInstalled: null,
+          timestamp: Date.now(),
+        });
       },
       logWarn,
     });

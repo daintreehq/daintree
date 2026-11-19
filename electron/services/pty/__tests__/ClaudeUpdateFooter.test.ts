@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scanClaudeUpdateFooter } from "../ClaudeUpdateFooter.js";
+import { hasClaudeComposer, scanClaudeUpdateFooter } from "../ClaudeUpdateFooter.js";
 
 const COLS = 100;
 
@@ -80,19 +80,40 @@ describe("scanClaudeUpdateFooter", () => {
     expect(scan(frame(footer("  ? for shortcuts", notice)))).toEqual({ namesRestart: false });
   });
 
-  it("reads nothing without the composer in view when asked to", () => {
-    const shell = ["$ cat notes.txt", "  ✔ Update installed · /restart to apply"];
-    expect(scanClaudeUpdateFooter(shell, COLS, { underComposer: true })).toBeNull();
-    expect(scanClaudeUpdateFooter(shell, COLS)).toEqual({ namesRestart: true });
-    expect(
-      scanClaudeUpdateFooter(
-        frame(footer("  ? for shortcuts", "✔ Update installed · Restart to update")),
-        COLS,
-        {
-          underComposer: true,
-        }
-      )
-    ).toEqual({ namesRestart: false });
+  it.each([
+    [
+      "Claude's composer",
+      frame(footer("  ? for shortcuts", "✔ Update installed · /restart to apply")),
+      true,
+    ],
+    [
+      "an older build's boxed composer",
+      [
+        "╭" + "─".repeat(40) + "╮",
+        "│ > " + " ".repeat(37) + "│",
+        "╰" + "─".repeat(40) + "╯",
+        "  ? for shortcuts",
+      ],
+      true,
+    ],
+    [
+      "a multi-line draft",
+      ["─".repeat(COLS), "❯ first line", "  second line", "─".repeat(COLS), "  ? for shortcuts"],
+      true,
+    ],
+    ["shell output", ["$ tail notes.txt", "  ✔ Update installed · /restart to apply"], false],
+    [
+      "a lone rule a shell printed",
+      ["$ make", "─".repeat(COLS), "  ✔ Update installed · /restart to apply"],
+      false,
+    ],
+    [
+      "a shell prompt between output rules",
+      ["─".repeat(COLS), "build ok", "─".repeat(COLS), "  ✔ Update installed · /restart to apply"],
+      false,
+    ],
+  ])("tells %s apart (composer: %s)", (_name, lines, expected) => {
+    expect(hasClaudeComposer(lines)).toBe(expected);
   });
 
   it("reads a wide pane's long rule-and-text rows in linear time", () => {

@@ -120,6 +120,25 @@ describe("update-installed listener (#17905)", () => {
     expect(observation()).toEqual({ observedAt: 1_000, namesRestart: true });
   });
 
+  it("marks an event that beat its pane in once it is applied, against a read in flight", () => {
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+    const mark = updateInstalledEventMark();
+    emit("agent:update-installed-changed", {
+      terminalId: "t1",
+      updateInstalled: null,
+      timestamp: 1_000,
+    });
+    expect(updateInstalledChangedSince("t1", mark)).toBe(false);
+
+    usePanelStore.setState({
+      panelsById: { t1: pane({ updateInstalled: { observedAt: 500, namesRestart: true } }) },
+      panelIds: ["t1"],
+    });
+
+    expect(observation()).toBeUndefined();
+    expect(updateInstalledChangedSince("t1", mark)).toBe(true);
+  });
+
   it("applies only the last event that beat its pane in, a clear included", () => {
     usePanelStore.setState({ panelsById: {}, panelIds: [] });
     emit("agent:update-installed-changed", {

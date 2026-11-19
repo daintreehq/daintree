@@ -46,7 +46,7 @@ import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
 import { resolveResetsAt, scanClaudeUsageMessages } from "./ClaudeUsageWarnings.js";
-import { scanClaudeUpdateFooter } from "./ClaudeUpdateFooter.js";
+import { hasClaudeComposer, scanClaudeUpdateFooter } from "./ClaudeUpdateFooter.js";
 import {
   clearUpdateInstalled,
   noteUpdateFooter,
@@ -2138,11 +2138,7 @@ export class TerminalProcess {
    * Anything else ends the observation, so a shell or another CLI taking the
    * pane clears it on its first frame.
    */
-  private observeUpdateFooter(
-    lines: readonly string[],
-    now: number,
-    options?: { underComposer?: boolean }
-  ): void {
+  private observeUpdateFooter(lines: readonly string[], now: number): void {
     const t = this.terminalInfo;
     const cols = readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined;
     if (t.detectedAgentId !== "claude" || !this.isAgentLive || this.samplingFinalFrame) {
@@ -2153,7 +2149,7 @@ export class TerminalProcess {
       }
       return;
     }
-    noteUpdateFooter(t, scanClaudeUpdateFooter(lines, cols, options), now);
+    noteUpdateFooter(t, scanClaudeUpdateFooter(lines, cols), now);
   }
 
   /**
@@ -2306,14 +2302,14 @@ export class TerminalProcess {
     const before = this.terminalInfo.detectedAgentId;
     runHandleAgentDetection(this.agentDetectionHost(), result, spawnedAt);
     // A quiet pane may already show the footer from before detection caught
-    // up (#17905); read the screen now rather than wait for output. Only under
-    // Claude's composer: the screen may still be what the shell left before
-    // Claude's first frame reached the mirror.
+    // up (#17905); read the screen now rather than wait for output. Only a
+    // screen showing Claude's composer counts, and any other says nothing,
+    // not even that the footer is gone: it may still be what the shell left
+    // before Claude's first frame reached the mirror.
     if (before !== "claude" && this.terminalInfo.detectedAgentId === "claude") {
       const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
-      this.observeUpdateFooter(this.analysis.getViewportLines(rows), Date.now(), {
-        underComposer: true,
-      });
+      const lines = this.analysis.getViewportLines(rows);
+      if (hasClaudeComposer(lines)) this.observeUpdateFooter(lines, Date.now());
     }
   }
 
