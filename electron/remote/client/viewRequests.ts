@@ -343,9 +343,7 @@ async function dispatchAction(
   const hostSkip = honoursSkipPreference(request);
   const ownSkip = !hostSkip && (await skipsOwnRelayedCall(service, hostId, webContentsId, request));
   const skipPreference = hostSkip || ownSkip;
-  const delegation = skipPreference
-    ? null
-    : relayedCallDelegation(hostId, webContentsId, request);
+  const delegation = skipPreference ? null : relayedCallDelegation(hostId, webContentsId, request);
   const envelope = await service.dispatchActionForHost(
     webContentsId,
     request.actionId,

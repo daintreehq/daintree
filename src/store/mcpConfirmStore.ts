@@ -5,6 +5,7 @@ import type {
   McpApprovalScope,
   McpBearerIdentity,
   McpConfirmationDecision,
+  McpDelegationOffer,
   McpRequester,
   McpSessionOrigin,
 } from "@shared/types/ipc/mcpServer";
@@ -200,6 +201,12 @@ export interface PendingMcpConfirm {
    */
   offerSessionApproval?: boolean;
   /**
+   * Offer "Don't ask again for this kind of action" beside the ordinary
+   * approval (#16752). Set only by main, only for its own assistant's call,
+   * and display only: main keeps which action and whose preference.
+   */
+  delegationOffer?: McpDelegationOffer;
+  /**
    * Why this dialog is asking (#12692). `above-tier` is an agent pane calling
    * something its project's MCP tier does not cover on its own, which the
    * dialog says in so many words — the action may well be harmless, and the
@@ -318,9 +325,10 @@ export interface McpConfirmResolution {
   selectedTargetIds?: readonly string[];
   /**
    * Present only on an approval of a dialog that offered the session scope
-   * (#12692), and `session` only when the user chose it.
+   * (#12692) or a hand-over (#16752), and only when the user chose it.
    */
-  scope?: McpApprovalScope; /**
+  scope?: McpApprovalScope;
+  /**
    * Present only on a timeout of a request whose window was never on screen
    * while it asked: nobody could have answered it, so nothing was declined.
    */
@@ -601,6 +609,9 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
       ...(approved && selectedTargetIds !== undefined ? { selectedTargetIds } : {}),
       ...(approved && current.offerSessionApproval === true && scope === "session"
         ? { scope: "session" as const }
+        : {}),
+      ...(approved && current.delegationOffer !== undefined && scope === "delegate"
+        ? { scope: "delegate" as const }
         : {}),
       ...(decision === "timeout" && unseen === true ? { unseen: true as const } : {}),
     });

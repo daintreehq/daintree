@@ -1427,6 +1427,7 @@ export function useMcpBridge(): void {
         hostPreview,
         authorization,
         requester,
+        delegationOffer,
         dispatchDeadlineAt: sentDeadlineAt,
         actionsListWalk,
       }) => {
@@ -1462,8 +1463,9 @@ export function useMcpBridge(): void {
             ? withReplayedWorktreeDetails(replayedContext, lookupViewWorktree)
             : replayedContext;
         let confirmationDecision: McpConfirmationDecision | undefined;
-        // Set only when the user ticked "Allow for this session" on a dialog
-        // main said may offer it (#12692); main mints the grant, never this.
+        // Set only when the user ticked "Allow for this session" (#12692) or
+        // "Don't ask again for this kind of action" (#16752) on a dialog main
+        // said may offer it; main mints the grant or writes the hand-over.
         let approvalScope: McpApprovalScope | undefined;
         // When the run main granted an approval ends (#14989). Undefined for a
         // dispatch nobody was asked about, which main times as it always did.
@@ -1787,6 +1789,9 @@ export function useMcpBridge(): void {
                     ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
                       ? { offerSessionApproval: true }
                       : {}),
+                    // Main's own assistant's call, whatever the dialog's shape:
+                    // main settled the action on the id the assistant called.
+                    ...(delegationOffer !== undefined ? { delegationOffer } : {}),
                     // Another machine's call is not above any tier of this
                     // view's: it is that machine's question, asked here.
                     ...(approvalOnly === true && hostLines === undefined
@@ -1847,7 +1852,9 @@ export function useMcpBridge(): void {
               }
               confirmationDecision = "approved";
               effectiveConfirmed = true;
-              if (resolution.scope === "session") approvalScope = "session";
+              if (resolution.scope === "session" || resolution.scope === "delegate") {
+                approvalScope = resolution.scope;
+              }
               if (approvalOnly === true) {
                 // Main runs the call itself, preconfirmed — which is also
                 // where a force delete's live D3 re-check happens, on the

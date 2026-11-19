@@ -1215,10 +1215,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * while the call is still the one out under `callId`, from a run still
    * running, with the host's control switch on.
    */
-  private callDelegation(
-    call: CallInFlight,
-    callId: string
-  ): PreparedAssistantDelegation | null {
+  private callDelegation(call: CallInFlight, callId: string): PreparedAssistantDelegation | null {
     const prepared = this.prepareDelegation(call.helpSessionId, call.tool);
     if (prepared === null) return null;
     return {

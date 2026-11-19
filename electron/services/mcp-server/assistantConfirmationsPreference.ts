@@ -119,7 +119,9 @@ function commitAssistantDelegation(
     // From another mode, only this action: ticks Settings kept from an
     // earlier "Ask, except for…" must not come back with it.
     const kept =
-      mode === "ask-except" ? sanitizeDelegatedConfirmations(current?.daintreeConfirmationsExcept) : [];
+      mode === "ask-except"
+        ? sanitizeDelegatedConfirmations(current?.daintreeConfirmationsExcept)
+        : [];
     if (mode === "ask-except" && kept.includes(calledActionId)) return true;
     store.set("helpAssistant", {
       ...current,
