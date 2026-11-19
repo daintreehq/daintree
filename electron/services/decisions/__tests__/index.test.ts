@@ -825,6 +825,7 @@ describe("Decisions entry", () => {
       },
       readHostQuestion: () => null,
       cancelHostQuestion: () => null,
+      lastHostRead: () => null,
     });
     const listPushes = () =>
       statusView.send.mock.calls.filter(
@@ -1627,6 +1628,7 @@ describe("Decisions entry", () => {
           onHostQuestionsChanged: () => () => {},
           readHostQuestion: () => null,
           cancelHostQuestion: () => null,
+          lastHostRead: () => null,
           ...over,
         });
       }
@@ -1854,6 +1856,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       });
       try {
         saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
@@ -2604,6 +2607,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       });
       try {
         saved.value = { enabled: true, consentedAt: 5 };
@@ -4579,6 +4583,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       });
       try {
         saved.value = { consentedAt: 5, ...RELAY };
@@ -4625,6 +4630,7 @@ describe("Decisions entry", () => {
         onHostQuestionsChanged: () => () => {},
         readHostQuestion: () => null,
         cancelHostQuestion: () => null,
+        lastHostRead: () => null,
       };
       const withdraw = setDecisionsHostsPort(port);
       return {

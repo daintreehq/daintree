@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Check, Clock } from "lucide-react";
 import type { DecisionQuestionContent, DecisionThreadEntry } from "@shared/types/decisionsQuestion";
 import { DecisionAnswerComposer, type AnswerComposerMode } from "./DecisionAnswerComposer";
+import { hostAwayNote } from "./decisionCancelModel";
 import { DecisionFollowUpComposer } from "./DecisionFollowUpComposer";
 import { DecisionMarkdown } from "./DecisionMarkdown";
 import { DecisionQuestionImages } from "./DecisionQuestionImages";
@@ -403,7 +404,11 @@ export function DecisionQuestionReadView({
           }
           data-testid="decision-question-unavailable"
         >
-          {UNAVAILABLE[current.result]}
+          {current.result === "host-not-connected"
+            ? [UNAVAILABLE[current.result], hostAwayNote(current.lastRead)]
+                .filter((text) => text !== null)
+                .join(" ")
+            : UNAVAILABLE[current.result]}
         </Callout>
       )}
     </>

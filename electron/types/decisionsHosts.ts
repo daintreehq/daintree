@@ -11,6 +11,7 @@ import type {
   DecisionQuestionCancelResult,
   DecisionQuestionContentResult,
   DecisionQuestionImagePartResult,
+  DecisionQuestionLastRead,
   DecisionQuestionListItem,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
@@ -178,6 +179,14 @@ export interface DecisionsHostsPort {
   cancelHostQuestion(
     reference: DecisionQuestionReference
   ): Promise<HostCallOutcome<DecisionQuestionCancelResult>> | null;
+  /**
+   * What this computer last read of one of a Host's questions over its link
+   * (#17946), for the owner to dismiss it by while the Host is away: only
+   * while the Host whose questions name `reference.hostId` is still reported
+   * to the owner this computer speaks as now, from the same Host device, and
+   * its last report lists the question as waiting for the person. Null otherwise.
+   */
+  lastHostRead(reference: DecisionQuestionReference): DecisionQuestionLastRead | null;
 }
 
 /** One Host's questions, as this computer last heard them (#17230). */

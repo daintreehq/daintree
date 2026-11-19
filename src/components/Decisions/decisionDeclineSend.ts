@@ -12,6 +12,8 @@ import {
 import type {
   DecisionQuestionContent,
   DecisionQuestionDeclineResult,
+  DecisionQuestionReference,
+  DecisionQuestionStatus,
 } from "@shared/types/decisionsQuestion";
 import { isDeclineCommitted, withDeadline } from "./decisionAnswerSend";
 import { readTargetContent, type DecisionQuestionTarget } from "./decisionQuestionTarget";
@@ -270,7 +272,7 @@ export function followDecline(key: string, retry = false): Promise<void> {
 }
 
 /** Whether the question still waits for an answer, and so can be dismissed. */
-export function isWaitingQuestion(question: DecisionQuestionContent): boolean {
+export function isWaitingQuestion(question: Pick<DecisionQuestionContent, "status">): boolean {
   return question.status === "queued" || question.status === "open";
 }
 
@@ -333,11 +335,13 @@ async function recover(key: string): Promise<DismissAttempt> {
  * Dismisses the question `target` names: reads it again first, and signs
  * nothing unless it still waits, at `revision` when the person read one
  * (the view), or at the revision it is open at now (a row naming it only by
- * alias). A dismissal of it already under way is read again instead, by its
- * id: first from `known`, the record the last try was kept under, without
- * reading the question again, since the computer that asked may be out of
- * reach while this one holds the answer. A second Dismiss never signs a
- * second decline.
+ * alias). A Remote Host's question whose Host is away is dismissed at the
+ * revision this computer last read it open at (#17946), which the relay
+ * refuses if it has moved on. A dismissal of it already under way is read
+ * again instead, by its id: first from `known`, the record the last try was
+ * kept under, without reading the question again, since the computer that
+ * asked may be out of reach while this one holds the answer. A second
+ * Dismiss never signs a second decline.
  */
 export async function dismissQuestion(
   target: DecisionQuestionTarget,
@@ -355,18 +359,29 @@ export async function dismissQuestion(
   if (useDecisionsAnswerStore.getState().generation !== generation) {
     return { kind: "failed", reason: "off" };
   }
+  let question: {
+    reference: DecisionQuestionReference;
+    revision: number;
+    status: DecisionQuestionStatus;
+  };
   switch (read.result) {
     case "read":
+      question = read.question;
+      break;
+    case "host-not-connected":
+      // Only a question read by its reference: that reference is what the last read was kept by.
+      if (read.lastRead?.result !== "read" || target.scope !== "reference") {
+        return { kind: "failed", reason: read.result };
+      }
+      question = { reference: target.reference, revision: read.lastRead.revision, status: "open" };
       break;
     case "not-found":
       return { kind: "gone" };
     case "off":
     case "not-running":
     case "unreadable":
-    case "host-not-connected":
       return { kind: "failed", reason: read.result };
   }
-  const question = read.question;
   const key = answerKey(question.reference);
   const record = readAnswerRecord(key);
   if (isDeclineInFlight(record)) return recover(key);
