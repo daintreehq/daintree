@@ -27,6 +27,8 @@ const RESOURCE_ENVIRONMENT_CHANGED_ERROR = "Resource environment changed";
 const IDLE_PAUSE_DELETE_WAIT_MS = 5 * 60_000;
 /** Past a pause's own timeout, for its killed commands to exit. */
 const IDLE_PAUSE_KILL_MARGIN_MS = 30_000;
+/** Inside the 20 minutes a delete's port request is given, so it never outlives its caller. */
+const IDLE_PAUSE_DELETE_WAIT_CEILING_MS = 15 * 60_000;
 
 const DEFAULT_TIMEOUT_MS = {
   provision: 300_000,
@@ -704,9 +706,12 @@ export class ResourceActionExecutor {
   whenIdlePauseSettled(worktreeId: string): Promise<void> {
     const running = this.idlePausesRunning.get(worktreeId);
     if (!running) return Promise.resolve();
-    const maxWaitMs = Math.max(
-      IDLE_PAUSE_DELETE_WAIT_MS,
-      (this.idlePauseTimeouts.get(worktreeId) ?? 0) + IDLE_PAUSE_KILL_MARGIN_MS
+    const maxWaitMs = Math.min(
+      IDLE_PAUSE_DELETE_WAIT_CEILING_MS,
+      Math.max(
+        IDLE_PAUSE_DELETE_WAIT_MS,
+        (this.idlePauseTimeouts.get(worktreeId) ?? 0) + IDLE_PAUSE_KILL_MARGIN_MS
+      )
     );
     return new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, maxWaitMs);
@@ -757,6 +762,7 @@ export class ResourceActionExecutor {
 
   cleanupResourceActionState(worktreeId: string): void {
     this.statusReadings.delete(worktreeId);
+    this.idlePauseTimeouts.delete(worktreeId);
     const controller = this.resourceActionAbortControllers.get(worktreeId);
     if (controller) {
       controller.abort();

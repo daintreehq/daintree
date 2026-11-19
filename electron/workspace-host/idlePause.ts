@@ -259,6 +259,8 @@ export class IdlePauseService {
       }
       // Read again in the write: a newer consent saved meanwhile stays, and says so.
       if (!(await this.consents.clear(projectRootPath, selection.selector, fingerprint))) {
+        // Already off, turned off from another card: what was asked holds.
+        if ((await this.consents.get(projectRootPath, selection.selector)) === null) return;
         throw new Error("This worktree's environment changed. Review it again.");
       }
       return;
