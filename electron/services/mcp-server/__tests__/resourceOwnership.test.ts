@@ -3,6 +3,8 @@ import {
   CLOSED_TERMINAL_TTL_MS,
   ResourceOwnershipLedger,
   helpConversationKey,
+  helpOwnershipPrincipal,
+  principalOwnerKey,
   relayConversationKey,
   extractOwnedResources,
   extractOwnedResourcesFromDispatch,
@@ -823,5 +825,81 @@ describe("ownership recording coverage", () => {
         `${id} is attributed but no non-assistant session can call it`
       ).toBe(true);
     }
+  });
+});
+
+describe("ResourceOwnershipLedger and what a restart keeps (#16845)", () => {
+  function observed() {
+    const events: string[] = [];
+    const ledger = new ResourceOwnershipLedger({
+      created: (kind, id) => events.push(`created ${kind}:${id}`),
+      held: (holder, record, durable) =>
+        events.push(`held ${holder.replace(/\u0000/g, "|")} ${record.id}${durable ? "" : " named"}`),
+      released: (holder, record) =>
+        events.push(`released ${holder.replace(/\u0000/g, "|")} ${record.id}`),
+      dropped: (holder) => events.push(`dropped ${holder.replace(/\u0000/g, "|")}`),
+    });
+    return { ledger, events };
+  }
+
+  it("reports each creation, what a conversation comes to hold, and what it stops holding", () => {
+    const { ledger, events } = observed();
+    const principal = helpOwnershipPrincipal("help-a");
+    ledger.bindPrincipal("s-a", principal);
+    const owner = principalOwnerKey(principal);
+    ledger.record(owner, [{ kind: "terminal", id: "t1" }], "p");
+    ledger.attachConversation(principal, helpConversationKey("c"));
+    ledger.record(owner, [{ kind: "terminal", id: "t2" }], "p", { callerNamedId: true });
+    ledger.release(owner, "terminal", "t1");
+    ledger.forgetConversation(helpConversationKey("c"));
+
+    expect(events).toEqual([
+      "created terminal:t1",
+      "held principal|help|help-a t1",
+      "held conversation|help|c t1",
+      "created terminal:t2",
+      "held conversation|help|c t2 named",
+      "released conversation|help|c t1",
+      "dropped conversation|help|c",
+    ]);
+  });
+
+  it("gives a conversation a kept record back only while nothing holds the id", () => {
+    const ledger = new ResourceOwnershipLedger();
+    const principal = helpOwnershipPrincipal("help-b");
+    ledger.bindPrincipal("s-b", principal);
+    ledger.attachConversation(principal, helpConversationKey("c"));
+    const other = principalOwnerKey(helpOwnershipPrincipal("help-x"));
+    ledger.bindPrincipal("s-x", helpOwnershipPrincipal("help-x"));
+    ledger.record(other, [{ kind: "terminal", id: "taken" }], "p");
+
+    expect(
+      ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "taken" }, "p")
+    ).toBe(false);
+    expect(
+      ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "t1" }, "p")
+    ).toBe(true);
+    expect(ledger.restoreIfUnclaimed(principalOwnerKey(principal), { kind: "terminal", id: "t2" }, "p")).toBe(
+      false
+    );
+    expect(ledger.get(principalOwnerKey(principal), "terminal", "t1")).toEqual({
+      kind: "terminal",
+      id: "t1",
+      workspaceId: "p",
+    });
+    expect(ledger.get(other, "terminal", "taken")).toBeDefined();
+  });
+
+  it("lets a creation no one records take the id from whoever held it", () => {
+    const { ledger, events } = observed();
+    const principal = helpOwnershipPrincipal("help-a");
+    ledger.bindPrincipal("s-a", principal);
+    ledger.record(principalOwnerKey(principal), [{ kind: "terminal", id: "t1" }], "p");
+    events.length = 0;
+
+    ledger.supersede([{ kind: "terminal", id: "t1" }]);
+
+    expect(ledger.creatorOf("terminal", "t1")).toBeUndefined();
+    expect(events).toEqual(["created terminal:t1", "released principal|help|help-a t1"]);
   });
 });

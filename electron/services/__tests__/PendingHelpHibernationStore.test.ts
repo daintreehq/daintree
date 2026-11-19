@@ -367,6 +367,37 @@ describe("PendingHelpHibernationStore", () => {
     }
   });
 
+  it("names the conversations the loaded lanes can reopen, as loaded (#16845)", async () => {
+    const entry = { agentId: "claude", cwd: "/sessions", capturedAt: Date.now() };
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 2,
+        entries: {
+          [slotKey("proj-1", 0)]: { ...entry, agentSessionId: "a", conversationOwnershipId: "c-1" },
+          [slotKey("proj-1", 1)]: { ...entry, agentSessionId: "", conversationOwnershipId: "c-2" },
+          [slotKey("proj-1", 2)]: { ...entry, agentSessionId: "c" },
+          [slotKey("proj-2", 0)]: {
+            ...entry,
+            agentSessionId: "d",
+            conversationOwnershipId: "c-stale",
+            capturedAt: Date.now() - 15 * 24 * 60 * 60 * 1000,
+          },
+        },
+      })
+    );
+
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    await store.set(slotKey("proj-1", 0), {
+      ...entry,
+      agentSessionId: "e",
+      conversationOwnershipId: "c-3",
+    });
+
+    expect([...store.loadedConversationOwnershipIds()]).toEqual(["c-1"]);
+  });
+
   it("never persists the in-memory-only panelWasOpen flag to disk (#10815)", async () => {
     // panelWasOpen drives cold switch-back auto-resume and must stay session-
     // local: if it leaked to disk, a token reloaded on app restart would

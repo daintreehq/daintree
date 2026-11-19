@@ -450,3 +450,103 @@ describe("createMcpRelayExecutor and a caller's conversation (#17919)", () => {
     ).resolves.toEqual({ status: "conflict" });
   });
 });
+
+describe("createMcpRelayExecutor and conversations a restart kept (#16845)", () => {
+  let executor: McpRelayExecutor | undefined;
+  const DAY = 24 * 60 * 60_000;
+
+  afterEach(() => {
+    executor?.dispose();
+    executor = undefined;
+    vi.useRealTimers();
+  });
+
+  function harness(
+    clock: { now: number },
+    kept: () => Array<{ senderId: string; conversationId: string; usedAt: number }> | null
+  ) {
+    const forgotten: Array<[string, string]> = [];
+    const calls: Array<[string, string, number]> = [];
+    executor = createMcpRelayExecutor({
+      acceptsRemoteControl: () => true,
+      hasProject: async () => true,
+      openSession: async () => ({ isOpen: () => true, callTool: async () => ANSWER, close: () => {} }),
+      forgetConversation: (senderId, conversationId) => forgotten.push([senderId, conversationId]),
+      keptConversations: kept,
+      noteConversationCall: (...args) => calls.push(args),
+      now: () => clock.now,
+    });
+    return { executor, forgotten, calls };
+  }
+
+  const spec = (helpSessionId: string, conversationId: string): RelayMcpSessionSpec => ({
+    ...SPEC,
+    helpSessionId,
+    conversationId,
+  });
+  const payload = (helpSessionId: string): McpCallPayload => ({
+    ...PAYLOAD,
+    helpSessionId,
+    callId: `call-${helpSessionId}`,
+  });
+
+  it("holds a kept conversation as an ended caller's, a day from its last call", () => {
+    vi.useFakeTimers();
+    const clock = { now: 10 * DAY };
+    const { forgotten } = harness(clock, () => [
+      { senderId: "local", conversationId: "conv-1", usedAt: 10 * DAY - DAY / 2 },
+      { senderId: "local", conversationId: "conv-old", usedAt: 10 * DAY - DAY - 1 },
+    ]);
+
+    vi.advanceTimersByTime(60_000);
+    expect(forgotten).toEqual([["local", "conv-old"]]);
+    clock.now = 10 * DAY + DAY / 2 + 1;
+    vi.advanceTimersByTime(60_000);
+    expect(forgotten).toEqual([
+      ["local", "conv-old"],
+      ["local", "conv-1"],
+    ]);
+  });
+
+  it("forgets a kept conversation resumed after its day ran out, before its call runs", async () => {
+    const clock = { now: 0 };
+    const { executor, forgotten } = harness(clock, () => [
+      { senderId: "local", conversationId: "conv-1", usedAt: 0 },
+    ]);
+    clock.now = DAY + 1;
+    await executor.call(spec("help-2", "conv-1"), payload("help-2"));
+
+    expect(forgotten).toEqual([["local", "conv-1"]]);
+  });
+
+  it("gives a kept conversation resumed within its day to its caller, which holds it from then on", async () => {
+    vi.useFakeTimers();
+    const clock = { now: 0 };
+    const { executor, forgotten, calls } = harness(clock, () => [
+      { senderId: "local", conversationId: "conv-1", usedAt: 0 },
+    ]);
+    clock.now = DAY / 2;
+    await executor.call(spec("help-2", "conv-1"), payload("help-2"));
+    // Past the kept conversation's own day, within its caller's.
+    clock.now = DAY + 1;
+    vi.advanceTimersByTime(60_000);
+
+    expect(forgotten).toEqual([]);
+    expect(calls).toEqual([["local", "conv-1", DAY / 2]]);
+  });
+
+  it("asks again until the kept records have loaded", () => {
+    vi.useFakeTimers();
+    const clock = { now: 0 };
+    let loaded = false;
+    const { forgotten } = harness(clock, () =>
+      loaded ? [{ senderId: "local", conversationId: "conv-1", usedAt: 0 }] : null
+    );
+    clock.now = DAY + 1;
+    vi.advanceTimersByTime(60_000);
+    expect(forgotten).toEqual([]);
+    loaded = true;
+    vi.advanceTimersByTime(60_000);
+    expect(forgotten).toEqual([["local", "conv-1"]]);
+  });
+});
