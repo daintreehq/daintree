@@ -18,6 +18,7 @@ const {
   clearPluginCloudProviders,
   publishPluginCloudProviders,
   setPluginCloudProviderRuntime,
+  withdrawPluginCloudProviders,
 } = await import("../../../services/plugin/pluginCloudProviders.js");
 const { PluginCloudProviderTransportError } =
   await import("../../../services/plugin/pluginCloudProviderCalls.js");
@@ -156,7 +157,8 @@ function acmePlugin(persistence: Partial<Persistence> = {}, lifetime?: Lifetime)
   setPluginCloudProviderRuntime({
     activate: async () => {},
     isActivated: () => true,
-    unavailableReason: () => "",
+    unavailableReason: (pluginId) =>
+      `Its cloud provider comes from the ${pluginId} plugin, which isn't installed.`,
     startFailure: () => null,
   });
   let current = machine();
@@ -704,6 +706,37 @@ describe("stopping an idle plugin provider's machine from the desktop (#17923)",
 
     expect(plugin.impl.inspect.mock.calls.length).toBe(reads + 2);
     expect(env.lifecycle.statuses()[0]).toMatchObject({ machine: "stopped", lastError: null });
+    env.dispose();
+  });
+
+  it("reports no success to a Stop joined to an idle stop when the provider leaves before the read that settles it", async () => {
+    const clock = worldClock();
+    const plugin = acmePlugin();
+    const host = fakeHost(clock);
+    const env = device("a", clock, host, host.link());
+    const hostId = await withMachine(env, plugin);
+    let answerRead!: () => void;
+    plugin.impl.stop.mockImplementationOnce(async () => {
+      plugin.impl.inspect.mockImplementationOnce(
+        () =>
+          new Promise<CloudProviderResource>((resolve) => {
+            answerRead = () => resolve(machine({ machine: "stopped", rawState: "stopped" }));
+          })
+      );
+      throw new PluginCloudProviderTransportError("Couldn't reach Acme VMs: no answer.");
+    });
+
+    await idleTimeEnds(clock, host);
+    const idleStop = env.lifecycle.stopIdleDue();
+    await vi.waitFor(() => expect(answerRead).toBeTypeOf("function"));
+    const personal = env.lifecycle.stopMachine(hostId);
+    await vi.waitFor(() => expect(env.disconnect).toHaveBeenCalledTimes(1));
+    withdrawPluginCloudProviders(PLUGIN);
+    answerRead();
+
+    await expect(personal).rejects.toThrow(/changed while the machine was stopping/);
+    await idleStop;
+    expect(plugin.impl.stop).toHaveBeenCalledTimes(1);
     env.dispose();
   });
 

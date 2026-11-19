@@ -3613,6 +3613,8 @@ export class CloudHostLifecycle {
         read = false;
       }
       answered ||= read;
+      // A read from a provider that left meanwhile settles nothing for whoever joined this stop.
+      this.requireStillRegistered(provider);
       const binding = this.deps.store.binding(bindingId);
       if (!binding) return;
       const machine = machineOf(binding);
