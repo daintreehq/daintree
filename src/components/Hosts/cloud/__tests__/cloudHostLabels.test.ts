@@ -386,6 +386,8 @@ describe("idleEndSentence (#17921)", () => {
     expect(idleEndSentence(idle, acme, null, { kind: "unknown" })).toBe(IDLE_STOP_UNKNOWN);
     // An unregistered provider promises nothing, whatever was found before it left.
     expect(idleEndSentence(idle, null, null, { kind: "stops" })).toBe(IDLE_STOP_UNKNOWN);
+    // A refused self-stop's own reason outranks it.
+    expect(idleEndSentence(idle, acme, refused, { kind: "stops" })).toBe(refused);
   });
 
   it("doesn't imply a stop where it can't be known", () => {

@@ -151,6 +151,7 @@ describe("CloudHostStore worktree marks", () => {
           dataExpired: false,
           asleep: false,
           idleSleep: null,
+          snapshotsDisabled: false,
           observedAt: 5,
         },
       })
@@ -175,6 +176,7 @@ describe("CloudHostStore worktree marks", () => {
       dataExpired: false,
       asleep: true,
       idleSleep: { enabled: true, idleSeconds: 600 },
+      snapshotsDisabled: false,
       observedAt: 5,
     };
     new CloudHostStore(backend).putBinding(binding({ observation }));

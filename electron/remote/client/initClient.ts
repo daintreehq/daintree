@@ -1135,15 +1135,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     guestPowerOff,
     idleClaims: {
       sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
-      idleOn: (hostId, session) => {
-        // Only a summary that came on this very link, and lately: the host's clock as it is now.
-        const metrics = getRemoteService("hostMetrics");
-        const summary = metrics?.latest(hostId) ?? null;
-        if (!metrics || !summary?.idle || metrics.cameOn(summary, session) !== true) return null;
-        const receipt = metrics.receiptOf(summary);
-        if (!receipt || Date.now() - receipt.receivedAt >= 60_000) return null;
-        return { idle: summary.idle, sampledAt: summary.sampledAt };
-      },
+      idleOn: (hostId, session) =>
+        getRemoteService("hostMetrics")?.idleOn(hostId, session, 60_000) ?? null,
     },
     hosts: {
       add: (name, connection, pendingPlacement) =>
