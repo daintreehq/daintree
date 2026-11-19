@@ -268,7 +268,13 @@ const mockGetAssistantScratchEnv = vi.hoisted(() =>
 const mockIsHelpTerminal = vi.hoisted(() => vi.fn<(terminalId: string) => boolean>(() => false));
 
 const mockRecordLaneLaunchForToken = vi.hoisted(() =>
-  vi.fn<(token: string, agentSessionId?: string) => Promise<void>>(() => Promise.resolve())
+  vi.fn<
+    (
+      token: string,
+      agentSessionId?: string,
+      options?: { freshConversation?: true }
+    ) => Promise<void>
+  >(() => Promise.resolve())
 );
 
 vi.mock("../../../../services/HelpSessionService.js", () => ({
@@ -286,8 +292,8 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
       mockMarkTerminalForToken(token, terminalId, expectedAgentId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),
     isHelpTerminal: (terminalId: string) => mockIsHelpTerminal(terminalId),
-    recordLaneLaunchForToken: (token: string, agentSessionId?: string) =>
-      mockRecordLaneLaunchForToken(token, agentSessionId),
+    recordLaneLaunchForToken: (...args: Parameters<typeof mockRecordLaneLaunchForToken>) =>
+      mockRecordLaneLaunchForToken(...args),
   },
 }));
 
@@ -3152,6 +3158,33 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       "help-token",
       "11111111-2222-3333-4444-555555555555"
     );
+  });
+
+  it("records a resume main turned into a fresh start as a fresh conversation (#17919)", async () => {
+    const SESSION = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+    findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: `claude --resume ${SESSION}`,
+        launchAgentId: "claude",
+        agentSessionId: SESSION,
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith("help-token", SESSION, {
+      freshConversation: true,
+    });
   });
 
   it("does not record a lane pointer for a non-help launch (#13205)", async () => {

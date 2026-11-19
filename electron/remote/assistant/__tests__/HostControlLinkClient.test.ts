@@ -837,3 +837,71 @@ describe("HostControlLinkClient relay approvals (#13501)", () => {
     relay.dispose();
   });
 });
+
+describe("HostControlLinkClient.relayCall naming the caller's conversation (#17919)", () => {
+  const DONE = { status: "done", result: { isError: false, structured: null, text: "ok" } };
+
+  it("sends it by its own method, carrying the global Assistant's mark as a field", async () => {
+    const { relay, calls } = client((method) =>
+      method === AssistantLinkMethod.CONVERSATION_MCP_CALL ? DONE : null
+    );
+
+    await expect(
+      relay.relayCall("studio", { ...PAYLOAD, global: true, conversationId: "conv-1" }, 105_000)
+    ).resolves.toEqual(DONE);
+    await relay.relayCall("studio", { ...PAYLOAD, callId: "call-2", conversationId: "conv-1" }, 1);
+
+    expect(calls.slice(1)).toEqual([
+      {
+        method: AssistantLinkMethod.CONVERSATION_MCP_CALL,
+        payload: { ...PAYLOAD, conversationId: "conv-1", global: true },
+        timeoutMs: 105_000,
+      },
+      {
+        method: AssistantLinkMethod.CONVERSATION_MCP_CALL,
+        payload: { ...PAYLOAD, callId: "call-2", conversationId: "conv-1" },
+        timeoutMs: 1,
+      },
+    ]);
+  });
+
+  it("sends the same call the old way to a host from before it, and asks that session no more", async () => {
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.CONVERSATION_MCP_CALL) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return method === AssistantLinkMethod.AUTHENTICATE ? null : DONE;
+    });
+    const resent = { ...PAYLOAD, resend: true, global: true as const, conversationId: "conv-1" };
+
+    await expect(relay.relayCall("studio", resent, 105_000)).resolves.toEqual(DONE);
+    await relay.relayCall("studio", { ...PAYLOAD, callId: "call-2", conversationId: "conv-1" }, 9);
+
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.CONVERSATION_MCP_CALL,
+      AssistantLinkMethod.GLOBAL_MCP_CALL,
+      AssistantLinkMethod.MCP_CALL,
+    ]);
+    // Nothing ran on the refusal, so the call goes again with no field an older host refuses.
+    expect(calls[2]!.payload).toEqual({ ...PAYLOAD, resend: true });
+    expect(calls[3]!.payload).toEqual({ ...PAYLOAD, callId: "call-2" });
+  });
+
+  it("never sends it again after an outcome it can't know", async () => {
+    const { relay, calls } = client((method) => {
+      if (method === AssistantLinkMethod.CONVERSATION_MCP_CALL) {
+        throw new AppError({ code: "OUTCOME_UNKNOWN", message: "no answer" });
+      }
+      return method === AssistantLinkMethod.AUTHENTICATE ? null : DONE;
+    });
+
+    await expect(
+      relay.relayCall("studio", { ...PAYLOAD, conversationId: "conv-1" }, 105_000)
+    ).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    expect(calls.map((call) => call.method)).toEqual([
+      AssistantLinkMethod.AUTHENTICATE,
+      AssistantLinkMethod.CONVERSATION_MCP_CALL,
+    ]);
+  });
+});

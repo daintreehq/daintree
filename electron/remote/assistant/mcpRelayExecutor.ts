@@ -353,7 +353,8 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     }
     if (calls?.size === 0) noticeCalls.delete(senderId);
     try {
-      deps.retirePrincipal?.(senderId, helpSessionId, keepConversationUntil);
+      if (keepConversationUntil === undefined) deps.retirePrincipal?.(senderId, helpSessionId);
+      else deps.retirePrincipal?.(senderId, helpSessionId, keepConversationUntil);
     } catch (error) {
       logger.warn("Couldn't retire a relay principal", { error });
     }

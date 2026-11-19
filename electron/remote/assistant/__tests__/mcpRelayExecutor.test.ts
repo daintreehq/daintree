@@ -243,3 +243,74 @@ describe("createMcpRelayExecutor reads (#16191)", () => {
     expect(calls).toHaveLength(2);
   });
 });
+
+describe("createMcpRelayExecutor and a caller's conversation (#17919)", () => {
+  let executor: McpRelayExecutor | undefined;
+
+  afterEach(() => {
+    executor?.dispose();
+    executor = undefined;
+    vi.useRealTimers();
+  });
+
+  function harness(clock: { now: number }) {
+    const opened: RelayMcpSessionSpec[] = [];
+    const retired: Array<[string, string, number | undefined]> = [];
+    executor = createMcpRelayExecutor({
+      acceptsRemoteControl: () => true,
+      hasProject: async () => true,
+      openSession: async (spec) => {
+        opened.push(spec);
+        return { isOpen: () => true, callTool: async () => ANSWER, close: () => {} };
+      },
+      retirePrincipal: (senderId, helpSessionId, keepConversationUntil) =>
+        retired.push([senderId, helpSessionId, keepConversationUntil]),
+      now: () => clock.now,
+    });
+    return { executor, opened, retired };
+  }
+
+  const WITH_CONVERSATION: RelayMcpSessionSpec = { ...SPEC, conversationId: "conv-1" };
+
+  it("keeps what an ended caller's conversation made for as long as its hold would have lasted", async () => {
+    const clock = { now: 5_000 };
+    const { executor, retired } = harness(clock);
+    await executor.call(WITH_CONVERSATION, PAYLOAD);
+    clock.now = 9_000;
+
+    executor.endPrincipal("local", "help-1");
+
+    // A day from its last call, as the idle sweep counts it.
+    expect(retired).toEqual([["local", "help-1", 5_000 + 24 * 60 * 60_000]]);
+  });
+
+  it("keeps nothing past a hold that aged out", async () => {
+    vi.useFakeTimers();
+    const clock = { now: 0 };
+    const { executor, retired } = harness(clock);
+    await executor.call(WITH_CONVERSATION, PAYLOAD);
+
+    clock.now = 24 * 60 * 60_000 + 1;
+    vi.advanceTimersByTime(60_000);
+
+    expect(retired).toEqual([["local", "help-1", undefined]]);
+  });
+
+  it("opens a session naming the conversation even after a read opened one without it", async () => {
+    const { executor, opened } = harness({ now: 0 });
+    await executor.read(SPEC, { tool: "terminal.list", args: {}, runMs: 5_000 });
+    await executor.call(WITH_CONVERSATION, PAYLOAD);
+    await executor.call(WITH_CONVERSATION, { ...PAYLOAD, callId: "call-2" });
+
+    expect(opened.map((spec) => spec.conversationId)).toEqual([undefined, "conv-1"]);
+  });
+
+  it("takes a callId resent naming another conversation as another call", async () => {
+    const { executor } = harness({ now: 0 });
+    await executor.call(WITH_CONVERSATION, PAYLOAD);
+
+    await expect(
+      executor.call({ ...SPEC, conversationId: "conv-2" }, { ...PAYLOAD, resend: true })
+    ).resolves.toEqual({ status: "conflict" });
+  });
+});

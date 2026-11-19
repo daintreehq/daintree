@@ -238,6 +238,47 @@ describe("installHostMcpRelay", () => {
     relay.dispose();
   });
 
+  it("admits a CONVERSATION_MCP_CALL as its sender's, naming the conversation and the global mark (#17919)", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    const base = {
+      helpSessionId: "help-g",
+      projectId: "project-1",
+      tier: "core",
+      callId: "call-g",
+      resend: false,
+      tool: "terminal.list",
+      args: {},
+      runMs: 90_000,
+    };
+    await links[0]!.ask(AssistantLinkMethod.CONVERSATION_MCP_CALL, {
+      ...base,
+      conversationId: "conv-1",
+      global: true,
+    });
+    await links[0]!.ask(AssistantLinkMethod.CONVERSATION_MCP_CALL, {
+      ...base,
+      helpSessionId: "help-p",
+      callId: "call-p",
+      conversationId: "conv-2",
+    });
+
+    expect(
+      opened.map((session) => {
+        const caller = relayCallerOf(session.spec);
+        return [caller.senderId, caller.helpSessionId, caller.conversationId, caller.global];
+      })
+    ).toEqual([
+      ["sender-a", "help-g", "conv-1", true],
+      ["sender-a", "help-p", "conv-2", undefined],
+    ]);
+    // The older methods carry no conversation: their payload check refuses one.
+    await expect(
+      links[0]!.ask(AssistantLinkMethod.MCP_CALL, { ...base, callId: "c3", conversationId: "x" })
+    ).rejects.toThrow();
+    expect(opened).toHaveLength(2);
+    relay.dispose();
+  });
+
   it("keeps a global and an ordinary session apart under one help session, reusing each (#14545)", async () => {
     const { links, opened, relay } = harness([["link-1", "sender-a"]]);
     const send = (global: boolean, callId: string) =>

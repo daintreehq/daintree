@@ -327,6 +327,46 @@ describe("PendingHelpHibernationStore", () => {
     expect(store.get("proj-future")).toBeNull();
   });
 
+  it("keeps a lane's conversation ownership id across a reload (#17919)", async () => {
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    await store.set(slotKey("proj-1", 0), {
+      agentId: "claude",
+      agentSessionId: "conv-1",
+      cwd: "/sessions/proj-1",
+      capturedAt: Date.now(),
+      conversationOwnershipId: "owner-1",
+    });
+
+    const fresh = new PendingHelpHibernationStore(filePath);
+    await fresh.load();
+    expect(fresh.get(slotKey("proj-1", 0))?.conversationOwnershipId).toBe("owner-1");
+  });
+
+  it("keeps a lane whose ownership id is unreadable, without the id (#17919)", async () => {
+    const entry = { agentId: "claude", cwd: "/sessions", capturedAt: Date.now() };
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 2,
+        entries: {
+          [slotKey("proj-1", 0)]: { ...entry, agentSessionId: "a", conversationOwnershipId: 42 },
+          [slotKey("proj-1", 1)]: { ...entry, agentSessionId: "b", conversationOwnershipId: "" },
+          [slotKey("proj-1", 2)]: { ...entry, agentSessionId: "c" },
+        },
+      })
+    );
+
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+
+    for (const slot of [0, 1, 2]) {
+      const loaded = store.get(slotKey("proj-1", slot));
+      expect(loaded?.agentSessionId).toBe(["a", "b", "c"][slot]);
+      expect(loaded).not.toHaveProperty("conversationOwnershipId");
+    }
+  });
+
   it("never persists the in-memory-only panelWasOpen flag to disk (#10815)", async () => {
     // panelWasOpen drives cold switch-back auto-resume and must stay session-
     // local: if it leaked to disk, a token reloaded on app restart would
