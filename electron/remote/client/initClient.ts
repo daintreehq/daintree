@@ -48,6 +48,7 @@ import {
 } from "../../window/projectOwnership.js";
 import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
 import { CloudGuestPowerOff } from "../cloud/CloudGuestPowerOff.js";
+import { CloudKeepAwakeLinks } from "../cloud/CloudKeepAwakeLinks.js";
 import { CloudMachineKeys } from "../cloud/CloudMachineKeys.js";
 import { CloudSshFiles } from "../cloud/CloudSshFiles.js";
 import { initCloudHosts } from "../cloud/initCloudHosts.js";
@@ -1147,6 +1148,16 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopGuestPowerOff = manager.onSessionOpened((hostId, session) =>
     guestPowerOff.sessionOpened(hostId, session)
   );
+  const keepAwake = new CloudKeepAwakeLinks({
+    store: cloud.store,
+    accounts: cloud.accounts,
+    hosts: { get: (hostId) => registry.get(hostId) },
+    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    changed: () => cloud.cloudHosts.changed(),
+  });
+  const stopKeepAwake = manager.onSessionOpened((hostId, session) =>
+    keepAwake.sessionOpened(hostId, session)
+  );
   cloudLifecycle = new CloudHostLifecycle({
     store: cloud.store,
     accounts: cloud.accounts,
@@ -1154,6 +1165,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     clientDir,
     machineKeys,
     guestPowerOff,
+    keepAwake,
     idleClaims: {
       sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
       idleOn: (hostId, session) =>
@@ -1245,6 +1257,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       machineKeys?.dispose();
       stopGuestPowerOff();
       guestPowerOff.dispose();
+      stopKeepAwake();
+      keepAwake.dispose();
       cloudLifecycle?.dispose();
       cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.

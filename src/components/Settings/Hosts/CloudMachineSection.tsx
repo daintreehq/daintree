@@ -613,6 +613,7 @@ export function CloudMachineSection({
           provider={provider}
           lifetime={status.lifetime}
           idleTimeFollowsHost={status.idleTimeFollowsHost ?? false}
+          keepAwake={status.keepAwake ?? null}
         />
         <SettingsRow
           label="Disk"

@@ -13,7 +13,11 @@ import {
   HOST_IDLE_MINUTE_CHOICES,
   type HostIdleObservation,
 } from "@shared/types/hostIdle";
-import type { CloudLifetimeModel, CloudLinkedIdleStop } from "@shared/types/cloudHosts";
+import type {
+  CloudKeepAwake,
+  CloudLifetimeModel,
+  CloudLinkedIdleStop,
+} from "@shared/types/cloudHosts";
 import type { HostSettingsSnapshot, HostSettingsUpdateResult } from "@shared/types/hostSettings";
 import type { HostId } from "@shared/types/remoteHosts";
 import { SettingsRow } from "../SettingsGroup";
@@ -75,6 +79,8 @@ interface HostIdleTimeRowProps {
   lifetime?: CloudLifetimeModel | null;
   /** The machine's own idle timeout follows the host's idle time (#17916). */
   idleTimeFollowsHost?: boolean;
+  /** What the host holds the machine awake with while it sees work, with no device connected (#17918). */
+  keepAwake?: CloudKeepAwake | null;
 }
 
 /**
@@ -93,6 +99,7 @@ export function HostIdleTimeRow({
   provider = null,
   lifetime = null,
   idleTimeFollowsHost = false,
+  keepAwake = null,
 }: HostIdleTimeRowProps) {
   const [setting, setSetting] = useState<IdleSetting | null>(null);
   // Read since the link last came up: an older reading is shown, not edited against.
@@ -150,6 +157,7 @@ export function HostIdleTimeRow({
     connected,
     lifetime,
     followsHost: idleTimeFollowsHost,
+    keepAwake,
   });
   const withConsequence = (text: string) =>
     consequence ? `${/[.!?]$/.test(text) ? text : `${text}.`} ${consequence}` : text;

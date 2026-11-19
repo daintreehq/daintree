@@ -224,6 +224,17 @@ export interface CloudProvider {
     idleSeconds: number,
     enable: boolean
   ): Promise<ProviderResource>;
+  /**
+   * Present only for a provider whose idle timer counts traffic on the
+   * machine's own URLs, Agent 37's (#17918): a URL reaching `port` of the
+   * machine alone, with no account key, that its host sends requests to
+   * itself through while it sees work. `expiresAt` is epoch milliseconds.
+   */
+  keepAwakeUrl?(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    port: number
+  ): Promise<{ url: string; expiresAt: number }>;
 }
 
 /** A provider that can put its idle machines to sleep for this device, and set when they would by themselves. */
