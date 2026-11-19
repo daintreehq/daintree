@@ -121,7 +121,10 @@ export function redactAgent37Text(text: string, apiKey?: string): string {
       .replace(/\bsk_[a-z]+_[A-Za-z0-9]{8,}/g, "[redacted]")
       .replace(/([?&](?:token|_token|a37_token|key|sig|signature)=)[^&\s]+/gi, "$1[redacted]")
       // A signed URL's token, however an answer quotes it.
-      .replace(/(a37_token["']?\s*[=:]\s*["']?)(?!\[redacted\])[^&\s"',}]+/gi, "$1[redacted]")
+      .replace(
+        /(a37(?:_|%5f)token["']?\s*(?:[=:]|%3d)\s*["']?)(?!\[redacted\])[^&\s"',}]+/gi,
+        "$1[redacted]"
+      )
       .slice(0, 500)
   );
 }

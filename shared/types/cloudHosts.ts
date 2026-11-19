@@ -725,12 +725,13 @@ export interface CloudHostStatus {
 /**
  * `held`: the host said it holds a link that keeps the machine awake while
  * it sees work until `expiresAt`, when this device last asked at
- * `confirmedAt`. `expired`: the last one it said it held has run out.
- * `none`: it holds none, with why when the host or this device found out;
- * a null problem is nothing handed over yet.
+ * `confirmedAt`; `reached` once it said a request through that link reached
+ * it. `expired`: the last one it said it held has run out. `none`: it holds
+ * none, with why when the host or this device found out; a null problem is
+ * nothing handed over yet.
  */
 export type CloudKeepAwake =
-  | { kind: "held"; expiresAt: number; confirmedAt: number }
+  | { kind: "held"; expiresAt: number; confirmedAt: number; reached: boolean }
   | { kind: "expired"; expiredAt: number }
   | { kind: "none"; problem: string | null };
 

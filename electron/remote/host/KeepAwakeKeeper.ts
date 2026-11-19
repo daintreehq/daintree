@@ -45,9 +45,10 @@ const PING_EVERY_MS = 60_000;
 /**
  * Far below the host's shortest idle time (5 minutes): every request starts
  * only while the host sees work, so none is still out once anything could
- * claim an idle time and sleep the instance.
+ * claim an idle time and sleep the instance. Two in a row (a pass's, then an
+ * arm's check) also fit inside the Shell's wait for the arm's answer.
  */
-const REQUEST_TIMEOUT_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 10_000;
 const RETRY_BASE_MS = 15_000;
 const RETRY_MAX_MS = 60_000;
 /** A listener opened for a URL that never came is closed after this long. */
@@ -193,12 +194,11 @@ export class KeepAwakeKeeper {
     if (this.disposed) throw shuttingDown();
     if (this.listener !== listener) refuse(PORT_CLOSED);
     if (outcome?.kind === "lost") refuse(outcome.problem);
-    const previous = this.held;
     const reached = outcome?.kind === "reached";
+    // Not checked yet: the last URL that reached it stays behind it, however many came between.
+    const working = this.held?.verified ? this.held : this.fallback;
     this.replace(candidate);
-    if (!reached && previous?.verified && previous.expiresAt > this.now()) {
-      this.fallback = previous;
-    }
+    if (!reached && working && working.expiresAt > this.now()) this.fallback = working;
     if (reached) {
       candidate.verified = true;
       candidate.reachedAt = this.now();

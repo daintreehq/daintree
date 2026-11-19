@@ -452,7 +452,7 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
     });
 
   it("says the host keeps it awake while it sees work through a link it holds until its expiry, and the timer after", () => {
-    const held = { kind: "held" as const, expiresAt, confirmedAt };
+    const held = { kind: "held" as const, expiresAt, confirmedAt, reached: true };
     const offline = sentence(held);
     // Two different moments, each in its own place.
     expect(dayTime(expiresAt)).not.toBe(dayTime(confirmedAt));
@@ -470,6 +470,12 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
     expect(linked).toContain("The host's idle time is in charge while this device is connected");
     expect(linked).toContain(`holds that link until ${dayTime(expiresAt)}.`);
     expect(linked).not.toContain("as the host said");
+    expect(linked).not.toContain("no request through it");
+
+    // Taken while the host was idle, it hasn't been tried: said so, not taken for protection.
+    expect(sentence({ ...held, reached: false })).toContain(
+      `holds that link until ${dayTime(expiresAt)}, though no request through it has reached the host yet (as the host said ${dayTime(confirmedAt)}).`
+    );
   });
 
   it("says Agent 37's own timer is in charge once the link expired, was refused, or was never given", () => {
@@ -491,6 +497,7 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
       "The host's idle time is in charge while this device is connected"
     );
     expect(refusedLinked).toContain("even while the host sees work: Refused.");
+    expect(refusedLinked).not.toContain("Refused..");
 
     // Nothing handed over yet, or a status from before it: the timer, as before.
     for (const nothing of [{ kind: "none" as const, problem: null }, null, undefined]) {

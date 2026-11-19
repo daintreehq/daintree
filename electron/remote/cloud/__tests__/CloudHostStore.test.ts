@@ -617,9 +617,20 @@ describe("CloudHostStore keep-awake (#17918)", () => {
       resourceId: RESOURCE,
       expiresAt: 1_800_604_800_000,
       confirmedAt: 1_800_000_000_000,
+      reached: true as const,
     };
     new CloudHostStore(backend).putBinding(binding({ resourceId: RESOURCE, keepAwake: held }));
     expect(new CloudHostStore(backend).bindings()[0]!.keepAwake).toEqual(held);
+    // Not yet reached reads back as such, and anything but true is not reached.
+    const { reached: _reached, ...untried } = held;
+    for (const reached of [undefined, "yes", 1]) {
+      backend.write({
+        version: 1,
+        accounts: [],
+        bindings: [{ ...binding({ resourceId: RESOURCE }), keepAwake: { ...untried, reached } }],
+      });
+      expect(new CloudHostStore(backend).bindings()[0]!.keepAwake).toEqual(untried);
+    }
 
     // Said of another machine, or unreadable: as if nothing were held.
     for (const keepAwake of [

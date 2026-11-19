@@ -14,10 +14,10 @@ import type { CloudProvider, ProviderCredentials } from "./provider.js";
 
 /**
  * How often a linked machine's host is asked what it holds: one it dropped,
- * or another device's. Often, since the details are what someone reads before
- * walking away from a busy machine.
+ * or another device's. On every keeper pass (a minute apart), since the
+ * details are what someone reads before walking away from a busy machine.
  */
-const CHECK_EVERY_MS = 60_000;
+const CHECK_EVERY_MS = 50_000;
 /** A link this close to its expiry is replaced while its machine's own link stays up. */
 const RENEW_BEFORE_MS = 24 * 60 * 60_000;
 /** A failure that may pass (a dropped link, an unreachable provider) is tried again after this long. */
@@ -56,16 +56,20 @@ function said(error: unknown, fallback: string): string {
     : fallback;
 }
 
-/** `text` with a signed URL, or any token one carried, taken out: it is shown and kept. */
+/** `text` with a signed URL, or any token one carried, taken out, as written or encoded: it is shown and kept. */
 function withoutLink(text: string, url?: string): string {
   let out = text;
   if (url) {
     const token = new URL(url).searchParams.get("a37_token");
-    out = out.split(url).join("[link]");
-    if (token) out = out.split(token).join("[redacted]");
+    for (const form of [url, encodeURIComponent(url)]) out = out.split(form).join("[link]");
+    if (token) {
+      for (const form of [token, encodeURIComponent(token)]) {
+        out = out.split(form).join("[redacted]");
+      }
+    }
   }
   return out.replace(
-    /(a37_token["']?\s*[=:]\s*["']?)(?!\[redacted\])[^&\s"',}]+/gi,
+    /(a37(?:_|%5f)token["']?\s*(?:[=:]|%3d)\s*["']?)(?!\[redacted\])[^&\s"',}]+/gi,
     "$1[redacted]"
   );
 }
@@ -73,6 +77,13 @@ function withoutLink(text: string, url?: string): string {
 /** A view of what the host holds, apart from when it last said so: that alone isn't news. */
 function viewKey(view: CloudKeepAwake | null): string {
   return JSON.stringify(view?.kind === "held" ? { ...view, confirmedAt: 0 } : view);
+}
+
+/** One attempt for a binding: the link it runs on, and whether it mints, which a pass may decide on the way. */
+interface Attempt {
+  session: LinkSession;
+  mint: boolean;
+  promise: Promise<void>;
 }
 
 export interface CloudKeepAwakeLinksDeps {
@@ -100,10 +111,7 @@ export interface CloudKeepAwakeLinksDeps {
  */
 export class CloudKeepAwakeLinks {
   /** The attempt under way for each binding, with the link it runs on and whether it mints. */
-  private readonly running = new Map<
-    string,
-    { session: LinkSession; mint: boolean; promise: Promise<void> }
-  >();
+  private readonly running = new Map<string, Attempt>();
   /** A link that came up while another's attempt ran: tried once that one settles. */
   private readonly queued = new Map<
     string,
@@ -140,6 +148,7 @@ export class CloudKeepAwakeLinks {
         kind: "held",
         expiresAt: stored.expiresAt,
         confirmedAt: Math.max(stored.confirmedAt, this.confirmedAt.get(bindingId) ?? 0),
+        reached: stored.reached === true,
       };
     }
     return { kind: "none", problem: this.problems.get(bindingId) ?? null };
@@ -174,10 +183,8 @@ export class CloudKeepAwakeLinks {
       const retryAt = this.retryAt.get(binding.id);
       const checked = this.checkedAt.get(binding.id);
       const renew = stored !== undefined && stored.expiresAt - now < RENEW_BEFORE_MS;
-      if (retryAt !== undefined) {
-        // A pause after a failure holds however long ago the last check was.
-        if (retryAt <= now) await this.run(binding.hostId, session, true);
-      } else if (renew) {
+      // A pause after a failure holds off minting however near the expiry, but not asking.
+      if (retryAt !== undefined ? retryAt <= now : renew) {
         await this.run(binding.hostId, session, true);
       } else if (checked === undefined || now - checked >= CHECK_EVERY_MS) {
         await this.run(binding.hostId, session, false);
@@ -231,13 +238,15 @@ export class CloudKeepAwakeLinks {
       }
       return running.promise;
     }
-    const promise = this.runOnce(bindingId, hostId, session, mint)
+    const attempt: Attempt = { session, mint, promise: Promise.resolve() };
+    this.running.set(bindingId, attempt);
+    attempt.promise = this.runOnce(bindingId, hostId, attempt)
       .catch(() => {
         // A failure that may pass is retried by tick().
         this.retryAt.set(bindingId, this.now() + RETRY_MS);
       })
       .finally(() => {
-        if (this.running.get(bindingId)?.promise === promise) this.running.delete(bindingId);
+        if (this.running.get(bindingId) === attempt) this.running.delete(bindingId);
         if (!this.deps.store.binding(bindingId)) this.forgetRemoved();
         const next = this.queued.get(bindingId);
         this.queued.delete(bindingId);
@@ -245,8 +254,7 @@ export class CloudKeepAwakeLinks {
           void this.run(next.hostId, next.session, next.mint);
         }
       });
-    this.running.set(bindingId, { session, mint, promise });
-    return promise;
+    return attempt.promise;
   }
 
   private providerOf(binding: StoredCloudBinding): KeepAwakeProvider | null {
@@ -269,12 +277,8 @@ export class CloudKeepAwakeLinks {
     return binding?.hostId === hostId && binding.resourceId === resourceId;
   }
 
-  private async runOnce(
-    bindingId: string,
-    hostId: HostId,
-    session: LinkSession,
-    mint: boolean
-  ): Promise<void> {
+  private async runOnce(bindingId: string, hostId: HostId, attempt: Attempt): Promise<void> {
+    const session = attempt.session;
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) return;
     const resourceId = binding.resourceId;
@@ -283,7 +287,8 @@ export class CloudKeepAwakeLinks {
     if (!provider || !account) return;
     if (!this.reaches(hostId, bindingId, resourceId, session)) return;
     if (this.unsupportedOn.get(bindingId) === session) return;
-    this.retryAt.delete(bindingId);
+    // Only an attempt that mints ends a pause after a failure; asking what the host holds doesn't.
+    if (attempt.mint) this.retryAt.delete(bindingId);
 
     let status: KeepAwakeStatus;
     try {
@@ -299,12 +304,14 @@ export class CloudKeepAwakeLinks {
     }
     if (!this.reaches(hostId, bindingId, resourceId, session)) return;
     this.record(bindingId, resourceId, status, status.problem);
-    // Found holding none on a link that stays up: handed a new one, now and then.
+    // Found holding none on a link that stays up: handed a new one, now and then, outside a pause.
     const lastMint = this.mintedAt.get(bindingId);
     const lost =
       status.expiresAt === null &&
+      !this.retryAt.has(bindingId) &&
       (lastMint === undefined || this.now() - lastMint >= REMINT_AFTER_MS);
-    if (!mint && !lost) return;
+    if (!attempt.mint && !lost) return;
+    attempt.mint = true;
     if (status.port === null) {
       // The host couldn't open its port, perhaps for a moment.
       this.retryAt.set(bindingId, this.now() + RETRY_MS);
@@ -379,10 +386,20 @@ export class CloudKeepAwakeLinks {
       this.confirmedAt.set(bindingId, now);
       this.problems.delete(bindingId);
       this.expiredSeen.delete(bindingId);
-      if (this.deps.store.binding(bindingId)?.keepAwake?.expiresAt !== expiresAt) {
+      const reached = status?.reachedAt != null;
+      const stored = this.deps.store.binding(bindingId)?.keepAwake;
+      if (stored?.expiresAt !== expiresAt || (stored.reached === true) !== reached) {
         this.deps.store.updateBinding(bindingId, (binding) =>
           binding.resourceId === resourceId
-            ? { ...binding, keepAwake: { resourceId, expiresAt, confirmedAt: now } }
+            ? {
+                ...binding,
+                keepAwake: {
+                  resourceId,
+                  expiresAt,
+                  confirmedAt: now,
+                  ...(reached ? { reached: true as const } : {}),
+                },
+              }
             : binding
         );
       }

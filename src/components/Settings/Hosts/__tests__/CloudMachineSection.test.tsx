@@ -941,6 +941,7 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
           kind: "held",
           expiresAt: Date.UTC(2026, 10, 26, 15),
           confirmedAt: Date.UTC(2026, 10, 19, 15),
+          reached: true,
         },
       }),
       [agent37]

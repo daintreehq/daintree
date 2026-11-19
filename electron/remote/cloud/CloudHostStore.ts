@@ -186,6 +186,8 @@ export interface StoredKeepAwake {
   resourceId: string;
   expiresAt: number;
   confirmedAt: number;
+  /** The host said a request through it had reached it. */
+  reached?: true;
 }
 
 /** Put on every machine a create asks for, naming its binding, so a lost answer is found again. */
@@ -665,7 +667,14 @@ function readKeepAwake(
   const expiresAt = num(value.expiresAt);
   const confirmedAt = num(value.confirmedAt);
   if (value.resourceId !== resourceId || expiresAt === null || confirmedAt === null) return {};
-  return { keepAwake: { resourceId, expiresAt, confirmedAt } };
+  return {
+    keepAwake: {
+      resourceId,
+      expiresAt,
+      confirmedAt,
+      ...(value.reached === true ? { reached: true as const } : {}),
+    },
+  };
 }
 
 const MACHINE_KEY_STATES = new Set(["issuing", "delivering", "active", "revoke"]);

@@ -269,6 +269,7 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
       kind: "held",
       expiresAt: minted[0]!.expiresAt * 1000,
       confirmedAt: env.api.now,
+      reached: true,
     });
     // Connecting again while it holds one still hands over a new one, for seven days from then.
     env.api.advance(600);
@@ -307,6 +308,7 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     expect(env.status().keepAwake).toMatchObject({
       kind: "held",
       expiresAt: env.api.signedUrls[0]!.expiresAt * 1000,
+      reached: false,
     });
     expect(env.edgeRequests).toHaveLength(0);
     expect(env.keeper.status()).toMatchObject({ reachedAt: null, problem: null });
@@ -354,8 +356,12 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     });
     expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(1);
 
-    // Still linked, half an hour after the last one: a new URL, and the host holds it awake again.
-    await env.run(1800);
+    // Still linked: nothing more until half an hour after the last one.
+    await env.run(1680);
+    await env.links.tick();
+    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(1);
+    // Then a new URL, and the host holds it awake again.
+    await env.run(120);
     await env.links.tick();
     expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(2);
     expect(env.status().keepAwake).toMatchObject({ kind: "held" });
@@ -453,13 +459,21 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
       kind: "none",
       problem: "Agent 37 couldn't reach this host through the link Daintree gave it.",
     });
-    // Refused, it isn't minted again on every pass: links can't be revoked.
+    // Refused, it isn't offered again for an hour, though the host holds none: links can't be
+    // revoked. The host is still asked what it holds meanwhile.
     const mints = env.api.calls("POST", /\/signed-url$/).length;
-    for (let i = 0; i < 5; i++) {
+    const asked = env.calls.filter((call) => call.method === KeepAwakeLinkMethod.STATUS).length;
+    for (let i = 0; i < 59; i++) {
       env.api.advance(60);
       await env.links.tick();
     }
     expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(mints);
+    expect(
+      env.calls.filter((call) => call.method === KeepAwakeLinkMethod.STATUS).length
+    ).toBeGreaterThanOrEqual(asked + 50);
+    env.api.advance(60);
+    await env.links.tick();
+    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(mints + 1);
   });
 
   it("says why the host holds none when the Shell can't mint one, and tries again on the same link", async () => {

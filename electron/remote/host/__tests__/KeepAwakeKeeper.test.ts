@@ -180,6 +180,7 @@ describe("KeepAwakeKeeper (#17918)", () => {
       `http://${RESOURCE}-${PORT}.agent37.app/?a37_token=t`,
       `https://${RESOURCE}-${PORT}.agent37.app.example.com/?a37_token=t`,
       `https://${RESOURCE}-${PORT}.agent37.app/`,
+      `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=`,
       `https://user@${RESOURCE}-${PORT}.agent37.app/?a37_token=t`,
       `https://${RESOURCE}-${PORT}.agent37.app:443/?a37_token=t`,
       `https://${RESOURCE}-${PORT}.agent37.app:444/?a37_token=t`,
@@ -249,6 +250,43 @@ describe("KeepAwakeKeeper (#17918)", () => {
     expect(env.keeper.status()).toMatchObject({ expiresAt: first.expiresAt, problem: null });
     await env.passes(1, 10_000);
     expect(env.tokens().at(-1)).toBe(TOKEN_A);
+  });
+
+  it("keeps the URL that worked behind every unchecked one that came after it", async () => {
+    const env = setup();
+    const TOKEN_C = "tok_live_5555555555";
+    await env.keeper.open();
+    const first = await env.arm();
+    env.setBusy(false);
+    await env.arm(URL_B, env.now() + 8 * DAY);
+    await env.arm(
+      `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=${TOKEN_C}`,
+      env.now() + 9 * DAY
+    );
+    env.setBusy(true);
+    env.answer((token) =>
+      token === TOKEN_A ? { status: 204, reaches: true } : { status: 403, reaches: false }
+    );
+    await env.passes(1, 10_000);
+    expect(env.keeper.status()).toMatchObject({ expiresAt: first.expiresAt, problem: null });
+  });
+
+  it("lets go of the old URL once the new one reaches it", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    env.setBusy(false);
+    await env.arm(URL_B, env.now() + 8 * DAY);
+    env.setBusy(true);
+    await env.passes(1, 10_000);
+    expect(env.tokens().at(-1)).toBe(TOKEN_B);
+    // Turned away later, it isn't replaced by the one it superseded.
+    env.answer(() => ({ status: 403, reaches: false }));
+    await env.passes(1, 60_000);
+    expect(env.keeper.status()).toMatchObject({
+      expiresAt: null,
+      problem: expect.stringContaining("no longer accepts"),
+    });
   });
 
   it("drops a URL Agent 37 turns away, and one that expired, even while idle", async () => {

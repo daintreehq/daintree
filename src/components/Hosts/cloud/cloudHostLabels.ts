@@ -293,7 +293,10 @@ function awaySentence(
   const ownInCharge = `${sentenceCase(ownTimer)} is in charge while no device is connected`;
   if (keepAwake?.kind === "held") {
     const said = machine.connected ? "" : ` (as the host said ${dayTime(keepAwake.confirmedAt)})`;
-    const held = `With no device connected, the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(keepAwake.expiresAt)}${said}. Once the host is idle, ${ownTimer} puts it to sleep ${afterIdle}.`;
+    const untried = keepAwake.reached
+      ? ""
+      : ", though no request through it has reached the host yet";
+    const held = `With no device connected, the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(keepAwake.expiresAt)}${untried}${said}. Once the host is idle, ${ownTimer} puts it to sleep ${afterIdle}.`;
     return { connected: held, offline: held };
   }
   if (keepAwake?.kind === "expired") {

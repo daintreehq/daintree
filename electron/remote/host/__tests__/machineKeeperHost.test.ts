@@ -492,7 +492,12 @@ describe("installMachineKeeperHost keep-awake (#17918)", () => {
     const url = "https://ab12cd34ef-40100.agent37.app/?a37_token=tok_secret_value";
     // Nothing the schema doesn't name, and nothing past its bounds.
     await expect(
-      call(KeepAwakeLinkMethod.ARM, { resourceId: "ab12cd34ef", url, expiresAt: 1, apiKey: "x" })
+      call(KeepAwakeLinkMethod.ARM, {
+        resourceId: "ab12cd34ef",
+        url,
+        expiresAt: Date.now() + 86_400_000,
+        apiKey: "x",
+      })
     ).rejects.toThrow("VALIDATION");
     await expect(
       call(KeepAwakeLinkMethod.ARM, {
