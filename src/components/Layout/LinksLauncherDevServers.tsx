@@ -1,11 +1,12 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { CircleStop, Play, RotateCw, X } from "lucide-react";
+import { CircleStop, ExternalLink, Play, RotateCw, X } from "lucide-react";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { cn } from "@/lib/utils";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { devServerAddress, devServerPanelInView } from "@/services/openDevServer";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -19,6 +20,7 @@ import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
+import { LinksLauncherRow } from "./LinksLauncherRow";
 
 // Status dot colors reuse the dev-server semantic tokens (--color-server-*),
 // the same ones DevPreview's ConsoleDrawer uses — NOT the panel-state-* border
@@ -84,11 +86,15 @@ const STOPPED_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
 
 const actionClass = PANE_TOOLBAR_ICON_BUTTON_CLASS;
 
-function extractPort(session: DevPreviewSessionState): string | null {
+/**
+ * Where the server is, as a browser's address bar would show it
+ * (`localhost:5824`): the address it runs at, else the one it is expected at.
+ */
+function displayAddress(session: DevPreviewSessionState): string | null {
   const target = session.url ?? session.predictedUrl;
   if (!target) return null;
   try {
-    return new URL(target).port || null;
+    return new URL(target).host || null;
   } catch {
     return null;
   }
@@ -101,21 +107,30 @@ function rowKey(session: DevPreviewSessionState): string {
 function DevServerRow({
   session,
   displayName,
+  rowId,
+  onOpen,
+  onOpenExternal,
 }: {
   session: DevPreviewSessionState;
   displayName: string;
+  rowId: string;
+  onOpen: (session: DevPreviewSessionState) => void;
+  onOpenExternal: (url: string) => void;
 }) {
   const presentation = STATUS_PRESENTATION[session.status];
-  const port = extractPort(session);
+  const address = displayAddress(session);
+  // Only a running server has somewhere to go; every other row is a status
+  // with its own controls.
+  const url = devServerAddress(session);
   const isError = session.status === "error";
   // A compile error keeps its terminal: stopping then kills a live watcher, so
   // only a process-less error is a pure dismissal.
   const isDismissableError = isError && !session.terminalId;
   const isStopped = STOPPED_STATUSES.has(session.status);
   const canStop = STOPPABLE_STATUSES.has(session.status);
-  // The second line answers "is it up, and where": an error names its reason,
-  // a server still coming up shows its progress, and a running one stops at
-  // its port — routine log lines stay in the row's tooltip.
+  // The detail answers "is it up, and where": a running server shows the
+  // address it opens, an error names its reason, a server still coming up
+  // shows its progress — routine log lines stay in the status's tooltip.
   const detail = isError
     ? (session.error?.message ?? session.lastOutput)
     : PROGRESS_STATUSES.has(session.status)
@@ -145,80 +160,107 @@ function DevServerRow({
   const stopLabel = isDismissableError ? "Dismiss error" : "Stop";
 
   return (
-    <li className="group flex items-center gap-2.5 rounded-[var(--radius-lg)] pl-3 pr-2 py-1.5 hover:bg-overlay-subtle transition-colors duration-150">
-      {isError ? (
-        <SeverityMark
-          severity="error"
-          label={presentation.label}
-          className="h-3.5 w-3.5 shrink-0"
-          decorative
-        />
-      ) : (
-        <span
-          className={cn("status-mark flex-shrink-0 w-2 h-2 rounded-full", presentation.dotClass)}
-          aria-hidden="true"
-        />
-      )}
-      <div className="flex flex-col min-w-0 flex-1">
-        <TruncatedTooltip content={displayName}>
-          <span className="truncate text-xs font-medium text-text-primary">{displayName}</span>
-        </TruncatedTooltip>
-        {/* The log line rides the status line only: on the row it would be inherited
-            by the action buttons, and on the name it would sit over that name's own
-            full-text reveal. */}
+    <LinksLauncherRow
+      rowId={rowId}
+      icon={
+        isError ? (
+          <SeverityMark
+            severity="error"
+            label={presentation.label}
+            className="h-4 w-4 shrink-0"
+            decorative
+          />
+        ) : (
+          <span
+            className={cn("status-mark mx-1 h-2 w-2 shrink-0 rounded-full", presentation.dotClass)}
+            aria-hidden="true"
+          />
+        )
+      }
+      title={displayName}
+      revealTitle
+      // A running row is about its address; the name gives way to it.
+      keepDetail={url !== undefined}
+      detail={
+        // The log line rides the status only: on the row it would be inherited
+        // by the action buttons, and on the name it would sit over that name's
+        // own full-text reveal.
         <StatusLine
           label={presentation.label}
-          port={port}
+          showLabel={url === undefined}
+          address={address}
           detail={detail}
           lastOutput={session.lastOutput}
         />
-      </div>
-      <div className="flex items-center gap-0.5 flex-shrink-0">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={handleRestart}
-              aria-label={`${restartLabel} dev server for ${displayName}`}
-              className={actionClass}
-            >
-              {isStopped ? (
-                <Play className={PANE_TOOLBAR_ICON_CLASS} />
-              ) : (
-                <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{restartLabel}</TooltipContent>
-        </Tooltip>
-        {!isStopped && (
+      }
+      url={url}
+      // The row knows its server by panel, not by address: another worktree's
+      // or project's server can share a port with one here.
+      opensPanel={() => devServerPanelInView(session) !== undefined}
+      onOpen={() => onOpen(session)}
+      actions={
+        <>
+          {url !== undefined && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => onOpenExternal(url)}
+                  aria-label={`Open dev server for ${displayName} in external browser`}
+                  className={actionClass}
+                >
+                  <ExternalLink className={PANE_TOOLBAR_ICON_CLASS} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Open in external browser</TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                onClick={handleStop}
-                // Not `disabled`: a server going down disables its Stop, and a
-                // disabled control drops the keyboard focus that was on it.
-                aria-disabled={!canStop || undefined}
-                aria-label={
-                  isDismissableError
-                    ? `Dismiss error for ${displayName}`
-                    : `Stop dev server for ${displayName}`
-                }
+                onClick={handleRestart}
+                aria-label={`${restartLabel} dev server for ${displayName}`}
                 className={actionClass}
               >
-                {isDismissableError ? (
-                  <X className={PANE_TOOLBAR_ICON_CLASS} />
+                {isStopped ? (
+                  <Play className={PANE_TOOLBAR_ICON_CLASS} />
                 ) : (
-                  <CircleStop className={PANE_TOOLBAR_ICON_CLASS} />
+                  <RotateCw className={PANE_TOOLBAR_ICON_CLASS} />
                 )}
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{stopLabel}</TooltipContent>
+            <TooltipContent side="bottom">{restartLabel}</TooltipContent>
           </Tooltip>
-        )}
-      </div>
-    </li>
+          {!isStopped && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  // Not `disabled`: a server going down disables its Stop, and a
+                  // disabled control drops the keyboard focus that was on it.
+                  aria-disabled={!canStop || undefined}
+                  aria-label={
+                    isDismissableError
+                      ? `Dismiss error for ${displayName}`
+                      : `Stop dev server for ${displayName}`
+                  }
+                  className={actionClass}
+                >
+                  {isDismissableError ? (
+                    <X className={PANE_TOOLBAR_ICON_CLASS} />
+                  ) : (
+                    <CircleStop className={PANE_TOOLBAR_ICON_CLASS} />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{stopLabel}</TooltipContent>
+            </Tooltip>
+          )}
+        </>
+      }
+    />
   );
 }
 
@@ -233,16 +275,24 @@ export function summarizeDevServers(sessions: DevPreviewSessionState[]): string 
 
 /**
  * The launcher's section listing every dev server across this machine's
- * worktrees, with its status and its start or restart and stop (#17251).
+ * worktrees, with its status and its start or restart and stop (#17251). A
+ * running server's row opens it: its own preview when that is a panel of this
+ * view, else its address in the system browser, which it also offers outright.
  * Renders nothing when {@link hasDevServersSection} says there is nothing to
  * show, or while a first load is too young for its skeleton.
  */
 export function LinksLauncherDevServers({
   snapshot,
   sectionId,
+  onOpen,
+  onOpenExternal,
 }: {
   snapshot: DevSessionsSnapshot;
   sectionId: string;
+  /** Opens a running server where it lives: its own preview, else the system browser. */
+  onOpen: (session: DevPreviewSessionState) => void;
+  /** Opens a running server's address in the system browser, wherever it lives. */
+  onOpenExternal: (url: string) => void;
 }) {
   const { sessions: allSessions, hydrated } = snapshot;
   // Select only the names this list renders: the worktrees Map identity
@@ -366,8 +416,11 @@ export function LinksLauncherDevServers({
           {visibleSessions.map((session) => (
             <DevServerRow
               key={rowKey(session)}
+              rowId={`${sectionId}-${rowKey(session)}`}
               session={session}
               displayName={displayNames.get(rowKey(session)) ?? ""}
+              onOpen={onOpen}
+              onOpenExternal={onOpenExternal}
             />
           ))}
         </ul>
@@ -378,28 +431,33 @@ export function LinksLauncherDevServers({
 
 /**
  * A shown detail reveals itself when clipped. The last log line, whenever the
- * row is not already showing it, is the tooltip on the status label: the whole
- * story for a running server, and what preceded the error for a failed one.
+ * row is not already showing it, is the tooltip on the status: the whole story
+ * for a running server, and what preceded the error for a failed one. A
+ * running row's address says it is up, so its label is for screen readers.
  */
 function StatusLine({
   label,
-  port,
+  showLabel,
+  address,
   detail,
   lastOutput,
 }: {
   label: string;
-  port: number | string | null | undefined;
+  showLabel: boolean;
+  address: string | null;
   detail: string | undefined;
   lastOutput: string | undefined;
 }) {
   const status = (
     <span className="flex shrink-0 items-baseline gap-1.5">
-      <span>{label}</span>
-      {port && <span className="tabular-nums">:{port}</span>}
+      <span className={showLabel ? undefined : "sr-only"}>{label}</span>
+      {/* Read between the two; a flex container doesn't draw it. */}
+      {address && " "}
+      {address && <span className="tabular-nums">{address}</span>}
     </span>
   );
   return (
-    <span className="flex min-w-0 items-baseline gap-1.5 text-xs text-text-secondary">
+    <span className="flex min-w-0 items-baseline gap-1.5">
       {lastOutput && lastOutput !== detail ? (
         <Tooltip>
           <TooltipTrigger asChild>{status}</TooltipTrigger>

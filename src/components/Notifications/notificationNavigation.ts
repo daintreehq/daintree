@@ -18,6 +18,7 @@ import {
   type NotificationDestination,
 } from "@/lib/notificationDestination";
 import { notify } from "@/lib/notify";
+import { focusPanelInItsWorktree } from "@/lib/panelNavigation";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
@@ -70,8 +71,6 @@ export async function navigateToNotificationSource(context: NotificationContext)
   // is the inbox's decision to make (see goToNotificationSource).
   if (destination.kind === "none" || destination.kind === "project") return false;
 
-  const selection = useWorktreeSelectionStore.getState();
-
   if (destination.kind === "worktree") {
     const result = await actionService.dispatch("worktree.select", {
       worktreeId: destination.worktreeId,
@@ -93,24 +92,8 @@ export async function navigateToNotificationSource(context: NotificationContext)
     return true;
   }
 
-  const { panelId, worktreeId } = destination;
-  if (worktreeId && worktreeId !== selection.activeWorktreeId) {
-    // Recorded first so the switch restores this panel rather than whichever
-    // one the worktree last had focused.
-    selection.trackTerminalFocus(worktreeId, panelId);
-    if (selection.deletedWorktrees.has(worktreeId)) {
-      // A surviving terminal of a deleted worktree. Session-only, as the
-      // deleted card does it: a user-sourced selection would persist an id
-      // that no longer exists as the restore target.
-      selection.selectWorktree(worktreeId, { source: "focus" });
-    } else {
-      // The resolver only returns a panel whose worktree this view has.
-      const selected = await actionService.dispatch("worktree.select", { worktreeId });
-      if (!selected.ok) return false;
-    }
-  }
-  const focused = await actionService.dispatch("panel.focus", { panelId });
-  return focused.ok;
+  // The resolver only returns a panel whose worktree this view has.
+  return focusPanelInItsWorktree(destination.panelId, destination.worktreeId);
 }
 
 /**

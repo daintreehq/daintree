@@ -20,7 +20,7 @@ import {
 const LOG_PREFIX = "[openLinkUrl]";
 
 /** Whether activating `panel` can bring it on screen: not trashed, parked or in a dialog. */
-function isReachable(panel: PanelInstance): boolean {
+export function isReachable(panel: PanelInstance): boolean {
   return isGridPanelLocation(panel.location) || panel.location === "dock";
 }
 
