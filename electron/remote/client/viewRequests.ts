@@ -17,6 +17,7 @@ import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { remoteHoldUntil } from "../../../shared/config/mcpConfirmWindow.js";
+import { ASSISTANT_PRESET_MOVE_DELEGATE } from "../../../shared/config/assistantConfirmationDelegation.js";
 import {
   NOTIFICATION_CLOSE_METHOD,
   NOTIFICATION_RECONCILE_METHOD,
@@ -66,6 +67,10 @@ const McpDispatchPayloadSchema = z.object({
   // one is shown, so it is taken as-is.
   approvalReason: z.enum(["above-tier", "protected-close"]).optional(),
   authorization: z.string().max(64).optional(),
+  // When the host's own assistant's preset move may run unasked (#17917).
+  // Believed as `authorization` is, and only for that move: this view still
+  // settles whether the pane meets it.
+  confirmationCondition: z.string().max(64).optional(),
   // This Shell's own assistant asked, through `host.call` (#13493). Display
   // only, and believed only while this Shell has a call out to that host: it
   // names who asked in the dialog and grants nothing.
@@ -109,36 +114,55 @@ function honoursSkipPreference(request: McpDispatchPayload): boolean {
 }
 
 /**
- * Whether a host's dispatch is one of this Shell's own assistant's relayed
- * calls that runs under that assistant's "Never ask" here (#15698): one this
- * view would ask about, matched to the call this Shell has out to that host,
- * in the project this view shows of it. The skip is read on this Shell; an
- * approval-only request exists to ask.
+ * The host's own assistant's preset move, offered as one this view may run
+ * unasked once it finds the move the pane's next own fallback step (#17917).
+ * Taken from the host as its skip is, and narrower: this view decides.
  */
-async function skipsOwnRelayedCall(
+function honoursNextFallback(request: McpDispatchPayload): boolean {
+  return (
+    !request.confirmed &&
+    request.sessionOrigin === "help" &&
+    request.confirmationCondition === "next-own-fallback" &&
+    request.actionId === ASSISTANT_PRESET_MOVE_DELEGATE &&
+    request.approvalOnly !== true &&
+    request.relayCall === undefined
+  );
+}
+
+/**
+ * How a host's dispatch that is one of this Shell's own assistant's relayed
+ * calls may skip this view's dialog (#15698, #17917): one this view would ask
+ * about, matched to the call this Shell has out to that host, in the project
+ * this view shows of it. `skip` under that assistant's "Never ask" or a tick
+ * on the call; `next-fallback` for a preset move this view may run unasked if
+ * it is the pane's next own step. Read on this Shell; an approval-only request
+ * exists to ask.
+ */
+async function ownRelayedCallSkip(
   service: Awaited<ReturnType<typeof loadMcpServerService>>,
   hostId: string,
   webContentsId: number,
   request: McpDispatchPayload
-): Promise<boolean> {
+): Promise<"skip" | "next-fallback" | null> {
   const call = request.relayCall;
-  if (call === undefined || request.approvalOnly === true) return false;
+  if (call === undefined || request.approvalOnly === true) return null;
   const viewKey = getProjectForWebContents(webContentsId);
-  if (viewKey === null) return false;
+  if (viewKey === null) return null;
   const view = parseHostScopedKey(viewKey);
-  if (view.hostId !== hostId) return false;
+  if (view.hostId !== hostId) return null;
   // A call that wouldn't ask has no confirmation to skip, and its record
   // mustn't say it ran unasked.
-  if (!(await asksInView(service, webContentsId, request))) return false;
-  return (
-    getRemoteService("hostCallRelayClient")?.skipsRelayedDispatch(hostId, {
-      callId: call.callId,
-      helpSessionId: call.helpSessionId,
-      projectId: view.projectId,
-      actionId: request.actionId,
-      args: request.args,
-    }) === true
-  );
+  if (!(await asksInView(service, webContentsId, request))) return null;
+  const relay = getRemoteService("hostCallRelayClient");
+  const dispatch = {
+    callId: call.callId,
+    helpSessionId: call.helpSessionId,
+    projectId: view.projectId,
+    actionId: request.actionId,
+    args: request.args,
+  };
+  if (relay?.skipsRelayedDispatch(hostId, dispatch) === true) return "skip";
+  return relay?.offersNextFallback(hostId, dispatch) === true ? "next-fallback" : null;
 }
 
 /**
@@ -344,9 +368,12 @@ async function dispatchAction(
   // one that settles meanwhile can't pass its place to a call that replaces it.
   const offered = hostSkip ? null : relayedCallDelegation(hostId, webContentsId, request);
   const service = await loadMcpServerService();
-  const ownSkip = !hostSkip && (await skipsOwnRelayedCall(service, hostId, webContentsId, request));
+  const own = hostSkip ? null : await ownRelayedCallSkip(service, hostId, webContentsId, request);
+  const ownSkip = own === "skip";
   const skipPreference = hostSkip || ownSkip;
   const delegation = skipPreference ? null : offered;
+  // Settled by this view, which holds the pane (#17917).
+  const nextFallback = !skipPreference && (own === "next-fallback" || honoursNextFallback(request));
   const envelope = await service.dispatchActionForHost(
     webContentsId,
     request.actionId,
@@ -370,7 +397,9 @@ async function dispatchAction(
               delegationOffer: delegation.offer,
               onDelegationApproved: delegation.approved,
             }
-          : deadline,
+          : nextFallback
+            ? { confirmationCondition: "next-own-fallback", ...deadline }
+            : deadline,
     describeHost(
       hostId,
       request.relayed === true &&
@@ -379,6 +408,14 @@ async function dispatchAction(
   );
   // This Shell's own preference, written here: the host hears only the decision.
   if (windowAnswer(envelope)?.delegate === true) delegation?.commit();
+  // A move this view ran unasked: nobody was asked here either (#17917).
+  const ranUnasked =
+    nextFallback &&
+    envelope.confirmationDecision === undefined &&
+    envelope.authorization === "skip-preference";
+  if (ranUnasked && own === "next-fallback" && request.relayCall !== undefined) {
+    getRemoteService("hostCallRelayClient")?.noteNextFallbackRan(hostId, request.relayCall.callId);
+  }
   // Only what the host reads back: this machine's view identity stays here,
   // and no approval is ever handed out for the host to reuse. A skip this
   // Shell granted is said, so the host's audit doesn't read it as unasked; a
@@ -387,7 +424,7 @@ async function dispatchAction(
     result: narrowRegistryRead(request.actionId, envelope.result),
     ...(envelope.confirmationDecision !== undefined
       ? { confirmationDecision: envelope.confirmationDecision }
-      : ownSkip
+      : ownSkip || ranUnasked
         ? { authorization: "skip-preference" }
         : {}),
   };

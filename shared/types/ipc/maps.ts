@@ -1855,6 +1855,8 @@ export interface IpcEventMap {
     dispatchDeadlineAt?: number;
     /** Main's own `actions.list` walk (#17036); set only by main, on a local send. */
     actionsListWalk?: boolean;
+    /** When this unconfirmed dispatch may run unasked (#17917); set only by main. */
+    confirmationCondition?: import("./mcpServer.js").McpConfirmationCondition;
   };
 
   /**

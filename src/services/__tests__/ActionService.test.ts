@@ -920,6 +920,62 @@ describe("ActionService", () => {
       // The whole point of putting it on the context rather than in args: a
       // caller cannot plant it. Same property that makes `dispatchSource`
       // trustworthy — the stamp is unconditional and overwrites the override.
+      // #17917: main's offer of the next-fallback tick lets exactly the preset
+      // restart into its own guarded run, unconfirmed, and nothing else.
+      it("lets the next-fallback offer past the gate only for the preset restart", async () => {
+        const restart = vi.fn().mockResolvedValue(undefined);
+        service.register({
+          ...confirmAction(restart),
+          id: "terminal.restartOnPreset" as ActionId,
+        });
+        const other = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(other));
+
+        const offered = await service.dispatch("terminal.restartOnPreset", undefined, {
+          source: "agent",
+          ownFallbackStep: true,
+        });
+        expect(offered.ok).toBe(true);
+        expect(restart).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostOwnFallbackStep: true, hostConfirmed: undefined })
+        );
+
+        const elsewhere = await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          ownFallbackStep: true,
+        });
+        expect(elsewhere).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+        expect(other).not.toHaveBeenCalled();
+
+        const fromPlugin = await service.dispatch("terminal.restartOnPreset", undefined, {
+          source: "plugin",
+          ownFallbackStep: true,
+        });
+        expect(fromPlugin).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+        expect(restart).toHaveBeenCalledTimes(1);
+      });
+
+      it("never takes the next-fallback offer from a contextOverride", async () => {
+        const restart = vi.fn().mockResolvedValue(undefined);
+        service.register({
+          ...confirmAction(restart),
+          id: "terminal.restartOnPreset" as ActionId,
+        });
+
+        const result = await service.dispatch("terminal.restartOnPreset", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { hostOwnFallbackStep: true },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(restart).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostOwnFallbackStep: undefined })
+        );
+      });
+
       it("overwrites a contextOverride that claims an approval the host never made", async () => {
         const mockRun = vi.fn().mockResolvedValue(undefined);
         service.register(confirmAction(mockRun));

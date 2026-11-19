@@ -10,6 +10,7 @@ import type {
   McpApprovalReason,
   McpApprovalScope,
   McpAuditResult,
+  McpConfirmationCondition,
   McpConfirmationDecision,
   McpDelegationOffer,
   McpDispatchAuthorization,
@@ -213,6 +214,11 @@ export interface WorkspaceDispatchOptions {
   hostPreview?: McpHostPreview;
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
+  /**
+   * When an unconfirmed dispatch may run unasked, settled by the view that
+   * holds the pane (#17917). Main sets it, never a caller.
+   */
+  confirmationCondition?: McpConfirmationCondition;
   /**
    * Main's own walk of `actions.list` (#17036): the view answers with a page of
    * `ACTIONS_LIST_WALK_LIMIT`, so the registry comes back in one round trip.
@@ -1200,6 +1206,8 @@ export interface PendingRequest<T> {
   offeredDelegation?: true;
   /** Dispatches only: {@link WorkspaceDispatchOptions.onDelegationApproved}, until it runs. */
   onDelegationApproved?: () => void;
+  /** Dispatches only: sent with a `confirmationCondition`, so a reported skip is believed (#17917). */
+  offeredCondition?: true;
 }
 
 /**

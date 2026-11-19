@@ -1,6 +1,7 @@
 // eager-import-allow: reads the assistant's confirmation settings via store.get on each call
 import { store } from "../../store.js";
 import {
+  assistantPolicyChecksNextFallback,
   assistantPolicySkips,
   isHelpAssistantDaintreeConfirmations,
   resolveAssistantAgentSkip,
@@ -181,4 +182,18 @@ function commitAssistantDelegation(
     logger.warn("Couldn't hand an action over to the assistant", { error });
     return false;
   }
+}
+
+/**
+ * Whether this machine's assistant's call to `calledActionId` may run unasked
+ * once the pane's own view finds it the next fallback step (#17917).
+ */
+export function readAssistantChecksNextFallback(
+  sessionAgentId: string | null,
+  calledActionId: string
+): boolean {
+  return assistantPolicyChecksNextFallback(
+    readAssistantConfirmationPolicy(sessionAgentId),
+    calledActionId
+  );
 }

@@ -74,6 +74,11 @@ export interface PresetRespawnOptions {
 export interface PresetRespawnResult {
   success: boolean;
   error?: string;
+  /**
+   * The move wasn't the pane's next own fallback step (#17917), and nothing
+   * was changed: the caller asks the person instead.
+   */
+  needsConfirmation?: boolean;
   /** The conversation the relaunch asked the CLI to reopen, when it kept one. */
   resumedSessionId?: string;
 }
@@ -345,6 +350,17 @@ export interface PanelRegistrySlice {
    * its env replaces the saved launch layer so a cold restore comes back on it.
    */
   restartTerminalOnPreset: (
+    id: string,
+    presetId: string,
+    options?: PresetRespawnOptions
+  ) => Promise<PresetRespawnResult>;
+  /**
+   * Hop a pane to `presetId` as a usage-limit hop would, keeping its root and
+   * advancing its index, only when that is the next step of the chain on one
+   * of the person's own presets it walks (#17917). Any other move changes
+   * nothing and reports `needsConfirmation`.
+   */
+  restartTerminalOnOwnFallbackStep: (
     id: string,
     presetId: string,
     options?: PresetRespawnOptions

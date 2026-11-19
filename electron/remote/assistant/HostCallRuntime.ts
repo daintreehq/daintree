@@ -3,6 +3,7 @@ import {
   globalAssistantMayRelay,
   isGlobalAssistantId,
 } from "../../../shared/config/globalAssistant.js";
+import { ASSISTANT_PRESET_MOVE_DELEGATE } from "../../../shared/config/assistantConfirmationDelegation.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../shared/utils/launchInNewWorktree.js";
@@ -290,6 +291,13 @@ export interface HostCallRuntimeDeps {
     calledActionId: string
   ): PreparedAssistantDelegation | null;
   /**
+   * Whether a help session's assistant may run its call to `calledActionId`
+   * unasked once the view holding the pane finds it that pane's next own
+   * fallback step (#17917): this machine's own preference, read at each
+   * dispatch. Absent, or throwing, the call asks.
+   */
+  checksNextFallback?(helpSessionId: string, calledActionId: string): boolean;
+  /**
    * Makes sure one of this machine's projects is on a host, with no window
    * (#14140): the Shell's switch service. Absent, no project is ever brought.
    */
@@ -410,6 +418,8 @@ interface CallInFlight {
   asked: boolean;
   /** It runs under the skip preference (#15698), so a resend that joins it later does too. */
   skipped: boolean;
+  /** Its one ask went to the view as a preset move it may run unasked (#17917). */
+  nextFallbackOffered?: true;
   /**
    * Tells each `host.call` send still out for it that it ran under the skip
    * preference, for that send's audit record (#15698).
@@ -417,6 +427,15 @@ interface CallInFlight {
   skipNotes: Set<() => void>;
   /** Sends of it still out, a resend's included; the record goes with the last. */
   sends: number;
+}
+
+/** A host's dispatch into this Shell's view, naming one of this Shell's own calls. */
+interface RelayedDispatch {
+  callId: string;
+  helpSessionId: string;
+  projectId: string;
+  actionId: string;
+  args: unknown;
 }
 
 /**
@@ -1146,16 +1165,47 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * preference, read now: nothing the host sends turns it on. The host is
    * the connection's, never the payload's.
    */
-  skipsRelayedDispatch(
-    hostId: HostId,
-    dispatch: {
-      callId: string;
-      helpSessionId: string;
-      projectId: string;
-      actionId: string;
-      args: unknown;
+  skipsRelayedDispatch(hostId: HostId, dispatch: RelayedDispatch): boolean {
+    const call = this.relayedDispatchCall(hostId, dispatch);
+    if (call === undefined || !this.skipsConfirmations(call, dispatch.actionId)) return false;
+    this.grantSkip(call);
+    return true;
+  }
+
+  /**
+   * Whether a host's dispatch, matched to one of this Shell's own calls as
+   * {@link skipsRelayedDispatch} matches it, is a preset move its view may
+   * run unasked if that view finds it the pane's next own fallback step
+   * (#17917). The call's one ask goes to that view, which either runs the
+   * move or asks itself; {@link noteNextFallbackRan} records the first.
+   */
+  offersNextFallback(hostId: HostId, dispatch: RelayedDispatch): boolean {
+    if (dispatch.actionId !== ASSISTANT_PRESET_MOVE_DELEGATE) return false;
+    const call = this.relayedDispatchCall(hostId, dispatch);
+    if (call === undefined) return false;
+    let offered: boolean;
+    try {
+      offered = this.deps.checksNextFallback?.(call.helpSessionId, call.tool) === true;
+    } catch (error) {
+      logger.warn("Couldn't read the assistant's confirmations preference", { error });
+      return false;
     }
-  ): boolean {
+    if (!offered) return false;
+    call.asked = true;
+    call.nextFallbackOffered = true;
+    return true;
+  }
+
+  /** The view ran a move {@link offersNextFallback} offered it, so nobody was asked. */
+  noteNextFallbackRan(hostId: HostId, callId: string): void {
+    const call = this.callsInFlight.get(callId);
+    if (call?.hostId === hostId && call.nextFallbackOffered === true && !call.skipped) {
+      this.grantSkip(call);
+    }
+  }
+
+  /** The call a host's dispatch runs, while it may still be answered without asking. */
+  private relayedDispatchCall(hostId: HostId, dispatch: RelayedDispatch): CallInFlight | undefined {
     const call = this.callsInFlight.get(dispatch.callId);
     if (
       this.disposed ||
@@ -1166,13 +1216,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       call.projectId !== dispatch.projectId ||
       !runsAsCall(call, dispatch.actionId, dispatch.args) ||
       !this.stillRunning(call.run) ||
-      !this.controlOn(hostId) ||
-      !this.skipsConfirmations(call, dispatch.actionId)
+      !this.controlOn(hostId)
     ) {
-      return false;
+      return undefined;
     }
-    this.grantSkip(call);
-    return true;
+    return call;
   }
 
   /**

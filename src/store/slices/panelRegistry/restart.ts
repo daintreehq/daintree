@@ -82,7 +82,13 @@ import {
   appendCallerLaunchFlagsToCommand,
   splitCallerLaunchFlags,
 } from "@shared/utils/callerLaunchFlags";
-import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
+import {
+  isTerminalRestarting,
+  markTerminalRestarting,
+  unmarkTerminalRestarting,
+} from "@/store/restartExitSuppression";
+import { getAgentSettingsEntrySnapshot } from "@/store/storeAccessors";
+import { ownFallbackChainRoot } from "./fallbackChainStep";
 import { saveNormalized } from "./persistence";
 import { buildAgentLaunchContext } from "./agentLaunchContext";
 import { applyGridPlacementTier, optimizeForDock } from "./layout";
@@ -1734,6 +1740,21 @@ export const createRestartActions = (
   restartTerminalOnPreset: (id, presetId, options) =>
     respawnAgentOnPreset(set, get, id, presetId, { kind: "switch" }, options),
 
+  restartTerminalOnOwnFallbackStep: (id, presetId, options) => {
+    const root = ownFallbackStepRootNow(get, id, presetId);
+    // Claimed by the respawn's synchronous start, in this same turn.
+    return root === null
+      ? Promise.resolve({ success: false, needsConfirmation: true })
+      : respawnAgentOnPreset(
+          set,
+          get,
+          id,
+          presetId,
+          { kind: "fallback", originalPresetId: root, ownChainStep: true },
+          options
+        );
+  },
+
   restartTerminalOnAccount: (id, account, options) =>
     respawnAgentOnPreset(set, get, id, undefined, { kind: "account", account }, options),
 });
@@ -1804,10 +1825,47 @@ function isPresetStamp(
 }
 
 type PresetRespawnMode =
-  | { kind: "fallback"; originalPresetId: string }
+  /**
+   * `ownChainStep`: a move the assistant made without asking (#17917), which
+   * holds only while the launch's own settings still make it the pane's next
+   * step; otherwise nothing changes and it asks.
+   */
+  | { kind: "fallback"; originalPresetId: string; ownChainStep?: true }
   | { kind: "switch" }
   /** Same preset, only the account changed (#16040). */
   | { kind: "account"; account: AccountSwitchTarget };
+
+/**
+ * The root of the chain a pane would hop along to `presetId` without asking
+ * (#17917), read from this view's own settings the way a usage-limit hop reads
+ * them, or null. Nothing is claimed here: a claim held through a settings read
+ * would swallow a natural exit, and a move that doesn't qualify must leave the
+ * pane as it was.
+ */
+function ownFallbackStepRootNow(get: Get, id: string, presetId: string): string | null {
+  const panel = get().panelsById[id];
+  if (!panel || !isPtyPanel(panel) || !panel.launchAgentId) return null;
+  if (panel.isRestarting || isTerminalRestarting(id) || panel.restoreRecovery) return null;
+  const agentId = panel.launchAgentId;
+  const entry = getAgentSettingsEntrySnapshot(agentId);
+  if (entry === null) return null;
+  const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[agentId];
+  const projectPresets = useProjectPresetsStore.getState().presetsByAgent[agentId];
+  const root = ownFallbackChainRoot(agentId, panel, presetId, {
+    customPresets: entry.customPresets,
+    ccrPresets,
+    projectPresets,
+  });
+  if (root === null) return null;
+  const target = getMergedPreset(
+    agentId,
+    presetId,
+    entry.customPresets,
+    ccrPresets,
+    projectPresets
+  );
+  return target && fallbackHopApproved(id, target.id, presetLaunchContent(target)) ? root : null;
+}
 
 /** The config folder the pane's running Claude launch writes to (#16269), if it can be read. */
 async function readLaunchConfigDir(id: string): Promise<string | undefined> {
@@ -1934,6 +1992,31 @@ async function respawnAgentOnPreset(
       projectPresets,
     });
     const nextPreset = runtimeSettings.preset;
+    if (
+      mode.kind === "fallback" &&
+      mode.ownChainStep === true &&
+      (!nextPreset ||
+        ownFallbackChainRoot(effectiveAgentId, terminal, nextPreset.id, {
+          customPresets: entry.customPresets,
+          ccrPresets,
+          projectPresets,
+        }) !== mode.originalPresetId ||
+        !fallbackHopApproved(id, nextPreset.id, presetLaunchContent(nextPreset)))
+    ) {
+      // The settings changed between the check and this read. Released as it
+      // was claimed: an exit that landed meanwhile went unrecorded, the one
+      // cost of a window this narrow.
+      unmarkTerminalRestarting(id);
+      set((state) =>
+        updateTerminal(state, id, (t) => ({
+          ...t,
+          isRestarting: false,
+          restartError: livePanel.restartError,
+          spawnError: livePanel.spawnError,
+        }))
+      );
+      return { success: false, needsConfirmation: true };
+    }
     // An account switch keeps the pane's preset, so one that can't be found —
     // gone, or a project or CCR preset still loading — refuses the switch
     // before anything is torn down, as a preset switch does. A pane with no

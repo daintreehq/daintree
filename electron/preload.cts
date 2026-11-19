@@ -3451,6 +3451,7 @@ function buildElectronApi(): ElectronAPI {
           delegationOffer?: McpDelegationOffer;
           dispatchDeadlineAt?: number;
           actionsListWalk?: boolean;
+          confirmationCondition?: "next-own-fallback";
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 
@@ -3459,6 +3460,7 @@ function buildElectronApi(): ElectronAPI {
         result: unknown;
         confirmationDecision?: "approved" | "rejected" | "timeout";
         approvalScope?: "once" | "session" | "delegate";
+        authorization?: "skip-preference";
       }) => {
         ipcRenderer.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, payload);
       },

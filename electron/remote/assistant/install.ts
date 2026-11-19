@@ -14,6 +14,7 @@ import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
 import {
   prepareAssistantDelegation,
+  readAssistantChecksNextFallback,
   readAssistantConfirmationsSkipped,
 } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import type { LaneWake } from "../../services/mcp-server/terminalNotify.js";
@@ -53,6 +54,8 @@ declare module "../runtime.js" {
       | "hasCallInFlight"
       | "skipsRelayedDispatch"
       | "relayedDelegation"
+      | "offersNextFallback"
+      | "noteNextFallbackRan"
       | "awaitsNotices"
       | "holdsThrowawayRuns"
       | "holdsLaunchedAgents"
@@ -371,6 +374,8 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     // The same preference, ticked from the dialog that asks (#16752).
     prepareDelegation: (helpSessionId, calledActionId) =>
       prepareAssistantDelegation(helpSessions.getSessionAgent(helpSessionId), calledActionId),
+    checksNextFallback: (helpSessionId, calledActionId) =>
+      readAssistantChecksNextFallback(helpSessions.getSessionAgent(helpSessionId), calledActionId),
     // A host's settings, read and changed by name with no view there (#14167).
     settingsClient: () => getRemoteService("settingsControlClient") ?? null,
     askSettingsApproval: async ({ helpSessionId, ...ask }) => {

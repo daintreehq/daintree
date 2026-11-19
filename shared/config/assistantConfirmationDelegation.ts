@@ -27,6 +27,9 @@ export const ASSISTANT_ACCOUNT_ADD_CONFIRMATION = "agent.addAccount";
 
 export const ASSISTANT_PRESET_MOVE_TOOL = "terminal.restartOnPresetOwned";
 
+/** What main dispatches to the pane's view for {@link ASSISTANT_PRESET_MOVE_TOOL}. */
+export const ASSISTANT_PRESET_MOVE_DELEGATE = "terminal.restartOnPreset";
+
 /**
  * Covers a preset move only to the next step of the chain the pane walks
  * (#17917). Not a tool id: a tick on the tool itself would hand over every
@@ -52,7 +55,7 @@ export const DELEGABLE_ASSISTANT_CONFIRMATIONS: readonly DelegableAssistantConfi
     calledActionId: ASSISTANT_PRESET_MOVE_TOOL,
     label: "Move an agent it launched to the next preset in its fallback chain",
     detail:
-      "Only the next step of a chain on one of your own presets, walked as a usage-limit fallback is and on the same account; any other preset still asks",
+      "Only the next step of a custom preset's fallback chain, walked as a usage-limit fallback walks it and on the same account; any other preset still asks",
   },
   {
     id: ASSISTANT_HOST_SETTINGS_CONFIRMATION,
