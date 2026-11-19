@@ -1206,6 +1206,16 @@ events.on("agent:claude-usage-observed", (payload) => {
   });
 });
 
+events.on("agent:codex-limit-stopped", (payload) => {
+  sendEvent({
+    type: "codex-limit-stopped",
+    terminalId: payload.terminalId,
+    run: payload.run,
+    seq: payload.seq,
+    timestamp: payload.timestamp,
+  });
+});
+
 events.on("agent:fallback-triggered", (payload) => {
   sendEvent({
     type: "agent-fallback-triggered",

@@ -1794,6 +1794,8 @@ export interface IpcEventMap {
 
   // An agent terminal's When done choice changed (#16171); main sends it to every view of that project.
   "terminal-when-done:changed": import("./terminalWhenDone.js").TerminalWhenDoneChange;
+  // An armed Codex pane's continuation at its limit's reset changed (#17909); every view of its project.
+  "codex-limit-continue:changed": import("../codexLimitContinuation.js").CodexLimitContinueChange;
   // A pane's held composer send changed (#16379); this machine's views of its project.
   "composer-hold:changed": import("./composerHold.js").ComposerHoldChange;
   "bulk-worktree-runs:changed": import("./bulkWorktreeRuns.js").BulkWorktreeRunsChanged;

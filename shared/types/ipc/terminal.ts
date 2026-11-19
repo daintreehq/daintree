@@ -97,6 +97,8 @@ export interface TerminalSpawnOptions {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops. */
   originalAgentPresetId?: string;
+  /** Fallback hops the pane has taken from its original preset (#17909: main reads the next one). */
+  fallbackChainIndex?: number;
   /**
    * Handback code minted for this launch's initial prompt (#12488); the
    * instruction is already in `command`. Never persisted.

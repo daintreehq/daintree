@@ -1617,6 +1617,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         agentPresetColor: validatedOptions.agentPresetColor,
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
+        fallbackChainIndex: validatedOptions.fallbackChainIndex,
         handbackCode: validatedOptions.handbackCode,
         // Only the spawn that registered a scheduled run reports for it
         // (#15982), and a launch armed with When done reports for its code.

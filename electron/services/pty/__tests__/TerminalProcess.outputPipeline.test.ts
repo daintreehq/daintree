@@ -1587,7 +1587,7 @@ describe("TerminalProcess Codex limit reset (#17906)", () => {
     });
   const stampOf = (terminal: TerminalProcess) => {
     const answer = terminal.answerCodexLimit({}, terminal.analysisObservedSince());
-    if (!("stamp" in answer)) throw new Error(`expected a stamp, got ${JSON.stringify(answer)}`);
+    if ("reset" in answer) throw new Error(`expected a stamp, got ${JSON.stringify(answer)}`);
     return answer.stamp;
   };
   const codexBucket = (...windows: Array<{ usedPercent: number; resetsAt: number | null }>) => ({
@@ -1614,6 +1614,8 @@ describe("TerminalProcess Codex limit reset (#17906)", () => {
         source: "banner",
         observedAt: stamp.observedAt,
       },
+      // The sighting it is about, so a wait can be tied to it (#17909).
+      stamp,
     });
     expect(JSON.stringify(answer)).not.toMatch(/usage limit|PM/);
     terminal.dispose();
@@ -1647,6 +1649,7 @@ describe("TerminalProcess Codex limit reset (#17906)", () => {
       // Still Thursday's 3:40 PM, long passed: never a known Friday 3:40 PM.
       expect(terminal.answerCodexLimit({ ...sighted, evidence: null }, since)).toEqual({
         reset: { status: "unknown", reason: "late-reading", observedAt: sighted.observedAt },
+        stamp: sighted,
       });
       terminal.dispose();
     }
@@ -1797,6 +1800,252 @@ describe("TerminalProcess Codex limit reset (#17906)", () => {
     expect(terminal.answerCodexLimit({}, terminal.analysisObservedSince())).toEqual({
       reset: { status: "unknown", reason: "no-banner" },
     });
+    terminal.dispose();
+  });
+});
+
+describe("TerminalProcess continuing at a Codex limit's reset (#17909)", () => {
+  const unsubscribers: Array<() => void> = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 10, 19, 15, 0));
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  function collect() {
+    const stops: Array<Record<string, unknown>> = [];
+    const offers: unknown[] = [];
+    unsubscribers.push(
+      events.on("agent:codex-limit-stopped", (payload) => stops.push({ ...payload })),
+      events.on("agent:fallback-triggered", (payload) => offers.push(payload))
+    );
+    return { stops, offers };
+  }
+
+  const BANNER = "■ You’ve hit your usage limit. Try again at 3:40 PM.";
+  /** Codex 0.170 at its stop: the banner, then the composer's tinted band and its footer. */
+  const stopScreen = (footer = "  ? for shortcuts") =>
+    "\x1b[?2004h\x1b[2J\x1b[H• Ran the tests.\r\n\r\n" +
+    `${BANNER}\r\n\r\n` +
+    "\x1b[48;2;30;30;30m\x1b[K\r\n" +
+    "\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[22m\x1b[K\r\n" +
+    "\x1b[K\x1b[0m\r\n" +
+    footer;
+
+  type Internals = {
+    terminalInfo: { ptyProcess: IPty; agentState?: string; waitingReason?: string };
+  };
+  const infoOf = (terminal: TerminalProcess) => (terminal as unknown as Internals).terminalInfo;
+
+  async function stoppedPane({ armed = true, footer }: { armed?: boolean; footer?: string } = {}) {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "codex" });
+    if (armed) terminal.setCodexLimitContinueArmed(true);
+    ptyOnDataCallback!(stopScreen(footer));
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    const write = vi.spyOn(infoOf(terminal).ptyProcess, "write");
+    const typed = () => write.mock.calls.map(([data]) => data).join("");
+    return { terminal, seen, typed };
+  }
+
+  const stopOf = (seen: { stops: Array<Record<string, unknown>> }) => {
+    const { run, seq } = seen.stops[0] as { run: string; seq: number };
+    return { run, seq };
+  };
+
+  async function continueAt(terminal: TerminalProcess, stop: { run: string; seq: number }) {
+    const result = terminal.continueAtCodexLimit(stop);
+    await vi.advanceTimersByTimeAsync(2_000);
+    return result;
+  }
+
+  it("reports an armed pane's settled stop once, as its process and sighting alone", async () => {
+    const { terminal, seen } = await stoppedPane();
+    expect(seen.stops).toEqual([
+      { terminalId: "t1", run: expect.any(String), seq: 1, timestamp: expect.any(Number) },
+    ]);
+    // Sitting there, or repainted, is the same stop.
+    ptyOnDataCallback!(stopScreen());
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(seen.stops).toHaveLength(1);
+    // A pane launched with no preset never offers a fallback.
+    expect(seen.offers).toEqual([]);
+    terminal.dispose();
+  });
+
+  it("reports nothing for an unarmed pane, and the stop already on screen once armed", async () => {
+    const { terminal, seen } = await stoppedPane({ armed: false });
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(seen.stops).toEqual([]);
+
+    terminal.setCodexLimitContinueArmed(true);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen.stops).toHaveLength(1);
+    terminal.dispose();
+  });
+
+  it("types `continue` into a pane still where its limit left it", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "continued",
+      line: "continue",
+    });
+    expect(typed()).toBe("continue\r");
+    terminal.dispose();
+  });
+
+  it("resumes a /goal run whose footer says it hit the limit", async () => {
+    const { terminal, seen, typed } = await stoppedPane({
+      footer: "  Goal hit usage limits (/goal resume)",
+    });
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "continued",
+      line: "/goal resume",
+    });
+    expect(typed()).toBe("/goal resume\r");
+    terminal.dispose();
+  });
+
+  it("types nothing after any input since the stop", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    terminal.write("x");
+    terminal.write("\x7f");
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).not.toContain("continue");
+    terminal.dispose();
+  });
+
+  it("counts an Enter alone, sent through the input lane, as input since the stop", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    terminal.submit("\r");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).not.toContain("continue");
+    terminal.dispose();
+  });
+
+  it("keeps what happened since the stop when the same banner comes back after a while", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    // A transcript opened over the stop for a while, then closed.
+    terminal.write("\x14");
+    ptyOnDataCallback!("\x1b[2J\x1b[H  Transcript\r\n");
+    await vi.advanceTimersByTimeAsync(10_000);
+    terminal.write("q");
+    ptyOnDataCallback!(stopScreen());
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen.stops).toHaveLength(2);
+    const redisplayed = seen.stops[1] as { run: string; seq: number };
+    expect(await continueAt(terminal, { run: redisplayed.run, seq: redisplayed.seq })).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).toBe("\x14q");
+    terminal.dispose();
+  });
+
+  it("starts afresh at the same banner when a new turn ran into it", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    terminal.write("try again\r");
+    ptyOnDataCallback!("\x1b[2J\x1b[H› try again\r\n\r\n• Working (2s)\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!(
+      "\x1b[2J\x1b[H› try again\r\n\r\n• Looked at the failing test.\r\n\r\n" +
+        `${BANNER}\r\n\r\n` +
+        "\x1b[48;2;30;30;30m\x1b[K\r\n" +
+        "\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[22m\x1b[K\r\n" +
+        "\x1b[K\x1b[0m\r\n  ? for shortcuts"
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(seen.stops).toHaveLength(2);
+    const next = seen.stops[1] as { run: string; seq: number };
+    expect(await continueAt(terminal, { run: next.run, seq: next.seq })).toEqual({
+      status: "continued",
+      line: "continue",
+    });
+    expect(typed()).toBe("try again\rcontinue\r");
+    terminal.dispose();
+  });
+
+  it("withholds the Enter of a line disarmed while it waits for it", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const result = terminal.continueAtCodexLimit(stopOf(seen));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(typed()).toBe("continue");
+    terminal.setCodexLimitContinueArmed(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await result).toEqual({ status: "skipped", reason: "not-delivered" });
+    expect(typed()).toBe("continue");
+    terminal.dispose();
+  });
+
+  it("refuses a line asked for under an arming that was turned off and on again", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const result = terminal.continueAtCodexLimit(stopOf(seen));
+    terminal.setCodexLimitContinueArmed(false);
+    terminal.setCodexLimitContinueArmed(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await result).toEqual({ status: "skipped", reason: "disarmed" });
+    expect(typed()).toBe("");
+    terminal.dispose();
+  });
+
+  it("types nothing once a choice dialog showed after the stop, though it has gone", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const info = infoOf(terminal);
+    info.agentState = "waiting";
+    info.waitingReason = "approval";
+    ptyOnDataCallback!(stopScreen());
+    await vi.advanceTimersByTimeAsync(250);
+    info.waitingReason = "error";
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "skipped",
+      reason: "dialog-since",
+    });
+    expect(typed()).toBe("");
+    terminal.dispose();
+  });
+
+  it("types nothing for another process's stop, or once disarmed", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const stop = stopOf(seen);
+    expect(await continueAt(terminal, { ...stop, run: "an-earlier-process" })).toEqual({
+      status: "skipped",
+      reason: "process-changed",
+    });
+    terminal.setCodexLimitContinueArmed(false);
+    expect(await continueAt(terminal, stop)).toEqual({ status: "skipped", reason: "disarmed" });
+    expect(typed()).toBe("");
+    terminal.dispose();
+  });
+
+  it("types nothing once something was printed below the banner", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    ptyOnDataCallback!(
+      "\x1b[2J\x1b[H" +
+        `${BANNER}\r\n\r\n• Retrying the request\r\n\r\n` +
+        "\x1b[48;2;30;30;30m\x1b[K\r\n" +
+        "\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[22m\x1b[K\r\n" +
+        "\x1b[K\x1b[0m\r\n  ? for shortcuts"
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "skipped",
+      reason: "banner-not-last",
+    });
+    expect(typed()).toBe("");
     terminal.dispose();
   });
 });

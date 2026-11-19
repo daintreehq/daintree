@@ -153,6 +153,10 @@ export const CHANNEL_LEASE_POLICY = {
   "codex:list-subagents": "free",
   "codex:match-restore-sessions": "free",
   "codex:read-quota": "free",
+  "codex-limit-continue:changed": "free",
+  "codex-limit-continue:list": "free",
+  // The handler holds arming to the project's driver, as for a submit (#17909).
+  "codex-limit-continue:set": "handler",
   "codex:refresh-quota": "free",
   "codex:read-context-usage": "free",
   "codex:read-subagent-transcript": "free",

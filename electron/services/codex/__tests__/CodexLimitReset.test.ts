@@ -7,6 +7,7 @@ import type {
 } from "../../../../shared/types/codexLimitReset.js";
 import {
   readCodexLimitReset,
+  readCodexLimitStop,
   type CodexLimitResetDeps,
   type CodexLimitTerminalRead,
 } from "../CodexLimitReset.js";
@@ -140,5 +141,38 @@ describe("readCodexLimitReset", () => {
     expect(await readCodexLimitReset("t1", fake)).toEqual(known);
     expect(fake.readEvidence).toHaveBeenCalledWith(HOME);
     expect(reads[1]).toEqual(["t1", { seq: 1, run: "r1", evidence: null }]);
+  });
+});
+
+describe("readCodexLimitStop (#17909)", () => {
+  const stamp = { seq: 4, run: "r1", observedAt: 1_000 };
+
+  it("names the sighting a resolved answer is about", async () => {
+    const { fake } = deps([{ stamp }, { reset: known, stamp }]);
+    expect(await readCodexLimitStop("t1", fake)).toEqual({ reset: known, stamp });
+  });
+
+  it("names the sighting of an answer given outright", async () => {
+    const { fake } = deps([{ reset: known, stamp }]);
+    expect(await readCodexLimitStop("t1", fake)).toEqual({ reset: known, stamp });
+  });
+
+  it("names the replacement when the banner changed between the reads", async () => {
+    const next = { seq: 5, run: "r1", observedAt: 1_200 };
+    const { fake } = deps([
+      { stamp },
+      { reset: { status: "unknown", reason: "banner-changed" } },
+      { stamp: next },
+      { reset: known, stamp: next },
+    ]);
+    expect(await readCodexLimitStop("t1", fake)).toEqual({ reset: known, stamp: next });
+  });
+
+  it("names none when no banner answered", async () => {
+    const { fake } = deps(["gone"]);
+    expect(await readCodexLimitStop("t1", fake)).toEqual({
+      reset: { status: "unknown", reason: "no-banner" },
+      stamp: null,
+    });
   });
 });

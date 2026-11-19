@@ -218,6 +218,8 @@ export interface TerminalPublicState {
   agentPresetColor?: string;
   /** User-originally-selected preset ID; immutable across fallback hops. */
   originalAgentPresetId?: string;
+  /** Fallback hops taken from the original preset, as the launch said (#17909). */
+  fallbackChainIndex?: number;
   /**
    * Launch generation adopted from Main's lifecycle ledger at spawn. Echoed on
    * `agent-session-captured` so Main can journal exactly-once per incarnation.

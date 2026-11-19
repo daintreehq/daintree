@@ -139,6 +139,7 @@ import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.
 import { buildAgentUsagePreloadBindings } from "./ipc/handlers/agentUsage.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildTerminalWhenDonePreloadBindings } from "./ipc/handlers/terminalWhenDone.preload.js";
+import { buildCodexLimitContinuePreloadBindings } from "./ipc/handlers/codexLimitContinue.preload.js";
 import { buildComposerHoldPreloadBindings } from "./ipc/handlers/composerHold.preload.js";
 import { buildBulkWorktreeRunsPreloadBindings } from "./ipc/handlers/bulkWorktreeRuns.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
@@ -2124,6 +2125,14 @@ function buildElectronApi(): ElectronAPI {
       ) => {
         ipcRenderer.send(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY, reply);
       },
+    },
+
+    // Continuing a Codex pane once its usage limit resets (#17909)
+    codexLimitContinue: {
+      ...buildCodexLimitContinuePreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (change: IpcEventMap["codex-limit-continue:changed"]) => void) =>
+        _typedOn(CHANNELS.CODEX_LIMIT_CONTINUE_CHANGED, callback),
     },
 
     // A pane composer's send held while its agent works (#16379)
