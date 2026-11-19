@@ -258,10 +258,11 @@ interface BoxRow {
 function findBox(screen: ScreenRows, rule: CompiledRule): BoxRow[] | null {
   candidates: for (let i = screen.rows.length - 1; i > 0; i--) {
     const match = rule.promptRow.exec(screen.plain(i));
-    if (match === null || !rule.border.test(screen.plain(i - 1))) continue;
+    if (match === null) continue;
     if (rule.echoGlyphDim && screen.read(i).cells.find((cell) => !isBlank(cell))?.dim) continue;
     const skip = Array.from(match[0]).length;
     if (rule.band) return bandBox(screen, rule, i, skip);
+    if (!rule.border.test(screen.plain(i - 1))) continue;
     for (let r = i + 1; r < screen.rows.length && r <= i + MAX_BOX_ROWS; r++) {
       const row = screen.plain(r);
       if (rule.border.test(row)) return boxRows(screen, i, r - 1, skip);
@@ -281,6 +282,7 @@ function findBox(screen: ScreenRows, rule: CompiledRule): BoxRow[] | null {
  */
 function bandBox(screen: ScreenRows, rule: CompiledRule, i: number, skip: number): BoxRow[] | null {
   const tint = screen.read(i).bg;
+  if (!rule.border.test(screen.plain(i - 1))) return null;
   if (tint === "" || screen.read(i - 1).bg !== tint) return null;
   for (let r = i + 1; r < screen.rows.length && r <= i + MAX_BOX_ROWS; r++) {
     const row = screen.plain(r);

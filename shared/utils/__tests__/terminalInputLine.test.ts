@@ -259,9 +259,17 @@ describe("observeInputLine in a band", () => {
     expect(observeInputLine(serialized, codex).inputLine).toEqual({ state: "unknown", text: "" });
   });
 
-  it("never falls back to an older band when the lowest one's frame fails", () => {
+  it.each([
+    [
+      "no blank row closing it",
+      `${TINT}${PAD}\r\n${GLYPH} add a test\x1b[50X\r\n  more\x1b[50X\r\n${FOOTER}`,
+    ],
+    [
+      "a written row where its opening blank row belongs",
+      `${TINT}  redraw\x1b[50X\r\n${GLYPH} add a test\x1b[50X\r\n${PAD}\r\n${FOOTER}`,
+    ],
+  ])("never falls back to an older band when the lowest one has %s", (_, live) => {
     const stale = `${TINT}${PAD}\r\n${GLYPH} \x1b[2mAsk Codex to do anything\x1b[22m\x1b[50X\r\n${PAD}\r\n\x1b[0m• Done.`;
-    const live = `${TINT}${PAD}\r\n${GLYPH} add a test\x1b[50X\r\n  more\x1b[50X\r\n${FOOTER}`;
     expect(observeInputLine(`${stale}\r\n${live}`, codex).inputLine.state).toBe("unknown");
     expect(observeInputLine(`${stale}\r\n${FOOTER}`, codex).inputLine.state).toBe("empty");
   });
