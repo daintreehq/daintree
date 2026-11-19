@@ -335,7 +335,6 @@ async function dispatchAction(
     };
   }
   const deadline = hostDeadline(request.holdBudgetMs, receivedAt);
-  const service = await loadMcpServerService();
   // Otherwise never pre-confirmed: a confirm-gated action raises this Shell's
   // own dialog, naming the host that asked, exactly as a local MCP client's
   // would. The origin stays `external` either way: the skip rides on
@@ -344,6 +343,7 @@ async function dispatchAction(
   // Bound to the call out when this arrived, before anything awaits (#16752):
   // one that settles meanwhile can't pass its place to a call that replaces it.
   const offered = hostSkip ? null : relayedCallDelegation(hostId, webContentsId, request);
+  const service = await loadMcpServerService();
   const ownSkip = !hostSkip && (await skipsOwnRelayedCall(service, hostId, webContentsId, request));
   const skipPreference = hostSkip || ownSkip;
   const delegation = skipPreference ? null : offered;

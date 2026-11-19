@@ -326,6 +326,32 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
+  it("stops a tick offered before a hand change from landing (#16752)", async () => {
+    const { prepareAssistantDelegation } =
+      await import("../../../services/mcp-server/assistantConfirmationsPreference.js");
+    let stored: Partial<HelpAssistantSettings> = {
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["host.settings"],
+    };
+    storeMock.get.mockImplementation(((key: string) =>
+      key === "helpAssistant" ? stored : undefined) as never);
+    storeMock.set.mockImplementation(((_key: string, value: Partial<HelpAssistantSettings>) => {
+      stored = value;
+    }) as never);
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    const unchanged = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    await handler(null, { daintreeConfirmations: "ask-except" });
+    expect(unchanged?.commit()).toBe(true);
+
+    const revoked = prepareAssistantDelegation(null, "worktree.retireOwned");
+    await handler(null, { daintreeConfirmationsExcept: ["worktree.deleteOwned"] });
+    expect(revoked?.commit()).toBe(false);
+    expect(stored.daintreeConfirmationsExcept).toEqual(["worktree.deleteOwned"]);
+    storeMock.set.mockReset();
+  });
+
   it("reads a stored list back as the delegable ids alone (#16752)", async () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;

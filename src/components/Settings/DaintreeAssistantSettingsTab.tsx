@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { FactSeparator } from "@/components/ui/FactSeparator";
@@ -404,6 +404,12 @@ export function DaintreeAssistantSettingsTab() {
   // never on this tab's copy: the confirm dialog can change the list while
   // Settings is open (#16752), dropping ticks a stale copy would send back.
   const exceptWritesRef = useRef<Promise<void>>(Promise.resolve());
+  // The newest save, so a queued tick that fails rolls back to what the tab
+  // shows by then rather than what it showed when it was clicked.
+  const persistRef = useRef(persist);
+  useEffect(() => {
+    persistRef.current = persist;
+  });
   const toggleDaintreeConfirmationExcept = (id: string, on: boolean) => {
     const fallback = delegatedConfirmations ?? [];
     exceptWritesRef.current = exceptWritesRef.current
@@ -420,7 +426,7 @@ export function DaintreeAssistantSettingsTab() {
         const next = new Set(stored);
         if (on) next.add(id);
         else next.delete(id);
-        await persist({
+        await persistRef.current({
           daintreeConfirmationsExcept: DELEGABLE_ASSISTANT_CONFIRMATIONS.map(
             (entry) => entry.id
           ).filter((candidate) => next.has(candidate)),

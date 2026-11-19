@@ -18,9 +18,40 @@ import { createLogger } from "../../utils/logger.js";
 
 const logger = createLogger("main:assistantConfirmations");
 
+function asMode(value: unknown): HelpAssistantDaintreeConfirmations {
+  return isHelpAssistantDaintreeConfirmations(value) ? value : "inherit";
+}
+
 function readMode(): HelpAssistantDaintreeConfirmations {
-  const stored = store.get("helpAssistant")?.daintreeConfirmations;
-  return isHelpAssistantDaintreeConfirmations(stored) ? stored : "inherit";
+  return asMode(store.get("helpAssistant")?.daintreeConfirmations);
+}
+
+/**
+ * Counts the changes the person makes to Daintree confirmations by hand, in
+ * Settings or the dialog's own mode control, and never a hand-over from the
+ * dialog (#16752). A tick offered before one of them writes nothing: an
+ * approval reports back only once its action has run, by when the person may
+ * have unticked that action or chosen another mode, and that later choice stands.
+ */
+let handEdits = 0;
+
+type ConfirmationFields = {
+  daintreeConfirmations?: unknown;
+  daintreeConfirmationsExcept?: unknown;
+};
+
+/** Hears a settings write the person made, after it lands. */
+export function noteAssistantConfirmationsWritten(
+  before: ConfirmationFields | undefined,
+  after: ConfirmationFields | undefined
+): void {
+  const list = (value: unknown) => sanitizeDelegatedConfirmations(value).join("\n");
+  if (
+    asMode(before?.daintreeConfirmations) !== asMode(after?.daintreeConfirmations) ||
+    list(before?.daintreeConfirmationsExcept) !== list(after?.daintreeConfirmationsExcept)
+  ) {
+    handEdits += 1;
+  }
 }
 
 /**
@@ -60,9 +91,10 @@ export interface PreparedAssistantDelegation {
   readonly offer: McpDelegationOffer;
   /**
    * Hands the action over, read again now: false, writing nothing, when the
+   * person changed Daintree confirmations by hand since the offer, when the
    * mode now skips everything, so ticking the box can never start asking
-   * about other actions, or has moved off the one the offer was worded for
-   * to anything but "Ask, except for…".
+   * about other actions, or when it has moved off the one the offer was
+   * worded for to anything but "Ask, except for…".
    */
   commit(): boolean;
 }
@@ -93,20 +125,22 @@ export function prepareAssistantDelegation(
   }
   if (policy.skipsAll || policy.delegated.has(calledActionId)) return null;
   const switchesMode = mode !== "ask-except";
+  const editsAtOffer = handEdits;
   return {
     offer: {
       label: entry.label,
       detail: entry.detail,
       ...(switchesMode ? { switchesMode: true as const } : {}),
     },
-    commit: () => commitAssistantDelegation(sessionAgentId, calledActionId, mode),
+    commit: () => commitAssistantDelegation(sessionAgentId, calledActionId, mode, editsAtOffer),
   };
 }
 
 function commitAssistantDelegation(
   sessionAgentId: string | null,
   calledActionId: string,
-  offeredMode: HelpAssistantDaintreeConfirmations
+  offeredMode: HelpAssistantDaintreeConfirmations,
+  editsAtOffer: number
 ): boolean {
   try {
     const mode = readMode();
@@ -115,6 +149,7 @@ function commitAssistantDelegation(
     // the person ticked. Any other mode must still be the one the offer named,
     // so a newer choice made while the dialog was up stands.
     if (
+      handEdits !== editsAtOffer ||
       (mode !== "ask-except" && mode !== offeredMode) ||
       readAssistantConfirmationPolicy(sessionAgentId).skipsAll
     ) {

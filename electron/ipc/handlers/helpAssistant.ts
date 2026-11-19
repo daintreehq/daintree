@@ -19,6 +19,7 @@ import { hasShellMetachar } from "../../../shared/utils/shellEscape.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { isHelpAssistantDaintreeConfirmations as isValidDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { sanitizeDelegatedConfirmations } from "../../../shared/config/assistantConfirmationDelegation.js";
+import { noteAssistantConfirmationsWritten } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import { applyModelIdPatch, sanitizeModelIdMap } from "../../utils/helpAssistantModels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 import type {
@@ -271,7 +272,11 @@ export const helpAssistantNamespace = defineIpcNamespace({
           // One write for the whole patch: a set per field rewrote and fsynced
           // all of config.json once per field. Merged into what's stored so
           // fields the settings UI never sends (identities, agentId) survive.
-          store.set("helpAssistant", { ...store.get("helpAssistant"), ...updates });
+          const previous = store.get("helpAssistant");
+          const next = { ...previous, ...updates };
+          store.set("helpAssistant", next);
+          // A tick offered in a confirm dialog before this change doesn't land (#16752).
+          noteAssistantConfirmationsWritten(previous, next);
           notifySettingsChanged();
         }
 

@@ -15,6 +15,7 @@ vi.mock("../../../store.js", () => ({
 
 import { store } from "../../../store.js";
 import {
+  noteAssistantConfirmationsWritten,
   prepareAssistantDelegation,
   readAssistantConfirmationsSkipped,
 } from "../assistantConfirmationsPreference.js";
@@ -172,6 +173,33 @@ describe("the confirm dialog's hand-over (#16752)", () => {
     };
     expect(prepareAssistantDelegation("claude", "host.settings")).toBeNull();
     expect(prepareAssistantDelegation(null, "host.settings")).not.toBeNull();
+  });
+
+  // An approval reports back once its action has run: an untick, or another
+  // mode, chosen by hand meanwhile is the newer choice and stands.
+  it("writes nothing once the person changed confirmations by hand after the offer", () => {
+    setAssistant({ daintreeConfirmations: "always-ask" });
+    const first = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    const second = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    expect(first?.commit()).toBe(true);
+
+    const before = { ...storedAssistant() };
+    storedAssistant().daintreeConfirmationsExcept = [];
+    noteAssistantConfirmationsWritten(before, storedAssistant());
+
+    expect(second?.commit()).toBe(false);
+    expect(storedAssistant().daintreeConfirmationsExcept).toEqual([]);
+    expect(readAssistantConfirmationsSkipped(null, "worktree.deleteOwned")).toBe(false);
+  });
+
+  it("counts only a write that changes the mode or the list", () => {
+    setAssistant({ daintreeConfirmations: "ask-except", daintreeConfirmationsExcept: [] });
+    const prepared = prepareAssistantDelegation(null, "host.settings");
+    noteAssistantConfirmationsWritten(
+      { daintreeConfirmations: "ask-except", daintreeConfirmationsExcept: [] },
+      { daintreeConfirmations: "ask-except", daintreeConfirmationsExcept: ["worktree.delete"] }
+    );
+    expect(prepared?.commit()).toBe(true);
   });
 
   it("writes nothing when the followed agent started skipping while the dialog was up", () => {
