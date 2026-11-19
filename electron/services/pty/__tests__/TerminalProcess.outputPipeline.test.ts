@@ -579,8 +579,8 @@ describe("TerminalProcess update-installed observation (#17905)", () => {
     const seen = collect();
     const terminal = createTerminal({ launchAgentId: "claude" });
 
-    // Drawn before detection caught up, then nothing more: a quiet pane.
-    ptyOnDataCallback!(footer());
+    // Claude's screen, drawn before detection caught up, then nothing more.
+    ptyOnDataCallback!(`${"─".repeat(79)}\r\n❯ \r\n${"─".repeat(79)}\r\n${footer()}`);
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toEqual([]);
 
@@ -588,6 +588,22 @@ describe("TerminalProcess update-installed observation (#17905)", () => {
 
     expect(terminal.getInfo().updateInstalled?.namesRestart).toBe(true);
     expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("doesn't credit footer text a shell left on screen to a Claude detected before it draws", async () => {
+    const seen = collect();
+    const terminal = createTerminal();
+
+    ptyOnDataCallback!(
+      "$ tail notes.txt\r\n  ✔ Update installed · /restart to apply\r\n$ claude\r\n"
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    detect(terminal, "claude");
+
+    expect(seen).toEqual([]);
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
 
     terminal.dispose();
   });

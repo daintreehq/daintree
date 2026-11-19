@@ -82,13 +82,14 @@ export function noteUpdateFooter(
  * caught up after Claude drew the footer reads it on its next frame.
  */
 export function clearUpdateInstalled(terminal: TerminalInfo, now: number): void {
+  // The run is over, so its process with it, observed or not: the next run's
+  // first pass names its own rather than reading as a replacement.
+  if (terminal.updateFooterSighting) terminal.updateFooterSighting.pid = undefined;
   if (terminal.updateInstalled === undefined) return;
   const sighting = sightingOf(terminal);
   sighting.visible = false;
   sighting.absentSince = null;
   sighting.fenced = true;
-  // The run is over, so its process with it: the next run's first pass names its own.
-  sighting.pid = undefined;
   terminal.updateInstalled = undefined;
   publish(terminal, null, now);
 }

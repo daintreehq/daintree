@@ -541,6 +541,9 @@ export function setupLifecycleListeners(): DisposableStore {
                 flowStatus: undefined,
                 flowStatusTimestamp: undefined,
                 heldDurationMs: undefined,
+                // The run that showed the footer ended with its process, even
+                // one whose host died before it could say so (#17905).
+                updateInstalled: undefined,
               },
             },
           };

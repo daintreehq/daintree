@@ -92,8 +92,9 @@ describe("update-installed listener (#17905)", () => {
     expect(observation()).toBeUndefined();
   });
 
-  it("leaves a pane mid-restart alone", () => {
+  it("leaves a pane mid-restart alone, without marking it against a host read", () => {
     usePanelStore.setState({ panelsById: { t1: pane({ isRestarting: true }) }, panelIds: ["t1"] });
+    const mark = updateInstalledEventMark();
 
     emit("agent:update-installed-changed", {
       terminalId: "t1",
@@ -102,6 +103,7 @@ describe("update-installed listener (#17905)", () => {
     });
 
     expect(observation()).toBeUndefined();
+    expect(updateInstalledChangedSince("t1", mark)).toBe(false);
   });
 
   it("applies an event that beat its pane in once the pane arrives", () => {

@@ -1,5 +1,6 @@
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import {
   noteUpdateInstalledEvent,
   resetUpdateInstalledEvents,
@@ -75,10 +76,14 @@ export function setupUpdateInstalledListeners(): DisposableStore {
     toDisposable(
       window.electron.events.on("agent:update-installed-changed", (payload) => {
         if (!isPayload(payload)) return;
-        noteUpdateInstalledEvent(payload.terminalId);
         const state = usePanelStore.getState();
-        if (state.panelsById[payload.terminalId]) {
+        const panel = state.panelsById[payload.terminalId];
+        if (panel) {
           unclaimed.delete(payload.terminalId);
+          // A pane mid-restart drops it, so it mustn't stop a host read from
+          // repairing the pane should the restart fail.
+          if (isPtyPanel(panel) && panel.isRestarting) return;
+          noteUpdateInstalledEvent(payload.terminalId);
           state.setUpdateInstalled(payload.terminalId, payload.updateInstalled ?? undefined);
           return;
         }

@@ -140,11 +140,6 @@ export function setupBackendHealthListeners(): DisposableStore {
         // won't re-emit it, so a paused-at-crash panel would stay "Paused" (#9899).
         clearFlowStateOnRecovery();
 
-        // Likewise every update footer the crashed host observed (#17905): the
-        // runs it belonged to are gone, and the new records carry none.
-        const recovered = usePanelStore.getState();
-        for (const id of recovered.panelIds) recovered.setUpdateInstalled(id, undefined);
-
         // Reset all xterm instances to fix white text
         peekTerminalService()?.handleBackendRecovery();
 

@@ -80,6 +80,32 @@ describe("scanClaudeUpdateFooter", () => {
     expect(scan(frame(footer("  ? for shortcuts", notice)))).toEqual({ namesRestart: false });
   });
 
+  it("reads nothing without the composer in view when asked to", () => {
+    const shell = ["$ cat notes.txt", "  ✔ Update installed · /restart to apply"];
+    expect(scanClaudeUpdateFooter(shell, COLS, { underComposer: true })).toBeNull();
+    expect(scanClaudeUpdateFooter(shell, COLS)).toEqual({ namesRestart: true });
+    expect(
+      scanClaudeUpdateFooter(
+        frame(footer("  ? for shortcuts", "✔ Update installed · Restart to update")),
+        COLS,
+        {
+          underComposer: true,
+        }
+      )
+    ).toEqual({ namesRestart: false });
+  });
+
+  it("reads a wide pane's long rule-and-text rows in linear time", () => {
+    // One pattern with overlapping repeats took seconds on a row like this.
+    const wide = 2_000;
+    const row = `${"─".repeat(wide - 10)} not rule`;
+    const lines = Array.from({ length: 12 }, () => row);
+    lines.push("  ✔ Update installed · /restart to apply");
+    const started = performance.now();
+    expect(scanClaudeUpdateFooter(lines, wide)).toEqual({ namesRestart: true });
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it("ignores a footer quoted in the transcript above the composer", () => {
     const lines = [
       "⏺ The footer reads:",

@@ -246,24 +246,3 @@ describe("onBackendReady — stale flow state cleared on host recovery (#9899)",
     expect(usePanelStore.getState().panelsById["term-1"]).toBe(clean);
   });
 });
-
-describe("onBackendReady — update footers dropped on host recovery (#17905)", () => {
-  it("clears every pane's observation: the runs it belonged to died with the host", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "term-1": {
-          ...ptyBase,
-          id: "term-1",
-          isVisible: true,
-          runtimeStatus: "running",
-          updateInstalled: { observedAt: 1_000, namesRestart: true },
-        },
-      },
-      panelIds: ["term-1"],
-    });
-
-    getBackendReadyHandler()();
-
-    expect(getPanel("term-1")?.updateInstalled).toBeUndefined();
-  });
-});

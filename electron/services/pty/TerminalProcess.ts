@@ -2138,7 +2138,11 @@ export class TerminalProcess {
    * Anything else ends the observation, so a shell or another CLI taking the
    * pane clears it on its first frame.
    */
-  private observeUpdateFooter(lines: readonly string[], now: number): void {
+  private observeUpdateFooter(
+    lines: readonly string[],
+    now: number,
+    options?: { underComposer?: boolean }
+  ): void {
     const t = this.terminalInfo;
     const cols = readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined;
     if (t.detectedAgentId !== "claude" || !this.isAgentLive || this.samplingFinalFrame) {
@@ -2149,7 +2153,7 @@ export class TerminalProcess {
       }
       return;
     }
-    noteUpdateFooter(t, scanClaudeUpdateFooter(lines, cols), now);
+    noteUpdateFooter(t, scanClaudeUpdateFooter(lines, cols, options), now);
   }
 
   /**
@@ -2302,10 +2306,14 @@ export class TerminalProcess {
     const before = this.terminalInfo.detectedAgentId;
     runHandleAgentDetection(this.agentDetectionHost(), result, spawnedAt);
     // A quiet pane may already show the footer from before detection caught
-    // up (#17905); read the screen now rather than wait for output.
+    // up (#17905); read the screen now rather than wait for output. Only under
+    // Claude's composer: the screen may still be what the shell left before
+    // Claude's first frame reached the mirror.
     if (before !== "claude" && this.terminalInfo.detectedAgentId === "claude") {
       const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
-      this.observeUpdateFooter(this.analysis.getViewportLines(rows), Date.now());
+      this.observeUpdateFooter(this.analysis.getViewportLines(rows), Date.now(), {
+        underComposer: true,
+      });
     }
   }
 

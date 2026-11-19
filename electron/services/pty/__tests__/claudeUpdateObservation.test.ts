@@ -160,6 +160,16 @@ describe("claudeUpdateObservation", () => {
     expect(published.at(-1)?.updateInstalled).toBeNull();
   });
 
+  it("forgets the last run's process at a boundary even with nothing observed", () => {
+    // Run A ended unobserved; run B's footer is read before a pass names B.
+    noteUpdateFooterProcess(terminal, 4242, 1_000);
+    clearUpdateInstalled(terminal, 2_000);
+    noteUpdateFooter(terminal, SLASH, 3_000);
+    noteUpdateFooterProcess(terminal, 5151, 4_000);
+
+    expect(terminal.updateInstalled).toEqual({ observedAt: 3_000, namesRestart: true });
+  });
+
   it("keeps the observation while passes name the same process", () => {
     noteUpdateFooterProcess(terminal, 4242, 1_000);
     noteUpdateFooter(terminal, SLASH, 2_000);
