@@ -55,6 +55,30 @@ describe("describeAgentUsage", () => {
     expect(line.detail[2]).toBe("Read from Codex 1m ago");
   });
 
+  it("names a default login by the name its own host gave it, and an account's reading never (#17080)", () => {
+    const named = describeAgentUsage(
+      { ...codex({ defaultLoginName: "Work" }), hostId: "h1", hostName: "Studio" },
+      "Codex",
+      NOW
+    );
+    expect(named.text).toMatch(/^Codex 82% · Work · Studio/);
+    expect(named.detail[1]).toBe("Work · default login on Studio");
+    const aliased = describeAgentUsage(
+      claude({ defaultLoginName: "Home", accountNames: ["Personal"] }),
+      "Claude",
+      NOW
+    );
+    expect(aliased.text).toBe("Claude 40% · Home, Personal");
+    expect(aliased.detail[1]).toBe("Home · default login · Personal");
+    const account = describeAgentUsage(
+      codex({ isDefault: false, accountNames: ["Lab"], defaultLoginName: "Work" }),
+      "Codex",
+      NOW
+    );
+    expect(account.text).toMatch(/^Codex 82% · Lab$/);
+    expect(account.detail[1]).toBe("Lab");
+  });
+
   it("names the account and the host a reading is from", () => {
     const line = describeAgentUsage(
       {

@@ -3281,6 +3281,16 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       }
     });
 
+    it("names the default login as the user named it (#17080)", () => {
+      mockAgentSettings = {
+        agents: { claude: { accounts: [COMPANY, PERSONAL], defaultLoginName: "Home" } },
+      };
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      expect(accountRows(container)[0]?.textContent).toContain("Home · default login");
+    });
+
     describe("quota headroom (#16407)", () => {
       beforeEach(() => {
         headroomHook.calls.length = 0;

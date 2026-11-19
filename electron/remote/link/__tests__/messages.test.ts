@@ -236,6 +236,28 @@ describe("link messages", () => {
     expect(() => hostSummary({ agentUsage: Array.from({ length: 17 }, () => codex) })).toThrow();
   });
 
+  it("carries a host's name for its default login, and a reading from a host that sends none (#17080)", () => {
+    const named = {
+      agentId: "claude",
+      accountNames: [],
+      isDefault: true,
+      defaultLoginName: "Work",
+      window: "weekly limit",
+      statement: "approaching",
+      usedPercent: null,
+      resetsAt: null,
+      observedAt: 20,
+    };
+    const { defaultLoginName: _name, ...unnamed } = named;
+    expect(hostSummary({ agentUsage: [named, unnamed] }).agentUsage).toEqual([named, unnamed]);
+    for (const bad of [
+      { ...named, defaultLoginName: 7 },
+      { ...named, defaultLoginName: "x".repeat(257) },
+    ]) {
+      expect(hostSummary({ agentUsage: [bad, unnamed] }).agentUsage).toEqual([unnamed]);
+    }
+  });
+
   it("carries a summary's timing, and one from a host that sends none (#14462)", () => {
     const timed = hostSummary({ timing: { sampleAgeMs: 120, afterPing: 4 } }) as HostSummaryFrame;
     expect(timed.timing).toEqual({ sampleAgeMs: 120, afterPing: 4 });

@@ -56,6 +56,20 @@ describe("shellClockOffset and onShellClock", () => {
     expect(onShellClock({ ...codex, observedAt: 4_940_000 }, offset).observedAt).toBe(4_928_000);
   });
 
+  it("keeps a host's name for its default login only on a default reading, made safe to show (#17080)", () => {
+    const defaultReading: AgentUsageReading = { ...codex, isDefault: true, accountNames: [] };
+    expect(
+      onShellClock({ ...defaultReading, defaultLoginName: "Work\u202e\u0007Lab " }, 0)
+        .defaultLoginName
+    ).toBe("Work Lab");
+    expect(onShellClock({ ...defaultReading, defaultLoginName: "\u200b\u0001" }, 0)).not.toHaveProperty(
+      "defaultLoginName"
+    );
+    expect(onShellClock({ ...codex, defaultLoginName: "Work" }, 0)).not.toHaveProperty(
+      "defaultLoginName"
+    );
+  });
+
   it("takes the host's own times when a summary came with no receipt", () => {
     expect(shellClockOffset({ sampledAt: 5_000_000 }, null)).toBe(0);
   });

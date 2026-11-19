@@ -438,3 +438,134 @@ describe("AgentAccountsSection (#16040)", () => {
     });
   });
 });
+
+describe("naming the default login and renaming accounts (#17080)", () => {
+  function editField(rename: HTMLElement, value: string): HTMLInputElement {
+    fireEvent.click(rename);
+    const input = document.activeElement as HTMLInputElement;
+    expect(input.tagName).toBe("INPUT");
+    fireEvent.change(input, { target: { value } });
+    return input;
+  }
+
+  it("lists the default login with its folder even before any account, and names it by id", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({});
+
+    expect(screen.getByText("Default login")).toBeTruthy();
+    expect(screen.getByText("~/.codex")).toBeTruthy();
+    const rename = screen.getByRole("button", { name: "Rename default login" });
+    const input = editField(rename, "  Work ");
+    expect(screen.getByRole("textbox", { name: "Default login name" })).toBe(input);
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    expect(renameAccount).toHaveBeenCalledTimes(1);
+    expect(renameAccount).toHaveBeenCalledWith("codex", null, "Work");
+    // The blur the field's unmount brings doesn't save a second time.
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Rename default login" })
+    );
+  });
+
+  it("shows the name beside the default login in the row and the default account choice, and clears it", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({ accounts: [COMPANY], defaultLoginName: "Work" });
+
+    expect(screen.getByText("Work · default login")).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Default account" }) as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      "Work · default login",
+      "Company",
+    ]);
+
+    const input = editField(screen.getByRole("button", { name: "Rename default login" }), "");
+    expect(input.placeholder).toBe("Default login");
+    await act(async () => {
+      fireEvent.blur(input);
+    });
+    expect(renameAccount).toHaveBeenCalledWith("codex", null, "");
+  });
+
+  it("renames a saved account in place, never by removing and adding it", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    const removeAccount = vi.fn();
+    const addAccount = vi.fn();
+    useAgentSettingsStore.setState({ renameAccount, removeAccount, addAccount });
+    renderSection({ accounts: [COMPANY] });
+
+    const input = editField(screen.getByRole("button", { name: "Rename Company" }), "Acme");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    expect(renameAccount).toHaveBeenCalledWith("codex", "company", "Acme");
+    expect(removeAccount).not.toHaveBeenCalled();
+    expect(addAccount).not.toHaveBeenCalled();
+  });
+
+  it("keeps a saved account's field open on a blank name, and saves nothing", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({ accounts: [COMPANY] });
+
+    const input = editField(screen.getByRole("button", { name: "Rename Company" }), "  ");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    expect(renameAccount).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe("Give the account a name");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("keeps the draft and says why when the save is refused", async () => {
+    const renameAccount = vi.fn().mockRejectedValue(new Error("That account isn't saved any more."));
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({ accounts: [COMPANY] });
+
+    const input = editField(screen.getByRole("button", { name: "Rename Company" }), "Acme");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe("That account isn't saved any more.");
+    expect((screen.getByRole("textbox", { name: "Account name" }) as HTMLInputElement).value).toBe(
+      "Acme"
+    );
+  });
+
+  it("saves once while a save is in flight, and leaves an unchanged name and Escape unsaved", async () => {
+    let finish: () => void = () => {};
+    const renameAccount = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({ accounts: [COMPANY] });
+
+    const input = editField(screen.getByRole("button", { name: "Rename Company" }), "Acme");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
+    expect(renameAccount).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+
+    renameAccount.mockClear();
+    const same = editField(screen.getByRole("button", { name: "Rename Company" }), "Company");
+    await act(async () => {
+      fireEvent.keyDown(same, { key: "Enter" });
+    });
+    const cancelled = editField(screen.getByRole("button", { name: "Rename Company" }), "Other");
+    fireEvent.keyDown(cancelled, { key: "Escape" });
+    expect(renameAccount).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "Account name" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Rename Company" }));
+  });
+});

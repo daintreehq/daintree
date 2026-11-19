@@ -2763,6 +2763,13 @@ describe("Move terminals to account in the agent's menu (#17089)", () => {
     expect(updateAgentMock).not.toHaveBeenCalled();
   });
 
+  it("names the default login as the user named it (#17080)", () => {
+    mockSettings = settingsWith({ claude: { accounts: [COMPANY], defaultLoginName: "Home" } });
+    render(<AgentButton type="claude" availability="ready" />);
+
+    expect(moveRows().map((row) => row.textContent)).toEqual(["Home · default login", "Company"]);
+  });
+
   it("isn't offered to an agent with no saved account", () => {
     mockSettings = settingsWith({ claude: {} });
     mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }];
