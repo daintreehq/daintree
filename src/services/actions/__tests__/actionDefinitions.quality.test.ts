@@ -1165,6 +1165,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
   "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdate",
+  "terminal.applyClaudeUpdateOwned",
   "terminal.restartAll",
   "terminal.startHeld",
   "terminal.arm",
@@ -1330,6 +1332,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "terminal.restartOnPresetOwned",
   // Its account twin (#17079), delegating to `terminal.restartOnAccount`.
   "terminal.restartOnAccountOwned",
+  // Same shape (#17908): main reads the pane, then delegates the approval to
+  // `terminal.applyClaudeUpdate`, and types `/restart` itself once it answers.
+  "terminal.applyClaudeUpdateOwned",
+  // That approval: dispatched only by main, never from the palette or a menu,
+  // so the dialog that gates it is `McpConfirmDialog` and nothing user-side.
+  "terminal.applyClaudeUpdate",
   // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
   // keystrokes to every armed terminal, so an external caller must pass the
   // host confirm dialog. Palette-hidden, and user-side arming goes through the
