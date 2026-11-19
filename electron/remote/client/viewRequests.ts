@@ -341,9 +341,12 @@ async function dispatchAction(
   // would. The origin stays `external` either way: the skip rides on
   // `authorization`, not on posing as one of this Shell's assistant surfaces.
   const hostSkip = honoursSkipPreference(request);
+  // Bound to the call out when this arrived, before anything awaits (#16752):
+  // one that settles meanwhile can't pass its place to a call that replaces it.
+  const offered = hostSkip ? null : relayedCallDelegation(hostId, webContentsId, request);
   const ownSkip = !hostSkip && (await skipsOwnRelayedCall(service, hostId, webContentsId, request));
   const skipPreference = hostSkip || ownSkip;
-  const delegation = skipPreference ? null : relayedCallDelegation(hostId, webContentsId, request);
+  const delegation = skipPreference ? null : offered;
   const envelope = await service.dispatchActionForHost(
     webContentsId,
     request.actionId,

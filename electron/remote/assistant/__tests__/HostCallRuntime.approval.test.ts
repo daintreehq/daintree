@@ -251,6 +251,11 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       reply = { delegate: true };
       await deleteCall("worktree.deleteOwned");
 
+      expect(asked.map((question) => question.delegation?.label)).toEqual([
+        "worktree.deleteOwned",
+        "worktree.deleteOwned",
+      ]);
+      expect(answers.map((answer) => answer.decision)).toEqual(["approved", "rejected"]);
       expect(commits).toEqual([]);
     });
 
@@ -265,6 +270,7 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
 
       await deleteCall("worktree.deleteOwned");
 
+      expect(asked[0]?.delegation).toBeDefined();
       expect(answers[0]?.decision).toBe("refused");
       expect(commits).toEqual([]);
     });

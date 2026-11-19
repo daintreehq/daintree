@@ -114,6 +114,66 @@ describe("the confirm dialog's hand-over (#16752)", () => {
     expect(storedAssistant().daintreeConfirmations).toBe("never-ask");
   });
 
+  it("keeps a newer choice of another mode made while the dialog was up", () => {
+    setAssistant({ daintreeConfirmations: "always-ask" });
+    const fromAlways = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    storedAssistant().daintreeConfirmations = "inherit";
+    expect(fromAlways?.commit()).toBe(false);
+
+    setAssistant({ daintreeConfirmations: "ask-except", daintreeConfirmationsExcept: [] });
+    const fromExcept = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    storedAssistant().daintreeConfirmations = "always-ask";
+    expect(fromExcept?.commit()).toBe(false);
+
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  // A second queued dialog was offered under the mode the first one's tick
+  // then changed: it joins the list rather than being refused.
+  it("adds to Ask, except for… as it stands, whichever mode the dialog was offered under", () => {
+    setAssistant({ daintreeConfirmations: "always-ask" });
+    const second = prepareAssistantDelegation(null, "host.settings");
+    expect(second?.offer.switchesMode).toBe(true);
+    expect(prepareAssistantDelegation(null, "worktree.deleteOwned")?.commit()).toBe(true);
+
+    expect(second?.commit()).toBe(true);
+    expect(storedAssistant()).toMatchObject({
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["worktree.deleteOwned", "host.settings"],
+    });
+  });
+
+  it("merges with ticks made in Settings while the dialog was up", () => {
+    setAssistant({ daintreeConfirmations: "ask-except", daintreeConfirmationsExcept: [] });
+    const prepared = prepareAssistantDelegation(null, "worktree.retireOwned");
+    storedAssistant().daintreeConfirmationsExcept = ["host.settings"];
+    expect(prepared?.commit()).toBe(true);
+    expect(storedAssistant().daintreeConfirmationsExcept).toEqual([
+      "worktree.retireOwned",
+      "host.settings",
+    ]);
+  });
+
+  it("still offers another action while one is handed over", () => {
+    setAssistant({
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["worktree.deleteOwned"],
+    });
+    expect(prepareAssistantDelegation(null, "host.settings")?.offer.label).toBe(
+      "Change a host's settings"
+    );
+  });
+
+  it("follows the agent the session runs, not only the global switch", () => {
+    setAssistant({ daintreeConfirmations: "inherit" });
+    state.values.agentSettings = {
+      agents: { claude: { dangerousMode: "on" } },
+      globalSkipPermissions: false,
+    };
+    expect(prepareAssistantDelegation("claude", "host.settings")).toBeNull();
+    expect(prepareAssistantDelegation(null, "host.settings")).not.toBeNull();
+  });
+
   it("writes nothing when the followed agent started skipping while the dialog was up", () => {
     setAssistant({ daintreeConfirmations: "inherit" });
     const prepared = prepareAssistantDelegation(null, "host.settings");
@@ -126,9 +186,16 @@ describe("the confirm dialog's hand-over (#16752)", () => {
     setAssistant({ daintreeConfirmations: "ask-except", daintreeConfirmationsExcept: [] });
     const first = prepareAssistantDelegation(null, "worktree.deleteOwned");
     const second = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    const other = prepareAssistantDelegation(null, "host.settings");
     expect(first?.commit()).toBe(true);
     expect(second?.commit()).toBe(true);
     expect(store.set).toHaveBeenCalledTimes(1);
+    expect(other?.commit()).toBe(true);
+    expect(store.set).toHaveBeenCalledTimes(2);
+    expect(storedAssistant().daintreeConfirmationsExcept).toEqual([
+      "worktree.deleteOwned",
+      "host.settings",
+    ]);
   });
 
   it("offers nothing when the preference can't be read", () => {

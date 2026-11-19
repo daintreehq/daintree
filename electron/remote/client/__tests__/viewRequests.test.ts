@@ -329,20 +329,48 @@ describe("view reverse requests", () => {
       expect(answer).toEqual({ result: { ok: true, result: 1 }, confirmationDecision: "approved" });
     });
 
-    it("writes no hand-over on a decline, and offers none for a call it skips (#16752)", async () => {
+    it.each([
+      { confirmationDecision: "rejected", approvalScope: "delegate" },
+      { confirmationDecision: "timeout", approvalScope: "delegate" },
+      { confirmationDecision: "approved" },
+    ])("writes no hand-over for a dialog answered %o (#16752)", async (reply) => {
       const commit = vi.fn(() => true);
       m.relayedDelegation.mockReturnValue({ offer: { label: "x", detail: "y" }, commit });
-      m.dispatchActionForHost.mockResolvedValue({
-        result: { ok: false, error: { code: "CANCELLED", message: "no" } },
-        confirmationDecision: "rejected",
-      });
-      await ask("mcp:dispatch-action", relayedDelete);
-      expect(commit).not.toHaveBeenCalled();
+      m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 }, ...reply });
 
+      const answer = await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toHaveProperty("delegationOffer");
+      expect(commit).not.toHaveBeenCalled();
+      expect(answer).toMatchObject({ confirmationDecision: reply.confirmationDecision });
+    });
+
+    it("offers no hand-over for a call it runs under the skip (#16752)", async () => {
       m.skipsRelayedDispatch.mockReturnValue(true);
-      m.relayedDelegation.mockClear();
+      m.relayedDelegation.mockReturnValue({
+        offer: { label: "x", detail: "y" },
+        commit: () => true,
+      });
+
       await ask("mcp:dispatch-action", relayedDelete);
-      expect(m.relayedDelegation).not.toHaveBeenCalled();
+
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).not.toHaveProperty("delegationOffer");
+    });
+
+    it("binds the hand-over to the call out when the dispatch arrives (#16752)", async () => {
+      const order: string[] = [];
+      m.relayedDelegation.mockImplementation(() => {
+        order.push("offer");
+        return null;
+      });
+      m.requestManifestForHost.mockImplementation(async () => {
+        order.push("manifest");
+        return [{ id: "worktree.delete", danger: "confirm" }];
+      });
+
+      await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(order).toEqual(["offer", "manifest"]);
     });
 
     it("offers no hand-over for a host's own assistant's call (#16752)", async () => {

@@ -627,7 +627,7 @@ export function McpConfirmDialog() {
     title: confirmTitle(current),
     confirmLabel: offersSession
       ? sessionConfirmLabel(current.actionTitle, allowForSession)
-      : delegationOffer !== undefined && handOver
+      : delegationOffer !== undefined && handOver && !expired
         ? `${selectionConfirmLabel(current, selectedCount)} and don't ask again`
         : selectionConfirmLabel(current, selectedCount),
     cancelLabel: expired ? "Close" : "Cancel",
@@ -788,18 +788,22 @@ export function McpConfirmDialog() {
         </LaterRequests>
       )}
 
-      {/* Not keyed per request: one assistant request promoting into another
-          would otherwise unmount a focused segment and drop focus to the body.
-          The value is app-wide, so it carries across requests unchanged. The
-          hand-over holds its slot ahead of it either way, so the preference
-          never moves position in the tree when one request offers it and the
-          next doesn't. */}
+      {/* The preference isn't keyed per request: one assistant request
+          promoting into another would otherwise unmount a focused segment and
+          drop focus to the body. The value is app-wide, so it carries across
+          requests unchanged. The hand-over is keyed, and holds its slot ahead
+          of the preference either way, so the preference never moves in the
+          tree when one request offers it and the next doesn't. */}
       {(showAssistantPreference || delegationOffer !== undefined) && (
         <LaterRequests>
           {delegationOffer !== undefined && (
             <DelegationOption
+              // Its own node per request: a press begun on one request's box
+              // that ends after the next is promoted can't tick that one.
+              key={`hand-over:${current.requestId}`}
               offer={delegationOffer}
-              checked={handOver}
+              checked={handOver && !expired}
+              disabled={expired}
               onCheckedChange={setHandOver}
             />
           )}
@@ -1108,10 +1112,13 @@ function SessionApprovalOption({
 function DelegationOption({
   offer,
   checked,
+  disabled,
   onCheckedChange,
 }: {
   offer: McpDelegationOffer;
   checked: boolean;
+  /** Timed out: there is no approval left for it to ride on. */
+  disabled: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
   const checkboxId = useId();
@@ -1122,6 +1129,7 @@ function DelegationOption({
         id={checkboxId}
         size="sm"
         checked={checked}
+        disabled={disabled}
         onCheckedChange={(value) => onCheckedChange(value === true)}
         aria-describedby={detailId}
         className="mt-0.5"

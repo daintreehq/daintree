@@ -2374,7 +2374,7 @@ describe("session-scoped resource ownership (#11909)", () => {
         { confirmationDecision: "rejected", approvalScope: "delegate" },
         { confirmationDecision: "timeout", approvalScope: "delegate" },
       ])("writes nothing for $confirmationDecision without an approved tick", async (answer) => {
-        const { server, commit } = delegating("s-no-hand-over", {
+        const { server, commit, dispatchAction } = delegating("s-no-hand-over", {
           result: { ok: true, result: null },
           ...answer,
         });
@@ -2384,6 +2384,8 @@ describe("session-scoped resource ownership (#11909)", () => {
           arguments: { worktreeId: "/tmp/wt" },
         });
 
+        // Offered, so the missing write is the answer's doing, not a missing offer.
+        expect(dispatchAction.mock.calls.at(-1)?.[5]).toEqual({ delegationOffer: offer });
         expect(commit).not.toHaveBeenCalled();
       });
 

@@ -761,6 +761,50 @@ describe("DaintreeAssistantSettingsTab", () => {
       );
     });
 
+    // The confirm dialog can change the list while Settings is open (#16752):
+    // switching from another mode keeps only the action it handed over, and an
+    // untick here must not send the ticks it dropped back with it.
+    it("applies a tick to the list as stored, never this tab's older copy", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      const setSettings = vi.fn().mockResolvedValue(undefined);
+      const base = {
+        docSearch: true,
+        daintreeControl: true,
+        tier: "core" as const,
+        bypassPermissions: true,
+        auditRetention: 7,
+        customArgs: "",
+        daintreeConfirmations: "ask-except",
+      };
+      const getSettings = vi.fn().mockResolvedValue({
+        ...base,
+        daintreeConfirmationsExcept: ["worktree.retireOwned", "host.settings"],
+      });
+      installApi({ getSettings, setSettings });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Retire a worktree it created");
+      getSettings.mockResolvedValue({
+        ...base,
+        daintreeConfirmationsExcept: ["worktree.deleteOwned"],
+      });
+
+      const box = Array.from(container.querySelectorAll('[role="checkbox"]')).find((el) =>
+        el.closest("[data-settings-reset-scope]")?.textContent?.includes("Retire a worktree")
+      ) as HTMLElement;
+      fireEvent.click(box);
+
+      await waitFor(() =>
+        expect(setSettings).toHaveBeenCalledWith({
+          daintreeConfirmationsExcept: ["worktree.deleteOwned"],
+        })
+      );
+      expect(setSettings).toHaveBeenCalledTimes(1);
+    });
+
     it("offers ask-except to a host whose answer carries the list, and saves it (#16752)", async () => {
       helpPanelState.preferredAgentId = "claude";
       const setSettings = vi.fn().mockResolvedValue(undefined);

@@ -378,8 +378,14 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
       expect(envelope).not.toHaveProperty("approvalScope");
     });
 
-    it("drops a hand-over beside anything but an approval", async () => {
-      answerWith(713, { confirmationDecision: "rejected", approvalScope: "delegate" });
+    it.each([
+      { confirmationDecision: "rejected", approvalScope: "delegate" },
+      { confirmationDecision: "timeout", approvalScope: "delegate" },
+      { approvalScope: "delegate" },
+      { confirmationDecision: "approved" },
+      { confirmationDecision: "approved", approvalScope: "session" },
+    ])("reports no hand-over for an offered request answered %o", async (reply) => {
+      answerWith(713, reply);
       const envelope = await bridge.dispatchActionForWebContents(
         713,
         "worktree.delete",
@@ -389,8 +395,7 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
         "help",
         { delegationOffer: offer }
       );
-      expect(envelope.confirmationDecision).toBe("rejected");
-      expect(envelope).not.toHaveProperty("approvalScope");
+      expect(envelope.approvalScope).not.toBe("delegate");
     });
   });
 

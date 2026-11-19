@@ -60,8 +60,9 @@ export interface PreparedAssistantDelegation {
   readonly offer: McpDelegationOffer;
   /**
    * Hands the action over, read again now: false, writing nothing, when the
-   * mode is no longer the one the offer was worded for, or now skips
-   * everything, so ticking the box can never start asking about other actions.
+   * mode now skips everything, so ticking the box can never start asking
+   * about other actions, or has moved off the one the offer was worded for
+   * to anything but "Ask, except for…".
    */
   commit(): boolean;
 }
@@ -109,7 +110,14 @@ function commitAssistantDelegation(
 ): boolean {
   try {
     const mode = readMode();
-    if (mode !== offeredMode || readAssistantConfirmationPolicy(sessionAgentId).skipsAll) {
+    // Under "Ask, except for…" the action joins the list as it stands now,
+    // whatever mode the dialog was offered under: everything already there
+    // the person ticked. Any other mode must still be the one the offer named,
+    // so a newer choice made while the dialog was up stands.
+    if (
+      (mode !== "ask-except" && mode !== offeredMode) ||
+      readAssistantConfirmationPolicy(sessionAgentId).skipsAll
+    ) {
       logger.info("Didn't hand an action over: Daintree confirmations changed while asking", {
         actionId: calledActionId,
       });

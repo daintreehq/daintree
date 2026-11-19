@@ -1308,6 +1308,90 @@ describe("McpConfirmDialog", () => {
       await expect(second).resolves.toEqual({ decision: "approved" });
     });
 
+    it("retires the tick when the request times out on screen", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue(
+          {
+            danger: "safe",
+            actionTitle: "Change settings",
+            callerInfo: ASSISTANT_HERE,
+            delegationOffer: OFFER,
+          },
+          mainDeadline()
+        );
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        act(() => {
+          fireEvent.click(screen.getByRole("checkbox", { name: TICK }));
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+        });
+
+        expect(await pending).toEqual({ decision: "timeout" });
+        const box = screen.getByRole("checkbox", { name: TICK });
+        expect(box.hasAttribute("disabled")).toBe(true);
+        expect(box.getAttribute("aria-checked")).toBe("false");
+        expect(screen.queryByRole("button", { name: /don't ask again/ })).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("gives the request brought up in place of a timed-out one a box of its own, unticked", async () => {
+      vi.useFakeTimers();
+      try {
+        const first = enqueue(
+          {
+            requestId: "a",
+            danger: "safe",
+            actionTitle: "Change settings",
+            callerInfo: ASSISTANT_HERE,
+            delegationOffer: OFFER,
+          },
+          mainDeadline()
+        );
+        const second = enqueue(
+          {
+            requestId: "b",
+            danger: "safe",
+            actionTitle: "Change settings",
+            callerInfo: ASSISTANT_HERE,
+            delegationOffer: { label: "Change a host's settings", detail: "Only as previewed" },
+          },
+          mainDeadline()
+        );
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        const firstBox = screen.getByRole("checkbox", { name: TICK });
+        act(() => {
+          fireEvent.click(firstBox);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+        });
+        expect(await first).toEqual({ decision: "timeout" });
+
+        const secondBox = screen.getByRole("checkbox", { name: TICK });
+        expect(secondBox).not.toBe(firstBox);
+        expect(secondBox.getAttribute("aria-checked")).toBe("false");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Change settings" }));
+        });
+        expect(await second).toEqual({ decision: "approved" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("hands nothing over when the person cancels with the box ticked", async () => {
       const pending = enqueue({
         danger: "safe",
