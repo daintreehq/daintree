@@ -165,7 +165,11 @@ describe("addAgentAccount (#16040)", () => {
         agents: {
           codex: {
             accounts: [
-              { id: "account-old", name: "Old", configDir: path.join(home, ".codex-company") },
+              {
+                id: "account-old",
+                name: "Old",
+                configDir: `${path.join(home, ".codex-company")}/`,
+              },
             ],
           },
         },

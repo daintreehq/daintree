@@ -225,7 +225,13 @@ export async function addAgentAccount(
     // Made just now and refused if it was there, so only an account saved
     // under this very path (its folder since deleted) can already be it.
     // Checked in the write's own turn, with nothing to resolve.
-    const owner = savedFolders(agentId).find((account) => account.configDir === configDir);
+    const spelled = (folder: string) => {
+      const resolved = path.resolve(folder);
+      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    };
+    const owner = savedFolders(agentId).find(
+      (account) => spelled(account.configDir) === spelled(configDir)
+    );
     if (owner) throw claimedBy(owner);
     return register(configDir);
   }
