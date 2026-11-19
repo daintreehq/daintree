@@ -1,5 +1,6 @@
 import { getAgentConfigFolderAccount, type AgentPreset } from "../config/agentRegistry.js";
 import type { AgentAccount, AgentSettingsEntry } from "../types/agentSettings.js";
+import type { PresetAccountPin, WorktreeAccountChoice } from "../types/ipc/agentAccounts.js";
 import { isAccountId } from "./agentAccountId.js";
 import { sanitizeAgentEnv } from "./agentPresets.js";
 
@@ -122,6 +123,65 @@ export function resolveEffectiveAccountId(
   }
   if (typeof presetAccountId === "string") return presetAccountId;
   return typeof entry?.accountId === "string" ? entry.accountId : null;
+}
+
+/** A worktree's saved pick as a launch reads it: anything but an id is the default login. */
+function worktreeChoiceValue(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** How many user presets carry each id: more than one means a write by id can't say which. */
+export function presetIdCounts(customPresets: unknown): Map<string, number> {
+  const counts = new Map<string, number>();
+  if (!Array.isArray(customPresets)) return counts;
+  for (const preset of customPresets as unknown[]) {
+    const id = preset && typeof preset === "object" ? (preset as { id?: unknown }).id : undefined;
+    if (typeof id === "string") counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * The saved choices that keep some launch off `accountId` (#17893): every
+ * worktree's own pick, in every project, and every user preset's pin, that
+ * names another login. One already naming `accountId` launches there anyway
+ * and isn't listed; one naming a removed account is, since a launch refuses
+ * it rather than signing in elsewhere.
+ */
+export function listAccountChoicesAway(
+  entry: AgentSettingsEntry | null | undefined,
+  accountId: string | null
+): { worktrees: WorktreeAccountChoice[]; presets: PresetAccountPin[] } {
+  const worktrees: WorktreeAccountChoice[] = [];
+  const scoped = entry?.worktreeAccounts;
+  if (scoped && typeof scoped === "object" && !Array.isArray(scoped)) {
+    for (const [worktreeId, value] of Object.entries(scoped)) {
+      const choice = worktreeChoiceValue(value);
+      if (worktreeId && choice !== accountId) worktrees.push({ worktreeId, accountId: choice });
+    }
+  }
+  const presets: PresetAccountPin[] = [];
+  const counts = presetIdCounts(entry?.customPresets);
+  const seen = new Set<string>();
+  for (const preset of Array.isArray(entry?.customPresets)
+    ? (entry.customPresets as unknown[])
+    : []) {
+    if (!preset || typeof preset !== "object") continue;
+    const { id, name, accountId: pin } = preset as Record<string, unknown>;
+    // Of presets sharing an id a launch uses the first, so a later one's pin never applies.
+    if (typeof id !== "string" || !id || seen.has(id)) continue;
+    seen.add(id);
+    // A pin `sanitizePreset` would drop never reaches a launch.
+    if (!isAccountId(pin) || pin === accountId) continue;
+    const presetName = typeof name === "string" && name.trim() ? name.trim() : id;
+    presets.push({
+      presetId: id,
+      presetName,
+      accountId: pin,
+      ...((counts.get(id) ?? 0) > 1 ? { sharedId: true as const } : {}),
+    });
+  }
+  return { worktrees, presets };
 }
 
 /** One saved account as an agent sees it (#17079): never its folder, which names the user's home. */

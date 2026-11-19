@@ -4,8 +4,10 @@ import {
   defaultLoginLabel,
   defaultLoginPhrase,
   describeLaunchAccount,
+  isAccountId,
   isUsableAccountFolder,
   launchAnswer,
+  listAccountChoicesAway,
   listAgentAccountIdentities,
   keepPaneAccount,
   paneAccountEnv,
@@ -313,5 +315,92 @@ describe("describeLaunchAccount (#17079)", () => {
     expect(
       describeLaunchAccount({ ...entry, worktreeAccounts: inherited }, "wt-proto", undefined)
     ).toEqual({ accountId: "personal", source: "agentDefault" });
+  });
+});
+
+describe("listAccountChoicesAway (#17893)", () => {
+  const entry = {
+    accountId: "spent",
+    accounts: [
+      { id: "spent", name: "Spent", configDir: "/Users/me/.codex-spent" },
+      { id: "fresh", name: "Fresh", configDir: "/Users/me/.codex-fresh" },
+    ],
+    worktreeAccounts: {
+      "/work/project-a/main": "spent",
+      "/work/project-b/feature": null,
+      "/work/project-c/fix": "fresh",
+      "/work/project-d/old": "removed",
+    },
+    customPresets: [
+      { id: "work", name: "  Work  ", accountId: "spent" },
+      { id: "home", name: "Home", accountId: "fresh" },
+      { id: "plain", name: "Plain" },
+      { id: "bad", name: "Bad pin", accountId: "bad id" },
+      { id: "unnamed", name: " ", accountId: "removed" },
+    ],
+  };
+
+  it("names every worktree pick and pin on another login, removed accounts included", () => {
+    expect(listAccountChoicesAway(entry, "fresh")).toEqual({
+      worktrees: [
+        { worktreeId: "/work/project-a/main", accountId: "spent" },
+        { worktreeId: "/work/project-b/feature", accountId: null },
+        { worktreeId: "/work/project-d/old", accountId: "removed" },
+      ],
+      presets: [
+        { presetId: "work", presetName: "Work", accountId: "spent" },
+        { presetId: "unnamed", presetName: "unnamed", accountId: "removed" },
+      ],
+    });
+  });
+
+  it("tells the default login in a worktree from a worktree that inherits", () => {
+    const { worktrees, presets } = listAccountChoicesAway(entry, null);
+    expect(worktrees.map((choice) => choice.worktreeId)).toEqual([
+      "/work/project-a/main",
+      "/work/project-c/fix",
+      "/work/project-d/old",
+    ]);
+    expect(presets.map((pin) => pin.presetId)).toEqual(["work", "home", "unnamed"]);
+    expect(listAccountChoicesAway({}, null)).toEqual({ worktrees: [], presets: [] });
+    expect(listAccountChoicesAway(undefined, "fresh")).toEqual({ worktrees: [], presets: [] });
+  });
+
+  it("leaves every launch on the account once the listed choices are cleared", () => {
+    const { worktrees, presets } = listAccountChoicesAway(entry, "fresh");
+    const cleared = new Set(worktrees.map((choice) => choice.worktreeId));
+    const unpinned = new Set(presets.map((pin) => pin.presetId));
+    const after = {
+      ...entry,
+      accountId: "fresh",
+      worktreeAccounts: Object.fromEntries(
+        Object.entries(entry.worktreeAccounts).filter(([id]) => !cleared.has(id))
+      ),
+      customPresets: entry.customPresets.map((preset) =>
+        unpinned.has(preset.id) ? { ...preset, accountId: undefined } : preset
+      ),
+    };
+    for (const worktreeId of [...Object.keys(entry.worktreeAccounts), "/work/new"]) {
+      for (const preset of after.customPresets) {
+        const pin = isAccountId(preset.accountId) ? preset.accountId : undefined;
+        expect(resolveEffectiveAccountId(after, worktreeId, undefined, pin)).toBe("fresh");
+      }
+    }
+    expect(listAccountChoicesAway(after, "fresh")).toEqual({ worktrees: [], presets: [] });
+  });
+
+  it("keeping a worktree's pick, or a pin, leaves that one choice where it was", () => {
+    const { worktrees } = listAccountChoicesAway(entry, "fresh");
+    const after = {
+      ...entry,
+      accountId: "fresh",
+      worktreeAccounts: { "/work/project-a/main": "spent" },
+    };
+    expect(worktrees.length).toBeGreaterThan(1);
+    expect(resolveEffectiveAccountId(after, "/work/project-a/main")).toBe("spent");
+    // A kept pin wins in every worktree whose own pick was cleared.
+    expect(resolveEffectiveAccountId(after, "/work/project-b/feature", undefined, "spent")).toBe(
+      "spent"
+    );
   });
 });

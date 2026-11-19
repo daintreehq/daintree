@@ -27,7 +27,13 @@ vi.mock("../../store.js", () => ({ store: fakeStore }));
 const broadcastMock = vi.hoisted(() => vi.fn());
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
 
-import { addAgentAccount, removeAgentAccount, renameAgentAccount } from "../agentAccounts.js";
+import {
+  addAgentAccount,
+  applyAccountEverywhere,
+  listAccountChoicesAwayOnHost,
+  removeAgentAccount,
+  renameAgentAccount,
+} from "../agentAccounts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 
 let home: string;
@@ -370,6 +376,284 @@ describe("renameAgentAccount (#17080)", () => {
     expect(() => renameAgentAccount("codex", "bad id", "Work")).toThrow(/Invalid account/);
     expect(() => renameAgentAccount("cursor", null, "Work")).toThrow(/no accounts/);
     expect(() => renameAgentAccount("__proto__", null, "Work")).toThrow(/Invalid agent/);
+    expect(savedCodex()).toEqual(before);
+    expect(fakeStore.set).not.toHaveBeenCalled();
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("using one account everywhere (#17893)", () => {
+  async function twoAccounts() {
+    const { account: spent } = await addAgentAccount({
+      agentId: "codex",
+      name: "Spent",
+      folder: { kind: "create" },
+    });
+    const { account: fresh } = await addAgentAccount({
+      agentId: "codex",
+      name: "Fresh",
+      folder: { kind: "create" },
+    });
+    return { spent, fresh };
+  }
+
+  it("lists every worktree pick and preset pin naming another login, and marks a worktree that's gone", async () => {
+    const { spent, fresh } = await twoAccounts();
+    // A main checkout's marker is a folder, a linked worktree's a file.
+    const kept = path.join(home, "repo-feature");
+    await mkdir(path.join(kept, ".git"), { recursive: true });
+    const linked = path.join(home, "repo-linked");
+    await mkdir(linked);
+    await writeFile(path.join(linked, ".git"), "gitdir: /elsewhere\n");
+    // Deleted, or its folder reused for something that isn't a checkout.
+    const deleted = path.join(home, "repo-old");
+    const reused = path.join(home, "repo-reused");
+    await mkdir(reused);
+    fakeStore.set("agentSettings.agents", {
+      codex: {
+        ...savedCodex(),
+        accountId: spent.id,
+        worktreeAccounts: {
+          [kept]: spent.id,
+          [linked]: spent.id,
+          [deleted]: null,
+          [reused]: spent.id,
+          "relative/key": spent.id,
+          [path.join(home, "repo-fresh")]: fresh.id,
+        },
+        customPresets: [
+          { id: "work", name: "Work", accountId: spent.id },
+          { id: "home", name: "Home", accountId: fresh.id },
+          { id: "plain", name: "Plain" },
+          { id: "gone", name: "Gone account", accountId: "account-removed" },
+        ],
+      },
+    });
+
+    const choices = await listAccountChoicesAwayOnHost("codex", fresh.id);
+
+    expect(choices).toEqual({
+      worktrees: [
+        { worktreeId: kept, accountId: spent.id, gone: false },
+        { worktreeId: linked, accountId: spent.id, gone: false },
+        { worktreeId: deleted, accountId: null, gone: true },
+        { worktreeId: reused, accountId: spent.id, gone: true },
+        { worktreeId: "relative/key", accountId: spent.id, gone: true },
+      ],
+      presets: [
+        { presetId: "work", presetName: "Work", accountId: spent.id },
+        { presetId: "gone", presetName: "Gone account", accountId: "account-removed" },
+      ],
+    });
+    // The default login as the target: a worktree on it already isn't listed, every pin is.
+    const toDefault = await listAccountChoicesAwayOnHost("codex", null);
+    expect(toDefault.worktrees.map((choice) => choice.worktreeId)).toEqual([
+      kept,
+      linked,
+      reused,
+      "relative/key",
+      path.join(home, "repo-fresh"),
+    ]);
+    expect(toDefault.presets.map((pin) => pin.presetId)).toEqual(["work", "home", "gone"]);
+  });
+
+  it("makes the account the default and clears only the choices left ticked, in one write", async () => {
+    const { spent, fresh } = await twoAccounts();
+    fakeStore.set("agentSettings.agents", {
+      codex: {
+        ...savedCodex(),
+        accountId: spent.id,
+        worktreeAccounts: { "/repo/a": spent.id, "/repo/b": null, "/repo/c": spent.id },
+        customPresets: [
+          { id: "work", name: "Work", accountId: spent.id, env: { FOO: "1" } },
+          { id: "review", name: "Review", accountId: spent.id },
+        ],
+      },
+    });
+    broadcastMock.mockClear();
+    fakeStore.set.mockClear();
+
+    const settings = applyAccountEverywhere({
+      agentId: "codex",
+      accountId: fresh.id,
+      clear: {
+        worktrees: [
+          { worktreeId: "/repo/a", accountId: spent.id },
+          { worktreeId: "/repo/b", accountId: null },
+        ],
+        presets: [{ presetId: "work", accountId: spent.id }],
+      },
+    });
+
+    const saved = savedCodex();
+    expect(saved.accountId).toBe(fresh.id);
+    expect(saved.presetId).toBe("keep-me");
+    expect(saved.worktreeAccounts).toEqual({ "/repo/c": spent.id });
+    expect(saved.customPresets).toEqual([
+      { id: "work", name: "Work", env: { FOO: "1" } },
+      { id: "review", name: "Review", accountId: spent.id },
+    ]);
+    expect(settings.agents.codex).toEqual(saved);
+    expect(fakeStore.set).toHaveBeenCalledTimes(1);
+    expect(broadcastMock).toHaveBeenCalledWith(
+      CHANNELS.AGENT_SETTINGS_CHANGED,
+      fakeStore.dump().agentSettings
+    );
+  });
+
+  it("keeps a choice another view changed after the list was made, and drops an emptied map", async () => {
+    const { spent, fresh } = await twoAccounts();
+    fakeStore.set("agentSettings.agents", {
+      codex: {
+        ...savedCodex(),
+        worktreeAccounts: { "/repo/a": spent.id, "/repo/b": fresh.id },
+        customPresets: [{ id: "work", name: "Work", accountId: fresh.id }],
+      },
+    });
+
+    // Listed while /repo/b and the preset were on Spent; both have moved since.
+    applyAccountEverywhere({
+      agentId: "codex",
+      accountId: null,
+      clear: {
+        worktrees: [
+          { worktreeId: "/repo/a", accountId: spent.id },
+          { worktreeId: "/repo/b", accountId: spent.id },
+          { worktreeId: "/repo/never", accountId: spent.id },
+        ],
+        presets: [
+          { presetId: "work", accountId: spent.id },
+          { presetId: "deleted", accountId: spent.id },
+        ],
+      },
+    });
+
+    expect(savedCodex().worktreeAccounts).toEqual({ "/repo/b": fresh.id });
+    expect(savedCodex().customPresets).toEqual([{ id: "work", name: "Work", accountId: fresh.id }]);
+    expect(savedCodex()).not.toHaveProperty("accountId");
+
+    applyAccountEverywhere({
+      agentId: "codex",
+      accountId: spent.id,
+      clear: { worktrees: [{ worktreeId: "/repo/b", accountId: fresh.id }], presets: [] },
+    });
+    expect(savedCodex().worktreeAccounts).toBeUndefined();
+    expect(savedCodex().accountId).toBe(spent.id);
+  });
+
+  it("never clears a pin by an id two presets share, listed when the list was made or not", async () => {
+    const { spent, fresh } = await twoAccounts();
+    fakeStore.set("agentSettings.agents", {
+      codex: {
+        ...savedCodex(),
+        customPresets: [
+          { id: "work", name: "Work", accountId: spent.id },
+          { id: "work", name: "Work copy", accountId: spent.id },
+          { id: "build", name: "Build", accountId: spent.id },
+        ],
+      },
+    });
+
+    const { presets } = await listAccountChoicesAwayOnHost("codex", fresh.id);
+    expect(presets).toEqual([
+      { presetId: "work", presetName: "Work", accountId: spent.id, sharedId: true },
+      { presetId: "build", presetName: "Build", accountId: spent.id },
+    ]);
+
+    // Another write puts a preset with Build's id ahead of it after the list was made.
+    const saved = savedCodex();
+    fakeStore.set("agentSettings.agents", {
+      codex: {
+        ...saved,
+        customPresets: [
+          { id: "build", name: "Deploy", accountId: spent.id },
+          ...(saved.customPresets as unknown[]),
+        ],
+      },
+    });
+    applyAccountEverywhere({
+      agentId: "codex",
+      accountId: fresh.id,
+      clear: {
+        worktrees: [],
+        presets: [
+          { presetId: "work", accountId: spent.id },
+          { presetId: "build", accountId: spent.id },
+        ],
+      },
+    });
+    expect(
+      (savedCodex().customPresets as Array<{ accountId?: string }>).map(
+        (preset) => preset.accountId
+      )
+    ).toEqual([spent.id, spent.id, spent.id, spent.id]);
+    expect(savedCodex().accountId).toBe(fresh.id);
+  });
+
+  it("refuses a target removed after the list was made, before writing anything", async () => {
+    const { spent, fresh } = await twoAccounts();
+    fakeStore.set("agentSettings.agents", {
+      codex: { ...savedCodex(), accountId: spent.id, worktreeAccounts: { "/repo/a": spent.id } },
+    });
+    const { worktrees } = await listAccountChoicesAwayOnHost("codex", fresh.id);
+    removeAgentAccount("codex", fresh.id);
+    const before = structuredClone(savedCodex());
+    fakeStore.set.mockClear();
+
+    expect(() =>
+      applyAccountEverywhere({
+        agentId: "codex",
+        accountId: fresh.id,
+        clear: { worktrees: worktrees.map(({ gone: _gone, ...choice }) => choice), presets: [] },
+      })
+    ).toThrow(/isn't saved/);
+    expect(savedCodex()).toEqual(before);
+    expect(fakeStore.set).not.toHaveBeenCalled();
+  });
+
+  it("refuses an account that isn't saved, a malformed request and an agent with no folder account, writing nothing", async () => {
+    await twoAccounts();
+    broadcastMock.mockClear();
+    fakeStore.set.mockClear();
+    const before = structuredClone(savedCodex());
+    const clear = { worktrees: [], presets: [] };
+
+    expect(() =>
+      applyAccountEverywhere({ agentId: "codex", accountId: "account-removed", clear })
+    ).toThrow(/isn't saved/);
+    expect(() => applyAccountEverywhere({ agentId: "codex", accountId: "bad id", clear })).toThrow(
+      /Invalid account/
+    );
+    expect(() => applyAccountEverywhere({ agentId: "codex", clear })).toThrow(/Invalid account/);
+    expect(() => applyAccountEverywhere("codex")).toThrow(/Invalid request/);
+    // A malformed row, or a missing list, refuses the whole request: never a smaller clear.
+    for (const malformed of [
+      undefined,
+      { worktrees: [] },
+      { presets: [] },
+      { worktrees: [{ worktreeId: "/repo/a" }], presets: [] },
+      { worktrees: [{ worktreeId: "", accountId: null }], presets: [] },
+      { worktrees: [], presets: [{ presetId: "work", accountId: null }] },
+      { worktrees: ["/repo/a"], presets: [] },
+    ]) {
+      expect(() =>
+        applyAccountEverywhere({ agentId: "codex", accountId: null, clear: malformed })
+      ).toThrow(/Invalid request/);
+    }
+    // Nothing the list offers names the target already.
+    expect(() =>
+      applyAccountEverywhere({
+        agentId: "codex",
+        accountId: null,
+        clear: { worktrees: [{ worktreeId: "/repo/a", accountId: null }], presets: [] },
+      })
+    ).toThrow(/Invalid request/);
+    expect(() => applyAccountEverywhere({ agentId: "cursor", accountId: null, clear })).toThrow(
+      /no accounts/
+    );
+    await expect(listAccountChoicesAwayOnHost("codex", "account-removed")).rejects.toThrow(
+      /isn't saved/
+    );
     expect(savedCodex()).toEqual(before);
     expect(fakeStore.set).not.toHaveBeenCalled();
     expect(broadcastMock).not.toHaveBeenCalled();
