@@ -1,0 +1,92 @@
+@echo off
+rem The `daintree` command on Windows (#17931). scripts/afterPack.cjs renders
+rem this into bin\daintree.cmd in the install directory, CRLF throughout, and the
+rem NSIS installer puts that directory on PATH (build/installer.nsh).
+rem Every expansion of a path stays inside double quotes, so an ampersand,
+rem caret or parenthesis in a folder name is never parsed as syntax, and
+rem delayed expansion stays off so an exclamation mark is just a character.
+rem Comments here avoid percent signs: cmd expands them even on rem lines.
+setlocal EnableExtensions DisableDelayedExpansion
+
+if "%~1"=="call" goto noClient
+if "%~1"=="session" goto noClient
+rem One directory at most. The bracketed test catches an explicitly empty
+rem second operand, which the quoted one reads as absent.
+if not "%~2"=="" goto tooMany
+if not [%2]==[] goto tooMany
+
+if "%~1"=="-h" goto help
+if "%~1"=="--help" goto help
+if "%~1"=="-v" goto version
+if "%~1"=="--version" goto version
+
+if "%~1"=="" goto currentDirectory
+set "target=%~f1"
+goto haveTarget
+:currentDirectory
+rem Not the CD pseudo-variable: an environment variable named CD shadows it.
+for %%D in (.) do set "target=%%~fD"
+:haveTarget
+
+rem The launch appends \. so no backslash ever sits against the closing quote,
+rem where CommandLineToArgvW would read it as escaping the quote (D:\ would
+rem swallow the rest of the command line). A trailing backslash comes off
+rem first: D:\ becomes D: and is sent as D:\. which resolves back to D:\.
+if "%target:~-1%"=="\" set "target=%target:~0,-1%"
+if not exist "%target%\*" goto notDirectory
+
+call :findApp
+if not exist "%app%" goto noApp
+rem start returns once the app is launched; a bare GUI program would hold this
+rem batch file until it exits. The joined --cli-path= form survives Chromium's
+rem second-instance command-line reconstruction (#11410).
+start "" "%app%" --cli-path="%target%\."
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:findApp
+rem Inside a CALLed label the dp0 modifier names this file even when it was
+rem run as a quoted bare name found on PATH, where at the top level it can
+rem name the caller's directory instead.
+set "app=%~dp0..\@EXE@"
+exit /b 0
+
+:help
+echo Usage: daintree [directory]
+echo.
+echo Open a directory as a project in Daintree.
+echo.
+echo Arguments:
+echo   directory    Path to open (defaults to the current directory). To open a
+echo                folder named "call" or "session", write it as .\call or
+echo                .\session
+echo.
+echo Options:
+echo   -h, --help       Show this help message
+echo   -v, --version    Show the Daintree CLI version
+echo.
+echo Examples:
+echo   daintree                     Open the current directory
+echo   daintree "C:\src\my app"     Open a specific project
+exit /b 0
+
+:version
+echo daintree @VERSION@
+exit /b 0
+
+:noClient
+>&2 echo daintree: "daintree %~1" isn't available on Windows yet. To open a folder named "%~1", write it as ".\%~1"
+exit /b 2
+
+:tooMany
+>&2 echo daintree: expected one directory (quote a path that contains spaces)
+>&2 echo Usage: daintree [directory]
+exit /b 2
+
+:notDirectory
+>&2 echo daintree: "%target%" is not a directory
+exit /b 1
+
+:noApp
+>&2 echo daintree: Daintree isn't where this command expects it: "%app%"
+exit /b 1

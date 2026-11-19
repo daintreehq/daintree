@@ -752,7 +752,9 @@ export function createApplicationMenu(
         { type: "separator" },
         {
           label: `Install ${PRODUCT_NAME} Command Line Tool`,
-          enabled: process.platform === "darwin" || process.platform === "linux",
+          // The Windows installer puts the command on PATH itself (#17931), so
+          // there is nothing for this item to do there.
+          visible: process.platform === "darwin" || process.platform === "linux",
           click: async (_item, browserWindow) => {
             const targetWin = getTargetBrowserWindow(browserWindow);
             try {

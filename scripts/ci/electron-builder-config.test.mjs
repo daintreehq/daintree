@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import buildConfig from "../../electron-builder.config.cjs";
-import { APP_ASAR_ROOT_ENTRIES, AVR_VAD_V5_MODEL } from "../afterPack.cjs";
+import { APP_ASAR_ROOT_ENTRIES, AVR_VAD_V5_MODEL, WINDOWS_CLI_SHIM } from "../afterPack.cjs";
 
 const require = createRequire(import.meta.url);
 
@@ -501,6 +501,111 @@ describe("NSIS installer — folder context-menu verbs (#11406)", () => {
     // file as a whole would pass with two in install and none in uninstall.
     expect(install.match(/SHChangeNotify/g)).toHaveLength(1);
     expect(uninstall.match(/SHChangeNotify/g)).toHaveLength(1);
+  });
+});
+
+describe("NSIS installer — the daintree command on PATH (#17931)", () => {
+  /** The body of `!macro <name>` up to its `!macroend`. */
+  const macroBody = (nsh, name) => {
+    const start = nsh.indexOf(`!macro ${name}`);
+    expect(start, `!macro ${name}`).toBeGreaterThan(-1);
+    return nsh.slice(start, nsh.indexOf("!macroend", start));
+  };
+
+  it("puts the folder afterPack writes the command into on PATH", async () => {
+    const nsh = await repoFile("build/installer.nsh");
+    const edit = macroBody(nsh, "daintreeEditPath");
+    const [folder, file] = [
+      path.posix.dirname(WINDOWS_CLI_SHIM),
+      path.posix.basename(WINDOWS_CLI_SHIM),
+    ];
+    expect(edit).toContain(`StrCpy $9 "$INSTDIR\\${folder}"`);
+    // An install whose package lacks the command puts nothing on PATH.
+    expect(edit).toContain(`\${IfNot} \${FileExists} "$9\\${file}"`);
+  });
+
+  it("adds the entry on install and drops it only once an uninstall has succeeded", async () => {
+    const nsh = await repoFile("build/installer.nsh");
+    expect(macroBody(nsh, "customInstall")).toMatch(/^\s*Call daintreeAddCliToPath\s*$/m);
+    // customUnInstall runs before the files go, and the uninstall can still
+    // restore them and abort; an update's uninstall must drop it too, or a
+    // reinstall to another folder leaves the old bin on PATH.
+    expect(macroBody(nsh, "customUnInstall")).not.toContain("daintreeEditPath");
+    const header = macroBody(nsh, "customHeader");
+    const uninstallerPass = header.slice(
+      header.indexOf("!ifdef BUILD_UNINSTALLER"),
+      header.indexOf("!else")
+    );
+    const installerPass = header.slice(header.indexOf("!else"));
+    expect(uninstallerPass).toMatch(
+      /Function un\.onUninstSuccess\s+!insertmacro daintreeEditPath 0\s+FunctionEnd/
+    );
+    expect(uninstallerPass).not.toContain("${isUpdated}");
+    expect(installerPass).toMatch(
+      /Function daintreeAddCliToPath\s+!insertmacro daintreeEditPath 1\s+FunctionEnd/
+    );
+  });
+
+  it("never rebuilds PATH from a read that could have come back short", async () => {
+    const nsh = await repoFile("build/installer.nsh");
+    const edit = macroBody(nsh, "daintreeEditPath");
+    const lines = edit.split("\n").map((line) => line.trim());
+    const at = (pattern) => lines.findIndex((line) => pattern.test(line));
+    // ReadRegStr returns "" for a value longer than its buffer exactly as for a
+    // missing one: the registry's own status tells them apart before it reads,
+    // and the error flag after it is checked before anything uses the text.
+    const status = at(/^System::Call 'advapi32::RegGetValueW/);
+    const missing = at(/^\$\{If\} \$4 = 2\b/);
+    const reads = lines.flatMap((line, i) => (/^ReadRegStr /.test(line) ? [i] : []));
+    expect(status).toBeGreaterThan(-1);
+    expect(missing).toBeGreaterThan(status);
+    expect(reads.length).toBeGreaterThan(0);
+    for (const read of reads) expect(read).toBeGreaterThan(missing);
+    const lastRead = Math.max(...reads);
+    const errorCheck = lines.findIndex((line, i) => i > lastRead && line === "${If} ${Errors}");
+    expect(errorCheck).toBeGreaterThan(lastRead);
+    expect(lines[errorCheck + 1]).toBe("Goto daintreePathSkip");
+    // A read as long as the buffer may have lost its last unit, and an append
+    // may not produce a value the uninstaller would refuse to read back: both
+    // are held to the one limit.
+    const readLength = at(/^StrLen \$R3 \$5$/);
+    expect(readLength).toBeGreaterThan(errorCheck);
+    expect(lines[readLength + 1]).toBe("${If} $R3 > ${DAINTREE_PATH_MAX}");
+    expect(lines[readLength + 2]).toBe("Goto daintreePathSkip");
+    const capacity = at(/^\$\{If\} \$R8 > \$\{DAINTREE_PATH_MAX\}$/);
+    const append = at(/^StrCpy \$6 "\$5;\$9"$/);
+    expect(capacity).toBeGreaterThan(readLength);
+    expect(append).toBeGreaterThan(capacity);
+    expect(lines[capacity + 1]).toBe("Goto daintreePathSkip");
+    expect(nsh).toMatch(/^!define \/math DAINTREE_PATH_MAX \$\{NSIS_MAX_STRLEN\} - 2$/m);
+    // The write carries the type that was read, not a fixed one.
+    expect(edit).toMatch(/RegGetValueW\(p r0, w r1, w "Path", i 0x1000FFFF, \*i \.r2,/);
+    expect(edit).toMatch(/RegSetKeyValueW\(p r0, w r1, w "Path", i r2,/);
+    expect(edit).not.toMatch(/WriteReg(Expand)?Str\b/);
+    // StrCmp is linguistic: a zero-weight character compares equal to "", so
+    // an end-of-string or emptiness test written that way stops early.
+    expect(edit).not.toMatch(/StrCmp \$\w+ ""|\$\w+ == ""/);
+  });
+
+  it("leaves a new install's entry alone and puts no user-writable folder on the machine PATH", async () => {
+    const nsh = await repoFile("build/installer.nsh");
+    const edit = macroBody(nsh, "daintreeEditPath");
+    const removal = edit.slice(
+      edit.indexOf("!else"),
+      edit.indexOf("!endif", edit.indexOf("!else"))
+    );
+    // An uninstall whose files are gone but whose folder holds the command
+    // again is looking at a reinstall.
+    expect(removal).toMatch(
+      /\$\{If\} \$\{FileExists\} "\$9\\daintree\.cmd"\s+\$\{AndIf\} \$\{FileExists\} "\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}"\s+Goto daintreePathDone/
+    );
+    const adding = edit.slice(edit.indexOf("!if ${ADD} == 1"), edit.indexOf("!else"));
+    expect(adding).toContain('${If} $installMode == "all"');
+    // Compared on the canonical path, so a ".." can't walk back out.
+    expect(adding).toMatch(/GetFullPathName \$R6 \$INSTDIR[\s\S]*StrCpy \$R7 \$R6 \$R9/);
+    expect(adding).not.toContain("StrCpy $R7 $INSTDIR");
+    expect(adding).toContain('StrCpy $R8 "$PROGRAMFILES64\\"');
+    expect(adding).toContain('StrCpy $R8 "$PROGRAMFILES\\"');
   });
 });
 

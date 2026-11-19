@@ -10,8 +10,11 @@ import {
   AVR_VAD_V5_MODEL,
   MAX_APP_ASAR_BYTES,
   ONNX_RUNTIME_LIBRARY,
+  WINDOWS_CLI_SHIM,
+  WINDOWS_CLI_TEMPLATE,
   applyPlatformFuses,
   pruneOnnxRuntime,
+  renderWindowsCliShim,
 } from "./afterPack.cjs";
 
 const mockExistsSync = vi.fn();
@@ -21,6 +24,9 @@ const mockCopyFileSync = vi.fn();
 const mockStatSync = vi.fn();
 const mockUnlinkSync = vi.fn();
 const mockRmSync = vi.fn();
+// The real template, so the shim afterPack writes is the one that ships.
+const mockReadFileSync = vi.fn((...args: Parameters<typeof readFileSync>) => readFileSync(...args));
+const mockWriteFileSync = vi.fn();
 const mockSpawnSync = vi.fn();
 const mockGetRawHeader = vi.fn();
 const mockInvalidModelFiles = vi.fn();
@@ -47,7 +53,7 @@ function createContext(platform: string, appOutDir: string, appName = "Daintree"
     appOutDir,
     electronPlatformName: platform,
     arch,
-    packager: { appInfo: { productFilename: appName } },
+    packager: { appInfo: { productFilename: appName, version: "1.2.3-beta.4" } },
   };
 }
 
@@ -107,6 +113,8 @@ describe("afterPack", () => {
           statSync: mockStatSync,
           unlinkSync: mockUnlinkSync,
           rmSync: mockRmSync,
+          readFileSync: mockReadFileSync,
+          writeFileSync: mockWriteFileSync,
         };
       }
       if (id === "child_process" || id === "node:child_process") {
@@ -348,6 +356,22 @@ describe("afterPack", () => {
         /third_party\/conpty not found/
       );
     });
+
+    it("writes the daintree command into the install's bin with this build's version (#17931)", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("win32", "/build/win", "Daintree Dev"));
+
+      const shimPath = path.join("/build/win", ...WINDOWS_CLI_SHIM.split("/"));
+      expect(mockMkdirSync).toHaveBeenCalledWith(path.dirname(shimPath), { recursive: true });
+      expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+      const [file, contents] = mockWriteFileSync.mock.calls[0];
+      expect(file).toBe(shimPath);
+      const text = String(contents);
+      expect(text).toContain("\r\necho daintree 1.2.3-beta.4\r\n");
+      // The executable comes from the package's product filename.
+      expect(text).toContain('..\\Daintree Dev.exe"');
+    });
   });
 
   describe("Linux", () => {
@@ -368,6 +392,15 @@ describe("afterPack", () => {
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, `node_modules/better-sqlite3/prebuilds/linux-${process.arch}.node`)
       );
+    });
+
+    it("writes no Windows command on Linux or macOS", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("linux", "/build/linux"));
+      await afterPack(createContext("darwin", "/build/mac"));
+
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
 
     // The hook itself must apply the per-platform fuse, not just the helper.
@@ -1481,6 +1514,139 @@ describe("pruneOnnxRuntime (#15670)", () => {
         ONNX_RUNTIME_LIBRARY[platform as keyof typeof ONNX_RUNTIME_LIBRARY];
       expect(library, `no runtime library known for ${platform}`).toBeDefined();
       expect(fs.readFileSync(binding).includes(library!), binding).toBe(true);
+    }
+  });
+});
+
+// Nothing runs cmd.exe in CI, so these read the batch source for the mistakes
+// that would only show on Windows.
+describe("renderWindowsCliShim (#17931)", () => {
+  const template = readFileSync(WINDOWS_CLI_TEMPLATE, "utf8");
+  const render = (version = "1.2.3", executable = "Daintree.exe") =>
+    renderWindowsCliShim(template, { version, executable });
+  const isComment = (line: string) => /^\s*@?rem(\s|$)/i.test(line);
+  const isEcho = (line: string) => /^\s*(>&2\s+)?echo\b/i.test(line);
+  const isLabel = (line: string) => /^:[A-Za-z]/.test(line);
+  const labelName = (line: string) => line.slice(1).trim().toLowerCase();
+  /** The statements cmd parses: no comments, no blank lines. */
+  const statements = (text: string) =>
+    text.split("\r\n").filter((line) => line.trim() !== "" && !isComment(line));
+
+  it("ships CRLF-only ASCII with every placeholder filled", () => {
+    // A template checked out CRLF must not come out with doubled carriage returns.
+    const mixed = renderWindowsCliShim(
+      template.replace(/\n/g, (lf, at) => (at % 2 ? "\r\n" : lf)),
+      {
+        version: "1.0.0",
+        executable: "Other App.exe",
+      }
+    );
+    expect(mixed).not.toMatch(/\r\r|[^\r]\n/);
+    expect(mixed).toContain('..\\Other App.exe"');
+    const text = render("2.0.0-beta.1+build.7");
+    expect(text.replace(/\r\n/g, "")).not.toMatch(/[\r\n]/);
+    // No BOM: cmd would read it as part of the first command.
+    expect(text).toMatch(/^[\t\r\n\x20-\x7e]*$/);
+    expect(text).not.toMatch(/@[A-Z]+@/);
+    expect(text).toContain("\r\necho daintree 2.0.0-beta.1+build.7\r\n");
+  });
+
+  it("refuses a version or executable a batch parser would read as syntax", () => {
+    expect(() => render("1.0.0&calc")).toThrow(/version/);
+    expect(() => render("1.0.0\r\ncalc")).toThrow(/version/);
+    expect(() => render("1.0.0", "Dain\ntree.exe")).toThrow(/executable/);
+    expect(() => render("1.0.0", "Daintree.cmd")).toThrow(/executable/);
+    expect(() =>
+      renderWindowsCliShim(template, {
+        version: undefined as unknown as string,
+        executable: "Daintree.exe",
+      })
+    ).toThrow(/version/);
+    expect(() => render("1.0.0", 'Dain"tree.exe')).toThrow(/executable/);
+    expect(() => render("1.0.0", "Daintree%PATH%.exe")).toThrow(/executable/);
+  });
+
+  it("refuses a template placeholder it has no value for", () => {
+    for (const placeholder of ["@CHANNEL@", "@BUILD_CHANNEL@", "@VERSION2@"]) {
+      expect(() =>
+        renderWindowsCliShim(`${template}echo ${placeholder}\n`, {
+          version: "1.0.0",
+          executable: "Daintree.exe",
+        })
+      ).toThrow(placeholder);
+    }
+  });
+
+  it("jumps only to labels that exist, each defined once", () => {
+    const lines = statements(render());
+    const labels = lines.filter(isLabel).map(labelName);
+    expect(new Set(labels).size).toBe(labels.length);
+    const targets = lines
+      .filter((line) => !isEcho(line))
+      .flatMap((line) => [...line.matchAll(/\b(?:goto|call)\s+:?(\S+)/gi)])
+      .map((match) => match[1].toLowerCase());
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) expect(labels).toContain(target);
+  });
+
+  it("names its own folder only inside a CALLed label", () => {
+    // At the top level the dp0 modifier can name the caller's directory when
+    // the command runs as a quoted bare name found on PATH.
+    const lines = statements(render());
+    const uses = lines.flatMap((line, i) => (line.includes("%~dp0") ? [i] : []));
+    expect(uses.length).toBeGreaterThan(0);
+    for (const use of uses) {
+      let label = use;
+      while (label >= 0 && !isLabel(lines[label])) label--;
+      expect(label, lines[use]).toBeGreaterThan(0);
+      const name = labelName(lines[label]);
+      expect(lines.some((line) => line.trim().toLowerCase() === `call :${name}`)).toBe(true);
+      expect(lines.some((line) => new RegExp(`\\bgoto\\s+:?${name}\\b`, "i").test(line))).toBe(
+        false
+      );
+      // Nor reached by falling through from the statement above it.
+      expect(lines[label - 1]).toMatch(/^(exit \/b|goto)\b/i);
+    }
+  });
+
+  it("keeps every path inside double quotes", () => {
+    // Unquoted, an ampersand, caret or parenthesis in a folder name would be
+    // parsed as batch syntax.
+    for (const line of statements(render())) {
+      // The bracketed second-operand test is the one bare positional: it only
+      // runs once the quoted test has found that operand empty.
+      const unquoted = line.replace(/"[^"]*"/g, "").replace("[%2]", "");
+      expect(unquoted, line).not.toMatch(/%(target|app)[%:]|%%?~|%[0-9*]/i);
+    }
+  });
+
+  it("keeps cmd syntax out of its comments", () => {
+    // cmd expands percent signs even on a rem line.
+    for (const line of render().split("\r\n").filter(isComment)) {
+      expect(line).not.toMatch(/[%^<>|&]/);
+    }
+  });
+
+  it("sends one joined --cli-path whose value never ends in a backslash (#11410)", () => {
+    const lines = statements(render());
+    const launches = lines.filter((line) => /^start\b/i.test(line));
+    expect(launches).toHaveLength(1);
+    expect(launches[0].match(/--cli-path/g)).toHaveLength(1);
+    const operand = launches[0].match(/ --cli-path="([^"]*)"$/)?.[1];
+    expect(operand).toBeDefined();
+    // The template strips one trailing backslash from what %~f1 resolved first.
+    expect(lines).toContain('if "%target:~-1%"=="\\" set "target=%target:~0,-1%"');
+    const sent = (resolved: string) =>
+      operand!.replace("%target%", resolved.endsWith("\\") ? resolved.slice(0, -1) : resolved);
+    for (const [resolved, opens] of [
+      ["D:\\", "D:\\"],
+      ["C:\\a b", "C:\\a b"],
+      ["C:\\a b\\", "C:\\a b"],
+      ["\\\\server\\share\\dir", "\\\\server\\share\\dir"],
+    ]) {
+      // CommandLineToArgvW reads a backslash before the closing quote as escaping it.
+      expect(sent(resolved).endsWith("\\"), resolved).toBe(false);
+      expect(path.win32.normalize(sent(resolved))).toBe(opens);
     }
   });
 });
