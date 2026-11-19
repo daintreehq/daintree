@@ -9,6 +9,7 @@ import {
   cloudCostFacts,
   cloudStatusLabel,
   clockTime,
+  dayTime,
   idleClockSentence,
   idleEndSentence,
   IDLE_STOP_UNKNOWN,
@@ -21,6 +22,7 @@ import {
   stopKeepsSentence,
   stoppedBillingSentence,
   machineSpecLabel,
+  idleSleepTimerSentence,
 } from "../cloudHostLabels";
 import { BOAT_PROVIDER, provider } from "./cloudProviderFixtures";
 
@@ -430,6 +432,70 @@ describe("idleEndSentence (#17921)", () => {
     expect(idleEndSentence(idle, null, null)).toBe(IDLE_STOP_UNKNOWN);
     const { hostIdleStop: _said, ...undeclared } = BOAT_PROVIDER;
     expect(idleEndSentence(idle, undeclared, null)).toBe(IDLE_STOP_UNKNOWN);
+  });
+});
+
+describe("what holds an Agent 37 instance awake with no device connected (#17918)", () => {
+  const agent37 = provider({ name: "Agent 37" });
+  const lifetime = { kind: "idle-sleep" as const, idleSeconds: 1800 };
+  const expiresAt = Date.UTC(2026, 10, 26, 15, 0);
+  const confirmedAt = Date.UTC(2026, 10, 19, 15, 0);
+  const sentence = (
+    keepAwake: Parameters<typeof idleSleepTimerSentence>[2]["keepAwake"],
+    connected = false
+  ) =>
+    idleSleepTimerSentence(agent37, undefined, {
+      connected,
+      lifetime,
+      followsHost: true,
+      keepAwake,
+    });
+
+  it("says the host keeps it awake while it sees work, until the link's expiry, and the timer after", () => {
+    const held = { kind: "held" as const, expiresAt, confirmedAt };
+    const offline = sentence(held);
+    expect(offline).toContain(
+      `the host keeps the machine awake while it sees work, with a link from Daintree that works until ${dayTime(expiresAt)}`
+    );
+    // Away, what this device knows is what the host said when it last asked.
+    expect(offline).toContain(`(as the host said ${dayTime(confirmedAt)})`);
+    expect(offline).toContain(
+      "Once the host is idle, Agent 37's own idle timer (30 minutes) puts it to sleep after 30 minutes without activity."
+    );
+    expect(offline).not.toContain("is in charge while no device is connected");
+
+    const linked = sentence(held, true);
+    expect(linked).toContain("The host's idle time is in charge while this device is connected");
+    expect(linked).toContain(`works until ${dayTime(expiresAt)}.`);
+    expect(linked).not.toContain("as the host said");
+  });
+
+  it("says Agent 37's own timer is in charge once the link expired, was refused, or was never given", () => {
+    const expired = sentence({ kind: "expired", expiredAt: expiresAt });
+    expect(expired).toContain(
+      "Agent 37's own idle timer (30 minutes) is in charge while no device is connected, even while the host sees work"
+    );
+    expect(expired).toContain(`expired ${dayTime(expiresAt)}. Connecting renews it.`);
+
+    const refused = sentence({
+      kind: "none",
+      problem: "The host refused the link Daintree gave it",
+    });
+    expect(refused).toContain(
+      "is in charge while no device is connected, even while the host sees work: The host refused the link Daintree gave it."
+    );
+    expect(sentence({ kind: "none", problem: "Refused." }, true)).toContain(
+      "The host's idle time is in charge while this device is connected"
+    );
+
+    // Nothing handed over yet, or a status from before it: the timer, as before.
+    for (const nothing of [{ kind: "none" as const, problem: null }, null, undefined]) {
+      expect(sentence(nothing)).toBe(
+        "Agent 37's own idle timer (30 minutes) is in charge while no device is connected: it puts the machine to sleep after 30 minutes without activity. The host's idle time takes over while this device is connected."
+      );
+    }
+    // Linked with nothing held yet, nothing is added to the linked sentence.
+    expect(sentence({ kind: "none", problem: null }, true)).not.toContain("no device is connected");
   });
 });
 

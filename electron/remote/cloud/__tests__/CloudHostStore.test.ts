@@ -608,6 +608,37 @@ describe("CloudHostStore host keys", () => {
   });
 });
 
+describe("CloudHostStore keep-awake (#17918)", () => {
+  const RESOURCE = "ab12cd34ef";
+
+  it("keeps what the host said it holds across a restart, for the machine it was said of", () => {
+    const backend = disk();
+    const held = {
+      resourceId: RESOURCE,
+      expiresAt: 1_800_604_800_000,
+      confirmedAt: 1_800_000_000_000,
+    };
+    new CloudHostStore(backend).putBinding(binding({ resourceId: RESOURCE, keepAwake: held }));
+    expect(new CloudHostStore(backend).bindings()[0]!.keepAwake).toEqual(held);
+
+    // Said of another machine, or unreadable: as if nothing were held.
+    for (const keepAwake of [
+      { ...held, resourceId: "zz12cd34ef" },
+      { ...held, expiresAt: "soon" },
+      "held",
+    ]) {
+      backend.write({
+        version: 1,
+        accounts: [],
+        bindings: [{ ...binding({ resourceId: RESOURCE }), keepAwake }],
+      });
+      const read = new CloudHostStore(backend).bindings()[0]!;
+      expect(read.keepAwake).toBeUndefined();
+      expect(read.resourceId).toBe(RESOURCE);
+    }
+  });
+});
+
 describe("CloudHostStore SSH access", () => {
   const PINNED = {
     user: "user",

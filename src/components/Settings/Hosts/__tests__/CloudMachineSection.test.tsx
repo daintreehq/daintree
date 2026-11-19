@@ -933,6 +933,30 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
     expect(idleRow()).toContain("The host's idle time is in charge while this device is connected");
     expect(idleRow()).not.toContain("keeps its own idle timer");
 
+    // With no device connected, the host's hold on it and when that runs out (#17918).
+    cleanup();
+    show(
+      sleeper({
+        keepAwake: {
+          kind: "held",
+          expiresAt: Date.UTC(2026, 10, 26, 15),
+          confirmedAt: Date.UTC(2026, 10, 19, 15),
+        },
+      }),
+      [agent37]
+    );
+    expect(idleRow()).toContain(
+      "With no device connected, the host keeps the machine awake while it sees work, with a link from Daintree that works until"
+    );
+    expect(idleRow()).not.toContain("is in charge while no device is connected");
+    cleanup();
+    show(sleeper({ keepAwake: { kind: "expired", expiredAt: Date.UTC(2026, 10, 26, 15) } }), [
+      agent37,
+    ]);
+    expect(idleRow()).toContain(
+      "Agent 37's own idle timer (15 minutes) is in charge while no device is connected, even while the host sees work"
+    );
+
     cleanup();
     show(sleeper({ lifetime: { kind: "none" } }), [agent37]);
     expect(idleRow()).toContain(
