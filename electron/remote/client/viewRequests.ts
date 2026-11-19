@@ -365,7 +365,11 @@ async function dispatchAction(
             ...deadline,
           }
         : delegation !== null
-          ? { ...deadline, delegationOffer: delegation.offer }
+          ? {
+              ...deadline,
+              delegationOffer: delegation.offer,
+              onDelegationApproved: delegation.approved,
+            }
           : deadline,
     describeHost(
       hostId,

@@ -482,9 +482,15 @@ export class HostSettingsRequests {
         ...(delegation !== null ? { delegation: delegation.offer } : {}),
       });
       if (answer === null) return null;
-      const handOver = delegation?.commit;
-      return answer.delegate === true && answer.decision === "approved" && handOver !== undefined
-        ? { decision: answer.decision, handOver: () => void handOver() }
+      const ticked = delegation;
+      return answer.delegate === true && answer.decision === "approved" && ticked !== null
+        ? {
+            decision: answer.decision,
+            handOver: () => {
+              ticked.approved();
+              ticked.commit();
+            },
+          }
         : { decision: answer.decision };
     } catch {
       return null;

@@ -805,6 +805,40 @@ describe("DaintreeAssistantSettingsTab", () => {
       expect(setSettings).toHaveBeenCalledTimes(1);
     });
 
+    it("writes nothing when the stored list can't be read", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      const setSettings = vi.fn().mockResolvedValue(undefined);
+      const getSettings = vi.fn().mockResolvedValue({
+        docSearch: true,
+        daintreeControl: true,
+        tier: "core" as const,
+        bypassPermissions: true,
+        auditRetention: 7,
+        customArgs: "",
+        daintreeConfirmations: "ask-except",
+        daintreeConfirmationsExcept: ["worktree.retireOwned", "host.settings"],
+      });
+      installApi({ getSettings, setSettings });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Retire a worktree it created");
+      getSettings.mockRejectedValue(new Error("unreachable"));
+      const readsBefore = getSettings.mock.calls.length;
+
+      const box = Array.from(container.querySelectorAll('[role="checkbox"]')).find((el) =>
+        el.closest("[data-settings-reset-scope]")?.textContent?.includes("Retire a worktree")
+      ) as HTMLElement;
+      fireEvent.click(box);
+      await waitFor(() => expect(getSettings.mock.calls.length).toBe(readsBefore + 1));
+      await Promise.resolve();
+
+      expect(setSettings).not.toHaveBeenCalled();
+      expect(box.getAttribute("aria-checked")).toBe("true");
+    });
+
     it("offers ask-except to a host whose answer carries the list, and saves it (#16752)", async () => {
       helpPanelState.preferredAgentId = "claude";
       const setSettings = vi.fn().mockResolvedValue(undefined);

@@ -181,6 +181,13 @@ export interface WorkspaceDispatchOptions {
    */
   delegationOffer?: McpDelegationOffer;
   /**
+   * Called once when the person approves a dispatch sent with
+   * {@link delegationOffer}: when the view claims the approval, before the
+   * action runs, or with the answer when nothing runs here (#16752). Main's
+   * own, never sent anywhere.
+   */
+  onDelegationApproved?: () => void;
+  /**
    * The pane or Assistant tab this dispatch came from, for any dialog it
    * raises to name (#14992). Set from the bearer's own surface, never from
    * the call.
@@ -1191,6 +1198,8 @@ export interface PendingRequest<T> {
    * an approval it reports may carry the `delegate` scope.
    */
   offeredDelegation?: true;
+  /** Dispatches only: {@link WorkspaceDispatchOptions.onDelegationApproved}, until it runs. */
+  onDelegationApproved?: () => void;
 }
 
 /**

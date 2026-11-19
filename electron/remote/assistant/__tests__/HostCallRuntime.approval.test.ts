@@ -110,6 +110,7 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
         if (!delegable.has(calledActionId)) return null;
         return {
           offer: { label: calledActionId, detail: "only this" },
+          approved: () => {},
           commit: () => {
             commits.push(calledActionId);
             return true;

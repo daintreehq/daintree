@@ -15,7 +15,11 @@ const m = vi.hoisted(() => ({
     (
       _hostId: string,
       _dispatch: unknown
-    ): { offer: { label: string; detail: string }; commit: () => boolean } | null => null
+    ): {
+      offer: { label: string; detail: string };
+      approved: () => void;
+      commit: () => boolean;
+    } | null => null
   ),
   // The project each view of this Shell shows, keyed as the Shell keys it.
   viewProjects: new Map<number, string>(),
@@ -304,7 +308,8 @@ describe("view reverse requests", () => {
     it("offers this Shell's hand-over on the dialog it asks with, and keeps it from the host (#16752)", async () => {
       const commit = vi.fn(() => true);
       const offer = { label: "Delete a worktree it created", detail: "Only a clean one" };
-      m.relayedDelegation.mockReturnValue({ offer, commit });
+      const approved = vi.fn();
+      m.relayedDelegation.mockReturnValue({ offer, approved, commit });
       m.dispatchActionForHost.mockResolvedValue({
         result: { ok: true, result: 1 },
         confirmationDecision: "approved",
@@ -323,6 +328,7 @@ describe("view reverse requests", () => {
       expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
         fixedDeadline: true,
         delegationOffer: offer,
+        onDelegationApproved: approved,
       });
       expect(commit).toHaveBeenCalledTimes(1);
       // The host hears the decision and nothing of the tick.
@@ -335,7 +341,11 @@ describe("view reverse requests", () => {
       { confirmationDecision: "approved" },
     ])("writes no hand-over for a dialog answered %o (#16752)", async (reply) => {
       const commit = vi.fn(() => true);
-      m.relayedDelegation.mockReturnValue({ offer: { label: "x", detail: "y" }, commit });
+      m.relayedDelegation.mockReturnValue({
+        offer: { label: "x", detail: "y" },
+        approved: () => {},
+        commit,
+      });
       m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 }, ...reply });
 
       const answer = await ask("mcp:dispatch-action", relayedDelete);
@@ -349,6 +359,7 @@ describe("view reverse requests", () => {
       m.skipsRelayedDispatch.mockReturnValue(true);
       m.relayedDelegation.mockReturnValue({
         offer: { label: "x", detail: "y" },
+        approved: () => {},
         commit: () => true,
       });
 
@@ -377,6 +388,7 @@ describe("view reverse requests", () => {
       const { relayCall: _relayCall, relayed: _relayed, ...hostsOwn } = relayedDelete;
       m.relayedDelegation.mockReturnValue({
         offer: { label: "x", detail: "y" },
+        approved: () => {},
         commit: () => true,
       });
 

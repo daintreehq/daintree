@@ -363,6 +363,59 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
       });
     });
 
+    it("tells the offer's owner once, when the approval is claimed before the action runs", async () => {
+      const wc = makeWebContents(714);
+      mockWebContentsRegistry.set(714, wc);
+      const onDelegationApproved = vi.fn();
+      const promise = bridge.dispatchActionForWebContents(
+        714,
+        "worktree.delete",
+        {},
+        false,
+        undefined,
+        "help",
+        { delegationOffer: offer, onDelegationApproved }
+      );
+      await Promise.resolve();
+      const [requestId] = [...pendingDispatches.keys()];
+      expect(bridge.holdDispatch(714, requestId!, "shown").held).toBe(true);
+      expect(onDelegationApproved).not.toHaveBeenCalled();
+      expect(bridge.holdDispatch(714, requestId!, "approved").held).toBe(true);
+      expect(onDelegationApproved).toHaveBeenCalledTimes(1);
+
+      mockIpcMain.emit(
+        CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+        { sender: { id: 714 } },
+        {
+          requestId,
+          result: { ok: true, result: null },
+          confirmationDecision: "approved",
+          approvalScope: "delegate",
+        }
+      );
+      await promise;
+      expect(onDelegationApproved).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      [{ confirmationDecision: "approved" }, 1],
+      [{ confirmationDecision: "rejected", approvalScope: "delegate" }, 0],
+      [{ confirmationDecision: "timeout" }, 0],
+    ])("tells the owner with an answer %o that nothing claimed first", async (reply, calls) => {
+      answerWith(715, reply);
+      const onDelegationApproved = vi.fn();
+      await bridge.dispatchActionForWebContents(
+        715,
+        "worktree.delete",
+        {},
+        false,
+        undefined,
+        "help",
+        { delegationOffer: offer, onDelegationApproved }
+      );
+      expect(onDelegationApproved).toHaveBeenCalledTimes(calls);
+    });
+
     it("drops a hand-over the view claims on a request it was never offered", async () => {
       const sent = answerWith(712, { confirmationDecision: "approved", approvalScope: "delegate" });
       const envelope = await bridge.dispatchActionForWebContents(

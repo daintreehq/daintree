@@ -15,7 +15,7 @@ vi.mock("../../../store.js", () => ({
 
 import { store } from "../../../store.js";
 import {
-  noteAssistantConfirmationsWritten,
+  noteAssistantConfirmationsEdited,
   prepareAssistantDelegation,
   readAssistantConfirmationsSkipped,
 } from "../assistantConfirmationsPreference.js";
@@ -176,30 +176,54 @@ describe("the confirm dialog's hand-over (#16752)", () => {
   });
 
   // An approval reports back once its action has run: an untick, or another
-  // mode, chosen by hand meanwhile is the newer choice and stands.
-  it("writes nothing once the person changed confirmations by hand after the offer", () => {
+  // mode, chosen by hand while it ran is the newer choice and stands.
+  it("writes nothing once the person changed confirmations by hand after approving", () => {
     setAssistant({ daintreeConfirmations: "always-ask" });
     const first = prepareAssistantDelegation(null, "worktree.deleteOwned");
     const second = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    first?.approved();
     expect(first?.commit()).toBe(true);
+    second?.approved();
 
-    const before = { ...storedAssistant() };
     storedAssistant().daintreeConfirmationsExcept = [];
-    noteAssistantConfirmationsWritten(before, storedAssistant());
+    noteAssistantConfirmationsEdited();
 
     expect(second?.commit()).toBe(false);
     expect(storedAssistant().daintreeConfirmationsExcept).toEqual([]);
     expect(readAssistantConfirmationsSkipped(null, "worktree.deleteOwned")).toBe(false);
   });
 
-  it("counts only a write that changes the mode or the list", () => {
+  // The dialog's own mode control, used before ticking: the tick is newer.
+  it("applies the tick to a mode the person chose by hand before approving", () => {
+    setAssistant({ daintreeConfirmations: "always-ask" });
+    const prepared = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    storedAssistant().daintreeConfirmations = "inherit";
+    noteAssistantConfirmationsEdited();
+    prepared?.approved();
+
+    expect(prepared?.commit()).toBe(true);
+    expect(storedAssistant()).toMatchObject({
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["worktree.deleteOwned"],
+    });
+  });
+
+  // An untick of an action already gone from the list leaves it as it was,
+  // and is still a no to that action.
+  it("counts a hand write that changes nothing", () => {
     setAssistant({ daintreeConfirmations: "ask-except", daintreeConfirmationsExcept: [] });
     const prepared = prepareAssistantDelegation(null, "host.settings");
-    noteAssistantConfirmationsWritten(
-      { daintreeConfirmations: "ask-except", daintreeConfirmationsExcept: [] },
-      { daintreeConfirmations: "ask-except", daintreeConfirmationsExcept: ["worktree.delete"] }
-    );
-    expect(prepared?.commit()).toBe(true);
+    prepared?.approved();
+    noteAssistantConfirmationsEdited();
+    expect(prepared?.commit()).toBe(false);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("holds an offer never approved to the setting as it was offered", () => {
+    setAssistant({ daintreeConfirmations: "always-ask" });
+    const prepared = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    noteAssistantConfirmationsEdited();
+    expect(prepared?.commit()).toBe(false);
   });
 
   it("writes nothing when the followed agent started skipping while the dialog was up", () => {

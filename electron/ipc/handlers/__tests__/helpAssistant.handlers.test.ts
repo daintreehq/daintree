@@ -341,14 +341,24 @@ describe("registerHelpAssistantHandlers", () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
-    const unchanged = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    // A hand write before the approval came before the tick.
+    const before = prepareAssistantDelegation(null, "worktree.deleteOwned");
     await handler(null, { daintreeConfirmations: "ask-except" });
-    expect(unchanged?.commit()).toBe(true);
+    before?.approved();
+    expect(before?.commit()).toBe(true);
 
-    const revoked = prepareAssistantDelegation(null, "worktree.retireOwned");
-    await handler(null, { daintreeConfirmationsExcept: ["worktree.deleteOwned"] });
-    expect(revoked?.commit()).toBe(false);
-    expect(stored.daintreeConfirmationsExcept).toEqual(["worktree.deleteOwned"]);
+    // One while the approved call runs is newer, even one that changes nothing.
+    const during = prepareAssistantDelegation(null, "worktree.retireOwned");
+    during?.approved();
+    await handler(null, { daintreeConfirmationsExcept: ["worktree.deleteOwned", "host.settings"] });
+    expect(during?.commit()).toBe(false);
+    expect(stored.daintreeConfirmationsExcept).toEqual(["worktree.deleteOwned", "host.settings"]);
+
+    // Any other setting isn't a choice about confirmations.
+    const unrelated = prepareAssistantDelegation(null, "worktree.retireOwned");
+    unrelated?.approved();
+    await handler(null, { docSearch: false });
+    expect(unrelated?.commit()).toBe(true);
     storeMock.set.mockReset();
   });
 

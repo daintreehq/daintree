@@ -27,31 +27,18 @@ function readMode(): HelpAssistantDaintreeConfirmations {
 }
 
 /**
- * Counts the changes the person makes to Daintree confirmations by hand, in
+ * Counts the writes the person makes to Daintree confirmations by hand, in
  * Settings or the dialog's own mode control, and never a hand-over from the
- * dialog (#16752). A tick offered before one of them writes nothing: an
- * approval reports back only once its action has run, by when the person may
- * have unticked that action or chosen another mode, and that later choice stands.
+ * dialog (#16752). Each counts, even one that leaves the stored value as it
+ * was: an untick of an action already gone is still a no to it. A tick
+ * approved before one of them writes nothing: an approval reports back only
+ * once its action has run, and a choice made by hand meanwhile is newer.
  */
 let handEdits = 0;
 
-type ConfirmationFields = {
-  daintreeConfirmations?: unknown;
-  daintreeConfirmationsExcept?: unknown;
-};
-
-/** Hears a settings write the person made, after it lands. */
-export function noteAssistantConfirmationsWritten(
-  before: ConfirmationFields | undefined,
-  after: ConfirmationFields | undefined
-): void {
-  const list = (value: unknown) => sanitizeDelegatedConfirmations(value).join("\n");
-  if (
-    asMode(before?.daintreeConfirmations) !== asMode(after?.daintreeConfirmations) ||
-    list(before?.daintreeConfirmationsExcept) !== list(after?.daintreeConfirmationsExcept)
-  ) {
-    handEdits += 1;
-  }
+/** Hears a write the person made to Daintree confirmations, after it lands. */
+export function noteAssistantConfirmationsEdited(): void {
+  handEdits += 1;
 }
 
 /**
@@ -90,8 +77,16 @@ export function readAssistantConfirmationsSkipped(
 export interface PreparedAssistantDelegation {
   readonly offer: McpDelegationOffer;
   /**
+   * The person approved the call the offer sits on: the setting as it stands
+   * now is the one the tick applies to. A change they made by hand before
+   * approving came before the tick; one made after it, while the call runs,
+   * is newer and stands.
+   */
+  approved(): void;
+  /**
    * Hands the action over, read again now: false, writing nothing, when the
-   * person changed Daintree confirmations by hand since the offer, when the
+   * person changed Daintree confirmations by hand since approving (since the
+   * offer, if {@link approved} was never called), when the
    * mode now skips everything, so ticking the box can never start asking
    * about other actions, or when it has moved off the one the offer was
    * worded for to anything but "Ask, except for…".
@@ -125,32 +120,38 @@ export function prepareAssistantDelegation(
   }
   if (policy.skipsAll || policy.delegated.has(calledActionId)) return null;
   const switchesMode = mode !== "ask-except";
-  const editsAtOffer = handEdits;
+  let basis = { mode, edits: handEdits };
   return {
     offer: {
       label: entry.label,
       detail: entry.detail,
       ...(switchesMode ? { switchesMode: true as const } : {}),
     },
-    commit: () => commitAssistantDelegation(sessionAgentId, calledActionId, mode, editsAtOffer),
+    approved: () => {
+      try {
+        basis = { mode: readMode(), edits: handEdits };
+      } catch {
+        // The offer's own reading still stands.
+      }
+    },
+    commit: () => commitAssistantDelegation(sessionAgentId, calledActionId, basis),
   };
 }
 
 function commitAssistantDelegation(
   sessionAgentId: string | null,
   calledActionId: string,
-  offeredMode: HelpAssistantDaintreeConfirmations,
-  editsAtOffer: number
+  basis: { mode: HelpAssistantDaintreeConfirmations; edits: number }
 ): boolean {
   try {
     const mode = readMode();
     // Under "Ask, except for…" the action joins the list as it stands now,
-    // whatever mode the dialog was offered under: everything already there
-    // the person ticked. Any other mode must still be the one the offer named,
-    // so a newer choice made while the dialog was up stands.
+    // whatever mode the dialog was approved under: everything already there
+    // the person ticked. Any other mode must still be the one it was approved
+    // under, so a newer choice stands.
     if (
-      handEdits !== editsAtOffer ||
-      (mode !== "ask-except" && mode !== offeredMode) ||
+      handEdits !== basis.edits ||
+      (mode !== "ask-except" && mode !== basis.mode) ||
       readAssistantConfirmationPolicy(sessionAgentId).skipsAll
     ) {
       logger.info("Didn't hand an action over: Daintree confirmations changed while asking", {

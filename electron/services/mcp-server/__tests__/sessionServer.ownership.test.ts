@@ -2326,8 +2326,9 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       function delegating(sessionId: string, envelope: Record<string, unknown>) {
         const commit = vi.fn(() => true);
+        const approved = vi.fn();
         const prepareAssistantDelegation = vi.fn((calledActionId: string) =>
-          calledActionId === "worktree.deleteOwned" ? { offer, commit } : null
+          calledActionId === "worktree.deleteOwned" ? { offer, approved, commit } : null
         );
         const h = harness(
           sessionId,
@@ -2339,7 +2340,7 @@ describe("session-scoped resource ownership (#11909)", () => {
         );
         h.store.sessionOriginMap.set(sessionId, "help");
         h.store.resourceOwnership.record(sessionId, [{ kind: "worktree", id: "/tmp/wt" }]);
-        return { ...h, commit, prepareAssistantDelegation };
+        return { ...h, commit, approved, prepareAssistantDelegation };
       }
 
       it("offers it for the owned id on the delete it is sent as, and writes it on approval", async () => {
@@ -2364,7 +2365,7 @@ describe("session-scoped resource ownership (#11909)", () => {
           false,
           undefined,
           undefined,
-          { delegationOffer: offer }
+          { delegationOffer: offer, onDelegationApproved: expect.any(Function) }
         );
         expect(commit).toHaveBeenCalledTimes(1);
       });
@@ -2385,12 +2386,16 @@ describe("session-scoped resource ownership (#11909)", () => {
         });
 
         // Offered, so the missing write is the answer's doing, not a missing offer.
-        expect(dispatchAction.mock.calls.at(-1)?.[5]).toEqual({ delegationOffer: offer });
+        expect(dispatchAction.mock.calls.at(-1)?.[5]).toMatchObject({ delegationOffer: offer });
         expect(commit).not.toHaveBeenCalled();
       });
 
       it("offers nothing for a call that already runs without asking", async () => {
-        const prepareAssistantDelegation = vi.fn(() => ({ offer, commit: () => true }));
+        const prepareAssistantDelegation = vi.fn(() => ({
+          offer,
+          approved: () => {},
+          commit: () => true,
+        }));
         const { store, server, dispatchAction } = harness(
           "s-skipped-hand-over",
           { "worktree.delete": { result: { ok: true, result: null } } },
@@ -2414,7 +2419,11 @@ describe("session-scoped resource ownership (#11909)", () => {
       });
 
       it("offers nothing to a session that isn't the assistant", async () => {
-        const prepareAssistantDelegation = vi.fn(() => ({ offer, commit: () => true }));
+        const prepareAssistantDelegation = vi.fn(() => ({
+          offer,
+          approved: () => {},
+          commit: () => true,
+        }));
         const { store, server, dispatchAction } = harness(
           "s-external-hand-over",
           { "worktree.delete": { result: { ok: true, result: null } } },

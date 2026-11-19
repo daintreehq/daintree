@@ -1601,6 +1601,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           : delegation !== null && !dispatchConfirmed
             ? dispatchAction(id, dispatchArgs, dispatchConfirmed, undefined, undefined, {
                 delegationOffer: delegation.offer,
+                onDelegationApproved: delegation.approved,
               })
             : dispatchAction(id, dispatchArgs, dispatchConfirmed);
 

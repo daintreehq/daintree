@@ -180,6 +180,7 @@ export interface SessionServerDepsSource {
       | "authorization"
       | "requester"
       | "delegationOffer"
+      | "onDelegationApproved"
       | "actionsListWalk"
     >
   ) => Promise<import("./shared.js").DispatchEnvelope>;
@@ -899,6 +900,7 @@ export function createSessionServerDeps(
     // that can reach a local view. A view-less host's catalog is one page.
     const actionsListWalk = callOptions?.actionsListWalk === true;
     const delegationOffer = callOptions?.delegationOffer;
+    const onDelegationApproved = callOptions?.onDelegationApproved;
     if (boundWorkspaceId !== null) {
       // A bound external session records no context: unlike a help session,
       // which replays the ActionContext snapshot taken when the user launched
@@ -1023,6 +1025,9 @@ export function createSessionServerDeps(
             ...(assistantRequester !== undefined ? { requester: assistantRequester } : {}),
             ...(actionsListWalk ? { actionsListWalk: true } : {}),
             ...(offer !== undefined ? { delegationOffer: offer } : {}),
+            ...(offer !== undefined && onDelegationApproved !== undefined
+              ? { onDelegationApproved }
+              : {}),
           })
         : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
     }

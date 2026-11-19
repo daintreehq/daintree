@@ -301,7 +301,7 @@ describe("host.settings (#14167)", () => {
 
     function withHandOver() {
       const commit = vi.fn(() => true);
-      const prepareDelegation = vi.fn(() => ({ offer, commit }));
+      const prepareDelegation = vi.fn(() => ({ offer, approved: () => {}, commit }));
       const t = setup(undefined, { prepareDelegation });
       return { t, commit, prepareDelegation };
     }
@@ -357,7 +357,7 @@ describe("host.settings (#14167)", () => {
 
     it("offers nothing when the change runs handed over already", async () => {
       const commit = vi.fn(() => true);
-      const prepareDelegation = vi.fn(() => ({ offer, commit }));
+      const prepareDelegation = vi.fn(() => ({ offer, approved: () => {}, commit }));
       const t = setup(undefined, { prepareDelegation, skipsApproval: () => true });
       expect((await applyOnce(t)).outcome).toBe("ok");
       expect(t.askApproval).not.toHaveBeenCalled();

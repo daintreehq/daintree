@@ -105,7 +105,11 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * reaches only the help session's own pinned view; see
      * `WorkspaceDispatchOptions.delegationOffer`.
      */
-    options?: { actionsListWalk?: true; delegationOffer?: McpDelegationOffer }
+    options?: {
+      actionsListWalk?: true;
+      delegationOffer?: McpDelegationOffer;
+      onDelegationApproved?: () => void;
+    }
   ) => Promise<DispatchEnvelope>;
   /**
    * Take the user to a run, and bring the window it lands in with them

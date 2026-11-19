@@ -411,19 +411,13 @@ export function DaintreeAssistantSettingsTab() {
     persistRef.current = persist;
   });
   const toggleDaintreeConfirmationExcept = (id: string, on: boolean) => {
-    const fallback = delegatedConfirmations ?? [];
     exceptWritesRef.current = exceptWritesRef.current
       .then(async () => {
-        let stored: readonly string[] = fallback;
-        try {
-          const fresh = await window.electron.helpAssistant.getSettings();
-          if (Array.isArray(fresh.daintreeConfirmationsExcept)) {
-            stored = fresh.daintreeConfirmationsExcept;
-          }
-        } catch {
-          // This tab's copy is all there is to go on.
-        }
-        const next = new Set(stored);
+        // Nothing is written without the stored list: this tab's copy may hold
+        // ticks the dialog has since dropped, so the box just stays as it was.
+        const fresh = await window.electron.helpAssistant.getSettings();
+        if (!Array.isArray(fresh.daintreeConfirmationsExcept)) return;
+        const next = new Set(fresh.daintreeConfirmationsExcept);
         if (on) next.add(id);
         else next.delete(id);
         await persistRef.current({

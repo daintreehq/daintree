@@ -1220,6 +1220,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     if (prepared === null) return null;
     return {
       offer: prepared.offer,
+      approved: () => prepared.approved(),
       commit: () =>
         this.callsInFlight.get(callId) === call &&
         this.stillRunning(call.run) &&
@@ -1462,7 +1463,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       return answer("refused");
     }
     // The host is told only the decision; the tick is this Shell's own.
-    if (decision === "approved" && reply?.delegate === true) delegation?.commit();
+    if (decision === "approved" && reply?.delegate === true && delegation !== null) {
+      delegation.approved();
+      delegation.commit();
+    }
     return answer(decision ?? "refused");
   }
 
