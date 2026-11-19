@@ -585,13 +585,46 @@ describe("TerminalRateLimitBadge, armed to continue (#17911)", () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
     const toast = notifyMock.mock.calls[0]![0];
     expect(toast.type).toBe("error");
-    expect(toast.message).toMatch(/'Codex' still continues/);
+    expect(toast.message).toMatch(/'Codex' may still continue/);
     expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toMatch(/^Resumes /);
 
     act(() => toast.action.onClick());
     await act(async () => {});
     expect(setContinue).toHaveBeenLastCalledWith("t1", false);
     expect(setContinue).toHaveBeenCalledTimes(2);
+  });
+
+  it("never lets an old refusal's Retry cancel a wait armed since", async () => {
+    clock.now = local(19, 9, 0);
+    usePanelStore.setState({ panelsById: { t1: codexPane() }, panelIds: ["t1"] });
+    renderBadge("t1");
+    armWith({ status: "waiting", resetsAt: local(19, 15, 39), continueAt: local(19, 15, 40) });
+    setContinue.mockRejectedValueOnce(new Error("refused"));
+    openChipMenu();
+    act(() => {
+      fireEvent.click(
+        screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" })
+      );
+    });
+    await act(async () => {});
+    const toast = notifyMock.mock.calls[0]![0];
+
+    // Cancelled from elsewhere, then armed again, with a new wait.
+    act(() => {
+      const store = useCodexLimitContinueStore.getState();
+      store.applyChange({ terminalId: "t1", revision: 3, state: null });
+      store.applyChange({
+        terminalId: "t1",
+        revision: 4,
+        state: { status: "waiting", resetsAt: local(19, 16, 39), continueAt: local(19, 16, 40) },
+      });
+    });
+    act(() => toast.action.onClick());
+    await act(async () => {});
+    expect(setContinue).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("terminal-rate-limit-badge").textContent).toMatch(
+      /^Resumes 4:40\sPM$/u
+    );
   });
 
   it("keeps a wait on the pane past the banner's 15 minutes, with no new record", () => {

@@ -132,9 +132,13 @@ function continueGlyph(kind: LimitContinueChip["kind"] | undefined) {
 /**
  * Turn the pane's continuation off, straight to main and never an action, so
  * nothing here reaches MCP (#17909). A refusal is said out loud: an armed
- * pane with a fresh banner shows the same chip either way.
+ * pane with a fresh banner shows the same chip either way. Its Retry acts only
+ * while main's record is still the one that was refused, so an old toast
+ * never cancels a wait armed since.
  */
 function turnOffContinue(terminalId: string): void {
+  const record = useCodexLimitContinueStore.getState().panes[terminalId];
+  if (!record) return;
   void codexLimitContinueClient.set(terminalId, false).catch((error: unknown) => {
     const title = usePanelStore.getState().panelsById[terminalId]?.title;
     const why =
@@ -142,8 +146,17 @@ function turnOffContinue(terminalId: string): void {
     notify({
       type: "error",
       title: "Couldn't cancel resume",
-      message: `${why} ${title ? `'${title}'` : "The pane"} still continues once its usage limit resets.`,
-      action: { label: "Retry", variant: "primary", onClick: () => turnOffContinue(terminalId) },
+      // "May": a reply lost on the way back can hide a cancel that took.
+      message: `${why} ${title ? `'${title}'` : "The pane"} may still continue once its usage limit resets.`,
+      action: {
+        label: "Retry",
+        variant: "primary",
+        onClick: () => {
+          if (useCodexLimitContinueStore.getState().panes[terminalId] === record) {
+            turnOffContinue(terminalId);
+          }
+        },
+      },
       context: { eventKind: "agent" },
     });
   });

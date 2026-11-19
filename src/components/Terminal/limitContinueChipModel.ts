@@ -128,7 +128,7 @@ const SKIPS: Record<
   draft: { kind: "skipped", copy: "The prompt wasn't empty" },
   "unrecognized-footer": {
     kind: "skipped",
-    copy: "Daintree didn't recognize what Codex's footer showed",
+    copy: "Daintree couldn't tell from Codex's footer which line to send",
   },
   "not-delivered": {
     kind: "skipped",
@@ -208,9 +208,10 @@ export function describeLimitContinue(
         return {
           kind: "no-reset",
           label: "No reset time",
-          // A credit or spend cap names no reset, so there's nothing to look up.
+          // A credit or spend cap, or "Try again later", names no reset, so
+          // there's nothing to look up.
           lines:
-            state.reason === "no-reset"
+            state.reason === "no-reset" || state.reason === "no-reset-stated"
               ? ["No reset time to wait for", copy]
               : [
                   "No reset time to wait for",

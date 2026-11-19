@@ -124,7 +124,12 @@ describe("describeLimitContinue (#17911)", () => {
       { status: "skipped", at: NOW, reason: "unreadable-time" },
       NOW
     );
+    const later = describeLimitContinue(
+      { status: "skipped", at: NOW, reason: "no-reset-stated" },
+      NOW
+    );
     expect(cap?.lines.join("\n")).not.toMatch(pointer);
+    expect(later?.lines.join("\n")).not.toMatch(pointer);
     expect(unread?.lines.join("\n")).toMatch(pointer);
   });
 
