@@ -1326,7 +1326,8 @@ describe("session-scoped resource ownership (#11909)", () => {
         dispatchAction,
         requestManifest: vi.fn().mockResolvedValue(manifest),
         getCachedManifest: vi.fn(() => manifest),
-        claudeUpdate,
+        // The lock's generic signature is beyond `vi.fn`'s inference.
+        claudeUpdate: claudeUpdate as unknown as Service,
       });
       store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
       return { store, dispatchAction, claudeUpdate, server: createSessionServer(sessionId, deps) };

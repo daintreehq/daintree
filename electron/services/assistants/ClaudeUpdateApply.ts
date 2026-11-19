@@ -98,6 +98,11 @@ type Check =
 
 const NOTHING_SENT = "Nothing was sent.";
 
+// A function, so a read after an await isn't narrowed by one before it.
+function aborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 function refuse(code: string, message: string): never {
   throw new AssistantTargetError(code, message);
 }
@@ -256,7 +261,7 @@ export class ClaudeUpdateApply {
     );
     let waitingOn = "its first read";
     for (;;) {
-      if (request.signal?.aborted === true) {
+      if (aborted(request.signal)) {
         return this.notSent(pin, "cancelled", "The call ended before the pane was ready.");
       }
       const record = await this.deps.getTerminal(terminalId).catch(() => null);
@@ -277,7 +282,7 @@ export class ClaudeUpdateApply {
     }
     // The ready read was awaited: the call may have ended, or its time run
     // out, while it was in flight. Nothing is typed for a caller already answered.
-    if (request.signal?.aborted === true) {
+    if (aborted(request.signal)) {
       return this.notSent(pin, "cancelled", "The call ended before the pane was ready.");
     }
     if (this.now() >= deadline) {
@@ -410,7 +415,7 @@ export class ClaudeUpdateApply {
           break;
       }
       // A call that ended takes the line back if it can; what became of it is still read.
-      if (request.signal?.aborted === true) withdraw();
+      if (aborted(request.signal)) withdraw();
       if (this.now() - handedAt >= CLAUDE_UPDATE_DELIVERY_MS) {
         withdraw();
         return {
