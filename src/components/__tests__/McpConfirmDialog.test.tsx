@@ -148,6 +148,7 @@ function enqueue(
     subject?: string;
     typedNameTarget?: string;
     offerSessionApproval?: boolean;
+    delegationOffer?: { label: string; detail: string; switchesMode?: true };
     approvalReason?: "above-tier";
     worktreeDeleteNotesTargetId?: string;
     requester?: McpConfirmRequester;
@@ -179,6 +180,7 @@ function enqueue(
       ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
       ...(overrides.typedNameTarget ? { typedNameTarget: overrides.typedNameTarget } : {}),
       ...(overrides.offerSessionApproval ? { offerSessionApproval: true } : {}),
+      ...(overrides.delegationOffer ? { delegationOffer: overrides.delegationOffer } : {}),
       ...(overrides.approvalReason ? { approvalReason: overrides.approvalReason } : {}),
       ...(overrides.requester ? { requester: overrides.requester } : {}),
       ...(overrides.worktreeDeleteNotesTargetId
@@ -1235,6 +1237,102 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       expect(screen.getByText(/needs your approval/)).toBeTruthy();
+    });
+  });
+
+  // #16752: the assistant's own call, local or relayed, can be handed over to
+  // it from the dialog that asks. Main settled the action; the tick only says yes.
+  describe("the hand-over (#16752)", () => {
+    const OFFER = {
+      label: "Delete a worktree it created",
+      detail: "Only a clean one",
+      switchesMode: true as const,
+    };
+    const ASSISTANT_HERE = { userAgent: "Your assistant, here", token4LastChars: "" };
+    const TICK = "Don't ask again for this kind of action";
+
+    it("offers it unchecked on a relayed ask, naming the action and the mode it switches to", () => {
+      void enqueue({ danger: "safe", callerInfo: ASSISTANT_HERE, delegationOffer: OFFER });
+      render(<McpConfirmDialog />);
+
+      expect(screen.getByRole("checkbox", { name: TICK }).getAttribute("aria-checked")).toBe(
+        "false"
+      );
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Delete a worktree it created");
+      expect(text).toContain("as Ask, except for… with only this action");
+    });
+
+    it("renders no tick without main's offer", () => {
+      void enqueue({ danger: "safe", callerInfo: ASSISTANT_HERE });
+      render(<McpConfirmDialog />);
+
+      expect(screen.queryByRole("checkbox", { name: TICK })).toBeNull();
+    });
+
+    it("reports the tick with the approval, and the next request opens unticked", async () => {
+      const first = enqueue({
+        requestId: "a",
+        danger: "safe",
+        actionTitle: "Change settings",
+        callerInfo: ASSISTANT_HERE,
+        delegationOffer: { label: "Change a host's settings", detail: "Only as previewed" },
+      });
+      const second = enqueue({
+        requestId: "b",
+        danger: "safe",
+        actionTitle: "Change settings",
+        callerInfo: ASSISTANT_HERE,
+        delegationOffer: { label: "Change a host's settings", detail: "Only as previewed" },
+      });
+      render(<McpConfirmDialog />);
+
+      expect(document.body.textContent).not.toContain("with only this action");
+      act(() => {
+        fireEvent.click(screen.getByRole("checkbox", { name: TICK }));
+      });
+      // The tick changes what the click does, so the button says so.
+      act(() => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Change settings and don't ask again" })
+        );
+      });
+      await expect(first).resolves.toEqual({ decision: "approved", scope: "delegate" });
+
+      expect(screen.getByRole("checkbox", { name: TICK }).getAttribute("aria-checked")).toBe(
+        "false"
+      );
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Change settings" }));
+      });
+      await expect(second).resolves.toEqual({ decision: "approved" });
+    });
+
+    it("hands nothing over when the person cancels with the box ticked", async () => {
+      const pending = enqueue({
+        danger: "safe",
+        callerInfo: ASSISTANT_HERE,
+        delegationOffer: OFFER,
+      });
+      render(<McpConfirmDialog />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("checkbox", { name: TICK }));
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      });
+      await expect(pending).resolves.toEqual({ decision: "rejected" });
+    });
+
+    it("sits with the Daintree confirmations control under one heading on a local ask", async () => {
+      void enqueue({ danger: "safe", sessionOrigin: "help", delegationOffer: OFFER });
+      render(<McpConfirmDialog />);
+      await act(async () => {});
+
+      expect(screen.getAllByText("Later requests")).toHaveLength(1);
+      expect(screen.getByRole("checkbox", { name: TICK })).toBeTruthy();
+      expect(document.body.textContent).toContain("Daintree confirmations");
     });
   });
 

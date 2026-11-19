@@ -627,7 +627,9 @@ export function McpConfirmDialog() {
     title: confirmTitle(current),
     confirmLabel: offersSession
       ? sessionConfirmLabel(current.actionTitle, allowForSession)
-      : selectionConfirmLabel(current, selectedCount),
+      : delegationOffer !== undefined && handOver
+        ? `${selectionConfirmLabel(current, selectedCount)} and don't ask again`
+        : selectionConfirmLabel(current, selectedCount),
     cancelLabel: expired ? "Close" : "Cancel",
     onConfirm: () => {
       if (expired || blockedBy !== undefined) return;

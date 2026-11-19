@@ -330,6 +330,28 @@ describe("mcpConfirmStore", () => {
     expect(await notOffered).toEqual({ decision: "approved" });
   });
 
+  // #16752: the hand-over writes a standing preference, so it is held to the
+  // same rule as the session grant.
+  it("carries the hand-over back only from an approval of a dialog that offered it", async () => {
+    const offered = requestMcpConfirmation({
+      ...pendingFixture({ requestId: "a" }),
+      delegationOffer: { label: "Delete a worktree it created", detail: "Only a clean one" },
+    });
+    const notOffered = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+    const rejected = requestMcpConfirmation({
+      ...pendingFixture({ requestId: "c" }),
+      delegationOffer: { label: "Delete a worktree it created", detail: "Only a clean one" },
+    });
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "delegate");
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "delegate");
+    useMcpConfirmStore.getState().resolveCurrent("rejected", undefined, "delegate");
+
+    expect(await offered).toEqual({ decision: "approved", scope: "delegate" });
+    expect(await notOffered).toEqual({ decision: "approved" });
+    expect(await rejected).toEqual({ decision: "rejected" });
+  });
+
   it("drops the session scope handed to a rejection", async () => {
     const pending = requestMcpConfirmation({ ...pendingFixture(), offerSessionApproval: true });
 

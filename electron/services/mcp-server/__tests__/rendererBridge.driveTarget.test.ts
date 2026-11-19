@@ -404,6 +404,31 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
       expect(payload).not.toHaveProperty("actionsListWalk");
     });
 
+    it("never offers another machine's view a hand-over, nor takes one back from it (#16752)", async () => {
+      const endpoint = makeRemoteEndpoint(async () => ({
+        result: { ok: true, result: null },
+        confirmationDecision: "approved",
+        approvalScope: "delegate",
+      }));
+      setMcpDriveTargetResolver((projectId) =>
+        projectId === WORKSPACE ? { state: "live", endpoint } : { state: "vacant" }
+      );
+
+      const envelope = await bridge.dispatchActionForWorkspace(
+        WORKSPACE,
+        "worktree.delete",
+        {},
+        false,
+        "external",
+        { delegationOffer: { label: "Delete a worktree it created", detail: "Only a clean one" } }
+      );
+
+      const [, payload] = vi.mocked(endpoint.request).mock.calls[0];
+      expect(payload).not.toHaveProperty("delegationOffer");
+      expect(envelope.confirmationDecision).toBe("approved");
+      expect(envelope).not.toHaveProperty("approvalScope");
+    });
+
     describe("how long it waits on the driving view (#15699)", () => {
       // A Shell's own call, as `host.call` makes it, into that Shell's own driving view.
       const relayed = (holdUntil?: number) => ({

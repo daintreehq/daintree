@@ -2318,6 +2318,120 @@ describe("session-scoped resource ownership (#11909)", () => {
       }
     );
 
+    // "Don't ask again for this kind of action" (#16752): offered on the
+    // dialog the owned delete raises, settled on the id called, and written
+    // only beside an approval that carried it.
+    describe("the dialog's hand-over", () => {
+      const offer = { label: "Delete a worktree it created", detail: "Only a clean one" };
+
+      function delegating(sessionId: string, envelope: Record<string, unknown>) {
+        const commit = vi.fn(() => true);
+        const prepareAssistantDelegation = vi.fn((calledActionId: string) =>
+          calledActionId === "worktree.deleteOwned" ? { offer, commit } : null
+        );
+        const h = harness(
+          sessionId,
+          { "worktree.delete": envelope },
+          {
+            readAssistantConfirmationPolicy: () => ({ skipsAll: false, delegated: new Set() }),
+            prepareAssistantDelegation,
+          }
+        );
+        h.store.sessionOriginMap.set(sessionId, "help");
+        h.store.resourceOwnership.record(sessionId, [{ kind: "worktree", id: "/tmp/wt" }]);
+        return { ...h, commit, prepareAssistantDelegation };
+      }
+
+      it("offers it for the owned id on the delete it is sent as, and writes it on approval", async () => {
+        const { server, dispatchAction, commit, prepareAssistantDelegation } = delegating(
+          "s-hand-over",
+          {
+            result: { ok: true, result: null },
+            confirmationDecision: "approved",
+            approvalScope: "delegate",
+          }
+        );
+
+        await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/tmp/wt" },
+        });
+
+        expect(prepareAssistantDelegation).toHaveBeenCalledWith("worktree.deleteOwned");
+        expect(dispatchAction).toHaveBeenCalledWith(
+          "worktree.delete",
+          { worktreeId: "/tmp/wt" },
+          false,
+          undefined,
+          undefined,
+          { delegationOffer: offer }
+        );
+        expect(commit).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        { confirmationDecision: "approved" },
+        { confirmationDecision: "rejected", approvalScope: "delegate" },
+        { confirmationDecision: "timeout", approvalScope: "delegate" },
+      ])("writes nothing for $confirmationDecision without an approved tick", async (answer) => {
+        const { server, commit } = delegating("s-no-hand-over", {
+          result: { ok: true, result: null },
+          ...answer,
+        });
+
+        await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/tmp/wt" },
+        });
+
+        expect(commit).not.toHaveBeenCalled();
+      });
+
+      it("offers nothing for a call that already runs without asking", async () => {
+        const prepareAssistantDelegation = vi.fn(() => ({ offer, commit: () => true }));
+        const { store, server, dispatchAction } = harness(
+          "s-skipped-hand-over",
+          { "worktree.delete": { result: { ok: true, result: null } } },
+          {
+            readAssistantConfirmationPolicy: () => ({ skipsAll: true, delegated: new Set() }),
+            prepareAssistantDelegation,
+          }
+        );
+        store.sessionOriginMap.set("s-skipped-hand-over", "help");
+        store.resourceOwnership.record("s-skipped-hand-over", [
+          { kind: "worktree", id: "/tmp/wt" },
+        ]);
+
+        await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/tmp/wt" },
+        });
+
+        expect(prepareAssistantDelegation).not.toHaveBeenCalled();
+        expect(dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+      });
+
+      it("offers nothing to a session that isn't the assistant", async () => {
+        const prepareAssistantDelegation = vi.fn(() => ({ offer, commit: () => true }));
+        const { store, server, dispatchAction } = harness(
+          "s-external-hand-over",
+          { "worktree.delete": { result: { ok: true, result: null } } },
+          { prepareAssistantDelegation }
+        );
+        store.resourceOwnership.record("s-external-hand-over", [
+          { kind: "worktree", id: "/tmp/wt" },
+        ]);
+
+        await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/tmp/wt" },
+        });
+
+        expect(prepareAssistantDelegation).not.toHaveBeenCalled();
+        expect(dispatchAction.mock.calls.at(-1)).toHaveLength(3);
+      });
+    });
+
     it("still refuses a worktree the session does not own under the skip preference (#12874)", async () => {
       const { store, server, dispatchAction } = harness(
         "s-skip-unowned",

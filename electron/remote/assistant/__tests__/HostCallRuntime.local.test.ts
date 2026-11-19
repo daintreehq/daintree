@@ -135,7 +135,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       queueNotice: (lane, wake) => queued.push({ lane, wake }),
       askApproval: async (question) => {
         asked.push(question);
-        return "approved";
+        return { decision: "approved" };
       },
       local: {
         name: () => "greg-mbp",

@@ -324,6 +324,76 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     expect(sent[1]).not.toHaveProperty("requester");
   });
 
+  describe("the hand-over offer (#16752)", () => {
+    const offer = { label: "Delete a worktree it created", detail: "Only a clean one" };
+
+    function answerWith(id: number, reply: Record<string, unknown>) {
+      const wc = makeWebContents(id);
+      mockWebContentsRegistry.set(id, wc);
+      const sent: Array<Record<string, unknown>> = [];
+      wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+        if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+        sent.push(payload as Record<string, unknown>);
+        queueMicrotask(() => {
+          mockIpcMain.emit(
+            CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+            { sender: { id } },
+            { requestId: payload.requestId, result: { ok: true, result: null }, ...reply }
+          );
+        });
+      });
+      return sent;
+    }
+
+    it("sends the offer to the local view and reports the hand-over beside its approval", async () => {
+      const sent = answerWith(711, { confirmationDecision: "approved", approvalScope: "delegate" });
+      const envelope = await bridge.dispatchActionForWebContents(
+        711,
+        "worktree.delete",
+        {},
+        false,
+        undefined,
+        "help",
+        { delegationOffer: offer }
+      );
+      expect(sent[0]?.delegationOffer).toEqual(offer);
+      expect(envelope).toMatchObject({
+        confirmationDecision: "approved",
+        approvalScope: "delegate",
+      });
+    });
+
+    it("drops a hand-over the view claims on a request it was never offered", async () => {
+      const sent = answerWith(712, { confirmationDecision: "approved", approvalScope: "delegate" });
+      const envelope = await bridge.dispatchActionForWebContents(
+        712,
+        "worktree.delete",
+        {},
+        false,
+        undefined,
+        "help"
+      );
+      expect(sent[0]).not.toHaveProperty("delegationOffer");
+      expect(envelope.confirmationDecision).toBe("approved");
+      expect(envelope).not.toHaveProperty("approvalScope");
+    });
+
+    it("drops a hand-over beside anything but an approval", async () => {
+      answerWith(713, { confirmationDecision: "rejected", approvalScope: "delegate" });
+      const envelope = await bridge.dispatchActionForWebContents(
+        713,
+        "worktree.delete",
+        {},
+        false,
+        undefined,
+        "help",
+        { delegationOffer: offer }
+      );
+      expect(envelope.confirmationDecision).toBe("rejected");
+      expect(envelope).not.toHaveProperty("approvalScope");
+    });
+  });
+
   it("threads the session's authenticated origin into the dispatch IPC payload (#11808)", async () => {
     const wc = makeWebContents(901);
     mockWebContentsRegistry.set(901, wc);
