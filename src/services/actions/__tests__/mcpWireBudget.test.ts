@@ -1066,12 +1066,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // the writes answer with the same link without advertising it, and their
   // argument descriptions were trimmed first. Assistant-only, so the external
   // ceiling does not move.
-  // 195_000 → 199_500 for #17079, measured at 199_385 B (+4_406 over develop's
+  // 195_000 → 199_400 for #17079, measured at 199_325 B (+4_346 over develop's
   // 194_979): the 2_557 B the external half above pays for, plus
   // `agent.addAccount`, in-app only, whose rows each carry an agent, a name and
   // a create-or-existing folder, and whose closed output schema reports every
   // row's outcome.
-  const MAX_COHORT_PAYLOAD_BYTES = 199_500;
+  const MAX_COHORT_PAYLOAD_BYTES = 199_400;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

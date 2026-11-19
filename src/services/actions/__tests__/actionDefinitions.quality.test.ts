@@ -615,7 +615,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // is shown to the user with an Undo, that it isn't an upsert, and that a link
   // the user added or edited is refused as theirs. Assistant-only, off the
   // external surface.
-  const MAX_COHORT_TOTAL_BYTES = 27_050;
+  // 27_050 → 27_550 for #17079, measured at 27_513 B (+548 over develop's
+  // 26_965): the two external account tools above, plus `agent.addAccount`,
+  // in-app only. The add has to say the user ticks each account with its folder
+  // shown, and that the caller launches on the returned id to sign in.
+  const MAX_COHORT_TOTAL_BYTES = 27_550;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

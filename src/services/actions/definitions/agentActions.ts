@@ -807,7 +807,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.addAccount",
     title: "Add agent accounts",
     description:
-      "Add accounts to agents that sign in through a folder, after the user ticks each one with its folder shown. Each row creates or uses a folder, then reports its account id or why it failed. Launch with that accountId to sign in; nothing is launched here.",
+      "Add accounts to agents that sign in through a folder, once the user ticks each one with its folder shown. Reports each row's account id or why it failed; launch with that accountId to sign in.",
     category: "agent",
     kind: "command",
     danger: "confirm",
