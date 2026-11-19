@@ -21,6 +21,8 @@ vi.mock("../../cloud/boat/boatMachineDriver.js", () => ({
 import { BOAT_PRODUCTION_API_URL } from "../../cloud/boat/BoatClient.js";
 import { GUEST_POWER_OFF_METHOD, MachineKeeperLinkMethod } from "../../cloud/machineKeeperLink.js";
 import type { GuestPowerOffSystem, StoredGuestPowerOff } from "../guestPowerOffSystem.js";
+import { HostIdleTracker, type HostWorkReading } from "../HostIdleTracker.js";
+import { LinkMethod } from "../linkMethods.js";
 import type { LinkSession } from "../../link/session.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../runtime.js";
 import { installMachineKeeperHost } from "../machineKeeperHost.js";
@@ -176,6 +178,169 @@ describe("installMachineKeeperHost (#17361)", () => {
       problem: null,
     });
     host.dispose();
+  });
+});
+
+const QUIET: HostWorkReading = { agents: { active: 0, unreadable: 0 }, shellViews: false };
+
+/** A host whose links each ask through their own handlers, over one real idle clock. */
+function claimingHost(readFresh: () => Promise<HostWorkReading> = async () => QUIET) {
+  const clock = { wall: 1_000_000, mono: 500 };
+  const tracker = new HostIdleTracker({
+    read: async () => QUIET,
+    readFresh,
+    idleAfterMinutes: () => 30,
+    clock: () => ({ ...clock }),
+  });
+  registerRemoteService("hostIdle", tracker);
+  let listener: ((ctx: { session: LinkSession }) => void) | null = null;
+  const dispose = installMachineKeeperHost(
+    {
+      onSession: (next) => {
+        listener = next;
+        return () => (listener = null);
+      },
+    },
+    { guestSystem: guestSystem() }
+  );
+  const link = () => {
+    const handlers = new Map<
+      string,
+      { schema: { safeParse(v: unknown): { success: boolean; data?: unknown } }; handler: Handler }
+    >();
+    const closers = new Set<() => void>();
+    let open = true;
+    const session = {
+      get isOpen() {
+        return open;
+      },
+      registerCallHandler: (method: string, schema: never, handler: Handler) => {
+        handlers.set(method, { schema, handler });
+        return () => handlers.delete(method);
+      },
+      onClose: (closer: () => void) => {
+        closers.add(closer);
+        return () => closers.delete(closer);
+      },
+    } as unknown as LinkSession;
+    listener!({ session });
+    return {
+      handlers,
+      /** As the link would: an unknown method or a payload its schema refuses is an error. */
+      async claim(payload: unknown = null) {
+        const entry = handlers.get(LinkMethod.CLAIM_IDLE);
+        if (!entry) throw new Error("UNSUPPORTED");
+        const parsed = entry.schema.safeParse(payload);
+        if (!parsed.success) throw new Error("VALIDATION");
+        return entry.handler(parsed.data);
+      },
+      close() {
+        open = false;
+        for (const closer of closers) closer();
+      },
+    };
+  };
+  return {
+    tracker,
+    link,
+    dispose,
+    /** Idle from a check now, then past its idle time. */
+    async idleOut() {
+      await tracker.check();
+      clock.wall += 31 * 60_000;
+      clock.mono += 31 * 60_000;
+    },
+  };
+}
+
+describe("the idle claim a Shell makes over its link (#17922)", () => {
+  const hosts: Array<ReturnType<typeof claimingHost>> = [];
+  const make = (readFresh?: () => Promise<HostWorkReading>) => {
+    const host = claimingHost(readFresh);
+    hosts.push(host);
+    return host;
+  };
+  afterEach(() => {
+    for (const host of hosts.splice(0)) {
+      host.dispose();
+      host.tracker.dispose();
+    }
+  });
+
+  it("grants one of two links asking at once, and nobody after it, the winner included", async () => {
+    const host = make();
+    await host.idleOut();
+    const a = host.link();
+    const b = host.link();
+    const answers = await Promise.all([a.claim(), b.claim()]);
+    expect(answers).toContainEqual({ granted: true });
+    expect(answers).toContainEqual({ granted: false });
+    await expect(a.claim()).resolves.toEqual({ granted: false });
+    await expect(b.claim()).resolves.toEqual({ granted: false });
+    await expect(host.link().claim()).resolves.toEqual({ granted: false });
+  });
+
+  it("refuses when the reading taken for the claim finds work", async () => {
+    let fresh = QUIET;
+    const host = make(async () => fresh);
+    await host.idleOut();
+    fresh = { agents: { active: 1, unreadable: 0 }, shellViews: false };
+    await expect(host.link().claim()).resolves.toEqual({ granted: false });
+  });
+
+  it("keeps an idle time spent after the link it went to drops, for a resumed link too", async () => {
+    const host = make();
+    await host.idleOut();
+    const first = host.link();
+    await expect(first.claim()).resolves.toEqual({ granted: true });
+    first.close();
+    expect(first.handlers.has(LinkMethod.CLAIM_IDLE)).toBe(false);
+    // The same Shell back on a resumed link is a new link, and so is another device.
+    const resumed = host.link();
+    await expect(resumed.claim()).resolves.toEqual({ granted: false });
+
+    // New work starts the next idle time, and that one can be claimed once it ends.
+    host.tracker.noteWork();
+    await host.idleOut();
+    await expect(resumed.claim()).resolves.toEqual({ granted: true });
+  });
+
+  it("claims nothing for a link that drops before the host decides", async () => {
+    let release: (() => void) | null = null;
+    const host = make(() =>
+      release === null
+        ? new Promise<HostWorkReading>((resolve) => (release = () => resolve(QUIET)))
+        : Promise.resolve(QUIET)
+    );
+    await host.idleOut();
+    const dropping = host.link();
+    const answer = dropping.claim();
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    dropping.close();
+    release!();
+    await expect(answer).resolves.toEqual({ granted: false });
+    await expect(host.link().claim()).resolves.toEqual({ granted: true });
+  });
+
+  it("claims nothing once Host mode stops, a claim already reading included", async () => {
+    let release: (() => void) | null = null;
+    const host = make(
+      () => new Promise<HostWorkReading>((resolve) => (release = () => resolve(QUIET)))
+    );
+    await host.idleOut();
+    const answer = host.link().claim();
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    host.dispose();
+    release!();
+    await expect(answer).resolves.toEqual({ granted: false });
+    expect(host.tracker.mayClaim(Symbol("keeper"))).toBe(true);
+  });
+
+  it("takes no payload a Shell could name an owner or a claim in", async () => {
+    const host = make();
+    await host.idleOut();
+    await expect(host.link().claim({ owner: "keeper" })).rejects.toThrow("VALIDATION");
+    await expect(host.link().claim({})).resolves.toEqual({ granted: true });
   });
 });
 

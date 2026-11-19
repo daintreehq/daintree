@@ -328,6 +328,87 @@ describe("MachineKeeper", () => {
     expect(h.driver.stop).toHaveBeenCalledTimes(1);
   });
 
+  describe("and a Shell's claim on the same idle time (#17922)", () => {
+    const shellClaims = async (h: ReturnType<typeof harness>) =>
+      h.tracker.tryClaim(await h.tracker.checkFresh(), Symbol("shell-link"));
+
+    it("never stops on an idle time a Shell claimed first, armed before the claim or after it", async () => {
+      for (const armFirst of [true, false]) {
+        const h = setup({ busy: false });
+        if (armFirst) await h.arm();
+        await h.pass();
+        h.advance(31 * MINUTE);
+        expect(await shellClaims(h)).toBe(true);
+        if (!armFirst) await h.arm();
+        const reads = h.driver.inspect.mock.calls.length;
+        for (let i = 0; i < 3; i++) {
+          h.advance(MINUTE);
+          await h.pass();
+        }
+        expect(h.driver.stop).not.toHaveBeenCalled();
+        // Nothing to ask the provider about an idle time already spent.
+        expect(h.driver.inspect.mock.calls.length).toBe(reads);
+        h.keeper.dispose();
+        h.tracker.dispose();
+      }
+    });
+
+    it("sends nothing when a Shell claims while the machine is being read", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.tracker.check();
+      let claimed: boolean | null = null;
+      h.driver.inspect.mockImplementationOnce(async () => {
+        claimed = await shellClaims(h);
+        return resource(h.machine, h.now());
+      });
+      await h.keeper.tick();
+      expect(claimed).toBe(true);
+      expect(h.driver.stop).not.toHaveBeenCalled();
+    });
+
+    it("doesn't stop on retrying a failed read after a Shell claimed meanwhile", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      h.failOnce(new Error("socket hang up"));
+      await h.pass();
+      expect(await shellClaims(h)).toBe(true);
+      h.advance(10 * MINUTE);
+      await h.pass();
+      expect(h.driver.stop).not.toHaveBeenCalled();
+    });
+
+    it("refuses a Shell the idle time it stopped on, its answer lost or not", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      h.driver.stop.mockImplementationOnce(async () => {
+        throw new Error("socket hang up");
+      });
+      await h.pass();
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+      expect(await shellClaims(h)).toBe(false);
+    });
+
+    it("stops on the next idle time, once new work has ended a Shell's", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      expect(await shellClaims(h)).toBe(true);
+      h.tracker.noteWork();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.pass();
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("doesn't renew a machine that is stopping or retrying its save", async () => {
     for (const status of ["pending", "failing"] as const) {
       const h = setup();
