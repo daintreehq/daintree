@@ -611,6 +611,8 @@ export function CloudMachineSection({
           selfStopProblem={status.selfStopProblem ?? null}
           linkedIdleStop={status.linkedIdleStop ?? null}
           provider={provider}
+          lifetime={status.lifetime}
+          idleTimeFollowsHost={status.idleTimeFollowsHost ?? false}
         />
         <SettingsRow
           label="Disk"

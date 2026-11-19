@@ -211,8 +211,24 @@ export class FakeAgent37Api {
     if (!instance) return apiError(404, "not_found", "No instance with that id in your workspace.");
     if (method === "GET" && action === "") return json(200, this.view(instance));
     if (method === "PATCH" && action === "") {
-      const update = (body ?? {}) as { name?: string | null };
+      const update = (body ?? {}) as {
+        name?: string | null;
+        auto_sleep?: unknown;
+        idle_timeout_seconds?: unknown;
+      };
+      const idle = update.idle_timeout_seconds;
+      if (
+        idle !== undefined &&
+        (typeof idle !== "number" || !Number.isInteger(idle) || idle < 300 || idle > 86_400)
+      ) {
+        return apiError(400, "invalid_request", "idle_timeout_seconds must be 300 to 86400.");
+      }
+      if (update.auto_sleep !== undefined && typeof update.auto_sleep !== "boolean") {
+        return apiError(400, "invalid_request", "auto_sleep must be a boolean.");
+      }
       if ("name" in update) instance.name = update.name || null;
+      if (typeof update.auto_sleep === "boolean") instance.auto_sleep = update.auto_sleep;
+      if (typeof idle === "number") instance.idle_timeout_seconds = idle;
       return json(200, this.view(instance));
     }
     if (method === "DELETE" && action === "") {
@@ -242,8 +258,18 @@ export class FakeAgent37Api {
       return json(200, { id: instance.id, status: instance.status });
     }
     if (method === "POST" && action === "/sleep") {
-      instance.status = "sleeping";
-      instance.slept_at = this.clock;
+      // An instance already asleep answers the same ack again; any other state is refused.
+      if (instance.status !== "running" && instance.status !== "sleeping") {
+        return apiError(
+          400,
+          "invalid_request",
+          `Can't sleep an instance that is ${instance.status}.`
+        );
+      }
+      if (instance.status === "running") {
+        instance.status = "sleeping";
+        instance.slept_at = this.clock;
+      }
       return json(200, { id: instance.id, status: instance.status });
     }
     return apiError(404, "not_found", `No route ${method} ${path}`);

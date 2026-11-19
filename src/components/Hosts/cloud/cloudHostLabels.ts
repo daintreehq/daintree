@@ -215,6 +215,49 @@ export const IDLE_STOP_UNKNOWN =
 export const LINKED_IDLE_STOP =
   "While this device is linked to the host, it stops the machine once the host's idle time ends. With every device away, the machine keeps running.";
 
+/** What the details know of a machine whose provider sleeps it once its host's idle time ends (#17916). */
+export interface IdleSleepMachine {
+  /** This device's link to the host is up. */
+  connected: boolean;
+  /** The machine's own idle sleep, as its provider last reported it. */
+  lifetime: CloudLifetimeModel | null;
+  /** Its own idle timeout follows the host's idle time (`CloudHostStatus.idleTimeFollowsHost`). */
+  followsHost: boolean;
+}
+
+const UNKNOWN_SLEEPER: IdleSleepMachine = { connected: false, lifetime: null, followsHost: true };
+
+/**
+ * Which timer puts a machine to sleep on a provider whose own idle timer an
+ * open link keeps from running, Agent 37's (#17916): the host's idle time
+ * while this device is connected, the provider's own otherwise. An imported
+ * machine's own timer keeps its own length until the person picks one here.
+ */
+export function idleSleepTimerSentence(
+  provider: Pick<CloudProviderTerms, "name">,
+  idle: HostIdleObservation | undefined,
+  machine: IdleSleepMachine
+): string {
+  const name = provider.name;
+  const lifetime = machine.lifetime;
+  if (lifetime?.kind === "none") {
+    return `Sleeping when idle is off for this machine on ${name}, so nothing puts it to sleep. Picking an idle time turns it on.`;
+  }
+  const own = lifetime?.kind === "idle-sleep" ? lifetime.idleSeconds : null;
+  const ownTimer = `${name}'s own idle timer${own === null ? "" : ` (${durationLabel(own)})`}`;
+  const inCharge = machine.connected
+    ? `The host's idle time is in charge while this device is connected, since the connection keeps ${ownTimer} from running: once it ends, Daintree checks with the host and puts the machine to sleep.`
+    : `${ownTimer} is in charge while no device is connected: it puts the machine to sleep ${own === null ? "once it's been idle for a while" : `after ${durationLabel(own)} without activity`}. The host's idle time takes over while this device is connected.`;
+  const differs =
+    !machine.followsHost &&
+    idle !== undefined &&
+    own !== null &&
+    own !== idle.idleAfterMinutes * 60;
+  return differs
+    ? `${inCharge} ${name} keeps its own idle timer until you pick an idle time here.`
+    : inCharge;
+}
+
 /**
  * Said after why a machine can't stop itself, where this device stops it
  * instead while linked (#17924). Nothing about every device being away: a
@@ -231,20 +274,23 @@ function sentences(first: string, second: string): string {
  * What a host's idle time ending does to its machine, beside its idle clock:
  * nothing more once the host says it stops the machine itself, which the
  * clock already says (#17361, #17362). Otherwise why it can't, as this device
- * found; that it doesn't, for a provider whose hosts have no way to stop their
- * machines, with what a stopped one would still cost; and unknown while the
- * provider isn't registered or its host hasn't said. A plugin provider's
- * machine this device stops while it's linked says so, with what happens with
- * every device away, or why it doesn't (#17923). A machine that can't stop
- * itself, where this device stops it instead, says both, as does one where a
- * stop from here is blocked too (#17924). `idle` is only ever from a summary
- * on the current link: one from an earlier link says nothing about now.
+ * found; which timer is in charge, where this device puts the machine to
+ * sleep while connected (#17916); that it doesn't, for a provider whose hosts
+ * have no way to stop their machines, with what a stopped one would still
+ * cost; and unknown while the provider isn't registered or its host hasn't
+ * said. A plugin provider's machine this device stops while it's linked says
+ * so, with what happens with every device away, or why it doesn't (#17923). A
+ * machine that can't stop itself, where this device stops it instead, says
+ * both, as does one where a stop from here is blocked too (#17924). `idle` is
+ * only ever from a summary on the current link: one from an earlier link says
+ * nothing about now.
  */
 export function idleEndSentence(
   idle: HostIdleObservation | undefined,
   provider: CloudProviderTerms | null,
   selfStopProblem: string | null,
-  linkedIdleStop: CloudLinkedIdleStop | null = null
+  linkedIdleStop: CloudLinkedIdleStop | null = null,
+  machine: IdleSleepMachine = UNKNOWN_SLEEPER
 ): string | null {
   if (idle?.stopsWhenIdle) return null;
   if (selfStopProblem) {
@@ -260,6 +306,8 @@ export function idleEndSentence(
     switch (linkedIdleStop.kind) {
       case "stops":
         return LINKED_IDLE_STOP;
+      case "sleeps":
+        return idleSleepTimerSentence(provider, idle, machine);
       case "blocked":
         return linkedIdleStop.problem;
       case "unknown":

@@ -285,6 +285,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       client: client.client,
       sessionFor: usedSessionFor,
       holdHost: (hostId) => client.manager.hold(hostId),
+      onApplied: (hostId, settings) => client.idleTimePicked(hostId, settings),
     })
   );
   const hostEntry = (hostId: string) =>

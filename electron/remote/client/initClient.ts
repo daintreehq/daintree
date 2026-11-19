@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { app, type BrowserWindow, type Event, type WebContents } from "electron";
 import type { HostRestartImpact, RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
+import type { HostSettingLeaf } from "../../../shared/types/hostSettings.js";
 import { MetricsLinkMethod, RestartImpactSchema } from "../metrics/linkMethods.js";
 import {
   isLocalHostId,
@@ -843,6 +844,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   /** Sends a Remote Hosts event to every view on this machine. */
   emitLocal(event: RemoteHostsEvent): void;
   registry: HostRegistry;
+  /** A change that landed on a host's settings: a new idle time becomes its cloud machine's own (#17916). */
+  idleTimePicked(hostId: HostId, settings: readonly HostSettingLeaf[]): void;
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
@@ -1155,6 +1158,19 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
       idleOn: (hostId, session) =>
         getRemoteService("hostMetrics")?.idleOn(hostId, session, 60_000) ?? null,
+      release: (hostId, session) => {
+        const current = manager.get(hostId)?.currentSession ?? null;
+        if (current !== null && current !== session) return;
+        // Not a person's disconnect: anything that dials it later reads it asleep and stops there.
+        void manager.disconnect(hostId).catch(() => {});
+      },
+      reconnect: (hostId) => {
+        // Only a link the sleep let go: one a person disconnected, or one up again, is left be.
+        if (!registry.get(hostId) || manager.get(hostId) || client.isDisconnectedByPerson(hostId)) {
+          return;
+        }
+        manager.connect(hostId);
+      },
     },
     hosts: {
       add: (name, connection, pendingPlacement) =>
@@ -1212,6 +1228,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     manager,
     emitLocal: broadcastLocal,
     registry,
+    idleTimePicked: (hostId, settings) => cloudLifecycle?.idleTimePicked(hostId, settings),
     async dispose() {
       stopWakeWatch();
       app.off("browser-window-focus", onWindowFocus);

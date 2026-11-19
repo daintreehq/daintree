@@ -206,6 +206,36 @@ export interface CloudProvider {
     credentials: ProviderCredentials,
     resourceId: string
   ): Promise<GuestPowerOffCheck>;
+  /**
+   * Present only for a provider whose `idle-sleep` lifetime this device can
+   * drive (#17916): puts a running machine to sleep now, keeping its memory.
+   * Sends one request and never repeats it, since whoever calls it acts on its
+   * host's idleness once; a machine already asleep is the same outcome.
+   */
+  sleepIdle?(credentials: ProviderCredentials, resourceId: string): Promise<void>;
+  /**
+   * Present with {@link sleepIdle}: sets how long the machine may go without
+   * activity before its provider sleeps it, and turns that sleep on when
+   * `enable`. Applies at once, whatever the machine is doing.
+   */
+  setIdleSleep?(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    idleSeconds: number,
+    enable: boolean
+  ): Promise<ProviderResource>;
+}
+
+/** A provider that can put its idle machines to sleep for this device, and set when they would by themselves. */
+export type IdleSleepingCloudProvider = CloudProvider &
+  Required<Pick<CloudProvider, "sleepIdle" | "setIdleSleep">>;
+
+export function canSleepIdle(provider: CloudProvider): provider is IdleSleepingCloudProvider {
+  return (
+    provider.info(process.platform).capabilities.lifetime.kind === "idle-sleep" &&
+    typeof provider.sleepIdle === "function" &&
+    typeof provider.setIdleSleep === "function"
+  );
 }
 
 /** A provider that can move a running machine's automatic stop. */

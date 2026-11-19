@@ -280,10 +280,31 @@ export class Agent37Client {
     );
   }
 
+  /**
+   * Sleeps a running instance now, answering once it is asleep. One already
+   * asleep answers the same ack again; any other state is refused, and one
+   * mid-operation answers `try_again`. Sent once, whatever comes back: a
+   * caller acting on idleness can't know it still holds by the time a retry
+   * would go out.
+   */
+  async sleepInstance(ctx: Agent37RequestContext, id: string): Promise<Agent37Action> {
+    return this.call(
+      ctx,
+      {
+        method: "POST",
+        path: `/instances/${requireInstanceId(id)}/sleep`,
+        body: {},
+        retry: "never",
+      },
+      agent37ActionSchema
+    );
+  }
+
+  /** Takes effect at once in any state, with no restart. */
   async updateInstance(
     ctx: Agent37RequestContext,
     id: string,
-    body: { name?: string | null }
+    body: { name?: string | null; auto_sleep?: boolean; idle_timeout_seconds?: number }
   ): Promise<Agent37Instance> {
     return this.call(
       ctx,

@@ -708,15 +708,27 @@ export interface CloudHostStatus {
    * asked to stop it: a request to it would wake it, and it bills as stopped.
    */
   asleep: boolean;
+  /**
+   * The machine's own idle timeout follows its host's idle time: Daintree
+   * created it, or the person picked an idle time for it here (#17916). An
+   * imported machine keeps its own until then. Optional for snapshots from before it.
+   */
+  idleTimeFollowsHost?: boolean;
 }
 
 /**
  * `stops`: this device stops the machine with the provider's normal stop once
- * the host grants it the ended idle time. `unknown`: the provider hasn't said
- * yet whether a stop would keep this machine's disk. `blocked`: why it doesn't.
+ * the host grants it the ended idle time. `sleeps`: it puts the machine to
+ * sleep the same way, for a provider whose own idle timer a link keeps from
+ * running, which is in charge with no device linked (#17916). `unknown`: the
+ * provider hasn't said yet whether a stop would keep this machine's disk.
+ * `blocked`: why it doesn't.
  */
 export type CloudLinkedIdleStop =
-  { kind: "stops" } | { kind: "unknown" } | { kind: "blocked"; problem: string };
+  | { kind: "stops" }
+  | { kind: "sleeps" }
+  | { kind: "unknown" }
+  | { kind: "blocked"; problem: string };
 
 /** The machine as it would be created. */
 export interface CloudHostCreateRequest {
