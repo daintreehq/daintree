@@ -510,8 +510,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     const waiting =
       standing !== undefined &&
       ((standing.kind === "waiting" && standing.reason === "open") || standing.kind === "queued");
-    // Only while its link is down: a Host still connected answers for itself, whatever it says.
-    if (host === undefined || host.connected || !waiting) return null;
+    // Only while its link is down: a Host connected answers for itself, whatever it says.
+    if (host === undefined || this.deps.sessionFor(host.hostId)?.isOpen || !waiting) return null;
     const reads = this.lastReads.get(host.hostId);
     const read = reads?.questions.get(reference.questionId)?.found;
     const current =

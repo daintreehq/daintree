@@ -315,40 +315,37 @@ export type DismissAttempt =
   | { kind: "busy" }
   | { kind: "submitted"; key: string; phase: DeclinePhase; lastReadAt?: number | null };
 
-function settledAttempt(
-  key: string,
-  claim: Claim,
-  lastReadAt: number | null = null
-): DismissAttempt {
+function settledAttempt(key: string, claim: Claim): DismissAttempt {
   if (useDecisionsAnswerStore.getState().generation !== claim.generation) {
     return { kind: "failed", reason: "off" };
   }
   // Another dismissal of the question took over meanwhile: say where that one stands.
   const decline = readAnswerRecord(key).decline;
   if (decline === null) return { kind: "failed", reason: "off" };
+  const { lastReadAt } = decline;
   return {
     kind: "submitted",
     key,
     phase: decline.phase,
-    ...(lastReadAt !== null ? { lastReadAt } : {}),
+    ...(lastReadAt !== undefined ? { lastReadAt } : {}),
   };
 }
 
 /**
  * Whether the relay already turned away a dismissal at `revision` for a
  * reason that holds for that revision whatever is sent again: answered,
- * moved on, closed, or not taken from a computer at all.
+ * moved on, expired, or closed first. Not one it doesn't hold, nor one a
+ * relay or computer too old turned away, which an update can change.
  */
 function ruledOut(decline: DeclineSubmission | null, revision: number): boolean {
   if (decline === null || decline.payload.expectedRevision !== revision) return false;
   const { phase } = decline;
   if (phase.kind !== "settled") return false;
-  const { status } = phase.outcome;
+  const { outcome } = phase;
   return (
-    status === "already-answered" ||
-    status === "changed" ||
-    status === "closed" ||
-    status === "unsupported"
+    outcome.status === "already-answered" ||
+    outcome.status === "changed" ||
+    (outcome.status === "closed" && outcome.reason !== "not-found")
   );
 }
 
@@ -417,10 +414,10 @@ export async function dismissQuestion(
   const record = readAnswerRecord(key);
   if (isDeclineInFlight(record)) return recover(key);
   // Taken already, and the question hasn't closed here yet.
-  if (isDeclineCommitted(record)) return settledAttempt(key, claimOf(key)!, lastReadAt);
+  if (isDeclineCommitted(record)) return settledAttempt(key, claimOf(key)!);
   // The last read can't show what the relay said of its revision: say it again rather than sign again.
   if (lastReadAt !== null && ruledOut(record.decline, question.revision)) {
-    return settledAttempt(key, claimOf(key)!, lastReadAt);
+    return settledAttempt(key, claimOf(key)!);
   }
   if (!isWaitingQuestion(question)) return { kind: "gone" };
   if (revision !== null && question.revision !== revision) return { kind: "changed" };
@@ -437,6 +434,7 @@ export async function dismissQuestion(
       },
       phase: { kind: "sending" },
       resubmitted: false,
+      ...(lastReadAt !== null ? { lastReadAt } : {}),
     },
   }));
   await exclusive(key, claim, async () => {
@@ -446,5 +444,5 @@ export async function dismissQuestion(
       await followOnce(key, claim, false);
     }
   });
-  return settledAttempt(key, claim, lastReadAt);
+  return settledAttempt(key, claim);
 }

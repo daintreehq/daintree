@@ -325,16 +325,48 @@ describe("dismissing a Remote Host's question while its Host is away (#17946)", 
     await expect(dismissQuestion(AWAY, 3)).resolves.toEqual(first);
     expect(declineQuestion).toHaveBeenCalledOnce();
 
-    // A newer revision read once the Host is back is a new round, which may be dismissed.
+    // A newer revision last read is a new round, which may be dismissed.
+    getQuestionContentByReference.mockResolvedValue({
+      result: "host-not-connected",
+      lastRead: { result: "read", revision: 4, alias: 42, readAt: 2_000 },
+    });
+    await expect(dismissQuestion(AWAY, null)).resolves.toMatchObject({ lastReadAt: 2_000 });
+    expect(declineQuestion).toHaveBeenCalledTimes(2);
+    expect(declineQuestion.mock.calls[1]![0]).toMatchObject({ expectedRevision: 4 });
+
+    // So is one read once the Host is back.
     getQuestionContentByReference.mockResolvedValue({
       result: "read",
-      question: question({ reference: ON_HOST, revision: 4 }),
+      question: question({ reference: ON_HOST, revision: 5 }),
     });
     declineQuestion.mockImplementation(submitted({ status: "declined" }));
-    const live = await dismissQuestion(AWAY, 4);
+    const live = await dismissQuestion(AWAY, 5);
     expect(live).toMatchObject({ phase: { kind: "settled", outcome: { status: "declined" } } });
     expect(live).not.toHaveProperty("lastReadAt");
+    expect(declineQuestion).toHaveBeenCalledTimes(3);
+  });
+
+  it("signs again at the same revision once a relay or computer too old to take it may have been updated", async () => {
+    declineQuestion.mockImplementation(submitted({ status: "unsupported", by: "relay" }));
+    await dismissQuestion(AWAY, 3);
+    declineQuestion.mockImplementation(submitted({ status: "declined" }));
+    await expect(dismissQuestion(AWAY, 3)).resolves.toMatchObject({
+      phase: { kind: "settled", outcome: { status: "declined" } },
+    });
     expect(declineQuestion).toHaveBeenCalledTimes(2);
+  });
+
+  it("still says a dismissal was signed from the last read when Retry reads back one whose reply was lost", async () => {
+    declineQuestion.mockRejectedValue(new Error("main didn't answer"));
+    await expect(dismissQuestion(AWAY, 3)).resolves.toMatchObject({
+      phase: { kind: "lost" },
+      lastReadAt: 1_000,
+    });
+    declineQuestion.mockImplementation(submitted({ status: "unsupported", by: "relay" }));
+    await expect(dismissQuestion(AWAY, 3, AWAY_KEY)).resolves.toMatchObject({
+      phase: { kind: "settled", outcome: { status: "unsupported", by: "relay" } },
+      lastReadAt: 1_000,
+    });
   });
 
   it("never takes a last read for a question opened from its pane", async () => {
