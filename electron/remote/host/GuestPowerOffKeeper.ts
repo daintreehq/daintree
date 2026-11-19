@@ -49,7 +49,7 @@ export class GuestPowerOffKeeper {
    * to the permission: taking the permission back and giving it again never
    * lets a second one go while the first may still be under way.
    */
-  private poweringOff: { since: number } | null = null;
+  private poweringOff: { since: number; claimed: number } | null = null;
   /** The saved permission was taken back but its file couldn't be removed yet. */
   private removalPending = false;
   /** Requests in the order they arrived, so a grant checked after a later revoke can't land. */
@@ -370,11 +370,13 @@ export class GuestPowerOffKeeper {
     const now = this.now();
     if (this.poweringOff) {
       if (now - this.poweringOff.since < SHUTDOWN_SETTLE_MS) return;
-      // Still here: something held the shutdown off. It counts as use, so a full idle time passes first.
+      // Still here: something held the shutdown off. It counts as use, so a full idle time passes
+      // first, unless newer work already restarted the clock, perhaps for an idle time a Shell claimed.
+      const { claimed } = this.poweringOff;
       this.poweringOff = null;
       this.powerOffProblem =
         "This machine asked to power itself off but kept running. It tries again after its next idle time.";
-      this.deps.idle.noteWork();
+      this.deps.idle.noteWorkIfCurrent(claimed);
       this.backOff();
       return;
     }
@@ -394,7 +396,7 @@ export class GuestPowerOffKeeper {
     // A Shell or the other keeper that claimed this idle time first acts on it alone.
     if (!this.deps.idle.tryClaim(reading, this.claimant, this.retryOwnClaim)) return;
     // Recorded before it goes: an answer lost on the way back is never followed by a second one.
-    this.poweringOff = { since: this.now() };
+    this.poweringOff = { since: this.now(), claimed: reading };
     this.retryOwnClaim = false;
     const outcome = await launch(this.controller.signal);
     if (this.disposed) return;

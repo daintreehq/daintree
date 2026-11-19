@@ -1,3 +1,4 @@
+import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { IdleClaimAnswerSchema, LinkMethod } from "../host/linkMethods.js";
 import type { LinkSession } from "../link/session.js";
 
@@ -20,32 +21,36 @@ function errorCode(error: unknown): string | null {
 }
 
 /**
- * Right before this Shell acts on a host's idleness (#17922): asks the host,
+ * Right before this Shell acts on a host's idleness (#17922): asks `hostId`,
  * over `session`, to read afresh and grant this link the idle time that ended,
- * and runs `act` in the same turn the grant arrives, only while `session` is
- * still open and still the host's (`current`). Nothing holds the claim past
+ * and starts `act` in the same turn the grant arrives, only while `session` is
+ * still open and still the host's (`sessionFor`). Nothing holds the claim past
  * that turn, so whatever acts on it starts in `act`, before its first await.
  *
- * A call that fails or times out throws and claims nothing here, though the
- * host may have granted it with the answer lost: that idle time is spent, and
- * nobody acts on it until new work restarts the host's clock.
+ * A grant is the host's decision at one moment: work that starts there while
+ * the answer travels back ends the claim on the host, but nothing on this side
+ * can see it in time. A call that fails or times out throws and claims nothing
+ * here, though the host may have granted it with the answer lost: that idle
+ * time is spent, and nobody acts on it until new work restarts the host's clock.
  */
 export async function withHostIdleClaim<T>(
+  hostId: HostId,
   session: LinkSession,
-  current: () => LinkSession | null,
+  sessionFor: (hostId: HostId) => LinkSession | null,
   act: () => T
-): Promise<HostIdleClaimOutcome<T>> {
-  const reaches = () => session.isOpen && current() === session;
+): Promise<HostIdleClaimOutcome<Awaited<T>>> {
+  const reaches = () => session.isOpen && sessionFor(hostId) === session;
   if (!reaches()) return { kind: "superseded" };
   let answer: unknown;
   try {
     answer = await session.call(LinkMethod.CLAIM_IDLE, null, { timeoutMs: CLAIM_TIMEOUT_MS });
   } catch (error) {
-    if (errorCode(error) === "UNSUPPORTED") return { kind: "unsupported" };
-    throw error;
+    if (errorCode(error) !== "UNSUPPORTED") throw error;
+    // An older build on a link since replaced says nothing of the host now.
+    return reaches() ? { kind: "unsupported" } : { kind: "superseded" };
   }
   const { granted } = IdleClaimAnswerSchema.parse(answer);
   if (!reaches()) return { kind: "superseded" };
   if (!granted) return { kind: "refused" };
-  return { kind: "claimed", result: act() };
+  return { kind: "claimed", result: await act() };
 }

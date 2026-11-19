@@ -346,8 +346,8 @@ describe("MachineKeeper", () => {
           await h.pass();
         }
         expect(h.driver.stop).not.toHaveBeenCalled();
-        // Nothing to ask the provider about an idle time already spent.
-        expect(h.driver.inspect.mock.calls.length).toBe(reads);
+        // An idle time already spent is only looked at now and then, never every pass.
+        expect(h.driver.inspect.mock.calls.length - reads).toBeLessThanOrEqual(1);
         h.keeper.dispose();
         h.tracker.dispose();
       }
@@ -382,7 +382,61 @@ describe("MachineKeeper", () => {
       expect(h.driver.stop).not.toHaveBeenCalled();
     });
 
-    it("refuses a Shell the idle time it stopped on, its answer lost or not", async () => {
+    it("refuses a Shell the idle time it stopped on, while the stop is out and after its answer is lost", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      let answer: (() => void) | null = null;
+      h.driver.stop.mockImplementationOnce(
+        () =>
+          new Promise<ProviderResource>((_resolve, reject) => {
+            answer = () => reject(new Error("socket hang up"));
+          })
+      );
+      const passing = h.pass();
+      await vi.waitFor(() => expect(answer).not.toBeNull());
+      expect(await shellClaims(h)).toBe(false);
+      answer!();
+      await passing;
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+      expect(await shellClaims(h)).toBe(false);
+    });
+
+    it("still reads the machine now and then on a spent idle time, so a start at the provider is use", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      expect(await shellClaims(h)).toBe(true);
+      // The Shell stopped it and the person started it again; this process carried on through it.
+      h.machine.stop = { id: "stop_desktop", status: "completed", error: null };
+      h.machine.stoppedAt = new Date(h.now()).toISOString();
+      h.advance(11 * MINUTE);
+      await h.pass();
+      expect(h.tracker.observation().busy).toBe(true);
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.pass();
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+    });
+
+    it("spends nothing when its key lapses during its last look", async () => {
+      const h = setup({ busy: false });
+      await h.arm({ expiresAt: h.now() + 40 * MINUTE });
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.tracker.check();
+      h.driver.inspect.mockImplementationOnce(async () => {
+        h.advance(10 * MINUTE);
+        return resource(h.machine, h.now());
+      });
+      await h.keeper.tick();
+      expect(h.driver.stop).not.toHaveBeenCalled();
+      expect(await shellClaims(h)).toBe(true);
+    });
+
+    it("never takes a later idle time a Shell claimed as use, for its own stop that didn't happen", async () => {
       const h = setup({ busy: false });
       await h.arm();
       await h.pass();
@@ -392,7 +446,21 @@ describe("MachineKeeper", () => {
       });
       await h.pass();
       expect(h.driver.stop).toHaveBeenCalledTimes(1);
-      expect(await shellClaims(h)).toBe(false);
+      // Boat can't be read for a while; meanwhile an agent works, and a Shell claims the idle time after.
+      h.fail(new Error("socket hang up"));
+      h.tracker.noteWork();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.pass();
+      expect(await shellClaims(h)).toBe(true);
+      h.fail(null);
+      h.advance(11 * MINUTE);
+      await h.pass();
+      for (let i = 0; i < 4; i++) {
+        h.advance(11 * MINUTE);
+        await h.pass();
+      }
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
     });
 
     it("stops on the next idle time, once new work has ended a Shell's", async () => {

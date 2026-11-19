@@ -51,7 +51,7 @@ export function agentWorkOf(terminals: readonly CountableTerminal[]): {
 /** What acts on idleness here needs of the tracker. */
 export type HostIdleActorSource = Pick<
   HostIdleTracker,
-  "observation" | "checkFresh" | "mayClaim" | "tryClaim" | "noteWork"
+  "observation" | "checkFresh" | "mayClaim" | "tryClaim" | "noteWork" | "noteWorkIfCurrent"
 >;
 
 const CHECK_INTERVAL_MS = 15_000;
@@ -112,6 +112,16 @@ export class HostIdleTracker {
     this.recordWork();
   }
 
+  /**
+   * Work, as {@link noteWork}, only while the idle time `reading` was claimed
+   * on is still the one under way: an owner's own attempt that never happened
+   * restarts the clock, never an idle time someone claimed after newer work.
+   */
+  noteWorkIfCurrent(reading: number): void {
+    if (this.disposed || reading !== this.workSeen) return;
+    this.recordWork();
+  }
+
   /** One check; a check already under way is shared rather than doubled. */
   async check(): Promise<void> {
     if (this.disposed) return;
@@ -152,7 +162,7 @@ export class HostIdleTracker {
    * whose own attempt definitely didn't happen try again on its own claim.
    * Decided at once, so the caller acts in the same turn it is granted.
    */
-  tryClaim(reading: number | null, owner: symbol, retryOwn = false): boolean {
+  tryClaim(reading: number | null, owner: symbol, retryOwn = false): reading is number {
     if (reading === null || reading !== this.workSeen || !this.mayClaim(owner, retryOwn)) {
       return false;
     }

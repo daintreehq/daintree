@@ -342,6 +342,60 @@ describe("GuestPowerOffKeeper (#17362)", () => {
       h.tracker.dispose();
     });
 
+    it("refuses a Shell while its power-off is still being asked of the OS", async () => {
+      const h = make();
+      const asked = gate<PowerOffOutcome>();
+      h.launch.mockImplementationOnce(() => asked.promise);
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.pass(0);
+      h.advance(IDLE + MINUTE);
+      const ticking = h.keeper.tick();
+      await vi.waitFor(() => expect(h.launch).toHaveBeenCalledTimes(1));
+      expect(await shellClaims(h)).toBe(false);
+      asked.release({ kind: "accepted" });
+      await ticking;
+    });
+
+    it("never retries a refused power-off on an idle time a Shell claimed after newer work", async () => {
+      const h = make();
+      h.outcomes.push({ kind: "refused", problem: "This machine refused to power itself off." });
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.idleOut();
+      expect(h.launch).toHaveBeenCalledTimes(1);
+      h.tracker.noteWork();
+      await h.pass(0);
+      h.advance(IDLE + MINUTE);
+      const prepared = gate();
+      h.prepare.hold = prepared.promise;
+      const ticking = h.keeper.tick();
+      await vi.waitFor(() => expect(h.system.preparePowerOff).toHaveBeenCalledTimes(2));
+      expect(await shellClaims(h)).toBe(true);
+      prepared.release();
+      await ticking;
+      expect(h.launch).toHaveBeenCalledTimes(1);
+    });
+
+    it("never takes a later idle time a Shell claimed as use, for its power-off that didn't happen", async () => {
+      const h = make();
+      h.outcomes.push({ kind: "unknown" });
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.idleOut();
+      expect(h.launch).toHaveBeenCalledTimes(1);
+      // Still running; an agent works and finishes, and a Shell claims the idle time after it.
+      h.tracker.noteWork();
+      await h.tracker.check();
+      h.advance(IDLE + MINUTE);
+      expect(await shellClaims(h)).toBe(true);
+      // The keeper settles its old power-off past its settle time: no new idle time for it to take.
+      await h.pass(MINUTE);
+      expect(h.keeper.status().problem).toMatch(/kept running/);
+      // A full idle time from the next check, as a restart at the settle would have given it.
+      await h.pass(0);
+      await h.pass(IDLE + MINUTE);
+      await h.pass(MINUTE);
+      expect(h.launch).toHaveBeenCalledTimes(1);
+    });
+
     it("leaves the idle time to a Shell when its permission went during its last look", async () => {
       const h = make();
       await h.keeper.set({ target: TARGET, enabled: true });

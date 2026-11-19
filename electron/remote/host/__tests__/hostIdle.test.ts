@@ -270,6 +270,19 @@ describe("installHostIdle (#17357)", () => {
       }
     );
 
+    it("is ended by work a check finds, so the next idle time can be claimed", async () => {
+      const dispose = installHostIdle(fakeSessionHost());
+      await vi.advanceTimersByTimeAsync(31 * MINUTE);
+      expect(await claim()).toBe(true);
+      terminals.snapshot = { terminals: [], degraded: true };
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(idle().busy).toBe(true);
+      terminals.snapshot = { terminals: [], degraded: false };
+      await vi.advanceTimersByTimeAsync(31 * MINUTE);
+      expect(await claim()).toBe(true);
+      dispose();
+    });
+
     it("is spent across a link only dropping, and restarted by a view opening", async () => {
       const sessionHost = fakeSessionHost();
       const dispose = installHostIdle(sessionHost);

@@ -432,7 +432,9 @@ describe("HostIdleTracker claims (#17922)", () => {
       const h = await ended();
       h.see(reading);
       expect(h.tracker.mayClaim(Symbol("before"))).toBe(true);
-      expect(await claim(h.tracker, Symbol("shell"))).toBe(false);
+      const fresh = await h.tracker.checkFresh();
+      expect(fresh).toBeNull();
+      expect(h.tracker.tryClaim(fresh, Symbol("shell"))).toBe(false);
       expect(h.tracker.observation().busy).toBe(true);
     }
   );
@@ -441,7 +443,9 @@ describe("HostIdleTracker claims (#17922)", () => {
     const h = await ended(async () => {
       throw new Error("pty host gone");
     });
-    expect(await claim(h.tracker, Symbol("shell"))).toBe(false);
+    const fresh = await h.tracker.checkFresh();
+    expect(fresh).toBeNull();
+    expect(h.tracker.tryClaim(fresh, Symbol("shell"))).toBe(false);
     expect(h.tracker.observation().busy).toBe(true);
   });
 
@@ -495,13 +499,20 @@ describe("HostIdleTracker claims (#17922)", () => {
     await vi.waitFor(() => expect(h.readFresh).toHaveBeenCalledTimes(1));
     h.tracker.noteWork();
     release(quiet);
-    expect(h.tracker.tryClaim(await pending, Symbol("shell"))).toBe(false);
+    const overtaken = await pending;
+    expect(overtaken).toBeNull();
+    expect(h.tracker.tryClaim(overtaken, Symbol("shell"))).toBe(false);
+    expect(h.tracker.observation().busy).toBe(true);
 
+    // A reading taken before work stays stale once a later idle time has ended too.
     const later = await ended();
-    const reading = await later.tracker.checkFresh();
-    expect(reading).not.toBeNull();
+    const stale = await later.tracker.checkFresh();
+    expect(stale).not.toBeNull();
     later.tracker.noteWork();
-    expect(later.tracker.tryClaim(reading, Symbol("shell"))).toBe(false);
+    await later.tracker.check();
+    later.advance(31 * MINUTE);
+    expect(later.tracker.tryClaim(stale, Symbol("shell"))).toBe(false);
+    expect(await claim(later.tracker, Symbol("shell"))).toBe(true);
   });
 
   it("keeps an idle time spent across a changed idle time", async () => {
@@ -529,6 +540,25 @@ describe("HostIdleTracker claims (#17922)", () => {
     expect(h.tracker.mayClaim(keeper, true)).toBe(true);
     expect(await claim(h.tracker, keeper, true)).toBe(true);
     expect(await claim(h.tracker, Symbol("shell"), true)).toBe(false);
+  });
+
+  it("restarts the clock for an owner's attempt that didn't happen, never over a newer claim", async () => {
+    const h = await ended();
+    const keeper = Symbol("keeper");
+    const reading = await h.tracker.checkFresh();
+    expect(h.tracker.tryClaim(reading, keeper)).toBe(true);
+    // Its power-off never happened: the idle time it claimed counts as use, and a new one starts.
+    h.tracker.noteWorkIfCurrent(reading!);
+    expect(h.tracker.observation().busy).toBe(true);
+    expect(h.tracker.mayClaim(Symbol("shell"))).toBe(false);
+
+    // Newer work came, and a Shell claimed the idle time after it: the old attempt changes nothing.
+    await h.tracker.check();
+    h.advance(31 * MINUTE);
+    expect(await claim(h.tracker, Symbol("shell"))).toBe(true);
+    h.tracker.noteWorkIfCurrent(reading!);
+    expect(h.tracker.observation().busy).toBe(false);
+    expect(h.tracker.mayClaim(keeper)).toBe(false);
   });
 
   it("grants nothing once disposed, a claim already reading included", async () => {
