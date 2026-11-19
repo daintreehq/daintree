@@ -698,11 +698,27 @@ export interface CloudHostStatus {
    */
   selfStopProblem?: string | null;
   /**
+   * What this device does once the host's idle time ends, while it is linked
+   * to the host, for a plugin provider's machine that can't stop itself
+   * (#17923). Absent or null for a machine this device never stops.
+   */
+  linkedIdleStop?: CloudLinkedIdleStop | null;
+  /**
    * The provider put the stopped machine to sleep on idle rather than being
    * asked to stop it: a request to it would wake it, and it bills as stopped.
    */
   asleep: boolean;
 }
+
+/**
+ * `stops`: this device stops the machine with the provider's normal stop once
+ * the host grants it the ended idle time. `unknown`: the provider hasn't said
+ * yet whether a stop would keep this machine's disk. `blocked`: why it doesn't.
+ */
+export type CloudLinkedIdleStop =
+  | { kind: "stops" }
+  | { kind: "unknown" }
+  | { kind: "blocked"; problem: string };
 
 /** The machine as it would be created. */
 export interface CloudHostCreateRequest {

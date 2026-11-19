@@ -3,6 +3,7 @@ import {
   cloudMachineLabel,
   type CloudHostStatus,
   type CloudLifetimeModel,
+  type CloudLinkedIdleStop,
   type CloudProviderInfo,
   type CloudProviderPersistence,
 } from "@shared/types/cloudHosts";
@@ -194,22 +195,39 @@ export function idleClockSentence(
 export const IDLE_STOP_UNKNOWN =
   "Daintree can't tell whether the machine stops when the host's idle time ends.";
 
+/** Said of a plugin provider's machine this device stops once idle while it's linked (#17923). */
+export const LINKED_IDLE_STOP =
+  "While this device is linked to the host, it stops the machine once the host's idle time ends. With every device away, the machine keeps running.";
+
 /**
  * What a host's idle time ending does to its machine, beside its idle clock:
  * nothing more once the host says it stops the machine itself, which the
  * clock already says (#17361, #17362). Otherwise why it can't, as this device
  * found; that it doesn't, for a provider whose hosts have no way to stop their
  * machines, with what a stopped one would still cost; and unknown while the
- * provider isn't registered or its host hasn't said. `idle` is only ever from a
+ * provider isn't registered or its host hasn't said. A plugin provider's
+ * machine this device stops while it's linked says so, with what happens with
+ * every device away, or why it doesn't (#17923). `idle` is only ever from a
  * summary on the current link: one from an earlier link says nothing about now.
  */
 export function idleEndSentence(
   idle: HostIdleObservation | undefined,
   provider: CloudProviderTerms | null,
-  selfStopProblem: string | null
+  selfStopProblem: string | null,
+  linkedIdleStop: CloudLinkedIdleStop | null = null
 ): string | null {
   if (idle?.stopsWhenIdle) return null;
   if (selfStopProblem) return selfStopProblem;
+  if (provider && linkedIdleStop) {
+    switch (linkedIdleStop.kind) {
+      case "stops":
+        return LINKED_IDLE_STOP;
+      case "blocked":
+        return linkedIdleStop.problem;
+      case "unknown":
+        return IDLE_STOP_UNKNOWN;
+    }
+  }
   if (provider?.hostIdleStop !== false) return IDLE_STOP_UNKNOWN;
   // Its own idle sleep or lifetime, if it has one, is described on its own.
   const doesnt = `On ${provider.name}, the machine doesn't stop when the host's idle time ends.`;

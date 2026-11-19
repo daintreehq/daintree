@@ -13,6 +13,7 @@ import {
   HOST_IDLE_MINUTE_CHOICES,
   type HostIdleObservation,
 } from "@shared/types/hostIdle";
+import type { CloudLinkedIdleStop } from "@shared/types/cloudHosts";
 import type { HostSettingsSnapshot, HostSettingsUpdateResult } from "@shared/types/hostSettings";
 import type { HostId } from "@shared/types/remoteHosts";
 import { SettingsRow } from "../SettingsGroup";
@@ -66,6 +67,8 @@ interface HostIdleTimeRowProps {
   sampledAt: number | null;
   /** Why the machine can't stop itself once idle, as this device found; null when nothing stands in the way. */
   selfStopProblem?: string | null;
+  /** What this device does once the idle time ends while it's linked, for a plugin provider's machine (#17923). */
+  linkedIdleStop?: CloudLinkedIdleStop | null;
   /** The machine's provider; null while it isn't registered, which leaves what the idle time does unknown. */
   provider?: CloudProviderTerms | null;
 }
@@ -82,6 +85,7 @@ export function HostIdleTimeRow({
   idle,
   sampledAt,
   selfStopProblem = null,
+  linkedIdleStop = null,
   provider = null,
 }: HostIdleTimeRowProps) {
   const [setting, setSetting] = useState<IdleSetting | null>(null);
@@ -136,7 +140,7 @@ export function HostIdleTimeRow({
   };
 
   // What its idle time ending does to the machine; the host's word that it stops it settles it.
-  const consequence = idleEndSentence(idle, provider, selfStopProblem);
+  const consequence = idleEndSentence(idle, provider, selfStopProblem, linkedIdleStop);
   const withConsequence = (text: string) =>
     consequence ? `${/[.!?]$/.test(text) ? text : `${text}.`} ${consequence}` : text;
 
