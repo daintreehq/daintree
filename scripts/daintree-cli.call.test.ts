@@ -32,8 +32,7 @@ interface Seen {
   sessionId: string | undefined;
   protocolVersion: string | undefined;
   rpc:
-    | { id?: unknown; method?: string; params?: { name?: string; arguments?: unknown } }
-    | undefined;
+    { id?: unknown; method?: string; params?: { name?: string; arguments?: unknown } } | undefined;
   /** What the server wrote back, as sent. */
   response: string;
 }
@@ -879,7 +878,9 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       expect(after.stderr).toContain("DAINTREE_MCP_SESSION");
       const again = await session(["end"], { DAINTREE_MCP_SESSION: handle });
       expect(again.status).toBe(5);
-      expect(fixture.seen.filter((request) => request.rpc?.method === "initialize")).toHaveLength(1);
+      expect(fixture.seen.filter((request) => request.rpc?.method === "initialize")).toHaveLength(
+        1
+      );
       expect(fs.readdirSync(tmpDir)).toEqual([]);
     });
 
