@@ -163,6 +163,14 @@ const {
   ),
 }));
 
+const continueClient = vi.hoisted(() => ({
+  set: vi.fn(async (_terminalId: string, _enabled: boolean) => {}),
+  list: vi.fn(async () => []),
+}));
+vi.mock("@/clients/codexLimitContinueClient", () => ({
+  codexLimitContinueClient: continueClient,
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch,
@@ -280,6 +288,7 @@ vi.mock("@/components/Terminal/TerminalHandOver", async (importOriginal) => ({
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
+import { useCodexLimitContinueStore } from "@/store/codexLimitContinueStore";
 import {
   claimComposerSendSeq,
   noteLastComposerSend,
@@ -1633,6 +1642,37 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     expect(screen.getByText("When done")).toBeTruthy();
     expect(screen.queryByText("Watch")).toBeNull();
     useTerminalWhenDoneStore.setState({ choices: {} });
+  });
+
+  it("offers Continue when usage limit resets on a Codex pane and arms it straight through main (#17909)", () => {
+    const codexPane = { ...agentPane, title: "Codex", launchAgentId: "codex", detectedAgentId: "codex" };
+    renderMenu(codexPane);
+    const row = () =>
+      screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" });
+    expect(row().getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(row());
+    expect(continueClient.set).toHaveBeenLastCalledWith("panel-1", true);
+    // No action carries it, so nothing reaches MCP.
+    expect(dispatch).not.toHaveBeenCalled();
+
+    cleanup();
+    useCodexLimitContinueStore.setState({
+      panes: { "panel-1": { revision: 2, state: { status: "armed" } } },
+    });
+    renderMenu(codexPane);
+    expect(row().getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(row());
+    expect(continueClient.set).toHaveBeenLastCalledWith("panel-1", false);
+    useCodexLimitContinueStore.setState({ panes: {} });
+  });
+
+  it.each([
+    ["an agent whose CLI waits on its own", { launchAgentId: "claude", detectedAgentId: "claude" }],
+    ["a plain shell", { launchAgentId: undefined, detectedAgentId: undefined }],
+    ["a dialog pane", { launchAgentId: "codex", detectedAgentId: "codex", location: "dialog" }],
+  ])("offers no Continue when usage limit resets on %s (#17909)", (_name, overrides) => {
+    renderMenu({ ...agentPane, ...overrides });
+    expect(screen.queryByText("Continue when usage limit resets")).toBeNull();
   });
 
   it("runs the watch and fleet rows from where they now sit", () => {
