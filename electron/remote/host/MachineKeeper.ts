@@ -1,8 +1,8 @@
-import type { HostIdleObservation } from "../../../shared/types/hostIdle.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { lifetimeRenewalDue, stopUnderWay } from "../cloud/lifetimeRenewal.js";
 import type { MachineKeeperArmRequest, MachineKeeperStatus } from "../cloud/machineKeeperLink.js";
 import type { ProviderResource } from "../cloud/provider.js";
+import type { HostIdleActorSource } from "./HostIdleTracker.js";
 
 /** What a failed request means for the key: try again later, or it no longer works. */
 export type MachineKeeperFailure = { kind: "retry" } | { kind: "lost"; problem: string };
@@ -18,12 +18,7 @@ export interface MachineDriver {
 }
 
 export interface MachineKeeperDeps {
-  idle: {
-    observation(): HostIdleObservation;
-    /** A check whose read starts now, after any already under way. */
-    checkFresh(): Promise<void>;
-    noteWork(): void;
-  };
+  idle: HostIdleActorSource;
   /** The driver for a key, or why this host can't use it. */
   driverFor(request: MachineKeeperArmRequest): MachineDriver | string;
   now?: () => number;
@@ -86,6 +81,8 @@ export class MachineKeeper {
   private marker: string | null = null;
   /** Arms in the order they came, so a late one from a link since gone can't land over a newer one. */
   private arms: Promise<unknown> = Promise.resolve();
+  /** Who this keeper is to the idle clock, when it claims an idle time to stop on. */
+  private readonly claimant = Symbol("machine-keeper");
   private disposed = false;
 
   constructor(private readonly deps: MachineKeeperDeps) {}
@@ -304,7 +301,7 @@ export class MachineKeeper {
         await read();
       } else if (idle.busy) {
         await this.keepRunning(held, read, current, signal);
-      } else if (idle.idleEndsAt !== null && idle.idleEndsAt <= this.now()) {
+      } else if (this.deps.idle.mayClaim(this.claimant)) {
         await this.stopIdle(held, read, current, signal);
       }
       if (current()) {
@@ -355,7 +352,9 @@ export class MachineKeeper {
   /**
    * Idle past its idle time: stop the machine, once the provider confirms it
    * is still running with no stop under way and a check of the host started
-   * after that answer still sees no work.
+   * after that answer still sees no work and claims the idle time for this
+   * keeper, so a Shell that claimed it first is never followed by a stop here.
+   * A stop sent is followed by reading the machine, never by a second claim.
    */
   private async stopIdle(
     held: HeldKey,
@@ -367,9 +366,9 @@ export class MachineKeeper {
     if (!current() || this.stopping !== null) return;
     // A stop would erase a disk nothing saves; Daintree never makes or takes such a machine.
     if (resource.snapshotsDisabled) return;
-    await this.deps.idle.checkFresh();
-    const idle = this.deps.idle.observation();
-    if (!current() || idle.busy || idle.idleEndsAt === null || idle.idleEndsAt > this.now()) return;
+    const reading = await this.deps.idle.checkFresh();
+    if (!current() || this.stopping !== null) return;
+    if (!this.deps.idle.tryClaim(reading, this.claimant)) return;
     // Recorded before it goes: an answer lost on the way back still leaves it followed, never sent twice.
     this.stopping = { since: this.now(), own: true };
     const stopping = await held.driver.stop(signal);

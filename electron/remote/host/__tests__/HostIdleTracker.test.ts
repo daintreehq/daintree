@@ -355,3 +355,189 @@ describe("HostIdleTracker.checkFresh (#17361)", () => {
     tracker.dispose();
   });
 });
+
+describe("HostIdleTracker claims (#17922)", () => {
+  const quiet: HostWorkReading = { agents: { active: 0, unreadable: 0 }, shellViews: false };
+
+  async function claim(tracker: HostIdleTracker, owner: symbol, retryOwn = false) {
+    return tracker.tryClaim(await tracker.checkFresh(), owner, retryOwn);
+  }
+
+  /** A tracker whose idle time ended a minute ago. */
+  async function ended(fresh?: () => Promise<HostWorkReading>) {
+    const now = { wall: 1_000_000, mono: 500 };
+    let reading: HostWorkReading = quiet;
+    const readFresh = vi.fn(fresh ?? (async () => reading));
+    const tracker = new HostIdleTracker({
+      read: async () => quiet,
+      readFresh,
+      idleAfterMinutes: () => 30,
+      clock: () => ({ ...now }),
+    });
+    await tracker.check();
+    now.wall += 31 * MINUTE;
+    now.mono += 31 * MINUTE;
+    return {
+      tracker,
+      readFresh,
+      advance(ms: number) {
+        now.wall += ms;
+        now.mono += ms;
+      },
+      see(next: HostWorkReading) {
+        reading = next;
+      },
+    };
+  }
+
+  it("grants an ended idle time once, from a reading taken for the claim", async () => {
+    const h = await ended();
+    const first = Symbol("first");
+    expect(h.tracker.mayClaim(first)).toBe(true);
+    expect(await claim(h.tracker, first)).toBe(true);
+    expect(h.readFresh).toHaveBeenCalledTimes(1);
+
+    // Spent: nobody else gets it, the owner asking again included, however often the clock is checked.
+    const second = Symbol("second");
+    await h.tracker.check();
+    h.advance(60 * MINUTE);
+    expect(h.tracker.mayClaim(second)).toBe(false);
+    expect(await claim(h.tracker, second)).toBe(false);
+    expect(await claim(h.tracker, first)).toBe(false);
+    expect(h.tracker.observation().busy).toBe(false);
+
+    // New work restarts the clock: the next idle time, once it ends, can be claimed again.
+    h.tracker.noteWork();
+    expect(await claim(h.tracker, second)).toBe(false);
+    h.advance(29 * MINUTE);
+    expect(await claim(h.tracker, second)).toBe(false);
+    h.advance(MINUTE);
+    expect(await claim(h.tracker, second)).toBe(true);
+  });
+
+  it.each([
+    ["an agent at work", { agents: { active: 1, unreadable: 0 }, shellViews: false }],
+    ["an agent whose state can't be read", { agents: { active: 0, unreadable: 1 }, shellViews: false }],
+    ["a degraded terminal read", { agents: null, shellViews: false }],
+    ["a Shell's window open on the host", { agents: { active: 0, unreadable: 0 }, shellViews: true }],
+  ] satisfies Array<[string, HostWorkReading]>)(
+    "refuses when the claim's own reading finds %s, though the last check found none",
+    async (_name, reading) => {
+      const h = await ended();
+      h.see(reading);
+      expect(h.tracker.mayClaim(Symbol("before"))).toBe(true);
+      expect(await claim(h.tracker, Symbol("shell"))).toBe(false);
+      expect(h.tracker.observation().busy).toBe(true);
+    }
+  );
+
+  it("refuses when the claim's reading fails", async () => {
+    const h = await ended(async () => {
+      throw new Error("pty host gone");
+    });
+    expect(await claim(h.tracker, Symbol("shell"))).toBe(false);
+    expect(h.tracker.observation().busy).toBe(true);
+  });
+
+  it("refuses an idle time that hasn't ended, and grants it from the moment it ends", async () => {
+    const now = { wall: 1_000_000, mono: 500 };
+    const tracker = new HostIdleTracker({
+      read: async () => quiet,
+      idleAfterMinutes: () => 30,
+      clock: () => ({ ...now }),
+    });
+    const owner = Symbol("shell");
+    // Read at the claim, the idle time starts there: nothing to claim yet.
+    expect(await claim(tracker, owner)).toBe(false);
+    now.wall += 30 * MINUTE - 1;
+    now.mono += 30 * MINUTE - 1;
+    expect(tracker.mayClaim(owner)).toBe(false);
+    expect(await claim(tracker, owner)).toBe(false);
+    now.wall += 1;
+    now.mono += 1;
+    expect(await claim(tracker, owner)).toBe(true);
+  });
+
+  it("never grants early for a wall clock stepped forward", async () => {
+    const now = { wall: 1_000_000, mono: 500 };
+    const tracker = new HostIdleTracker({
+      read: async () => quiet,
+      idleAfterMinutes: () => 30,
+      clock: () => ({ ...now }),
+    });
+    await tracker.check();
+    now.mono += 5 * MINUTE;
+    now.wall += 65 * MINUTE;
+    expect(await claim(tracker, Symbol("shell"))).toBe(false);
+  });
+
+  it("grants one of two asking at once, each after a reading of its own", async () => {
+    const h = await ended();
+    const results = await Promise.all([
+      claim(h.tracker, Symbol("a")),
+      claim(h.tracker, Symbol("b")),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(h.readFresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a reading that work overtook, while it was out or before the claim", async () => {
+    // The clock stands still: only the work itself, not a later time, can tell the reading is stale.
+    let release: (reading: HostWorkReading) => void = () => {};
+    const h = await ended(
+      () => new Promise<HostWorkReading>((resolve) => (release = resolve))
+    );
+    const pending = h.tracker.checkFresh();
+    await vi.waitFor(() => expect(h.readFresh).toHaveBeenCalledTimes(1));
+    h.tracker.noteWork();
+    release(quiet);
+    expect(h.tracker.tryClaim(await pending, Symbol("shell"))).toBe(false);
+
+    const later = await ended();
+    const reading = await later.tracker.checkFresh();
+    expect(reading).not.toBeNull();
+    later.tracker.noteWork();
+    expect(later.tracker.tryClaim(reading, Symbol("shell"))).toBe(false);
+  });
+
+  it("keeps an idle time spent across a changed idle time", async () => {
+    let minutes = 30;
+    const now = { wall: 1_000_000, mono: 500 };
+    const tracker = new HostIdleTracker({
+      read: async () => quiet,
+      idleAfterMinutes: () => minutes,
+      clock: () => ({ ...now }),
+    });
+    await tracker.check();
+    now.wall += 31 * MINUTE;
+    now.mono += 31 * MINUTE;
+    expect(await claim(tracker, Symbol("first"))).toBe(true);
+    minutes = 60;
+    now.wall += 30 * MINUTE;
+    now.mono += 30 * MINUTE;
+    expect(await claim(tracker, Symbol("second"))).toBe(false);
+  });
+
+  it("lets only the owner try again on its own claim, and only when it asks to", async () => {
+    const h = await ended();
+    const keeper = Symbol("keeper");
+    expect(await claim(h.tracker, keeper)).toBe(true);
+    expect(h.tracker.mayClaim(keeper, true)).toBe(true);
+    expect(await claim(h.tracker, keeper, true)).toBe(true);
+    expect(await claim(h.tracker, Symbol("shell"), true)).toBe(false);
+  });
+
+  it("grants nothing once disposed, a claim already reading included", async () => {
+    let release: (reading: HostWorkReading) => void = () => {};
+    const h = await ended(
+      () => new Promise<HostWorkReading>((resolve) => (release = resolve))
+    );
+    const pending = h.tracker.checkFresh();
+    await vi.waitFor(() => expect(h.readFresh).toHaveBeenCalledTimes(1));
+    h.tracker.dispose();
+    release(quiet);
+    expect(h.tracker.tryClaim(await pending, Symbol("shell"))).toBe(false);
+    expect(h.tracker.mayClaim(Symbol("shell"))).toBe(false);
+    expect(await h.tracker.checkFresh()).toBeNull();
+  });
+});

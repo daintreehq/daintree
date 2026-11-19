@@ -106,7 +106,9 @@ function setup(options: { guest?: boolean } = {}) {
   const keeper = new GuestPowerOffKeeper({
     idle: {
       observation: () => ({ idleAfterMinutes: 30, lastWorkAt: 0, busy: true, idleEndsAt: null }),
-      checkFresh: async () => {},
+      checkFresh: async () => null,
+      mayClaim: () => false,
+      tryClaim: () => false,
       noteWork: () => {},
     },
     system,

@@ -298,7 +298,8 @@ async function buildHostListener(
   teardowns.push(installSettingsCopyHost(server));
   // This machine's own settings, read and changed by name when a Shell asks (#14167).
   teardowns.push(installSettingsControlHost(server));
-  // A cloud machine renewing and stopping itself by its idle clock, with the key a Shell hands it (#17361).
+  // A cloud machine renewing and stopping itself by its idle clock, with the key a Shell hands it
+  // (#17361), and the claim a Shell makes before acting on this host's idleness (#17922).
   teardowns.push(installMachineKeeperHost(server));
   // Plugin prompts go to the project's driving frontend; view bundles are
   // served per endpoint alongside its other streams.
