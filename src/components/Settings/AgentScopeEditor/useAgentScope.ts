@@ -15,6 +15,7 @@ import {
   type PermissionLevel,
 } from "@shared/types";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { sanitizePreset } from "@shared/utils/agentPresets";
 
 interface UseAgentScopeProps {
   agentId: string;
@@ -165,7 +166,11 @@ export function useAgentScope({
     const id = `user-${crypto.randomUUID()}`;
     // Continuing at a limit's reset is the user's to turn on (#17912): a copy
     // of a repository's or router's preset never brings it along unseen.
-    const ownSource = (activeEntry.customPresets ?? []).some((own) => own.id === preset.id);
+    // A stored entry the sanitiser drops answers for nothing: the id is then
+    // whichever other source's preset resolves under it.
+    const ownSource = (activeEntry.customPresets ?? []).some(
+      (own) => own.id === preset.id && sanitizePreset(own) !== null
+    );
     const updated = [
       ...(activeEntry.customPresets ?? []),
       // Drop the display title on copy so the duplicate doesn't share an

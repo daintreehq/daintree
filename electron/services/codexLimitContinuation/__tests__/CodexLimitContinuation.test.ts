@@ -31,6 +31,7 @@ const codexPane = (extra: Partial<ContinuationTerminal> = {}): ContinuationTermi
   fallbackChainIndex: undefined,
   isAssistantTerminal: false,
   spawnedAt: 1_000,
+  launchGeneration: undefined,
   ...extra,
 });
 
@@ -546,6 +547,30 @@ describe("CodexLimitContinuation — a preset arms its panes (#17912)", () => {
     // The wait is still the one the later process's exit ends.
     h.service.handleProcessChange("t1", 2_000);
     expect(h.state()).toEqual({ status: "armed" });
+  });
+
+  it("keeps another project's choice for the same id when a project is removed", async () => {
+    const h = harness();
+    await h.service.set("t1", false, "elsewhere");
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    h.service.forgetProject(PROJECT);
+
+    h.service.noteLaunch(launch(true, 2, "elsewhere"));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.service.isArmed("t1")).toBe(false);
+  });
+
+  it("ignores an earlier spawn's late answer for a pane armed from its menu", async () => {
+    const h = harness();
+    h.setTerminal(codexPane({ spawnedAt: 2_000, launchGeneration: 2 }));
+    await h.service.set("t1", true, PROJECT);
+    await h.service.handleStop("t1", STOP);
+    const waiting = h.state();
+    expect(waiting).toMatchObject({ status: "waiting" });
+
+    h.service.handleSpawnResult("t1", confirmed(1, 1_000));
+    expect(h.state()).toEqual(waiting);
   });
 
   it("forgets a removed project's panes and choices, and no other project's", async () => {

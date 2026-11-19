@@ -34,6 +34,7 @@ async function readTerminal(terminalId: string): Promise<ContinuationTerminal | 
     fallbackChainIndex: info.fallbackChainIndex,
     isAssistantTerminal: info.isAssistantTerminal === true,
     spawnedAt: info.spawnedAt,
+    launchGeneration: info.launchGeneration,
   };
 }
 
@@ -107,7 +108,7 @@ export interface AgentLaunchForContinuation {
  * Called by the spawn handler right after it sent a launch (#17912): the pane
  * starts armed when its user's own original preset says so, unless the user
  * chose otherwise for it, once the host confirms the spawn. A launch whose
- * preset doesn't arm it, of a pane nothing has armed, creates nothing.
+ * preset doesn't arm it, of a pane nothing has armed or noted, creates nothing.
  */
 export function noteContinuationLaunch(launch: AgentLaunchForContinuation): void {
   const arms =
@@ -120,7 +121,9 @@ export function noteContinuationLaunch(launch: AgentLaunchForContinuation): void
       },
       readOwnPresets(launch.agentId)
     );
-  if (!arms && !service?.isArmed(launch.terminalId)) return;
+  // A launch noted earlier is still awaiting its spawn, so this one, newer,
+  // must be noted too, or that one's default would be taken for it.
+  if (!arms && !service?.followsLaunches(launch.terminalId)) return;
   getCodexLimitContinuation().noteLaunch({
     terminalId: launch.terminalId,
     projectId: launch.projectId,

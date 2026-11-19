@@ -47,6 +47,8 @@ export interface ContinuationTerminal {
   isAssistantTerminal: boolean;
   /** Names the pane's process: a successor under the same id has another. */
   spawnedAt: number | undefined;
+  /** The ledger generation the pane's process runs under, when its host says. */
+  launchGeneration: number | undefined;
 }
 
 export type Timer = unknown;
@@ -188,6 +190,11 @@ export class CodexLimitContinuation {
     return this.panes.has(terminalId);
   }
 
+  /** Whether a launch under `terminalId` can change anything: it is armed, or a launch awaits its spawn. */
+  followsLaunches(terminalId: string): boolean {
+    return this.panes.has(terminalId) || this.launches.has(terminalId);
+  }
+
   /**
    * Arm a pane of `projectId` for agents whose limit Daintree can wait out,
    * or disarm it, which drops a pending wait at once. Asked twice in quick
@@ -246,7 +253,7 @@ export class CodexLimitContinuation {
     }
     this.setOverride(terminalId, projectId, true);
     if (this.panes.has(terminalId)) return;
-    this.arm(terminalId, projectId, terminal.spawnedAt, undefined);
+    this.arm(terminalId, projectId, terminal.spawnedAt, terminal.launchGeneration);
   }
 
   /**
@@ -348,10 +355,15 @@ export class CodexLimitContinuation {
     this.updateActive();
   }
 
-  /** A project was removed: everything held for its panes goes (#17912). */
+  /**
+   * A project was removed: everything held for its panes goes (#17912), and
+   * nothing another project holds under the same ids.
+   */
   forgetProject(projectId: string): void {
     for (const pane of [...this.panes.values()]) {
-      if (pane.projectId === projectId) this.forgetPane(pane.terminalId);
+      if (pane.projectId !== projectId) continue;
+      this.fired.delete(pane.terminalId);
+      this.disarm(pane.terminalId);
     }
     for (const [terminalId, choices] of [...this.overrides]) {
       choices.delete(projectId);

@@ -208,6 +208,12 @@ describe("useAgentScope — duplicating a preset's continuation switch (#17912)"
     expect(copy?.continueAtLimitReset).toBe(true);
   });
 
+  it("drops it when the user's own entry under that id is one the sanitiser discards", async () => {
+    const discarded = { id: "team", name: "<bad>" };
+    const copy = await duplicate({ customPresets: [discarded] }, { id: "team", name: "Team" });
+    expect(copy?.continueAtLimitReset).toBeUndefined();
+  });
+
   it("drops it from a copy of a repository's preset, whose switch the user never saw", async () => {
     const copy = await duplicate({ customPresets: [] }, { id: "team", name: "Team" });
     expect(copy?.name).toBe("Team (copy)");
