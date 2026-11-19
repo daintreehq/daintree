@@ -243,13 +243,22 @@ async function buildHostListener(
         caller: relayCallerOf(spec),
       });
     },
-    retirePrincipal: (senderId, helpSessionId, keepConversationUntil) => {
+    retirePrincipal: (senderId, helpSessionId, keepConversation) => {
       void import("../../services/McpServerService.js")
         .then(({ mcpServerService }) =>
-          mcpServerService.retireRelayPrincipal(senderId, helpSessionId, keepConversationUntil)
+          mcpServerService.retireRelayPrincipal(senderId, helpSessionId, keepConversation)
         )
         .catch((error: unknown) => {
           logger.warn("Couldn't retire a relay principal", { error });
+        });
+    },
+    forgetConversation: (senderId, conversationId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) =>
+          mcpServerService.forgetRelayConversation(senderId, conversationId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't forget a relay conversation", { error });
         });
     },
     watchingNoticeCalls: async (senderId, helpSessionId) => {

@@ -246,6 +246,7 @@ describe("createMcpRelayExecutor reads (#16191)", () => {
 
 describe("createMcpRelayExecutor and a caller's conversation (#17919)", () => {
   let executor: McpRelayExecutor | undefined;
+  const DAY = 24 * 60 * 60_000;
 
   afterEach(() => {
     executor?.dispose();
@@ -255,7 +256,8 @@ describe("createMcpRelayExecutor and a caller's conversation (#17919)", () => {
 
   function harness(clock: { now: number }) {
     const opened: RelayMcpSessionSpec[] = [];
-    const retired: Array<[string, string, number | undefined]> = [];
+    const retired: Array<[string, string, ...unknown[]]> = [];
+    const forgotten: Array<[string, string]> = [];
     executor = createMcpRelayExecutor({
       acceptsRemoteControl: () => true,
       hasProject: async () => true,
@@ -263,54 +265,126 @@ describe("createMcpRelayExecutor and a caller's conversation (#17919)", () => {
         opened.push(spec);
         return { isOpen: () => true, callTool: async () => ANSWER, close: () => {} };
       },
-      retirePrincipal: (senderId, helpSessionId, keepConversationUntil) =>
-        retired.push([senderId, helpSessionId, keepConversationUntil]),
+      retirePrincipal: (...args) => retired.push(args),
+      forgetConversation: (senderId, conversationId) => forgotten.push([senderId, conversationId]),
       now: () => clock.now,
     });
-    return { executor, opened, retired };
+    return { executor, opened, retired, forgotten };
   }
 
-  const WITH_CONVERSATION: RelayMcpSessionSpec = { ...SPEC, conversationId: "conv-1" };
+  const spec = (helpSessionId: string, conversationId?: string): RelayMcpSessionSpec => ({
+    ...SPEC,
+    helpSessionId,
+    ...(conversationId !== undefined ? { conversationId } : {}),
+  });
+  const payload = (helpSessionId: string, callId = `call-${helpSessionId}`): McpCallPayload => ({
+    ...PAYLOAD,
+    helpSessionId,
+    callId,
+  });
 
-  it("keeps what an ended caller's conversation made for as long as its hold would have lasted", async () => {
+  it("keeps an ended caller's conversation for a day from its last call, then forgets it", async () => {
+    vi.useFakeTimers();
     const clock = { now: 5_000 };
-    const { executor, retired } = harness(clock);
-    await executor.call(WITH_CONVERSATION, PAYLOAD);
+    const { executor, retired, forgotten } = harness(clock);
+    await executor.call(spec("help-1", "conv-1"), payload("help-1"));
     clock.now = 9_000;
 
     executor.endPrincipal("local", "help-1");
+    expect(retired).toEqual([["local", "help-1", true]]);
 
-    // A day from its last call, as the idle sweep counts it.
-    expect(retired).toEqual([["local", "help-1", 5_000 + 24 * 60 * 60_000]]);
+    clock.now = 5_000 + DAY - 1;
+    vi.advanceTimersByTime(60_000);
+    expect(forgotten).toEqual([]);
+    clock.now = 5_000 + DAY + 1;
+    vi.advanceTimersByTime(60_000);
+    expect(forgotten).toEqual([["local", "conv-1"]]);
   });
 
-  it("keeps nothing past a hold that aged out", async () => {
+  it("keeps nothing past a hold that aged out, or for a caller that named no conversation", async () => {
     vi.useFakeTimers();
     const clock = { now: 0 };
-    const { executor, retired } = harness(clock);
-    await executor.call(WITH_CONVERSATION, PAYLOAD);
+    const { executor, retired, forgotten } = harness(clock);
+    await executor.call(spec("help-1", "conv-1"), payload("help-1"));
+    await executor.call(spec("help-2"), payload("help-2"));
+    executor.endPrincipal("local", "help-2");
 
-    clock.now = 24 * 60 * 60_000 + 1;
+    clock.now = DAY + 1;
     vi.advanceTimersByTime(60_000);
 
-    expect(retired).toEqual([["local", "help-1", undefined]]);
+    expect(retired).toEqual([
+      ["local", "help-2"],
+      ["local", "help-1"],
+    ]);
+    expect(forgotten).toEqual([]);
+  });
+
+  it("gives an ended conversation back to its resumed caller, which nothing forgets then", async () => {
+    vi.useFakeTimers();
+    const clock = { now: 0 };
+    const { executor, forgotten } = harness(clock);
+    await executor.call(spec("help-1", "conv-1"), payload("help-1"));
+    executor.endPrincipal("local", "help-1");
+
+    await executor.call(spec("help-2", "conv-1"), payload("help-2"));
+    clock.now = DAY + 1;
+    vi.advanceTimersByTime(60_000);
+
+    expect(forgotten).toEqual([]);
+  });
+
+  it("leaves a conversation another of the sender's callers is still on to that caller", async () => {
+    vi.useFakeTimers();
+    const clock = { now: 0 };
+    const { executor, forgotten } = harness(clock);
+    await executor.call(spec("help-1", "conv-1"), payload("help-1"));
+    clock.now = DAY / 2;
+    await executor.call(spec("help-2", "conv-1"), payload("help-2"));
+    executor.endPrincipal("local", "help-1");
+
+    clock.now = DAY + 1;
+    vi.advanceTimersByTime(60_000);
+
+    expect(forgotten).toEqual([]);
+  });
+
+  it("counts ended conversations against the sender's bound, the least recent going first", async () => {
+    const clock = { now: 0 };
+    const { executor, forgotten } = harness(clock);
+    for (let i = 0; i < 65; i += 1) {
+      clock.now = i;
+      await executor.call(spec(`help-${i}`, `conv-${i}`), payload(`help-${i}`));
+      executor.endPrincipal("local", `help-${i}`);
+    }
+
+    expect(forgotten).toEqual([["local", "conv-0"]]);
+  });
+
+  it("forgets every ended conversation it holds when the relay goes", async () => {
+    const { executor, forgotten } = harness({ now: 0 });
+    await executor.call(spec("help-1", "conv-1"), payload("help-1"));
+    executor.endPrincipal("local", "help-1");
+
+    executor.dispose();
+
+    expect(forgotten).toEqual([["local", "conv-1"]]);
   });
 
   it("opens a session naming the conversation even after a read opened one without it", async () => {
     const { executor, opened } = harness({ now: 0 });
     await executor.read(SPEC, { tool: "terminal.list", args: {}, runMs: 5_000 });
-    await executor.call(WITH_CONVERSATION, PAYLOAD);
-    await executor.call(WITH_CONVERSATION, { ...PAYLOAD, callId: "call-2" });
+    await executor.call(spec("help-1", "conv-1"), PAYLOAD);
+    await executor.call(spec("help-1", "conv-1"), { ...PAYLOAD, callId: "call-2" });
 
-    expect(opened.map((spec) => spec.conversationId)).toEqual([undefined, "conv-1"]);
+    expect(opened.map((opening) => opening.conversationId)).toEqual([undefined, "conv-1"]);
   });
 
   it("takes a callId resent naming another conversation as another call", async () => {
     const { executor } = harness({ now: 0 });
-    await executor.call(WITH_CONVERSATION, PAYLOAD);
+    await executor.call(spec("help-1", "conv-1"), PAYLOAD);
 
     await expect(
-      executor.call({ ...SPEC, conversationId: "conv-2" }, { ...PAYLOAD, resend: true })
+      executor.call(spec("help-1", "conv-2"), { ...PAYLOAD, resend: true })
     ).resolves.toEqual({ status: "conflict" });
   });
 });

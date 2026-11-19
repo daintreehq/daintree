@@ -572,8 +572,8 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
 
       it("names the lane's conversation from main's own record of the run, never the model's", async () => {
         const spoof = { ...LIST, conversationId: "forged", args: { conversationId: "forged" } };
-        await runtime.call("a", spoof as typeof LIST, { tier: "core" });
-        await runtime.call("b", spoof as typeof LIST, { tier: "core" });
+        await runtime.call("a", spoof as unknown as typeof LIST, { tier: "core" });
+        await runtime.call("b", spoof as unknown as typeof LIST, { tier: "core" });
         const remote = { ...LIST, hostId: "studio", projectId: "host-p" };
         await runtime.call("a", remote, { tier: "core" });
         await runtime.call("b", remote, { tier: "core" });

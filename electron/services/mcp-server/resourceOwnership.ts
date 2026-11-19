@@ -213,12 +213,6 @@ export class ResourceOwnershipLedger {
    * notices and grants stay its own. Dropped when the principal is revoked.
    */
   private readonly conversationByPrincipal = new Map<string, string>();
-  /**
-   * Conversations no live principal is bound to whose records last only until
-   * a deadline: a relay's, whose hold here is the relay's own retention bound.
-   * A conversation not listed keeps its records until main forgets it.
-   */
-  private readonly dormantUntil = new Map<string, number>();
 
   /**
    * Bind a session to the principal its bearer resolved to at handshake
@@ -257,17 +251,23 @@ export class ResourceOwnershipLedger {
    * back what the last one launched, and a revoked one reads nothing, since
    * revoking unbinds it. Anything the principal recorded before it was bound
    * moves with it. A revoked principal binds nothing.
+   *
+   * One conversation per principal: a bearer that goes on to run another (a
+   * help session relaunched fresh onto a new PTY) holds what it makes from
+   * then on itself, so neither conversation gets the other's work, nor a call
+   * of the first that lands late.
    */
-  attachConversation(principalId: string, conversationKey: string, now: number = Date.now()): void {
+  attachConversation(principalId: string, conversationKey: string): void {
     const owner = principalOwnerKey(principalId);
     if (!this.livePrincipals.has(owner) || !isConversationOwner(conversationKey)) return;
-    this.pruneDormant(now);
-    this.dormantUntil.delete(conversationKey);
     const current = this.conversationByPrincipal.get(owner);
-    if (current === conversationKey) return;
-    if (current === undefined) this.moveRecords(owner, conversationKey);
-    // Re-inserted, so the latest bound is last for `controllerOf`.
-    this.conversationByPrincipal.delete(owner);
+    if (current === conversationKey || current === owner) return;
+    if (current !== undefined) {
+      // Pinned to itself: `holderOf` reads the principal's own key from now on.
+      this.conversationByPrincipal.set(owner, owner);
+      return;
+    }
+    this.moveRecords(owner, conversationKey);
     this.conversationByPrincipal.set(owner, conversationKey);
   }
 
@@ -281,17 +281,7 @@ export class ResourceOwnershipLedger {
     for (const [owner, conversation] of [...this.conversationByPrincipal]) {
       if (conversation === conversationKey) this.conversationByPrincipal.delete(owner);
     }
-    this.dormantUntil.delete(conversationKey);
     this.dropOwner(conversationKey);
-  }
-
-  /** Drop every dormant conversation whose deadline has passed. */
-  private pruneDormant(now: number): void {
-    for (const [conversationKey, until] of [...this.dormantUntil]) {
-      if (until > now) continue;
-      this.dormantUntil.delete(conversationKey);
-      this.dropOwner(conversationKey);
-    }
   }
 
   /** Where `owner`'s creation records live: its conversation while bound to one, else itself. */
@@ -336,18 +326,20 @@ export class ResourceOwnershipLedger {
     workspaceId?: string
   ): OwnedResourceRecord[] {
     if (drafts.length === 0) return [];
-    if (isPrincipalOwner(owner) && !this.livePrincipals.has(owner)) return [];
+    if (isPrincipalOwner(owner) && !this.livePrincipals.has(owner)) {
+      // Nothing for it, but the ids name something new: an older record for
+      // them, such as a dormant conversation's, no longer speaks for them.
+      for (const draft of drafts) {
+        if (draft.id.length > 0) this.evict(resourceKey(draft.kind, draft.id));
+      }
+      return [];
+    }
     const holder = this.holderOf(owner);
     const added: OwnedResourceRecord[] = [];
     for (const draft of drafts) {
       if (draft.id.length === 0) continue;
       const key = resourceKey(draft.kind, draft.id);
-      const previousOwner = this.ownerByResource.get(key);
-      if (previousOwner !== undefined && previousOwner !== holder) {
-        const previous = this.byOwner.get(previousOwner);
-        previous?.delete(key);
-        if (previous?.size === 0) this.byOwner.delete(previousOwner);
-      }
+      if (this.ownerByResource.get(key) !== holder) this.evict(key);
       let owned = this.byOwner.get(holder);
       if (owned === undefined) {
         owned = new Map();
@@ -363,6 +355,16 @@ export class ResourceOwnershipLedger {
       added.push(record);
     }
     return added;
+  }
+
+  /** Drop whatever record holds `key`, wherever it is held. */
+  private evict(key: string): void {
+    const holder = this.ownerByResource.get(key);
+    if (holder === undefined) return;
+    const owned = this.byOwner.get(holder);
+    owned?.delete(key);
+    if (owned?.size === 0) this.byOwner.delete(holder);
+    this.ownerByResource.delete(key);
   }
 
   /**
@@ -441,8 +443,7 @@ export class ResourceOwnershipLedger {
    * hand-over (#12490), which refuses to give a second pane a terminal another
    * one launched and can already drive.
    */
-  creatorOf(kind: OwnedResourceKind, id: string, now: number = Date.now()): string | undefined {
-    this.pruneDormant(now);
+  creatorOf(kind: OwnedResourceKind, id: string): string | undefined {
     return this.ownerByResource.get(resourceKey(kind, id));
   }
 
@@ -480,7 +481,9 @@ export class ResourceOwnershipLedger {
    * With `expected`, only that record is dropped. Every creation writes a new
    * record, so a cleanup that finishes after the id was recorded again — by
    * another session on the same bearer — leaves the newer resource's record
-   * alone.
+   * alone. That very record goes wherever it is held, so a cleanup whose
+   * bearer was revoked before it finished still takes it out of the
+   * conversation that holds it (#17919).
    */
   release(
     owner: string,
@@ -489,7 +492,13 @@ export class ResourceOwnershipLedger {
     expected?: OwnedResourceRecord
   ): void {
     const key = resourceKey(kind, id);
-    const holder = this.holderOf(owner);
+    const current = this.ownerByResource.get(key);
+    const holder =
+      expected !== undefined &&
+      current !== undefined &&
+      this.byOwner.get(current)?.get(key) === expected
+        ? current
+        : this.holderOf(owner);
     const owned = this.byOwner.get(holder);
     if (owned === undefined) return;
     if (expected !== undefined && owned.get(key) !== expected) return;
@@ -522,30 +531,24 @@ export class ResourceOwnershipLedger {
    * owns nothing and records nothing, so they fail closed until they end.
    *
    * A conversation it was bound to keeps its records for the conversation's
-   * next bearer (#17919). With `keepConversationUntil`, a conversation this
-   * leaves with no live principal keeps them only until then, and loses them
-   * now if that has passed: a relay principal's, whose records last only as
-   * long as the relay's own retention would have held it.
+   * next bearer (#17919), unless `dropUnboundConversation` says this was its
+   * last hold: a relay principal whose hold aged out or was crowded out, so
+   * its conversation's records last no longer than the relay's own retention.
    */
-  revokePrincipal(
-    principalId: string,
-    options?: { keepConversationUntil?: number },
-    now: number = Date.now()
-  ): void {
+  revokePrincipal(principalId: string, options?: { dropUnboundConversation?: boolean }): void {
     const owner = principalOwnerKey(principalId);
     this.livePrincipals.delete(owner);
     const conversation = this.conversationByPrincipal.get(owner);
     this.conversationByPrincipal.delete(owner);
     this.dropOwner(owner);
-    const until = options?.keepConversationUntil;
-    if (conversation === undefined || until === undefined) return;
-    if (this.isConversationBound(conversation)) return;
-    if (until <= now) {
-      this.dormantUntil.delete(conversation);
+    if (
+      conversation !== undefined &&
+      conversation !== owner &&
+      options?.dropUnboundConversation === true &&
+      !this.isConversationBound(conversation)
+    ) {
       this.dropOwner(conversation);
-      return;
     }
-    this.dormantUntil.set(conversation, Math.max(until, this.dormantUntil.get(conversation) ?? 0));
   }
 
   /**

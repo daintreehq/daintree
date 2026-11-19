@@ -4009,6 +4009,68 @@ describe("HelpSessionService", () => {
           expect(ownershipOfLane()).toBe(id);
         });
 
+        it("keeps the id on every pointer write a capture makes for the same conversation", async () => {
+          mockPtyGracefulKill.mockResolvedValueOnce(null);
+          await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+          hibernationStore.set.mockClear();
+
+          await service.revokeByWebContentsId(42);
+          await Promise.resolve();
+
+          expect(hibernationStore.set).toHaveBeenCalled();
+          for (const [, entry] of hibernationStore.set.mock.calls) {
+            expect((entry as { conversationOwnershipId?: string }).conversationOwnershipId).toBe(
+              id
+            );
+          }
+        });
+
+        it("keeps the id when a quit-time capture learns the lane's first id", async () => {
+          const first = await launchLane("term-1");
+          const id = ownershipOfLane();
+          const lanes = service.snapshotLaneTerminals();
+          await service.revokeSession(first.sessionId);
+
+          await service.noteQuitCapture(lanes.get("term-1")!, "thread-1");
+
+          expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("thread-1");
+          expect(ownershipOfLane()).toBe(id);
+        });
+
+        it("gives a conversation the run moved to none of the one it started with", async () => {
+          mockPtyGracefulKill.mockResolvedValueOnce("conv-after-clear");
+          await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+
+          await service.revokeByWebContentsId(42);
+          await Promise.resolve();
+          await Promise.resolve();
+          expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("conv-after-clear");
+          expect(ownershipOfLane()).toBeUndefined();
+
+          const moved = await launchLane("term-2", "conv-after-clear");
+          expect([undefined, id]).not.toContain(ownershipOfLane());
+          await service.revokeSession(moved.sessionId);
+          // The conversation it started with is the lane's previous one, still its own.
+          await launchLane("term-3", "conv-1");
+          expect(ownershipOfLane()).toBe(id);
+          expect(listener.forget).not.toHaveBeenCalledWith(id);
+        });
+
+        it("parks the known conversation when a quit-time capture names another", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+          const lanes = service.snapshotLaneTerminals();
+          await service.revokeSession(first.sessionId);
+
+          await service.noteQuitCapture(lanes.get("term-1")!, "conv-2");
+
+          expect(ownershipOfLane()).toBeUndefined();
+          await launchLane("term-2", "conv-1");
+          expect(ownershipOfLane()).toBe(id);
+        });
+
         it("keeps the lane's id private to main", async () => {
           await launchLane("term-1", "conv-1");
 

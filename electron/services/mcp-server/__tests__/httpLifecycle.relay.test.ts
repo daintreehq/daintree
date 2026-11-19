@@ -243,9 +243,8 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
       relayConversationKey(CALLER.senderId, "conv-1")
     );
     first!.close();
-    ownership.revokePrincipal(relayOwnershipPrincipal(CALLER.senderId, CALLER.helpSessionId), {
-      keepConversationUntil: Date.now() + 60_000,
-    });
+    // Ended, not aged out: its conversation keeps what it made for the resume.
+    ownership.revokePrincipal(relayOwnershipPrincipal(CALLER.senderId, CALLER.helpSessionId));
 
     const resumed = await lc.openRelaySession({
       tier: "core",

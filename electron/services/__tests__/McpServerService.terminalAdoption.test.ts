@@ -678,7 +678,7 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
     ownership.bindPrincipal("relay-before", before);
     ownership.attachConversation(before, relayConversationKey("local", "conv-g"));
     ownership.record(principalOwnerKey(before), [{ kind: "terminal", id: "terminal-1" }]);
-    service.retireRelayPrincipal("local", "help-before-resume", Date.now() + 60_000);
+    service.retireRelayPrincipal("local", "help-before-resume", true);
     ownership.clearSession("relay-before");
     expect(adoptGlobal()).toMatchObject({ reason: "launched-by-another" });
 

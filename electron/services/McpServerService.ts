@@ -839,6 +839,16 @@ export class McpServerService {
   }
 
   /**
+   * Remote Hosts (#17919): what another machine's assistant's conversation
+   * made here outlived the relay's hold on it, so it is no one's any more.
+   */
+  forgetRelayConversation(senderId: string, conversationId: string): void {
+    this.sessionStore.resourceOwnership.forgetConversation(
+      relayConversationKey(senderId, conversationId)
+    );
+  }
+
+  /**
    * A pane's bearer is gone (its terminal exited or relaunched): revoke what
    * it owns and close the sessions it holds. Pane sessions never idle out
    * (#13635), so this is what ends them.
@@ -1735,12 +1745,15 @@ export class McpServerService {
    * made here. Its terminals and worktrees stay; only the authority goes.
    *
    * What its conversation launched (#17919) stays for that conversation's
-   * other principals here, and with none left, until `keepConversationUntil`:
-   * the relay's own hold on it had it not ended. Absent or passed, it goes now.
+   * other principals here, and with none left, only with `keepConversation`:
+   * it ended rather than aged out, and the relay holds the conversation in its
+   * own retention until it resumes or `forgetRelayConversation` drops it.
    */
-  retireRelayPrincipal(senderId: string, helpSessionId: string, keepConversationUntil = 0): void {
+  retireRelayPrincipal(senderId: string, helpSessionId: string, keepConversation = false): void {
     const principal = relayOwnershipPrincipal(senderId, helpSessionId);
-    this.sessionStore.resourceOwnership.revokePrincipal(principal, { keepConversationUntil });
+    this.sessionStore.resourceOwnership.revokePrincipal(principal, {
+      dropUnboundConversation: !keepConversation,
+    });
     this.sessionStore.terminalAdoption.revokePrincipal(principal);
     this.terminalNotify.revokeOwner(relayNotifyKey(principal));
     // Held for a worker by the session that ended, never typed for its successor

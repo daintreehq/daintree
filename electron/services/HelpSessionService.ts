@@ -1842,7 +1842,12 @@ export class HelpSessionService {
             cwd: record.sessionPath,
             capturedAt: Date.now(),
             panelWasOpen,
-            ...ownershipOf(record),
+            ...this.ownershipAfterCapture(slotKey, {
+              agentId: record.agentId,
+              agentSessionId: record.agentSessionId ?? "",
+              conversationOwnershipId: record.conversationOwnershipId,
+              captured: capturedAgentSessionId,
+            }),
           })
           .catch((err) => {
             console.warn(
@@ -2100,7 +2105,8 @@ export class HelpSessionService {
       this.setPreviousConversation(slotKey, current, previous.conversationOwnershipId);
       return previous.conversationOwnershipId;
     }
-    this.setPreviousConversation(slotKey, current);
+    // A pointer holding no conversation of its own leaves the previous one in place.
+    if (current !== undefined) this.setPreviousConversation(slotKey, current);
     return randomUUID();
   }
 
@@ -2177,11 +2183,47 @@ export class HelpSessionService {
       return Promise.resolve();
     }
     if (entry.agentSessionId === agentSessionId) return Promise.resolve();
+    const { conversationOwnershipId, ...rest } = entry;
     return this.pendingHibernationStore.set(lane.slotKey, {
-      ...entry,
+      ...rest,
       agentSessionId,
       capturedAt: Date.now(),
+      ...this.ownershipAfterCapture(lane.slotKey, {
+        agentId: entry.agentId,
+        agentSessionId: entry.agentSessionId,
+        conversationOwnershipId,
+        captured: agentSessionId,
+      }),
     });
+  }
+
+  /**
+   * The ownership id a capture's pointer write carries (#17919). A first id
+   * for a conversation the lane knew none for is that conversation's. One the
+   * run moved to from a conversation it knew (`/clear`, `/new`, `/resume`
+   * inside the CLI) is another conversation: it starts with none, and what the
+   * run launched stays the first's, kept as the lane's previous conversation.
+   */
+  private ownershipAfterCapture(
+    slotKey: string,
+    known: {
+      agentId: string;
+      agentSessionId: string;
+      conversationOwnershipId: string | undefined;
+      captured: string;
+    }
+  ): { conversationOwnershipId?: string } {
+    const { conversationOwnershipId } = known;
+    if (conversationOwnershipId === undefined) return {};
+    if (known.agentSessionId === "" || known.agentSessionId === known.captured) {
+      return { conversationOwnershipId };
+    }
+    this.setPreviousConversation(slotKey, {
+      agentId: known.agentId,
+      agentSessionId: known.agentSessionId,
+      conversationOwnershipId,
+    });
+    return {};
   }
 
   /**

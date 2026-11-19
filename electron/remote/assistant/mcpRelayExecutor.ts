@@ -99,9 +99,16 @@ export interface McpRelayExecutorDeps {
   openSession(spec: RelayMcpSessionSpec): Promise<RelayMcpSession | null>;
   /**
    * Ends a relay principal's hold on what it made here, once unused for long
-   * enough or crowded out; the terminals and worktrees themselves stay.
+   * enough or crowded out; the terminals and worktrees themselves stay. With
+   * `keepConversation`, it ended, and what its conversation made stays for that
+   * conversation resumed (#17919) until `forgetConversation`.
    */
-  retirePrincipal?(senderId: string, helpSessionId: string, keepConversationUntil?: number): void;
+  retirePrincipal?(senderId: string, helpSessionId: string, keepConversation?: true): void;
+  /**
+   * Ends what an ended caller's conversation made here (#17919), once the hold
+   * it would have had runs out or the sender's bound crowds it out.
+   */
+  forgetConversation?(senderId: string, conversationId: string): void;
   /**
    * The calls of a relay principal that still have notices armed or waiting
    * in this host's notice service (#13930); absent, none do.
@@ -320,8 +327,12 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
   // more, so a call of its still being admitted or run finishes, then its hold goes.
   const principals = new Map<
     string,
-    Map<string, { usedAt: number; running: number; ended?: boolean }>
+    Map<string, { usedAt: number; running: number; ended?: boolean; conversationId?: string }>
   >();
+  // Conversations whose caller ended (#17919), by sender then conversation, least
+  // recent first, with when it last ran a call: each counts against the sender's
+  // bound and goes a day after that call, as the caller's own hold would have.
+  const dormant = new Map<string, Map<string, { usedAt: number }>>();
   let disposed = false;
   // Running a call, or with a session open or opening: a closed one waiting to be swept holds nothing.
   const principalInUse = (senderId: string, helpSessionId: string): boolean =>
@@ -332,16 +343,8 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
         cached.helpSessionId === helpSessionId &&
         (cached.session === null || cached.session.isOpen())
     );
-  /**
-   * `keepConversationUntil`, for a principal that ended rather than aged out or
-   * was crowded out: what its conversation launched stays for that long, as
-   * its own hold would have (#17919), for the conversation resumed.
-   */
-  const retire = (
-    senderId: string,
-    helpSessionId: string,
-    keepConversationUntil?: number
-  ): void => {
+  /** `keepConversation` for a principal that ended, never one that aged out or was crowded out. */
+  const retire = (senderId: string, helpSessionId: string, keepConversation = false): void => {
     const held = principals.get(senderId);
     held?.delete(helpSessionId);
     if (held?.size === 0) principals.delete(senderId);
@@ -353,25 +356,72 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     }
     if (calls?.size === 0) noticeCalls.delete(senderId);
     try {
-      if (keepConversationUntil === undefined) deps.retirePrincipal?.(senderId, helpSessionId);
-      else deps.retirePrincipal?.(senderId, helpSessionId, keepConversationUntil);
+      if (keepConversation) deps.retirePrincipal?.(senderId, helpSessionId, true);
+      else deps.retirePrincipal?.(senderId, helpSessionId);
     } catch (error) {
       logger.warn("Couldn't retire a relay principal", { error });
     }
   };
-  const retireEnded = (senderId: string, helpSessionId: string, record: { usedAt: number }): void =>
-    retire(senderId, helpSessionId, record.usedAt + RELAY_PRINCIPAL_RETENTION_MS);
-  /** Retires the least recent of a sender's principals past its bound; one in use stays. */
+  const forgetConversation = (senderId: string, conversationId: string): void => {
+    const asleep = dormant.get(senderId);
+    asleep?.delete(conversationId);
+    if (asleep?.size === 0) dormant.delete(senderId);
+    try {
+      deps.forgetConversation?.(senderId, conversationId);
+    } catch (error) {
+      logger.warn("Couldn't forget a relay conversation", { error });
+    }
+  };
+  /**
+   * A caller that ended keeps what its conversation made for that conversation
+   * resumed, within the hold it would have had (#17919). Another of the
+   * sender's principals still on that conversation keeps it anyway, and is
+   * what decides when it goes.
+   */
+  const retireEnded = (
+    senderId: string,
+    helpSessionId: string,
+    record: { usedAt: number; conversationId?: string }
+  ): void => {
+    const { conversationId } = record;
+    const fresh = record.usedAt >= now() - RELAY_PRINCIPAL_RETENTION_MS;
+    retire(senderId, helpSessionId, conversationId !== undefined && fresh);
+    if (conversationId === undefined || !fresh) return;
+    const shared = [...(principals.get(senderId)?.values() ?? [])].some(
+      (other) => other.conversationId === conversationId
+    );
+    if (shared) return;
+    let asleep = dormant.get(senderId);
+    if (!asleep) {
+      asleep = new Map();
+      dormant.set(senderId, asleep);
+    }
+    asleep.delete(conversationId);
+    asleep.set(conversationId, { usedAt: record.usedAt });
+    boundPrincipals(senderId);
+  };
+  /**
+   * Holds a sender to its bound, ended conversations counted with live holds:
+   * the least recent ended conversation goes first, then the least recent
+   * principal not in use.
+   */
   const boundPrincipals = (senderId: string): void => {
-    const held = principals.get(senderId);
-    if (!held) return;
-    for (const helpSessionId of [...held.keys()]) {
-      if (held.size <= RELAY_PRINCIPALS_PER_SENDER) return;
+    const size = () => (principals.get(senderId)?.size ?? 0) + (dormant.get(senderId)?.size ?? 0);
+    for (const conversationId of [...(dormant.get(senderId)?.keys() ?? [])]) {
+      if (size() <= RELAY_PRINCIPALS_PER_SENDER) return;
+      forgetConversation(senderId, conversationId);
+    }
+    for (const helpSessionId of [...(principals.get(senderId)?.keys() ?? [])]) {
+      if (size() <= RELAY_PRINCIPALS_PER_SENDER) return;
       if (!principalInUse(senderId, helpSessionId)) retire(senderId, helpSessionId);
     }
   };
   /** Held from before admission until the call settles, wherever its session went meanwhile. */
-  const holdPrincipal = (senderId: string, helpSessionId: string): (() => void) => {
+  const holdPrincipal = (
+    senderId: string,
+    helpSessionId: string,
+    conversationId?: string
+  ): (() => void) => {
     let held = principals.get(senderId);
     if (!held) {
       held = new Map();
@@ -381,6 +431,13 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     held.delete(helpSessionId);
     record.usedAt = now();
     record.running += 1;
+    if (conversationId !== undefined) {
+      record.conversationId = conversationId;
+      // Resumed: it is a live hold's again, no longer an ended one's.
+      const asleep = dormant.get(senderId);
+      asleep?.delete(conversationId);
+      if (asleep?.size === 0) dormant.delete(senderId);
+    }
     held.set(helpSessionId, record);
     boundPrincipals(senderId);
     return () => {
@@ -516,7 +573,7 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     spec: RelayMcpSessionSpec,
     payload: McpCallPayload
   ): Promise<McpCallAnswer> => {
-    const release = holdPrincipal(spec.senderId, spec.helpSessionId);
+    const release = holdPrincipal(spec.senderId, spec.helpSessionId, spec.conversationId);
     const endNoticeCall = relayCallArmsNotice(payload.tool, payload.args)
       ? startNoticeCall(spec.senderId, spec.helpSessionId, payload.callId)
       : null;
@@ -639,6 +696,11 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       }
       boundPrincipals(senderId);
     }
+    for (const [senderId, asleep] of [...dormant]) {
+      for (const [conversationId, { usedAt }] of [...asleep]) {
+        if (usedAt < stale) forgetConversation(senderId, conversationId);
+      }
+    }
     ledger.sweep();
   }, SWEEP_INTERVAL_MS);
   sweep.unref?.();
@@ -664,7 +726,7 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       if (relayCallArmsNotice(tool, args)) {
         return { status: "done", result: errorResult(new Error("A read can't ask for notices")) };
       }
-      const release = holdPrincipal(spec.senderId, spec.helpSessionId);
+      const release = holdPrincipal(spec.senderId, spec.helpSessionId, spec.conversationId);
       try {
         return await executeHeld(spec, {
           helpSessionId: spec.helpSessionId,
@@ -717,6 +779,10 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       // Nothing here will retire them later: the holds go with the executor.
       for (const [senderId, held] of [...principals]) {
         for (const helpSessionId of [...held.keys()]) retire(senderId, helpSessionId);
+      }
+      for (const [senderId, asleep] of [...dormant]) {
+        for (const conversationId of [...asleep.keys()])
+          forgetConversation(senderId, conversationId);
       }
       ledger.clear();
       noticeCalls.clear();

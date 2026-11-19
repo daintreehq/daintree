@@ -277,6 +277,15 @@ const mockRecordLaneLaunchForToken = vi.hoisted(() =>
   >(() => Promise.resolve())
 );
 
+const mockSnapshotLaneTerminals = vi.hoisted(() =>
+  vi.fn<() => Map<string, { slotKey: string; agentSessionId: string; revision: number }>>(
+    () => new Map()
+  )
+);
+const mockNoteQuitCapture = vi.hoisted(() =>
+  vi.fn<(lane: unknown, agentSessionId: string) => Promise<void>>(() => Promise.resolve())
+);
+
 vi.mock("../../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     validateToken: (token: string) => mockValidateToken(token),
@@ -294,6 +303,9 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     isHelpTerminal: (terminalId: string) => mockIsHelpTerminal(terminalId),
     recordLaneLaunchForToken: (...args: Parameters<typeof mockRecordLaneLaunchForToken>) =>
       mockRecordLaneLaunchForToken(...args),
+    snapshotLaneTerminals: () => mockSnapshotLaneTerminals(),
+    noteQuitCapture: (lane: unknown, agentSessionId: string) =>
+      mockNoteQuitCapture(lane, agentSessionId),
   },
 }));
 
@@ -3187,6 +3199,32 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     });
   });
 
+  it("records a launch that forks the conversation it reopens as a fresh one (#17919)", async () => {
+    const SESSION = "11111111-2222-3333-4444-555555555555";
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: `claude --resume ${SESSION} --fork-session`,
+        launchAgentId: "claude",
+        agentSessionId: SESSION,
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith("help-token", SESSION, {
+      freshConversation: true,
+    });
+  });
+
   it("does not record a lane pointer for a non-help launch (#13205)", async () => {
     mockValidateToken.mockReturnValue(false);
 
@@ -4770,5 +4808,56 @@ describe("terminal spawn handler - forwarded ssh-agent (#17432)", () => {
       KEEP: "1",
     });
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("graceful kill of an Assistant's PTY (#17919)", () => {
+  function gracefulKillHandler(ptyClient: unknown) {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    // The registration just made, not one an earlier test left behind.
+    return [...calls].reverse().find((c) => c[0] === CHANNELS.TERMINAL_GRACEFUL_KILL)?.[1] as (
+      event: unknown,
+      id: string
+    ) => Promise<string | null>;
+  }
+
+  beforeEach(() => {
+    mockSnapshotLaneTerminals.mockReset();
+    mockSnapshotLaneTerminals.mockReturnValue(new Map());
+    mockNoteQuitCapture.mockClear();
+  });
+
+  it("hands the id it captured to the lane it snapshotted before the kill", async () => {
+    const lane = { slotKey: "proj-1:0", agentSessionId: "", revision: 3 };
+    mockSnapshotLaneTerminals.mockReturnValue(new Map([["term-help", lane]]));
+    const ptyClient = {
+      getTerminalAsync: vi.fn().mockResolvedValue(null),
+      gracefulKill: vi.fn(async () => {
+        // The lane can move on during the kill; the snapshot is what routes it.
+        mockSnapshotLaneTerminals.mockReturnValue(new Map());
+        return "codex-thread-1";
+      }),
+    };
+
+    await expect(gracefulKillHandler(ptyClient)({}, "term-help")).resolves.toBe("codex-thread-1");
+
+    expect(mockNoteQuitCapture).toHaveBeenCalledExactlyOnceWith(lane, "codex-thread-1");
+  });
+
+  it("records nothing for a terminal that serves no lane, or a kill that captured nothing", async () => {
+    const lane = { slotKey: "proj-1:0", agentSessionId: "", revision: 3 };
+    mockSnapshotLaneTerminals.mockReturnValue(new Map([["term-help", lane]]));
+    const ptyClient = {
+      getTerminalAsync: vi.fn().mockResolvedValue(null),
+      gracefulKill: vi.fn().mockResolvedValueOnce("other-id").mockResolvedValueOnce(null),
+    };
+    const kill = gracefulKillHandler(ptyClient);
+
+    await kill({}, "term-plain");
+    await kill({}, "term-help");
+
+    expect(mockNoteQuitCapture).not.toHaveBeenCalled();
   });
 });

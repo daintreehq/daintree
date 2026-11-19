@@ -189,6 +189,15 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
 }
 
 /** An Assistant's pane, by its binding; none is bound before the service loads. */
+/**
+ * Whether a Claude launch forks the conversation it reopens into a new one
+ * (`--fork-session`), as a user's own launch flags may ask: the run is then
+ * another conversation, whatever id it was resumed by (#17919).
+ */
+function forksClaudeConversation(command: string, agentId: string | undefined): boolean {
+  return agentId === "claude" && /(?:^|\s)--fork-session(?:[\s=]|$)/.test(command);
+}
+
 function isBoundHelpTerminal(terminalId: string): boolean {
   return loadedHelpSessionService()?.isHelpTerminal(terminalId) ?? false;
 }
@@ -1657,6 +1666,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // (#13205). Memory-first, so it is current before any later capture.
       // The PTY is already up, so a failure here must not fail the spawn.
       if (isHelpLaunch) {
+        // Nor can main count a launch as the same conversation when the
+        // Windows launch script may still start one fresh under its id, or the
+        // CLI forks the one it reopens into a new one (#17919).
+        startsFreshConversation ||=
+          windowsClaudeResume !== undefined || forksClaudeConversation(safeCommand, launchAgentId);
         try {
           (startsFreshConversation
             ? helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId, {
@@ -1820,9 +1834,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
     if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
     dropHeldComposerSend(id, options);
+    // An Assistant's lane, frozen before the kill: the id it hands back is the
+    // lane's conversation too, which a view keeps by itself otherwise (#17919).
+    const helpSessions = loadedHelpSessionService();
+    const lane = helpSessions?.snapshotLaneTerminals().get(id);
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
     const generation = getLifecycleLedger().currentGeneration(id);
     const sessionId = await ptyClient.gracefulKill(id);
+    if (lane && sessionId) {
+      helpSessions?.noteQuitCapture(lane, sessionId).catch((err) => {
+        console.warn("[TerminalGracefulKill] Failed to record assistant lane conversation:", err);
+      });
+    }
     await persistCloseRecord(
       info,
       sessionId,
