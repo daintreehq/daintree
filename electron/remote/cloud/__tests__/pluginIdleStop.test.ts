@@ -731,7 +731,7 @@ describe("stopping an idle plugin provider's machine from the desktop (#17923)",
     const [status] = env.lifecycle.statuses();
     expect(status).toMatchObject({ machine: "running", operation: null });
     expect(status!.lastError).toMatchObject({ code: "outcome-unknown" });
-    expect(status!.lastError!.message).toContain("still read as running a minute later");
+    expect(status!.lastError!.message).toContain("hadn't read as stopping a minute later");
     expect(status!.lastError!.message).toContain("No second stop was sent.");
 
     // The idle time stays spent here: later passes read, and never send again.
@@ -833,6 +833,60 @@ describe("stopping an idle plugin provider's machine from the desktop (#17923)",
     expect(personalDone).toBe(true);
     expect(plugin.impl.stop).toHaveBeenCalledTimes(1);
     expect(env.lifecycle.statuses()[0]).toMatchObject({ machine: "stopped", operation: null });
+    env.dispose();
+  });
+
+  it("lets go of the link for a person's Stop joining an idle stop, even with an earlier Stop still recorded", async () => {
+    const clock = worldClock();
+    const plugin = acmePlugin();
+    const host = fakeHost(clock);
+    const env = device("a", clock, host, host.link());
+    const hostId = await withMachine(env, plugin);
+    const [binding] = env.store.bindings();
+    env.store.updateBinding(binding!.id, (current) => ({ ...current, intent: "stop" }));
+    let refuse!: () => void;
+    plugin.impl.stop.mockImplementationOnce(
+      () =>
+        new Promise<CloudProviderResource>((_resolve, reject) => {
+          refuse = () => reject(Object.assign(new Error("Not now."), { code: "refused" }));
+        })
+    );
+
+    await idleTimeEnds(clock, host);
+    const idleStop = env.lifecycle.stopIdleDue();
+    await vi.waitFor(() => expect(plugin.impl.stop).toHaveBeenCalledTimes(1));
+    const personal = env.lifecycle.stopMachine(hostId);
+    await vi.waitFor(() => expect(env.disconnect).toHaveBeenCalledTimes(1));
+    refuse();
+    await expect(personal).rejects.toThrow();
+    await idleStop;
+    expect(plugin.impl.stop).toHaveBeenCalledTimes(1);
+    env.dispose();
+  });
+
+  it("records a named refusal after its one read, whatever else that read finds under way", async () => {
+    const clock = worldClock();
+    const plugin = acmePlugin();
+    const host = fakeHost(clock);
+    const env = device("a", clock, host, host.link());
+    await withMachine(env, plugin);
+    plugin.impl.stop.mockImplementationOnce(async () => {
+      // Someone else's stop is already saving the disk.
+      plugin.setMachine(machine({ stop: { id: "stop-1", status: "pending", error: null } }));
+      throw Object.assign(new Error("A stop is already under way."), { code: "refused" });
+    });
+
+    await idleTimeEnds(clock, host);
+    const reads = plugin.impl.inspect.mock.calls.length;
+    const startedAt = clock.now();
+    await env.lifecycle.stopIdleDue();
+
+    expect(plugin.impl.inspect.mock.calls.length).toBe(reads + 2);
+    expect(clock.now()).toBe(startedAt);
+    expect(env.lifecycle.statuses()[0]).toMatchObject({
+      operation: null,
+      lastError: { code: "refused" },
+    });
     env.dispose();
   });
 

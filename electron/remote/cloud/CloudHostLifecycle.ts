@@ -604,6 +604,8 @@ export class CloudHostLifecycle {
   private readonly idleUnsupported = new Map<string, LinkSession>();
   /** An idle stop being prepared or carried out, per binding. */
   private readonly idleAttempts = new Map<string, Promise<void>>();
+  /** The stopping operation each idle stop runs as, so a person's Stop can tell it from their own. */
+  private readonly idleStops = new Map<string, Promise<void>>();
   /** Some plugin provider's machine is bound to a host, so the keeper looks for an idle one to stop. */
   private idleCandidates = false;
   /**
@@ -1619,10 +1621,12 @@ export class CloudHostLifecycle {
       running.controller.abort();
       await running.promise.catch(() => {});
     }
-    // An idle stop under way (the only stop that leaves the intent alone) is joined and sends
-    // nothing more; the person's choice is still recorded, and their link let go.
-    if (running?.kind === "stopping" && this.deps.store.binding(binding.id)?.intent !== "stop") {
-      this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
+    // An idle stop under way is joined and sends nothing more; the person's choice is still
+    // recorded, and their link let go, as their own Stop would.
+    if (running?.kind === "stopping" && this.idleStops.get(binding.id) === running.promise) {
+      if (this.deps.store.binding(binding.id)?.intent !== "stop") {
+        this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
+      }
       const joined = running.promise;
       await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
       return joined;
@@ -3501,8 +3505,13 @@ export class CloudHostLifecycle {
           const stopping = this.operate(bindingId, "stopping", (signal) =>
             this.runIdleStop(bindingId, provider, credentials, resourceId, signal)
           );
+          this.idleStops.set(bindingId, stopping);
           // Awaited below; its failure is recorded on the machine, never left unheard meanwhile.
-          stopping.catch(() => {});
+          stopping
+            .catch(() => {})
+            .finally(() => {
+              if (this.idleStops.get(bindingId) === stopping) this.idleStops.delete(bindingId);
+            });
           this.stage(bindingId, "Saving the disk and stopping");
           return { stopping };
         }
@@ -3538,7 +3547,7 @@ export class CloudHostLifecycle {
       answer = await provider.stop({ ...credentials, signal }, resourceId);
     } catch (error) {
       if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
-      this.requireStillRegistered(bindingId, provider);
+      this.requireStillRegistered(provider);
       await this.settleIdleStop(
         bindingId,
         provider,
@@ -3548,7 +3557,7 @@ export class CloudHostLifecycle {
       );
       return;
     }
-    this.requireStillRegistered(bindingId, provider);
+    this.requireStillRegistered(provider);
     if (answer) this.observe(bindingId, answer, ticket);
     this.deps.store.updateBinding(bindingId, (current) => ({
       ...current,
@@ -3566,13 +3575,13 @@ export class CloudHostLifecycle {
 
   /**
    * A provider that left or was replaced while the stop was out no longer
-   * speaks for the machine: the stop's outcome is unknown, and is read again
-   * once the provider is back. Never a success, which a Stop joined to it would take.
+   * speaks for the machine: never a success, which a Stop joined to it would
+   * take. Nothing is kept on the machine: the host already says its provider
+   * is unavailable, and the first read once it's back says how it is.
    */
-  private requireStillRegistered(bindingId: string, provider: CloudProvider): void {
+  private requireStillRegistered(provider: CloudProvider): void {
     if (this.stillRegistered(provider.id, provider)) return;
-    const message = `${nameOf(provider)} changed while the machine was stopping, so whether it stopped isn't known yet. It's checked again once ${nameOf(provider)} is back.`;
-    this.recordError(bindingId, { code: "outcome-unknown", message, at: this.now() });
+    const message = `${nameOf(provider)} changed while the machine was stopping, so whether it stopped isn't known yet.`;
     throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
   }
 
@@ -3611,8 +3620,10 @@ export class CloudHostLifecycle {
         this.deps.store.updateBinding(bindingId, (current) => ({ ...current, access: null }));
         return;
       }
-      // Stopping, saving, failed or gone: followed, and reported, as any stop is.
+      // Stopping, saving, failed or gone after a lost answer: followed, and reported, as any stop
+      // is. A refusal the provider named did nothing, whatever else is under way.
       if (
+        !refused &&
         read &&
         (machine === "stopping" ||
           machine === "error" ||
@@ -3628,7 +3639,7 @@ export class CloudHostLifecycle {
         );
         return;
       }
-      if (this.now() >= givesUpAt) {
+      if (refused || this.now() >= givesUpAt) {
         const error: CloudHostError = refused
           ? {
               code: described.code,
@@ -3637,7 +3648,7 @@ export class CloudHostLifecycle {
             }
           : {
               code: "outcome-unknown",
-              message: `${nameOf(provider)} didn't confirm the stop once the host's idle time ended, and ${answered ? "the machine still read as running a minute later" : "the machine couldn't be read for a minute after"}. No second stop was sent.`,
+              message: `${nameOf(provider)} didn't confirm the stop once the host's idle time ended, and ${answered ? "the machine hadn't read as stopping a minute later" : "the machine couldn't be read for a minute after"}. No second stop was sent.`,
               at: this.now(),
             };
         this.recordError(bindingId, error);
