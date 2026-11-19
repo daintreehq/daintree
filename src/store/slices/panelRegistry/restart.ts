@@ -2260,7 +2260,14 @@ async function respawnAgentOnPreset(
     if (requested.kind === "own-chain-step" && requested.deadlineAt !== undefined) {
       if (Date.now() >= requested.deadlineAt) {
         unmarkTerminalRestarting(id);
-        set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+        set((state) =>
+          updateTerminal(state, id, (t) => ({
+            ...t,
+            isRestarting: false,
+            restartError: livePanel.restartError,
+            spawnError: livePanel.spawnError,
+          }))
+        );
         return { success: false, error: "the call's deadline passed before the move started" };
       }
     }
