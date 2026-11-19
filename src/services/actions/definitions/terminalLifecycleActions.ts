@@ -522,7 +522,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restartOnAccountOwned",
     title: "Move owned agent to another account",
     description:
-      "Move a panel this session launched (not a handed one) to another of its agent's accounts once the user confirms, keeping its preset. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
+      "Move a panel this session launched (not a handed one) to another account of its agent once the user confirms. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -543,7 +543,7 @@ export function registerTerminalLifecycleActions(
         .string()
         .min(1)
         .nullable()
-        .describe("An account id from the account listing; null is the CLI's default login."),
+        .describe("An account of the panel's agent; null is the CLI's default login."),
       keepConversation: KeepConversationArgSchema,
     }),
     resultSchema: RestartOnAccountResultSchema,

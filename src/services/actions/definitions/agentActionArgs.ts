@@ -118,7 +118,9 @@ export const AgentAddAccountArgsSchema = z
       )
       .min(1)
       .max(MAX_ADD_ACCOUNT_ROWS)
-      .describe("One row per account, any agents, put to the person as one checklist."),
+      .describe(
+        `1-${MAX_ADD_ACCOUNT_ROWS} accounts, any agents, put to the user as one checklist.`
+      ),
   })
   .strict();
 

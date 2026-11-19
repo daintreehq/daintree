@@ -109,6 +109,47 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "agent",
+    "danger": "confirm",
+    "dangerRationale": "Each account is a folder the agent keeps its login in, and a launch on it signs in as whoever logs in there.",
+    "description": "Add accounts to agents that sign in through a folder, after the user ticks each one with its folder shown. Each row creates or uses a folder, then reports its account id or why it failed. Launch with that accountId to sign in; nothing is launched here.",
+    "examples": [
+      {
+        "args": {
+          "accounts": [
+            {
+              "agentId": "claude",
+              "folder": {
+                "kind": "create",
+              },
+              "name": "Work",
+            },
+            {
+              "agentId": "codex",
+              "folder": {
+                "kind": "existing",
+                "path": "/Users/me/.codex-team",
+              },
+              "name": "Team",
+            },
+          ],
+        },
+        "description": "A new Claude folder and an existing Codex one, in one approval",
+      },
+    ],
+    "id": "agent.addAccount",
+    "keywords": [
+      "account",
+      "login",
+      "add",
+      "folder",
+      "sign in",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Add agent accounts",
+  },
+  {
+    "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
     "description": "Launch Aider agent",
@@ -469,6 +510,26 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "kind": "command",
     "requiresArgs": true,
     "title": "Launch several agents",
+  },
+  {
+    "category": "agent",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "List an agent's saved accounts: the ids a launch's accountId takes. With worktreeId, also which account a launch there uses when it names no account or preset, and why.",
+    "examples": [
+      {
+        "args": {
+          "agentId": "claude",
+          "worktreeId": "wt-1",
+        },
+        "description": "Find Claude's account ids and the one a launch in wt-1 signs in as",
+      },
+    ],
+    "id": "agent.listAccounts",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "List agent accounts",
   },
   {
     "category": "agent",
@@ -6186,6 +6247,23 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "kind": "command",
     "requiresArgs": true,
     "title": "Restart agent on account",
+  },
+  {
+    "category": "terminal",
+    "danger": "confirm",
+    "dangerRationale": "Interrupts the agent and respawns it on another account, in a new conversation unless asked to keep it. Scrollback is lost.",
+    "description": "Move a panel this session launched (not a handed one) to another account of its agent once the user confirms. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
+    "examples": undefined,
+    "id": "terminal.restartOnAccountOwned",
+    "keywords": [
+      "account",
+      "login",
+      "rate limit",
+      "owned",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Move owned agent to another account",
   },
   {
     "category": "terminal",

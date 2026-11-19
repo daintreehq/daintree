@@ -764,7 +764,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listAccounts",
     title: "List agent accounts",
     description:
-      "List an agent's saved accounts, the ids agent.launch's accountId takes. With worktreeId, also says which account a launch there uses when it names no account or preset, and why. Agents that sign in one way only are refused.",
+      "List an agent's saved accounts: the ids a launch's accountId takes. With worktreeId, also which account a launch there uses when it names no account or preset, and why.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -787,17 +787,10 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       worktreeLaunch: z
         .object({
           accountId: z.string().nullable().describe("null is the CLI's default login."),
-          source: z
-            .enum(["worktree", "preset", "agentDefault", "cliDefault"])
-            .describe("What chose it: the worktree's pick, a preset's pin, or a default."),
+          source: z.enum(["worktree", "preset", "agentDefault", "cliDefault"]),
           presetId: z.string().optional().describe("The preset whose pin chose it."),
-          missing: z
-            .literal(true)
-            .optional()
-            .describe("No saved account has this id, so a launch is refused."),
-          presetsComplete: z
-            .boolean()
-            .describe("false: a preset source is loading, so a preset's pin may be missed."),
+          missing: z.literal(true).optional().describe("No such account: a launch is refused."),
+          presetsComplete: z.boolean().describe("false: presets loading, a pin may be missed."),
         })
         .optional(),
     }),
@@ -848,7 +841,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           status: z
             .enum(["added", "declined", "failed", "notAttempted"])
             .describe("declined: the user unticked it; notAttempted: the call ran out of time."),
-          accountId: z.string().optional().describe("Pass as agent.launch's accountId."),
+          accountId: z.string().optional().describe("Launch with this accountId to sign in."),
           name: z.string().optional(),
           error: z.string().optional(),
         })

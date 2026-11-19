@@ -341,7 +341,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // conversation ends, that the user confirms, and that a handed-over pane is
   // refused — a caller missing the first sends the next step to an agent that
   // no longer has the brief.
-  const MAX_EXTERNAL_TOTAL_BYTES = 8_700;
+  // 8_700 → 9_000 for #17079, measured at 8_943 B (+356 over develop's 8_587):
+  // `agent.listAccounts`, the ids `agent.launch`'s `accountId` takes, and
+  // `terminal.restartOnAccountOwned`, the account twin of the preset move. The
+  // listing has to say what its worktree answer means; the move has to say the
+  // conversation ends, that the user confirms, and that a handed pane is refused.
+  const MAX_EXTERNAL_TOTAL_BYTES = 9_000;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
@@ -1150,6 +1155,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.restartOnPreset",
   "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
   "terminal.restartAll",
   "terminal.startHeld",
   "terminal.arm",
@@ -1187,6 +1193,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.addAccount",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -1312,6 +1319,8 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Same shape (#14369): main checks the session launched the pane, then
   // delegates to `terminal.restartOnPreset`, whose confirm is wired above.
   "terminal.restartOnPresetOwned",
+  // Its account twin (#17079), delegating to `terminal.restartOnAccount`.
+  "terminal.restartOnAccountOwned",
   // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
   // keystrokes to every armed terminal, so an external caller must pass the
   // host confirm dialog. Palette-hidden, and user-side arming goes through the
@@ -1343,6 +1352,10 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  // Agent/MCP-only and palette-hidden (#17079); Settings adds an account through
+  // its own dialog and the agentAccounts IPC. The confirm is the generic
+  // McpConfirmDialog's checklist, a row per account naming its folder.
+  "agent.addAccount",
   // ConfirmDialog with diff preview in ArtifactOverlay.tsx; the dispatch lives in
   // useArtifacts.ts (action ID not co-located with the dialog component).
   "artifact.applyPatch",
@@ -1492,6 +1505,9 @@ describe("destructive-action danger metadata", () => {
       "agent.createPreset": { agentId: "claude", name: "placeholder" },
       "agent.updatePreset": { agentId: "claude", presetId: "preset-placeholder", name: "p" },
       "agent.deletePreset": { agentId: "claude", presetId: "preset-placeholder" },
+      "agent.addAccount": {
+        accounts: [{ agentId: "claude", name: "placeholder", folder: { kind: "create" } }],
+      },
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
@@ -1659,6 +1675,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.sendKeysOwned": { terminalId: "t-placeholder", keys: ["Enter"] },
       "terminal.placeOwned": { terminalId: "t-placeholder", location: "dock" },
       "terminal.restartOnPresetOwned": { terminalId: "t-placeholder", presetId: "p-placeholder" },
+      "terminal.restartOnAccountOwned": { terminalId: "t-placeholder", accountId: "a-placeholder" },
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
       "agent.launchInNewWorktree": {
         source: { kind: "newBranch", branchName: "b-placeholder" },
@@ -1682,6 +1699,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
       "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
       "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },
+      "agent.addAccount": {
+        accounts: [{ agentId: "claude", name: "p-placeholder", folder: { kind: "create" } }],
+      },
       "agent.moveTerminalsToAccount.claude": {},
       "agent.moveTerminalsToAccount.codex": {},
       "agent.moveTerminalsToAccount.kimi": {},

@@ -39,6 +39,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `agent.kimi` | Launch Kimi Code | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agent.kiro` | Launch Kiro | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agent.launch` | Launch agent | safe | `agentId`, `accountId?`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `notify?`, `presetId?`, `prompt?`, `removeOnExit?`, `replyLines?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `waitForReply?`, `waitSeconds?`, `worktreeId?` |
+| `agent.listAccounts` | List agent accounts | safe | `agentId`, `worktreeId?` |
 | `agent.listAvailable` | List available agents | safe | — |
 | `agent.listModels` | List agent models | safe | `agentId?` |
 | `agent.listPresets` | List agent presets | safe | `agentId`, `projectId?` |
