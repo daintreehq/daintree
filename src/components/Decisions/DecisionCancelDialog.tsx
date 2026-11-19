@@ -121,10 +121,16 @@ export function DecisionCancelDialog({
   const current = target !== null && asked?.target === target ? asked : null;
   const fallback = current !== null ? current.fallback : openingFallback;
   // Withdrawing is offered only while the reason still holds: a question the
-  // relay didn't hold yet can be dismissed once it has been sent.
+  // relay didn't hold yet can be dismissed once it has been sent. Never for a
+  // Remote Host's question dismissed while its Host is away (#17946).
   const reason =
     target !== null && fallback !== null
-      ? dismissFallback(target.label, fallback, queued ? "queued" : "open")
+      ? dismissFallback(
+          target.label,
+          fallback,
+          queued ? "queued" : "open",
+          (target.lastReadAt ?? null) === null
+        )
       : null;
   const mode: DecisionCancelMode =
     (current?.mode ?? openingMode) === "withdraw" && reason !== null ? "withdraw" : "dismiss";
@@ -155,7 +161,12 @@ export function DecisionCancelDialog({
     const dismiss = async () => {
       const attempt = await dismissQuestion(subject.question, subject.revision, key);
       if (attempt.kind === "submitted") key = attempt.key;
-      const verdict = dismissVerdict(subject, attempt);
+      // Its Remote Host went away after this opened: signed from the last read, never withdrawn.
+      const lastReadAt = attempt.kind === "submitted" ? (attempt.lastReadAt ?? null) : null;
+      const verdict = dismissVerdict(
+        lastReadAt !== null ? { ...subject, lastReadAt } : subject,
+        attempt
+      );
       switch (verdict.kind) {
         case "done":
           onDismissing?.(questionOf(subject.question).questionId, verdict.key);
@@ -218,7 +229,7 @@ export function DecisionCancelDialog({
       description={
         target === null ? undefined : (
           <span className="[text-wrap:pretty]">
-            {dismissing ? dismissBody() : cancelBody(queued)}
+            {dismissing ? dismissBody(target) : cancelBody(queued)}
           </span>
         )
       }

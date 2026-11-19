@@ -56,6 +56,30 @@ export interface DecisionQuestionHostNotConnected {
   result: "host-not-connected";
 }
 
+/**
+ * A Remote Host's question this computer can't read now, with what it last
+ * read of it over that Host's link (#17946), for the owner to dismiss it by.
+ * Absent where the Host's last report doesn't list it as waiting for the person.
+ */
+export interface DecisionQuestionHostAway extends DecisionQuestionHostNotConnected {
+  lastRead?: DecisionQuestionLastRead;
+}
+
+/**
+ * What this computer last read of a waiting Host question, kept for the
+ * owner identity, Host and Host device it was read under, while it runs:
+ * - `read`: open on the relay at `revision`, read at `readAt` (epoch ms): a
+ *   dismissal can be signed against that revision, and the relay refuses it
+ *   if the question moved on since;
+ * - `not-sent`: it hadn't reached the relay when last read, so the relay
+ *   can't take a dismissal of it until the Host sends it;
+ * - `not-read`: nothing read of it here can say which revision it is open at.
+ */
+export type DecisionQuestionLastRead =
+  | { result: "read"; revision: number; alias: number; readAt: number }
+  | { result: "not-sent" }
+  | { result: "not-read" };
+
 export type DecisionQuestionCancelRefusal = "answered" | "expired" | "publish-failed" | "not-found";
 
 /** The question's state in the local store: the library's `LocalStatus`. */
@@ -218,7 +242,7 @@ export type DecisionQuestionContentResult =
   | { result: "not-running" }
   | { result: "not-found" }
   | { result: "unreadable" }
-  | DecisionQuestionHostNotConnected;
+  | DecisionQuestionHostAway;
 
 /**
  * One question's opening line, or why there is none: `host-not-connected`

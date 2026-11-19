@@ -58,6 +58,11 @@ export interface DeclineSubmission {
   phase: DeclinePhase;
   /** It was sent again on its own once already; after that only Retry sends it again, under the same id. */
   resubmitted: boolean;
+  /**
+   * When this computer last read the question (epoch ms), for one signed from
+   * that read while its Remote Host was away (#17946); absent otherwise.
+   */
+  lastReadAt?: number;
 }
 
 /**

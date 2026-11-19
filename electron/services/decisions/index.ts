@@ -1157,18 +1157,23 @@ export function getDecisionQuestionSummaries(
 /**
  * One question with its content opened, by its reference (#17229), for any
  * window on this computer whatever project it shows: read on the Remote Host
- * that asked it when the reference names one (#17230). Never makes or starts
- * the service.
+ * that asked it when the reference names one (#17230). A Host whose link was
+ * down before the read went out answers with what this computer last read of
+ * the question over it (#17946), for the owner to dismiss it by. Never makes
+ * or starts the service.
  */
 export async function getDecisionQuestionContentByReference(
   payload: GetDecisionQuestionByReferencePayload
 ): Promise<DecisionQuestionContentResult> {
   const { reference } = payload;
-  const onHost = hostRouteFor(reference)?.readHostQuestion(reference.hostId, {
-    read: "content",
-    reference,
-  });
-  if (onHost) return answeredByHost(await onHost);
+  const route = hostRouteFor(reference);
+  const onHost = route?.readHostQuestion(reference.hostId, { read: "content", reference });
+  if (route && onHost) {
+    const read = answeredByHost(await onHost);
+    if (read.result !== "host-not-connected") return read;
+    const lastRead = route.lastHostRead(reference);
+    return lastRead === null ? read : { ...read, lastRead };
+  }
   return readOwnQuestionContent(reference);
 }
 
@@ -1542,10 +1547,41 @@ export function getDecisionAnswerResult(
  * the service; a decline it committed stays committed, and the same decline
  * id submitted again finds it.
  */
-export function declineDecisionQuestion(
+export async function declineDecisionQuestion(
   payload: DeclineDecisionQuestionPayload
 ): Promise<DecisionQuestionDeclineResult> {
+  if (!hostDeclineAdmitted(payload)) return { result: "refused", reason: "not-found" };
   return whileRunning((running) => running.declineQuestion(payload));
+}
+
+/**
+ * The owner identity each decline of another machine's question was first
+ * submitted under, by decline id (#17946), for as long as this process runs.
+ */
+const hostDeclineOwners = new Map<string, string>();
+
+/**
+ * Whether an owner's decline of another machine's question may be signed
+ * (#17946). The library signs a decline of a question it holds no copy of by
+ * its id and revision alone, so the reference is all that ties it to an
+ * enrolled Host: it must name a Host reported to the owner this computer
+ * speaks as now, and a decline first submitted under another owner identity
+ * is never sent again under this one, whatever its Hosts report. A
+ * reference naming this computer is the store's to check.
+ */
+function hostDeclineAdmitted({ reference, declineId }: DeclineDecisionQuestionPayload): boolean {
+  const running = service;
+  if (running === null || running.getRole() !== "owner") return true;
+  const settings = running.getSettings();
+  const ownHostId = settings?.hostId ?? null;
+  if (ownHostId === null || reference.hostId === ownHostId) return true;
+  const owner = `${settings?.installationId ?? ""}\n${settings?.deviceId ?? ""}`;
+  const first = hostDeclineOwners.get(declineId);
+  if (first !== undefined && first !== owner) return false;
+  const reported = getDecisionsHostsPort()?.hostQuestions() ?? [];
+  if (!reported.some((host) => host.questionHostId === reference.hostId)) return false;
+  hostDeclineOwners.set(declineId, owner);
+  return true;
 }
 
 /** Where a person's decline stands, by its id (#17239). Never makes or starts the service. */
@@ -3260,6 +3296,7 @@ export async function stopDecisions(): Promise<void> {
 
 /** @internal Tests only. */
 export function _resetDecisionsForTesting(): void {
+  hostDeclineOwners.clear();
   cancelRelayChecks();
   forgetOwnerDevices();
   cancelKitExports();

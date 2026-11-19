@@ -1203,6 +1203,147 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     );
   });
 
+  it("keeps what it last read of a waiting question for the owner to dismiss it by once the link closes (#17946)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    const queued = item(3, { kind: "queued" });
+    decisions.set({
+      hostId: QHOST,
+      questions: [item(1), item(2, { kind: "settled", outcome: "expired" }), queued, item(4)],
+    });
+    decisions.answerWith((read) =>
+      read.read === "content"
+        ? {
+            result: "read",
+            question: {
+              ...content(read.reference),
+              status: read.reference.questionId === queued.reference.questionId ? "queued" : "open",
+            },
+          }
+        : null
+    );
+    serveQuestions(host, decisions);
+    const hosts = [STUDIO];
+    const shell = shellOf(hosts);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()[0]?.questions).toHaveLength(4));
+    const { reference } = item(1);
+
+    await shell.client.readHostQuestion(QHOST, { read: "content", reference });
+    await shell.client.readHostQuestion(QHOST, { read: "content", reference: queued.reference });
+    await shell.client.readHostQuestion(QHOST, { read: "content", reference: item(2).reference });
+    // While its link is up, the Host answers for itself: nothing read before stands in for it.
+    expect(shell.client.lastHostRead(reference)).toBeNull();
+
+    // The link goes: what was read stands, and nothing more is read.
+    host.close("test");
+    await vi.waitFor(() => expect(shell.client.hostQuestions()[0]?.connected).toBe(false));
+    expect(await shell.client.readHostQuestion(QHOST, { read: "content", reference })).toEqual({
+      ok: false,
+      failure: "disconnected",
+    });
+    const read = shell.client.lastHostRead(reference);
+    expect(read).toEqual({ result: "read", revision: 3, alias: 1, readAt: expect.any(Number) });
+    // Read before it reached the relay: there's nothing there to dismiss yet.
+    expect(shell.client.lastHostRead(queued.reference)).toEqual({ result: "not-sent" });
+    // Listed as waiting but never read here: nothing says which revision it waits at.
+    expect(shell.client.lastHostRead(item(4).reference)).toEqual({ result: "not-read" });
+    // Settled as the Host last listed it, or not listed at all: nothing to dismiss.
+    expect(shell.client.lastHostRead(item(2).reference)).toBeNull();
+    expect(shell.client.lastHostRead({ ...reference, terminalId: "pane-9" })).toBeNull();
+    expect(shell.client.lastHostRead({ ...reference, hostId: "qhost_other_001" })).toBeNull();
+
+    // Another owner identity has none of it, and taking this one up again doesn't bring it back.
+    shell.setOwner({ ...OWNER, installationId: "inst_owner_9876543210" });
+    expect(shell.client.lastHostRead(reference)).toBeNull();
+    shell.setOwner(OWNER);
+    expect(shell.client.lastHostRead(reference)).toEqual({ result: "not-read" });
+
+    // A Host taken off the host list takes everything with it.
+    hosts.splice(0);
+    expect(shell.client.lastHostRead(reference)).toBeNull();
+  });
+
+  it("keeps no read that lands after a later one or after its question went, nor one from a replaced Host device (#17946)", async () => {
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [item(1)] });
+    const { reference } = item(1);
+    const shell = shellOf([STUDIO]);
+    const connect = async () => {
+      const { host, client } = await pair();
+      serveQuestions(host, decisions);
+      shell.open(HOST, client);
+      await vi.waitFor(() => expect(shell.client.hostQuestions()[0]?.connected).toBe(true));
+      return host;
+    };
+    const goAway = async (host: LinkSession) => {
+      host.close("test");
+      await vi.waitFor(() => expect(shell.client.hostQuestions()[0]?.connected).toBe(false));
+    };
+    const at = (revision: number) => () => ({
+      result: "read",
+      question: { ...content(reference), revision },
+    });
+    // The Host answers with its question as it stood when read; a held read lands only once released.
+    let answer: () => unknown = at(3);
+    let hold: Promise<void> | null = null;
+    decisions.answerWith((read) => {
+      if (read.read !== "content") return null;
+      const answered = answer();
+      const gate = hold;
+      hold = null;
+      return gate === null ? answered : gate.then(() => answered);
+    });
+    const heldRead = async () => {
+      let release!: () => void;
+      hold = new Promise<void>((resolve) => (release = resolve));
+      const reads = decisions.reads.length;
+      const landed = shell.client.readHostQuestion(QHOST, { read: "content", reference })!;
+      await vi.waitFor(() => expect(decisions.reads.length).toBe(reads + 1));
+      return { landed, release };
+    };
+
+    // A read that went out first and lands last doesn't replace the later one.
+    let host = await connect();
+    const earlier = await heldRead();
+    answer = at(4);
+    await shell.client.readHostQuestion(QHOST, { read: "content", reference });
+    earlier.release();
+    await earlier.landed;
+    await goAway(host);
+    expect(shell.client.lastHostRead(reference)).toMatchObject({ result: "read", revision: 4 });
+
+    // Nor does it bring back a question the Host said it no longer holds.
+    host = await connect();
+    answer = at(5);
+    const beforeGone = await heldRead();
+    answer = () => ({ result: "not-found" });
+    await shell.client.readHostQuestion(QHOST, { read: "content", reference });
+    beforeGone.release();
+    await beforeGone.landed;
+    await goAway(host);
+    expect(shell.client.lastHostRead(reference)).toEqual({ result: "not-read" });
+
+    // A read that went out to the device the Host has since replaced is dropped untouched.
+    host = await connect();
+    answer = at(6);
+    const fromReplaced = await heldRead();
+    await host.call(DecisionsLinkMethod.HOST_RUNTIME, {
+      runtime: { ...RUNNING, deviceId: "dev_host_studio_02" },
+    });
+    answer = at(7);
+    await shell.client.readHostQuestion(QHOST, { read: "content", reference });
+    fromReplaced.release();
+    await fromReplaced.landed;
+    await goAway(host);
+    expect(shell.client.lastHostRead(reference)).toMatchObject({ result: "read", revision: 7 });
+
+    // Back as the first device: nothing read of the other stands for it.
+    host = await connect();
+    await goAway(host);
+    expect(shell.client.lastHostRead(reference)).toEqual({ result: "not-read" });
+  });
+
   it("keeps what it last heard when the Host stops serving its questions", async () => {
     const { host, client } = await pair();
     const decisions = questionHost();
