@@ -574,6 +574,9 @@ describe("NSIS installer — the daintree command on PATH (#17931)", () => {
     expect(edit).toMatch(/RegGetValueW\(p r0, w r1, w "Path", i 0x1000FFFF, \*i \.r2,/);
     expect(edit).toMatch(/RegSetKeyValueW\(p r0, w r1, w "Path", i r2,/);
     expect(edit).not.toMatch(/WriteReg(Expand)?Str\b/);
+    // StrCmp is linguistic: a zero-weight character compares equal to "", so
+    // an end-of-string or emptiness test written that way stops early.
+    expect(edit).not.toMatch(/StrCmp \$\w+ ""|\$\w+ == ""/);
   });
 
   it("leaves a new install's entry alone and puts no user-writable folder on the machine PATH", async () => {
@@ -586,7 +589,7 @@ describe("NSIS installer — the daintree command on PATH (#17931)", () => {
     // An uninstall whose files are gone but whose folder holds the command
     // again is looking at a reinstall.
     expect(removal).toMatch(
-      /\$\{If\} \$\{FileExists\} "\$9\\daintree\.cmd"\s+Goto daintreePathDone/
+      /\$\{If\} \$\{FileExists\} "\$9\\daintree\.cmd"\s+\$\{AndIf\} \$\{FileExists\} "\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}"\s+Goto daintreePathDone/
     );
     const adding = edit.slice(edit.indexOf("!if ${ADD} == 1"), edit.indexOf("!else"));
     expect(adding).toContain('${If} $installMode == "all"');

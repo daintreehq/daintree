@@ -1613,8 +1613,10 @@ describe("renderWindowsCliShim (#17931)", () => {
     // Unquoted, an ampersand, caret or parenthesis in a folder name would be
     // parsed as batch syntax.
     for (const line of statements(render())) {
-      const unquoted = line.replace(/"[^"]*"/g, "");
-      expect(unquoted, line).not.toMatch(/%(target|app)[%:]|%%?~/i);
+      // The bracketed second-operand test is the one bare positional: it only
+      // runs once the quoted test has found that operand empty.
+      const unquoted = line.replace(/"[^"]*"/g, "").replace("[%2]", "");
+      expect(unquoted, line).not.toMatch(/%(target|app)[%:]|%%?~|%[0-9*]/i);
     }
   });
 

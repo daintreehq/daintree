@@ -42,23 +42,24 @@
       StrCpy $R8 "$PROGRAMFILES64\"
       StrLen $R9 $R8
       StrCpy $R7 $INSTDIR $R9
-      ${If} $R7 != $R8
+      System::Call 'kernel32::CompareStringOrdinal(w R7, i -1, w R8, i -1, i 1) i .R9'
+      ${If} $R9 <> 2 ; CSTR_EQUAL
         StrCpy $R8 "$PROGRAMFILES\"
         StrLen $R9 $R8
         StrCpy $R7 $INSTDIR $R9
-        ${If} $R7 != $R8
+        System::Call 'kernel32::CompareStringOrdinal(w R7, i -1, w R8, i -1, i 1) i .R9'
+        ${If} $R9 <> 2
           Goto daintreePathSkip
         ${EndIf}
       ${EndIf}
     ${EndIf}
     ; An entry can't carry a bare semicolon, and Windows (and Daintree's own
     ; PATH refresh) can expand a percent sign in it.
+    StrLen $R9 $9
     StrCpy $R8 0
-    ${Do}
+    ${DoWhile} $R8 < $R9
       StrCpy $R4 $9 1 $R8
-      ${If} $R4 == ""
-        ${ExitDo}
-      ${ElseIf} $R4 == ";"
+      ${If} $R4 == ";"
       ${OrIf} $R4 == "%"
         Goto daintreePathSkip
       ${EndIf}
@@ -66,8 +67,10 @@
     ${Loop}
   !else
     ; A copy installed here again since this uninstall removed the files (the
-    ; uninstaller's last page can still be open) owns the entry now.
+    ; uninstaller's last page can still be open) owns the entry now. A shim
+    ; left alone, one the uninstall couldn't delete, owns nothing.
     ${If} ${FileExists} "$9\daintree.cmd"
+    ${AndIf} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
       Goto daintreePathDone
     ${EndIf}
   !endif
@@ -80,6 +83,7 @@
     !if ${ADD} == 1
       StrCpy $2 2 ; REG_EXPAND_SZ, as Windows creates it
       StrCpy $5 ""
+      StrCpy $R3 0
       Goto daintreePathScanned
     !else
       Goto daintreePathDone
@@ -103,6 +107,14 @@
   ${If} ${Errors}
     Goto daintreePathSkip
   ${EndIf}
+  ; ReadRegStr terminates its buffer's last unit, so a value stored without a
+  ; terminator at exactly the buffer's size comes back one unit short. Only
+  ; a read shorter than that is known to be whole.
+  StrLen $R3 $5
+  IntOp $R8 ${NSIS_MAX_STRLEN} - 1
+  ${If} $R3 >= $R8
+    Goto daintreePathSkip
+  ${EndIf}
   ; Another installer could have rewritten Path between the two reads; the
   ; write below reuses the first read's type, so it must still be the type.
   System::Call 'advapi32::RegGetValueW(p r0, w r1, w "Path", i 0x1000FFFF, *i .R8, p 0, *i .R9) i .r4'
@@ -111,14 +123,16 @@
     Goto daintreePathSkip
   ${EndIf}
 
-  ; Split on semicolons outside double quotes.
+  ; Split on semicolons outside double quotes. The end is found by length:
+  ; StrCmp is linguistic, and reads a zero-weight character (U+200C, say) as
+  ; equal to "", which would cut PATH short at it.
   StrCpy $8 0 ; scan index
   StrCpy $R0 0 ; start of the current entry
   StrCpy $R2 0 ; entries kept
-  StrCmp $5 "" daintreePathScanned
+  IntCmp $R3 0 daintreePathScanned
 daintreePathScan:
+  IntCmp $8 $R3 daintreePathEntry
   StrCpy $R4 $5 1 $8
-  StrCmp $R4 "" daintreePathEntry
   StrCmp $R4 "$\"" 0 +3
     IntOp $R1 $R1 ^ 1
     Goto daintreePathNext
@@ -154,7 +168,7 @@ daintreePathKeep:
   ${EndIf}
   IntOp $R2 $R2 + 1
 daintreePathKept:
-  StrCmp $R4 "" daintreePathScanned
+  IntCmp $8 $R3 daintreePathScanned
   IntOp $R0 $8 + 1
 daintreePathNext:
   IntOp $8 $8 + 1
@@ -172,16 +186,15 @@ daintreePathScanned:
     ${EndIf}
     ; The result and its terminator must fit NSIS's string buffer, or the
     ; concatenation would truncate what gets written.
-    StrLen $R8 $5
     StrLen $R9 $9
-    IntOp $R8 $R8 + $R9
+    IntOp $R8 $R3 + $R9
     IntOp $R8 $R8 + 1
     ${If} $R8 >= ${NSIS_MAX_STRLEN}
       Goto daintreePathSkip
     ${EndIf}
     ; Always a new separator, even after a trailing one: the empty entry
     ; that trailing ";" stood for is then still there after an uninstall.
-    ${If} $5 == ""
+    ${If} $R3 = 0
       StrCpy $6 $9
     ${Else}
       StrCpy $6 "$5;$9"
