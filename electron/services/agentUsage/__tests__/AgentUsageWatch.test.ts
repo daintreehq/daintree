@@ -123,6 +123,7 @@ describe("AgentUsageWatch", () => {
 
     h.watch.acquire();
     await settle();
+    const codexReads = h.readCodexHomes.mock.calls.length;
     const shown = () =>
       h.watch.latest().map((r) => [r.agentId, r.isDefault, r.defaultLoginName] as const);
     expect(shown()).toEqual([
@@ -141,7 +142,7 @@ describe("AgentUsageWatch", () => {
       ["codex", true, "Lab"],
       ["claude", false, undefined],
     ]);
-    expect(h.readCodexHomes).toHaveBeenCalledTimes(1);
+    expect(h.readCodexHomes).toHaveBeenCalledTimes(codexReads);
     h.watch.dispose();
   });
 

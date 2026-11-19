@@ -475,7 +475,9 @@ describe("naming the default login and renaming accounts (#17080)", () => {
     useAgentSettingsStore.setState({ renameAccount });
     renderSection({ accounts: [COMPANY], defaultLoginName: "Work" });
 
-    expect(screen.getByText("Work · default login")).toBeTruthy();
+    expect(
+      screen.getByText("Work · default login", { selector: "[data-settings-row-label]" })
+    ).toBeTruthy();
     const select = screen.getByRole("combobox", { name: "Default account" }) as HTMLSelectElement;
     expect([...select.options].map((option) => option.textContent)).toEqual([
       "Work · default login",
