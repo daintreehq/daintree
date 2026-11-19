@@ -561,15 +561,23 @@ describe("NSIS installer — the daintree command on PATH (#17931)", () => {
     expect(missing).toBeGreaterThan(status);
     expect(reads.length).toBeGreaterThan(0);
     for (const read of reads) expect(read).toBeGreaterThan(missing);
-    const errorCheck = at(/^\$\{If\} \$\{Errors\}$/);
-    expect(errorCheck).toBeGreaterThan(Math.max(...reads));
+    const lastRead = Math.max(...reads);
+    const errorCheck = lines.findIndex((line, i) => i > lastRead && line === "${If} ${Errors}");
+    expect(errorCheck).toBeGreaterThan(lastRead);
     expect(lines[errorCheck + 1]).toBe("Goto daintreePathSkip");
-    // The appended PATH has to fit the string buffer, measured on what was read.
-    const capacity = at(/^\$\{If\} \$R8 >= \$\{NSIS_MAX_STRLEN\}$/);
+    // A read as long as the buffer may have lost its last unit, and an append
+    // may not produce a value the uninstaller would refuse to read back: both
+    // are held to the one limit.
+    const readLength = at(/^StrLen \$R3 \$5$/);
+    expect(readLength).toBeGreaterThan(errorCheck);
+    expect(lines[readLength + 1]).toBe("${If} $R3 > ${DAINTREE_PATH_MAX}");
+    expect(lines[readLength + 2]).toBe("Goto daintreePathSkip");
+    const capacity = at(/^\$\{If\} \$R8 > \$\{DAINTREE_PATH_MAX\}$/);
     const append = at(/^StrCpy \$6 "\$5;\$9"$/);
-    expect(capacity).toBeGreaterThan(errorCheck);
+    expect(capacity).toBeGreaterThan(readLength);
     expect(append).toBeGreaterThan(capacity);
     expect(lines[capacity + 1]).toBe("Goto daintreePathSkip");
+    expect(nsh).toMatch(/^!define \/math DAINTREE_PATH_MAX \$\{NSIS_MAX_STRLEN\} - 2$/m);
     // The write carries the type that was read, not a fixed one.
     expect(edit).toMatch(/RegGetValueW\(p r0, w r1, w "Path", i 0x1000FFFF, \*i \.r2,/);
     expect(edit).toMatch(/RegSetKeyValueW\(p r0, w r1, w "Path", i r2,/);
@@ -593,6 +601,9 @@ describe("NSIS installer — the daintree command on PATH (#17931)", () => {
     );
     const adding = edit.slice(edit.indexOf("!if ${ADD} == 1"), edit.indexOf("!else"));
     expect(adding).toContain('${If} $installMode == "all"');
+    // Compared on the canonical path, so a ".." can't walk back out.
+    expect(adding).toMatch(/GetFullPathName \$R6 \$INSTDIR[\s\S]*StrCpy \$R7 \$R6 \$R9/);
+    expect(adding).not.toContain("StrCpy $R7 $INSTDIR");
     expect(adding).toContain('StrCpy $R8 "$PROGRAMFILES64\\"');
     expect(adding).toContain('StrCpy $R8 "$PROGRAMFILES\\"');
   });

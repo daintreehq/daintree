@@ -12,6 +12,11 @@
 ; daintree.cmd, which scripts/afterPack.cjs renders from build/win/daintree.cmd.in.
 
 !define DAINTREE_MACHINE_ENV_KEY "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+; The longest Path value this edits, in UTF-16 units: one short of NSIS's
+; string buffer. ReadRegStr terminates the buffer's last unit, so a read that
+; long may be short by one, and the installer never writes a value its own
+; uninstaller would then refuse to read.
+!define /math DAINTREE_PATH_MAX ${NSIS_MAX_STRLEN} - 2
 
 ; Adds (ADD 1) or removes (ADD 0) $INSTDIR\bin in the Path of the scope this copy
 ; was installed for: HKCU for a per-user install, the machine environment for an
@@ -39,14 +44,20 @@
     ; standard users can't write to. A custom all-users folder elsewhere
     ; (C:\Tools, D:\Apps) usually inherits their Modify right.
     ${If} $installMode == "all"
+      ; Canonical first, so C:\Program Files\..\Users\Public can't pass.
+      ClearErrors
+      GetFullPathName $R6 $INSTDIR
+      ${If} ${Errors}
+        Goto daintreePathSkip
+      ${EndIf}
       StrCpy $R8 "$PROGRAMFILES64\"
       StrLen $R9 $R8
-      StrCpy $R7 $INSTDIR $R9
+      StrCpy $R7 $R6 $R9
       System::Call 'kernel32::CompareStringOrdinal(w R7, i -1, w R8, i -1, i 1) i .R9'
       ${If} $R9 <> 2 ; CSTR_EQUAL
         StrCpy $R8 "$PROGRAMFILES\"
         StrLen $R9 $R8
-        StrCpy $R7 $INSTDIR $R9
+        StrCpy $R7 $R6 $R9
         System::Call 'kernel32::CompareStringOrdinal(w R7, i -1, w R8, i -1, i 1) i .R9'
         ${If} $R9 <> 2
           Goto daintreePathSkip
@@ -107,12 +118,10 @@
   ${If} ${Errors}
     Goto daintreePathSkip
   ${EndIf}
-  ; ReadRegStr terminates its buffer's last unit, so a value stored without a
-  ; terminator at exactly the buffer's size comes back one unit short. Only
-  ; a read shorter than that is known to be whole.
+  ; A value stored without a terminator at exactly the buffer's size comes
+  ; back one unit short (see DAINTREE_PATH_MAX).
   StrLen $R3 $5
-  IntOp $R8 ${NSIS_MAX_STRLEN} - 1
-  ${If} $R3 >= $R8
+  ${If} $R3 > ${DAINTREE_PATH_MAX}
     Goto daintreePathSkip
   ${EndIf}
   ; Another installer could have rewritten Path between the two reads; the
@@ -184,12 +193,12 @@ daintreePathScanned:
     ${If} $R1 <> 0
       Goto daintreePathSkip
     ${EndIf}
-    ; The result and its terminator must fit NSIS's string buffer, or the
-    ; concatenation would truncate what gets written.
+    ; Within the same limit the read is held to, so the concatenation can't
+    ; truncate and the uninstaller can read back what this writes.
     StrLen $R9 $9
     IntOp $R8 $R3 + $R9
     IntOp $R8 $R8 + 1
-    ${If} $R8 >= ${NSIS_MAX_STRLEN}
+    ${If} $R8 > ${DAINTREE_PATH_MAX}
       Goto daintreePathSkip
     ${EndIf}
     ; Always a new separator, even after a trailing one: the empty entry
