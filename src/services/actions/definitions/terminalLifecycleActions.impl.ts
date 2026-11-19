@@ -44,6 +44,7 @@ import {
   launchFromRestoreRecovery,
 } from "@/services/terminal/restoreRecoveryLaunch";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { OwnFallbackStepFailedError } from "@/services/actions/ownFallbackStep";
 import { logWarn } from "@/utils/logger";
 import {
   ResetModesArgsSchema,
@@ -369,8 +370,12 @@ export const terminalLifecycleActionRuns = {
     // Unlike terminal.restart, this asks whatever the agent is doing: the
     // conversation follows the pane to another preset's home only when asked
     // to and when that home can find it (#16045), and a rate-limited agent is
-    // rarely `working` (#13746).
-    if (!isConfirmed(args, ctx)) {
+    // rarely `working` (#13746). Unasked, the one move it makes is the
+    // assistant's next own fallback step, when main offered that (#17917):
+    // the offer, not anything in the args, decides it, so `confirmed` sent
+    // alongside it still takes only that step.
+    const ownFallbackStep = ctx?.hostOwnFallbackStep === true && ctx.hostConfirmed !== true;
+    if (!ownFallbackStep && !isConfirmed(args, ctx)) {
       throw new Error(
         "Restarting on another preset interrupts the agent and discards its scrollback; pass confirmed: true"
       );
@@ -379,9 +384,23 @@ export const terminalLifecycleActionRuns = {
     const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) throw new Error("No terminal to restart on that preset");
     const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
-    const result = await state.restartTerminalOnPreset(targetId, presetId, {
-      keepConversation: keepConversation === true,
-    });
+    const options = { keepConversation: keepConversation === true };
+    const result = ownFallbackStep
+      ? await state.restartTerminalOnOwnFallbackStep(targetId, presetId, {
+          ...options,
+          ...(ctx?.dispatchDeadlineAt !== undefined ? { deadlineAt: ctx.dispatchDeadlineAt } : {}),
+        })
+      : await state.restartTerminalOnPreset(targetId, presetId, options);
+    if (result.needsConfirmation === true) {
+      throw new ConfirmationStagedError(
+        `Moving '${targetId}' to preset '${presetId}' wasn't the next step of its own fallback chain, so it needs confirmation. Nothing changed.`
+      );
+    }
+    if (ownFallbackStep && result.admitted === true) {
+      throw new OwnFallbackStepFailedError(
+        result.error ?? "Couldn't restart the terminal on that preset"
+      );
+    }
     if (!result.success) {
       throw new Error(result.error ?? "Couldn't restart the terminal on that preset");
     }

@@ -10,6 +10,7 @@ import type {
   McpApprovalReason,
   McpApprovalScope,
   McpAuditResult,
+  McpConfirmationCondition,
   McpConfirmationDecision,
   McpDelegationOffer,
   McpDispatchAuthorization,
@@ -214,6 +215,11 @@ export interface WorkspaceDispatchOptions {
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
   /**
+   * When an unconfirmed dispatch may run unasked, settled by the view that
+   * holds the pane (#17917). Main sets it, never a caller.
+   */
+  confirmationCondition?: McpConfirmationCondition;
+  /**
    * Main's own walk of `actions.list` (#17036): the view answers with a page of
    * `ACTIONS_LIST_WALK_LIMIT`, so the registry comes back in one round trip.
    * Sent to a local view only; another machine's still pages at the public
@@ -264,6 +270,12 @@ export interface WorkspaceDispatchOptions {
     requestApproval?: (
       ask: import("../viewless/index.js").ViewlessApprovalAsk
     ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
+    /**
+     * A local call's preset move, offered as one the view may run unasked
+     * once it finds it the pane's next own step (#17917): bound to this one
+     * call, so the view's project is all it is told.
+     */
+    nextFallback?: (projectId: string, actionId: string, args: unknown) => (() => void) | null;
   };
 }
 export type { HelpAssistantTier };
@@ -1200,6 +1212,8 @@ export interface PendingRequest<T> {
   offeredDelegation?: true;
   /** Dispatches only: {@link WorkspaceDispatchOptions.onDelegationApproved}, until it runs. */
   onDelegationApproved?: () => void;
+  /** Dispatches only: sent with a `confirmationCondition`, so a reported skip is believed (#17917). */
+  offeredCondition?: true;
 }
 
 /**
@@ -1341,7 +1355,27 @@ export interface McpRelayCaller {
    * has settled, or for a call this session isn't running.
    */
   callDeadline?: (callId: string) => number | undefined;
+  /**
+   * Whether this machine's assistant may have a call run unasked once the
+   * view holding the pane finds it the next own fallback step (#17917). Set
+   * only by the in-process relay: another machine's call is matched on its
+   * own Shell.
+   */
+  nextFallback?: RelayNextFallback;
 }
+
+/**
+ * One of this machine's own `host.call`s matched to a dispatch it runs
+ * (#17917): what to call once the view says it ran the move, or null when the
+ * move isn't offered.
+ */
+export type RelayNextFallback = (dispatch: {
+  callId: string;
+  helpSessionId: string;
+  projectId: string;
+  actionId: string;
+  args: unknown;
+}) => (() => void) | null;
 
 const RESOURCE_URI_PATTERN =
   /^daintree:\/\/(worktree|terminal|agent|project|workspace)\/([^/]+)\/(pulse|scrollback|state|issues|binding)$/;

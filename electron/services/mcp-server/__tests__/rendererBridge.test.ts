@@ -270,6 +270,102 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     expect(sent[1]).not.toHaveProperty("authorization");
   });
 
+  // #17917: the view settles the condition; main believes the run unasked only
+  // from the view it offered one, and never beside a dialog's decision.
+  describe("a condition the pane's view settles (#17917)", () => {
+    function answering(
+      wc: FakeWebContents,
+      reply: Record<string, unknown>,
+      sent: Array<Record<string, unknown>>
+    ): void {
+      wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+        if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+        sent.push(payload as Record<string, unknown>);
+        queueMicrotask(() => {
+          mockIpcMain.emit(
+            CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+            { sender: { id: wc.id } },
+            { requestId: payload.requestId, result: { ok: true, result: "ok" }, ...reply }
+          );
+        });
+      });
+    }
+
+    it("sends the condition on an unconfirmed dispatch alone, and believes the run it reports", async () => {
+      const wc = makeWebContents(705);
+      mockWebContentsRegistry.set(705, wc);
+      const sent: Array<Record<string, unknown>> = [];
+      answering(wc, { authorization: "skip-preference" }, sent);
+      const condition = { confirmationCondition: "next-own-fallback" as const };
+
+      const ran = await bridge.dispatchActionForWebContents(
+        705,
+        "terminal.restartOnPreset",
+        {},
+        false,
+        undefined,
+        "help",
+        condition
+      );
+      await bridge.dispatchActionForWebContents(
+        705,
+        "terminal.restartOnPreset",
+        {},
+        true,
+        undefined,
+        "help",
+        condition
+      );
+      await bridge.dispatchActionForWebContents(
+        705,
+        "terminal.restartOnPreset",
+        {},
+        false,
+        undefined,
+        "help",
+        { ...condition, approvalOnly: true }
+      );
+
+      expect(sent[0]).toMatchObject({
+        confirmed: false,
+        confirmationCondition: "next-own-fallback",
+      });
+      expect(sent[1]).not.toHaveProperty("confirmationCondition");
+      expect(sent[2]).not.toHaveProperty("confirmationCondition");
+      expect(ran.authorization).toBe("skip-preference");
+    });
+
+    it("believes no run unasked from a view it offered nothing, or beside a decision", async () => {
+      const wc = makeWebContents(706);
+      mockWebContentsRegistry.set(706, wc);
+      const sent: Array<Record<string, unknown>> = [];
+      answering(wc, { authorization: "skip-preference" }, sent);
+
+      const unoffered = await bridge.dispatchActionForWebContents(
+        706,
+        "terminal.restartOnPreset",
+        {},
+        false,
+        undefined,
+        "help"
+      );
+      expect(unoffered.authorization).toBeUndefined();
+
+      answering(wc, { authorization: "skip-preference", confirmationDecision: "approved" }, sent);
+      const decided = await bridge.dispatchActionForWebContents(
+        706,
+        "terminal.restartOnPreset",
+        {},
+        false,
+        undefined,
+        "help",
+        { confirmationCondition: "next-own-fallback" }
+      );
+      expect(decided.authorization).toBeUndefined();
+      expect(decided.confirmationDecision).toBe("approved");
+    });
+  });
+
   it("threads a host's approval options into the pinned dispatch payload", async () => {
     const wc = makeWebContents(703);
     mockWebContentsRegistry.set(703, wc);

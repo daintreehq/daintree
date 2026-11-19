@@ -8,8 +8,13 @@
  * confirm-gated action is never delegable until someone adds it here.
  */
 export interface DelegableAssistantConfirmation {
-  /** The tool id the assistant calls. */
+  /** The tool id the assistant calls, or the tick's own key when `calledActionId` names the tool. */
   id: string;
+  /**
+   * The tool a tick covers only some calls of (#17917). Its pane's view
+   * settles each call, so a policy keyed on the called id never matches it.
+   */
+  calledActionId?: string;
   label: string;
   /** What still holds, or what the tick doesn't cover: one sentence, no period. */
   detail: string;
@@ -19,6 +24,18 @@ export const ASSISTANT_HOST_SETTINGS_CONFIRMATION = "host.settings";
 
 /** Never skipped, delegated or granted: the person ticks each account's folder (#17079). */
 export const ASSISTANT_ACCOUNT_ADD_CONFIRMATION = "agent.addAccount";
+
+export const ASSISTANT_PRESET_MOVE_TOOL = "terminal.restartOnPresetOwned";
+
+/** What main dispatches to the pane's view for {@link ASSISTANT_PRESET_MOVE_TOOL}. */
+export const ASSISTANT_PRESET_MOVE_DELEGATE = "terminal.restartOnPreset";
+
+/**
+ * Covers a preset move only to the next step of the chain the pane walks
+ * (#17917). Not a tool id: a tick on the tool itself would hand over every
+ * preset, including one that skips permission prompts.
+ */
+export const ASSISTANT_NEXT_FALLBACK_CONFIRMATION = "terminal.restartOnPresetOwned.nextFallback";
 
 export const DELEGABLE_ASSISTANT_CONFIRMATIONS: readonly DelegableAssistantConfirmation[] = [
   {
@@ -32,6 +49,13 @@ export const DELEGABLE_ASSISTANT_CONFIRMATIONS: readonly DelegableAssistantConfi
     label: "Retire a worktree it created",
     detail:
       "Only once it's clean and every commit is on a remote, after closing the assistant's own panels there",
+  },
+  {
+    id: ASSISTANT_NEXT_FALLBACK_CONFIRMATION,
+    calledActionId: ASSISTANT_PRESET_MOVE_TOOL,
+    label: "Move an agent it launched to the next preset in its fallback chain",
+    detail:
+      "Only the next step of a custom preset's fallback chain, walked as a usage-limit fallback walks it and on the same account; any other preset still asks",
   },
   {
     id: ASSISTANT_HOST_SETTINGS_CONFIRMATION,
@@ -69,6 +93,16 @@ export const UNDELEGABLE_ASSISTANT_CONFIRMATIONS: readonly UndelegableAssistantC
     reason: "Always asks: what runs depends on what the assistant sends",
   },
   {
+    ids: [ASSISTANT_PRESET_MOVE_TOOL],
+    label: "Move an agent to any preset",
+    reason: "Always asks: another preset can skip permission prompts or add its own flags",
+  },
+  {
+    ids: ["terminal.restartOnAccountOwned"],
+    label: "Move an agent to another account",
+    reason: "Always asks: an account's folder carries the CLI's own settings, not just a login",
+  },
+  {
     ids: ["host.switch", "project.openOnHost"],
     label: "Move this window to a host",
     reason: "Always asks: it moves the window you're using",
@@ -81,9 +115,12 @@ export const UNDELEGABLE_ASSISTANT_CONFIRMATIONS: readonly UndelegableAssistantC
 ];
 
 const DELEGABLE_IDS: ReadonlySet<string> = new Set(
-  DELEGABLE_ASSISTANT_CONFIRMATIONS.map((entry) => entry.id)
+  DELEGABLE_ASSISTANT_CONFIRMATIONS.filter((entry) => entry.calledActionId === undefined).map(
+    (entry) => entry.id
+  )
 );
 
+/** Whether a tick can hand over every call to `actionId`. */
 export function isDelegableAssistantConfirmation(actionId: string): boolean {
   return DELEGABLE_IDS.has(actionId);
 }

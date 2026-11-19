@@ -67,12 +67,15 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
   let delegationReads: Array<[string, string]>;
   let commits: string[];
   let reply: { delegate?: true };
+  // The tools a preset move may run unasked for, once the view finds it the next step (#17917).
+  let nextFallback: ReadonlySet<string> | Error;
 
   beforeEach(() => {
     delegable = new Set();
     delegationReads = [];
     commits = [];
     reply = {};
+    nextFallback = new Set();
     skips = false;
     skipReads = [];
     skipNotes = 0;
@@ -121,6 +124,10 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
         skipReads.push(helpSessionId);
         if (skips instanceof Error) throw skips;
         return typeof skips === "boolean" ? skips : skips.has(calledActionId);
+      },
+      checksNextFallback: (_helpSessionId, calledActionId) => {
+        if (nextFallback instanceof Error) throw nextFallback;
+        return nextFallback.has(calledActionId);
       },
       newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
     });
@@ -536,6 +543,55 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
 
         expect(verdicts).toEqual([true, false]);
         expect(skipNotes).toBe(1);
+      });
+
+      describe("a preset move offered as the pane's next own step (#17917)", () => {
+        const MOVE = "terminal.restartOnPresetOwned";
+        const moveArgs = { terminalId: "t-9", presetId: "p-1" };
+        const restart = (callId: string, args: Record<string, unknown> = moveArgs) =>
+          dispatch(callId, { actionId: "terminal.restartOnPreset", args });
+
+        it("offers the move once, spending the call's ask, and notes a skip only once it ran", async () => {
+          nextFallback = new Set([MOVE]);
+          const offers: Array<(() => void) | null> = [];
+          during((r, callId) => {
+            offers.push(r.offersNextFallback("studio", restart(callId)));
+            offers.push(r.offersNextFallback("studio", restart(callId)));
+            verdicts.push(r.skipsRelayedDispatch("studio", restart(callId)));
+            expect(skipNotes).toBe(0);
+            offers[0]?.();
+            offers[0]?.();
+          });
+
+          await deleteCall(MOVE, moveArgs);
+
+          expect(offers.map((ran) => ran !== null)).toEqual([true, false]);
+          expect(verdicts).toEqual([false]);
+          expect(skipNotes).toBe(1);
+        });
+
+        it("offers nothing without the tick, for other arguments, another host, or an unreadable preference", async () => {
+          const offered = (ran: (() => void) | null) => verdicts.push(ran !== null);
+          during((r, callId) => offered(r.offersNextFallback("studio", restart(callId))));
+          await deleteCall(MOVE, moveArgs);
+          expect(verdicts).toEqual([false]);
+
+          nextFallback = new Set([MOVE]);
+          during((r, callId) => {
+            offered(
+              r.offersNextFallback("studio", restart(callId, { ...moveArgs, presetId: "p-2" }))
+            );
+            offered(r.offersNextFallback("elsewhere", restart(callId)));
+            offered(r.offersNextFallback("studio", dispatch(callId)));
+          });
+          await deleteCall(MOVE, moveArgs);
+          expect(verdicts).toEqual([false, false, false]);
+
+          nextFallback = new Error("store unreadable");
+          during((r, callId) => offered(r.offersNextFallback("studio", restart(callId))));
+          await deleteCall(MOVE, moveArgs);
+          expect(verdicts).toEqual([false]);
+        });
       });
 
       it("rebuilds an owned tool's delegate from its id and the fields it forwards, nothing else", async () => {

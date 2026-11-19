@@ -182,6 +182,7 @@ export interface SessionServerDepsSource {
       | "delegationOffer"
       | "onDelegationApproved"
       | "actionsListWalk"
+      | "confirmationCondition"
     >
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
@@ -901,6 +902,9 @@ export function createSessionServerDeps(
     const actionsListWalk = callOptions?.actionsListWalk === true;
     const delegationOffer = callOptions?.delegationOffer;
     const onDelegationApproved = callOptions?.onDelegationApproved;
+    // Settled by the view that holds the pane (#17917); a view-less host has
+    // none, so that route asks as it always did.
+    const confirmationCondition = callOptions?.confirmationCondition;
     if (boundWorkspaceId !== null) {
       // A bound external session records no context: unlike a help session,
       // which replays the ActionContext snapshot taken when the user launched
@@ -973,6 +977,15 @@ export function createSessionServerDeps(
                       }),
                   }
                 : {}),
+              ...(relay.local === true && relay.nextFallback && relayCallId !== undefined
+                ? {
+                    nextFallback: bindNextFallback(
+                      relay.nextFallback,
+                      relay.helpSessionId,
+                      relayCallId
+                    ),
+                  }
+                : {}),
             },
           }
         : undefined;
@@ -984,11 +997,12 @@ export function createSessionServerDeps(
             args,
             confirmed,
             sessionOrigin,
-            authorization !== undefined || actionsListWalk
+            authorization !== undefined || actionsListWalk || confirmationCondition !== undefined
               ? {
                   ...options,
                   ...(authorization !== undefined ? { authorization } : {}),
                   ...(actionsListWalk ? { actionsListWalk: true } : {}),
+                  ...(confirmationCondition !== undefined ? { confirmationCondition } : {}),
                 }
               : options
           )
@@ -1019,7 +1033,8 @@ export function createSessionServerDeps(
       return authorization !== undefined ||
         assistantRequester !== undefined ||
         actionsListWalk ||
-        offer !== undefined
+        offer !== undefined ||
+        confirmationCondition !== undefined
         ? pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin, {
             ...(authorization !== undefined ? { authorization } : {}),
             ...(assistantRequester !== undefined ? { requester: assistantRequester } : {}),
@@ -1028,6 +1043,7 @@ export function createSessionServerDeps(
             ...(offer !== undefined && onDelegationApproved !== undefined
               ? { onDelegationApproved }
               : {}),
+            ...(confirmationCondition !== undefined ? { confirmationCondition } : {}),
           })
         : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
     }
@@ -1400,4 +1416,14 @@ export function createSessionServerDeps(
         }
       : {}),
   };
+}
+
+/** A local relay's matcher, bound to the one call a dispatch runs (#17917). */
+function bindNextFallback(
+  nextFallback: import("./shared.js").RelayNextFallback,
+  helpSessionId: string,
+  callId: string
+): NonNullable<NonNullable<WorkspaceDispatchOptions["relay"]>["nextFallback"]> {
+  return (projectId, actionId, args) =>
+    nextFallback({ callId, helpSessionId, projectId, actionId, args });
 }

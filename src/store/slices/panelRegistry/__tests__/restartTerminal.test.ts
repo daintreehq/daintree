@@ -82,6 +82,7 @@ vi.mock("@/services/TerminalInstanceService", () => {
 vi.mock("@/store/restartExitSuppression", () => ({
   markTerminalRestarting: vi.fn(),
   unmarkTerminalRestarting: vi.fn(),
+  isTerminalRestarting: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("@/store/projectStore", () => ({
@@ -143,9 +144,10 @@ vi.mock("@/store/ccrPresetsStore", () => ({
   },
 }));
 
+const projectPresetsByAgent = vi.hoisted(() => ({ current: {} as Record<string, unknown[]> }));
 vi.mock("@/store/projectPresetsStore", () => ({
   useProjectPresetsStore: {
-    getState: () => ({ presetsByAgent: {} }),
+    getState: () => ({ presetsByAgent: projectPresetsByAgent.current }),
   },
 }));
 
@@ -2836,6 +2838,300 @@ describe("restartTerminalOnPreset", () => {
       expect(pane().isUsingFallback).toBe(true);
       expect(pane().agentSessionId).toBe("sess-personal");
     });
+  });
+});
+
+describe("restartTerminalOnOwnFallbackStep (#17917)", () => {
+  type Preset = { id: string; name: string; fallbacks?: string[]; args?: string[] };
+  const custom: Preset[] = [
+    { id: "personal", name: "Personal", fallbacks: ["work", "backup"] },
+    { id: "work", name: "Work", fallbacks: ["other"] },
+    { id: "backup", name: "Backup" },
+    { id: "other", name: "Other" },
+  ];
+  let mirror: Preset[] = custom;
+  let mirrorAgent: Record<string, unknown> = {};
+  let mirrorGlobalSkip = false;
+
+  async function savedPresets(presets: Preset[]): Promise<void> {
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({
+      agents: { claude: { customPresets: presets } },
+    } as never);
+  }
+
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    vi.clearAllMocks();
+    projectPresetsByAgent.current = {};
+    mirror = custom;
+    const { setAgentSettingsEntryAccessor, setGlobalSkipPermissionsAccessor } =
+      await import("@/store/storeAccessors");
+    setAgentSettingsEntryAccessor(() => ({ customPresets: mirror, ...mirrorAgent }) as never);
+    mirrorAgent = {};
+    mirrorGlobalSkip = false;
+    setGlobalSkipPermissionsAccessor(() => mirrorGlobalSkip);
+    getMergedPresetMock.mockImplementation(
+      (_agentId: string, presetId: string, customPresets?: Preset[]) =>
+        [...(customPresets ?? custom), ...(projectPresetsByAgent.current.claude ?? [])].find(
+          (preset) => (preset as Preset).id === presetId
+        )
+    );
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    await savedPresets(custom);
+  });
+
+  function seed(overrides: Partial<PtyPanelData> = {}): void {
+    const pane: PtyPanelData = {
+      ...agentPanelBase,
+      agentState: "waiting",
+      agentPresetId: "personal",
+      originalPresetId: "personal",
+      ...overrides,
+    };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+  }
+
+  function pane(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+    return panel;
+  }
+
+  const move = (presetId: string) =>
+    usePanelStore.getState().restartTerminalOnOwnFallbackStep("test-1", presetId);
+
+  it("hops to the next step as a usage-limit hop would, keeping the root and the account", async () => {
+    seed({ agentAccountId: "acct-2", env: { CLAUDE_CONFIG_DIR: "/home/me/.claude-2" } });
+
+    expect(await move("work")).toEqual({ success: true });
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockSpawn.mock.calls[0]![0].agentPresetId).toBe("work");
+    expect(pane()).toMatchObject({
+      agentPresetId: "work",
+      originalPresetId: "personal",
+      fallbackChainIndex: 1,
+      isUsingFallback: true,
+    });
+  });
+
+  it("walks one chain across moves, never the chain of the preset it landed on", async () => {
+    seed();
+    await move("work");
+
+    // `work`'s own chain names `other`: a move there asks, and changes nothing.
+    const before = pane();
+    expect(await move("other")).toEqual({ success: false, needsConfirmation: true });
+    expect(pane()).toEqual(before);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+    expect(await move("backup")).toEqual({ success: true });
+    expect(pane()).toMatchObject({
+      agentPresetId: "backup",
+      originalPresetId: "personal",
+      fallbackChainIndex: 2,
+    });
+  });
+
+  it("touches nothing for a preset that isn't the next step", async () => {
+    const { markTerminalRestarting } = await import("@/store/restartExitSuppression");
+    seed();
+    const before = pane();
+
+    expect(await move("backup")).toEqual({ success: false, needsConfirmation: true });
+
+    expect(pane()).toEqual(before);
+    expect(vi.mocked(markTerminalRestarting)).not.toHaveBeenCalled();
+    expect(mockKill).not.toHaveBeenCalled();
+    expect(mockGracefulKill).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("never follows a project preset's chain", async () => {
+    projectPresetsByAgent.current = {
+      claude: [{ id: "team", name: "Team", fallbacks: ["backup"] }],
+    };
+    seed({ agentPresetId: "team", originalPresetId: "team" });
+
+    expect(await move("backup")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("asks, having claimed nothing, when the saved chain moved on before the launch read it", async () => {
+    const { markTerminalRestarting } = await import("@/store/restartExitSuppression");
+    seed({ restartError: { message: "earlier", timestamp: 1, recoverable: true } });
+    const before = pane();
+    await savedPresets([{ ...custom[0]!, fallbacks: ["backup"] }, ...custom.slice(1)]);
+
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+
+    // No claim was ever held, so no exit could have been swallowed meanwhile.
+    expect(vi.mocked(markTerminalRestarting)).not.toHaveBeenCalled();
+    expect(mockKill).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(pane()).toEqual(before);
+  });
+
+  it("asks when this view heard of a change the launch's read came back without", async () => {
+    seed();
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+      mirror = [{ ...custom[0]!, fallbacks: ["backup"] }, ...custom.slice(1)];
+      return { agents: { claude: { customPresets: custom } } } as never;
+    });
+
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("asks when a usage-limit hop moved the pane on while the launch's inputs were read", async () => {
+    seed();
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "test-1": {
+            ...state.panelsById["test-1"]!,
+            agentPresetId: "work",
+            fallbackChainIndex: 1,
+          } as PtyPanelData,
+        },
+      }));
+      return { agents: { claude: { customPresets: custom } } } as never;
+    });
+
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(pane()).toMatchObject({ agentPresetId: "work", fallbackChainIndex: 1 });
+  });
+
+  it("asks when the pane it was asked about was replaced, or relaunched, during the read", async () => {
+    seed({ startedAt: 1_000 });
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "test-1": { ...state.panelsById["test-1"]!, startedAt: 2_000 } as PtyPanelData,
+        },
+      }));
+      return { agents: { claude: { customPresets: custom } } } as never;
+    });
+
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("asks for a pane an exit sent to Trash", async () => {
+    seed({ location: "trash" });
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("asks when this view heard of an edit to the step's own launch during the read", async () => {
+    seed();
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+      mirror = custom.map((preset) =>
+        preset.id === "work" ? { ...preset, args: ["--skip-prompts"] } : preset
+      );
+      return { agents: { claude: { customPresets: custom } } } as never;
+    });
+
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the agent's own", () => (mirrorAgent = { dangerousMode: "off" })],
+    ["every agent's", () => (mirrorGlobalSkip = true)],
+  ])(
+    "asks when this view heard %s permission setting change during the read",
+    async (_label, change) => {
+      seed();
+      // Agreeing with the launch's read until the change lands.
+      mirrorAgent = { dangerousMode: "on" };
+      const { agentSettingsClient } = await import("@/clients");
+      vi.mocked(agentSettingsClient.get).mockImplementation(async () => {
+        change();
+        return {
+          agents: { claude: { customPresets: custom, dangerousMode: "on" } },
+          globalSkipPermissions: false,
+        } as never;
+      });
+
+      expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+      expect(mockSpawn).not.toHaveBeenCalled();
+    }
+  );
+
+  it("starts a new conversation, as the owned move does: a caller's resume selector stays behind", async () => {
+    seed({
+      agentLaunchFlags: ["--persisted-flag", "--continue", "--verbose"],
+      callerLaunchFlags: ["--continue", "--verbose"],
+    });
+
+    await move("work");
+
+    expect(pane().callerLaunchFlags).toEqual(["--verbose"]);
+    expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
+  });
+
+  it("starts nothing once the call's deadline has passed", async () => {
+    const { markTerminalRestarting } = await import("@/store/restartExitSuppression");
+    seed();
+
+    const result = await usePanelStore
+      .getState()
+      .restartTerminalOnOwnFallbackStep("test-1", "work", { deadlineAt: Date.now() - 1 });
+
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining("deadline") });
+    expect(result.admitted).toBeUndefined();
+    expect(vi.mocked(markTerminalRestarting)).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("says a hop that claimed the pane and then failed was admitted, and rolls it back", async () => {
+    seed();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const result = await move("work");
+
+    expect(result).toMatchObject({ success: false, admitted: true });
+    expect(pane()).toMatchObject({ agentPresetId: "personal", originalPresetId: "personal" });
+    expect(pane().fallbackChainIndex).toBeUndefined();
+  });
+
+  it("leaves a pane that is already restarting alone", async () => {
+    const { isTerminalRestarting } = await import("@/store/restartExitSuppression");
+    seed({ isRestarting: true });
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+
+    seed();
+    vi.mocked(isTerminalRestarting).mockReturnValueOnce(true);
+    expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("asks for a step whose content a plugin's launch approval no longer covers (#16324)", async () => {
+    const approvals = await import("@/services/plugin/pluginPresetLaunchApprovals");
+    approvals.rememberApprovedPresetLaunch("test-1", {
+      agentId: "claude",
+      presetId: "personal",
+      source: "custom",
+      content: "[]",
+      fallbacks: [["work", "approved before an edit"]],
+    });
+    try {
+      seed();
+      expect(await move("work")).toEqual({ success: false, needsConfirmation: true });
+      expect(mockSpawn).not.toHaveBeenCalled();
+    } finally {
+      approvals.forgetApprovedPresetLaunch("test-1");
+    }
   });
 });
 

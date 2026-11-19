@@ -103,12 +103,15 @@ export interface SessionServerDeps extends OwnedMainExecutors {
      * (#17036), so a local view answers with one large page. See
      * `WorkspaceDispatchOptions.actionsListWalk`. `delegationOffer` (#16752)
      * reaches only the help session's own pinned view; see
-     * `WorkspaceDispatchOptions.delegationOffer`.
+     * `WorkspaceDispatchOptions.delegationOffer`. `confirmationCondition`:
+     * when an unconfirmed dispatch may run unasked, for the pane's view to
+     * settle (#17917).
      */
     options?: {
       actionsListWalk?: true;
       delegationOffer?: McpDelegationOffer;
       onDelegationApproved?: () => void;
+      confirmationCondition?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationCondition;
     }
   ) => Promise<DispatchEnvelope>;
   /**

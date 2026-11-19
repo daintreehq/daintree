@@ -22,10 +22,12 @@ import {
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import {
   ASKS_FOR_EVERYTHING,
+  assistantPolicyChecksNextFallback,
   assistantPolicySkips,
   type AssistantConfirmationPolicy,
 } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import type { PreparedAssistantDelegation } from "./assistantConfirmationsPreference.js";
+import { ASSISTANT_PRESET_MOVE_DELEGATE } from "../../../shared/config/assistantConfirmationDelegation.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { SendKeysArgsSchema } from "../../../shared/utils/terminalKeys.js";
@@ -1211,6 +1213,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         console.error("[MCP] Failed to prepare the assistant's confirmation hand-over:", err);
       }
     }
+    // A preset move the pane's own view may run unasked (#17917): offered on
+    // its unconfirmed delegate, and believed as a skip only when that view
+    // reports the move qualified.
+    const checksNextFallback = assistantPolicyChecksNextFallback(confirmationPolicy, actionId);
+    let nextFallbackOffered = false;
     // Whose ownership records this call reads and writes (#12487): the
     // bearer's principal for a pane session, else the session itself. Captured
     // at admission so the ownership gate, an `owned` listing and the
@@ -1587,8 +1594,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // manifest entry is known, well after this is defined.
     // The hand-over is offered only on a dispatch that can still raise a
     // dialog: one already confirmed shows nobody anything to tick.
-    const dispatchToRenderer = (id: string, dispatchArgs: unknown): Promise<DispatchEnvelope> =>
-      relayCallId !== undefined
+    const dispatchToRenderer = (id: string, dispatchArgs: unknown): Promise<DispatchEnvelope> => {
+      if (checksNextFallback && !dispatchConfirmed && id === ASSISTANT_PRESET_MOVE_DELEGATE) {
+        nextFallbackOffered = true;
+        return dispatchAction(id, dispatchArgs, false, undefined, relayCallId, {
+          confirmationCondition: "next-own-fallback",
+        });
+      }
+      return relayCallId !== undefined
         ? dispatchAction(
             id,
             dispatchArgs,
@@ -1604,6 +1617,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 onDelegationApproved: delegation.approved,
               })
             : dispatchAction(id, dispatchArgs, dispatchConfirmed);
+    };
 
     const { askForApproval, askToClose, mintSessionApproval } = createCallApprovals(
       { sessionStore, requestApproval, requestCloseApproval },
@@ -3847,8 +3861,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // A relayed call the Shell ran under its own assistant's "Never ask"
           // (#15698): that, not an unasked run, is what its audit says. Only a
           // relayed session's: no other caller's view speaks for its preference.
+          // A preset move offered as the pane's next own step (#17917) is the
+          // other: its view says whether the move qualified.
           if (
-            relayCallId !== undefined &&
+            (relayCallId !== undefined || nextFallbackOffered) &&
             dispatchAuthorization === undefined &&
             envelope.authorization === "skip-preference"
           ) {

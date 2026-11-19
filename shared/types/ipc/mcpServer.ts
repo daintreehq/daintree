@@ -141,6 +141,13 @@ export type McpDispatchAuthorization =
   "tier" | "project-setting" | "user" | "session-grant" | "native-grant" | "skip-preference";
 
 /**
+ * A condition under which an unconfirmed dispatch may run without asking,
+ * which only the view holding the pane can settle (#17917): the assistant's
+ * preset move, when it is the pane's next own fallback step. Set only by main.
+ */
+export type McpConfirmationCondition = "next-own-fallback";
+
+/**
  * Audit-record severity tier. Derived from the dispatch result at record-write
  * time so readers can triage without re-deriving from errorCode + result.
  *

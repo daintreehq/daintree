@@ -58,6 +58,21 @@ let _exitProjectHome: (() => void) | null = null;
 let _isProjectHomePresented: (() => boolean) | null = null;
 let _panelMaximize: { isMaximized: () => boolean; exit: () => void } | null = null;
 
+let _getGlobalSkipPermissions: (() => boolean) | null = null;
+
+export function setGlobalSkipPermissionsAccessor(getter: () => boolean): void {
+  _getGlobalSkipPermissions = getter;
+}
+
+/**
+ * This view's global "Skip permission prompts", or `null` when the agent
+ * settings store isn't mounted. Lets the preset restart hold an assistant's
+ * unasked move (#17917) to what this view knows now.
+ */
+export function getGlobalSkipPermissionsSnapshot(): boolean | null {
+  return _getGlobalSkipPermissions?.() ?? null;
+}
+
 export function setAgentSettingsEntryAccessor(
   getter: (agentId: string) => AgentSettingsEntry | undefined
 ): void {

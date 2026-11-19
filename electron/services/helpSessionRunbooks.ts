@@ -135,7 +135,10 @@ export function buildConfirmationsAddendum(): string {
 export function buildDelegatedConfirmationsAddendum(delegated: readonly string[]): string {
   const calls = DELEGABLE_ASSISTANT_CONFIRMATIONS.filter((entry) =>
     delegated.includes(entry.id)
-  ).map((entry) => `- \`${entry.id}\`: ${entry.label.toLowerCase()}. ${entry.detail}.`);
+  ).map(
+    (entry) =>
+      `- \`${entry.calledActionId ?? entry.id}\`: ${entry.label.toLowerCase()}. ${entry.detail}.`
+  );
   return [
     "## Daintree Confirmations",
     "",

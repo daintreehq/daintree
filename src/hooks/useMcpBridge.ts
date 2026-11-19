@@ -88,6 +88,8 @@ import {
 } from "@/services/actions/definitions/agentAccountAdd";
 import { pluralize } from "@/lib/pluralize";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { ASSISTANT_PRESET_MOVE_DELEGATE } from "@shared/config/assistantConfirmationDelegation";
+import { OwnFallbackStepFailedError } from "@/services/actions/ownFallbackStep";
 
 /**
  * What the approver reads when a preview could not be built at all, such as a
@@ -1430,6 +1432,7 @@ export function useMcpBridge(): void {
         delegationOffer,
         dispatchDeadlineAt: sentDeadlineAt,
         actionsListWalk,
+        confirmationCondition,
       }) => {
         // Main started its clock when it sent this; ours starts a beat later.
         // Only a confirmation's first deadline reads it, until main grants a
@@ -1557,6 +1560,39 @@ export function useMcpBridge(): void {
           // the checklist rather than a run with no rows to add.
           if (effectiveConfirmed === true && actionId === "agent.addAccount") {
             effectiveConfirmed = false;
+          }
+
+          // The assistant's next-fallback tick (#17917): main offers it on an
+          // unconfirmed preset move, and only the pane's own run, here, settles
+          // it. A hop that ran, or failed once admitted, is the answer; a move
+          // it doesn't cover changed nothing and asks below like any other.
+          if (
+            confirmationCondition === "next-own-fallback" &&
+            effectiveConfirmed !== true &&
+            approvalOnly !== true &&
+            actionId === ASSISTANT_PRESET_MOVE_DELEGATE &&
+            Date.now() < dispatchDeadlineAt
+          ) {
+            const attempt = await actionService.dispatch(actionId as ActionId, args, {
+              source: "agent",
+              ownFallbackStep: true,
+              contextOverride: context,
+              ...(sessionOrigin === "help" ? { hostCallerOrigin: "assistant" as const } : {}),
+              dispatchDeadlineAt,
+            });
+            if (disposed) return;
+            if (attempt.ok || attempt.error.code !== "CONFIRMATION_REQUIRED") {
+              // Ran, or failed once admitted: either way the tick authorized
+              // it. A refusal before admission ran on nobody's say-so.
+              const admitted =
+                attempt.ok || attempt.error.details instanceof OwnFallbackStepFailedError;
+              window.electron.mcpBridge.sendDispatchActionResponse({
+                requestId,
+                result: attempt,
+                ...(admitted ? { authorization: "skip-preference" as const } : {}),
+              });
+              return;
+            }
           }
 
           if (effectiveConfirmed !== true) {

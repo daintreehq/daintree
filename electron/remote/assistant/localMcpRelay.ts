@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import type { LinkSession } from "../link/session.js";
+import type { RelayNextFallback } from "../../services/mcp-server/shared.js";
 import type { AgentDirectory } from "../../../shared/types/agentDirectory.js";
 import type {
   McpCallAnswer,
@@ -47,6 +48,12 @@ export interface LocalMcpRelayDeps extends Pick<
    * calls still out have settled, and a held send must not outlive it.
    */
   endHeldSends?(helpSessionId: string): void;
+  /**
+   * Whether a local call's preset move may run unasked once the view finds it
+   * the pane's next own step, and the note that it ran (#17917), as a Shell
+   * matches a host's dispatch of one of its calls.
+   */
+  nextFallback?: RelayNextFallback;
   /** Puts one confirm-gated local call to the person, as a host's question would be. */
   receiveApproval(
     payload: RelayApprovePayload | RelayApproveTimedPayload
@@ -120,6 +127,7 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
     shellName: deps.machineName(),
     local: true,
     ...(global ? { global: true as const } : {}),
+    ...(deps.nextFallback ? { nextFallback: deps.nextFallback } : {}),
     deliverNotices: (fired) => {
       if (disposed || fired.length === 0) return;
       deps.receiveNotices({

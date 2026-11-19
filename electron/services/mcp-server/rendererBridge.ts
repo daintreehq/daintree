@@ -25,7 +25,12 @@ import {
 } from "../viewless/hostStartedTerminals.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
 import { getRemoteService } from "../../remote/runtime.js";
-import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import {
+  LOCAL_HOST_ID,
+  isLocalHostId,
+  parseHostScopedKey,
+} from "../../../shared/types/remoteHosts.js";
+import { ASSISTANT_PRESET_MOVE_DELEGATE } from "../../../shared/config/assistantConfirmationDelegation.js";
 import {
   getProjectForWebContents,
   getWebContentsForProject,
@@ -387,7 +392,12 @@ function buildDispatchPayload(
   callerInfo?: McpBearerIdentity,
   approval?: Pick<
     WorkspaceDispatchOptions,
-    "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization" | "hostPreview"
+    | "offerSessionApproval"
+    | "approvalOnly"
+    | "approvalReason"
+    | "authorization"
+    | "hostPreview"
+    | "confirmationCondition"
   >
 ) {
   return {
@@ -423,7 +433,20 @@ function buildDispatchPayload(
     // renderer reads it only to tell the skip preference, which also waives
     // the typed-name gate, from a native grant, which does not.
     ...(confirmed && approval?.authorization ? { authorization: approval.authorization } : {}),
+    // When an unconfirmed dispatch may run unasked (#17917). Main decides; the
+    // view only settles whether the pane meets it.
+    ...(offersConfirmationCondition(confirmed, approval)
+      ? { confirmationCondition: approval!.confirmationCondition }
+      : {}),
   };
+}
+
+/** Whether a dispatch carries its condition: only an unconfirmed one that may run. */
+function offersConfirmationCondition(
+  confirmed: boolean,
+  approval: Pick<WorkspaceDispatchOptions, "approvalOnly" | "confirmationCondition"> | undefined
+): boolean {
+  return !confirmed && approval?.confirmationCondition !== undefined && !approval.approvalOnly;
 }
 
 /** Whether a rejection means the endpoint went away before it answered. */
@@ -968,6 +991,7 @@ export function createRendererBridge(
       | "delegationOffer"
       | "onDelegationApproved"
       | "actionsListWalk"
+      | "confirmationCondition"
     >
   ): Promise<DispatchEnvelope> {
     let viewId: number | undefined;
@@ -1015,6 +1039,7 @@ export function createRendererBridge(
       | "delegationOffer"
       | "onDelegationApproved"
       | "actionsListWalk"
+      | "confirmationCondition"
     >
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
@@ -1116,6 +1141,7 @@ export function createRendererBridge(
                 : {}),
             }
           : {}),
+        ...(offersConfirmationCondition(confirmed, approval) ? { offeredCondition: true } : {}),
       });
 
       const send = () => {
@@ -1380,6 +1406,7 @@ export function createRendererBridge(
       | "delegationOffer"
       | "onDelegationApproved"
       | "actionsListWalk"
+      | "confirmationCondition"
     >,
     callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {
@@ -2036,15 +2063,13 @@ export function createRendererBridge(
       );
     }
     if (driver === null) {
-      return sendDispatchRequest(
+      return sendLocalWorkspaceDispatch(
         () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),
+        workspaceId,
         actionId,
         args,
         confirmed,
         sessionOrigin,
-        options.contextOverride,
-        undefined,
-        { kind: "workspace", workspaceId },
         options
       );
     }
@@ -2078,8 +2103,36 @@ export function createRendererBridge(
       }
       throw err;
     }
-    return sendDispatchRequest(
+    return sendLocalWorkspaceDispatch(
       () => target,
+      workspaceId,
+      actionId,
+      args,
+      confirmed,
+      sessionOrigin,
+      options
+    );
+  }
+
+  /**
+   * A workspace dispatch sent to a view on this machine. A `host.call` from one
+   * of this machine's own assistants to another of its projects (#17917) may
+   * offer its preset move as one the view runs unasked once it finds it the
+   * pane's next own step: matched to that assistant's call here as a host's
+   * dispatch is matched on its Shell, and read from this machine's preference.
+   */
+  async function sendLocalWorkspaceDispatch(
+    resolveWebContents: () => Electron.WebContents,
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
+    options: WorkspaceDispatchOptions
+  ): Promise<DispatchEnvelope> {
+    const ran = offersLocalNextFallback(resolveWebContents, actionId, args, confirmed, options);
+    const envelope = await sendDispatchRequest(
+      resolveWebContents,
       actionId,
       args,
       confirmed,
@@ -2087,8 +2140,42 @@ export function createRendererBridge(
       options.contextOverride,
       undefined,
       { kind: "workspace", workspaceId },
-      options
+      ran !== null ? { ...options, confirmationCondition: "next-own-fallback" } : options
     );
+    if (ran !== null && envelope.authorization === "skip-preference") ran();
+    return envelope;
+  }
+
+  /**
+   * A local `host.call`'s preset move offered to its view as one it may run
+   * unasked: what to call once the view ran it, or null when not offered.
+   */
+  function offersLocalNextFallback(
+    resolveWebContents: () => Electron.WebContents,
+    actionId: string,
+    args: unknown,
+    confirmed: boolean,
+    options: WorkspaceDispatchOptions
+  ): (() => void) | null {
+    const nextFallback = options.relay?.nextFallback;
+    if (
+      confirmed ||
+      options.approvalOnly === true ||
+      options.relay?.local !== true ||
+      nextFallback === undefined ||
+      actionId !== ASSISTANT_PRESET_MOVE_DELEGATE
+    ) {
+      return null;
+    }
+    let key: string | null;
+    try {
+      key = getProjectForWebContents(resolveWebContents().id);
+    } catch {
+      return null;
+    }
+    if (key === null) return null;
+    const view = parseHostScopedKey(key);
+    return view.hostId === LOCAL_HOST_ID ? nextFallback(view.projectId, actionId, args) : null;
   }
 
   /**
@@ -2154,6 +2241,7 @@ export function createRendererBridge(
       result: import("../../../shared/types/actions.js").ActionDispatchResult;
       confirmationDecision?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision;
       approvalScope?: unknown;
+      authorization?: unknown;
     }
   ) => {
     if (!payload || typeof payload.requestId !== "string") return;
@@ -2189,6 +2277,13 @@ export function createRendererBridge(
       payload.approvalScope === "delegate" &&
       pending.offeredDelegation === true
         ? { approvalScope: "delegate" as const }
+        : {}),
+      // A condition the view found met (#17917): believed only for a request
+      // sent with one, and never beside a dialog's decision.
+      ...(pending.offeredCondition === true &&
+      payload.confirmationDecision === undefined &&
+      payload.authorization === "skip-preference"
+        ? { authorization: "skip-preference" as const }
         : {}),
       ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
     });

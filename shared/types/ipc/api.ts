@@ -2738,6 +2738,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * send, so the view answers with one large page.
          */
         actionsListWalk?: boolean;
+        /**
+         * When this unconfirmed dispatch may run unasked (#17917), set only
+         * by main; the view settles it from the pane's own state.
+         */
+        confirmationCondition?: import("./mcpServer.js").McpConfirmationCondition;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -2750,6 +2755,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
        * (#12692), or to stop asking about this kind of action (#16752).
        */
       approvalScope?: import("./mcpServer.js").McpApprovalScope;
+      /**
+       * A request's `confirmationCondition` held and it ran unasked (#17917).
+       * Main believes it only for a request it sent one with.
+       */
+      authorization?: "skip-preference";
     }): void;
   };
   pluginBridge: {

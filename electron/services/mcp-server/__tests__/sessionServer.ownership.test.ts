@@ -1178,6 +1178,110 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
+  // #17917: the tick never confirms the move here; it offers the pane's view
+  // the one move it covers, and the view's answer is what the audit says.
+  describe("terminal.restartOnPresetOwned under the next-fallback tick (#17917)", () => {
+    const NEXT = "terminal.restartOnPresetOwned.nextFallback";
+    const RESTART_RESULT = {
+      terminalId: "terminal-1",
+      agentPresetId: "work",
+      agentSessionIdCleared: true,
+    };
+
+    function tickHarness(
+      sessionId: string,
+      policy: { skipsAll: boolean; delegated: Set<string> },
+      envelope: Record<string, unknown> = { result: { ok: true, result: RESTART_RESULT } }
+    ) {
+      const h = harness(
+        sessionId,
+        { "terminal.restartOnPreset": envelope },
+        { readAssistantConfirmationPolicy: () => policy }
+      );
+      h.store.sessionOriginMap.set(sessionId, "help");
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    const move = {
+      name: "terminal.restartOnPresetOwned",
+      arguments: { terminalId: "terminal-1", presetId: "work" },
+    };
+
+    it("offers the pane's view the move, unconfirmed, and audits the run its view reports", async () => {
+      const { server, dispatchAction, deps } = tickHarness(
+        "s-next",
+        { skipsAll: false, delegated: new Set([NEXT]) },
+        { result: { ok: true, result: RESTART_RESULT }, authorization: "skip-preference" }
+      );
+
+      const result = await callTool(server, move);
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnPreset",
+        { presetId: "work", terminalId: "terminal-1" },
+        false,
+        undefined,
+        undefined,
+        { confirmationCondition: "next-own-fallback" }
+      );
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolId: "terminal.restartOnPresetOwned",
+          authorization: "skip-preference",
+        })
+      );
+    });
+
+    it("offers nothing without the tick, and Never ask still confirms the move outright", async () => {
+      const asks = tickHarness("s-next-off", { skipsAll: false, delegated: new Set() });
+      await callTool(asks.server, move);
+      expect(asks.dispatchAction.mock.calls.at(-1)).toEqual([
+        "terminal.restartOnPreset",
+        { presetId: "work", terminalId: "terminal-1" },
+        false,
+      ]);
+
+      const skips = tickHarness("s-next-never", { skipsAll: true, delegated: new Set() });
+      await callTool(skips.server, move);
+      expect(skips.dispatchAction.mock.calls.at(-1)).toEqual([
+        "terminal.restartOnPreset",
+        { presetId: "work", terminalId: "terminal-1" },
+        true,
+        "skip-preference",
+      ]);
+    });
+
+    it("believes no skip from a view it offered nothing", async () => {
+      const { server, deps } = tickHarness(
+        "s-next-claim",
+        { skipsAll: false, delegated: new Set() },
+        { result: { ok: true, result: RESTART_RESULT }, authorization: "skip-preference" }
+      );
+
+      await callTool(server, move);
+
+      const record = vi.mocked(deps.appendAuditRecord).mock.calls.at(-1)![0];
+      expect(record.authorization).toBeUndefined();
+    });
+
+    it("still refuses a panel the session didn't launch, offering nothing", async () => {
+      const { server, dispatchAction } = tickHarness("s-next-foreign", {
+        skipsAll: false,
+        delegated: new Set([NEXT]),
+      });
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-theirs", presetId: "work" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
   describe("terminal.restartOnAccountOwned (#17079)", () => {
     const RESTART_RESULT = {
       terminalId: "terminal-1",
