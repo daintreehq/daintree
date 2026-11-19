@@ -85,8 +85,10 @@ async function closeRunTerminal(run: ScheduledRun): Promise<string | null> {
     throw new Error("The run's terminal was restarted.");
   }
   const { invokeHostChannel } = await import("../viewless/viewlessInvoke.js");
+  // The run's pane goes with it, so the host forgets its continuation (#17912).
   return invokeHostChannel<string | null>(run.projectId, CHANNELS.TERMINAL_GRACEFUL_KILL, [
     run.terminalId,
+    { closesPane: true },
   ]);
 }
 

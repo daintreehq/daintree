@@ -42,7 +42,10 @@ import { decisionsHostServes, loadDecisionsModule } from "../../../window/servic
 import { AppError } from "../../../utils/errorTypes.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import { peekComposerSendHold } from "../../../services/composerHold/composerSendHoldLive.js";
-import { forgetContinuationPane } from "../../../services/codexLimitContinuation/forgetPane.js";
+import {
+  forgetContinuationPane,
+  noteContinuationSpawn,
+} from "../../../services/codexLimitContinuation/forgetPane.js";
 import { canContinueAtLimitReset } from "../../../../shared/types/codexLimitContinuation.js";
 import type {
   AgentSessionBookmarkMetadata,
@@ -1669,12 +1672,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // spawn (#12433).
       noteTerminalLaunch(id, { command: safeCommand, agentSessionId: spawnAgentSessionId });
       // Whether the preset starts the pane armed to continue at its limit's
-      // reset, confirmed with the spawn's own generation (#17912).
-      if (continuationLive && projectId !== undefined && typeof launchAgentId === "string") {
-        // Unchanged means PtyClient refused the spawn without sending it, and
-        // the generation still current is an earlier launch's.
-        const launchGeneration = getLifecycleLedger().currentGeneration(id);
-        if (launchGeneration !== undefined && launchGeneration !== generationBeforeSpawn) {
+      // reset, confirmed with the spawn's own generation (#17912). Unchanged
+      // means PtyClient refused the spawn without sending it, and the
+      // generation still current is an earlier launch's.
+      const launchGeneration = getLifecycleLedger().currentGeneration(id);
+      if (
+        projectId !== undefined &&
+        launchGeneration !== undefined &&
+        launchGeneration !== generationBeforeSpawn
+      ) {
+        if (continuationLive && typeof launchAgentId === "string") {
           continuationLive.noteContinuationLaunch({
             terminalId: id,
             projectId,
@@ -1684,6 +1691,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             originalPresetId:
               validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
           });
+        } else {
+          noteContinuationSpawn(id, projectId, launchGeneration);
         }
       }
       if (whenDone !== undefined && whenDoneLive && validatedOptions.handbackCode !== undefined) {

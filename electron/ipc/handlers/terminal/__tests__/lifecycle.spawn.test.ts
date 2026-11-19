@@ -3887,7 +3887,7 @@ describe("terminal close handlers - resume journaling", () => {
       ptyClient.getTerminalAsync.mockResolvedValue(null);
       ptyClient.gracefulKill.mockResolvedValue(null);
       const forgetPane = vi.fn();
-      setContinuationForgetter({ forgetPane, forgetProject: vi.fn() });
+      setContinuationForgetter({ forgetPane, forgetProject: vi.fn(), noteSpawn: vi.fn() });
       try {
         const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
         await handler({}, "term-1", { forRestart: true });
@@ -4550,14 +4550,30 @@ describe("terminal spawn handler - a preset arming the pane to continue (#17912)
     expect(mockNoteContinuationLaunch).not.toHaveBeenCalled();
   });
 
-  it("says nothing for an agent that waits for its own reset, a shell, or the Assistant", async () => {
-    await codexSpawn({ id: "claude-pane", launchAgentId: "claude", command: "claude" });
-    await codexSpawn({ id: "shell-pane", launchAgentId: undefined, command: undefined });
-    mockIsHelpTerminal.mockReturnValue(true);
-    await codexSpawn({ id: "assistant-pane" });
+  it("only names any other spawn, for an agent that waits for its own reset, a shell, or the Assistant", async () => {
+    const noteSpawn = vi.fn();
+    setContinuationForgetter({ forgetPane: vi.fn(), forgetProject: vi.fn(), noteSpawn });
+    try {
+      await codexSpawn({ id: "claude-pane", launchAgentId: "claude", command: "claude" });
+      await codexSpawn({ id: "shell-pane", launchAgentId: undefined, command: undefined });
+      mockIsHelpTerminal.mockReturnValue(true);
+      await codexSpawn({ id: "assistant-pane" });
+    } finally {
+      setContinuationForgetter(null);
+    }
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(3);
     expect(mockNoteContinuationLaunch).not.toHaveBeenCalled();
+    expect(noteSpawn.mock.calls.map((call) => call[0])).toEqual([
+      "claude-pane",
+      "shell-pane",
+      "assistant-pane",
+    ]);
+    expect(noteSpawn).toHaveBeenCalledWith(
+      "shell-pane",
+      "project-1",
+      getLifecycleLedger().currentGeneration("shell-pane")
+    );
   });
 });
 

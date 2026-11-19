@@ -15,6 +15,7 @@ import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { keepStoredLimitResets } from "@shared/utils/agentPresets";
 import { setAgentSettingsEntryAccessor, setGlobalSkipPermissionsAccessor } from "./storeAccessors";
 
 /**
@@ -219,6 +220,32 @@ type StoreSet = (partial: Partial<AgentSettingsStore>) => void;
 type StoreGet = () => AgentSettingsStore;
 
 /**
+ * A locked write's patch keeps each preset's continuation switch as the
+ * snapshot it lands on holds it (#17912), so the write's own older copy never
+ * shows here, nor reaches a Settings save made while it is in flight.
+ */
+function keepingLimitResets(agentId: string, patch: Patch): Patch {
+  return (settings) => {
+    const next = patch(settings);
+    const entry = next.agents?.[agentId];
+    if (!entry || !Array.isArray(entry.customPresets)) return next;
+    return {
+      ...next,
+      agents: {
+        ...next.agents,
+        [agentId]: {
+          ...entry,
+          customPresets: keepStoredLimitResets(
+            entry.customPresets,
+            settings.agents?.[agentId]?.customPresets
+          ) as typeof entry.customPresets,
+        },
+      },
+    };
+  };
+}
+
+/**
  * One agent's write. `patch` is what it changes in a snapshot, which may be
  * narrower than `updates`: a preset choice sends the agent's whole preset map
  * but changes one worktree's entry, so another view's choice for a different
@@ -237,8 +264,9 @@ async function writeAgentEntry(
   const heardAtStart = savedChangesHeard;
   set({ error: null });
   const previous = get().settings;
-  const release = holdPatch(patch);
-  if (previous) set({ settings: patch(previous) });
+  const applied = options?.lockContinueAtLimitReset ? keepingLimitResets(agentId, patch) : patch;
+  const release = holdPatch(applied);
+  if (previous) set({ settings: applied(previous) });
   try {
     const raw = await (options
       ? agentSettingsClient.set(agentId, updates, options)

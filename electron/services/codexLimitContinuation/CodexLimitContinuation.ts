@@ -62,8 +62,12 @@ export interface ContinuationLaunch {
   projectId: string;
   /** The ledger generation the spawn went out under, which its result echoes. */
   launchGeneration: number;
-  /** The user's own original preset arms the pane. */
-  arms: boolean;
+  /**
+   * The user's own original preset arms the pane, or doesn't; `keep` for a
+   * launch that decides nothing (a shell, an agent Daintree can't continue),
+   * noted only so it can't take an older launch's default for its own.
+   */
+  arms: boolean | "keep";
 }
 
 /** A host's answer to a spawn, as far as arming reads it. */
@@ -193,6 +197,15 @@ export class CodexLimitContinuation {
   /** Whether a launch under `terminalId` can change anything: it is armed, or a launch awaits its spawn. */
   followsLaunches(terminalId: string): boolean {
     return this.panes.has(terminalId) || this.launches.has(terminalId);
+  }
+
+  /**
+   * Any other spawn sent under an id a launch awaits, so its answer settles
+   * only itself: it leaves the pane's arming as it was.
+   */
+  noteSpawn(terminalId: string, projectId: string, launchGeneration: number): void {
+    if (!this.launches.has(terminalId)) return;
+    this.noteLaunch({ terminalId, projectId, launchGeneration, arms: "keep" });
   }
 
   /**
@@ -392,6 +405,7 @@ export class CodexLimitContinuation {
       this.disarm(terminalId);
       return this.applyLaunch(launch, spawnedAt, generation);
     }
+    if (launch.arms === "keep") return false;
     const wanted = this.overrides.get(terminalId)?.get(projectId) ?? launch.arms;
     if (wanted && !pane) {
       this.arm(terminalId, projectId, spawnedAt, generation);

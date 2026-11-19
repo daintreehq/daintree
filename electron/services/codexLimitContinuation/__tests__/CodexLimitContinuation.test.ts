@@ -524,6 +524,31 @@ describe("CodexLimitContinuation — a preset arms its panes (#17912)", () => {
     expect(h.active).toEqual([true]);
   });
 
+  it("never gives a newer spawn that decides nothing an older launch's default", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true, 1));
+    // A shell queued under the same id after it; only the shell is sent.
+    h.service.noteSpawn("t1", PROJECT, 2);
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.service.isArmed("t1")).toBe(false);
+    expect(h.active).toEqual([true, false]);
+  });
+
+  it("still arms the running launch when a shell queued behind it is refused", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true, 1));
+    h.service.noteSpawn("t1", PROJECT, 2);
+    h.service.handleSpawnResult("t1", confirmed(1));
+    h.service.handleSpawnResult("t1", { success: false, launchGeneration: 2 });
+    expect(h.state()).toEqual({ status: "armed" });
+  });
+
+  it("notes no other spawn for an id no launch awaits", () => {
+    const h = harness();
+    h.service.noteSpawn("t1", PROJECT, 1);
+    expect(h.active).toEqual([]);
+  });
+
   it("takes a crash replay's answer, under a newer generation, for the launch it resent", () => {
     const h = harness();
     h.service.noteLaunch(launch(true, 1));
