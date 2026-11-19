@@ -254,12 +254,10 @@ export function useDecisionQuestionReader(
   }, []);
   const showSkeleton = useSkeletonGate(open && current === null);
   const question = current?.result === "read" ? current.question : null;
-  // A Host away: what was last read of its question open, by the reference that read it.
+  // A Host away: what was last read of its question open, kept by the reference that read it.
   const lastRead =
-    current?.result === "host-not-connected" &&
-    current.lastRead?.result === "read" &&
-    target?.scope === "reference"
-      ? { reference: target.reference, ...current.lastRead }
+    current?.result === "host-not-connected" && current.lastRead?.result === "read"
+      ? current.lastRead
       : null;
   const subject: DismissalSubject | null =
     question !== null
@@ -270,9 +268,9 @@ export function useDecisionQuestionReader(
           status: question.status,
           lastReadAt: null,
         }
-      : lastRead !== null
+      : lastRead !== null && target?.scope === "reference"
         ? {
-            reference: lastRead.reference,
+            reference: target.reference,
             revision: lastRead.revision,
             alias: lastRead.alias,
             status: "open",
