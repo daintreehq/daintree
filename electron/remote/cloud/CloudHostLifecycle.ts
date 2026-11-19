@@ -3466,8 +3466,8 @@ export class CloudHostLifecycle {
   /** Whether the machine's keepers last found a reason it can't stop itself. */
   private hasSelfStopProblem(bindingId: string): boolean {
     return (
-      (this.deps.machineKeys?.problemFor(bindingId) ?? this.deps.guestPowerOff?.problemFor(bindingId)) !=
-      null
+      (this.deps.machineKeys?.problemFor(bindingId) ??
+        this.deps.guestPowerOff?.problemFor(bindingId)) != null
     );
   }
 
