@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import http from "node:http";
+import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // A feature holds the loopback listener open, and its wakes accepted, with the
@@ -84,6 +85,7 @@ import {
 } from "../mcp-server/terminalNotify.js";
 import { setPtyClientRef } from "../../window/serviceRefs.js";
 import { MAX_PORT_RETRIES } from "../mcp-server/shared.js";
+import { MCP_DISCOVERY_FILE_NAME, discoveryProcessStamp } from "../mcp-server/discoveryFile.js";
 
 const API_KEY = "orchestration-api-key";
 
@@ -421,6 +423,64 @@ describe("McpServerService listener holds (#15999)", () => {
     expect(service.isRunning).toBe(false);
     expect((await request(moved, "/mcp/feature")).status).toBe(200);
     await expect(request(before, "/mcp/feature")).rejects.toMatchObject({ code: "ECONNREFUSED" });
+  });
+
+  it("publishes the control surface's port for scripts outside a pane, and never a held listener's (#17904)", async () => {
+    const file = path.join(testHomeDir, MCP_DISCOVERY_FILE_NAME);
+    const record = async () => {
+      try {
+        return {
+          text: await fs.readFile(file, "utf8"),
+          mode: (await fs.stat(file)).mode & 0o777,
+        };
+      } catch {
+        return null;
+      }
+    };
+    await boot(false);
+    const { route } = featureRoute();
+    const hold = await service.holdListener("feature", route);
+    expect(await record()).toBeNull();
+
+    await service.setEnabled(true);
+    const published = await record();
+    expect(published?.mode).toBe(0o600);
+    const parsed = JSON.parse(published!.text);
+    expect(parsed).toEqual({
+      pid: process.pid,
+      port: hold.port,
+      startedAt: discoveryProcessStamp(process.pid),
+    });
+    expect(published!.text).not.toContain(API_KEY);
+    expect((await postMcp(parsed.port, API_KEY)).status).toBe(200);
+
+    // The held route still answers on that port; the record is gone all the same.
+    await service.setEnabled(false);
+    expect(await record()).toBeNull();
+    expect((await request(hold.port!, "/mcp/feature")).status).toBe(200);
+
+    await service.setEnabled(true);
+    const before = service.currentPort!;
+    await service.setPort(await freePort(before));
+    const moved = JSON.parse((await record())!.text);
+    expect(moved.port).toBe(service.currentPort);
+    expect(moved.port).not.toBe(before);
+    expect((await postMcp(moved.port, API_KEY)).status).toBe(200);
+
+    await service.stop();
+    expect(await record()).toBeNull();
+  });
+
+  it("leaves a record another process wrote over this one's", async () => {
+    const file = path.join(testHomeDir, MCP_DISCOVERY_FILE_NAME);
+    await boot(true);
+    expect(JSON.parse(await fs.readFile(file, "utf8")).port).toBe(service.currentPort);
+    const foreign = `${JSON.stringify({ pid: 1, port: 1, startedAt: "x" })}\n`;
+    await fs.writeFile(file, foreign);
+
+    await service.setEnabled(false);
+    expect(await fs.readFile(file, "utf8")).toBe(foreign);
+    await fs.rm(file);
   });
 
   it("ends every hold at shutdown", async () => {

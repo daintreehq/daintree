@@ -64,13 +64,16 @@ get_version() {
 # `daintree call`: one call to one of Daintree's MCP tools, as the caller. Inside
 # an agent pane that has Daintree MCP, that is the pane's own bearer, which the
 # launch puts in DAINTREE_MCP_TOKEN beside DAINTREE_MCP_URL; elsewhere, a
-# Settings API key exported by hand. It adds no tools: tiers, ownership and the
-# audit are the server's, as for any MCP client. Each call opens a session and
+# Settings API key exported by hand, sent to the port the running Daintree
+# published in its runtime file unless DAINTREE_MCP_URL names another. It adds
+# no tools: tiers, ownership and the audit are the server's, as for any MCP
+# client. Each call opens a session and
 # closes it again, so a script doesn't hold a slot of the pane's session cap,
 # and a pane bearer's ownership belongs to the pane, so a later call can drive
 # what an earlier one launched. An API key owns only what it creates in one
 # session, so `daintree session start` opens one that later calls continue,
-# named by DAINTREE_MCP_SESSION, until `daintree session end`. Self-contained
+# named by DAINTREE_MCP_SESSION, until `daintree session end`. The block also
+# holds `daintree --status`, which reads the same runtime file. Self-contained
 # (the AppImage wrapper embeds this block) and limited to bash 3.2, curl and
 # POSIX awk: no jq, python or node.
 
@@ -85,7 +88,9 @@ the caller already has.
 
 In an agent pane of a project with Daintree MCP on, the pane's own credential is
 used (DAINTREE_MCP_URL and DAINTREE_MCP_TOKEN), so one call can send to an agent
-an earlier call launched. Anywhere else, export both from Settings > MCP server.
+an earlier call launched. Anywhere else, export the key from Settings > MCP
+server as DAINTREE_MCP_TOKEN: the running Daintree's port is found by itself,
+and DAINTREE_MCP_URL, exported as well, picks a dev build or another profile.
 That key owns only what it creates in one session, and each call opens its own
 and closes it on exit, unless DAINTREE_MCP_SESSION names a session held open by
 daintree session start (see daintree session --help).
@@ -106,8 +111,9 @@ Exit status:
   2  usage error
   3  no answer: Daintree isn't reachable, or the reply wasn't understood. A
      call that was already sent may have run, so check before repeating it
-  4  no usable credential: DAINTREE_MCP_URL or DAINTREE_MCP_TOKEN is missing,
-     malformed, or refused
+  4  no usable credential or endpoint: DAINTREE_MCP_TOKEN is missing,
+     malformed, or refused, DAINTREE_MCP_URL is malformed, or, without it, no
+     running Daintree has published its MCP endpoint
   5  the session in DAINTREE_MCP_SESSION is gone; nothing ran
 
 Examples:
@@ -135,7 +141,8 @@ in one session:
 
 where send.json is {"terminalId": "<the launch's terminalId>", "command": "..."}.
 
-start opens a session with DAINTREE_MCP_URL and DAINTREE_MCP_TOKEN and prints
+start opens a session with DAINTREE_MCP_TOKEN (and DAINTREE_MCP_URL, or else
+the running Daintree's published endpoint, as for daintree call) and prints
 its handle, refusing while DAINTREE_MCP_SESSION names one already. Every
 daintree call made with the handle in DAINTREE_MCP_SESSION runs in that
 session; end closes it. The handle holds no credential and is useless without
@@ -160,8 +167,7 @@ Exit status:
   2  usage error: DAINTREE_MCP_SESSION already names a session for start, or
      is missing or malformed for end
   3  no answer: Daintree isn't reachable, or the reply wasn't understood
-  4  no usable credential: DAINTREE_MCP_URL or DAINTREE_MCP_TOKEN is missing,
-     malformed, or refused
+  4  no usable credential or endpoint, as for daintree call
   5  the session in DAINTREE_MCP_SESSION is gone
 USAGE
 }
@@ -254,7 +260,8 @@ daintree_call_cleanup() {
   done
   wait 2> /dev/null || true
   daintree_call_adopt_session || true
-  if [[ ${DTC_CLOSE:-0} -eq 1 && -n $DTC_SESSION && -n $DTC_TMP ]] && daintree_call_write_headers 2> /dev/null; then
+  if [[ ${DTC_CLOSE:-0} -eq 1 && -n $DTC_SESSION && -n $DTC_TMP ]] && daintree_call_pinned &&
+    daintree_call_write_headers 2> /dev/null; then
     # Best effort, bounded: a refused DELETE must not read as a failed call.
     curl -q -sS --noproxy '*' --proto =http --connect-timeout 2 --max-time 2 \
       -X DELETE -H @"$DTC_TMP/request-headers" -o /dev/null "$DTC_ENDPOINT" > /dev/null 2>&1 || true
@@ -302,19 +309,163 @@ daintree_call_fresh_id() {
   DTC_ID=$(((16#$hex & 0xfffffffffffff) | 0x10000000000000))
 }
 
-# What every request needs: the endpoint and bearer from the environment, curl,
-# the traps, and the private directory the bearer is written to.
-daintree_call_setup() {
-  local url=${DAINTREE_MCP_URL:-} token=${DAINTREE_MCP_TOKEN:-}
-  if [[ -z $url || -z $token ]]; then
-    daintree_call_fail 4 "DAINTREE_MCP_URL and DAINTREE_MCP_TOKEN are not set. Run it in an agent pane of a project with Daintree MCP on, or export both from Settings > MCP server."
+# The installed app's userData, where it publishes mcp-runtime.json while its
+# MCP server serves. A dev build or another profile keeps its own elsewhere and
+# is reached through DAINTREE_MCP_URL instead.
+daintree_user_data_dir() {
+  if [[ $(uname) == Darwin ]]; then
+    printf '%s\n' "${HOME:-}/Library/Application Support/Daintree"
+  else
+    printf '%s\n' "${XDG_CONFIG_HOME:-${HOME:-}/.config}/Daintree"
   fi
+}
+
+# Sets DTC_STAMP to when `pid` started, in the form Daintree records it
+# (electron/services/mcp-server/discoveryFile.ts), when it is a live Daintree
+# app of this user's; fails for anything else, another user's process included.
+daintree_process_stamp() {
+  local pid=$1 out exe stat boot
+  DTC_STAMP=""
+  kill -0 "$pid" 2> /dev/null || return 1
+  if [[ $(uname) == Darwin ]]; then
+    out=$(LC_ALL=C TZ=UTC0 ps -ww -o lstart= -o comm= -p "$pid" 2> /dev/null) || return 1
+    # Five fields of start time, then the executable's path, spaces and all.
+    set -f
+    set -- $out
+    set +f
+    [[ $# -ge 6 ]] || return 1
+    DTC_STAMP="$1 $2 $3 $4 $5"
+    shift 5
+    exe="$*"
+    [[ $exe == */Daintree.app/Contents/MacOS/Daintree ]] || return 1
+  else
+    exe=$(readlink "/proc/$pid/exe" 2> /dev/null) || return 1
+    exe=${exe% (deleted)}
+    case "${exe##*/}" in
+      daintree|daintree-app) ;;
+      *) return 1 ;;
+    esac
+    IFS= read -r stat 2> /dev/null < "/proc/$pid/stat" || return 1
+    IFS= read -r boot 2> /dev/null < /proc/sys/kernel/random/boot_id || return 1
+    # Field 22, counted from after the command name, which may hold spaces or
+    # parentheses of its own.
+    stat=${stat##*") "}
+    set -f
+    set -- $stat
+    set +f
+    [[ $# -ge 20 && ${20} =~ ^[0-9]+$ ]] || return 1
+    DTC_STAMP="${20}@$boot"
+  fi
+}
+
+# Sets DTC_FOUND to "pid port stamp" from the runtime file the running Daintree
+# published, when that Daintree is still the one that wrote it; fails for a
+# missing, malformed or stale file. A crash leaves the file behind, and its port
+# may since be another listener's, which would be sent the bearer.
+daintree_discover() {
+  local file record pid port stamp
+  DTC_FOUND=""
+  file="$(daintree_user_data_dir)/mcp-runtime.json"
+  [[ -f $file && ! -L $file && -O $file ]] || return 1
+  daintree_call_load_awk
+  record=$(head -c 4096 "$file" 2> /dev/null | LC_ALL=C awk -v mode=runtime "$DTC_AWK" 2> /dev/null) || return 1
+  read -r pid port stamp <<< "$record"
+  daintree_process_stamp "$pid" || return 1
+  [[ $DTC_STAMP == "$stamp" ]] || return 1
+  DTC_FOUND="$pid $port $stamp"
+}
+
+# Whether a Daintree app is running here, by its processes alone.
+daintree_running() {
+  local pid exe
+  if [[ $(uname) == Darwin ]]; then
+    pgrep -f "Daintree.app/Contents/MacOS" > /dev/null 2>&1
+    return
+  fi
+  # The pattern also matches this script (run as /usr/bin/daintree) and any
+  # shell whose command line names it; only the app's own binary counts.
+  for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)|daintree-app" 2> /dev/null); do
+    exe="$(readlink "/proc/$pid/exe" 2> /dev/null)" || continue
+    exe="${exe% (deleted)}"
+    case "${exe##*/}" in
+      daintree|daintree-app) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# The saved MCP server setting, true or false; fails when it can't be read,
+# and for a file past 1 MiB, which awk would take seconds over.
+daintree_saved_mcp_enabled() {
+  local file
+  file="$(daintree_user_data_dir)/config.json"
+  [[ -f $file && -r $file ]] || return 1
+  daintree_call_load_awk
+  head -c 1048576 "$file" 2> /dev/null | LC_ALL=C awk -v mode=enabled "$DTC_AWK" 2> /dev/null
+}
+
+# `daintree --status [--json]`: $1 is the version (read only for --json), the
+# rest what followed --status. Exits 0 while Daintree runs and 1 otherwise.
+daintree_status() {
+  local version=$1 running=false enabled=null port=null
+  shift
+  if [[ ${1:-} != --json ]]; then
+    if daintree_running; then
+      echo "Daintree is running"
+      exit 0
+    fi
+    echo "Daintree is not running"
+    exit 1
+  fi
+  if [[ $# -gt 1 ]]; then
+    echo "daintree: --status --json takes no other arguments" >&2
+    exit 2
+  fi
+  if daintree_discover; then
+    running=true
+    enabled=true
+    port=${DTC_FOUND#* }
+    port=${port%% *}
+  else
+    if daintree_running; then running=true; fi
+    enabled=$(daintree_saved_mcp_enabled) || enabled=null
+  fi
+  daintree_call_quote "$version"
+  printf '{"version":%s,"running":%s,"mcpEnabled":%s,"mcpPort":%s}\n' "$DTC_QUOTED" "$running" "$enabled" "$port"
+  if [[ $running == true ]]; then exit 0; fi
+  exit 1
+}
+
+# A discovered endpoint is used only while the record that named it stands:
+# once that Daintree stops or moves, its old port may be another listener's.
+daintree_call_pinned() {
+  [[ -n ${DTC_PINNED:-} ]] || return 0
+  daintree_discover && [[ $DTC_FOUND == "$DTC_PINNED" ]]
+}
+
+daintree_call_still_pinned() {
+  daintree_call_pinned || daintree_call_fail 3 "Daintree's MCP endpoint changed $1"
+}
+
+# What every request needs: the bearer from the environment, the endpoint from
+# DAINTREE_MCP_URL or else the runtime file, curl, the traps, and the private
+# directory the bearer is written to.
+daintree_call_setup() {
+  local url=${DAINTREE_MCP_URL:-} token=${DAINTREE_MCP_TOKEN:-} pinned="" port
+  if [[ -z $token ]]; then
+    daintree_call_fail 4 "DAINTREE_MCP_TOKEN is not set. Run it in an agent pane of a project with Daintree MCP on, or export the key from Settings > MCP server as DAINTREE_MCP_TOKEN (with DAINTREE_MCP_URL too, for a dev build or another profile)."
+  fi
+  if [[ -z $url ]]; then
+    daintree_discover || daintree_call_fail 4 "DAINTREE_MCP_URL is not set, and no running Daintree has published its MCP endpoint. Turn on Settings > MCP server, or export DAINTREE_MCP_URL for a dev build or another profile."
+    pinned=$DTC_FOUND
+    port=${pinned#* }
+    DTC_ENDPOINT="http://127.0.0.1:${port%% *}/mcp"
   # Loopback only, so the bearer never leaves the machine whatever the env
   # says, and always 127.0.0.1, the address Daintree binds: `localhost` can
   # resolve to ::1, where something else may listen on the same port. Claude's
   # Assistant pane is handed the legacy /sse URL; the same listener and bearer
   # serve Streamable HTTP at /mcp.
-  if [[ $url =~ ^http://(127\.0\.0\.1|localhost):([0-9]{1,5})(/mcp|/sse)?/?$ ]] &&
+  elif [[ $url =~ ^http://(127\.0\.0\.1|localhost):([0-9]{1,5})(/mcp|/sse)?/?$ ]] &&
     ((10#${BASH_REMATCH[2]} >= 1 && 10#${BASH_REMATCH[2]} <= 65535)); then
     DTC_ENDPOINT="http://127.0.0.1:$((10#${BASH_REMATCH[2]}))/mcp"
   else
@@ -331,6 +482,7 @@ daintree_call_setup() {
   DTC_VERSION=""
   DTC_STATUS=""
   DTC_CLOSE=0
+  DTC_PINNED=$pinned
   trap daintree_call_cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -375,6 +527,7 @@ daintree_call_open() {
 
   printf '%s' '{"jsonrpc":"2.0","method":"notifications/initialized"}' > "$DTC_TMP/initialized" ||
     daintree_call_fail 3 "could not write the request"
+  daintree_call_still_pinned "while the session was opening, so nothing more was sent to it; nothing ran"
   rc=0
   daintree_call_request "$DTC_TMP/initialized" 10 "$DTC_TMP/reply-headers" || rc=$?
   daintree_call_refused
@@ -457,8 +610,9 @@ daintree_call() {
   daintree_call_send "$tool" "$as_json" "$args_given" "$arguments"
 }
 
-# The reply parser, into DTC_AWK.
+# The reply parser, into DTC_AWK, read in once.
 daintree_call_load_awk() {
+  [[ -z ${DTC_AWK:-} ]] || return 0
   IFS= read -r -d '' DTC_AWK <<'AWK' || true
 # Reads one reply body, plain JSON or an SSE stream, and finds the JSON-RPC
 # response whose id is `want`. Mode `object` instead checks that the input is
@@ -658,6 +812,30 @@ END {
     rpcerror()
     exit 11
   }
+  # The runtime file Daintree publishes while its MCP server serves: its pid,
+  # port and start stamp on one line, or exit 1 for anything malformed.
+  if (mode == "runtime") {
+    body = ""
+    for (i = 1; i <= nl; i++) body = body (i > 1 ? "\n" : "") lines[i]
+    if (!parse(body) || T["$"] != "object") exit 1
+    pid = "$" SUBSEP "pid"; port = "$" SUBSEP "port"; st = "$" SUBSEP "startedAt"
+    if (T[pid] != "number" || raw(pid) !~ /^[1-9][0-9]*$/ || length(raw(pid)) > 10) exit 1
+    if (T[port] != "number" || raw(port) !~ /^[1-9][0-9]*$/ || raw(port) + 0 > 65535) exit 1
+    if (T[st] != "string" || raw(st) !~ /^[0-9A-Za-z :@.-]+$/ || length(raw(st)) > 80) exit 1
+    print raw(pid) " " raw(port) " " raw(st)
+    exit 0
+  }
+  # The saved MCP server setting in Daintree's config.json: true or false, or
+  # exit 1 when it can't be read. Silent either way: the file holds the API key.
+  if (mode == "enabled") {
+    body = ""
+    for (i = 1; i <= nl; i++) body = body (i > 1 ? "\n" : "") lines[i]
+    if (!parse(body)) exit 1
+    v = T["$" SUBSEP "mcpServer" SUBSEP "enabled"]
+    if (T["$" SUBSEP "mcpServer"] != "object" || (v != "true" && v != "false")) exit 1
+    print v
+    exit 0
+  }
   sse = 0
   for (i = 1; i <= nl; i++) if (lines[i] ~ /^(data|event|id|retry):/) { sse = 1; break }
   if (!sse) {
@@ -721,6 +899,7 @@ daintree_call_send() {
   daintree_call_quote "$tool"
   printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":%s,"arguments":%s}}' "$id" "$DTC_QUOTED" "$arguments" > "$DTC_TMP/call" ||
     daintree_call_fail 3 "could not write the request"
+  daintree_call_still_pinned "before the call to $tool was sent, so it didn't run"
   # No time limit: a call can wait on an approval dialog or on an agent.
   rc=0
   daintree_call_request "$DTC_TMP/call" "" "$DTC_TMP/reply-headers" || rc=$?
@@ -816,6 +995,10 @@ daintree_session_end() {
 # <<< daintree call <<<
 
 # --- Handle flags before directory resolution ---
+# `--json --status` asks the same as `--status --json`.
+if [[ ${1:-} == --json && ( ${2:-} == --status || ${2:-} == -s ) ]]; then
+  set -- "$2" "$1" "${@:3}"
+fi
 case "${1:-}" in
   --help|-h)
     cat <<'USAGE'
@@ -838,7 +1021,10 @@ Commands:
 Options:
   -h, --help       Show this help message
   -v, --version    Show the Daintree CLI version
-  -s, --status     Check if Daintree is running
+  -s, --status     Check if Daintree is running (exit 0 if it is, 1 if not)
+  --status --json  The same, as one JSON object: version, running, mcpEnabled
+                   (null when it can't be told) and mcpPort (null when the MCP
+                   server isn't serving)
 
 Examples:
   daintree .             Open the current directory
@@ -860,27 +1046,10 @@ USAGE
     exit 0
     ;;
   --status|-s)
-    if [[ "$(uname)" == "Darwin" ]]; then
-      if pgrep -f "Daintree.app/Contents/MacOS" &>/dev/null; then
-        echo "Daintree is running"
-        exit 0
-      fi
-    else
-      # The pattern also matches this script (run as /usr/bin/daintree) and any
-      # shell whose command line names it; only the app's own binary counts.
-      for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)|daintree-app"); do
-        exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue
-        exe="${exe% (deleted)}"
-        case "${exe##*/}" in
-          daintree|daintree-app)
-            echo "Daintree is running"
-            exit 0
-            ;;
-        esac
-      done
-    fi
-    echo "Daintree is not running"
-    exit 1
+    shift
+    version=""
+    [[ ${1:-} != --json ]] || version=$(get_version)
+    daintree_status "$version" "$@"
     ;;
 esac
 

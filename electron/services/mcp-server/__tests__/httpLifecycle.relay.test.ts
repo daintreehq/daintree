@@ -128,6 +128,7 @@ async function startedLifecycle(overrides: Partial<HttpLifecycleDeps> = {}) {
     emitStatusChange: vi.fn(),
     emitRuntimeStateChange: vi.fn(),
     setConfig: vi.fn(),
+    publishDiscoveryPort: vi.fn(),
     abusePolicy: {
       recordDenial: vi.fn(() => ({ tripped: false })),
       dropSession: vi.fn(),

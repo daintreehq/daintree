@@ -1,0 +1,58 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MCP_DISCOVERY_FILE_NAME, McpDiscoveryFile } from "../discoveryFile.js";
+
+describe("McpDiscoveryFile (#17904)", () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-mcp-discovery-"));
+    file = path.join(dir, MCP_DISCOVERY_FILE_NAME);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const read = () => JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+
+  it("moves the record with the port, and removes it once nothing serves", () => {
+    const published = new McpDiscoveryFile({ dir: () => dir, pid: 4242, stamp: () => "t0" });
+
+    published.publish(45454);
+    expect(read()).toEqual({ pid: 4242, port: 45454, startedAt: "t0" });
+    published.publish(45460);
+    expect(read()).toEqual({ pid: 4242, port: 45460, startedAt: "t0" });
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+
+    published.publish(null);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(() => published.publish(null)).not.toThrow();
+  });
+
+  it("writes nothing it can't tell from a crash's leftover: no start time, no record", () => {
+    new McpDiscoveryFile({ dir: () => dir, stamp: () => null }).publish(45454);
+
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it("never fails the server over a userData directory it can't resolve or write", () => {
+    const unresolved = new McpDiscoveryFile({
+      dir: () => {
+        throw new Error("no userData");
+      },
+      stamp: () => "t0",
+    });
+    const missing = new McpDiscoveryFile({ dir: () => path.join(dir, "gone"), stamp: () => "t0" });
+
+    expect(() => unresolved.publish(45454)).not.toThrow();
+    expect(() => missing.publish(45454)).not.toThrow();
+    expect(() => missing.publish(null)).not.toThrow();
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+});

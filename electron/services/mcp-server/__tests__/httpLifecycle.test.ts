@@ -263,6 +263,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
     emitStatusChange: vi.fn(),
     emitRuntimeStateChange: vi.fn(),
     setConfig: vi.fn(),
+    publishDiscoveryPort: vi.fn(),
     abusePolicy: {
       recordDenial: vi.fn(() => ({ tripped: false })),
       dropSession: vi.fn(),
@@ -510,6 +511,115 @@ describe("HttpLifecycle", () => {
       expect(route.close).toHaveBeenCalledTimes(1);
       // Taken back, so the same id holds again rather than reading as held.
       await expect(lc.holdListener("feature", heldRoute())).rejects.toThrow("Failed to bind");
+    });
+  });
+
+  describe("discovery port (#17904)", () => {
+    /** Each server binds the next port of `ports`; `refuse` of them fail first, as taken ones do. */
+    function serveOn(ports: number[], refuse = 0): MockServer[] {
+      const servers: MockServer[] = [];
+      let refusals = refuse;
+      vi.spyOn(http, "createServer").mockImplementation((() => {
+        const s = mockServer(ports[servers.length]);
+        s.listen.mockImplementation((_p: number, _h: string, cb?: () => void) => {
+          if (refusals-- > 0) {
+            s.emit("error", Object.assign(new Error("EADDRINUSE"), { code: "EADDRINUSE" }));
+            return s;
+          }
+          s.listening = true;
+          cb?.();
+          return s;
+        });
+        servers.push(s);
+        return s;
+      }) as unknown as typeof http.createServer);
+      return servers;
+    }
+
+    /** What was published, and whether the listener still accepted at that moment. */
+    function recordPublications(): {
+      deps: HttpLifecycleDeps;
+      seen: Array<{ port: number | null; listening: boolean }>;
+      attach: (lc: HttpLifecycle) => void;
+    } {
+      const seen: Array<{ port: number | null; listening: boolean }> = [];
+      let lifecycle: HttpLifecycle | null = null;
+      const deps = fakeDeps({
+        publishDiscoveryPort: vi.fn((port: number | null) => {
+          const server = lifecycle?.httpServerInstance as MockServer | null;
+          seen.push({ port, listening: server?.listening === true });
+        }),
+      });
+      return { deps, seen, attach: (lc) => (lifecycle = lc) };
+    }
+
+    beforeEach(() => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    it("publishes the port it bound, not the one it asked for, and takes it back before the drain", async () => {
+      const servers = serveOn([45456], 2);
+      const { deps, seen, attach } = recordPublications();
+      const lc = new HttpLifecycle(deps);
+      attach(lc);
+      lc.isEnabled = () => true;
+
+      await lc.start({} as unknown as never);
+      expect(seen).toEqual([{ port: 45456, listening: true }]);
+
+      servers[0].close.mockImplementation(() => servers[0]); // the drain hangs
+      const stopping = lc.stop();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen).toEqual([
+        { port: 45456, listening: true },
+        { port: null, listening: true },
+      ]);
+      await vi.advanceTimersByTimeAsync(4_000);
+      await stopping;
+      expect(seen).toHaveLength(2);
+    });
+
+    it("takes the port back when the listener closes unexpectedly, and publishes where the restart lands", async () => {
+      const servers = serveOn([45454, 45459]);
+      const { deps, seen, attach } = recordPublications();
+      const lc = new HttpLifecycle(deps);
+      attach(lc);
+      lc.isEnabled = () => true;
+      await lc.start({} as unknown as never);
+
+      servers[0].listening = false;
+      servers[0].emit("close");
+      expect(seen.map((s) => s.port)).toEqual([45454, null]);
+
+      await vi.advanceTimersByTimeAsync(RESTART_BASE_DELAY_MS + RESTART_JITTER_MS);
+      expect(lc.currentPort).toBe(45459);
+      expect(seen.map((s) => s.port)).toEqual([45454, null, 45459]);
+    });
+
+    it("never publishes a listener held for a feature alone, and takes the port back when a disable keeps it", async () => {
+      serveOn([45454]);
+      const { deps, seen, attach } = recordPublications();
+      const lc = new HttpLifecycle(deps);
+      attach(lc);
+      let enabled = false;
+      lc.isEnabled = () => enabled;
+
+      await lc.holdListener("feature", {
+        path: "/mcp/feature",
+        handle: vi.fn(async () => {}),
+        close: vi.fn(),
+      });
+      expect(seen.filter((s) => s.port !== null)).toEqual([]);
+
+      enabled = true;
+      await lc.start({} as unknown as never);
+      expect(seen.at(-1)).toEqual({ port: 45454, listening: true });
+
+      enabled = false;
+      await lc.stop();
+      expect(lc.isListening).toBe(true);
+      expect(seen.at(-1)).toEqual({ port: null, listening: true });
     });
   });
 
