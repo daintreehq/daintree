@@ -357,6 +357,12 @@ const { mockResolveSettingTemplate } = vi.hoisted(() => ({
 const { mockArmWhenDoneLaunch } = vi.hoisted(() => ({
   mockArmWhenDoneLaunch: vi.fn(() => true),
 }));
+const { mockNoteContinuationLaunch } = vi.hoisted(() => ({
+  mockNoteContinuationLaunch: vi.fn(),
+}));
+vi.mock("../../../../services/codexLimitContinuation/codexLimitContinuationLive.js", () => ({
+  noteContinuationLaunch: mockNoteContinuationLaunch,
+}));
 vi.mock("../../../../services/terminalWhenDone/terminalWhenDoneLive.js", () => ({
   armWhenDoneLaunch: mockArmWhenDoneLaunch,
 }));
@@ -4426,6 +4432,85 @@ describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
 
     await expect(agentSpawn("restored", { restore: true })).resolves.toBe("restored");
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("terminal spawn handler - a preset arming the pane to continue (#17912)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    disposeLifecycleLedger();
+    // Records the launch as PtyClient.spawn does, minting the generation.
+    ptyClient = {
+      spawn: vi.fn((id: string, options: Parameters<typeof ledgerFactsFromSpawnOptions>[0]) => {
+        getLifecycleLedger().recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      }),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockIsHelpTerminal.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    disposeLifecycleLedger();
+  });
+
+  const codexSpawn = async (overrides: Record<string, unknown> = {}) => {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    return handler({} as Electron.IpcMainInvokeEvent, {
+      id: "terminal-codex",
+      projectId: "project-1",
+      cwd: os.homedir(),
+      cols: 80,
+      rows: 24,
+      launchAgentId: "codex",
+      command: "codex",
+      agentPresetId: "spare",
+      originalAgentPresetId: "work",
+      ...overrides,
+    });
+  };
+
+  it("tells the continuation about the launch after its spawn, with the spawn's generation", async () => {
+    await codexSpawn();
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(mockNoteContinuationLaunch).toHaveBeenCalledWith({
+      terminalId: "terminal-codex",
+      projectId: "project-1",
+      launchGeneration: getLifecycleLedger().currentGeneration("terminal-codex"),
+      agentId: "codex",
+      presetId: "spare",
+      originalPresetId: "work",
+    });
+  });
+
+  it("names the launch's own preset as the original when the launch names none", async () => {
+    await codexSpawn({ originalAgentPresetId: undefined });
+
+    expect(mockNoteContinuationLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ presetId: "spare", originalPresetId: "spare" })
+    );
+  });
+
+  it("says nothing for an agent that waits for its own reset, a shell, or the Assistant", async () => {
+    await codexSpawn({ id: "claude-pane", launchAgentId: "claude", command: "claude" });
+    await codexSpawn({ id: "shell-pane", launchAgentId: undefined, command: undefined });
+    mockIsHelpTerminal.mockReturnValue(true);
+    await codexSpawn({ id: "assistant-pane" });
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(3);
+    expect(mockNoteContinuationLaunch).not.toHaveBeenCalled();
   });
 });
 

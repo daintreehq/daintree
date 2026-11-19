@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentPreset } from "../../../../shared/config/agentRegistry.js";
-import { decideLimitFallback, type LimitFallbackRun } from "../limitFallback.js";
+import { decideLimitFallback, limitResetOptIn, type LimitFallbackRun } from "../limitFallback.js";
 
 const preset = (id: string, extra: Partial<AgentPreset> = {}): AgentPreset => ({
   id,
@@ -80,5 +80,28 @@ describe("decideLimitFallback (#17909)", () => {
     expect(decideLimitFallback(run(), null, undefined)).toBe("unknown");
     expect(decideLimitFallback(run(), custom, null)).toBe("unknown");
     expect(decideLimitFallback(run({ presetId: "spare" }), custom, undefined)).toBe("unknown");
+  });
+});
+
+describe("limitResetOptIn (#17912)", () => {
+  const armed = preset("work", { continueAtLimitReset: true, fallbacks: ["spare"] });
+
+  it("arms a launch on the user's own preset that turned it on, and only that", () => {
+    expect(limitResetOptIn(run(), [armed, preset("spare")])).toBe(true);
+    expect(limitResetOptIn(run(), [preset("work")])).toBe(false);
+    expect(limitResetOptIn(run({ presetId: undefined }), [armed])).toBe(false);
+  });
+
+  it("reads a fallback hop's original preset, not the one it hopped to", () => {
+    const hop = run({ presetId: "spare", chainIndex: 0 });
+    expect(limitResetOptIn(hop, [armed, preset("spare")])).toBe(true);
+    expect(
+      limitResetOptIn(hop, [preset("work"), preset("spare", { continueAtLimitReset: true })])
+    ).toBe(false);
+  });
+
+  it("never takes a value the sanitiser wouldn't keep", () => {
+    const stringy = { ...preset("work"), continueAtLimitReset: "true" } as unknown as AgentPreset;
+    expect(limitResetOptIn(run(), [stringy])).toBe(false);
   });
 });

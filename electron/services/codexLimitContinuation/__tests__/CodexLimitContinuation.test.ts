@@ -7,6 +7,7 @@ import type {
 import type { CodexLimitStop } from "../../codex/CodexLimitReset.js";
 import {
   CONTINUE_AFTER_RESET_MS,
+  LAUNCH_CONFIRMATION_MS,
   READS_PAUSED_RETRY_MS,
   WAKE_SETTLE_MS,
   CodexLimitContinuation,
@@ -359,5 +360,178 @@ describe("CodexLimitContinuation (#17909)", () => {
       { terminalId: "t1", revision: revisions.at(-1), state: h.state() },
     ]);
     expect(h.service.list("other-project")).toEqual([]);
+  });
+});
+
+describe("CodexLimitContinuation — a preset arms its panes (#17912)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(START);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const launch = (arms: boolean, launchGeneration = 1, projectId = PROJECT) => ({
+    terminalId: "t1",
+    projectId,
+    launchGeneration,
+    arms,
+  });
+  const confirmed = (launchGeneration = 1, spawnedAt = 2_000) => ({
+    success: true,
+    launchGeneration,
+    spawnedAt,
+  });
+
+  it("arms a pane once the host confirms the launch its preset arms, and tells the host once", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    expect(h.state()).toBeUndefined();
+    expect(h.active).toEqual([true]);
+
+    h.service.handleSpawnResult("t1", confirmed());
+    expect(h.state()).toEqual({ status: "armed" });
+    expect(h.hostArmed).toEqual([["t1", true]]);
+  });
+
+  it("arms nothing for a refused spawn or an earlier spawn's answer", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true, 2));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    expect(h.state()).toBeUndefined();
+
+    h.service.handleSpawnResult("t1", { success: false, launchGeneration: 2 });
+    expect(h.state()).toBeUndefined();
+    expect(h.hostArmed).toEqual([]);
+    // The launch is settled either way, so nothing is left listening.
+    expect(h.active).toEqual([true, false]);
+  });
+
+  it("drops a launch its host never confirms, and stops listening", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    vi.advanceTimersByTime(LAUNCH_CONFIRMATION_MS);
+    expect(h.active).toEqual([true, false]);
+    h.service.handleSpawnResult("t1", confirmed());
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("keeps a live pane's wait when a second spawn under its id is refused", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1, 1_000));
+    await h.service.handleStop("t1", STOP);
+    const waiting = h.state();
+    expect(waiting).toMatchObject({ status: "waiting" });
+
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", { success: false, launchGeneration: 2 });
+    expect(h.state()).toEqual(waiting);
+    expect(h.hostArmed).toEqual([["t1", true]]);
+  });
+
+  it("follows the preset at the next launch when nobody chose for the pane", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+
+    // The preset was edited off, then the pane restarted.
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.state()).toBeUndefined();
+    expect(h.hostArmed).toEqual([
+      ["t1", true],
+      ["t1", false],
+    ]);
+  });
+
+  it("keeps the menu's off across later launches the preset arms", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    await h.service.set("t1", false, PROJECT);
+
+    h.service.noteLaunch(launch(true, 2));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("keeps the menu's off when it lands before the launch is confirmed", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    await h.service.set("t1", false, PROJECT);
+    h.service.handleSpawnResult("t1", confirmed(1));
+    expect(h.state()).toBeUndefined();
+    expect(h.hostArmed).toEqual([]);
+  });
+
+  it("keeps the menu's on across later launches the preset doesn't arm", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", confirmed(2, 3_000));
+    expect(h.state()).toEqual({ status: "armed" });
+    // As any respawn of an armed pane: the new process's host is told.
+    expect(h.hostArmed).toEqual([
+      ["t1", true],
+      ["t1", true],
+    ]);
+  });
+
+  it("takes the menu's on for a pane its preset armed as the pane's own choice", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    await h.service.set("t1", true, PROJECT);
+
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.state()).toEqual({ status: "armed" });
+  });
+
+  it("ignores a choice made for the same id in another project", async () => {
+    const h = harness();
+    await h.service.set("t1", false, "elsewhere");
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    expect(h.state()).toEqual({ status: "armed" });
+  });
+
+  it("forgets a pane closed for good, so a new pane under its id follows its own preset", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    h.service.forgetPane("t1");
+    expect(h.state()).toBeUndefined();
+    expect(h.active).toEqual([true, false]);
+
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("drops an arm still waiting on its host read when the pane is closed for good", async () => {
+    const h = harness();
+    let answer: (value: ContinuationTerminal | null) => void = () => {};
+    const service = new CodexLimitContinuation({
+      now: () => Date.now(),
+      readTerminal: () => new Promise((resolve) => (answer = resolve)),
+      readStop: async () => known(),
+      decideFallback: async () => "none",
+      continueAt: async () => ({ status: "continued", line: "continue" }),
+      setHostArmed: (id, armed) => h.hostArmed.push([id, armed]),
+      notify: () => {},
+      setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
+      clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+      onActiveChange: () => {},
+    });
+    const arming = service.set("t1", true, PROJECT);
+    service.forgetPane("t1");
+    answer(codexPane());
+    await arming;
+    expect(service.isArmed("t1")).toBe(false);
+    expect(h.hostArmed).toEqual([]);
   });
 });

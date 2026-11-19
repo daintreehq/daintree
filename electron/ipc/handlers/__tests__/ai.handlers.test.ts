@@ -444,6 +444,63 @@ describe("ai handler payload validation", () => {
     });
   });
 
+  it("keeps each stored preset's continuation switch for a locked write (#17912)", async () => {
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) =>
+      key === "agentSettings"
+        ? {
+            agents: {
+              codex: {
+                customPresets: [
+                  { id: "on", name: "On", continueAtLimitReset: true },
+                  { id: "off", name: "Off" },
+                  // A later duplicate isn't the one a launch reads.
+                  { id: "off", name: "Shadowed", continueAtLimitReset: true },
+                ],
+              },
+            },
+          }
+        : defaultValue
+    );
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET);
+
+    await handler(
+      {} as never,
+      {
+        agentType: "codex",
+        lockContinueAtLimitReset: true,
+        settings: {
+          customPresets: [
+            { id: "on", name: "On (renamed)" },
+            { id: "off", name: "Off", continueAtLimitReset: true },
+            { id: "new", name: "New", continueAtLimitReset: true },
+          ],
+        },
+      } as never
+    );
+
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", {
+      codex: {
+        customPresets: [
+          { id: "on", name: "On (renamed)", continueAtLimitReset: true },
+          { id: "off", name: "Off" },
+          { id: "new", name: "New" },
+        ],
+      },
+    });
+
+    // Settings' own editor writes it as given.
+    await handler(
+      {} as never,
+      {
+        agentType: "codex",
+        settings: { customPresets: [{ id: "off", name: "Off", continueAtLimitReset: true }] },
+      } as never
+    );
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", {
+      codex: { customPresets: [{ id: "off", name: "Off", continueAtLimitReset: true }] },
+    });
+  });
+
   it("trims AGENT_SETTINGS_RESET agentType and blocks reserved values after trimming", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
 
