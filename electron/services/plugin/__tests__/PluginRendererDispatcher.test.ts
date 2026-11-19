@@ -573,12 +573,17 @@ describe("PluginRendererDispatcher", () => {
     it("names the Remote Host whose project the answering view shows", async () => {
       await expect(readAmbient("studio-1:proj-9")).resolves.toEqual({
         hostId: "studio-1",
+        projectId: "proj-9",
         agents: [PANE],
       });
     });
 
     it("names this machine for a view of a local project", async () => {
-      await expect(readAmbient("proj-9")).resolves.toEqual({ hostId: "local", agents: [PANE] });
+      await expect(readAmbient("proj-9")).resolves.toEqual({
+        hostId: "local",
+        projectId: "proj-9",
+        agents: [PANE],
+      });
     });
   });
 });

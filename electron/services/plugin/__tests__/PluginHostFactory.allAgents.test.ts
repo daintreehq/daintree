@@ -402,6 +402,32 @@ describe("app-wide agent list", () => {
       expect(consentMock.ensureAllowed).not.toHaveBeenCalled();
     });
 
+    it("treats a grant store it can't read as no grant, in a call and in a push", async () => {
+      vi.useFakeTimers();
+      try {
+        const h = makeHarness(makeFleet(fleetSnapshot([askingRow()])));
+        asInstalled(h, ["agent:read", "terminal:read"]);
+        grantStoreMock.hasGrant.mockImplementation(() => {
+          throw new Error("grants file unreadable");
+        });
+        const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+        const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+        const received: PluginAllAgentsSnapshot[] = [];
+        await host.onDidChangeAllAgents((snapshot) => received.push(snapshot));
+
+        expect((await host.agents.listAll()).agents[0]!.canopy).toEqual({
+          readAt: 30,
+          ask: "question",
+        });
+        h.fleet!.publish(fleetSnapshot([askingRow()]));
+        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+        expect(received[0]!.agents[0]!.canopy).toEqual({ readAt: 30, ask: "question" });
+        errors.mockRestore();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("decides the quote when a push is delivered, not when the fleet published it", async () => {
       vi.useFakeTimers();
       try {
@@ -881,8 +907,13 @@ describe("send to agent", () => {
     const sendAgentsListWithHost = vi.fn(
       async (
         ..._args: unknown[]
-      ): Promise<{ hostId: string; agents: PluginAgentPaneObservation[] }> => ({
+      ): Promise<{
+        hostId: string;
+        projectId: string | null;
+        agents: PluginAgentPaneObservation[];
+      }> => ({
         hostId: "local",
+        projectId: PROJECT_A,
         agents: [PANE],
       })
     );
@@ -1169,12 +1200,44 @@ describe("send to agent", () => {
         ["a view of a Remote Host's project", fleet(ASKING), "host-1"],
       ])("leaves the pane unplaced with %s", async (_label, snapshot, hostId) => {
         const h = makeHarness(undefined, undefined, snapshot);
-        h.sendAgentsListWithHost.mockResolvedValue({ hostId, agents: [PANE] });
+        h.sendAgentsListWithHost.mockResolvedValue({
+          hostId,
+          projectId: PROJECT_A,
+          agents: [PANE],
+        });
         const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
 
         await expect(host.agents.list()).resolves.toEqual([
           { ...PANE, launchedByThisPlugin: false },
         ]);
+      });
+
+      it("places an installed plugin's pane only by a row of the project its view showed", async () => {
+        const h = makeHarness(undefined, undefined, fleet(ASKING));
+        const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+        // Another project's view lists a pane under the id this row still holds.
+        h.sendAgentsListWithHost.mockResolvedValue({
+          hostId: "local",
+          projectId: "project-b",
+          agents: [PANE],
+        });
+        expect((await host.agents.list())[0]!.band).toBeUndefined();
+
+        h.sendAgentsListWithHost.mockResolvedValue({
+          hostId: "local",
+          projectId: PROJECT_A,
+          agents: [PANE],
+        });
+        expect((await host.agents.list())[0]!.band).toBe("needs-you");
+
+        // An answer that names no project is joined by terminal id alone.
+        h.sendAgentsListWithHost.mockResolvedValue({
+          hostId: "local",
+          projectId: null,
+          agents: [PANE],
+        });
+        expect((await host.agents.list())[0]!.band).toBe("needs-you");
       });
     });
   });

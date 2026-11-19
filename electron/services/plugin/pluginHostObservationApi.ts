@@ -384,17 +384,20 @@ export function buildObservationHostApi(
    * id from main's fleet — the same row Pilot and the pane's own band read, so
    * in the moment a respawned pane still carries its predecessor's row, all
    * three agree. Only this machine's runs are in it, so a view of a Remote
-   * Host's project gets no placement; a project plugin's pane is placed only
-   * by a row filed under its own project.
+   * Host's project gets no placement. A pane is placed only by a row filed
+   * under the project it was listed from, when the answer names one: a
+   * terminal id another project just let go of can't lend its reading.
    */
   const agentPlacements = (
-    hostId: string
+    hostId: string,
+    projectId: string | null | undefined
   ): ((terminalId: string) => Partial<PluginAgentPlacement>) => {
     const fleet = isLocalHostId(hostId) ? deps.getFleetSnapshotService()?.getLastBroadcast() : null;
     if (!fleet || fleet.runs.length === 0) return () => ({});
+    const owner = boundProjectId ?? projectId ?? null;
     const rows = new Map<string, FleetRunRow>();
     for (const row of fleet.runs) {
-      if (boundProjectId === null || row.workspaceId === boundProjectId) rows.set(row.runId, row);
+      if (owner === null || row.workspaceId === owner) rows.set(row.runId, row);
     }
     const options = placementOptions();
     return (terminalId) => {
@@ -612,7 +615,7 @@ export function buildObservationHostApi(
           );
         }
         try {
-          const { hostId, agents } = await dispatcher.sendAgentsListWithHost(
+          const { hostId, projectId, agents } = await dispatcher.sendAgentsListWithHost(
             boundProjectId,
             pluginId
           );
@@ -628,7 +631,7 @@ export function buildObservationHostApi(
               ? pty !== null &&
                 launchedAgentProject(pty, pluginId, terminalId, boundProjectId) !== null
               : boundProjectId === null && isRemotePluginLaunch(pluginId, hostId, terminalId);
-          const placement = agentPlacements(hostId);
+          const placement = agentPlacements(hostId, projectId);
           return agents.map((pane) => ({
             ...pane,
             launchedByThisPlugin: launched(pane.terminalId),

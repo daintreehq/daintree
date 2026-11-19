@@ -68,9 +68,13 @@ function buildCanopyNote(
 }
 
 function boundQuote(quote: string): string {
-  return quote.length > MAX_PLUGIN_CANOPY_QUOTE_LENGTH
-    ? `${quote.slice(0, MAX_PLUGIN_CANOPY_QUOTE_LENGTH - 1).trimEnd()}…`
-    : quote;
+  if (quote.length <= MAX_PLUGIN_CANOPY_QUOTE_LENGTH) return quote;
+  let end = MAX_PLUGIN_CANOPY_QUOTE_LENGTH - 1;
+  // Never cut between the halves of a surrogate pair, which would leave half
+  // a character before the ellipsis.
+  const last = quote.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${quote.slice(0, end).trimEnd()}…`;
 }
 
 /**

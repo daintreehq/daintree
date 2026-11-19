@@ -929,7 +929,8 @@ describe("FleetSnapshotService", () => {
       expect(broadcastMock.mock.calls.length).toBe(published + 1);
       expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
 
-      // The same reading told again is no fleet change.
+      // The same reading told again is no fleet change, even as a new object.
+      refinement = { ...refinement };
       notifyCanopyRefinementsChanged();
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 1);

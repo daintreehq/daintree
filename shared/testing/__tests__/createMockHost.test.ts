@@ -2188,15 +2188,17 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(listed.canopy).toEqual(canopy);
       expect(Object.isFrozen(listed.canopy)).toBe(true);
 
-      const blind = createMockHost({ agents: [placed], allAgents: seed });
+      const blind = createMockHost({ agents: [placed] });
       const pane = (await blind.agents.list())[0]!;
       expect(pane.band).toBe("needs-you");
       expect(pane.canopy).toEqual({ readAt: 5, ask: "question" });
+      const pushed: unknown[] = [];
+      await blind.onDidChangeAllAgents((s) => pushed.push(s), { debounceMs: 0 });
       blind.simulateAllAgentsChange(seed);
-      expect((await blind.agents.listAll()).agents[0]!.canopy).toEqual({
-        readAt: 5,
-        ask: "question",
-      });
+      const blindRun = (await blind.agents.listAll()).agents[0]!;
+      expect(blindRun.band).toBe("needs-you");
+      expect(blindRun.canopy).toEqual({ readAt: 5, ask: "question" });
+      expect(pushed).toHaveLength(1);
     });
 
     it("onDidChangeFocusedPanel gates, replays and dedupes like production", async () => {

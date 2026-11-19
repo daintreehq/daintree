@@ -241,7 +241,8 @@ describe("toPluginAgentPlacement", () => {
   it("gives no note when the user's decision or the agent's own report placed the run", () => {
     const parked = row({ canopy: ASK, park: { parkedAt: 2 } });
     const snoozed = row({ canopy: ASK, snooze: { snoozedAt: 2, snoozedUntil: 9 } });
-    const reported = row({ canopy: ASK, handbackReport: "needs-you" });
+    // Seen, the reading alone would land the run in idle.
+    const reported = row({ canopy: { ...ASK, seen: true }, handbackReport: "needs-you" });
     expect(toPluginAgentPlacement(parked, QUOTES)).toEqual({ band: "parked" });
     expect(toPluginAgentPlacement(snoozed, QUOTES)).toEqual({ band: "snoozed" });
     expect(toPluginAgentPlacement(reported, QUOTES)).toEqual({ band: "needs-you" });
@@ -257,6 +258,12 @@ describe("toPluginAgentPlacement", () => {
     const wait = row({ waitingReason: "question", canopy: notAsking });
     expect(toPluginAgentPlacement(wait, QUOTES)).toEqual({
       band: "review",
+      canopy: { readAt: 50 },
+    });
+    expect(
+      toPluginAgentPlacement({ ...wait, canopy: { ...notAsking, seen: true } }, QUOTES)
+    ).toEqual({
+      band: "done",
       canopy: { readAt: 50 },
     });
     // An approval Daintree observed itself is never cleared by a reading.
@@ -296,10 +303,26 @@ describe("toPluginAgentPlacement", () => {
   });
 
   it("cuts a long quote short with an ellipsis", () => {
-    const long = row({ canopy: { ...ASK, quote: "x".repeat(400) } });
+    const words = "Should I run the full migration against staging first? ".repeat(8);
+    const long = row({ canopy: { ...ASK, quote: words } });
     const quote = toPluginAgentPlacement(long, QUOTES).canopy?.quote ?? "";
-    expect(quote.length).toBe(MAX_PLUGIN_CANOPY_QUOTE_LENGTH);
+    expect(quote.length).toBeLessThanOrEqual(MAX_PLUGIN_CANOPY_QUOTE_LENGTH);
     expect(quote.endsWith("…")).toBe(true);
+    expect(words.startsWith(quote.slice(0, -1))).toBe(true);
+    // Cut again, it is already short enough to keep.
+    const again = normalizePluginAgentPlacement(
+      { band: "needs-you", canopy: { readAt: 1, ask: "question", quote } },
+      QUOTES
+    );
+    expect(again.canopy?.quote).toBe(quote);
+  });
+
+  it("never cuts a character in half", () => {
+    const quote = `${"a".repeat(MAX_PLUGIN_CANOPY_QUOTE_LENGTH - 2)}🚀 and more after it`;
+    const cut = toPluginAgentPlacement(row({ canopy: { ...ASK, quote } }), QUOTES).canopy!.quote!;
+    const beforeEllipsis = cut.charCodeAt(cut.length - 2);
+    expect(beforeEllipsis >= 0xd800 && beforeEllipsis <= 0xdbff).toBe(false);
+    expect(cut.endsWith("…")).toBe(true);
   });
 
   it("carries the note through the whole-fleet projection", () => {
@@ -343,6 +366,11 @@ describe("normalizing placement after a clone", () => {
   );
 
   it("keeps the band and the note main let through, frozen again", () => {
+    expect(projected.agents[0]!.canopy).toEqual({
+      readAt: 7,
+      ask: "question",
+      quote: "Which branch?",
+    });
     const result = normalizePluginAllAgentsSnapshot(structuredClone(projected));
     expect(result).toEqual(projected);
     expect(Object.isFrozen(result.agents[0]!.canopy)).toBe(true);

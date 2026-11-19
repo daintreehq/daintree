@@ -343,11 +343,22 @@ export function holdsCapabilityConsent(
   const plugin = deps.plugins.get(pluginId);
   if (!plugin) return false;
   if (plugin.isBuiltin) return true;
-  return getPluginCapabilityConsentStore().hasGrant({
-    pluginId,
-    capability,
-    scopeKey: plugin.binding?.projectId ?? "global",
-  });
+  try {
+    return getPluginCapabilityConsentStore().hasGrant({
+      pluginId,
+      capability,
+      scopeKey: plugin.binding?.projectId ?? "global",
+    });
+  } catch (err) {
+    // Read from timers and pushes as well as calls, where a throw would reach
+    // the process rather than the plugin: a store that can't be read grants
+    // nothing.
+    console.error(
+      `[PluginHost] could not read plugin "${pluginId}"'s "${capability}" grant; treating it as not granted:`,
+      err
+    );
+    return false;
+  }
 }
 
 /**

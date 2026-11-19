@@ -450,6 +450,29 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     await expect(promise).resolves.toEqual(panes);
   });
 
+  it("rebuilds and re-freezes each pane's placement after the clone, keeping main's quote", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.agents.list();
+    resolveCall(proxy, sent, "agents.list", [
+      {
+        terminalId: "t-1",
+        canDraft: true,
+        band: "needs-you",
+        canopy: { readAt: 3, ask: "approval", quote: "Run it?", seen: false },
+      },
+      { terminalId: "t-2", canDraft: true, band: "urgent", canopy: { readAt: 3 } },
+    ]);
+    const [placed, malformed] = await promise;
+    expect(placed).toEqual({
+      terminalId: "t-1",
+      canDraft: true,
+      band: "needs-you",
+      canopy: { readAt: 3, ask: "approval", quote: "Run it?" },
+    });
+    expect(Object.isFrozen(placed!.canopy)).toBe(true);
+    expect(malformed).toEqual({ terminalId: "t-2", canDraft: true });
+  });
+
   it("relays sendToAgent with its text and options, and resolves with the result", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.sendToAgent("Card body", { title: "Fix login", worktreeId: "wt-1" });
@@ -587,7 +610,12 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
       subscriptionId: sub.subscriptionId,
       payload: {
         agents: [
-          { workspaceId: "p1", terminalId: "t-1", band: "quiet", canopy: { readAt: 2, extra: 1 } },
+          {
+            workspaceId: "p1",
+            terminalId: "t-1",
+            band: "needs-you",
+            canopy: { readAt: 2, ask: "question", quote: "Which?", extra: 1 },
+          },
         ],
         degraded: true,
         lastSuccessfulAt: null,
@@ -600,10 +628,12 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
       workspaceId: "p1",
       workspaceKind: "project",
       terminalId: "t-1",
-      band: "quiet",
-      canopy: { readAt: 2 },
+      band: "needs-you",
+      canopy: { readAt: 2, ask: "question", quote: "Which?" },
     });
     expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.agents[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.agents[0].canopy)).toBe(true);
   });
 
   it("subscribes focused-panel and rebuilds each focus to the allowlist, frozen", async () => {
