@@ -261,16 +261,18 @@ export class MachineKeeper {
     const restartedBetweenLooks = this.marker !== null && marker !== this.marker;
     this.marker = marker;
     if (resource.machine !== "running" || stopUnderWay(resource.stop)) {
-      this.stopping ??= { since: now, claimed: null };
+      // Seen taking effect: running again from here is a start, whoever's stop it was.
+      if (this.stopping) this.stopping.claimed = null;
+      else this.stopping = { since: now, claimed: null };
       return;
     }
     if (this.stopping) {
-      const { claimed } = this.stopping;
+      const { since, claimed } = this.stopping;
       // Its own stop may not show yet; past that, running means the stop was overtaken.
-      if (claimed !== null && now - this.stopping.since < STOP_SETTLE_MS) return;
+      if (claimed !== null && now - since < STOP_SETTLE_MS) return;
       this.stopping = null;
-      // A start after a stop is use; its own stop that never happened is use only for the idle
-      // time it claimed, never for one a Shell claimed after newer work.
+      // A start after a stop is use; its own stop never seen taking effect is use only for the
+      // idle time it claimed, never for one a Shell claimed after newer work.
       if (claimed !== null && !restartedBetweenLooks) this.deps.idle.noteWorkIfCurrent(claimed);
       else this.deps.idle.noteWork();
       return;
@@ -388,7 +390,7 @@ export class MachineKeeper {
     const reading = await this.deps.idle.checkFresh();
     // A key that lapsed meanwhile can't stop the machine, so it spends no idle time either.
     if (!current() || this.stopping !== null || this.now() >= held.expiresAt) return;
-    if (!this.deps.idle.tryClaim(reading, this.claimant)) return;
+    if (reading === null || !this.deps.idle.tryClaim(reading, this.claimant)) return;
     // Recorded before it goes: an answer lost on the way back still leaves it followed, never sent twice.
     this.stopping = { since: this.now(), claimed: reading };
     const stopping = await held.driver.stop(signal);

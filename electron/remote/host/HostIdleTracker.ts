@@ -162,7 +162,7 @@ export class HostIdleTracker {
    * whose own attempt definitely didn't happen try again on its own claim.
    * Decided at once, so the caller acts in the same turn it is granted.
    */
-  tryClaim(reading: number | null, owner: symbol, retryOwn = false): reading is number {
+  tryClaim(reading: number | null, owner: symbol, retryOwn = false): boolean {
     if (reading === null || reading !== this.workSeen || !this.mayClaim(owner, retryOwn)) {
       return false;
     }

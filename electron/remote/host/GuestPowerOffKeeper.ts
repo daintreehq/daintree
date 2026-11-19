@@ -392,7 +392,7 @@ export class GuestPowerOffKeeper {
       return;
     }
     const reading = await this.deps.idle.checkFresh();
-    if (!current() || this.poweringOff) return;
+    if (!current() || this.poweringOff || reading === null) return;
     // A Shell or the other keeper that claimed this idle time first acts on it alone.
     if (!this.deps.idle.tryClaim(reading, this.claimant, this.retryOwnClaim)) return;
     // Recorded before it goes: an answer lost on the way back is never followed by a second one.

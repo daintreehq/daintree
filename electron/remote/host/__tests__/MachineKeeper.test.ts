@@ -436,6 +436,33 @@ describe("MachineKeeper", () => {
       expect(await shellClaims(h)).toBe(true);
     });
 
+    it("takes a start after its own stop took effect as use, though work came before it looked", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.pass();
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+      // Seen stopped, then started again with nothing about the stop changed since that look.
+      h.machine.state = "stopped";
+      h.machine.stop = { id: "stop_own", status: "completed", error: null };
+      h.machine.stoppedAt = new Date(h.now()).toISOString();
+      h.advance(MINUTE);
+      await h.pass();
+      h.machine.state = "running";
+      // An agent works and finishes before the keeper looks again, a full idle time back.
+      h.tracker.noteWork();
+      await h.tracker.check();
+      h.advance(31 * MINUTE);
+      await h.keeper.tick();
+      expect(h.tracker.observation().busy).toBe(true);
+      for (let i = 0; i < 3; i++) {
+        h.advance(MINUTE);
+        await h.pass();
+      }
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+    });
+
     it("never takes a later idle time a Shell claimed as use, for its own stop that didn't happen", async () => {
       const h = setup({ busy: false });
       await h.arm();

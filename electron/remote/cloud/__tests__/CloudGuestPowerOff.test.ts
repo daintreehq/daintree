@@ -108,7 +108,7 @@ function setup(options: { guest?: boolean } = {}) {
       observation: () => ({ idleAfterMinutes: 30, lastWorkAt: 0, busy: true, idleEndsAt: null }),
       checkFresh: async () => null,
       mayClaim: () => false,
-      tryClaim: (_reading: number | null): _reading is number => false,
+      tryClaim: () => false,
       noteWork: () => {},
       noteWorkIfCurrent: () => {},
     },

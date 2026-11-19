@@ -4,6 +4,7 @@ import type { ProviderResource } from "../../cloud/provider.js";
 
 const driver = vi.hoisted(() => ({
   inspect: null as null | (() => Promise<unknown>),
+  stop: null as null | (() => Promise<unknown>),
 }));
 
 vi.mock("electron", () => ({
@@ -13,7 +14,7 @@ vi.mock("../../cloud/boat/boatMachineDriver.js", () => ({
   boatMachineDriver: () => ({
     inspect: () => driver.inspect!(),
     renew: vi.fn(),
-    stop: vi.fn(),
+    stop: () => driver.stop!(),
     failure: () => ({ kind: "retry" }),
   }),
 }));
@@ -85,6 +86,7 @@ beforeEach(() => {
     noteWork: () => {},
   } as never);
   driver.inspect = async () => ({ machine: "running", stop: null }) as unknown as ProviderResource;
+  driver.stop = async () => null;
 });
 
 afterEach(() => {
@@ -362,6 +364,21 @@ describe("the idle claim a Shell makes over its link (#17922)", () => {
       await shell.call(GUEST_POWER_OFF_METHOD, { target, enabled: true });
       await getRemoteService("guestPowerOff")!.tick();
       expect(launch).toHaveBeenCalledTimes(shellFirst ? 0 : 1);
+      if (!shellFirst) await expect(shell.claim()).resolves.toEqual({ granted: false });
+    }
+  });
+
+  it("shares one idle time between the machine's own keeper here and a link, whichever claims first", async () => {
+    for (const shellFirst of [true, false]) {
+      const stop = vi.fn(async () => null);
+      driver.stop = stop;
+      const host = make();
+      const shell = host.link();
+      await host.idleOut();
+      if (shellFirst) await expect(shell.claim()).resolves.toEqual({ granted: true });
+      await shell.call(MachineKeeperLinkMethod.ARM, request());
+      await getRemoteService("machineKeeper")!.tick();
+      expect(stop).toHaveBeenCalledTimes(shellFirst ? 0 : 1);
       if (!shellFirst) await expect(shell.claim()).resolves.toEqual({ granted: false });
     }
   });
