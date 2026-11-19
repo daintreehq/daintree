@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync, spawnSync, type ChildProcess } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import {
   daintreeProfileDir,
   startFakeDaintreeApp,
   stopProcess,
+  type FakeDaintreeApp,
 } from "../electron/services/mcp-server/__tests__/helpers/fakeDaintreeApp.js";
 
 const SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), "daintree-cli.sh");
@@ -510,7 +511,7 @@ describe.runIf(process.platform === "linux")("daintree-cli.sh --status", () => {
 describe.skipIf(process.platform === "win32")("daintree-cli.sh --status --json", () => {
   let home: string;
   let shim: string;
-  let app: ChildProcess | null = null;
+  let app: FakeDaintreeApp | null = null;
 
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-json-home-"));
@@ -519,7 +520,7 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh --status --json",
   });
 
   afterEach(async () => {
-    if (app) await stopProcess(app);
+    if (app) await stopProcess(app.process);
     app = null;
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(shim, { recursive: true, force: true });
@@ -546,10 +547,14 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh --status --json",
     );
   }
 
-  async function publishFromApp(port: number, bundle?: string): Promise<void> {
+  /** Publishes the port the fake app listens on, as the app does; returns it. */
+  async function publishFromApp(bundle?: string): Promise<number> {
     app = await startFakeDaintreeApp(home, { bundle });
     fs.mkdirSync(daintreeProfileDir(home), { recursive: true });
-    new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: app.pid! }).publish(port);
+    new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: app.process.pid! }).publish(
+      app.port
+    );
+    return app.port;
   }
 
   it("prints one JSON object with nulls for what it can't read, in every order of the flags", () => {
@@ -599,7 +604,7 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh --status --json",
 
   it("reports the port a live app published, and the app as running", async () => {
     saveConfig({ mcpServer: { enabled: false } });
-    await publishFromApp(45461);
+    const port = await publishFromApp();
 
     const result = run("--json", "--status");
 
@@ -608,26 +613,26 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh --status --json",
       version: version(),
       running: true,
       mcpEnabled: true,
-      mcpPort: 45461,
+      mcpPort: port,
     });
   });
 
   it.runIf(process.platform === "darwin")(
     "knows the app by its executable under a bundle the user renamed",
     async () => {
-      await publishFromApp(45463, "Daintree Work.app");
+      const port = await publishFromApp("Daintree Work.app");
 
       expect(JSON.parse(run("--status", "--json").stdout)).toMatchObject({
         running: true,
-        mcpPort: 45463,
+        mcpPort: port,
       });
     }
   );
 
   it("reads past a runtime file whose app has exited", async () => {
     saveConfig({ mcpServer: { enabled: true } });
-    await publishFromApp(45461);
-    await stopProcess(app!);
+    await publishFromApp();
+    await stopProcess(app!.process);
 
     const result = run("--status", "--json");
 

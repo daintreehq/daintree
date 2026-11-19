@@ -24,6 +24,7 @@ import {
   startFakeDaintreeApp,
   stopProcess,
   writeRuntimeFile,
+  type FakeDaintreeApp,
 } from "../electron/services/mcp-server/__tests__/helpers/fakeDaintreeApp.js";
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "daintree-cli.sh");
@@ -1148,28 +1149,39 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
   // Outside a pane only the key is exported: the port comes from the runtime
   // file the running app publishes, which a crash can leave behind (#17904).
   describe("finding Daintree outside a pane", () => {
-    const apps: ChildProcess[] = [];
-    let app: ChildProcess | null = null;
+    const apps: FakeDaintreeApp[] = [];
+    let app: FakeDaintreeApp | null = null;
 
     afterEach(async () => {
-      for (const started of apps.splice(0)) await stopProcess(started);
+      for (const started of apps.splice(0)) await stopProcess(started.process);
       app = null;
     });
 
     const fixturePort = () => Number(new URL(fixture.url).port);
 
-    /** Publishes `port` as the app does, from a process the CLI takes for it. */
-    async function publishFromApp(port = fixturePort()) {
-      app = await startFakeDaintreeApp(home);
-      apps.push(app);
+    async function startApp(proxyTo = fixturePort(), root = home): Promise<FakeDaintreeApp> {
+      const started = await startFakeDaintreeApp(root, { proxyTo });
+      apps.push(started);
+      return started;
+    }
+
+    function publish(from: FakeDaintreeApp, port = from.port) {
       fs.mkdirSync(daintreeProfileDir(home), { recursive: true });
-      new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: app.pid! }).publish(port);
+      new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: from.process.pid! }).publish(
+        port
+      );
       const file = path.join(daintreeProfileDir(home), "mcp-runtime.json");
       return JSON.parse(fs.readFileSync(file, "utf8")) as {
         pid: number;
         port: number;
         startedAt: string;
       };
+    }
+
+    /** Publishes as the app does, from a process the CLI takes for it, whose port reaches `proxyTo`. */
+    async function publishFromApp(proxyTo = fixturePort()) {
+      app = await startApp(proxyTo);
+      return publish(app);
     }
 
     const outsidePane = { DAINTREE_MCP_URL: undefined };
@@ -1212,7 +1224,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
 
     it("sends nothing when the app that wrote the runtime file has exited", async () => {
       await publishFromApp();
-      await stopProcess(app!);
+      await stopProcess(app!.process);
 
       const run = await call(["fixture.echo"], outsidePane);
 
@@ -1246,6 +1258,20 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       expect(fixture.seen).toEqual([]);
     });
 
+    // The app is alive and the record its own, but the port is someone else's:
+    // a record left standing after the app let the port go.
+    it("sends nothing to a port the live app that published it doesn't hold", async () => {
+      const holder = await startApp();
+      const stranger = await startApp();
+      publish(holder, stranger.port);
+
+      const run = await call(["fixture.echo"], outsidePane);
+
+      expect(run.status).toBe(4);
+      expect(run.stderr).toContain("no running Daintree has published");
+      expect(fixture.seen).toEqual([]);
+    });
+
     it("sends nothing when the runtime file is a link to a record", async () => {
       await publishFromApp();
       const file = path.join(daintreeProfileDir(home), "mcp-runtime.json");
@@ -1259,18 +1285,16 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       expect(fixture.seen).toEqual([]);
     });
 
-    // Each replacement is a record the client would trust on its own: the
-    // session is dropped because it no longer matches, not because it's stale.
     it.each([
       {
         stage: "initialize",
-        how: "moves to another port",
+        how: "names another live app",
         message: "while the session was opening",
         reached: ["initialize"],
       },
       {
         stage: "notifications/initialized",
-        how: "names another live app on the same port",
+        how: "goes",
         message: "before the call to fixture.echo was sent",
         reached: ["initialize", "notifications/initialized"],
       },
@@ -1284,16 +1308,14 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
             if (method === stage) onStage();
           },
         });
-        const record = await publishFromApp();
+        await publishFromApp();
+        const file = path.join(daintreeProfileDir(home), "mcp-runtime.json");
         if (stage === "initialize") {
-          onStage = () => writeRuntimeFile(home, { ...record, port: record.port + 1 });
+          // A record the client would trust on its own: dropped for not matching.
+          const other = await startApp(fixturePort(), path.join(home, "other"));
+          onStage = () => publish(other);
         } else {
-          const other = await startFakeDaintreeApp(path.join(home, "other"));
-          apps.push(other);
-          onStage = () =>
-            new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: other.pid! }).publish(
-              record.port
-            );
+          onStage = () => fs.rmSync(file);
         }
 
         const run = await call(["fixture.echo"], outsidePane);

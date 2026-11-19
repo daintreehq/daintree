@@ -65,9 +65,11 @@ describe("McpDiscoveryFile (#17904)", () => {
     expect(stamp).toHaveBeenCalledTimes(3);
   });
 
-  // A record left in place names this live process, so a reader would trust a
-  // port it no longer holds. Root removes it whatever the directory says.
-  it.skipIf(process.platform === "win32")(
+  // Root removes and reads whatever the modes say, so these would pass vacuously.
+  const asRoot = process.getuid?.() === 0;
+
+  // A record left in place names this live process for a port it let go.
+  it.skipIf(process.platform === "win32" || asRoot)(
     "empties a record it can't remove, so no reader trusts it",
     () => {
       const published = new McpDiscoveryFile({ dir: () => dir, pid: 4242, stamp: () => "t0" });
@@ -76,7 +78,22 @@ describe("McpDiscoveryFile (#17904)", () => {
 
       published.publish(null);
 
-      expect(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "").toBe("");
+      expect(fs.readFileSync(file, "utf8")).toBe("");
+    }
+  );
+
+  it.skipIf(process.platform === "win32" || asRoot)(
+    "leaves alone a record it can't read back, which may not be its own",
+    () => {
+      const published = new McpDiscoveryFile({ dir: () => dir, pid: 4242, stamp: () => "t0" });
+      published.publish(45454);
+      fs.rmSync(file);
+      fs.writeFileSync(file, "another writer's", { mode: 0o200 });
+
+      published.publish(null);
+
+      fs.chmodSync(file, 0o600);
+      expect(fs.readFileSync(file, "utf8")).toBe("another writer's");
     }
   );
 

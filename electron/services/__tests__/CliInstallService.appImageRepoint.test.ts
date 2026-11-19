@@ -298,19 +298,20 @@ describe("CliInstallService — following a moved AppImage", () => {
       const app = await startFakeDaintreeApp(profileHome);
       try {
         fs.mkdirSync(daintreeProfileDir(profileHome), { recursive: true });
-        new McpDiscoveryFile({ dir: () => daintreeProfileDir(profileHome), pid: app.pid! }).publish(
-          45462
-        );
+        new McpDiscoveryFile({
+          dir: () => daintreeProfileDir(profileHome),
+          pid: app.process.pid!,
+        }).publish(app.port);
         const status = run(["--json", "--status"]);
         expect(status.status).toBe(0);
         expect(JSON.parse(status.stdout)).toEqual({
           version: "1.2.3",
           running: true,
           mcpEnabled: true,
-          mcpPort: 45462,
+          mcpPort: app.port,
         });
       } finally {
-        await stopProcess(app);
+        await stopProcess(app.process);
       }
     }
   );

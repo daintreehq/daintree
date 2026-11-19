@@ -119,25 +119,44 @@ export class McpDiscoveryFile {
   private withdraw(): void {
     const written = this.written;
     if (written === null) return;
+    let current: string;
     try {
-      if (fs.readFileSync(written.file, "utf8") === written.text) fs.unlinkSync(written.file);
+      current = fs.readFileSync(written.file, "utf8");
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") this.written = null;
+      // Unreadable: not provably ours, so it is left alone; the next withdrawal tries again.
+      else console.warn("[MCP] Couldn't read the discovery file back:", errorCode(err));
+      return;
+    }
+    if (current !== written.text) {
       this.written = null;
+      return;
+    }
+    try {
+      fs.unlinkSync(written.file);
+      this.written = null;
+      return;
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
         this.written = null;
         return;
       }
-      // A record left standing names this live process, so a reader would
-      // trust a port it no longer holds. Emptying it needs only the file's own
-      // permission, which a directory that refuses the unlink can't take away.
-      try {
-        fs.truncateSync(written.file, 0);
-        this.written = null;
-        return;
-      } catch {
-        // Still ours on disk as far as is known: the next withdrawal tries again.
-      }
       console.warn("[MCP] Couldn't remove the discovery file:", errorCode(err));
+    }
+    // Ours and still standing, it names this live process for a port it is
+    // letting go. Emptying it needs only the file's own permission, which a
+    // directory that refused the unlink can't take away.
+    try {
+      const fd = fs.openSync(written.file, fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW ?? 0));
+      try {
+        fs.ftruncateSync(fd, 0);
+      } finally {
+        fs.closeSync(fd);
+      }
+      this.written = null;
+    } catch (err) {
+      // Left as it is; the CLI checks the port is still this process's before using it.
+      console.warn("[MCP] Couldn't empty the discovery file:", errorCode(err));
     }
   }
 }

@@ -319,11 +319,9 @@ daintree_call_fresh_id() {
 daintree_user_data_dir() {
   if [[ $(uname) == Darwin ]]; then
     printf '%s\n' "${HOME:-}/Library/Application Support/Daintree"
-  elif [[ ${XDG_CONFIG_HOME:-} == /* ]]; then
-    printf '%s\n' "$XDG_CONFIG_HOME/Daintree"
   else
-    # A relative XDG_CONFIG_HOME means nothing from another directory.
-    printf '%s\n' "${HOME:-}/.config/Daintree"
+    # As Electron reads it, relative or not.
+    printf '%s\n' "${XDG_CONFIG_HOME:-${HOME:-}/.config}/Daintree"
   fi
 }
 
@@ -369,10 +367,27 @@ daintree_process_stamp() {
   fi
 }
 
+# Whether `pid` holds the listening socket on 127.0.0.1:`port`. A record can
+# outlive the port it names, left by a crash or stuck where Daintree couldn't
+# remove it, and whoever binds the port next would be sent the bearer.
+daintree_process_listens() {
+  local pid=$1 port=$2 hex inode fds
+  if [[ $(uname) == Darwin ]]; then
+    [[ -n $(/usr/sbin/lsof -nP -a -p "$pid" -iTCP@127.0.0.1:"$port" -sTCP:LISTEN -t 2> /dev/null) ]]
+    return
+  fi
+  printf -v hex '%04X' "$port"
+  # 127.0.0.1 as the kernel writes it in either byte order; 0A is LISTEN.
+  inode=$(awk -v want=":$hex" '($2 == "0100007F" want || $2 == "7F000001" want) && $4 == "0A" { print $10; exit }' /proc/net/tcp 2> /dev/null) || return 1
+  [[ $inode =~ ^[1-9][0-9]*$ ]] || return 1
+  fds=$(ls -l "/proc/$pid/fd" 2> /dev/null) || return 1
+  [[ $fds == *"socket:[$inode]"* ]]
+}
+
 # Sets DTC_FOUND to "pid port stamp" from the runtime file the running Daintree
-# published, when that Daintree is still the one that wrote it; fails for a
-# missing, malformed or stale file. A crash leaves the file behind, and its port
-# may since be another listener's, which would be sent the bearer.
+# published, when that Daintree is still the one that wrote it and still holds
+# the port; fails for a missing, malformed or stale file. A crash leaves the
+# file behind, and its port may since be another listener's.
 daintree_discover() {
   local file record pid port stamp
   DTC_FOUND=""
@@ -383,6 +398,7 @@ daintree_discover() {
   read -r pid port stamp <<< "$record"
   daintree_process_stamp "$pid" || return 1
   [[ $DTC_STAMP == "$stamp" ]] || return 1
+  daintree_process_listens "$pid" "$port" || return 1
   DTC_FOUND="$pid $port $stamp"
 }
 
