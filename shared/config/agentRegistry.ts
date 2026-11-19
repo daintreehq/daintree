@@ -72,6 +72,11 @@ export interface AgentInputSuggestionConfig {
   frame?: "rules" | "band";
   /** The style echoes of sent messages draw the prompt glyph in: a row whose glyph is drawn so is never the box. */
   echoGlyphStyle?: "dim";
+  /**
+   * The box always shows one of `placeholderPatterns` when empty, so a box
+   * with nothing visible in it holds something not drawn and reads `unknown`.
+   */
+  emptyShowsPlaceholder?: boolean;
 }
 
 /**

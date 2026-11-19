@@ -188,7 +188,6 @@ describe("input line on captured Codex screens", () => {
     ["a draft holding a blank line", "inner-blank", "first\n\nthird"],
     // Shaped like the approval list's selected option, but in the composer's own tint.
     ["a draft opening like a numbered option", "numbered-draft", "1. add a test"],
-    ["the slash popup's command", "slash-popup", "/"],
     ["a draft typed while the turn works", "typed-while-working", "queued draft"],
     ["that draft once the turn settles", "settled-with-draft", "queued draft"],
   ])("reads %s as typed", async (_, at, text) => {
@@ -196,6 +195,13 @@ describe("input line on captured Codex screens", () => {
     const tail = captureTerminalTail(screen, 20, true, "codex");
     expect(tail.inputLine).toEqual({ state: "typed", text });
     expect(tail.content).not.toContain("suggested by");
+  });
+
+  it("reads the slash popup's command as typed, the popup drawn above the box", async () => {
+    const screen = await serializeCastAt(CODEX_COMPOSER, "slash-popup");
+    const tail = captureTerminalTail(screen, 20, true, "codex");
+    expect(tail.content).toContain("/model");
+    expect(tail.inputLine).toEqual({ state: "typed", text: "/" });
   });
 
   it("reads a draft wrapped at 40 columns whole", async () => {
@@ -209,14 +215,14 @@ describe("input line on captured Codex screens", () => {
   it.each([
     // The composer is gone: the last `›` rows are the sent message's echo,
     // drawn with a dim glyph, and the overlay's selected option.
-    ["a command approval", CODEX_APPROVAL, "approval"],
-    ["the folder trust prompt", CODEX_TRUST, "trust"],
-  ])("reads %s in place of the composer as unknown", async (_, path, at) => {
+    ["a command approval", CODEX_APPROVAL, "approval", "› 1. Yes, proceed (y)"],
+    ["the folder trust prompt", CODEX_TRUST, "trust", "› 1. Trust and continue"],
+  ])("reads %s in place of the composer as unknown", async (_, path, at, option) => {
     const screen = await serializeCastAt(path, at);
-    expect(captureTerminalTail(screen, 20, true, "codex").inputLine).toEqual({
-      state: "unknown",
-      text: "",
-    });
+    const tail = captureTerminalTail(screen, 20, true, "codex");
+    expect(tail.content).toContain(option);
+    expect(tail.content).not.toContain(PLACEHOLDER);
+    expect(tail.inputLine).toEqual({ state: "unknown", text: "" });
   });
 
   it("reads dim text in the box that is not the placeholder as Codex's suggestion", async () => {
@@ -242,7 +248,7 @@ describe("input line on captured Codex screens", () => {
 
   it("finds no box when the composer is drawn without a tint of its own", async () => {
     const captured = await serializeCastAt(CODEX_COMPOSER, "placeholder");
-    const screen = captured.replace(/\x1b\[48;2;\d+;\d+;\d+m/g, "");
+    const screen = captured.split("\x1b[48;2;30;30;30m").join("");
     expect(screen).not.toBe(captured);
     expect(captureTerminalTail(screen, 20, true, "codex").inputLine.state).toBe("unknown");
   });

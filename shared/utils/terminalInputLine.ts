@@ -219,6 +219,7 @@ interface CompiledRule {
   band: boolean;
   echoGlyphDim: boolean;
   placeholders: RegExp[];
+  emptyShowsPlaceholder: boolean;
 }
 
 const compiled = new WeakMap<AgentInputSuggestionConfig, CompiledRule>();
@@ -232,6 +233,7 @@ function compile(rule: AgentInputSuggestionConfig): CompiledRule {
       band: rule.frame === "band",
       echoGlyphDim: rule.echoGlyphStyle === "dim",
       placeholders: (rule.placeholderPatterns ?? []).map((pattern) => new RegExp(pattern, "u")),
+      emptyShowsPlaceholder: rule.emptyShowsPlaceholder === true,
     };
     compiled.set(rule, entry);
   }
@@ -251,31 +253,43 @@ interface BoxRow {
  * echoes of messages already sent; an echo that happens to sit under a rule
  * runs into unindented transcript or a dialog before any edge, so it is no box.
  *
- * A `band` box has no rules: its edges are the first and last rows of a tint
- * of its own, so a blank line inside a draft stays inside the box. A selected
- * option drawn in a highlight of its own is not the band's tint.
+ * A `band` box has no rules; see {@link bandBox}.
  */
 function findBox(screen: ScreenRows, rule: CompiledRule): BoxRow[] | null {
   candidates: for (let i = screen.rows.length - 1; i > 0; i--) {
     const match = rule.promptRow.exec(screen.plain(i));
     if (match === null || !rule.border.test(screen.plain(i - 1))) continue;
-    const prompt = screen.read(i);
-    if (rule.echoGlyphDim && prompt.cells.find((cell) => !isBlank(cell))?.dim) continue;
+    if (rule.echoGlyphDim && screen.read(i).cells.find((cell) => !isBlank(cell))?.dim) continue;
     const skip = Array.from(match[0]).length;
-    if (rule.band && (prompt.bg === "" || screen.read(i - 1).bg !== prompt.bg)) continue;
+    if (rule.band) return bandBox(screen, rule, i, skip);
     for (let r = i + 1; r < screen.rows.length && r <= i + MAX_BOX_ROWS; r++) {
       const row = screen.plain(r);
-      if (rule.band) {
-        if (screen.read(r).bg === prompt.bg) {
-          if (row.trim() !== "" && !/^\s/u.test(row)) continue candidates;
-          continue;
-        }
-        if (r - 1 === i || !rule.border.test(screen.plain(r - 1))) continue candidates;
-        return boxRows(screen, i, r - 2, skip);
-      }
       if (rule.border.test(row)) return boxRows(screen, i, r - 1, skip);
       if (row.trim() !== "" && !/^\s/u.test(row)) continue candidates;
     }
+  }
+  return null;
+}
+
+/**
+ * The box a prompt row at `i` opens in a tint of its own: from the blank row
+ * of that tint above it to the blank row of that tint that closes the band,
+ * so a blank line inside a draft stays inside the box. A selected option drawn
+ * in a highlight of its own is not the band's tint. The lowest prompt row that
+ * isn't an echo decides: a frame it doesn't close is no box, never an older
+ * band further up, such as a composer frame left in scrollback.
+ */
+function bandBox(screen: ScreenRows, rule: CompiledRule, i: number, skip: number): BoxRow[] | null {
+  const tint = screen.read(i).bg;
+  if (tint === "" || screen.read(i - 1).bg !== tint) return null;
+  for (let r = i + 1; r < screen.rows.length && r <= i + MAX_BOX_ROWS; r++) {
+    const row = screen.plain(r);
+    if (screen.read(r).bg !== tint) {
+      return r - 1 > i && rule.border.test(screen.plain(r - 1))
+        ? boxRows(screen, i, r - 2, skip)
+        : null;
+    }
+    if (row.trim() !== "" && !/^\s/u.test(row)) return null;
   }
   return null;
 }
@@ -356,7 +370,12 @@ function read(serialized: string, rule: AgentInputSuggestionConfig | undefined):
   const styled = suggestionCells(box);
   const visible = box.flatMap((row) => row.cells.filter((cell) => !isBlank(cell)));
   const base = { screen, box, styled };
-  if (visible.length === 0) return { ...base, inputLine: { state: "empty", text: "" } };
+  if (visible.length === 0) {
+    // A box that always shows a placeholder when empty and shows nothing holds
+    // something that isn't drawn: spaces, or a draft its frame was misread around.
+    if (compiledRule.emptyShowsPlaceholder) return { ...unknown, screen };
+    return { ...base, inputLine: { state: "empty", text: "" } };
+  }
   if (visible.every((cell) => styled.has(cell))) {
     const text = boxText(box, (cell) => styled.has(cell) || isBlank(cell));
     if (compiledRule.placeholders.some((pattern) => pattern.test(text))) {
