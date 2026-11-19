@@ -2238,12 +2238,20 @@ export class HelpSessionService {
     if (known.agentSessionId === "" || known.agentSessionId === known.captured) {
       return { conversationOwnershipId };
     }
-    this.setPreviousConversation(slotKey, {
-      agentId: known.agentId,
-      agentSessionId: known.agentSessionId,
-      conversationOwnershipId,
-    });
-    return {};
+    // Back to the conversation the lane ran before: that one is current again.
+    const previous = this.previousConversationBySlotKey.get(slotKey);
+    const back =
+      previous !== undefined &&
+      previous.agentId === known.agentId &&
+      previous.agentSessionId === known.captured
+        ? previous.conversationOwnershipId
+        : undefined;
+    this.setPreviousConversation(
+      slotKey,
+      { agentId: known.agentId, agentSessionId: known.agentSessionId, conversationOwnershipId },
+      back
+    );
+    return back !== undefined ? { conversationOwnershipId: back } : {};
   }
 
   /**

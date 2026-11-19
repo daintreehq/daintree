@@ -4072,6 +4072,23 @@ describe("HelpSessionService", () => {
           expect(ownershipOfLane()).toBe(id);
         });
 
+        it("keeps the previous conversation's id when a capture finds the run went back to it", async () => {
+          const first = await launchLane("term-1", "conv-b");
+          const idB = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+          const second = await launchLane("term-2", "conv-a");
+          const idA = ownershipOfLane();
+          const lanes = service.snapshotLaneTerminals();
+          await service.revokeSession(second.sessionId);
+
+          await service.noteQuitCapture(lanes.get("term-2")!, "conv-b");
+
+          expect(ownershipOfLane()).toBe(idB);
+          expect(listener.forget).not.toHaveBeenCalled();
+          await launchLane("term-3", "conv-a");
+          expect(ownershipOfLane()).toBe(idA);
+        });
+
         it("gives a fork no ownership of its own and keeps the conversation it forked from", async () => {
           const first = await launchLane("term-1", "conv-1");
           const id = ownershipOfLane();

@@ -192,10 +192,17 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
 /**
  * Whether a Claude launch forks the conversation it reopens into a new one
  * (`--fork-session`), as a user's own launch flags may ask: the run is then
- * another conversation, whatever id it was resumed by (#17919).
+ * another conversation, whatever id it was resumed by (#17919). Read from the
+ * flags themselves, so a prompt that only mentions the flag is no fork.
  */
-function forksClaudeConversation(command: string, agentId: string | undefined): boolean {
-  return agentId === "claude" && /(?:^|\s)["']?--fork-session(?:["'\s=]|$)/.test(command);
+function forksClaudeConversation(
+  flags: readonly string[] | undefined,
+  agentId: string | undefined
+): boolean {
+  return (
+    agentId === "claude" &&
+    (flags ?? []).some((flag) => flag === "--fork-session" || flag.startsWith("--fork-session="))
+  );
 }
 
 function isBoundHelpTerminal(terminalId: string): boolean {
@@ -1668,7 +1675,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       if (isHelpLaunch) {
         // A launch that forks the conversation it reopens runs a new one its id
         // doesn't name (#17919).
-        const laneLaunch = forksClaudeConversation(safeCommand, launchAgentId)
+        const laneLaunch = forksClaudeConversation(validatedOptions.agentLaunchFlags, launchAgentId)
           ? ({ forkedConversation: true } as const)
           : startsFreshConversation
             ? ({ freshConversation: true } as const)

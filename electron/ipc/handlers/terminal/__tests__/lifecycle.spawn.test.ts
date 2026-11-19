@@ -3200,11 +3200,12 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
   });
 
   it.each([
-    ["bare", "--fork-session"],
-    ["quoted", "'--fork-session'"],
+    ["forks it", ["--fork-session"], { forkedConversation: true }],
+    ["forks it with a value", ["--fork-session=true"], { forkedConversation: true }],
+    ["only mentions the flag", ["--append-system-prompt", "See the --fork-session flag"], null],
   ])(
-    "records a launch that forks the conversation it reopens as forked, its flag %s (#17919)",
-    async (_form, flag) => {
+    "records a launch whose flags %s as the conversation it is (#17919)",
+    async (_case, flags, expected) => {
       const SESSION = "11111111-2222-3333-4444-555555555555";
       mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
 
@@ -3218,16 +3219,23 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
           cols: 80,
           rows: 24,
           cwd: tmpDir,
-          command: `claude --resume ${SESSION} ${flag}`,
+          command: `claude --resume ${SESSION}`,
           launchAgentId: "claude",
+          agentLaunchFlags: flags,
           agentSessionId: SESSION,
           env: { DAINTREE_MCP_TOKEN: "help-token" },
         } as unknown as Parameters<typeof handler>[1]
       );
 
-      expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith("help-token", SESSION, {
-        forkedConversation: true,
-      });
+      if (expected === null) {
+        expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith("help-token", SESSION);
+      } else {
+        expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith(
+          "help-token",
+          SESSION,
+          expected
+        );
+      }
     }
   );
 
