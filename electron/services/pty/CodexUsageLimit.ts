@@ -43,27 +43,35 @@ const MARKER = /^■ ?/;
 const APOSTROPHES = "'’";
 const OPENERS = [
   new RegExp(String.raw`^You[${APOSTROPHES}]ve hit your usage limit\b`),
-  /^Your workspace is out of credits\./,
+  /^Your workspace is out of credits\b/,
   /^You hit your spend cap\b/,
+];
+/** What a stop's first words are, for telling a half-drawn one from another error. */
+const OPENER_TEXTS = [
+  "You've hit your usage limit",
+  "You\u2019ve hit your usage limit",
+  "Your workspace is out of credits",
+  "You hit your spend cap",
 ];
 // A row that opens another history cell, a prompt or a footer: an indent, a
 // box or pointer glyph (• ■ › ❯ │ └ ─), or any other symbol set off by a space
-// (⚠, a list dash). The rows reach here without the blank ones between cells,
-// so this is what ends a banner. A wrapped banner's own rows start with a word,
-// a number, or a URL in parentheses.
-const CELL_BOUNDARY = /^(?:\s|[•■›❯│└─]|[^\p{L}\p{N}(["'[]\s)/u;
+// (⚠). The rows reach here without the blank ones between cells, so this is
+// what ends a banner. A wrapped banner's own rows start with a word, a number,
+// punctuation the terminal wrapped onto them, or a URL in parentheses.
+const CELL_BOUNDARY = /^(?:\s|[•■›❯│└─]|\p{S}\s)/u;
 
 // chrono's `%-I:%M %p`, after `%b %-d{st|nd|rd|th}, %Y ` when the reset isn't
 // on the day Codex printed it (codex-rs/protocol/src/error.rs).
 const TIME = String.raw`(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2})(st|nd|rd|th), (\d{4}) )?(\d{1,2}):(\d{2}) (AM|PM)`;
 const RETRY = String.raw`(?:at ${TIME}|later)\.`;
 
-// "You’ve hit your usage limit." then " Try again …", or an upsell (Plus, Pro,
-// Business, Free/Go, a promo) ending " or try again …"; a model bucket's own
-// limit names it and offers a switch. Credit and spend-cap stops state no
-// reset at all.
+// "You’ve hit your usage limit." then " Try again …", or an upsell ending the
+// way each plan's copy does: "… credits or try again" (Plus, Pro), "… your
+// admin or try again" (Business), ", or try again" (Free/Go, a promo). A model
+// bucket's own limit names it and offers a switch. Credit and spend-cap stops
+// state no reset at all.
 const GENERAL = new RegExp(
-  String.raw`^You[${APOSTROPHES}]ve hit your usage limit\.(?: Try again| .+?,? or try again) ${RETRY}$`
+  String.raw`^You[${APOSTROPHES}]ve hit your usage limit\.(?: Try again| .+?(?:,| credits| your admin) or try again) ${RETRY}$`
 );
 const MODEL = new RegExp(
   String.raw`^You[${APOSTROPHES}]ve hit your usage limit for (.+?)\. Switch to another model now, or try again ${RETRY}$`
@@ -153,11 +161,14 @@ export function scanCodexLimitBanner(
       parts.push(rows[j]!);
     }
     const message = (text: string) => text.replace(MARKER, "");
-    // Another error behind the marker, or an opener's words split mid-cell.
-    const opens = joinings(parts, cols).some((text) =>
-      OPENERS.some((opener) => opener.test(message(text)))
-    );
-    if (!opens) continue;
+    const texts = joinings(parts, cols).map(message);
+    if (!texts.some((text) => OPENERS.some((opener) => opener.test(text)))) {
+      // A stop caught half-drawn, before its first words are all there.
+      const drawing = texts.some((text) => OPENER_TEXTS.some((opener) => opener.startsWith(text)));
+      if (drawing) return i + parts.length - 1 >= tailStart ? { kind: "unreadable" } : null;
+      // Another error behind the marker.
+      continue;
+    }
     for (let end = 1; end <= parts.length; end++) {
       const read = new Map<string, CodexLimitBanner>();
       for (const text of joinings(parts.slice(0, end), cols)) {
@@ -240,7 +251,7 @@ const ZONEINFO_DIRS = [
 function zoneFromFile(file: string): string | null {
   const dir = ZONEINFO_DIRS.find((prefix) => file.startsWith(prefix));
   const zone = dir === undefined ? "" : file.slice(dir.length);
-  return zone !== "" && zoneFormat(zone) !== null ? zone : null;
+  return zone !== "" && isZoneName(zone) ? zone : null;
 }
 
 /**
@@ -261,7 +272,19 @@ export function codexLaunchZone(
   if (raw === "") return "UTC";
   const zone = raw.startsWith(":") ? raw.slice(1) : raw;
   if (zone.startsWith("/")) return zoneFromFile(zone);
-  return zone !== "" && zoneFormat(zone) !== null ? zone : null;
+  return zone !== "" && isZoneName(zone) ? zone : null;
+}
+
+/**
+ * Whether Codex's chrono finds the same zone `Intl` reads for `zone`. Chrono
+ * opens the zone file by that exact name, so a spelling only `Intl`'s
+ * case-insensitive lookup accepts may be another zone, or none, to Codex.
+ */
+function isZoneName(zone: string): boolean {
+  const format = zoneFormat(zone);
+  if (format === null) return false;
+  const canonical = format.resolvedOptions().timeZone;
+  return canonical === zone || canonical.toLowerCase() !== zone.toLowerCase();
 }
 
 /**
@@ -299,9 +322,10 @@ export interface CodexLimitObservation {
 
 /**
  * How long after the banner a reading may still speak for `Try again later.`:
- * with no time to tie it to, a window spent long after is another stop's.
+ * with no time to tie it to, a window spent long after is another stop's. It
+ * covers a stop that settles at the rate-limit deadline, and the read.
  */
-const LATER_EVIDENCE_MS = 2 * MINUTE_MS;
+const LATER_EVIDENCE_MS = 60_000;
 
 const GENERAL_BUCKETS = new Set(["codex", "gpt-reserve"]);
 
@@ -371,12 +395,14 @@ export function readCodexLimitEvidence(value: unknown): CodexLimitEvidence | nul
  * of its own Codex home, or why that can't be told (#17906).
  *
  * The banner names the bucket and the minute; a reading asked for after it
- * showed confirms the window and adds every other spent window of the same
- * bucket, the latest reset winning, to the second. A reading of a bucket the
- * banner can't mean never stretches it. Where the reading contradicts the
- * banner, can't settle a time the banner prints twice, or is missing a reset
- * it needs, the answer is unknown, never a guess. `Try again later.` resolves
- * only from a timely reading that shows the bucket spent.
+ * showed, before that minute began, confirms the window and adds every other
+ * spent window of the same bucket, the latest reset winning, to the second. A
+ * reading of a bucket the banner can't mean never stretches it. Where the
+ * reading contradicts the banner, can't settle a time the banner prints
+ * twice, came too late to tell what was spent at the stop, or is missing a
+ * reset it needs, the answer is unknown, never a guess. So the question is
+ * best asked when the stop shows. `Try again later.` resolves only from a
+ * prompt reading that shows the bucket spent.
  */
 export function resolveCodexLimitReset(
   observation: CodexLimitObservation,
@@ -426,13 +452,6 @@ export function resolveCodexLimitReset(
       ? known(candidates[0]! + MINUTE_MS, "banner")
       : unknown("ambiguous-time");
   if (reading === null || buckets.length === 0) return fromBanner();
-  // Only a reset still to come when the reading was asked for can show in it.
-  const pending = candidates.filter((candidate) => candidate + MINUTE_MS > reading.requestedAt);
-  if (pending.length === 0) return fromBanner();
-
-  // A showing that passed before the reading may have been the one meant, and
-  // the reading can no longer show its window.
-  if (pending.length < candidates.length) return unknown("ambiguous-time");
   // Any bucket the banner could mean with a window that can't be read, or a
   // spent one with no reset, may be the one that stopped it.
   const incomplete = buckets.some(
@@ -441,11 +460,20 @@ export function resolveCodexLimitReset(
       spentWindows(bucket, reading.requestedAt).some((window) => window.resetsAt === null)
   );
   if (incomplete) return unknown("quota-incomplete");
+  // A reading can only vouch for a reset whose minute hadn't begun when it was
+  // asked for: within or after it, the window may have rolled already.
+  if (candidates.some((candidate) => candidate <= reading.requestedAt)) {
+    if (candidates.length > 1) return unknown("ambiguous-time");
+    // Nothing spent now: the banner's window has reset and nothing else blocks.
+    // Something spent may have been spent since, or all along; it can't be told.
+    const spentNow = buckets.some((bucket) => spentWindows(bucket, reading.requestedAt).length > 0);
+    return spentNow ? unknown("late-reading") : fromBanner();
+  }
   const answers = new Set<number>();
   for (const bucket of buckets) {
     const spent = spentWindows(bucket, reading.requestedAt);
     const matched = spent.some((window) =>
-      pending.some(
+      candidates.some(
         (candidate) => window.resetsAt! >= candidate && window.resetsAt! < candidate + MINUTE_MS
       )
     );

@@ -1630,29 +1630,45 @@ describe("TerminalProcess Codex limit reset (#17906)", () => {
     terminal.dispose();
   });
 
-  itWithTz("keeps a reading's confirmation once the printed minute has passed", async () => {
+  itWithTz("answers from a prompt reading, and won't from a late one that can't tell", async () => {
     const terminal = codexPane();
     ptyOnDataCallback!(banner);
     await vi.advanceTimersByTimeAsync(250);
     const stamp = stampOf(terminal);
     const since = terminal.analysisObservedSince();
-    const evidence = {
-      requestedAt: Date.now(),
+    const reading = (requestedAt: number) => ({
+      requestedAt,
       buckets: [
         codexBucket(
           { usedPercent: 100, resetsAt: resetMinute + 42_000 },
           { usedPercent: 100, resetsAt: weeklyReset }
         ),
       ],
-    };
-    expect(terminal.answerCodexLimit({ ...stamp, evidence }, since)).toMatchObject({
-      reset: { status: "known", resetsAt: weeklyReset, source: "quota" },
     });
+    expect(
+      terminal.answerCodexLimit({ ...stamp, evidence: reading(Date.now()) }, since)
+    ).toMatchObject({ reset: { status: "known", resetsAt: weeklyReset, source: "quota" } });
 
-    vi.setSystemTime(resetMinute + 5 * 60_000);
-    expect(terminal.answerCodexLimit({}, since)).toMatchObject({
-      reset: { status: "known", resetsAt: weeklyReset, source: "quota" },
+    const late = resetMinute + 5 * 60_000;
+    vi.setSystemTime(late);
+    expect(terminal.answerCodexLimit({ ...stamp, evidence: reading(late) }, since)).toMatchObject({
+      reset: { status: "unknown", reason: "late-reading" },
     });
+    terminal.dispose();
+  });
+
+  itWithTz("starts a new sighting once the banner was gone past a repaint", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const first = stampOf(terminal);
+    ptyOnDataCallback!("\x1b[2J\x1b[H");
+    await vi.advanceTimersByTimeAsync(10_000);
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const second = stampOf(terminal);
+    expect(second.seq).toBe(first.seq + 1);
+    expect(second.observedAt).toBeGreaterThan(first.observedAt + 10_000);
     terminal.dispose();
   });
 
@@ -1684,10 +1700,19 @@ describe("TerminalProcess Codex limit reset (#17906)", () => {
   });
 
   it("answers for its own process and agent run only", async () => {
+    const replaced = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const replacedStamp = stampOf(replaced);
+    replaced.dispose();
+
     const terminal = codexPane();
     ptyOnDataCallback!(banner);
     await vi.advanceTimersByTimeAsync(250);
     const stamp = stampOf(terminal);
+    // A replacement counts from the same sequence; only the run tells them apart.
+    expect(stamp.seq).toBe(replacedStamp.seq);
+    expect(stamp.run).not.toBe(replacedStamp.run);
     const since = terminal.analysisObservedSince();
 
     expect(

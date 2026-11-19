@@ -65,6 +65,15 @@ describe("readCodexLimitReset", () => {
     ]);
   });
 
+  it("asks about the pane it was given", async () => {
+    const { fake, reads } = deps([{ reset: known }]);
+    expect(await readCodexLimitReset("t2", fake)).toEqual({
+      status: "unknown",
+      reason: "no-banner",
+    });
+    expect(reads).toEqual([["t2", {}]]);
+  });
+
   it("takes an answer the first read already settled without reading quota", async () => {
     const noReset: CodexLimitReset = { status: "unknown", reason: "no-reset", observedAt: 1_000 };
     const { fake, homes } = deps([{ reset: noReset }]);

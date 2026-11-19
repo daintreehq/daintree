@@ -1020,6 +1020,31 @@ describe("readCodexHomeLimitEvidence (#17906)", () => {
     expect(runSession).toHaveBeenCalledTimes(2);
   });
 
+  it("won't reuse a reading another reader asked of a link to the home", async () => {
+    const link = path.join(root, "current");
+    symlinkSync(home, link, "junction");
+    const asked: Array<string | undefined> = [];
+    runSession.mockImplementation(
+      async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
+        asked.push(options.codexHome);
+        return run(async () => ({ rateLimits: { primary: FIVE_HOURS } }));
+      }
+    );
+    await readCodexQuotaForHomes(new Map([[await canonicalCodexHomeKey(link), link]]));
+    await readCodexHomeLimitEvidence(home, 999_000);
+    expect(asked).toEqual([link, realpathSync(home)]);
+  });
+
+  it("won't reuse a reading dated ahead of a clock that stepped back", async () => {
+    respondWith(() => ({ rateLimits: { primary: FIVE_HOURS } }));
+    vi.setSystemTime(1_010_000);
+    await readCodexHomeLimitEvidence(home, 1_009_000);
+    vi.setSystemTime(1_005_000);
+    const evidence = await readCodexHomeLimitEvidence(home, 1_004_000);
+    expect(runSession).toHaveBeenCalledTimes(2);
+    expect(evidence?.requestedAt).toBe(1_005_000);
+  });
+
   it("never asks about a home Codex hasn't made", async () => {
     expect(await readCodexHomeLimitEvidence(path.join(root, "missing"), 0)).toBeNull();
     expect(runSession).not.toHaveBeenCalled();

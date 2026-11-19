@@ -41,6 +41,8 @@ export type CodexLimitUnknownReason =
   | "unreadable-time"
   /** The printed time names more than one instant (a fold, midnight) and no reading picks one. */
   | "ambiguous-time"
+  /** The printed reset passed before the reading, which shows a window spent that may not have stopped it. */
+  | "late-reading"
   /** `Try again later.` with no reading showing this pane's window spent. */
   | "no-reset-stated"
   | "quota-disagrees"

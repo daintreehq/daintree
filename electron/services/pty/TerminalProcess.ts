@@ -64,7 +64,6 @@ import {
 import type {
   CodexLimitAnswer,
   CodexLimitQuery,
-  CodexLimitReset,
   CodexLimitUnknownReason,
 } from "../../../shared/types/codexLimitReset.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
@@ -296,8 +295,7 @@ export class TerminalProcess {
    * which fixes the day a bare time is read on, for as long as it stays.
    * `seq` names this sighting for a read that resolves it against a reading;
    * `incarnation` and `observedSince` tie it to the agent run and the unbroken
-   * read of the output it was seen in. A quota answer that confirmed it is
-   * kept, since a later reading can no longer see a window that has rolled.
+   * read of the output it was seen in.
    */
   private codexLimit: {
     key: string;
@@ -307,13 +305,12 @@ export class TerminalProcess {
     observation: CodexLimitObservation;
     /** When the last look stopped showing it; null while it shows. */
     hiddenSince: number | null;
-    confirmed: CodexLimitReset | null;
   } | null = null;
   private codexLimitSeq = 0;
   /** This process, as a stamp names it: a replacement pane counts its sequence from zero again. */
   private readonly codexLimitRun = randomUUID();
-  /** The zone a Codex launched here writes its local times in; see {@link codexLaunchZone}. */
-  private readonly codexZone: string | null | undefined;
+  /** The launch's `TZ`, which a Codex run here writes its local times in; see {@link codexLaunchZone}. */
+  private readonly launchTz: string | undefined;
   /**
    * When the pane was last looked at without a banner being drawn: a banner
    * that shows next was printed after it. A half-drawn one doesn't count.
@@ -425,7 +422,7 @@ export class TerminalProcess {
     this.emittedBytes = callbacks.streamOffsetBase ?? 0;
     const { shell, args: spawnArgs } = spawnContext;
     const spawnedAt = Date.now();
-    this.codexZone = codexLaunchZone(spawnContext.env);
+    this.launchTz = spawnContext.env.TZ;
 
     // Launch hint: the agent this terminal was asked to run, if any. Not an
     // identity — never drives chrome or capability — see
@@ -2238,14 +2235,14 @@ export class TerminalProcess {
       held.hiddenSince = null;
       return;
     }
-    const zone = this.codexZone === undefined ? codexSystemZone() : this.codexZone;
+    const launchZone = codexLaunchZone({ TZ: this.launchTz });
+    const zone = launchZone === undefined ? codexSystemZone() : launchZone;
     this.codexLimit = {
       key,
       seq: ++this.codexLimitSeq,
       incarnation,
       observedSince,
       hiddenSince: null,
-      confirmed: null,
       observation: {
         banner,
         observedAt: now,
@@ -2283,7 +2280,6 @@ export class TerminalProcess {
     if (observedSince === null || observedSince !== held.observedSince) {
       return unknown("not-observed");
     }
-    if (held.confirmed !== null) return { reset: held.confirmed };
     const { observation } = held;
     if (query.seq === undefined) {
       const { banner, candidates } = observation;
@@ -2297,9 +2293,7 @@ export class TerminalProcess {
     if (query.seq !== held.seq || query.run !== this.codexLimitRun) {
       return unknown("banner-changed");
     }
-    const reset = resolveCodexLimitReset(observation, readCodexLimitEvidence(query.evidence));
-    if (reset.status === "known" && reset.source === "quota") held.confirmed = reset;
-    return { reset };
+    return { reset: resolveCodexLimitReset(observation, readCodexLimitEvidence(query.evidence)) };
   }
 
   /**

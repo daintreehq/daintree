@@ -60,6 +60,8 @@ interface HomeReading {
   identity: CodexAccountIdentity | null;
   /** When the quota request went out, which is what says what a reading can speak for. */
   requestedAt: number;
+  /** The home the app-server was started against: undefined for main's own env. */
+  askedHome: string | undefined;
   /** Every bucket as the server sent it, for a stopped pane's reset (#17906); null with no answer. */
   evidence: CodexLimitEvidence | null;
 }
@@ -69,6 +71,7 @@ interface HomeCacheEntry {
   inFlight: Promise<HomeReading> | null;
   /** When the read in flight was queued: it can't ask any earlier. */
   inFlightQueuedAt: number;
+  inFlightHome: string | undefined;
 }
 
 /** Keyed by realpath'd home, never by preset: presets sharing a home share a reading. */
@@ -251,6 +254,7 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
       result,
       identity: result.status === "ok" && accountId && email ? { accountId, email } : null,
       requestedAt,
+      askedHome: codexHome,
       evidence: toCodexLimitEvidence(raw, requestedAt),
     };
   } catch (error) {
@@ -260,6 +264,7 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
         result: normalizeCodexRateLimits(answered.raw, answered.fetchedAt),
         identity: null,
         requestedAt,
+        askedHome: codexHome,
         evidence: toCodexLimitEvidence(answered.raw, requestedAt),
       };
     }
@@ -267,6 +272,7 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
       result: { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() },
       identity: null,
       requestedAt,
+      askedHome: codexHome,
       evidence: null,
     };
   }
@@ -275,7 +281,7 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
 function cacheEntry(home: string): HomeCacheEntry {
   let entry = cacheByHome.get(home);
   if (!entry) {
-    entry = { cached: null, inFlight: null, inFlightQueuedAt: 0 };
+    entry = { cached: null, inFlight: null, inFlightQueuedAt: 0, inFlightHome: undefined };
     cacheByHome.set(home, entry);
   }
   return entry;
@@ -288,6 +294,7 @@ function startRead(owner: HomeCacheEntry, codexHome: string | undefined): Promis
   });
   owner.inFlight = request;
   owner.inFlightQueuedAt = Date.now();
+  owner.inFlightHome = codexHome;
   void request.finally(() => {
     if (owner.inFlight === request) owner.inFlight = null;
   });
@@ -311,28 +318,37 @@ function readHome(
 }
 
 /**
- * A reading asked for no earlier than `notBefore`, behind the same cache and
- * queue: a recent enough cached one, a read queued since, or a new one. A read
- * that went out before then is waited out rather than joined, since what it
- * says predates the moment it is asked to speak for.
+ * A reading of `codexHome` asked for no earlier than `notBefore`, behind the
+ * same cache and queue: a recent enough cached one, a read queued since, or a
+ * new one. A read that went out before then is waited out rather than joined,
+ * since what it says predates the moment it is asked to speak for; so is one
+ * asked of another spelling of the home, which a link repointed meanwhile may
+ * have sent elsewhere, and one dated ahead of the clock, which stepped back.
  */
 async function readHomeSince(
   home: string,
-  codexHome: string | undefined,
+  codexHome: string,
   notBefore: number
 ): Promise<HomeReading> {
   const entry = cacheEntry(home);
-  const usable = (reading: HomeReading | null): reading is HomeReading =>
-    reading !== null &&
-    reading.requestedAt >= notBefore &&
-    reading.evidence !== null &&
-    Date.now() - reading.requestedAt < CACHE_TTL_MS;
+  const usable = (reading: HomeReading | null): reading is HomeReading => {
+    if (reading === null || reading.askedHome !== codexHome || reading.evidence === null) {
+      return false;
+    }
+    const age = Date.now() - reading.requestedAt;
+    return reading.requestedAt >= notBefore && age >= 0 && age < CACHE_TTL_MS;
+  };
+  const joinable = () =>
+    entry.inFlight !== null &&
+    entry.inFlightHome === codexHome &&
+    entry.inFlightQueuedAt >= notBefore &&
+    entry.inFlightQueuedAt <= Date.now();
   if (usable(entry.cached)) return entry.cached;
   if (entry.inFlight) {
-    if (entry.inFlightQueuedAt >= notBefore) return entry.inFlight;
+    if (joinable()) return entry.inFlight;
     await entry.inFlight;
     if (usable(entry.cached)) return entry.cached;
-    if (entry.inFlight && entry.inFlightQueuedAt >= notBefore) return entry.inFlight;
+    if (joinable()) return entry.inFlight!;
   }
   return startRead(entry, codexHome);
 }
@@ -587,9 +603,12 @@ export async function readCodexHomeLimitEvidence(
     return null;
   }
   const reading = await readHomeSince(await canonicalCodexHomeKey(physical), physical, notBefore);
-  // A clock stepped back while the read waited can still date it too early.
-  return reading.evidence !== null && reading.evidence.requestedAt >= notBefore
-    ? reading.evidence
+  // A clock stepped back while the read waited can still date it out of range.
+  const { evidence } = reading;
+  return evidence !== null &&
+    evidence.requestedAt >= notBefore &&
+    evidence.requestedAt <= Date.now()
+    ? evidence
     : null;
 }
 

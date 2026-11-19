@@ -359,6 +359,8 @@ describe("mapTerminalInfo", () => {
     );
     expect(answerCodexLimit).toHaveBeenLastCalledWith("live", {}, 4_200);
     const query = { seq: 3, run: "r1", evidence: null };
+    mapTerminalInfo(makeTerminal({ id: "live" }), ctx, undefined, query);
+    expect(answerCodexLimit).toHaveBeenLastCalledWith("live", query, 4_200);
     expect(
       mapTerminalInfo(makeTerminal({ id: "paused" }), ctx, undefined, query).codexLimit
     ).toEqual(unobserved);
