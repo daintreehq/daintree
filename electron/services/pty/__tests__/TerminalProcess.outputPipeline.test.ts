@@ -569,6 +569,81 @@ describe("TerminalProcess update-installed observation (#17905)", () => {
     terminal.dispose();
   });
 
+  const detect = (terminal: TerminalProcess, agentType: "claude" | "codex") =>
+    terminal.handleAgentDetection(
+      { detectionState: "agent", detected: true, agentType, processName: agentType },
+      terminal.getInfo().spawnedAt
+    );
+
+  it("reads a footer already on screen the moment Claude is first detected", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    // Drawn before detection caught up, then nothing more: a quiet pane.
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([]);
+
+    detect(terminal, "claude");
+
+    expect(terminal.getInfo().updateInstalled?.namesRestart).toBe(true);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("clears the moment another agent is detected, with no frame after", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    detect(terminal, "claude");
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    detect(terminal, "codex");
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)?.updateInstalled).toBeNull();
+
+    terminal.dispose();
+  });
+
+  it("clears when an idle Claude pane is killed", async () => {
+    const seen = collect();
+    const terminal = claudeTerminal();
+    terminal.getInfo().agentState = "idle";
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    terminal.kill();
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)?.updateInstalled).toBeNull();
+
+    terminal.dispose();
+  });
+
+  it("lets the next run read its own footer once the shell has scrolled the old one away", async () => {
+    const terminal = claudeTerminal();
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    // Claude exits to the shell, which keeps drawing under the old footer.
+    terminal.getInfo().detectedAgentId = undefined;
+    terminal.getInfo().launchAgentId = undefined;
+    ptyOnDataCallback!("$ ls\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(true);
+
+    ptyOnDataCallback!("\x1b[2J\x1b[H$ clear\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(false);
+
+    terminal.dispose();
+  });
+
   it("clears when a detection pass names a different Claude process", async () => {
     const seen = collect();
     const terminal = claudeTerminal();

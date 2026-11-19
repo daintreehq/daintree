@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { setupUpdateInstalledListeners } from "../updateInstalled";
+import {
+  updateInstalledChangedSince,
+  updateInstalledEventMark,
+} from "@/store/updateInstalledEvents";
 import type { DisposableStore } from "@/utils/disposable";
 
 type Listener = (payload: unknown) => void;
@@ -133,6 +137,103 @@ describe("update-installed listener (#17905)", () => {
     });
 
     expect(observation()).toBeUndefined();
+  });
+
+  it("keeps a restored observation newer than a clear that beat its pane in", () => {
+    // The clear ended an earlier run; the pane was restored from a read taken
+    // after this run showed the footer again.
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+    emit("agent:update-installed-changed", {
+      terminalId: "t1",
+      updateInstalled: null,
+      timestamp: 1_000,
+    });
+
+    const restored = { observedAt: 5_000, namesRestart: false };
+    usePanelStore.setState({
+      panelsById: { t1: pane({ updateInstalled: restored }) },
+      panelIds: ["t1"],
+    });
+
+    expect(observation()).toEqual(restored);
+  });
+
+  it("keeps a restored observation newer than a set that beat its pane in", () => {
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+    emit("agent:update-installed-changed", {
+      terminalId: "t1",
+      updateInstalled: { observedAt: 1_000, namesRestart: true },
+      timestamp: 1_000,
+    });
+
+    const restored = { observedAt: 5_000, namesRestart: false };
+    usePanelStore.setState({
+      panelsById: { t1: pane({ updateInstalled: restored }) },
+      panelIds: ["t1"],
+    });
+
+    expect(observation()).toEqual(restored);
+  });
+
+  it("forgets an event for a terminal whose pane never arrives", () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({ panelsById: {}, panelIds: [] });
+      emit("agent:update-installed-changed", {
+        terminalId: "t1",
+        updateInstalled: { observedAt: 1_000, namesRestart: true },
+        timestamp: 1_000,
+      });
+      vi.advanceTimersByTime(2 * 60_000);
+      // Another terminal's event prunes the stale entry.
+      emit("agent:update-installed-changed", {
+        terminalId: "t9",
+        updateInstalled: null,
+        timestamp: 2_000,
+      });
+
+      usePanelStore.setState({ panelsById: { t1: pane() }, panelIds: ["t1"] });
+
+      expect(observation()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("applies a change to one field alone", () => {
+    emit("agent:update-installed-changed", {
+      terminalId: "t1",
+      updateInstalled: { observedAt: 1_000, namesRestart: true },
+      timestamp: 1_000,
+    });
+    emit("agent:update-installed-changed", {
+      terminalId: "t1",
+      updateInstalled: { observedAt: 1_000, namesRestart: false },
+      timestamp: 1_000,
+    });
+    expect(observation()).toEqual({ observedAt: 1_000, namesRestart: false });
+
+    emit("agent:update-installed-changed", {
+      terminalId: "t1",
+      updateInstalled: { observedAt: 9_000, namesRestart: false },
+      timestamp: 9_000,
+    });
+    expect(observation()).toEqual({ observedAt: 9_000, namesRestart: false });
+  });
+
+  it("marks the terminals an event reached since a host read began", () => {
+    const mark = updateInstalledEventMark();
+    expect(updateInstalledChangedSince("t1", mark)).toBe(false);
+
+    emit("agent:update-installed-changed", {
+      terminalId: "t1",
+      updateInstalled: null,
+      timestamp: 1_000,
+    });
+
+    expect(updateInstalledChangedSince("t1", mark)).toBe(true);
+    expect(updateInstalledChangedSince("t2", mark)).toBe(false);
+    expect(updateInstalledChangedSince("t1", updateInstalledEventMark())).toBe(false);
   });
 
   it("stops listening once disposed", () => {

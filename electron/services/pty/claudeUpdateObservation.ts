@@ -19,7 +19,7 @@ export interface UpdateFooterSighting {
    * isn't the next run's, so one counts again only after a frame without it.
    */
   fenced: boolean;
-  /** The Claude process the observation belongs to, once a detection pass named it. */
+  /** The Claude process the last detection pass named behind the pane. */
   pid?: number;
 }
 
@@ -71,7 +71,6 @@ export function noteUpdateFooter(
   sighting.visible = true;
   sighting.absentSince = null;
   if (!fresh) return;
-  if (current === undefined) sighting.pid = undefined;
   terminal.updateInstalled = { observedAt: now, namesRestart: footer.namesRestart };
   publish(terminal, terminal.updateInstalled, now);
 }
@@ -88,22 +87,21 @@ export function clearUpdateInstalled(terminal: TerminalInfo, now: number): void 
   sighting.visible = false;
   sighting.absentSince = null;
   sighting.fenced = true;
+  // The run is over, so its process with it: the next run's first pass names its own.
   sighting.pid = undefined;
   terminal.updateInstalled = undefined;
   publish(terminal, null, now);
 }
 
 /**
- * A detection pass named the Claude process behind the pane. The first one
- * after an observation adopts it; a different one later means Claude was
- * replaced without the pane ever showing a shell, which is a new run.
+ * A detection pass named the Claude process behind the pane. One that differs
+ * from the last means Claude was replaced without the pane ever showing a
+ * shell: a new run, so an observation the old process made goes. Tracked
+ * whether or not anything is observed, so a footer drawn between two passes
+ * is held against the process that was there before it.
  */
 export function noteUpdateFooterProcess(terminal: TerminalInfo, pid: number, now: number): void {
-  if (terminal.updateInstalled === undefined) return;
   const sighting = sightingOf(terminal);
-  if (sighting.pid === undefined) {
-    sighting.pid = pid;
-    return;
-  }
-  if (sighting.pid !== pid) clearUpdateInstalled(terminal, now);
+  if (sighting.pid !== undefined && sighting.pid !== pid) clearUpdateInstalled(terminal, now);
+  sighting.pid = pid;
 }

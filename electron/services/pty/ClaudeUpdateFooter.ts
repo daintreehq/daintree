@@ -41,22 +41,35 @@ const OFFER_END = new RegExp(String.raw`\s*[${SEPARATORS}]|\s{2}`);
 // "/restart/x" don't.
 const RESTART = /(?<![\w/-])\/restart(?![\w/-])/;
 
+// A rule or box edge across the pane: the composer's bottom border.
+const RULE = /^[\s─━═╭╮╰╯]*[─━═]{8,}[\s─━═╭╮╰╯]*$/;
+
 function offerOf(rest: string): string {
   const end = OFFER_END.exec(rest);
   return (end === null ? rest : rest.slice(0, end.index)).trim();
 }
 
 /**
- * The "Update installed" footer at the tail of a viewport, the lowest on
- * screen winning, or null. `cols` is the pane's width: a footer row that fills
- * it may continue on the next row, so it is read across the wrap.
+ * The "Update installed" footer at the tail of a viewport, below the
+ * composer's border when one is in view, the lowest on screen winning, or
+ * null. `cols` is the pane's width: a footer row that fills it may continue
+ * on the next row, so it is read across the wrap.
  */
 export function scanClaudeUpdateFooter(
   lines: readonly string[],
   cols?: number
 ): ClaudeUpdateFooter | null {
   const tail = lines.slice(-SCAN_LINES).map((line) => stripAnsi(line));
+  // The footer sits under the composer. With its border in view, rows above
+  // it are the transcript, where the agent may well quote the footer.
+  let floor = -1;
   for (let i = tail.length - 1; i >= 0; i--) {
+    if (RULE.test(tail[i]!)) {
+      floor = i;
+      break;
+    }
+  }
+  for (let i = tail.length - 1; i > floor; i--) {
     const row = tail[i]!;
     const next = tail[i + 1];
     // Only a row whose last column is filled can have wrapped. Rows arrive

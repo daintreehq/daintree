@@ -1,5 +1,9 @@
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { usePanelStore } from "@/store/panelStore";
+import {
+  noteUpdateInstalledEvent,
+  resetUpdateInstalledEvents,
+} from "@/store/updateInstalledEvents";
 import type {
   AgentUpdateInstalledChangedPayload,
   UpdateInstalledObservation,
@@ -7,8 +11,10 @@ import type {
 
 function isPayload(payload: unknown): payload is AgentUpdateInstalledChangedPayload {
   if (!payload || typeof payload !== "object") return false;
-  const { terminalId, updateInstalled } = payload as Partial<AgentUpdateInstalledChangedPayload>;
+  const { terminalId, updateInstalled, timestamp } =
+    payload as Partial<AgentUpdateInstalledChangedPayload>;
   if (typeof terminalId !== "string" || terminalId.length === 0) return false;
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return false;
   if (updateInstalled === null) return true;
   return (
     !!updateInstalled &&
@@ -19,25 +25,49 @@ function isPayload(payload: unknown): payload is AgentUpdateInstalledChangedPayl
 }
 
 /**
+ * How long an event for a terminal with no pane here is kept: long enough to
+ * outlast a restore, short enough that another project's terminals don't pile
+ * up. Measured on this machine's clock, which a remote host's isn't.
+ */
+const UNCLAIMED_TTL_MS = 2 * 60_000;
+
+interface Unclaimed {
+  payload: AgentUpdateInstalledChangedPayload;
+  receivedAt: number;
+}
+
+/**
  * The latest set or clear for each terminal this view held no pane for when it
  * arrived. One that lands between a restore's inventory read and its pane's
  * commit would otherwise be lost for the rest of the run: the footer stays up,
- * so the host never says it again. Events reach every view, so a terminal
- * another view owns stays here; one entry per terminal ever observed.
+ * so the host never says it again.
  */
-const unclaimed = new Map<string, UpdateInstalledObservation | null>();
+const unclaimed = new Map<string, Unclaimed>();
 
-function applyTo(terminalId: string, updateInstalled: UpdateInstalledObservation | null): boolean {
-  const state = usePanelStore.getState();
-  if (!state.panelsById[terminalId]) return false;
-  state.setUpdateInstalled(terminalId, updateInstalled ?? undefined);
-  return true;
+/**
+ * Whether a buffered event is newer than what the pane was restored with. Both
+ * times come from the host's clock: a clear is stamped when it was made, after
+ * the observation it cleared, and an observation by when it was seen.
+ */
+function isNewer(
+  payload: AgentUpdateInstalledChangedPayload,
+  current: UpdateInstalledObservation | undefined
+): boolean {
+  if (current === undefined) return true;
+  const at = payload.updateInstalled?.observedAt ?? payload.timestamp;
+  return payload.updateInstalled === null ? at >= current.observedAt : at > current.observedAt;
+}
+
+function prune(now: number): void {
+  for (const [terminalId, entry] of unclaimed) {
+    if (now - entry.receivedAt >= UNCLAIMED_TTL_MS) unclaimed.delete(terminalId);
+  }
 }
 
 /**
  * Copy the host's update-installed observation onto its pane (#17905). The
  * host sends every set and clear; a view attached later reads it off the
- * terminal's record on restore, and takes any event that beat its pane in.
+ * terminal's record on restore, and takes any newer event that beat its pane in.
  */
 export function setupUpdateInstalledListeners(): DisposableStore {
   const d = new DisposableStore();
@@ -45,11 +75,16 @@ export function setupUpdateInstalledListeners(): DisposableStore {
     toDisposable(
       window.electron.events.on("agent:update-installed-changed", (payload) => {
         if (!isPayload(payload)) return;
-        if (applyTo(payload.terminalId, payload.updateInstalled)) {
+        noteUpdateInstalledEvent(payload.terminalId);
+        const state = usePanelStore.getState();
+        if (state.panelsById[payload.terminalId]) {
           unclaimed.delete(payload.terminalId);
-        } else {
-          unclaimed.set(payload.terminalId, payload.updateInstalled);
+          state.setUpdateInstalled(payload.terminalId, payload.updateInstalled ?? undefined);
+          return;
         }
+        const now = Date.now();
+        prune(now);
+        unclaimed.set(payload.terminalId, { payload, receivedAt: now });
       })
     )
   );
@@ -57,16 +92,25 @@ export function setupUpdateInstalledListeners(): DisposableStore {
     toDisposable(
       usePanelStore.subscribe((state, previous) => {
         if (unclaimed.size === 0 || state.panelsById === previous.panelsById) return;
-        for (const [terminalId, updateInstalled] of unclaimed) {
-          if (!state.panelsById[terminalId]) continue;
-          // Newer than the inventory the pane was restored from: events and
-          // that read leave the host in order, and this is the last event.
+        prune(Date.now());
+        for (const [terminalId, { payload }] of unclaimed) {
+          const panel = state.panelsById[terminalId];
+          if (!panel) continue;
           unclaimed.delete(terminalId);
-          applyTo(terminalId, updateInstalled);
+          const current = "updateInstalled" in panel ? panel.updateInstalled : undefined;
+          if (!isNewer(payload, current)) continue;
+          usePanelStore
+            .getState()
+            .setUpdateInstalled(terminalId, payload.updateInstalled ?? undefined);
         }
       })
     )
   );
-  d.add(toDisposable(() => unclaimed.clear()));
+  d.add(
+    toDisposable(() => {
+      unclaimed.clear();
+      resetUpdateInstalledEvents();
+    })
+  );
   return d;
 }

@@ -12,6 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { UpdateInstalledObservation } from "@shared/types/ipc/agent";
+import { formatTimeAgo } from "@/utils/timeAgo";
 
 const OBSERVED_AT = 1_700_000_000_000;
 
@@ -54,12 +55,16 @@ describe("TerminalUpdateInstalledBadge (#17905)", () => {
       panelIds: ["t1", "t2"],
     });
 
-    renderBadge("t1");
-    renderBadge("t2");
+    const seenPane = renderBadge("t1");
+    const otherPane = renderBadge("t2");
 
-    const badges = screen.queryAllByTestId("terminal-update-installed-badge");
-    expect(badges).toHaveLength(1);
-    expect(badges[0]?.textContent).toBe("Update installed");
+    expect(
+      seenPane.container.querySelector('[data-testid="terminal-update-installed-badge"]')
+        ?.textContent
+    ).toBe("Update reported");
+    expect(
+      otherPane.container.querySelector('[data-testid="terminal-update-installed-badge"]')
+    ).toBeNull();
   });
 
   it("goes when the host clears the observation", () => {
@@ -94,6 +99,7 @@ describe("TerminalUpdateInstalledBadge (#17905)", () => {
     const tooltip = await screen.findByRole("tooltip");
 
     expect(tooltip.textContent).toContain("Update installed");
+    expect(tooltip.textContent).toContain(formatTimeAgo(OBSERVED_AT, clock.now));
     expect(tooltip.textContent?.includes("/restart")).toBe(mentioned);
   });
 });

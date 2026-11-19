@@ -73,12 +73,23 @@ describe("scanClaudeUpdateFooter", () => {
     expect(scan(frame(row))).toEqual({ namesRestart: false });
   });
 
-  it("keeps the offer to its own segment", () => {
-    const row = footer(
+  it.each([
+    ["a separator", "✔ Update installed · Restart to update · /restart to apply"],
+    ["a column gap", "✔ Update installed · Restart to update  /restart to apply"],
+  ])("ends the offer at %s, so a neighbour naming /restart doesn't count", (_name, notice) => {
+    expect(scan(frame(footer("  ? for shortcuts", notice)))).toEqual({ namesRestart: false });
+  });
+
+  it("ignores a footer quoted in the transcript above the composer", () => {
+    const lines = [
+      "⏺ The footer reads:",
+      "  ✔ Update installed · /restart to apply",
+      "─".repeat(COLS),
+      "❯ ",
+      "─".repeat(COLS),
       "  ? for shortcuts",
-      "✔ Update installed · Restart to update · /restart-free notices"
-    );
-    expect(scan(frame(row))).toEqual({ namesRestart: false });
+    ];
+    expect(scan(lines)).toBeNull();
   });
 
   // A footer wider than the pane, as the terminal wraps it: the first row is
@@ -97,7 +108,9 @@ describe("scanClaudeUpdateFooter", () => {
     // The read drops blank rows, so a head alone one column short of the edge
     // and a later row starting with the separator are not a wrapped footer.
     const head = "✔ Update installed".padStart(COLS - 1);
-    expect(scan([...frame("  ? for shortcuts", COLS).slice(0, -1), head, "· /restart"])).toBeNull();
+    expect(
+      scan([...frame("  ? for shortcuts", COLS).slice(0, -1), head, " · /restart"])
+    ).toBeNull();
   });
 
   it("misses a footer whose wrap fell on a space, rather than guess at a join", () => {
@@ -116,7 +129,7 @@ describe("scanClaudeUpdateFooter", () => {
 
   it("doesn't join a row that stops short of the pane's edge", () => {
     const row = footer("  ? for shortcuts", "✔ Update installed · Restart to", COLS - 5);
-    expect(scan([...frame(row), "/restart"])).toEqual({ namesRestart: false });
+    expect(scan([...frame(row), " /restart"])).toEqual({ namesRestart: false });
   });
 
   it("doesn't take a truncated /restart as naming it", () => {

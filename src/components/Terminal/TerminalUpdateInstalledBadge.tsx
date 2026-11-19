@@ -44,7 +44,9 @@ function UpdateInstalledChip({ observation }: { observation: UpdateInstalledObse
           <span className="inline-flex h-4 shrink-0 items-center">
             <CircleArrowUp className="w-3 h-3" aria-hidden="true" />
           </span>
-          <span className="@max-[420px]/header:sr-only">Update installed</span>
+          {/* Reported, as the rate-limit chip says: the footer's own words
+              stay in the tooltip, with when the pane showed them. */}
+          <span className="@max-[420px]/header:sr-only">Update reported</span>
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-xs">

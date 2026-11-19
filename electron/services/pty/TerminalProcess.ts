@@ -920,6 +920,9 @@ export class TerminalProcess {
     this.flushAgentOutput();
     this.inThreadAnalysis?.cancelAgentOutputNote();
     this.cancelRateLimitSettle();
+    // The run is over however it ended, an idle kill the state machine
+    // ignores included (#17905).
+    clearUpdateInstalled(this.terminalInfo, Date.now());
 
     if (this.ptyDataDisposable) {
       try {
@@ -2137,11 +2140,15 @@ export class TerminalProcess {
    */
   private observeUpdateFooter(lines: readonly string[], now: number): void {
     const t = this.terminalInfo;
+    const cols = readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined;
     if (t.detectedAgentId !== "claude" || !this.isAgentLive || this.samplingFinalFrame) {
       clearUpdateInstalled(t, now);
+      // A fenced footer the shell scrolled away no longer belongs to anyone.
+      if (t.updateFooterSighting?.fenced && scanClaudeUpdateFooter(lines, cols) === null) {
+        t.updateFooterSighting.fenced = false;
+      }
       return;
     }
-    const cols = readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined;
     noteUpdateFooter(t, scanClaudeUpdateFooter(lines, cols), now);
   }
 
@@ -2276,14 +2283,14 @@ export class TerminalProcess {
     const info = this.terminalInfo;
     if (info.spawnedAt !== spawnedAt || info.wasKilled || info.isExited) return;
     if (info.detectedAgentId !== observation.agentType) return;
-    if (observation.agentType === "claude" && observation.pid !== undefined) {
-      noteUpdateFooterProcess(info, observation.pid, Date.now());
-    }
     const run = `${info.launchGeneration ?? "?"}:${info.agentIncarnation}`;
     if (observation.pid !== undefined) {
       const seen = this.agentProcessSeen;
       if (seen?.pid === observation.pid && seen.run !== run) return;
       this.agentProcessSeen = { pid: observation.pid, run };
+      if (observation.agentType === "claude") {
+        noteUpdateFooterProcess(info, observation.pid, Date.now());
+      }
     }
     if (this.argvReadRun === run) return;
     this.argvReadRun = run;
@@ -2292,7 +2299,14 @@ export class TerminalProcess {
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {
     this.flushAgentOutput();
+    const before = this.terminalInfo.detectedAgentId;
     runHandleAgentDetection(this.agentDetectionHost(), result, spawnedAt);
+    // A quiet pane may already show the footer from before detection caught
+    // up (#17905); read the screen now rather than wait for output.
+    if (before !== "claude" && this.terminalInfo.detectedAgentId === "claude") {
+      const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
+      this.observeUpdateFooter(this.analysis.getViewportLines(rows), Date.now());
+    }
   }
 
   /**

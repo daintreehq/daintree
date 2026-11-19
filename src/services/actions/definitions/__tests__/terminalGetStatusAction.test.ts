@@ -127,9 +127,38 @@ describe("terminal.getStatus", () => {
     expect(result.terminals[0]).toMatchObject({ agentState: "working", updateInstalled });
     expect(result.terminals[0]?.waitingReason).toBeUndefined();
     expect(result.terminals[1]).not.toHaveProperty("updateInstalled");
+    // Parsed through the schema the action registers, which is what callers get.
+    const def = setupActions().get("terminal.getStatus")!() as AnyActionDefinition;
+    expect(def.resultSchema?.parse(result).terminals[0]?.updateInstalled).toEqual(updateInstalled);
     expect(TerminalStatusResultSchema.parse(result).terminals[0]?.updateInstalled).toEqual(
       updateInstalled
     );
+  });
+
+  it("reports the footer beside a waiting reason, each its own field (#17905)", async () => {
+    const updateInstalled = { observedAt: 2_000, namesRestart: false };
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1"],
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          location: "grid",
+          detectedAgentId: "claude",
+          agentState: "waiting",
+          waitingReason: "approval",
+          updateInstalled,
+        },
+      },
+    });
+
+    const result = await callGetStatus(setupActions());
+
+    expect(result.terminals[0]).toMatchObject({
+      agentState: "waiting",
+      waitingReason: "approval",
+      updateInstalled,
+    });
   });
 
   it("emits no hasPty key rather than a value it cannot observe (#12336)", async () => {

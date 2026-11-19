@@ -1174,6 +1174,11 @@ describe("agentActions adversarial", () => {
     const result = await callAction(actions, "agent.getState", { agentId: "claude" });
 
     expect(result).toMatchObject({ state: "working", waitingReason: null, updateInstalled });
+    // What a caller receives: the result as the registered schema parses it.
+    const def = actions.get("agent.getState")!() as {
+      resultSchema?: { parse: (v: unknown) => unknown };
+    };
+    expect(def.resultSchema?.parse(result)).toMatchObject({ updateInstalled });
   });
 
   it("agent.getState returns found:false with null fields when no panel matches", async () => {

@@ -150,6 +150,7 @@ import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
+import type { UpdateInstalledObservation } from "../../shared/types/ipc/agent.js";
 import { withoutHandbackInstruction } from "../../shared/utils/handback.js";
 import { buildFirstPrompt, sanitizeFirstPrompt } from "../../shared/utils/firstPrompt.js";
 import { isCheckoutPendingProject } from "./projectClone/checkoutGate.js";

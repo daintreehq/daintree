@@ -125,6 +125,7 @@ export const createCorePanelActions = (
   | "updateAgentState"
   | "noteAgentObservation"
   | "setAgentIncarnation"
+  | "setUpdateInstalled"
   | "updateActivity"
   | "updateLastCommand"
   | "updateVisibility"

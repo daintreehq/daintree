@@ -56,6 +56,7 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
 }));
 
 import { resyncHostTerminals } from "../hostTerminalResync";
+import { noteUpdateInstalledEvent } from "../updateInstalledEvents";
 import { markSpawnUnconfirmed } from "../slices/panelRegistry/unconfirmedSpawn";
 import {
   holdForDriveLease,
@@ -204,6 +205,39 @@ describe("resyncHostTerminals", () => {
     expect(reportLost).toHaveBeenCalledTimes(1);
     expect(reportLost).toHaveBeenCalledWith("t-gone", expect.any(String));
     expect(store.removePanel).toHaveBeenCalledWith("t-trashed", { backendAlreadyClosed: true });
+  });
+
+  it("drops the update footer of a terminal the host confirms gone (#17905)", async () => {
+    panel("t-gone", { updateInstalled: { observedAt: 30, namesRestart: true } });
+    getForProject.mockResolvedValue([]);
+    reconnectBulk.mockResolvedValue({ "t-gone": { exists: false } });
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(store.setUpdateInstalled).toHaveBeenCalledWith("t-gone", undefined);
+  });
+
+  it("leaves an update footer an event changed while the host was being read (#17905)", async () => {
+    panel("t-1", { lastStateChange: 50, agentIncarnation: 1 });
+    getForProject.mockImplementation(async () => {
+      // Claude exits while the list is out: its clear lands first.
+      noteUpdateInstalledEvent("t-1");
+      return [
+        {
+          id: "t-1",
+          cwd: "/",
+          spawnedAt: 1,
+          agentState: "working",
+          lastStateChange: 40,
+          agentIncarnation: 1,
+          updateInstalled: { observedAt: 30, namesRestart: true },
+        },
+      ];
+    });
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(store.setUpdateInstalled).not.toHaveBeenCalledWith("t-1", expect.anything());
   });
 
   it("names each pane it reports gone, under its restart key, for a host restart to relaunch (#14184)", async () => {

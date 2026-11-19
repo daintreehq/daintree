@@ -150,12 +150,21 @@ describe("claudeUpdateObservation", () => {
     expect(published.at(-1)?.updateInstalled).toBeNull();
   });
 
-  it("ignores process passes while nothing is observed", () => {
+  it("holds a footer drawn between two passes against the process before it", () => {
+    // 4242 drew it; 5151 took over before the next pass named anyone.
     noteUpdateFooterProcess(terminal, 4242, 1_000);
     noteUpdateFooter(terminal, SLASH, 2_000);
-    // The pass before the observation must not have been adopted for it.
     noteUpdateFooterProcess(terminal, 5151, 3_000);
-    noteUpdateFooterProcess(terminal, 5151, 4_000);
+
+    expect(terminal.updateInstalled).toBeUndefined();
+    expect(published.at(-1)?.updateInstalled).toBeNull();
+  });
+
+  it("keeps the observation while passes name the same process", () => {
+    noteUpdateFooterProcess(terminal, 4242, 1_000);
+    noteUpdateFooter(terminal, SLASH, 2_000);
+    noteUpdateFooterProcess(terminal, 4242, 3_000);
+    noteUpdateFooterProcess(terminal, 4242, 4_000);
 
     expect(terminal.updateInstalled).toEqual({ observedAt: 2_000, namesRestart: true });
   });
