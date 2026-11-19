@@ -2782,9 +2782,12 @@ describe("WorkspaceService idle pause (#17925)", () => {
     expect(monitor.resourceStatus?.ssh).toBe("dev@box-1");
   });
 
-  it("refuses a box the environment no longer reports as ready", async () => {
+  it.each([
+    ["paused", { lastStatus: "paused" }],
+    ["ready without a machine to open", { lastStatus: "ready" }],
+  ])("refuses a box the environment reports %s", async (_label, status) => {
     const monitor = readyBox();
-    monitor.setResourceStatus({ lastStatus: "paused" });
+    monitor.setResourceStatus(status);
     await configAt(USER_CONFIG, { resource: { pause: ["stop-box"] } });
     await turnOn();
 
@@ -2792,5 +2795,70 @@ describe("WorkspaceService idle pause (#17925)", () => {
       ok: false,
       reason: expect.stringMatching(/no ready machine/),
     });
+  });
+
+  it("refuses when the worktree's own values in the commands changed since the check", async () => {
+    const monitor = readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["box pause {{branch-slug}}"] } });
+    await turnOn();
+    const guard = await checkedGuard();
+
+    // Same template, but it would now name another branch's machine.
+    monitor.branch = "feature/other";
+    const outcome = await service.runIdlePause("req-idle", "/test/worktree", guard);
+
+    expect(outcome).toEqual({ ran: false, reason: expect.stringMatching(/changed since/) });
+    expect(ran).toEqual([]);
+  });
+
+  it("refuses a pause checked by an earlier run of the workspace host", async () => {
+    readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"] } });
+    await turnOn();
+    const guard = await checkedGuard();
+
+    const outcome = await service.runIdlePause("req-idle", "/test/worktree", {
+      ...guard,
+      processEpoch: "an-earlier-run",
+    });
+
+    expect(outcome).toEqual({ ran: false, reason: expect.stringMatching(/restarted/) });
+    expect(ran).toEqual([]);
+  });
+
+  it("keeps idle pauses off a worktree a delete is tearing down, and lets the delete wait one out", async () => {
+    readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"] } });
+    await turnOn();
+    const guard = await checkedGuard();
+    const executor = service["resourceActionExecutor"];
+
+    let finishPause!: () => void;
+    vi.spyOn(service["lifecycleService"], "runCommands").mockImplementationOnce(
+      (commands) =>
+        new Promise((resolve) => {
+          ran.push([...commands]);
+          finishPause = () => resolve({ success: true, output: "" });
+        })
+    );
+    const pause = service.runIdlePause("req-idle", "/test/worktree", guard);
+    await vi.waitFor(() => expect(ran).toEqual([["stop-box"]]));
+
+    const release = executor.holdAgainstIdlePause("/test/worktree");
+    let settled = false;
+    const waited = executor.whenIdlePauseSettled("/test/worktree").then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+    finishPause();
+    await waited;
+    expect(await pause).toEqual({ ran: true, success: true });
+
+    expect(await service.checkIdlePause("/test/worktree")).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/being deleted/),
+    });
+    release();
   });
 });

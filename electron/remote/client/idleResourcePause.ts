@@ -102,13 +102,17 @@ export function watchIdleResourcePause(options: IdleResourcePauseOptions): () =>
       logger.debug("Idle pause not taken: the environment reports another machine", { hostId });
       return;
     }
-    const current = options.registry.get(hostId);
-    const stillOwned = () =>
-      !disposed &&
-      current !== null &&
-      options.registry.get(hostId) === current &&
-      current.ownerWorktreeId === worktreeId &&
-      sameHostAccount(current.connection, host.connection);
+    // Read afresh each time, and compared by value: the registry hands out a new record on every read.
+    const stillOwned = () => {
+      const current = options.registry.get(hostId);
+      return (
+        !disposed &&
+        current !== null &&
+        current.ownerWorktreeId === worktreeId &&
+        current.connection.kind === "ssh" &&
+        sameHostAccount(current.connection, host.connection)
+      );
+    };
     if (!stillOwned() || options.sessionFor(hostId) !== session) return;
     if (endedIdleTime(hostId, session) !== idleTime || asked.get(hostId) === idleTime) return;
     asked.set(hostId, idleTime);

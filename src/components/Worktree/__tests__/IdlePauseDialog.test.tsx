@@ -88,13 +88,11 @@ describe("IdlePauseDialog (#17925)", () => {
   });
 
   it("shows what the host has now when the commands changed before the confirm", async () => {
-    worktreeClientMock.getIdlePause
-      .mockResolvedValueOnce(OFF)
-      .mockResolvedValueOnce({
-        ...OFF,
-        commands: ["stop-box --force"],
-        fingerprint: "b".repeat(64),
-      });
+    worktreeClientMock.getIdlePause.mockResolvedValueOnce(OFF).mockResolvedValueOnce({
+      ...OFF,
+      commands: ["stop-box --force"],
+      fingerprint: "b".repeat(64),
+    });
     worktreeClientMock.setIdlePause.mockRejectedValueOnce(
       new Error("These pause commands changed after you reviewed them. Review them again.")
     );
@@ -108,15 +106,16 @@ describe("IdlePauseDialog (#17925)", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("turns off without a fingerprint", async () => {
+  it("turns off the environment it showed", async () => {
     worktreeClientMock.getIdlePause.mockResolvedValue({ ...OFF, enabled: true });
-    open();
+    const onClose = open();
 
     fireEvent.click(await screen.findByRole("button", { name: "Turn off idle pause" }));
 
     await waitFor(() =>
-      expect(worktreeClientMock.setIdlePause).toHaveBeenCalledWith("/wt", false, undefined)
+      expect(worktreeClientMock.setIdlePause).toHaveBeenCalledWith("/wt", false, "a".repeat(64))
     );
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it("offers nothing for an environment from the repository", async () => {

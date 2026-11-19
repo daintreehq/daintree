@@ -80,9 +80,13 @@ let clock: number;
 
 function start() {
   dispose = watchIdleResourcePause({
+    // A fresh record on every read, as the real registry hands out.
     registry: {
-      get: (hostId) => hosts.get(hostId) ?? null,
-      list: () => [...hosts.values()],
+      get: (hostId) => {
+        const host = hosts.get(hostId);
+        return host ? { ...host, connection: { ...host.connection } } : null;
+      },
+      list: () => [...hosts.values()].map((host) => ({ ...host })),
       onChange: (listener) => {
         registryListener = listener;
         return () => {
@@ -135,21 +139,22 @@ afterEach(() => {
 });
 
 describe("watchIdleResourcePause (#17925)", () => {
-  it("claims an ended idle time and pauses in the grant's turn", async () => {
-    let claimed = false;
-    session = fakeSession(async () => {
-      claimed = true;
-      return { granted: true };
-    });
-    run.mockImplementation(async () => {
-      expect(claimed).toBe(true);
-      return { ran: true, success: true };
-    });
+  it("claims an ended idle time and pauses only once the grant arrives", async () => {
+    let grant!: (answer: unknown) => void;
+    session = fakeSession(
+      () =>
+        new Promise((resolve) => {
+          grant = resolve;
+        })
+    );
 
     await hear();
-
     expect(prepare).toHaveBeenCalledWith(WORKTREE);
     expect(session.call).toHaveBeenCalledTimes(1);
+    expect(run).not.toHaveBeenCalled();
+
+    grant({ granted: true });
+    await hear();
     expect(run).toHaveBeenCalledTimes(1);
     expect(onFailed).not.toHaveBeenCalled();
   });
@@ -171,15 +176,24 @@ describe("watchIdleResourcePause (#17925)", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a busy host running", async () => {
-    await hear(summary({ busy: true, idleEndsAt: null }));
-    await hear(summary(null));
+  it.each([
+    ["seen working", { busy: true }],
+    ["with no end to its idle time", { idleEndsAt: null }],
+  ])("leaves a host %s running", async (_label, idle) => {
+    await hear(summary(idle));
 
     expect(prepare).not.toHaveBeenCalled();
     expect(session.call).not.toHaveBeenCalled();
   });
 
+  it("leaves a host that reports no idle time running", async () => {
+    await hear(summary(null));
+
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
   it("goes by the host's clock, not this machine's", async () => {
+    clock = 1_000_000;
     vi.spyOn(Date, "now").mockReturnValue(1_000_000);
 
     await hear(summary({ idleEndsAt: 12_000 }, 10_000));
@@ -187,8 +201,11 @@ describe("watchIdleResourcePause (#17925)", () => {
     expect(prepare).not.toHaveBeenCalled();
   });
 
-  it("never acts on a summary from an earlier link", async () => {
-    cameOn = false;
+  it.each([
+    ["an earlier link", false],
+    ["no link at all", null],
+  ])("never acts on a summary from %s", async (_label, provenance) => {
+    cameOn = provenance;
 
     await hear();
 
@@ -214,6 +231,7 @@ describe("watchIdleResourcePause (#17925)", () => {
     await hear();
 
     expect(session.call).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("does nothing on a refused claim, and doesn't ask again for that idle time", async () => {
@@ -289,6 +307,18 @@ describe("watchIdleResourcePause (#17925)", () => {
     await hear();
 
     expect(session.call).not.toHaveBeenCalled();
+  });
+
+  it("doesn't pause a host whose owner changed while the claim was asked", async () => {
+    session = fakeSession(async () => {
+      hosts.set(HOST, ownedHost({ ownerWorktreeId: "/repo-worktrees/other" }));
+      return { granted: true };
+    });
+
+    await hear();
+
+    expect(session.call).toHaveBeenCalledTimes(1);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("stops listening once disposed", async () => {

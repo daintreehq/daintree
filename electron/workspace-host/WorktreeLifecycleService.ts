@@ -348,7 +348,8 @@ export class WorktreeLifecycleService {
     worktreePath: string,
     projectRootPath: string,
     environmentId: string | undefined,
-    worktreeMode: string | undefined
+    /** Read once the config has loaded, as the mode may change while it does. */
+    worktreeMode: () => string | undefined
   ): Promise<{
     resolvedConfig: ResolvedLifecycleConfig | null;
     selection: ResolvedResourceSelection | null;
@@ -393,9 +394,10 @@ export class WorktreeLifecycleService {
     if (config?.resource) {
       return { resolvedConfig, selection: fromConfig(config.resource, "resource", "resource") };
     }
-    if (worktreeMode && worktreeMode !== "local") {
+    const mode = worktreeMode();
+    if (mode && mode !== "local") {
       const environments = await this.resolveProjectResourceEnvironments(projectRootPath);
-      const resource = ownResource(environments?.environments, worktreeMode);
+      const resource = ownResource(environments?.environments, mode);
       if (environments && resource) {
         return {
           resolvedConfig,
@@ -403,8 +405,8 @@ export class WorktreeLifecycleService {
             resource,
             resolvedConfig,
             environments,
-            selector: `settings:${worktreeMode}`,
-            name: worktreeMode,
+            selector: `settings:${mode}`,
+            name: mode,
             origin: environments.origin,
             path: environments.path,
           },

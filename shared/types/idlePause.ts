@@ -15,9 +15,14 @@ export interface IdlePauseGuard {
   fingerprint: string;
   /** The ssh target the environment's status last reported for its box. */
   sshTarget: string;
+  /** The pause commands with this worktree's values filled in, as they would run. */
+  commandsDigest: string;
   /** Mutating resource actions this worktree had started when checked. */
   generation: number;
   environmentEpoch: number;
+  /** Which monitor of the worktree, and which run of its workspace host, was checked. */
+  monitorGeneration: number;
+  processEpoch: string;
 }
 
 export type IdlePauseCheck = { ok: true; guard: IdlePauseGuard } | { ok: false; reason: string };

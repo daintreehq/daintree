@@ -1303,7 +1303,16 @@ export class WorkspaceClient extends EventEmitter {
             },
             IDLE_PAUSE_RUN_TIMEOUT_MS
           )
-          .then(({ outcome }) => outcome ?? { ran: true, success: false, error: "No answer" });
+          .then(
+            ({ outcome }): IdlePauseRunOutcome =>
+              outcome ?? { ran: true, success: false, error: "The workspace host sent no answer" },
+            // Posted, so it may have started: told as a failure, never tried again.
+            (error: unknown): IdlePauseRunOutcome => ({
+              ran: true,
+              success: false,
+              error: `No answer came back, so the pause may not have run (${formatErrorMessage(error, "no answer")})`,
+            })
+          );
       },
     };
   }

@@ -106,6 +106,7 @@ export function WorktreeDialogs({
             isOpen={showIdlePauseDialog}
             onClose={onCloseIdlePauseDialog}
             worktreeId={worktree.id}
+            restoreFocusTo={restoreTitleDialogFocusTo}
           />
         </Suspense>
       )}

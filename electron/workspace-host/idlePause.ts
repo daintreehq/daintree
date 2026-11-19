@@ -46,9 +46,11 @@ export function fingerprintIdlePause(
     .digest("hex");
 }
 
-/** Mirrors what runs: an empty command is skipped, so it isn't one to confirm. */
-function pauseCommandsOf(selection: ResolvedResourceSelection): string[] {
-  return (selection.resource.pause ?? []).filter((command) => command.length > 0);
+/** The pause commands as they would run for one worktree, to tell a change between check and run. */
+export function digestCommands(commands: readonly string[]): string {
+  return createHash("sha256")
+    .update(JSON.stringify([...commands]))
+    .digest("hex");
 }
 
 /**
@@ -186,7 +188,7 @@ export class IdlePauseService {
         worktreePath,
         projectRootPath,
         undefined,
-        worktreeMode
+        () => worktreeMode
       )
     ).selection;
   }
@@ -199,6 +201,7 @@ export class IdlePauseService {
     const selection = await this.selectionFor(worktreePath, projectRootPath, worktreeMode);
     const eligibility = this.eligibility(selection);
     if (!eligibility.ok) {
+      await this.revokeEmptied(selection, eligibility, projectRootPath);
       return {
         status: "unavailable",
         reason: eligibility.reason,
@@ -224,8 +227,9 @@ export class IdlePauseService {
   }
 
   /**
-   * Turns it on for the commands the person was shown, recomputed here and
-   * refused when they no longer match, or off.
+   * Turns it on or off for the environment the person was shown, named by
+   * the fingerprint they saw: recomputed here, and refused when the
+   * worktree's environment or its commands no longer match.
    */
   async setEnabled(
     worktreePath: string,
@@ -236,7 +240,13 @@ export class IdlePauseService {
   ): Promise<void> {
     const selection = await this.selectionFor(worktreePath, projectRootPath, worktreeMode);
     if (!enabled) {
-      if (selection) await this.consents.clear(projectRootPath, selection.selector);
+      const consent = selection
+        ? await this.consents.get(projectRootPath, selection.selector)
+        : null;
+      if (!selection || !consent || consent.fingerprint !== fingerprint) {
+        throw new Error("This worktree's environment changed. Review it again.");
+      }
+      await this.consents.clear(projectRootPath, selection.selector);
       return;
     }
     const eligibility = this.eligibility(selection);
@@ -256,7 +266,10 @@ export class IdlePauseService {
     projectRootPath: string
   ): Promise<{ ok: true; fingerprint: string } | { ok: false; reason: string }> {
     const eligibility = this.eligibility(selection);
-    if (!eligibility.ok) return { ok: false, reason: UNAVAILABLE_MESSAGES[eligibility.reason] };
+    if (!eligibility.ok) {
+      await this.revokeEmptied(selection, eligibility, projectRootPath);
+      return { ok: false, reason: UNAVAILABLE_MESSAGES[eligibility.reason] };
+    }
     const consent = await this.consents.get(projectRootPath, selection!.selector);
     if (!consent) return { ok: false, reason: "Idle pause is off for this environment" };
     if (consent.revoked) {
@@ -271,17 +284,34 @@ export class IdlePauseService {
     return { ok: true, fingerprint: eligibility.fingerprint };
   }
 
+  /** Emptying the pause commands is a change too: putting them back asks again. */
+  private async revokeEmptied(
+    selection: ResolvedResourceSelection | null,
+    eligibility: { reason: IdlePauseUnavailableReason },
+    projectRootPath: string
+  ): Promise<void> {
+    if (!selection || eligibility.reason !== "no-pause") return;
+    const consent = await this.consents.get(projectRootPath, selection.selector);
+    if (consent && !consent.revoked) {
+      await this.consents
+        .revoke(projectRootPath, selection.selector, consent.fingerprint)
+        .catch(() => undefined);
+    }
+  }
+
   private eligibility(selection: ResolvedResourceSelection | null): Eligibility {
     if (!selection) return { ok: false, reason: "no-environment" };
     // The block that wins is the one that runs: the person's own definition
     // of an environment a repository file now shadows doesn't count.
     if (selection.origin !== "user") return { ok: false, reason: "repository" };
-    const commands = pauseCommandsOf(selection);
+    const pause = selection.resource.pause ?? [];
+    // Shown without the empty lines nothing runs, but confirmed as written.
+    const commands = pause.filter((command) => command.length > 0);
     if (commands.length === 0) return { ok: false, reason: "no-pause" };
     return {
       ok: true,
       commands,
-      fingerprint: fingerprintIdlePause(selection.selector, selection.path, commands),
+      fingerprint: fingerprintIdlePause(selection.selector, selection.path, pause),
     };
   }
 }

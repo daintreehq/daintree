@@ -4073,8 +4073,9 @@ export class WorkspaceService {
     );
   }
 
-  checkIdlePause(worktreeId: string): Promise<IdlePauseCheck> {
-    return this.resourceActionExecutor.checkIdlePause(worktreeId);
+  async checkIdlePause(worktreeId: string): Promise<IdlePauseCheck> {
+    const check = await this.resourceActionExecutor.checkIdlePause(worktreeId);
+    return check.ok ? { ok: true, guard: { ...check.guard, processEpoch: this.epoch } } : check;
   }
 
   /** Main's pause once the worktree's host granted its ended idle time: a manual pause, guarded. */
@@ -4083,6 +4084,10 @@ export class WorkspaceService {
     worktreeId: string,
     guard: IdlePauseGuard
   ): Promise<IdlePauseRunOutcome> {
+    // Checked by an earlier run of this host: nothing it saw holds now.
+    if (guard.processEpoch !== this.epoch) {
+      return { ran: false, reason: "The workspace host restarted since the pause was checked" };
+    }
     const result = await this.resourceActionExecutor.runResourceAction(
       requestId,
       worktreeId,
@@ -4266,6 +4271,7 @@ export class WorkspaceService {
     // Set once the attachment detaches have run, so a failure releases the
     // hold they took on the worktree — and only then.
     let attachmentsReserved = false;
+    let releaseIdlePause: (() => void) | undefined;
     let deletingMonitor: WorktreeMonitor | undefined;
     let restoreFileWatching: (() => void) | undefined;
     // Set once git is asked to remove the checkout: a failure after that may
@@ -4375,6 +4381,10 @@ export class WorkspaceService {
 
       if (!unattended) {
         attachmentsReserved = true;
+        // The teardown runs outside the resource queue, so an idle pause is
+        // kept off it, and one already admitted is waited out first.
+        releaseIdlePause = this.resourceActionExecutor.holdAgainstIdlePause(worktreeId);
+        await this.resourceActionExecutor.whenIdlePauseSettled(worktreeId);
         await this.runLifecycleTeardown(worktreeId, monitor);
       }
 
@@ -4593,6 +4603,8 @@ export class WorkspaceService {
       // `mutationId` and the `throwOnError` flag (`WorkspaceClient.sendWithResponse`
       // resolves via the delete-worktree-result event, not the promise return).
       if (throwOnError) throw error;
+    } finally {
+      releaseIdlePause?.();
     }
   }
 

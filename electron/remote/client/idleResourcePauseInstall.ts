@@ -31,6 +31,8 @@ export function installIdleResourcePause(options: {
         title: "Pause failed",
         message: `${worktree}'s environment didn't pause after ${host.name} went idle. ${error}`,
         action: { label: "Copy details", ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT, data: error },
+        // One entry per host in a view's inbox, however it hears of it.
+        replaceKey: `idle-pause-failed:${host.id}`,
       };
       broadcastToVisibleRenderersOrAll(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
     },

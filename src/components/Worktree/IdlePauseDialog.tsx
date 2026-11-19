@@ -3,6 +3,7 @@ import type { IdlePausePolicy, IdlePauseUnavailableReason } from "@shared/types/
 import { worktreeClient } from "@/clients";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { InlineError } from "@/components/ui/field";
 import { PathSegments } from "@/components/ui/PathSegments";
@@ -25,6 +26,8 @@ export interface IdlePauseDialogProps {
   isOpen: boolean;
   worktreeId: string;
   onClose: () => void;
+  /** Where focus goes on close when the menu that opened it has no trigger left. */
+  restoreFocusTo?: RestoreFocusTarget;
 }
 
 /**
@@ -32,7 +35,12 @@ export interface IdlePauseDialogProps {
  * (#17925). Turning it on shows the pause commands that will run, read fresh
  * by the host, and is refused if they changed before the confirm landed.
  */
-export function IdlePauseDialog({ isOpen, worktreeId, onClose }: IdlePauseDialogProps) {
+export function IdlePauseDialog({
+  isOpen,
+  worktreeId,
+  onClose,
+  restoreFocusTo,
+}: IdlePauseDialogProps) {
   // `undefined` while loading.
   const [policy, setPolicy] = useState<IdlePausePolicy | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -74,11 +82,7 @@ export function IdlePauseDialog({ isOpen, worktreeId, onClose }: IdlePauseDialog
     setIsSaving(true);
     setSaveError(null);
     try {
-      await worktreeClient.setIdlePause(
-        worktreeId,
-        !enabled,
-        enabled ? undefined : available.fingerprint
-      );
+      await worktreeClient.setIdlePause(worktreeId, !enabled, available.fingerprint);
       onClose();
     } catch (err) {
       setSaveError(formatErrorMessage(err, "Couldn't change idle pause"));
@@ -98,6 +102,7 @@ export function IdlePauseDialog({ isOpen, worktreeId, onClose }: IdlePauseDialog
       variant="default"
       size="lg"
       initialFocus="cancel"
+      restoreFocusTo={restoreFocusTo}
       title={
         enabled
           ? `Turn off idle pause for ${environment}?`
@@ -105,7 +110,7 @@ export function IdlePauseDialog({ isOpen, worktreeId, onClose }: IdlePauseDialog
       }
       description={
         enabled
-          ? "Its machine stays running until someone pauses it."
+          ? "This device stops pausing it when its host goes idle."
           : "Once the machine a worktree in this environment opened as a host has gone idle, this device runs these pause commands with nobody there. A host you already had is never paused this way."
       }
       confirmLabel={enabled ? "Turn off idle pause" : "Turn on idle pause"}

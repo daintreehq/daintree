@@ -157,11 +157,33 @@ describe("idle pause consent (#17925)", () => {
     expect(await confirmed()).toEqual({ ok: true, fingerprint });
   });
 
-  it("forgets it when turned off", async () => {
+  it("turns off again when the pause commands are emptied and then put back", async () => {
     await userEnvironments(["stop-box"]);
     await turnOn();
 
-    await service.setEnabled(worktree, project, MODE, false);
+    await userEnvironments([]);
+    expect(await policy()).toMatchObject({ status: "unavailable", reason: "no-pause" });
+
+    await userEnvironments(["stop-box"]);
+    expect(await policy()).toMatchObject({ enabled: false, changed: true });
+    expect((await confirmed()).ok).toBe(false);
+  });
+
+  it("refuses to turn off anything but what the person was shown", async () => {
+    await userEnvironments(["stop-box"]);
+    const fingerprint = await turnOn();
+
+    await expect(
+      service.setEnabled(worktree, project, MODE, false, "c".repeat(64))
+    ).rejects.toThrow(/changed/);
+    expect(await confirmed()).toEqual({ ok: true, fingerprint });
+  });
+
+  it("forgets it when turned off", async () => {
+    await userEnvironments(["stop-box"]);
+    const fingerprint = await turnOn();
+
+    await service.setEnabled(worktree, project, MODE, false, fingerprint);
 
     expect(await policy()).toMatchObject({ enabled: false, changed: false });
     expect((await confirmed()).ok).toBe(false);
