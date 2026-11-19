@@ -37,6 +37,8 @@ const ObservationSchema = z.object({
     .catch(undefined),
   stopped: z.literal(true).optional(),
   enabled: z.boolean(),
+  // One this build doesn't know is dropped: it never stands for a start method.
+  startMethod: z.literal("on-connect").optional().catch(undefined),
   startAtLogin: z.boolean(),
   startAtLoginInstalled: z.boolean().nullable(),
   startAtLoginError: z.string().max(MAX_TEXT).nullable(),

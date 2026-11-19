@@ -37,6 +37,19 @@ describe("host-mode.json keychain record", () => {
     expect(await readHostModeStatusFile(dir)).toEqual(observation);
   });
 
+  it("keeps a start method it knows, and drops one it doesn't without losing the rest", () => {
+    const onConnect = { ...observation, startMethod: "on-connect" as const, startAtLogin: false };
+    expect(parseHostModeStatus(formatHostModeStatus(onConnect))).toEqual(onConnect);
+    const later = JSON.parse(formatHostModeStatus(onConnect)) as Record<string, unknown>;
+    const parsed = parseHostModeStatus(
+      JSON.stringify({ ...later, startMethod: "socket-activated" })
+    );
+    expect(parsed).not.toBeNull();
+    // Everything else is kept as it was.
+    expect({ ...parsed, startMethod: "on-connect" }).toEqual(onConnect);
+    expect(parsed?.startMethod).toBeUndefined();
+  });
+
   it("still reads a file written before checkedAt existed", () => {
     const { checkedAt: _at, ...keychain } = observation.keychain;
     const text = formatHostModeStatus({ ...observation, keychain });

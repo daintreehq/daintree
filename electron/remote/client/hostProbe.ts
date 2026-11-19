@@ -18,6 +18,7 @@ import {
   HOST_SOCKET_NAME,
   LINUX_RUNTIME_DIR_NAME,
   MAC_APP_DIR_NAME,
+  PID1_COMM_PATH,
 } from "../host/hostSocketPath.js";
 import type { CommandOptions } from "./commandRunner.js";
 import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -81,15 +82,42 @@ export function processStartShell(pidVar: string, into: string): string {
   return `if [ "$(uname -s)" = Darwin ]; then ${into}=$(LC_ALL=C /bin/ps -o lstart= -p "$${pidVar}" 2>/dev/null | sed 's/^ *//; s/  */ /g; s/ *$//'); else ${into}=$(sed 's/.*) //' "/proc/$${pidVar}/stat" 2>/dev/null | cut -d' ' -f20); fi`;
 }
 
+/**
+ * Shell test that process `$<pidVar>` isn't a zombie. A host started on
+ * connect is left to PID 1, which on a machine with no init system may never
+ * reap it: what it leaves when it exits still answers `kill -0` and `pgrep`.
+ * True where /proc can't be read (macOS).
+ */
+export function notZombieShell(pidVar: string): string {
+  return `[ "$(sed 's/.*) //' "/proc/$${pidVar}/stat" 2>/dev/null | cut -d' ' -f1)" != Z ]`;
+}
+
+/**
+ * Linux shell test that process `$<pidVar>` is there and not a zombie, read
+ * from /proc alone: a `kill -0` before it can see one that is reaped before
+ * its state is read.
+ */
+export function liveProcessShell(pidVar: string): string {
+  return `{ st=$(sed 's/.*) //' "/proc/$${pidVar}/stat" 2>/dev/null | cut -d' ' -f1); [ -n "$st" ] && [ "$st" != Z ]; }`;
+}
+
 function buildInfoRead(asar: string): string {
   // Assigned first: bash 3.2 (macOS /bin/sh) brace-expands inside "$(...)".
   return `b=$(grep -a -o -m 1 -E ${sq(BUILD_INFO_PATTERN)} ${asar} 2>/dev/null | head -n 1); echo "${MARK}buildinfo $b"`;
 }
 
 /** One line of `sh` (see remoteShell.ts). Only markers are parsed. */
+/**
+ * Sets `$d` to where a Linux host listens, and `$pid1` to what PID 1 is: under
+ * the home's cache where PID 1 isn't systemd, else the uid's runtime
+ * directory (see host/hostSocketPath.ts).
+ */
+export function linuxHostDirShell(dirName: string = LINUX_RUNTIME_DIR_NAME): string {
+  return `pid1=$(head -c 64 ${PID1_COMM_PATH} 2>/dev/null); if [ -n "$pid1" ] && [ "$pid1" != systemd ]; then d="$HOME/.cache/${dirName}/run"; else d="/run/user/$(id -u)/${dirName}"; fi`;
+}
+
 export function buildHostProbeScript(): string {
   const macDir = `"$HOME/Library/Application Support/${MAC_APP_DIR_NAME}"`;
-  const linuxDir = `"/run/user/$(id -u)/${LINUX_RUNTIME_DIR_NAME}"`;
   const mac = [
     `d=${macDir}`,
     // Settings there mean Daintree has run as this user, who may have chosen its update channel.
@@ -106,7 +134,7 @@ export function buildHostProbeScript(): string {
     `if [ -f "$HOME/${MAC_LAUNCH_AGENT_RELATIVE}" ]; then echo "${MARK}launchagent yes"; else echo "${MARK}launchagent no"; fi`,
   ].join("; ");
   const linux = [
-    `d=${linuxDir}`,
+    linuxHostDirShell(),
     `if [ -f "\${XDG_CONFIG_HOME:-$HOME/.config}/${LINUX_SETTINGS_DIR_NAME}/config.json" ]; then echo "${MARK}settings yes"; else echo "${MARK}settings no"; fi`,
     `if [ -d ${DEB_INSTALL_DIR} ]; then echo "${MARK}install deb ${DEB_INSTALL_DIR}"`,
     `echo "${MARK}version $(dpkg-query -W -f='\${Version}' daintree 2>/dev/null)"`,
@@ -117,7 +145,7 @@ export function buildHostProbeScript(): string {
     `u=""; if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then u=$(sed -n 's/^ExecStart="\\([^"]*\\)".*/\\1/p' "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" | head -n 1); echo "${MARK}unitexec $u"; fi`,
     `r=""; p=$(pgrep -u "$(id -u)" -o -x daintree 2>/dev/null); if [ -n "$p" ]; then r=$(tr '\\000' '\\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^APPIMAGE=//p' | head -n 1); echo "${MARK}runningappimage $r"; fi`,
     `for f in "$HOME"/Applications/Daintree*.AppImage "$HOME"/Applications/daintree*.AppImage "$u" "$r"; do case "$f" in /*.AppImage) if [ -f "$f" ]; then b=""; i="$f${APPIMAGE_BUILD_INFO_SUFFIX}"; if [ -f "$i" ] && [ "$i" -nt "$f" ]; then b=$(head -c 512 "$i"); fi; echo "${MARK}appimage $f"; echo "${MARK}appimageinfo $b"; fi ;; esac; done`,
-    `if pgrep -u "$(id -u)" -x daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
+    `for q in $(pgrep -u "$(id -u)" -x daintree 2>/dev/null); do if ${liveProcessShell("q")}; then echo "${MARK}running yes"; break; fi; done`,
     `echo "${MARK}sleep $(systemctl is-enabled sleep.target 2>/dev/null)"`,
     `if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then echo "${MARK}unit yes"; echo "${MARK}unitenabled $(systemctl --user is-enabled ${LINUX_UNIT_NAME} 2>/dev/null)"; else echo "${MARK}unit no"; fi`,
     // What an AppImage needs to mount itself: the device and a setuid
@@ -126,7 +154,7 @@ export function buildHostProbeScript(): string {
     `f=no; if [ -e /dev/fuse ]; then for b in fusermount3 fusermount; do p=$(command -v $b 2>/dev/null) && [ -u "$p" ] && { f=yes; break; }; done; fi; echo "${MARK}fuse $f"`,
     `echo "${MARK}linger $(loginctl show-user "$(id -un)" -p Linger 2>/dev/null)"`,
     // Host mode runs as a systemd user service; a WSL distro may boot without systemd.
-    `echo "${MARK}init $(head -c 64 /proc/1/comm 2>/dev/null)"`,
+    `echo "${MARK}init $pid1"`,
     // Only this SSH user's processes: another user's keyring is no use here.
     `k=none; for n in gnome-keyring-d kwalletd5 kwalletd6; do if pgrep -u "$(id -u)" -x $n >/dev/null 2>&1; then k=$n; break; fi; done; echo "${MARK}keyring $k"`,
   ].join("; ");
@@ -137,7 +165,7 @@ export function buildHostProbeScript(): string {
     // and the pid can be reused since. A file that records when its process started
     // must match it; one that doesn't (an older host) is taken on the pid alone,
     // but then no start time is reported and nothing is ever signalled by pid.
-    `if [ -f "$d/${HOST_DISCOVERY_NAME}" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then s=$(sed -n 's/.*"startedAt":"\\([^"]*\\)".*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); ${processStartShell("p", "n")}; if [ -z "$s" ] || [ -z "$n" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; elif [ "$n" = "$s" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; echo "${MARK}hoststart $s"; fi; fi; fi`,
+    `if [ -f "$d/${HOST_DISCOVERY_NAME}" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null && ${notZombieShell("p")}; then s=$(sed -n 's/.*"startedAt":"\\([^"]*\\)".*/\\1/p' "$d/${HOST_DISCOVERY_NAME}"); ${processStartShell("p", "n")}; if [ -z "$s" ] || [ -z "$n" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; elif [ "$n" = "$s" ]; then echo "${MARK}listening yes"; echo "${MARK}hostpid $p"; echo "${MARK}hoststart $s"; fi; fi; fi`,
     `if [ -f "$d/${HOST_MODE_STATUS_NAME}" ]; then printf '%s %s\\n' "${MARK}hostmodestate" "$(head -c 4096 "$d/${HOST_MODE_STATUS_NAME}" | tr -d '\\n')"; fi`,
     `if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then echo "${MARK}download yes"; fi`,
     `echo "${MARK}end"`,
@@ -476,6 +504,18 @@ export interface ProbeOutcome {
   parsed: ParsedProbe | null;
 }
 
+/**
+ * Daintree there runs in the background once started, and a connection from
+ * here starts it again: Linux reached over SSH or a cloud route, with PID 1
+ * seen not to be systemd. A WSL distro keeps the systemd path, as before.
+ */
+export function startsOnConnect(
+  connection: HostConnection,
+  probe: Pick<ParsedProbe, "platform" | "advice">
+): boolean {
+  return connection.kind !== "wsl" && probe.platform === "linux" && probe.advice.systemd === false;
+}
+
 export async function probeHost(params: {
   connection: HostConnection;
   shell: HostCommandChannel;
@@ -550,6 +590,7 @@ export async function probeHost(params: {
       stagedUpdate: liveHostRecord(observed)?.stagedUpdate ?? null,
       advice: observed.advice,
       hostModeState: observed.hostModeState,
+      startsOnConnect: startsOnConnect(connection, observed),
     },
   };
 }

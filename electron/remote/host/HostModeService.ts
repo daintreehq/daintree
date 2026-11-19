@@ -63,6 +63,12 @@ export interface HostModeServiceDeps {
   startListener(signal: AbortSignal): Promise<HostListener>;
   /** Null where this platform has no start-at-login support. */
   startAtLogin: StartAtLoginController | null;
+  /**
+   * Linux with no init system (PID 1 isn't systemd): nothing can start the
+   * host at login, so setup asks for none, and the record says a Shell's
+   * connection starts it instead.
+   */
+  startsOnConnect?: boolean;
   /** Built by the service so advertise changes reach its status pushes. */
   createAdvertiser(onChange: () => void): HostModeAdvertiser;
   keychain: KeychainProbe;
@@ -250,7 +256,10 @@ export class HostModeService {
    * (the person confirmed both there), and the keychain is checked here.
    */
   async enableFromSetup(): Promise<HostModeStatus> {
-    const status = await this.setEnabled({ enabled: true, startAtLogin: true });
+    const status = await this.setEnabled({
+      enabled: true,
+      startAtLogin: this.deps.startsOnConnect !== true,
+    });
     void this.runKeychainPreflight();
     return status;
   }
@@ -361,7 +370,13 @@ export class HostModeService {
     this.installError = null;
     if (startAtLogin) {
       try {
-        if (!this.deps.startAtLogin) throw new Error("not supported on this platform");
+        if (!this.deps.startAtLogin) {
+          throw new Error(
+            this.deps.startsOnConnect
+              ? "it needs systemd, which this machine doesn't run"
+              : "not supported on this platform"
+          );
+        }
         await this.deps.startAtLogin.install();
       } catch (error) {
         this.installError = messageOf(error);
@@ -430,6 +445,7 @@ export class HostModeService {
       ...(runtime ? { windows: runtime.windows } : {}),
       ...(runtime?.stagedUpdate ? { stagedUpdate: runtime.stagedUpdate } : {}),
       enabled: settings.enabled,
+      ...(this.deps.startsOnConnect ? { startMethod: "on-connect" as const } : {}),
       startAtLogin: settings.startAtLogin,
       startAtLoginInstalled: this.observation?.installed ?? null,
       startAtLoginError: this.installError,
@@ -480,6 +496,7 @@ export class HostModeService {
           observation: this.observation,
           installError: this.installError,
           wsl: this.wsl,
+          startsOnConnect: this.deps.startsOnConnect,
         }),
         keychainRow(keychain, this.keychainCheckedAt),
         sleepRow(this.deps.platform, this.pmset, this.wsl),

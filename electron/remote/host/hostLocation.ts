@@ -1,5 +1,37 @@
+import { readFileSync } from "node:fs";
+import os from "node:os";
 import { app } from "electron";
-import { hostSocketLocation, type HostSocketLocation } from "./hostSocketPath.js";
+import {
+  hostSocketLocation,
+  PID1_COMM_PATH,
+  startsOnConnectForInit,
+  type HostSocketLocation,
+} from "./hostSocketPath.js";
+
+let startsOnConnect: boolean | undefined;
+
+/**
+ * Whether this Linux machine has no init system to run the host as a
+ * service (PID 1 isn't systemd), read once: PID 1 doesn't change while it runs.
+ */
+export function hostStartsOnConnect(): boolean {
+  if (process.platform !== "linux") return false;
+  if (startsOnConnect === undefined) {
+    let comm: string | null = null;
+    try {
+      comm = readFileSync(PID1_COMM_PATH, "utf8");
+    } catch {
+      // Unreadable: the systemd layout, as the probe reads it.
+    }
+    startsOnConnect = startsOnConnectForInit(comm);
+  }
+  return startsOnConnect;
+}
+
+/** Forget the cached reading; tests only. */
+export function resetHostStartsOnConnectForTests(): void {
+  startsOnConnect = undefined;
+}
 
 /**
  * Where this build's Host mode listens and publishes its discovery file.
@@ -15,6 +47,9 @@ export function hostLocation(): HostSocketLocation {
     uid: process.getuid!(),
     // Dev and packaged builds must not fight over one socket.
     dirName: app.isPackaged ? "daintree" : "daintree-dev",
+    startsOnConnect: hostStartsOnConnect(),
+    // $HOME, as every SSH-side script and the start that runs this host use it.
+    home: os.homedir(),
   });
 }
 

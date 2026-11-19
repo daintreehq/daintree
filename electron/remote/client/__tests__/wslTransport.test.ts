@@ -83,7 +83,9 @@ const signal = () => new AbortController().signal;
 describe("buildWslDiscoveryScript", () => {
   it("looks in each runtime directory for a live Host only", () => {
     const script = buildWslDiscoveryScript(["daintree", "daintree-dev"]);
-    expect(script).toContain('for n in daintree daintree-dev; do d="/run/user/$u/$n"');
+    expect(script).toContain(
+      'for n in daintree daintree-dev; do for d in "/run/user/$u/$n" "$HOME/.cache/$n/run"; do'
+    );
     expect(script).toContain('[ -S "$d/host.sock" ]');
     expect(script).toContain('kill -0 "$p"');
     expect(script.endsWith("exit 3")).toBe(true);

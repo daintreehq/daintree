@@ -79,6 +79,7 @@ import {
   namedProgressMessage,
   sshRefusalAdvice,
   hostModeSwitchedOn,
+  STARTS_ON_CONNECT_COVERAGE,
   installLabel,
   platformLabel,
   canWaitForIdle,
@@ -772,21 +773,30 @@ export function AddHostDialog({
     );
   };
 
-  /** Add the host to the list once; every later step reuses that record. */
-  const save = (): Promise<SavedHost> => {
+  /**
+   * Add the host to the list once; every later step reuses that record. `seen`
+   * is the latest check when the caller has one newer than the dialog's.
+   */
+  const save = (seen: HostProbeResult | null = probe): Promise<SavedHost> => {
     if (savedHost) return Promise.resolve(savedHost);
-    saving.current ??= remoteHostsClient.add({ name: hostLabel, connection: connectionFor() }).then(
-      (descriptor) => {
-        const record = { hostId: descriptor.id, name: descriptor.name };
-        setSaved(record);
-        awaitFirstConnect(descriptor.id);
-        return record;
-      },
-      (err: unknown) => {
-        saving.current = null;
-        throw err;
-      }
-    );
+    saving.current ??= remoteHostsClient
+      .add({
+        name: hostLabel,
+        connection: connectionFor(),
+        ...(seen?.startsOnConnect === true ? { startsOnConnect: true } : {}),
+      })
+      .then(
+        (descriptor) => {
+          const record = { hostId: descriptor.id, name: descriptor.name };
+          setSaved(record);
+          awaitFirstConnect(descriptor.id);
+          return record;
+        },
+        (err: unknown) => {
+          saving.current = null;
+          throw err;
+        }
+      );
     return saving.current;
   };
 
@@ -806,7 +816,10 @@ export function AddHostDialog({
     }
     // Adding: Host mode is on there for good, so Connect is next and the host is saved now.
     setStep("advise");
-    run(save, () => {});
+    run(
+      () => save(seen),
+      () => {}
+    );
   };
 
   const check = (nextTarget?: string) => {
@@ -1002,7 +1015,10 @@ export function AddHostDialog({
         if (hostModeSwitchedOn(result.probe)) {
           setHostModeTurnedOn(true);
           setStep("advise");
-          run(save, () => {});
+          run(
+            () => save(result.probe),
+            () => {}
+          );
         }
       }
     );
@@ -1010,7 +1026,10 @@ export function AddHostDialog({
   /** Setup ends here, saved but not connected: nothing after Host mode applies without it. */
   const skipHostMode = () => {
     setSkipped(true);
-    run(save, () => setOutcome("skipped"));
+    run(
+      () => save(),
+      () => setOutcome("skipped")
+    );
   };
 
   /** Connect and end on what the link reported, not on the dial having started. */
@@ -1048,10 +1067,13 @@ export function AddHostDialog({
       onClose();
       return;
     }
-    run(save, (host) => {
-      if (skipped || !probe?.hostModeListening) setOutcome("skipped");
-      else connectSaved(host);
-    });
+    run(
+      () => save(),
+      (host) => {
+        if (skipped || !probe?.hostModeListening) setOutcome("skipped");
+        else connectSaved(host);
+      }
+    );
   };
 
   const cancelInstall = () => {
@@ -2116,10 +2138,13 @@ export function AddHostDialog({
     announce = title;
   } else if (step === "enable") {
     const switchedOn = hostModeSwitchedOn(probe);
+    const onConnect = probe?.startsOnConnect === true;
     const enableBody = switchedOn ? (
       <p className="text-sm text-text-primary">
-        Host mode is on at {hostLabel} and starts {viaWsl ? "with it" : "at login there"}. This
-        machine can connect.
+        {onConnect
+          ? `Host mode is on at ${hostLabel} and runs in the background. ${STARTS_ON_CONNECT_COVERAGE}`
+          : `Host mode is on at ${hostLabel} and starts ${viaWsl ? "with it" : "at login there"}.`}{" "}
+        This machine can connect.
       </p>
     ) : (
       <div className="space-y-2 text-sm">
@@ -2131,9 +2156,11 @@ export function AddHostDialog({
         <p className="text-text-secondary">
           {probe?.platform === "darwin"
             ? "Daintree turns on Host mode there in the logged-in session and sets it to start at login. If it has never run on that Mac, open it once at the machine: macOS asks to approve a first launch."
-            : viaWsl
-              ? "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode, so it starts whenever the distribution does."
-              : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
+            : onConnect
+              ? `${hostLabel} has no systemd, so there's no Host mode service to install. Daintree starts Host mode there in the background instead. ${STARTS_ON_CONNECT_COVERAGE}`
+              : viaWsl
+                ? "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode, so it starts whenever the distribution does."
+                : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
         </p>
         {!existing && (
           <p className="text-xs text-text-secondary">
@@ -2175,7 +2202,9 @@ export function AddHostDialog({
                 : `${hostLabel} is ready to connect`}
           </p>
           <p className="text-text-secondary">
-            Host mode is on there and starts {viaWsl ? "with the distribution" : "at login"}.
+            {probe?.startsOnConnect === true
+              ? `Host mode is on there and runs in the background. ${STARTS_ON_CONNECT_COVERAGE}`
+              : `Host mode is on there and starts ${viaWsl ? "with the distribution" : "at login"}.`}
           </p>
         </div>
         <AddHostNotes

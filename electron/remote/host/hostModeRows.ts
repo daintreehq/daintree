@@ -54,8 +54,18 @@ export function startAtLoginRow(input: {
   observation: StartAtLoginObservation | null;
   installError: string | null;
   wsl?: boolean;
+  /** No init system here to start the host at login (see HostModeServiceDeps.startsOnConnect). */
+  startsOnConnect?: boolean;
 }): HostModeStatusRow {
   const obs = input.observation;
+  if (input.startsOnConnect && !input.installError && !obs) {
+    return {
+      id: "start-at-login",
+      state: "unavailable",
+      detail:
+        "Not available without systemd. Host mode runs until it's stopped, and Daintree on another machine starts it again when it connects",
+    };
+  }
   if (input.installError) {
     return {
       id: "start-at-login",
