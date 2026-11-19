@@ -40,6 +40,18 @@ function panelName(target: GlobalCloseTarget, agent: string): string {
     : title;
 }
 
+/**
+ * The longest a question line runs: well inside the relay's own cap, so an
+ * id or title of any length never keeps the question from being asked.
+ */
+const QUESTION_LINE_MAX_CHARS = 900;
+
+function clipLine(line: string): string {
+  return line.length > QUESTION_LINE_MAX_CHARS
+    ? `${line.slice(0, QUESTION_LINE_MAX_CHARS - 1)}…`
+    : line;
+}
+
 function agentName(target: GlobalCloseTarget): string {
   return getEffectiveAgentConfig(target.agentId)?.name ?? target.agentId;
 }
@@ -59,7 +71,7 @@ export function globalCloseQuestion(
   return {
     subject,
     lines: [
-      `Panel: ${subject} (${terminalId})`,
+      clipLine(`Panel: ${subject} (${terminalId})`),
       `Agent: ${agent}, ${stopOf(target)}`,
       "Its input box holds nothing typed.",
       TRASH_LINE,
@@ -81,7 +93,7 @@ export function globalCloseBatchQuestion(
     lines: [
       ...targets.map(({ terminalId, target }) => {
         const agent = agentName(target);
-        return `${panelName(target, agent)} (${terminalId}): ${agent}, ${stopOf(target)}`;
+        return clipLine(`${panelName(target, agent)} (${terminalId}): ${agent}, ${stopOf(target)}`);
       }),
       "None of their input boxes holds anything typed.",
       ...(ownCount > 0

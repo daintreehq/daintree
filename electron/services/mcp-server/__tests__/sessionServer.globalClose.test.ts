@@ -83,7 +83,8 @@ function harness(
   options: {
     global?: boolean;
     answer?: ViewlessApprovalDecision;
-    refuseWrite?: { code: string; message: string };
+    refuseWrite?:
+      { code: string; message: string } | (() => { code: string; message: string } | null);
   } = {}
 ) {
   const records = new Map<string, WorkerSteerRecord>([
@@ -124,7 +125,9 @@ function harness(
     doubleEscape: vi.fn(),
     sleep: async () => {},
   });
-  const store = new SessionStore(() => {});
+  const store = new SessionStore(() => {}, {
+    launchGenerationOf: (id) => generations.get(id) ?? null,
+  });
   stores.push(store);
   store.sessionTierMap.set(SESSION, "core");
   store.sessionOriginMap.set(SESSION, "external");
@@ -151,7 +154,10 @@ function harness(
     relay: {
       shellName: "studio-01",
       ...(options.global !== false ? { global: true as const } : {}),
-      refuseWrite: () => options.refuseWrite ?? null,
+      refuseWrite: () =>
+        typeof options.refuseWrite === "function"
+          ? options.refuseWrite()
+          : (options.refuseWrite ?? null),
       askClose,
     },
     globalSteer: steer,
@@ -275,6 +281,53 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
     expect(toolErrorPayload(eligible).code).toBe("DRIVEN_ELSEWHERE");
     expect(askClose).not.toHaveBeenCalled();
     expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("asks nobody once the drive moves while the agent is read", async () => {
+    let checks = 0;
+    const { deps, askClose, dispatchAction } = harness({
+      refuseWrite: () =>
+        ++checks === 1
+          ? null
+          : { code: "DRIVEN_ELSEWHERE", message: "Another machine drives this project." },
+    });
+    const server = await serve(deps);
+
+    const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+
+    expect(toolErrorPayload(result).code).toBe("DRIVEN_ELSEWHERE");
+    expect(askClose).not.toHaveBeenCalled();
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("settles a record its own launch of the very run made while it asked", async () => {
+    const h = harness();
+    h.askClose.mockImplementationOnce(async () => {
+      h.store.resourceOwnership.record(h.owner, [{ kind: "terminal", id: WORKER }]);
+      h.store.workerCreations.note(h.owner, [WORKER]);
+      return APPROVED;
+    });
+    const server = await serve(h.deps);
+
+    const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+
+    expect(result.isError).toBeFalsy();
+    expect(h.store.resourceOwnership.get(h.owner, "terminal", WORKER)).toBeUndefined();
+    expect(h.store.resourceOwnership.closedRecord(h.owner, WORKER)?.launchGeneration).toBe(4);
+  });
+
+  it("leaves a record it can't tie to the run it closed", async () => {
+    const h = harness();
+    h.askClose.mockImplementationOnce(async () => {
+      h.store.resourceOwnership.record(h.owner, [{ kind: "terminal", id: WORKER }]);
+      return APPROVED;
+    });
+    const server = await serve(h.deps);
+
+    await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+
+    expect(h.store.resourceOwnership.get(h.owner, "terminal", WORKER)).toBeDefined();
+    expect(h.store.resourceOwnership.closedRecord(h.owner, WORKER)).toBeUndefined();
   });
 
   it("puts an agent stopped on an error to the person, and no skip closes it", async () => {

@@ -1361,6 +1361,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Until when the answer that admitted a global close holds, checked again
     // right before its dispatch, whatever was awaited since the last read.
     let globalCloseDeadline: number | undefined;
+    // The run a global close was admitted on, for its ledger settlement.
+    let globalCloseGeneration: number | undefined;
     // The record the gate accepted. A release drops only this record, so a
     // cleanup that completes after another session on the same bearer
     // recorded a new resource under the id cannot take the new one with it.
@@ -1416,6 +1418,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             resourceId
           );
 
+    const settleGlobalCloseLedger = (envelope: DispatchEnvelope): void => {
+      const terminalId = ownedResourceId;
+      const generation = globalCloseGeneration;
+      if (terminalId === undefined || generation === undefined || !envelope.result.ok) return;
+      if (!closedIdsInclude(envelope.result.result, terminalId)) return;
+      const record = ownedRecordFor("terminal", terminalId);
+      if (record === undefined) return;
+      if (sessionStore.workerCreations.get(terminalId, generation)?.owner !== ownershipOwner)
+        return;
+      sessionStore.resourceOwnership.release(ownershipOwner, "terminal", terminalId, record);
+      noteClosedTerminals({ sessionId, sessionStore, ownershipOwner }, envelope, () => generation);
+    };
     const askedAt = Date.now();
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void =>
       recordOwnershipFromDispatch(
@@ -1718,6 +1732,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       const first = asked?.target ?? (await steer.closeTarget(projectId, terminalId));
       if (first === null) return refuseGlobalClose(terminalId);
       globalCloseAudited = true;
+      // Asked again now: another machine may have taken the drive while the
+      // agent was read, and nobody is asked about a close that can't run.
+      const standingNow = assistantWriteRefusal(projectId);
+      if (standingNow) return refuseWrite(standingNow);
       let answered: Pick<GlobalCloseItem, "settlement" | "deadline">;
       if (asked !== undefined) {
         answered = asked;
@@ -1764,6 +1782,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // An answer covers the close only so long, whatever waited before it.
       if (Date.now() > answered.deadline) return refuseCall(globalCloseExpired(`'${terminalId}'`));
       globalCloseDeadline = answered.deadline;
+      globalCloseGeneration = first.generation;
       return undefined;
     };
 
@@ -2419,7 +2438,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             }
           }
           const globalAsks = globalEligible.length > 0;
-          if (globalAsks) globalCloseAudited = true;
+          if (globalAsks) {
+            globalCloseAudited = true;
+            // Asked again now: the drive may have moved while the agents were read.
+            const standingNow = assistantWriteRefusal(globalBatchProject!);
+            if (standingNow) return refuseWrite(standingNow);
+          }
           emitToolCallStarted(closeNeedsAsking || globalAsks, closeNeedsAsking || globalAsks);
           if (closeNeedsAsking) {
             const asked = await askToClose(closeIds);
@@ -4071,8 +4095,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // — "this session created it" is a fact about the session, not about
           // its privileges.
           // A global close (#16750) neither releases a record it never held
-          // nor gains a wait on the process it closed.
+          // nor gains a wait on the process it closed, save for one made
+          // while its question was out by this caller's own launch of the
+          // very run it closed: that run was the caller's after all.
           if (!globalCloseAdmitted) recordDispatchOwnership(envelope);
+          else settleGlobalCloseLedger(envelope);
           // What it closed, so it can wait for those processes to exit after
           // `terminal.closeOwned` released them (#15728).
           if (CLOSE_TOOLS.has(actionId) && !globalCloseAdmitted) {
