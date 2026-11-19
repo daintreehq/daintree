@@ -1215,6 +1215,28 @@ export function createSessionServerDeps(
           relay: {
             shellName: relay.shellName,
             ...(relay.global === true ? { global: true as const } : {}),
+            // Only the global Assistant's: no other caller closes what it didn't launch.
+            ...(relay.global === true && relay.requestApproval !== undefined
+              ? {
+                  askClose: ((callId, ask) => {
+                    const askShell = relay.requestApproval!;
+                    // Inside the call's own wait, with room for the answer (#15699).
+                    const deadline = relay.callDeadline?.(callId);
+                    if (relay.callDeadline !== undefined && deadline === undefined) {
+                      return Promise.resolve({ decision: "timeout" as const });
+                    }
+                    return askShell({
+                      ...ask,
+                      callId,
+                      ...(deadline !== undefined
+                        ? { holdUntil: deadline - MCP_REMOTE_CONFIRM_MARGIN_MS }
+                        : {}),
+                    });
+                  }) satisfies NonNullable<
+                    NonNullable<import("./sessionServer.js").SessionServerDeps["relay"]>["askClose"]
+                  >,
+                }
+              : {}),
             refuseWrite: (projectId: string | undefined) => {
               if (boundWorkspaceId === null) return null;
               if (projectId !== undefined && projectId !== boundWorkspaceId) {

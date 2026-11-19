@@ -1450,7 +1450,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Close a panel this session created, usually to the trash, where it stays briefly recoverable. Panels opened by the user, another client or a plugin are refused, as are unknown ids. The result names what closed.",
+      "Close a panel this session created, usually to the trash, where it stays briefly recoverable. Panels opened by the user, another client or a plugin are refused, as are unknown ids; the global Assistant may also close a finished agent it didn't launch, with nothing typed in it. The result names what closed.",
     enabled: true,
     id: "terminal.closeOwned",
     inputSchema: {
@@ -1461,7 +1461,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "Panel `id` this session got when creating it. Required; there is no focus fallback.",
+            "Panel `id` this session got when creating it, or a finished agent's for the global Assistant. Required; there is no focus fallback.",
         },
       },
       required: ["terminalId"],

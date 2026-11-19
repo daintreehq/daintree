@@ -1347,6 +1347,8 @@ export interface McpRelayCaller {
       callId: string;
       /** When the call stops waiting on the answer, on this machine's clock (#15699). */
       holdUntil?: number;
+      /** The global Assistant's close of a finished agent it didn't launch (#16750). */
+      closeClass?: import("../../../shared/types/assistantControl.js").GlobalCloseClass;
     }
   ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
   /**

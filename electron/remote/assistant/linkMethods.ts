@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { EXCHANGE_STATES } from "../exchange/types.js";
 import { AgentDirectorySchema } from "../../../shared/types/agentDirectory.js";
+import { GLOBAL_CLOSE_CLASSES } from "../../../shared/types/assistantControl.js";
 import {
   HOST_STATUS_MAX_LINES,
   HOST_STATUS_PROJECT_TERMINALS_MAX,
@@ -598,6 +599,12 @@ export const RelayApprovePayloadSchema = z
     subject: z.string().min(1).max(256).optional(),
     /** What the call would do, read on the host from the target it acts on. */
     lines: z.array(z.string().max(MAX_RELAY_APPROVAL_LINE_CHARS)).max(MAX_RELAY_APPROVAL_LINES),
+    /**
+     * Set on, and only on, the global Assistant's close of a finished agent it
+     * didn't launch (#16750): how the host read that agent's stop. A Shell from
+     * before it rejects the field, which approves nothing.
+     */
+    closeClass: z.enum(GLOBAL_CLOSE_CLASSES).optional(),
   })
   .strict();
 export type RelayApprovePayload = z.infer<typeof RelayApprovePayloadSchema>;

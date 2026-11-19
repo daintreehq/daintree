@@ -22,6 +22,15 @@ export interface DelegableAssistantConfirmation {
 
 export const ASSISTANT_HOST_SETTINGS_CONFIRMATION = "host.settings";
 
+export const ASSISTANT_GLOBAL_CLOSE_TOOL = "terminal.closeOwned";
+
+/**
+ * Covers the global Assistant's close of a finished agent it didn't launch
+ * (#16750), never one stopped on an error. Not a tool id: the owned close
+ * also ends what the assistant launched, which never asks.
+ */
+export const ASSISTANT_GLOBAL_CLOSE_CONFIRMATION = "terminal.closeOwned.finishedAgent";
+
 /** Never skipped, delegated or granted: the person ticks each account's folder (#17079). */
 export const ASSISTANT_ACCOUNT_ADD_CONFIRMATION = "agent.addAccount";
 
@@ -56,6 +65,13 @@ export const DELEGABLE_ASSISTANT_CONFIRMATIONS: readonly DelegableAssistantConfi
     label: "Move an agent it launched to the next preset in its fallback chain",
     detail:
       "Only the next step of a custom preset's fallback chain, walked as a usage-limit fallback walks it and on the same account; any other preset still asks",
+  },
+  {
+    id: ASSISTANT_GLOBAL_CLOSE_CONFIRMATION,
+    calledActionId: ASSISTANT_GLOBAL_CLOSE_TOOL,
+    label: "Close a finished agent",
+    detail:
+      "For the global assistant, only an agent that handed its work back with nothing typed; one stopped on an error always asks",
   },
   {
     id: ASSISTANT_HOST_SETTINGS_CONFIRMATION,

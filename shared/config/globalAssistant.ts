@@ -31,8 +31,9 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * project, so every project tool reaches it only through `host.call`, where
  * the target host admits it as it would another machine's assistant: the owned
  * tools alone act, on what it launched there or was handed, save that a prompt,
- * keys and an interrupt also reach an agent it didn't launch (#14551), and a
- * reveal shows the person that agent's panel (#16096). `host.ensureProject`
+ * keys and an interrupt also reach an agent it didn't launch (#14551), a
+ * reveal shows the person that agent's panel (#16096), and a close reaches one
+ * that has finished (#16750). `host.ensureProject`
  * acts on the caller's own project, which it has none of. `host.settings`
  * names hosts, never a project, and every change it makes the person approves.
  * `host.watch` names a host and only listens, so the coordinator that held
@@ -69,7 +70,11 @@ export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
  * run it names and never over a person's input, and its send runs a slash
  * command only as one of the agent's fixed forms (#16101); `terminal.revealOwned`
  * reaches the same workers through the same checks, which writes nothing and so
- * waits on no one (#16096); every other owned form keeps the ledger.
+ * waits on no one (#16096); `terminal.closeOwned` and `terminal.closeMany`
+ * close an agent it didn't launch only once its stop handed the work back, or
+ * stopped on an error, with nothing typed, and the person's Daintree
+ * confirmations or the person said yes (#16750); every other owned form keeps
+ * the ledger.
  * `worktree.resource.teardown` and `recipe.run` are here on purpose: both are
  * `danger: "confirm"`, so the person approves each run. So are the user-preset
  * writes (#16047), each previewed as the exact change, and the account add
