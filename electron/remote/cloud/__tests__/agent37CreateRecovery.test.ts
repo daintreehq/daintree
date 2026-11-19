@@ -51,6 +51,8 @@ type SavedCreation = { sentAt: number | null } | null;
  */
 async function agent37() {
   const api = new FakeAgent37Api();
+  // Daintree's clock runs with Agent 37's, so a machine it made dates from its send.
+  const skew = Date.now() - api.now;
   /**
    * Requests still in flight when Daintree quits: `held` never reached Agent 37,
    * `lost` did, and only its answer never came back.
@@ -120,6 +122,7 @@ async function agent37() {
       },
       changed: () => {},
       sleep: async () => {},
+      now: () => Date.now() - skew,
     });
     runs.push(lifecycle);
     const crash = () => {
