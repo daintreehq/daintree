@@ -8,6 +8,8 @@ const running = vi.hoisted(
 const detached = vi.hoisted(() => new Set<string>());
 /** Help sessions a schedule started (#16169), with their run. */
 const scheduled = vi.hoisted(() => new Map<string, { scheduleId: string; runId: string }>());
+/** The conversation each help session's lane runs, as main minted it (#17919). */
+const conversations = vi.hoisted(() => new Map<string, string>());
 /** Which project each of this machine's views shows, by WebContents id. */
 const views = vi.hoisted(() => new Map<number, string>());
 /** The host-control runtime install hands the MCP server. */
@@ -61,6 +63,7 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     getRunningLaneSession: (projectId: string, slot: number) =>
       running.get(`${projectId}:${slot}`) ?? null,
     getScheduledRunOf: (helpSessionId: string) => scheduled.get(helpSessionId) ?? null,
+    getConversationOwnershipId: (helpSessionId: string) => conversations.get(helpSessionId) ?? null,
     listRunningLanes: () =>
       [...running.keys()].map((key) => {
         const [projectId, slot] = laneOf(key);
@@ -233,6 +236,7 @@ afterEach(() => {
   running.clear();
   detached.clear();
   scheduled.clear();
+  conversations.clear();
   views.clear();
   generations.clear();
   queued.length = 0;
@@ -281,6 +285,7 @@ describe("installHostControl (#13493)", () => {
       isHostControlEnabled: () => true,
     });
     runLocally("proj-1", 0, "a");
+    conversations.set("a", "conv-a");
     const runtime = hostControl.runtime as HostCallRuntime;
 
     const listed = await runtime.list("a");
@@ -304,6 +309,8 @@ describe("installHostControl (#13493)", () => {
         caller: expect.objectContaining({
           senderId: "local",
           helpSessionId: "a",
+          // From main's own record of the lane (#17919).
+          conversationId: "conv-a",
           shellName: "greg-mbp",
           local: true,
         }),

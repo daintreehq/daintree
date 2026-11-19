@@ -189,6 +189,22 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
 }
 
 /** An Assistant's pane, by its binding; none is bound before the service loads. */
+/**
+ * Whether a Claude launch forks the conversation it reopens into a new one
+ * (`--fork-session`), as a user's own launch flags may ask: the run is then
+ * another conversation, whatever id it was resumed by (#17919). Read from the
+ * flags themselves, so a prompt that only mentions the flag is no fork.
+ */
+function forksClaudeConversation(
+  flags: readonly string[] | undefined,
+  agentId: string | undefined
+): boolean {
+  return (
+    agentId === "claude" &&
+    (flags ?? []).some((flag) => flag === "--fork-session" || flag.startsWith("--fork-session="))
+  );
+}
+
 function isBoundHelpTerminal(terminalId: string): boolean {
   return loadedHelpSessionService()?.isHelpTerminal(terminalId) ?? false;
 }
@@ -1395,10 +1411,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // value (no `getDefaultShell()` fallback) so the PTY pool can match —
     // see `acquirePtyProcess` in `terminalSpawn.ts`.
     let spawnAgentSessionId = validatedOptions.agentSessionId;
+    // A resume main turned into a fresh start is a new conversation, whatever
+    // its id: what the old one launched isn't its to clean up (#17919).
+    let startsFreshConversation = false;
     if (untouchedSessionId) {
       const relaunch = relaunchResumeAsAssignedSession(safeCommand, launchAgentId);
       if (relaunch?.sessionId === untouchedSessionId) {
         safeCommand = relaunch.command;
+        startsFreshConversation = true;
         // A caller that only had the command still gets the id on the record, so
         // teardown hands it back like any other assigned launch.
         spawnAgentSessionId ??= untouchedSessionId;
@@ -1653,8 +1673,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // (#13205). Memory-first, so it is current before any later capture.
       // The PTY is already up, so a failure here must not fail the spawn.
       if (isHelpLaunch) {
+        // A launch that forks the conversation it reopens runs a new one its id
+        // doesn't name (#17919).
+        const laneLaunch = forksClaudeConversation(validatedOptions.agentLaunchFlags, launchAgentId)
+          ? ({ forkedConversation: true } as const)
+          : startsFreshConversation
+            ? ({ freshConversation: true } as const)
+            : undefined;
         try {
-          helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId).catch((err) => {
+          (laneLaunch
+            ? helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId, laneLaunch)
+            : helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
+          ).catch((err) => {
             console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
           });
         } catch (err) {
@@ -1811,9 +1841,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
     if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
     dropHeldComposerSend(id, options);
+    // An Assistant's lane, frozen before the kill: the id it hands back is the
+    // lane's conversation too, which a view keeps by itself otherwise (#17919).
+    const helpSessions = loadedHelpSessionService();
+    const lane = helpSessions?.snapshotLaneTerminals().get(id);
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
     const generation = getLifecycleLedger().currentGeneration(id);
     const sessionId = await ptyClient.gracefulKill(id);
+    if (lane && sessionId) {
+      helpSessions?.noteQuitCapture(lane, sessionId).catch((err) => {
+        console.warn("[TerminalGracefulKill] Failed to record assistant lane conversation:", err);
+      });
+    }
     await persistCloseRecord(
       info,
       sessionId,

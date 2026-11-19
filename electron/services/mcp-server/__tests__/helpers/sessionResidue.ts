@@ -10,6 +10,8 @@ import type { SessionStore } from "../../sessionStore.js";
 export const RETAINED_COLLECTIONS: Readonly<Record<string, string>> = {
   "resourceOwnership.livePrincipals":
     "principal keys: a bearer's authority outlives its sessions (#12487)",
+  "resourceOwnership.conversationByPrincipal":
+    "principal keys bound to a conversation, unbound with the bearer (#17919)",
   "terminalAdoption.byTerminal": "held by bearer principals, never by a session (#12490)",
   "terminalAdoption.listeners": "change subscribers, not session state",
   "workerCreations.byTerminal":

@@ -16,7 +16,7 @@ import http from "node:http";
 import { EventEmitter } from "node:events";
 import type { ActionId, ActionManifestEntry } from "../../../../shared/types/actions.js";
 import { HttpLifecycle, type HttpLifecycleDeps } from "../httpLifecycle.js";
-import { relayOwnershipPrincipal } from "../resourceOwnership.js";
+import { relayConversationKey, relayOwnershipPrincipal } from "../resourceOwnership.js";
 import { SessionStore } from "../sessionStore.js";
 import {
   _resetMcpDriveTargetResolverForTesting,
@@ -227,6 +227,50 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     expect(store.sessionWorkspaceMap.has(id)).toBe(false);
     expect(store.getRelayCaller(id)).toBeUndefined();
     expect(session!.isOpen()).toBe(false);
+  });
+
+  // #17919: the same conversation resumed under a new help session holds what it made here.
+  it("holds what a caller's conversation made under that conversation and its sender", async () => {
+    const { lc, store } = await startedLifecycle();
+    const ownership = store.resourceOwnership;
+    const first = await lc.openRelaySession({
+      tier: "core",
+      workspaceId: "project-1",
+      caller: { ...CALLER, conversationId: "conv-1" },
+    });
+    ownership.record(ownership.ownerOf(first!.sessionId), [{ kind: "terminal", id: "t1" }]);
+    expect(ownership.creatorOf("terminal", "t1")).toBe(
+      relayConversationKey(CALLER.senderId, "conv-1")
+    );
+    first!.close();
+    // Ended, not aged out: its conversation keeps what it made for the resume.
+    ownership.revokePrincipal(relayOwnershipPrincipal(CALLER.senderId, CALLER.helpSessionId));
+
+    const resumed = await lc.openRelaySession({
+      tier: "core",
+      workspaceId: "project-1",
+      caller: { ...CALLER, helpSessionId: "help-2", conversationId: "conv-1" },
+    });
+    const otherSender = await lc.openRelaySession({
+      tier: "core",
+      workspaceId: "project-1",
+      caller: {
+        ...CALLER,
+        senderId: "b".repeat(64),
+        helpSessionId: "help-3",
+        conversationId: "conv-1",
+      },
+    });
+    const older = await lc.openRelaySession({
+      tier: "core",
+      workspaceId: "project-1",
+      caller: { ...CALLER, helpSessionId: "help-4" },
+    });
+
+    expect(ownership.owns(ownership.ownerOf(resumed!.sessionId), "terminal", "t1")).toBe(true);
+    expect(ownership.owns(ownership.ownerOf(otherSender!.sessionId), "terminal", "t1")).toBe(false);
+    expect(ownership.owns(ownership.ownerOf(older!.sessionId), "terminal", "t1")).toBe(false);
+    for (const session of [resumed, otherSender, older]) session!.close();
   });
 
   it("dispatches with who asked, a read by what the tool advertises and anything else as a write", async () => {

@@ -42,7 +42,10 @@ import type { ActionDispatchResult } from "../../../shared/types/actions.js";
  *    the session but not the bearer, so the pane or help session keeps
  *    authority over what it launched. The principal's
  *    records go when the bearer is revoked ({@link revokePrincipal}), never
- *    before. Clearing authority is not cleanup: the terminals and worktrees
+ *    before. An Assistant's creations are the exception (#17919): main binds
+ *    its principal to its conversation, which holds them for the bearer of
+ *    the same conversation resumed, while the revoked bearer holds nothing.
+ *    Clearing authority is not cleanup: the terminals and worktrees
  *    themselves stay exactly where they are, because a disconnect is not a
  *    decision to destroy the user's work.
  *
@@ -136,6 +139,31 @@ function isPrincipalOwner(owner: string): boolean {
   return owner.startsWith(PRINCIPAL_OWNER_PREFIX);
 }
 
+// NUL-led like the principal prefix, and never bound to a session: no caller
+// can present one, only main can bind a principal to it.
+const CONVERSATION_OWNER_PREFIX = "conversation\u0000";
+
+/**
+ * Where a local Assistant's creations are held (#17919): its conversation, as
+ * the ownership id main minted for its lane, so a resumed conversation's next
+ * bearer holds what the last one made.
+ */
+export function helpConversationKey(conversationId: string): string {
+  return `${CONVERSATION_OWNER_PREFIX}help\u0000${conversationId}`;
+}
+
+/**
+ * Where a relayed assistant's creations are held (#17919): its conversation,
+ * under the sender that proved it, so no other Shell can name its way in.
+ */
+export function relayConversationKey(senderId: string, conversationId: string): string {
+  return `${CONVERSATION_OWNER_PREFIX}relay\u0000${senderId}\u0000${conversationId}`;
+}
+
+function isConversationOwner(owner: string): boolean {
+  return owner.startsWith(CONVERSATION_OWNER_PREFIX);
+}
+
 /** A Daintree Assistant's principal, read back from the owner key its authority is held under. */
 export type AssistantOwnershipPrincipal =
   | { kind: "help"; helpSessionId: string }
@@ -179,6 +207,12 @@ export class ResourceOwnershipLedger {
   private readonly livePrincipals = new Set<string>();
   /** owner → terminalId → what it closed, oldest first. */
   private readonly closedByOwner = new Map<string, Map<string, ClosedTerminalRecord>>();
+  /**
+   * Live principal owner key → the conversation its creations are held under
+   * (#17919). Only creation records go there; what it closed, its hand-overs,
+   * notices and grants stay its own. Dropped when the principal is revoked.
+   */
+  private readonly conversationByPrincipal = new Map<string, string>();
 
   /**
    * Bind a session to the principal its bearer resolved to at handshake
@@ -210,6 +244,74 @@ export class ResourceOwnershipLedger {
   }
 
   /**
+   * Hold a live principal's creations under its conversation (#17919), as main
+   * bound it: a help bearer to its lane's conversation, a relay principal to
+   * the conversation its sender named. Every live principal bound to one
+   * conversation holds its records, so a resumed conversation's bearer gets
+   * back what the last one launched, and a revoked one reads nothing, since
+   * revoking unbinds it. Anything the principal recorded before it was bound
+   * moves with it. A revoked principal binds nothing.
+   *
+   * One conversation per principal: a bearer that goes on to run another (a
+   * help session relaunched fresh onto a new PTY) holds what it makes from
+   * then on itself, so neither conversation gets the other's work, nor a call
+   * of the first that lands late.
+   */
+  attachConversation(principalId: string, conversationKey: string): void {
+    const owner = principalOwnerKey(principalId);
+    if (!this.livePrincipals.has(owner) || !isConversationOwner(conversationKey)) return;
+    const current = this.conversationByPrincipal.get(owner);
+    if (current === conversationKey || current === owner) return;
+    if (current !== undefined) {
+      // Pinned to itself: `holderOf` reads the principal's own key from now on.
+      this.conversationByPrincipal.set(owner, owner);
+      return;
+    }
+    this.moveRecords(owner, conversationKey);
+    this.conversationByPrincipal.set(owner, conversationKey);
+  }
+
+  /**
+   * Forget a conversation's creations (#17919): its lane started another or
+   * was cleared, so nothing can resume it. Any principal still bound to it
+   * holds what it records next under itself.
+   */
+  forgetConversation(conversationKey: string): void {
+    if (!isConversationOwner(conversationKey)) return;
+    for (const [owner, conversation] of [...this.conversationByPrincipal]) {
+      if (conversation === conversationKey) this.conversationByPrincipal.delete(owner);
+    }
+    this.dropOwner(conversationKey);
+  }
+
+  /** Where `owner`'s creation records live: its conversation while bound to one, else itself. */
+  private holderOf(owner: string): string {
+    return this.conversationByPrincipal.get(owner) ?? owner;
+  }
+
+  private moveRecords(from: string, to: string): void {
+    const owned = this.byOwner.get(from);
+    if (owned === undefined) return;
+    let target = this.byOwner.get(to);
+    if (target === undefined) {
+      target = new Map();
+      this.byOwner.set(to, target);
+    }
+    for (const [key, record] of owned) {
+      target.set(key, record);
+      this.ownerByResource.set(key, to);
+    }
+    this.byOwner.delete(from);
+  }
+
+  private isConversationBound(conversationKey: string): boolean {
+    for (const conversation of this.conversationByPrincipal.values()) {
+      if (conversation === conversationKey) return true;
+    }
+    return false;
+  }
+
+  /**
    * Attribute freshly created resources to an owner.
    *
    * A previous holder of the same id loses its record, because the id now names
@@ -224,21 +326,24 @@ export class ResourceOwnershipLedger {
     workspaceId?: string
   ): OwnedResourceRecord[] {
     if (drafts.length === 0) return [];
-    if (isPrincipalOwner(owner) && !this.livePrincipals.has(owner)) return [];
+    if (isPrincipalOwner(owner) && !this.livePrincipals.has(owner)) {
+      // Nothing for it, but the ids name something new: an older record for
+      // them, such as a dormant conversation's, no longer speaks for them.
+      for (const draft of drafts) {
+        if (draft.id.length > 0) this.evict(resourceKey(draft.kind, draft.id));
+      }
+      return [];
+    }
+    const holder = this.holderOf(owner);
     const added: OwnedResourceRecord[] = [];
     for (const draft of drafts) {
       if (draft.id.length === 0) continue;
       const key = resourceKey(draft.kind, draft.id);
-      const previousOwner = this.ownerByResource.get(key);
-      if (previousOwner !== undefined && previousOwner !== owner) {
-        const previous = this.byOwner.get(previousOwner);
-        previous?.delete(key);
-        if (previous?.size === 0) this.byOwner.delete(previousOwner);
-      }
-      let owned = this.byOwner.get(owner);
+      if (this.ownerByResource.get(key) !== holder) this.evict(key);
+      let owned = this.byOwner.get(holder);
       if (owned === undefined) {
         owned = new Map();
-        this.byOwner.set(owner, owned);
+        this.byOwner.set(holder, owned);
       }
       const record: OwnedResourceRecord = {
         kind: draft.kind,
@@ -246,10 +351,20 @@ export class ResourceOwnershipLedger {
         ...(workspaceId !== undefined ? { workspaceId } : {}),
       };
       owned.set(key, record);
-      this.ownerByResource.set(key, owner);
+      this.ownerByResource.set(key, holder);
       added.push(record);
     }
     return added;
+  }
+
+  /** Drop whatever record holds `key`, wherever it is held. */
+  private evict(key: string): void {
+    const holder = this.ownerByResource.get(key);
+    if (holder === undefined) return;
+    const owned = this.byOwner.get(holder);
+    owned?.delete(key);
+    if (owned?.size === 0) this.byOwner.delete(holder);
+    this.ownerByResource.delete(key);
   }
 
   /**
@@ -316,7 +431,7 @@ export class ResourceOwnershipLedger {
    * handshook, or one already half torn down, owns nothing.
    */
   get(owner: string, kind: OwnedResourceKind, id: string): OwnedResourceRecord | undefined {
-    return this.byOwner.get(owner)?.get(resourceKey(kind, id));
+    return this.byOwner.get(this.holderOf(owner))?.get(resourceKey(kind, id));
   }
 
   owns(owner: string, kind: OwnedResourceKind, id: string): boolean {
@@ -332,6 +447,28 @@ export class ResourceOwnershipLedger {
     return this.ownerByResource.get(resourceKey(kind, id));
   }
 
+  /** The record held for a resource, whoever holds it. Compared by identity with what a creation noted. */
+  recordOf(kind: OwnedResourceKind, id: string): OwnedResourceRecord | undefined {
+    const key = resourceKey(kind, id);
+    const holder = this.ownerByResource.get(key);
+    return holder === undefined ? undefined : this.byOwner.get(holder)?.get(key);
+  }
+
+  /**
+   * The owner holding authority over a resource's record now: its holder, or
+   * for a conversation's record the principal bound to it most recently, and
+   * undefined while no live principal is (#17919). Display only.
+   */
+  controllerOf(kind: OwnedResourceKind, id: string): string | undefined {
+    const holder = this.ownerByResource.get(resourceKey(kind, id));
+    if (holder === undefined || !isConversationOwner(holder)) return holder;
+    let controller: string | undefined;
+    for (const [owner, conversation] of this.conversationByPrincipal) {
+      if (conversation === holder) controller = owner;
+    }
+    return controller;
+  }
+
   /**
    * Drop one record after its resource is gone.
    *
@@ -344,7 +481,9 @@ export class ResourceOwnershipLedger {
    * With `expected`, only that record is dropped. Every creation writes a new
    * record, so a cleanup that finishes after the id was recorded again — by
    * another session on the same bearer — leaves the newer resource's record
-   * alone.
+   * alone. That very record goes wherever it is held, so a cleanup whose
+   * bearer was revoked before it finished still takes it out of the
+   * conversation that holds it (#17919).
    */
   release(
     owner: string,
@@ -353,17 +492,24 @@ export class ResourceOwnershipLedger {
     expected?: OwnedResourceRecord
   ): void {
     const key = resourceKey(kind, id);
-    const owned = this.byOwner.get(owner);
+    const current = this.ownerByResource.get(key);
+    const holder =
+      expected !== undefined &&
+      current !== undefined &&
+      this.byOwner.get(current)?.get(key) === expected
+        ? current
+        : this.holderOf(owner);
+    const owned = this.byOwner.get(holder);
     if (owned === undefined) return;
     if (expected !== undefined && owned.get(key) !== expected) return;
     if (!owned.delete(key)) return;
-    if (owned.size === 0) this.byOwner.delete(owner);
-    if (this.ownerByResource.get(key) === owner) this.ownerByResource.delete(key);
+    if (owned.size === 0) this.byOwner.delete(holder);
+    if (this.ownerByResource.get(key) === holder) this.ownerByResource.delete(key);
   }
 
   /** Every resource this owner still holds authority over. */
   list(owner: string): OwnedResourceRecord[] {
-    const owned = this.byOwner.get(owner);
+    const owned = this.byOwner.get(this.holderOf(owner));
     return owned === undefined ? [] : [...owned.values()];
   }
 
@@ -383,22 +529,38 @@ export class ResourceOwnershipLedger {
    * Revoke a bearer's authority, in the same step as the bearer itself
    * (#12487). Sessions still bound to it stay bound to a principal that now
    * owns nothing and records nothing, so they fail closed until they end.
+   *
+   * A conversation it was bound to keeps its records for the conversation's
+   * next bearer (#17919), unless `dropUnboundConversation` says this was its
+   * last hold: a relay principal whose hold aged out or was crowded out, so
+   * its conversation's records last no longer than the relay's own retention.
    */
-  revokePrincipal(principalId: string): void {
+  revokePrincipal(principalId: string, options?: { dropUnboundConversation?: boolean }): void {
     const owner = principalOwnerKey(principalId);
     this.livePrincipals.delete(owner);
+    const conversation = this.conversationByPrincipal.get(owner);
+    this.conversationByPrincipal.delete(owner);
     this.dropOwner(owner);
+    if (
+      conversation !== undefined &&
+      conversation !== owner &&
+      options?.dropUnboundConversation === true &&
+      !this.isConversationBound(conversation)
+    ) {
+      this.dropOwner(conversation);
+    }
   }
 
   /**
    * End every session at once, for `SessionStore.drain`. Principals keep their
    * records: stopping the server revokes no pane bearer, so a pane that
    * reconnects to the restarted server is still the pane that launched them.
+   * Conversations keep theirs for the same reason.
    */
   clearAllSessions(): void {
     this.principalBySession.clear();
     for (const owner of [...this.byOwner.keys(), ...this.closedByOwner.keys()]) {
-      if (!isPrincipalOwner(owner)) this.dropOwner(owner);
+      if (!isPrincipalOwner(owner) && !isConversationOwner(owner)) this.dropOwner(owner);
     }
   }
 

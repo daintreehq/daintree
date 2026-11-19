@@ -202,6 +202,11 @@ export interface OpenRun {
   sessionId: string;
   terminalId: string;
   launchGeneration: number;
+  /**
+   * The conversation its lane runs, as main minted it (#17919): a host holds
+   * what the run makes there under it, so the conversation resumed keeps it.
+   */
+  conversationOwnershipId?: string;
 }
 
 export interface HostCallRuntimeDeps {
@@ -1903,6 +1908,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         runMs,
         // From the runtime's own lane, so no argument the model passes can set or clear it.
         ...(isGlobalAssistantId(caller.projectId) ? { global: true as const } : {}),
+        ...(caller.conversationOwnershipId !== undefined
+          ? { conversationId: caller.conversationOwnershipId }
+          : {}),
       };
       const noted = resend
         ? NOTHING_NOTED

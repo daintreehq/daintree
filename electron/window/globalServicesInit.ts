@@ -387,7 +387,8 @@ export function startMcpServerOnce(registry: WindowRegistry): Promise<void> {
       // validators this task would have wired.
       if (!store.get("mcpServer").enabled) return;
       const { mcpServerService } = await import("../services/McpServerService.js");
-      const { helpSessionService } = await import("../services/HelpSessionService.js");
+      const { helpSessionService, conversationOwnershipFor } =
+        await import("../services/HelpSessionService.js");
       // Register the help-token validator before start() so the very first
       // request can authenticate against a help session if the renderer
       // races ahead of us. (Also wired in HelpSessionService.ensureMcpServerReady
@@ -410,6 +411,10 @@ export function startMcpServerOnce(registry: WindowRegistry): Promise<void> {
       );
       helpSessionService.setOnMcpSessionRepinned((token) =>
         mcpServerService.resetHelpTransports(token)
+      );
+      // What an Assistant launches follows its conversation (#17919).
+      helpSessionService.setConversationOwnershipListener(
+        conversationOwnershipFor(mcpServerService)
       );
       // Before the first session, so none opens without what keeps assistants
       // out of its reach (#13496).
