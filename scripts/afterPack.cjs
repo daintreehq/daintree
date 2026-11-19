@@ -679,6 +679,12 @@ const WINDOWS_CLI_TEMPLATE = path.join(__dirname, "..", "build", "win", "daintre
 exports.WINDOWS_CLI_SHIM = WINDOWS_CLI_SHIM;
 exports.WINDOWS_CLI_TEMPLATE = WINDOWS_CLI_TEMPLATE;
 
+// The client the shim hands `daintree call` and `daintree session` to (#17932),
+// relative to the install directory: `win.extraResources` in
+// electron-builder.config.cjs copies it there before this hook runs.
+const WINDOWS_CLI_CLIENT = "resources/daintree-call.ps1";
+exports.WINDOWS_CLI_CLIENT = WINDOWS_CLI_CLIENT;
+
 /**
  * The shim's text: the template with this build's version and executable
  * filled in, CRLF throughout. The repo checks text out LF, and cmd.exe can
@@ -707,6 +713,13 @@ function renderWindowsCliShim(template, { version, executable }) {
 exports.renderWindowsCliShim = renderWindowsCliShim;
 
 function writeWindowsCliShim(appOutDir, packager) {
+  const clientPath = path.join(appOutDir, ...WINDOWS_CLI_CLIENT.split("/"));
+  if (!fs.existsSync(clientPath)) {
+    throw new Error(
+      `[afterPack] CRITICAL: the daintree call client is missing at ${clientPath}; ` +
+        "every daintree call and daintree session would fail. Check win.extraResources."
+    );
+  }
   const text = renderWindowsCliShim(fs.readFileSync(WINDOWS_CLI_TEMPLATE, "utf8"), {
     version: packager.appInfo.version,
     executable: `${packager.appInfo.productFilename}.exe`,

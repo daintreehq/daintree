@@ -5,7 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import buildConfig from "../../electron-builder.config.cjs";
-import { APP_ASAR_ROOT_ENTRIES, AVR_VAD_V5_MODEL, WINDOWS_CLI_SHIM } from "../afterPack.cjs";
+import {
+  APP_ASAR_ROOT_ENTRIES,
+  AVR_VAD_V5_MODEL,
+  WINDOWS_CLI_CLIENT,
+  WINDOWS_CLI_SHIM,
+} from "../afterPack.cjs";
 
 const require = createRequire(import.meta.url);
 
@@ -606,6 +611,27 @@ describe("NSIS installer — the daintree command on PATH (#17931)", () => {
     expect(adding).not.toContain("StrCpy $R7 $INSTDIR");
     expect(adding).toContain('StrCpy $R8 "$PROGRAMFILES64\\"');
     expect(adding).toContain('StrCpy $R8 "$PROGRAMFILES\\"');
+  });
+});
+
+describe("daintree call on Windows (#17932)", () => {
+  it("ships the client to the place the command and afterPack look for it", async () => {
+    const config = await buildConfig();
+    const [folder, file] = [
+      path.posix.dirname(WINDOWS_CLI_CLIENT),
+      path.posix.basename(WINDOWS_CLI_CLIENT),
+    ];
+    expect(folder).toBe("resources");
+    const entry = config.win.extraResources.find((r) => r.to === file);
+    expect(entry).toBeDefined();
+    expect(existsSync(new URL(`../../${entry.from}`, import.meta.url))).toBe(true);
+    // Resolved from bin\, where afterPack writes the command.
+    const template = await repoFile("build/win/daintree.cmd.in");
+    const fromBin = path.posix.relative(path.posix.dirname(WINDOWS_CLI_SHIM), WINDOWS_CLI_CLIENT);
+    expect(template).toContain(`set "client=%~dp0${fromBin.replaceAll("/", "\\")}"`);
+    // Nowhere on PATH: PowerShell would prefer a daintree.ps1 there over
+    // daintree.cmd and then refuse it under the default execution policy.
+    expect(path.posix.dirname(WINDOWS_CLI_CLIENT)).not.toBe(path.posix.dirname(WINDOWS_CLI_SHIM));
   });
 });
 
