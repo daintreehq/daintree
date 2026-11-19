@@ -365,13 +365,16 @@ export function useQuestionCancel(
   const away = subject !== null && subject.lastReadAt !== null;
 
   const declineKey = subject !== null ? answerKey(subject.reference) : "";
-  const declinePhase = useAnswerRecord(declineKey).decline?.phase ?? null;
+  const decline = useAnswerRecord(declineKey).decline;
+  const declinePhase = decline?.phase ?? null;
+  // Signed from a last read: never withdrawn in its place, even once its Host is back.
+  const signedAway = decline?.lastReadAt;
   const shownDecline = cancellable ? declinePhase : null;
   const progress = shownDecline !== null ? dismissProgressText(shownDecline, away) : null;
   // A relay that didn't hold the question yet is no reason once it reads as sent.
   const fallback =
     shownDecline !== null && alias !== null && subject !== null
-      ? dismissFallback(alias, shownDecline, subject.status, !away)
+      ? dismissFallback(alias, shownDecline, subject.status, !away && signedAway === undefined)
       : null;
   // One that settled without being taken, once out of the confirmation (read again on its own, or Retry).
   const outcome =
@@ -382,7 +385,7 @@ export function useQuestionCancel(
             label: alias,
             line: null,
             revision: subject.revision,
-            lastReadAt: subject.lastReadAt,
+            lastReadAt: subject.lastReadAt ?? signedAway ?? null,
           },
           shownDecline
         )

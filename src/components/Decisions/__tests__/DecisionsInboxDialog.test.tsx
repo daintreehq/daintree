@@ -21,7 +21,7 @@ import type {
 import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
+import { answerKey, useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 
 let decisionsOn = true;
@@ -784,6 +784,37 @@ describe("DecisionsInboxDialog", () => {
       expect(confirm.textContent).not.toContain("Withdraw question");
       expect(confirm.textContent).not.toMatch(/withdraw it instead/);
       expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    });
+
+    it("offers no withdrawal for a dismissal signed from the last read once the Host is back", async () => {
+      const declineId = "0190f0aa-1111-4222-8333-44445555ee01";
+      useDecisionsAnswerStore.getState().update(answerKey(AWAY_REFERENCE), (record) => ({
+        ...record,
+        decline: {
+          declineId,
+          payload: { reference: AWAY_REFERENCE, declineId, expectedRevision: 4 },
+          phase: { kind: "settled", outcome: { status: "unsupported", by: "relay" } },
+          resubmitted: false,
+          lastReadAt: 1_000,
+        },
+      }));
+      getQuestionContentByReference.mockResolvedValue({
+        result: "read",
+        question: content("question-9", 9, {
+          reference: AWAY_REFERENCE,
+          status: "open",
+          revision: 4,
+        }),
+      });
+      open();
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toMatch(
+          /^Your relay needs an update.*q-9 wasn't dismissed\.$/
+        )
+      );
+      expect(screen.queryByTestId("decisions-inbox-withdraw")).toBeNull();
+      // A new Dismiss, from the live read, is its own decision.
+      expect(screen.getByTestId("decisions-inbox-dismiss")).toBeTruthy();
     });
 
     it("says why it can't be dismissed when nothing read here says where it stands, and keeps Clear", async () => {
