@@ -132,6 +132,8 @@ export function opaqueHolders(
 export const OPAQUE_HOLDERS: Readonly<Record<string, string>> = {
   "grantCache.sweepTimer":
     "the cache's own sweep interval handle (a Node Timeout under real timers)",
+  "resourceOwnership.callerNamed":
+    "a WeakSet of creation records whose caller named the id (#16845): keyed by the record objects, so an entry goes with its record and names no session",
 };
 
 export interface SeedOptions {
