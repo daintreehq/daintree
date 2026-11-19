@@ -1550,22 +1550,44 @@ describe("AddHostDialog", () => {
       remoteHosts.probe!.mockResolvedValue(refused());
       cloudHosts
         .startHost!.mockRejectedValueOnce(refusal)
-        .mockImplementationOnce(() => new Promise<void>(() => {}));
+        .mockRejectedValueOnce(new Error("Agent 37 is still out of capacity."));
       render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
       await advance(0);
       await push(asleep());
       fireEvent.click(screen.getByRole("button", { name: "Start machine" }));
       await advance(0);
-      expect(
-        within(screen.getByTestId("add-host-machine-down")).getByRole("alert").textContent
-      ).toBe("Agent 37 has no capacity right now.");
+      const alert = () => within(screen.getByTestId("add-host-machine-down")).getAllByRole("alert");
+      expect(alert().map((node) => node.textContent)).toEqual([
+        "Agent 37 has no capacity right now.",
+      ]);
       await advance(60_000);
       expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
 
       fireEvent.click(screen.getByRole("button", { name: "Start machine" }));
       await advance(0);
       expect(cloudHosts.startHost).toHaveBeenCalledTimes(2);
-      expect(screen.queryByText("Agent 37 has no capacity right now.")).toBeNull();
+      expect(alert().map((node) => node.textContent)).toEqual([
+        "Agent 37 is still out of capacity.",
+      ]);
+    });
+
+    it("holds the rechecks while a start or stop is under way from anywhere", async () => {
+      remoteHosts.probe!.mockResolvedValue(refused());
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      expect(screen.getByTestId("add-host-awaiting-login")).toBeTruthy();
+      await push(
+        machine({
+          machine: "starting",
+          rawState: "waking",
+          operation: { id: "op_2", kind: "starting", startedAt: Date.now(), stage: "Waking it" },
+        })
+      );
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+      await push(machine());
+      await advance(10_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
     });
 
     it("checks again from the offer without starting it", async () => {
@@ -1577,6 +1599,51 @@ describe("AddHostDialog", () => {
       await advance(0);
       expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
       expect(cloudHosts.startHost).not.toHaveBeenCalled();
+    });
+
+    it("checks afresh from the offer over a failed connect, rather than showing that failure again", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult({ connection: HOST.connection }));
+      remoteHosts.connect!.mockResolvedValueOnce({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "The cloud machine is asleep. Start it to wake it and connect.",
+      });
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} connectWhenDone />);
+      await advance(0);
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+      await advance(0);
+      expect(screen.getByText("Couldn't connect to a37")).toBeTruthy();
+      await push(asleep());
+      expect(screen.getByTestId("add-host-machine-down")).toBeTruthy();
+
+      // Woken some other way meanwhile: the check finds it answering.
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      await push(machine());
+      await advance(0);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Couldn't connect to a37")).toBeNull();
+      expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+    });
+
+    it("hands the step back with new buttons, the leading one too, once the machine runs", async () => {
+      remoteHosts.probe!.mockResolvedValue(
+        probeResult({
+          connection: HOST.connection,
+          matchesClient: false,
+          hostModeListening: false,
+          hostBuild: { version: "1.3.0", commit: "0123456", order: "older" },
+        })
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      expect(screen.getByRole("button", { name: "Continue anyway" })).toBeTruthy();
+      await push(asleep());
+      const checkAgain = screen.getByRole("button", { name: "Check again" });
+      await push(machine());
+      expect(screen.queryByTestId("add-host-machine-down")).toBeNull();
+      // A press begun on Check again can't end on the step's own leading action.
+      expect(checkAgain.isConnected).toBe(false);
+      expect(screen.getByRole("button", { name: "Continue anyway" })).toBeTruthy();
     });
 
     it("puts the offer ahead of a reviewed install once the machine stops, then checks afresh", async () => {
@@ -1653,6 +1720,7 @@ describe("AddHostDialog", () => {
         />
       );
       await advance(0);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
       expect(remoteHosts.probe).toHaveBeenCalledWith({
         connection: { kind: "ssh", target: "greg@studio" },
       });

@@ -2150,6 +2150,8 @@ export function AddHostDialog({
       const local = localFooter();
       primary = local.primary;
       secondary = local.secondary;
+      // As on the check's newer verdict: the way on is this machine's update.
+      needsMachine = false;
       if (local.offerDowngrade)
         leading = {
           label: `Downgrade ${buttonHost}…`,
@@ -2360,7 +2362,15 @@ export function AddHostDialog({
       );
       primary = { label: "Start machine", onClick: startMachine };
       // Asking again reads its state and wakes nothing: for one woken some other way.
-      leading = { label: "Check again", onClick: () => check() };
+      // What it finds replaces a failed connect's outcome, as a fresh check after a start does.
+      leading = {
+        label: "Check again",
+        onClick: () => {
+          setOutcome(null);
+          setMachineStartError(null);
+          check();
+        },
+      };
       // It can open under a press meant for the step's own action: the start is a choice.
       focusCancel = true;
       screen = "machine:down";
@@ -2417,19 +2427,15 @@ export function AddHostDialog({
           </p>
         </AppDialog.Body>
         <AppDialog.Footer
+          // Every button new when the start offer comes or goes, the leading one too: a press
+          // begun on one screen's action must never end on the other's.
+          key={recovering ? "machine" : "setup"}
           // A step with an alternative and three actions wraps it onto its own row when narrow.
           className="flex-wrap gap-y-3"
           leadingAction={leading}
           hint={hint ?? savedHint}
         >
-          <WizardFooterActions
-            // New buttons when the start offer comes or goes: a press begun on the step's
-            // own action must never end on Start machine.
-            key={recovering ? "machine" : "setup"}
-            dismiss={secondary}
-            back={back}
-            primary={primary}
-          />
+          <WizardFooterActions dismiss={secondary} back={back} primary={primary} />
         </AppDialog.Footer>
       </AppDialog>
       {isOpen && (

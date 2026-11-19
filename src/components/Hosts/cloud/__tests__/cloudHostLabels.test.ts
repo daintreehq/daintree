@@ -535,6 +535,9 @@ describe("startBillingSentence", () => {
     expect(startBillingSentence(status({ machine: "error" }), billed)).toBe(
       "Starting it bills Personal about $0.036 an hour while it runs."
     );
+    expect(startBillingSentence(status({ machine: "running", accountName: "Team" }), billed)).toBe(
+      "Starting it bills Team about $0.036 an hour while it runs."
+    );
     expect(startBillingSentence(status({ machine: "stopped" }), BOAT_PROVIDER)).toBe(
       "Starting it bills Personal about $0.036 an hour while it runs."
     );
