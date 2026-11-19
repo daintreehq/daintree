@@ -74,6 +74,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.addAccount",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -177,6 +178,7 @@ const BYPASS_WIRED = new Set([
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.addAccount", // agent/MCP-only (#17079); palette-hidden, Settings adds through its own dialog and the agentAccounts IPC
   // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"
   // gates agent dispatch — no user-side ConfirmDialog to co-locate.
   "forge.createPR",

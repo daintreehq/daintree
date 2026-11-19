@@ -1069,6 +1069,7 @@ export const agentActionRuns = {
             isAgent: true,
             worktreeId,
             settings,
+            options: undefined,
             ...sources,
           }) === undefined,
       },

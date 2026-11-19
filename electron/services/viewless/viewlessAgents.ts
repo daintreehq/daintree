@@ -789,6 +789,7 @@ export async function runAgentListAccounts(
           ccrPresets: sources.ccrPresets,
           projectPresets: sources.projectPresets,
           presetInventory: sources.presetInventory,
+          options: undefined,
         }) === undefined,
     },
   });
