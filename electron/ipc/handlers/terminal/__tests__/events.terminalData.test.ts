@@ -319,7 +319,9 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
         expect(remote.send).not.toHaveBeenCalled();
         expect(dataSends(activeA)).toHaveLength(0);
         for (const wc of [cachedB, activeB, cachedA]) {
-          expect(dataSends(wc)).toEqual([[CHANNELS.TERMINAL_DATA, "term-unplaced", "picker output"]]);
+          expect(dataSends(wc)).toEqual([
+            [CHANNELS.TERMINAL_DATA, "term-unplaced", "picker output"],
+          ]);
         }
 
         // One main can no longer place still reaches them, as before.
