@@ -33,6 +33,11 @@ describe("formatLimitClock (#17911)", () => {
     expect(formatLimitClock(at(26, 10, 0), NOW)).toMatch(/^Nov 26, 10:00\sAM$/u);
   });
 
+  it("keeps the locale's own order of day and time", () => {
+    expect(formatLimitClock(at(23, 10, 0), NOW, "ja-JP")).toBe("10:00 (月)");
+    expect(formatLimitClock(at(26, 10, 0), NOW, "en-GB")).toBe("26 Nov, 10:00");
+  });
+
   it("names yesterday by its weekday", () => {
     expect(formatLimitClock(at(18, 23, 5), NOW)).toMatch(/^Wed 11:05\sPM$/u);
   });
@@ -66,7 +71,7 @@ describe("describeLimitContinue (#17911)", () => {
 
   it("says when the pane continued, then lets it go after a day", () => {
     const state = { status: "continued", at: at(19, 3, 41), line: "continue" } as const;
-    expect(describeLimitContinue(state, NOW)?.label).toMatch(/^Resumed 3:41\sAM$/u);
+    expect(describeLimitContinue(state, NOW)?.label).toMatch(/^Resume sent 3:41\sAM$/u);
     expect(describeLimitContinue(state, NOW)?.lines.join("\n")).toMatch(/"continue"/);
     expect(
       describeLimitContinue(state, state.at + LIMIT_CONTINUE_OUTCOME_TTL_MS - 1)
@@ -74,14 +79,23 @@ describe("describeLimitContinue (#17911)", () => {
     expect(describeLimitContinue(state, state.at + LIMIT_CONTINUE_OUTCOME_TTL_MS)).toBeNull();
   });
 
-  it("keeps an overnight skip on the pane in the morning, with its reason", () => {
-    const chip = describeLimitContinue(
-      { status: "skipped", at: at(19, 3, 41), reason: "draft" },
-      at(19, 8, 0)
-    );
+  it("keeps an overnight skip on the pane through the next night, with its reason", () => {
+    const state = { status: "skipped", at: at(19, 3, 41), reason: "draft" } as const;
+    const chip = describeLimitContinue(state, at(19, 8, 0));
     expect(chip?.kind).toBe("skipped");
     expect(chip?.label).toBe("Resume skipped");
     expect(chip?.lines).toContain("The prompt wasn't empty");
+    expect(describeLimitContinue(state, at(20, 3, 0))).not.toBeNull();
+    expect(describeLimitContinue(state, at(20, 3, 41))).toBeNull();
+  });
+
+  it("says a resume is unconfirmed when the host never answered, not that it was skipped", () => {
+    const chip = describeLimitContinue(
+      { status: "skipped", at: NOW, reason: "host-unanswered" },
+      NOW
+    );
+    expect(chip?.kind).toBe("unconfirmed");
+    expect(chip?.label).toBe("Resume unconfirmed");
   });
 
   it("says a restart, exit or move is why a resume was skipped", () => {
@@ -99,11 +113,23 @@ describe("describeLimitContinue (#17911)", () => {
       expect(chip?.kind).toBe("no-reset");
       expect(chip?.label).toBe("No reset time");
       expect(chip?.lines).toContain(describeSkipReason(reason));
+      expect(chip?.lines.join("\n")).not.toMatch(/\d:\d\d/);
     }
   });
 
+  it("points at the limit message only when it may name the reset", () => {
+    const pointer = /Check the limit message/;
+    const cap = describeLimitContinue({ status: "skipped", at: NOW, reason: "no-reset" }, NOW);
+    const unread = describeLimitContinue(
+      { status: "skipped", at: NOW, reason: "unreadable-time" },
+      NOW
+    );
+    expect(cap?.lines.join("\n")).not.toMatch(pointer);
+    expect(unread?.lines.join("\n")).toMatch(pointer);
+  });
+
   it("words a reason that can come at the stop or at the reset as a skip", () => {
-    for (const reason of ["not-observed", "banner-changed", "host-unanswered"] as const) {
+    for (const reason of ["not-observed", "banner-changed", "fallback-undetermined"] as const) {
       expect(describeLimitContinue({ status: "skipped", at: NOW, reason }, NOW)?.kind).toBe(
         "skipped"
       );

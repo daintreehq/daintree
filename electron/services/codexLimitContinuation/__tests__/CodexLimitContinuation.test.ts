@@ -301,11 +301,15 @@ describe("CodexLimitContinuation (#17909)", () => {
     await h.service.set("t1", true, PROJECT);
     await h.service.handleStop("t1", STOP);
     expect(h.state()).toMatchObject({ status: "waiting" });
+    const waitingRevision = h.changes.at(-1)!.revision;
 
     h.setTerminal(null);
     const handled = h.service.handleStop("t1", { run: "run-a", seq: 2 });
     expect(h.state()).toEqual({ status: "armed" });
     expect(h.changes.at(-1)).toMatchObject({ terminalId: "t1", state: { status: "armed" } });
+    // Newer than the wait it withdraws, so a view takes it.
+    expect(h.changes.at(-1)!.revision).toBeGreaterThan(waitingRevision);
+    expect(vi.getTimerCount()).toBe(0);
     await handled;
     expect(h.state()).toEqual({ status: "armed" });
     await vi.runAllTimersAsync();

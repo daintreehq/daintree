@@ -20,7 +20,8 @@ import { useCodexLimitContinueStore } from "@/store/codexLimitContinueStore";
 import { codexLimitContinueClient } from "@/clients/codexLimitContinueClient";
 import { formatRateLimitCountdownCoarse } from "@/components/Layout/RateLimitDetails";
 import { formatTimeAgo } from "@/utils/timeAgo";
-import { logWarn } from "@/utils/logger";
+import { isClientAppError } from "@/utils/clientAppError";
+import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import {
   HEADER_CHIP_CLASS,
@@ -74,12 +75,24 @@ export function TerminalRateLimitBadge({ terminalId }: { terminalId: string }) {
   const closeAccountRequest = useCallback(() => setAccountRequest(null), []);
   // Main keeps an outcome until the pane's next stop, the chip only for a
   // while: once everything it had to say has expired it stops reading the
-  // clock, until a new observation or continuation state arrives.
-  const inputs = `${observedAt ?? ""}:${continuation?.revision ?? ""}`;
-  const [retired, setRetired] = useState<string | null>(null);
-  const retire = useCallback(() => setRetired(inputs), [inputs]);
+  // clock, until a new observation or a new record of main's arrives. A record
+  // is new by identity, not revision: a restarted host can repeat a revision.
+  // A wait always shows.
+  const [retired, setRetired] = useState<{
+    observedAt: number | undefined;
+    entry: typeof continuation;
+  } | null>(null);
+  const retire = useCallback(
+    () => setRetired({ observedAt, entry: continuation }),
+    [observedAt, continuation]
+  );
+  const isRetired =
+    retired !== null &&
+    retired.observedAt === observedAt &&
+    retired.entry === continuation &&
+    continuation?.state.status !== "waiting";
   const mounted =
-    (observedAt !== undefined || canShowLimitContinue(continuation?.state)) && retired !== inputs;
+    (observedAt !== undefined || canShowLimitContinue(continuation?.state)) && !isRetired;
   return (
     <>
       {mounted && (
@@ -108,12 +121,33 @@ export function TerminalRateLimitBadge({ terminalId }: { terminalId: string }) {
 
 const CHIP_SOURCE: { readonly current: ActionSource } = { current: "user" };
 
-const CONTINUE_GLYPH: Record<LimitContinueChip["kind"], typeof TriangleAlert> = {
-  waiting: AlarmClock,
-  continued: AlarmClockCheck,
-  skipped: TriangleAlert,
-  "no-reset": TriangleAlert,
-};
+// Chosen at render, never at module load: tests mock the icon module with
+// only the glyphs they render.
+function continueGlyph(kind: LimitContinueChip["kind"] | undefined) {
+  if (kind === "waiting") return AlarmClock;
+  if (kind === "continued") return AlarmClockCheck;
+  return TriangleAlert;
+}
+
+/**
+ * Turn the pane's continuation off, straight to main and never an action, so
+ * nothing here reaches MCP (#17909). A refusal is said out loud: an armed
+ * pane with a fresh banner shows the same chip either way.
+ */
+function turnOffContinue(terminalId: string): void {
+  void codexLimitContinueClient.set(terminalId, false).catch((error: unknown) => {
+    const title = usePanelStore.getState().panelsById[terminalId]?.title;
+    const why =
+      (isClientAppError(error) && error.userMessage) || "The change didn't reach the pane's host.";
+    notify({
+      type: "error",
+      title: "Couldn't cancel resume",
+      message: `${why} ${title ? `'${title}'` : "The pane"} still continues once its usage limit resets.`,
+      action: { label: "Retry", variant: "primary", onClick: () => turnOffContinue(terminalId) },
+      context: { eventKind: "agent" },
+    });
+  });
+}
 
 // Split out so only a pane with something to say subscribes to the clock.
 function RateLimitChip({
@@ -150,12 +184,10 @@ function RateLimitChip({
   const live = isRateLimitObservationLive(observedAt, now);
   const resume = describeLimitContinue(continuation, now);
   const visible = live || resume !== null;
-  // An expired chip takes its menu with it, so the quota stops being read too,
-  // and a later observation doesn't bring the chip back with the menu open.
-  if (!visible && menuOpen) setMenuOpen(false);
-  // The pane is still stopped on its limit while the banner is fresh or a wait
-  // is pending, so a move elsewhere is still worth offering; an outcome isn't.
-  const offersRestart = live || resume?.kind === "waiting";
+  // The pane is still stopped on its limit while a wait is pending, or the
+  // banner is fresh and the line wasn't sent, so a move elsewhere is still
+  // worth offering; once the line went in, it isn't.
+  const offersRestart = resume?.kind === "waiting" || (live && resume?.kind !== "continued");
   // A pane on an account keeps it across a preset switch, so a preset's own
   // home says nothing about the quota it would run on: no hints then.
   const choices = useRestartPresetChoices(
@@ -173,15 +205,20 @@ function RateLimitChip({
     if (!visible) onRetire();
   }, [visible, onRetire]);
 
-  if (!visible) return null;
-
   const presetChoices = offersRestart ? choices : [];
   const accountMoves = offersRestart ? accountChoices : [];
   const hasRestart = Boolean(agentId) && (presetChoices.length > 0 || accountMoves.length > 0);
   // Main holds the pane armed: its menu can turn that off from here.
   const armed = continuation !== undefined;
-  const Glyph = resume ? CONTINUE_GLYPH[resume.kind] : TriangleAlert;
-  const warns = resume === null || resume.kind === "skipped" || resume.kind === "no-reset";
+  // A chip that expires or stops being a menu takes the menu with it, so the
+  // quota stops being read too, and a chip that becomes one again never opens
+  // by itself.
+  if (menuOpen && (!visible || !(armed || hasRestart))) setMenuOpen(false);
+
+  if (!visible) return null;
+
+  const Glyph = continueGlyph(resume?.kind);
+  const warns = resume === null || (resume.kind !== "waiting" && resume.kind !== "continued");
 
   const chipClass = cn(
     HEADER_CHIP_CLASS,
@@ -264,22 +301,11 @@ function RateLimitChip({
           </Tooltip>
           <DropdownMenuContent align="start" className="min-w-[200px]">
             {armed && (
-              // Straight to main, never an action: nothing here reaches MCP
-              // (#17909). Arming is the pane menu's; the chip only turns it off.
+              // Arming is the pane menu's; the chip only turns it off.
               <DropdownMenuCheckboxItem
                 checked
                 disabled={inputBlock !== null}
-                onSelect={() => {
-                  void codexLimitContinueClient.set(terminalId, false).catch((error: unknown) => {
-                    logWarn(
-                      "[TerminalRateLimitBadge] Continue when usage limit resets wasn't changed",
-                      {
-                        terminalId,
-                        error,
-                      }
-                    );
-                  });
-                }}
+                onSelect={() => turnOffContinue(terminalId)}
               >
                 Continue when usage limit resets
               </DropdownMenuCheckboxItem>

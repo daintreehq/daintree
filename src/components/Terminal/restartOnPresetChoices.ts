@@ -81,23 +81,30 @@ export function useRestartPresetChoices(
         : [],
     [agentId, currentPresetId, customPresets, ccrPresets, projectPresets]
   );
-  // Nothing to hint on, nothing to read: a menu open for another reason (the
-  // rate-limit chip's continue row, #17911) costs no app-server round trip.
-  const { profiles } = useCodexQuota(open && agentId === "codex" && others.length > 0);
-
-  return useMemo(() => {
-    if (!agentId) return [];
-    const globalPresetIds =
+  // Only a global preset can carry a quota hint (`codexProfileForPreset`).
+  const globalPresetIds = useMemo(
+    () =>
       agentId === "codex"
         ? new Set(getMergedPresets("codex", customPresets).map((preset) => preset.id))
-        : new Set<string>();
-    return others.map((preset) => ({
-      id: preset.id,
-      name: preset.name,
-      color: preset.color,
-      hint: profiles
-        ? formatCodexHeadroom(codexProfileForPreset(preset, globalPresetIds, profiles))
-        : undefined,
-    }));
-  }, [agentId, others, customPresets, profiles]);
+        : new Set<string>(),
+    [agentId, customPresets]
+  );
+  // Nothing to hint on, nothing to read: a menu open for another reason (the
+  // rate-limit chip's continue row, #17911) costs no app-server round trip.
+  const { profiles } = useCodexQuota(
+    open && agentId === "codex" && others.some((preset) => globalPresetIds.has(preset.id))
+  );
+
+  return useMemo(
+    () =>
+      others.map((preset) => ({
+        id: preset.id,
+        name: preset.name,
+        color: preset.color,
+        hint: profiles
+          ? formatCodexHeadroom(codexProfileForPreset(preset, globalPresetIds, profiles))
+          : undefined,
+      })),
+    [others, globalPresetIds, profiles]
+  );
 }
