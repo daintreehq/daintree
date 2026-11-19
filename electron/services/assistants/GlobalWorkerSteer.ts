@@ -602,9 +602,7 @@ export class GlobalWorkerSteer {
     if (generation === null) return null;
     const before = await this.closeRecord(projectId, terminalId, generation);
     if (before === null) return null;
-    const snapshot = await this.deps
-      .serializedState(terminalId, { tailRows: 0 })
-      .catch(() => null);
+    const snapshot = await this.deps.serializedState(terminalId, { tailRows: 0 }).catch(() => null);
     if (snapshot === null || snapshot.partial === true) return null;
     const after = await this.closeRecord(projectId, terminalId, generation);
     if (

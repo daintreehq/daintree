@@ -1675,6 +1675,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         ...(error.details !== undefined ? { details: error.details } : {}),
       });
     };
+    // A drive-rule refusal, which speaks its own code (#13493).
+    const refuseWrite = (refusal: { code: string; message: string }): CallToolResultLike =>
+      refuseCall({ code: refusal.code as ActionError["code"], message: refusal.message });
     // Every way a global close can miss, refused exactly as the ledger
     // refuses an id it doesn't hold.
     const refuseGlobalClose = (terminalId: string): CallToolResultLike => {
@@ -1699,7 +1702,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       if (first === null) return refuseGlobalClose(terminalId);
       globalCloseAudited = true;
       const standing = assistantWriteRefusal(projectId);
-      if (standing) return refuseCall(standing);
+      if (standing) return refuseWrite(standing);
       let settlement = asked?.settlement;
       if (settlement === undefined) {
         // Announced before the wait, so the strip shows the call awaiting
@@ -1726,7 +1729,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       if (settlement === "approved") confirmationDecision = "approved";
       else dispatchAuthorization = "skip-preference";
       if (sessionStore.getTier(sessionId) === null) {
-        return refuseCall({ code: SESSION_GONE, message: SESSION_GONE_MESSAGE });
+        return refuseCall({
+          code: SESSION_GONE as ActionError["code"],
+          message: SESSION_GONE_MESSAGE,
+        });
       }
       // Read again right before the close: the person may have typed, or
       // the agent moved on or been replaced, while the question was out.
@@ -1869,7 +1875,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // give it (#16750), keyed on the relay caller as the steer is. A
         // hand-over gives it no close: its own launches keep the owned path.
         const globalCloseRequested =
-          deps.relay?.global === true && actionId === GLOBAL_CLOSE_TOOL && ownedResource !== undefined;
+          deps.relay?.global === true &&
+          actionId === GLOBAL_CLOSE_TOOL &&
+          ownedResource !== undefined;
         const globalCloseCandidate =
           globalCloseRequested &&
           deps.relay?.askClose !== undefined &&
@@ -2362,7 +2370,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const globalEligible: Array<{ terminalId: string; target: GlobalCloseTarget }> = [];
           if (globalBatchProject !== undefined) {
             for (const terminalId of new Set((parsed.data as TerminalCloseManyArgs).terminalIds)) {
-              if (isAssistantId(terminalId) || ownedRecordFor("terminal", terminalId) !== undefined) {
+              if (
+                isAssistantId(terminalId) ||
+                ownedRecordFor("terminal", terminalId) !== undefined
+              ) {
                 continue;
               }
               const target = await deps.globalSteer!.closeTarget(globalBatchProject, terminalId);
@@ -2372,7 +2383,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           if (globalEligible.length > 0) {
             const standing = assistantWriteRefusal(globalBatchProject!);
-            if (standing) return refuseCall(standing);
+            if (standing) return refuseWrite(standing);
             globalCloseAudited = true;
           }
           const globalAsks = globalEligible.length > 0;

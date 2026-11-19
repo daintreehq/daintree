@@ -176,6 +176,45 @@ describe("askShellApproval (#13501)", () => {
     ).resolves.toEqual({ decision: "timeout" });
   });
 
+  describe("the global Assistant's close of a finished agent (#16750)", () => {
+    const CLOSE: RelayApprovalAsk = {
+      ...ASK,
+      actionId: "terminal.close",
+      args: { terminalId: "t-1" },
+      subject: "Fix the flaky test",
+      lines: ["Panel: Fix the flaky test (t-1)"],
+    };
+    const skipped = (payload: Record<string, unknown>) => ({
+      approvalId: payload.approvalId,
+      argsHash: payload.argsHash,
+      decision: "skip-preference",
+    });
+
+    it("tells the Shell how it read the stop", async () => {
+      const link = linkAnswering(skipped);
+
+      await expect(
+        askShellApproval(link, { ...CLOSE, closeClass: "handback" }, { now: () => 1_000 })
+      ).resolves.toMatchObject({ decision: "approved", authorization: "skip-preference" });
+      expect(RelayApproveTimedPayloadSchema.parse(link.call.mock.calls[0]![1])).toMatchObject({
+        actionId: "terminal.close",
+        closeClass: "handback",
+      });
+    });
+
+    it("takes no skip as an answer about an agent stopped on an error", async () => {
+      await expect(
+        askShellApproval(linkAnswering(skipped), { ...CLOSE, closeClass: "requires-person" })
+      ).resolves.toEqual({ decision: "unavailable" });
+    });
+
+    it("sends nothing of a close to any other ask", async () => {
+      const link = linkAnswering(skipped);
+      await askShellApproval(link, ASK);
+      expect(link.call.mock.calls[0]![1]).not.toHaveProperty("closeClass");
+    });
+  });
+
   it("counts nobody's approval in an answer that doesn't echo the ask", async () => {
     for (const answer of [
       { approvalId: "someone-else", argsHash: HASH, decision: "approved" },

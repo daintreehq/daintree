@@ -321,7 +321,10 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
-  it("still refuses to close, restart or inject into a worker it didn't launch", async () => {
+  // The close of a finished agent has its own gate, which asks the calling
+  // Shell (#16750); this session has no Shell to ask, so the steer never
+  // lets a close through.
+  it("still refuses to restart or inject into a worker it didn't launch, and closes nothing through the steer", async () => {
     const { deps, pty } = harness({ shellName, global: true, tier: "full" });
     const server = await serve(deps);
 
