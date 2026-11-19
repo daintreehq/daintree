@@ -237,6 +237,8 @@ export interface TerminalRuntime {
  * runtime resources via TerminalProcess methods (getPid(), write(), etc.)
  */
 export interface TerminalInfo extends TerminalPublicState {
+  /** Placed in no project on purpose (#17926): its cwd never makes it a project's. */
+  unplaced?: true;
   // Runtime resources - access via TerminalProcess methods instead
   /** @deprecated Use TerminalProcess.getPtyProcess() internally */
   ptyProcess: pty.IPty;

@@ -487,7 +487,8 @@ export class TerminalRegistry {
     }
 
     const startPaths: string[] = [];
-    if (typeof info.cwd === "string" && info.cwd.trim()) {
+    // One placed in no project on purpose stays in none wherever it opened (#17926).
+    if (info.unplaced !== true && typeof info.cwd === "string" && info.cwd.trim()) {
       startPaths.push(info.cwd);
     }
 

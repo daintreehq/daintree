@@ -23,10 +23,12 @@ function createMockTerminalProcess(options: {
   cwd: string;
   projectId?: string;
   worktreeId?: string;
+  unplaced?: true;
 }): TerminalProcess {
   const info = {
     id: options.id,
     projectId: options.projectId,
+    unplaced: options.unplaced,
     cwd: options.cwd,
     shell: "/bin/sh",
     kind: "terminal",
@@ -69,6 +71,29 @@ describe("TerminalRegistry projectId inference", () => {
       const stats = registry.getProjectStats(projectId);
       expect(stats.terminalCount).toBe(1);
       expect(registry.getForProject(projectId)).toEqual(["t1"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // #17926: opened from a window showing no project, inside a project's repository.
+  it("never infers a project for a terminal placed in none on purpose", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-terminal-registry-unplaced-"));
+    try {
+      fs.mkdirSync(path.join(root, ".git"));
+      const projectId = hashProjectId(root);
+      const registry = new TerminalRegistry();
+      const unplaced = createMockTerminalProcess({ id: "t-unplaced", cwd: root, unplaced: true });
+      registry.add("t-unplaced", unplaced);
+      registry.add("t-legacy", createMockTerminalProcess({ id: "t-legacy", cwd: root }));
+
+      expect(registry.getProjectStats(projectId).terminalCount).toBe(1);
+      expect(registry.getForProject(projectId)).toEqual(["t-legacy"]);
+      expect(registry.terminalBelongsToProject(unplaced, projectId)).toBe(false);
+      expect(unplaced.getInfo().projectId).toBeUndefined();
+      expect(
+        registry.getLiveTerminalRoots().find((root) => root.terminalId === "t-unplaced")?.projectId
+      ).toBeNull();
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

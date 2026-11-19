@@ -34,6 +34,7 @@ import {
   broadcastToProjectRenderers,
   getProjectPushTargets,
   hasBroadcastAudience,
+  broadcastToLocalRenderersExcept,
   broadcastToProjectRenderersExcept,
   broadcastToRemoteEndpoints,
   broadcastToRenderer,
@@ -292,6 +293,23 @@ describe("broadcast helpers with a link session's grouped endpoints (#15902)", (
     expect(laptop.sendToAll.mock.calls).toEqual(expected);
     expect(loose.send.mock.calls).toEqual(expected);
     for (const ep of [a, b, c]) expect(ep.send).not.toHaveBeenCalled();
+  });
+
+  it("keep a local-only push off every remote endpoint, bound or not", () => {
+    const view = localView(9);
+    const other = localView(10);
+    localViews.push(view, other);
+    const studio = group();
+    const picker = grouped(-1, null, studio);
+    const bound = endpoint(-2, "proj-1");
+    for (const ep of [picker, bound]) getEndpointRegistry().add(ep);
+
+    broadcastToLocalRenderersExcept(new Set([9]), "terminal:data", "id", "bytes");
+
+    expect(view.send).not.toHaveBeenCalled();
+    expect(other.send.mock.calls).toEqual([["terminal:data", "id", "bytes"]]);
+    expect(studio.sendToAll).not.toHaveBeenCalled();
+    for (const ep of [picker, bound]) expect(ep.send).not.toHaveBeenCalled();
   });
 
   it("address each grouped endpoint for project-scoped and excluding pushes", () => {

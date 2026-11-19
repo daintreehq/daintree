@@ -2,8 +2,12 @@ import type { LeaseArgPath, LeaseTarget, LeaseTargetSource } from "../ipc/channe
 
 type MaybePromise<T> = T | Promise<T>;
 
-/** What the host knows of a terminal: gone, or its project (null for none). */
-export type TerminalRecord = "missing" | { projectId: string | null };
+/**
+ * What the host knows of a terminal: gone, or its project (null for none, or
+ * when the lookup couldn't tell). `unplaced` is one main placed in no project
+ * on purpose (#17926), which changes none.
+ */
+export type TerminalRecord = "missing" | { projectId: string | null; unplaced?: true };
 
 /**
  * This Host's own records, which the lease gate reads to find the project a
@@ -20,15 +24,14 @@ export interface LeaseTargetResolvers {
    */
   projectsForPath(path: string): MaybePromise<readonly string[]>;
   /**
-   * A terminal's record: "missing" only when the host confirms it has none; a
-   * lookup that fails or times out answers `{ projectId: null }` or rejects.
+   * A terminal's record: "missing" only when the host confirms it has none,
+   * `unplaced` only when main placed it in no project itself; a lookup that
+   * fails or times out answers `{ projectId: null }` or rejects.
    */
   describeTerminal(terminalId: string): MaybePromise<TerminalRecord>;
   projectsForOperation(opId: string): MaybePromise<readonly string[]>;
   projectsForDevPreviewPanel(panelId: string): MaybePromise<readonly string[]>;
   projectsForHelpSession(sessionId: string): MaybePromise<readonly string[]>;
-  /** This Host's current project, which some handlers fall back to; null for none. */
-  currentProjectId(): string | null;
 }
 
 /**
@@ -83,10 +86,7 @@ function resolveSource(
     const optional = "optional" in source ? source.optional : undefined;
     if (optional === true) return [];
     if (optional === "caller") return one(callerProjectId, "the caller's project");
-    if (optional === "current-project") {
-      const current = resolvers.currentProjectId();
-      return current ? [current] : [];
-    }
+    if (optional === "caller-or-none") return callerProjectId ? [callerProjectId] : [];
     return { unresolved: `no ${source.from} argument` };
   }
   if (typeof value !== "string" || value.length === 0) {
@@ -113,7 +113,9 @@ function resolveSource(
     case "terminal":
       return then(resolvers.describeTerminal(value), (record) =>
         record !== "missing"
-          ? one(record.projectId, "a terminal with no owning project")
+          ? record.unplaced === true && record.projectId === null
+            ? []
+            : one(record.projectId, "a terminal with no owning project")
           : // A handler's session cleanup trims the id it's given, so a padded
             // one the host doesn't have would reach the terminal it spells.
             source.missing === "allow" && value === value.trim()

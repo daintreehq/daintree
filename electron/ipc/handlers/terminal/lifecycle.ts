@@ -477,18 +477,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // to whatever is globally current would hand the terminal to the wrong workspace,
     // and leaving it unset made ownership fall back to PtyClient's global
     // `activeProjectId`, so deleting a scratch never killed its terminals (#11079).
-    // Only a caller that sent no id at all falls back to the current project.
     // Blank is absent, not an identity: PtyClient already substitutes its
     // active project for a blank id, so leaving it as `""` here would let a
     // whitespace projectId slip past checks that a missing one is subject to.
-    const explicitWorkspaceId = validatedOptions.projectId?.trim() || undefined;
-    const resolvedProject = explicitWorkspaceId
-      ? projectStore.getProjectById(explicitWorkspaceId)
-      : projectStore.getCurrentProject();
+    //
+    // A caller that sent no id is placed in the window that asked: its own
+    // workspace, or none for a window showing none. Never the Host's current
+    // project, which names whatever some window last showed, another window's
+    // or, for a remote window, one of the Host's own (#17926). The lease gate
+    // places it the same way (`"caller-or-none"`).
+    const workspaceId = validatedOptions.projectId?.trim() || ctx.projectId || undefined;
+    const resolvedProject = workspaceId ? projectStore.getProjectById(workspaceId) : null;
 
-    // Ownership is the explicit id; project-only enrichment below (settings, shell
+    // Ownership is the workspace id; project-only enrichment below (settings, shell
     // overrides, project-path cwd fallback) stays gated on a resolved Project.
-    const projectId = explicitWorkspaceId ?? resolvedProject?.id;
+    const projectId = workspaceId;
     const projectPath = resolvedProject?.path;
 
     // A request naming BOTH a project and a worktree asserts that the worktree
@@ -1586,7 +1589,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         pluginPanelKindId: validatedOptions.pluginPanelKindId,
         title,
         titleMode: validatedOptions.titleMode,
-        projectId,
+        // None on purpose, so PtyClient doesn't hand it its active project.
+        projectId: projectId ?? null,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,
         // Seal the assistant's identity onto the record itself, for the

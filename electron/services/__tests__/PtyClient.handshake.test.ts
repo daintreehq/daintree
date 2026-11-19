@@ -1068,6 +1068,28 @@ describe("PtyClient projectId assignment", () => {
       })
     );
   });
+
+  // #17926: a window showing no project places its terminal in none.
+  it("places a spawn whose projectId is null in no project, never the active one", () => {
+    const client = createClient();
+    client.setActiveProject(1, "project-a");
+    mockChild.postMessage.mockClear();
+
+    client.spawn("t4", { cwd: "/tmp", cols: 80, rows: 24, projectId: null });
+
+    const sent = mockChild.postMessage.mock.calls
+      .map(([message]) => message as { type?: string; id?: string; options?: object })
+      .find((message) => message.type === "spawn" && message.id === "t4");
+    expect(sent?.options).toMatchObject({ unplaced: true });
+    expect(sent?.options).not.toHaveProperty("projectId");
+    expect(client.getTerminalProjectId("t4")).toBeNull();
+    expect(client.isUnplacedTerminal("t4")).toBe(true);
+
+    // The id reused for a project's spawn is that project's.
+    client.spawn("t4", { cwd: "/tmp", cols: 80, rows: 24 });
+    expect(client.getTerminalProjectId("t4")).toBe("project-a");
+    expect(client.isUnplacedTerminal("t4")).toBe(false);
+  });
 });
 
 function createMockPort() {

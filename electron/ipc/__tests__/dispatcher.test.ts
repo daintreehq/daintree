@@ -660,7 +660,6 @@ describe("drive-lease gate", () => {
         projectsForOperation: () => [],
         projectsForDevPreviewPanel: () => [],
         projectsForHelpSession: () => [],
-        currentProjectId: () => null,
         ...resolvers,
       }
     );
@@ -713,6 +712,60 @@ describe("drive-lease gate", () => {
     ).resolves.toEqual(wrapSuccess("ran"));
     expect(driver).toHaveBeenCalledTimes(1);
     expect(free).toHaveBeenCalledTimes(1);
+  });
+
+  // #17926: the window shows no project, so nothing anyone holds is its to take.
+  it("lets a window with no project open a terminal while another screen holds a project here", async () => {
+    const spawn = handle("terminal:spawn");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const ask = (projectId: string | null, args: unknown[]) =>
+      getIpcDispatcher().invokeForEndpoint(
+        { endpoint: makeRemoteEndpoint(-4, projectId).endpoint, client: REMOTE_CLIENT },
+        "terminal:spawn",
+        args
+      );
+
+    await expect(ask(null, [{ cols: 80, rows: 24 }])).resolves.toEqual(wrapSuccess("ran"));
+    await expect(ask(null, [{ cols: 80, rows: 24, cwd: "/home/u" }])).resolves.toEqual(
+      wrapSuccess("ran")
+    );
+    for (const [projectId, args] of [
+      // A window showing the held project is still refused, named or not.
+      ["proj-1", [{ cols: 80, rows: 24 }]],
+      ["proj-1", [{ cols: 80, rows: 24, projectId: "proj-1" }]],
+      // A no-project window can't spawn into the held project by naming it or its folder.
+      [null, [{ cols: 80, rows: 24, projectId: "proj-1" }]],
+      [null, [{ cols: 80, rows: 24, cwd: P1 }]],
+    ] as const) {
+      const refused = await ask(projectId, [...args]);
+      expect(refused.ok ? null : refused.error.code, JSON.stringify([projectId, args])).toBe(
+        "DRIVEN_ELSEWHERE"
+      );
+    }
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a window close a terminal main placed in no project while another screen holds a project here", async () => {
+    const kill = handle("terminal:kill");
+    const trash = handle("terminal:trash");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]), {
+      describeTerminal: (id) =>
+        id === "picker-shell"
+          ? { projectId: null, unplaced: true }
+          : id === "host-shell"
+            ? { projectId: null }
+            : "missing",
+    });
+    const { endpoint } = makeRemoteEndpoint(-4, null);
+    const ask = (channel: string, id: string) =>
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, channel, [id]);
+
+    await expect(ask("terminal:trash", "picker-shell")).resolves.toEqual(wrapSuccess("ran"));
+    await expect(ask("terminal:kill", "picker-shell")).resolves.toEqual(wrapSuccess("ran"));
+    const refused = await ask("terminal:kill", "host-shell");
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(trash).toHaveBeenCalledTimes(1);
   });
 
   it("traces where a call lands while a tenure is kept for a project nobody holds (#15918)", async () => {
@@ -1084,7 +1137,6 @@ describe("remote scope gate", () => {
           projectsForOperation: () => [],
           projectsForDevPreviewPanel: () => [],
           projectsForHelpSession: () => [],
-          currentProjectId: () => null,
         })
       )
     );

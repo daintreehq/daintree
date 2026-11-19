@@ -205,6 +205,26 @@ describe("PtyClient lifecycle ledger", () => {
     expect(ledger.recordJournal("t1", 2, "sess-after-crash").accepted).toBe(true);
   });
 
+  // #17926: a project activated after the spawn must not claim it on replay.
+  it("replays a terminal placed in no project still in none", () => {
+    const client = createReadyClient();
+    client.spawn("t1", { ...baseOptions, projectId: null });
+    client.setActiveProject(1, "project-later");
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    restartedChild.emit("message", { type: "ready" });
+
+    const replayed = spawnMessages(restartedChild);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]!.options).toMatchObject({ unplaced: true });
+    expect(replayed[0]!.options).not.toHaveProperty("projectId");
+    expect(client.isUnplacedTerminal("t1")).toBe(true);
+  });
+
   it("reports the incarnation a crashed host took with it before replaying the terminal (#15976)", () => {
     const client = createReadyClient();
     const lost = vi.fn();

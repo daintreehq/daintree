@@ -154,13 +154,15 @@ async function projectsForPathOwnership(
 /**
  * What the host knows of a terminal: gone, or the project it belongs to (null
  * for one with none). A lookup that fails answers "no project", which no call
- * or view can be traced to.
+ * or view can be traced to; only main's own record of placing it in none
+ * answers `unplaced`.
  */
 function describeTerminal(terminalId: string): TerminalRecord | Promise<TerminalRecord> {
   const pty = getPtyClient();
   if (!pty) return "missing";
   const tracked = pty.getTerminalProjectId(terminalId);
   if (tracked) return { projectId: tracked };
+  if (pty.isUnplacedTerminal(terminalId)) return { projectId: null, unplaced: true };
   // Strict: a lookup that times out throws rather than reading as "no such terminal".
   return pty.getTerminalAsync(terminalId, undefined, { strict: true }).then(
     (info): TerminalRecord => {
@@ -197,10 +199,6 @@ export function createLeaseTargetResolvers(): LeaseTargetResolvers {
     async projectsForDevPreviewPanel(panelId) {
       const { getDevPreviewProjectsForPanel } = await import("../ipc/handlers/devPreview.js");
       return getDevPreviewProjectsForPanel(panelId);
-    },
-
-    currentProjectId() {
-      return projectStore.getCurrentProjectId();
     },
 
     async projectsForHelpSession(sessionId) {
