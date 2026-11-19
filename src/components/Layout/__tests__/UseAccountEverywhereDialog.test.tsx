@@ -253,13 +253,19 @@ describe("UseAccountEverywhereDialog (#17893)", () => {
   });
 
   it("lists again, open, when a checked choice was changed elsewhere, keeping what was left out", async () => {
-    applyMock.mockResolvedValue({
-      agents: {
-        claude: {
-          accountId: "fresh",
-          worktreeAccounts: { "/work/app/main": "other", "/work/site/old": null },
+    // Settled into the store as the real save settles it.
+    applyMock.mockImplementation(async () => {
+      const saved = {
+        agents: {
+          claude: {
+            ...useAgentSettingsStore.getState().settings?.agents?.claude,
+            accountId: "fresh",
+            worktreeAccounts: { "/work/app/main": "other", "/work/site/old": null },
+          },
         },
-      },
+      } satisfies AgentSettings;
+      useAgentSettingsStore.setState({ settings: saved });
+      return saved;
     });
     const { onClose, onSaved } = renderDialog(FRESH);
     await screen.findByRole("checkbox", { name: "Review" });
@@ -288,10 +294,13 @@ describe("UseAccountEverywhereDialog (#17893)", () => {
         description: "On a removed account",
       })
     ).toBeTruthy();
-    expect(checked("/work/app/main")).toBe("true");
+    // Changed since it was shown, so clearing it takes a fresh tick.
+    expect(checked("/work/app/main")).toBe("false");
     // Left out before the save, so still left out.
     expect(checked("/work/site/old")).toBe("false");
     expect(screen.queryByRole("checkbox", { name: "Review" })).toBeNull();
+    // The default is saved and nothing is checked: a repeated confirm has nothing to send.
+    expect(isDisabled(confirmButton("Use Fresh everywhere"))).toBe(true);
 
     // Keeping it moves on without another write.
     act(() => {
@@ -299,6 +308,38 @@ describe("UseAccountEverywhereDialog (#17893)", () => {
     });
     expect(applyMock).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a choice changed elsewhere only once it's checked again", async () => {
+    applyMock.mockResolvedValueOnce({
+      agents: { claude: { accountId: "fresh", worktreeAccounts: { "/work/app/main": "other" } } },
+    });
+    renderDialog(FRESH, { accountId: "fresh" });
+    await screen.findByRole("checkbox", { name: "Review" });
+    listMock.mockResolvedValue({
+      worktrees: [{ worktreeId: "/work/app/main", accountId: "other", gone: false }],
+      presets: [],
+    });
+    await act(async () => {
+      fireEvent.click(confirmButton("Use Fresh everywhere"));
+    });
+    await screen.findByText("1 checked choice wasn't cleared");
+    await screen.findByRole("checkbox", {
+      name: "/work/app/main",
+      description: "On a removed account",
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "/work/app/main" }));
+    });
+    await act(async () => {
+      fireEvent.click(confirmButton("Use Fresh everywhere"));
+    });
+    expect(applyMock).toHaveBeenLastCalledWith({
+      agentId: "claude",
+      accountId: "fresh",
+      clear: { worktrees: [{ worktreeId: "/work/app/main", accountId: "other" }], presets: [] },
+    });
   });
 
   it("moves on to the running terminals from a list with nothing left to clear", async () => {

@@ -232,6 +232,17 @@ function UseAccountEverywhereConfirm({
       tickedPresets.filter((pin) => after.presets.some((left) => left.presetId === pin.presetId))
         .length;
     if (kept > 0) {
+      // What's left changed since it was shown, or is new, so it starts
+      // unchecked: clearing it takes a fresh tick, never a repeated Enter.
+      if (targetValue !== null) {
+        setUnticked({
+          target: targetValue,
+          keys: new Set([
+            ...after.worktrees.map((choice) => worktreeKey(choice.worktreeId)),
+            ...after.presets.map((pin) => presetKey(pin.presetId)),
+          ]),
+        });
+      }
       setChangedMeanwhile(kept);
       setAttempt((n) => n + 1);
       return;
