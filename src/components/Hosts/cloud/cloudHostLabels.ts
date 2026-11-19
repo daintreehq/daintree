@@ -66,6 +66,22 @@ export function stoppedBillingSentence(provider: CloudProviderTerms | null): str
   return `${provider.name} bills only for its disk while it's ${parked}.`;
 }
 
+/** What starting a machine bills, said where the start is decided. */
+export function startBillingSentence(
+  status: Pick<CloudHostStatus, "accountName" | "hourlyDollars" | "machine">,
+  provider: CloudProviderTerms | null
+): string {
+  const hourly =
+    status.hourlyDollars !== null
+      ? `about $${status.hourlyDollars.toFixed(3)} an hour`
+      : "for the time it runs";
+  const stopped = stoppedBillingSentence(provider);
+  // Starting doesn't start the billing there: the stopped machine is billed already.
+  return stopped && status.machine === "stopped"
+    ? `It bills ${status.accountName} ${hourly} while it runs. ${stopped}`
+    : `Starting it bills ${status.accountName} ${hourly} while it runs.`;
+}
+
 /** That a stopped machine keeps billing for compute, in the provider's own words where it gave them. */
 function stoppedComputeBilling(provider: CloudProviderTerms): string {
   return (

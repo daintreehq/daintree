@@ -21,7 +21,14 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { isMac } from "@/lib/platform";
 import { appClient } from "@/clients/appClient";
+import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
+import { cloudStatusFor, useCloudHostsWhile } from "@/components/Hosts/cloud/cloudHostsState";
+import {
+  canStartMachine,
+  cloudProviderFor,
+  startBillingSentence,
+} from "@/components/Hosts/cloud/cloudHostLabels";
 import { remoteConnectionKind } from "@/lib/remoteHosts";
 import { mintOperationId } from "@/clients/operationsClient";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
@@ -527,6 +534,15 @@ export function AddHostDialog({
   const [loginRechecks, setLoginRechecks] = useState<number | null>(
     cloudExisting && existing?.intent === "setup" ? LOGIN_RECHECKS : null
   );
+  // A cloud machine can fall asleep or be stopped while setup waits on the person, and
+  // setup never dials one that is (a dial would wake it unasked). Followed only for a
+  // cloud host, so setup can offer the start itself rather than send them elsewhere.
+  const cloudHosts = useCloudHostsWhile(isOpen && cloudExisting !== null);
+  const machine = cloudExisting ? cloudStatusFor(cloudHosts.snapshot, existing?.hostId) : null;
+  const machineDown =
+    machine !== null && machine.providerUnavailable === null && canStartMachine(machine);
+  /** Its start from here: asked of the provider, or done with the fresh check it owes not yet run. */
+  const [machineStart, setMachineStart] = useState<"starting" | "started" | null>(null);
   // A trust asks for a check as soon as none is running, and only while the dialog is open.
   const [checkAfterTrust, setCheckAfterTrust] = useState(false);
   const [plan, setPlan] = useState<HostInstallPlan | null>(null);
@@ -583,6 +599,18 @@ export function AddHostDialog({
         .pendingPlacement ?? null)
     : null;
   const connectAtEnd = connectWhenDone || placement !== null;
+  // Offered once the step under way has settled, wherever what comes next needs the
+  // machine: not on a last screen whose Done only closes, and never before the first check.
+  const nextNeedsMachine =
+    outcome !== null || (step !== "advise" && step !== "done") || connectAtEnd;
+  const machineRecovery =
+    machineStart === "starting" ||
+    (machineStart === null &&
+      machineDown &&
+      nextNeedsMachine &&
+      !busy &&
+      !connecting &&
+      (step !== "check" || probe !== null));
   const discovering = !existing && discovered === null && discoverError === null;
   const showDiscovering = useDeferredLoading(discovering, UI_DOHERTY_THRESHOLD);
   const showConnecting = useDeferredLoading(connecting, UI_DOHERTY_THRESHOLD);
@@ -865,18 +893,55 @@ export function AddHostDialog({
   const awaitingLogin = loginRechecks !== null && loginRechecks > 0 && unreachable;
   // Said once the last check has answered, not while it runs.
   const stoppedAwaitingLogin = loginRechecks === 0 && unreachable && !busy;
+  // A machine that's down turns every check away; its start owns the next one.
+  const machineHeld = machineRecovery || machineStart !== null;
   useEffect(() => {
     // Only from the check itself: never pulls setup back once it has moved on to an install.
-    if (!isOpen || busy || step !== "check" || !(checkAfterTrust || awaitingLogin)) {
+    if (!isOpen || busy || step !== "check" || machineHeld || !(checkAfterTrust || awaitingLogin)) {
       return undefined;
     }
     const timer = setTimeout(() => recheckForLogin(), checkAfterTrust ? 0 : LOGIN_RECHECK_MS);
     return () => clearTimeout(timer);
-  }, [isOpen, busy, step, checkAfterTrust, awaitingLogin, probe, loginRechecks]);
+  }, [isOpen, busy, step, machineHeld, checkAfterTrust, awaitingLogin, probe, loginRechecks]);
   const trustedHostKey = () => {
     setLoginRechecks(LOGIN_RECHECKS);
     setCheckAfterTrust(true);
   };
+
+  /** Start the machine from here; setup carries on from a fresh check once it runs. */
+  const startMachine = () => {
+    if (!existing) return;
+    setMachineStart("starting");
+    setError(null);
+    cloudHostsClient.startHost(existing.hostId).then(
+      () => {
+        // The answer can land before the picture that says it runs.
+        void cloudHosts.refresh();
+        setMachineStart("started");
+      },
+      (err: unknown) => {
+        setMachineStart(null);
+        setError(
+          isClientAppError(err) && err.userMessage
+            ? err.userMessage
+            : clientErrorText(err, "Couldn't start the machine")
+        );
+      }
+    );
+  };
+  // Back to the check, whatever step the machine went down on: what it finds decides what's next.
+  const resumeAfterStart = useEffectEvent(() => {
+    setMachineStart(null);
+    setOutcome(null);
+    setCheckAfterTrust(false);
+    setStep("check");
+    setProbe(null);
+    check();
+  });
+  useEffect(() => {
+    if (!isOpen || machineStart !== "started" || busy || connecting) return;
+    resumeAfterStart();
+  }, [isOpen, machineStart, busy, connecting]);
 
   // An existing host is checked as the dialog opens: its target is already known.
   const autoChecked = useRef(false);
@@ -2227,6 +2292,49 @@ export function AddHostDialog({
       onClick: () => setStep(hostModeTurnedOn ? "enable" : "check"),
       disabled: busy,
     };
+  }
+
+  // Ahead of any step: whatever it would do next needs the machine running.
+  if (machineRecovery && machine) {
+    leading = undefined;
+    back = undefined;
+    hint = undefined;
+    secondary = { label: "Close", onClick: onClose };
+    if (machineStart === "starting") {
+      const stage = machine.operation?.stage || "Asking the provider to start it";
+      body = (
+        <div className="space-y-3" data-testid="add-host-machine-starting">
+          <p className="text-sm font-medium text-text-primary" aria-live="polite">
+            {stage}
+          </p>
+          <ProgressBar label="Machine progress" valueText={stage} />
+          <p className="text-xs text-text-secondary">
+            Setup carries on once it&apos;s running. Closing this doesn&apos;t stop the start:{" "}
+            {hostLabel}&apos;s row in Settings&nbsp;→&nbsp;Hosts follows it.
+          </p>
+        </div>
+      );
+      primary = undefined;
+      focusCancel = true;
+      screen = "machine:starting";
+      announce = `Starting ${hostLabel}'s machine`;
+    } else {
+      const title =
+        machine.machine === "error"
+          ? `${hostLabel}'s machine reported an error`
+          : `${hostLabel}'s machine is ${machine.asleep ? "asleep" : "stopped"}`;
+      body = (
+        <Callout severity="warning" title={title} data-testid="add-host-machine-down">
+          {machine.machine === "error" && machine.lastError ? `${machine.lastError.message} ` : ""}
+          Setup can&apos;t reach it until it&apos;s running.{" "}
+          {startBillingSentence(machine, cloudProviderFor(cloudHosts.snapshot.providers, machine))}
+        </Callout>
+      );
+      primary = { label: "Start machine", onClick: startMachine };
+      focusCancel = false;
+      screen = "machine:down";
+      announce = title;
+    }
   }
 
   // Each new view hands focus to its answer, the way the first one did: the

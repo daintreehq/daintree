@@ -13,6 +13,7 @@ import {
   cloudProviderFor,
   isObservationStale,
   lifetimeSentence,
+  startBillingSentence,
   stopKeepsSentence,
   stoppedBillingSentence,
 } from "./cloudHostLabels";
@@ -21,12 +22,6 @@ function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
     ? err.userMessage
     : clientErrorText(err, fallback);
-}
-
-function hourlyClause(status: CloudHostStatus): string {
-  return status.hourlyDollars !== null
-    ? `about $${status.hourlyDollars.toFixed(3)} an hour`
-    : "for the time it runs";
 }
 
 /** Why a machine that may be started now isn't running, from the reading it was asked on. */
@@ -174,7 +169,7 @@ export function useCloudMachineActions(): {
   const stopProvider = cloudProviderFor(snapshot.providers, stopStatus);
   // A provider that bills a stopped machine says so, and how to stop paying, where the stop is decided.
   const stopBilling = stoppedBillingSentence(stopProvider);
-  const startBilling = stoppedBillingSentence(cloudProviderFor(snapshot.providers, startStatus));
+  const startProvider = cloudProviderFor(snapshot.providers, startStatus);
   const stopBusy = stopAsk !== null && pending.has(stopAsk.hostId);
   const startBusy = startAsk !== null && pending.has(startAsk.hostId);
 
@@ -235,10 +230,7 @@ export function useCloudMachineActions(): {
             : startStatus && startAsk
               ? [
                   notRunningSentence(startAsk.name, startStatus, startAsk.askedAt ?? 0),
-                  startBilling && startStatus.machine === "stopped"
-                    ? // Starting doesn't start the billing here: the stopped machine is billed already.
-                      `It bills ${startStatus.accountName} ${hourlyClause(startStatus)} while it runs. ${startBilling}`
-                    : `Starting it bills ${startStatus.accountName} ${hourlyClause(startStatus)} while it runs.`,
+                  startBillingSentence(startStatus, startProvider),
                   lifetimeSentence(startStatus.lifetime, startStatus.lifetimeSeconds),
                 ]
                   .filter(Boolean)

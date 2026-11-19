@@ -9,8 +9,11 @@ import type {
   HostInstallPlan,
   RemoteHostsEvent,
 } from "@shared/types/ipc/remoteHosts";
+import type { CloudHostStatus, CloudHostsSnapshot } from "@shared/types/cloudHosts";
 import type { HostListEntry } from "@shared/types/remoteHosts";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
+import { _resetCloudHostsStateForTesting } from "@/components/Hosts/cloud/cloudHostsState";
+import { provider as cloudProvider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 import { AddHostDialog } from "../AddHostDialog";
 import { ClientAppError } from "@/utils/clientAppError";
 
@@ -19,6 +22,8 @@ const connectionKind = vi.hoisted(() => ({ value: "ssh" as "ssh" | "wsl" }));
 vi.mock("@/lib/remoteHosts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/remoteHosts")>()),
   remoteConnectionKind: () => connectionKind.value,
+  // Cloud machines are followed only where a test hands the page a cloudHosts bridge.
+  isRemoteShellSupported: () => true,
 }));
 
 // The key review itself is CloudHostKeyReview's; here it only needs to say the key was trusted.
@@ -1311,6 +1316,239 @@ describe("AddHostDialog", () => {
       view.rerender(<AddHostDialog isOpen={false} onClose={() => {}} existing={EXISTING} />);
       await advance(60_000);
       expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a cloud machine that falls asleep or stops while it's being set up", () => {
+    const HOST = {
+      hostId: "a37",
+      name: "a37",
+      connection: { kind: "cloud" as const, bindingId: "cb_a37setup" },
+      intent: "setup" as const,
+    };
+    const AGENT37 = cloudProvider({
+      name: "Agent 37",
+      stoppedComputeBilled: false,
+      stoppedStorageBilled: true,
+      lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+    });
+    let cloud: CloudHostsSnapshot;
+    let cloudHosts: Record<string, ReturnType<typeof vi.fn>>;
+
+    const machine = (overrides: Partial<CloudHostStatus> = {}): CloudHostStatus => ({
+      hostId: HOST.hostId,
+      providerId: AGENT37.id,
+      providerUnavailable: null,
+      accountId: "ca_0123456789",
+      accountName: "Personal",
+      resourceId: "inst_a37setup",
+      machineName: "a37",
+      ownership: "created-by-daintree",
+      createdFor: null,
+      worktreeCleanup: null,
+      provisioning: null,
+      machine: "running",
+      rawState: "running",
+      machineType: "default",
+      vcpu: 2,
+      memoryGB: 4,
+      hourlyDollars: 0.05,
+      lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+      autoStopAt: null,
+      lifetimeSeconds: null,
+      stoppedAt: null,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      operation: null,
+      lastError: null,
+      observedAt: Date.now(),
+      lastEndpoint: null,
+      hostKeyFingerprint: null,
+      hostKeyReview: null,
+      keptRunningAt: null,
+      asleep: false,
+      ...overrides,
+    });
+    const asleep = () => machine({ machine: "stopped", rawState: "sleeping", asleep: true });
+    /** What the cloud picture reads from now on, without telling the page. */
+    const becomes = (status: CloudHostStatus) => {
+      cloud = { providers: [AGENT37], accounts: [], hosts: [status] };
+    };
+    /** The picture changes, as main pushes it. */
+    const push = async (status: CloudHostStatus) => {
+      becomes(status);
+      await act(async () => {
+        for (const listener of [...listeners]) listener({ type: "cloud-changed", snapshot: cloud });
+      });
+    };
+    // What the cloud channel answers for a machine it won't dial.
+    const refused = () =>
+      probeResult({
+        connection: HOST.connection,
+        reachable: false,
+        sshError: "The cloud machine is asleep. Start it to wake it and connect.",
+        platform: null,
+        install: null,
+        hostModeListening: false,
+        matchesClient: null,
+      });
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      becomes(machine());
+      cloudHosts = {
+        getSnapshot: vi.fn(async () => cloud),
+        startHost: vi.fn(async () => {}),
+        refreshHost: vi.fn(async () => {}),
+      };
+      Object.defineProperty(window, "electron", {
+        value: { remoteHosts, cloudHosts },
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    afterEach(() => {
+      cleanup();
+      _resetCloudHostsStateForTesting();
+      vi.useRealTimers();
+    });
+
+    it.each(["its check answers", "the cloud picture changes"])(
+      "offers to start a machine found asleep however %s first, and dials nothing meanwhile",
+      async (first) => {
+        let answer: (result: HostProbeResult) => void = () => {};
+        remoteHosts.probe!.mockImplementationOnce(
+          () => new Promise<HostProbeResult>((resolve) => (answer = resolve))
+        );
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        if (first === "its check answers") {
+          answer(refused());
+          await advance(0);
+          await push(asleep());
+        } else {
+          await push(asleep());
+          answer(refused());
+          await advance(0);
+        }
+        const offer = screen.getByTestId("add-host-machine-down");
+        expect(offer.textContent).toContain("a37's machine is asleep");
+        expect(offer.textContent).toContain(
+          "It bills Personal about $0.050 an hour while it runs. Agent 37 bills only for its disk while it's stopped or asleep."
+        );
+        expect(screen.getByRole("button", { name: "Start machine" })).toBeTruthy();
+        expect(screen.queryByTestId("add-host-awaiting-login")).toBeNull();
+        // A check would only be turned away, and waking it is the person's call.
+        await advance(60_000);
+        expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+        expect(cloudHosts.startHost).not.toHaveBeenCalled();
+      }
+    );
+
+    it("starts it when asked, and carries on from one fresh check once it runs", async () => {
+      remoteHosts
+        .probe!.mockResolvedValueOnce(refused())
+        .mockResolvedValue(probeResult({ connection: HOST.connection }));
+      let started: () => void = () => {};
+      cloudHosts.startHost!.mockImplementation(
+        () => new Promise<void>((resolve) => (started = resolve))
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      await push(asleep());
+      fireEvent.click(screen.getByRole("button", { name: "Start machine" }));
+      await advance(0);
+      expect(cloudHosts.startHost).toHaveBeenCalledWith({ hostId: "a37" });
+      await push(
+        machine({
+          machine: "starting",
+          rawState: "waking",
+          operation: { id: "op_1", kind: "starting", startedAt: Date.now(), stage: "Waking it" },
+        })
+      );
+      expect(screen.getByTestId("add-host-machine-starting").textContent).toContain("Waking it");
+      expect(screen.queryByRole("button", { name: "Start machine" })).toBeNull();
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+
+      // Its answer can come before the push that says it runs.
+      becomes(machine());
+      started();
+      await advance(0);
+      await advance(0);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId("add-host-machine-down")).toBeNull();
+      expect(screen.queryByTestId("add-host-machine-starting")).toBeNull();
+      expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
+    });
+
+    it("says why a start was refused, offers it again, and checks nothing", async () => {
+      remoteHosts.probe!.mockResolvedValue(refused());
+      cloudHosts.startHost!.mockRejectedValueOnce(
+        new ClientAppError("INTERNAL", "start refused", "Agent 37 has no capacity right now.")
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      await push(asleep());
+      fireEvent.click(screen.getByRole("button", { name: "Start machine" }));
+      await advance(0);
+      expect(screen.getByText("Agent 37 has no capacity right now.")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Start machine" })).toBeTruthy();
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+    });
+
+    it("puts the offer ahead of a reviewed install once the machine stops", async () => {
+      remoteHosts.probe!.mockResolvedValue(
+        probeResult({
+          connection: HOST.connection,
+          install: null,
+          hostModeListening: false,
+          appRunning: false,
+          matchesClient: false,
+        })
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      fireEvent.click(screen.getByRole("button", { name: "Review install" }));
+      await advance(0);
+      expect(remoteHosts.planInstall).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+
+      await push(machine({ machine: "stopped", rawState: "stopped" }));
+      expect(screen.getByTestId("add-host-machine-down").textContent).toContain(
+        "a37's machine is stopped"
+      );
+      expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Start machine" })).toBeTruthy();
+      expect(remoteHosts.install).not.toHaveBeenCalled();
+    });
+
+    it("never follows the cloud for a host that isn't a cloud machine", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult());
+      render(
+        <AddHostDialog
+          isOpen
+          onClose={() => {}}
+          existing={{
+            hostId: "studio",
+            name: "studio",
+            connection: { kind: "ssh", target: "greg@studio" },
+            intent: "setup",
+          }}
+        />
+      );
+      await advance(0);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+      expect(cloudHosts.getSnapshot).not.toHaveBeenCalled();
     });
   });
 
