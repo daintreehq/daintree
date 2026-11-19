@@ -463,7 +463,7 @@ export class HostSettingsRequests {
     const ask = this.deps.askApproval;
     if (!ask) return null;
     const count = ticket.hosts.length;
-    let delegation: PreparedAssistantDelegation | null = null;
+    let delegation: PreparedAssistantDelegation | null;
     try {
       delegation = this.deps.prepareDelegation?.(helpSessionId) ?? null;
     } catch {
