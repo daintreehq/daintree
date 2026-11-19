@@ -73,7 +73,7 @@ export const INPUT_LINE_TRUNCATED_DESCRIPTION = "`text` was cut to its first 200
 
 /** Model-facing description of `updateInstalled` (#17905), on `terminal.getStatus` and `agent.getState`. */
 export const UPDATE_INSTALLED_DESCRIPTION =
-  'Claude Code\'s "Update installed" footer, seen this run: when, and if its text named /restart. Not a state.';
+  'Claude Code showed "Update installed" this run: when, and if its text named /restart.';
 
 /** Model-facing description of `inputLine.text`. */
 export const INPUT_LINE_TEXT_DESCRIPTION =
