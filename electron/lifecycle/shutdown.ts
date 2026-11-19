@@ -11,6 +11,11 @@ import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import type { AssistantLaneSnapshot } from "../services/HelpSessionService.js";
 import { getLifecycleLedger } from "../services/pty/lifecycleLedger.js";
 import {
+  applyStopObservations,
+  hasStopReading,
+  stopObservationsFor,
+} from "../services/pty/stopObservation.js";
+import {
   getActiveAgentCount,
   getActiveAgents,
   showQuitWarning,
@@ -643,7 +648,21 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             r.agentSessionId &&
             !isAssistantTerminalRecord(terminalInfoById.get(r.id) ?? { id: r.id })
         );
-        if (captured.length === 0) continue;
+        // What each pane the quit stops was doing, read before the kill
+        // (#17886): every one of them goes with the app, reported back or not.
+        const stoppedIds = new Set([
+          ...[...terminalInfoById.values()]
+            .filter((t) => t.projectId === projectIds[i])
+            .map((t) => t.id),
+          ...results.map((r) => r.id),
+        ]);
+        const observations = stopObservationsFor(
+          [...stoppedIds].filter(
+            (id) => !isAssistantTerminalRecord(terminalInfoById.get(id) ?? { id })
+          ),
+          terminalInfoById
+        );
+        if (captured.length === 0 && !hasStopReading(observations)) continue;
 
         try {
           await projectStore.enqueueProjectStateUpdate(projectIds[i], (state) => {
@@ -654,7 +673,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
                 snapshot.agentSessionId = result.agentSessionId ?? undefined;
               }
             }
-            return state;
+            const observed = applyStopObservations(state.terminals, observations);
+            return captured.length > 0 || observed ? state : null;
           });
         } catch (error) {
           // Per-project so one failed write can't skip the remaining projects —

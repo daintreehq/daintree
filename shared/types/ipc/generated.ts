@@ -4031,7 +4031,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "project:sleep": {
-    args: [projectId: string];
+    args: [projectId: string, options?: import("./project.js").ProjectSleepOptions | undefined];
     result: import("./project.js").ProjectSleepResult;
   };
   "recent-dictations:list": {

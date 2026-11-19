@@ -448,6 +448,54 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(new Set(wakeCandidates.map((c) => c.restoredAt)).size).toBe(1);
   });
 
+  it("reports what each relaunched agent was last seen doing before it was stopped", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext();
+    const { wakeCandidates } = await restorePanelsPhase(
+      [
+        // A Sleep that waited for it to settle: its last report is the settle,
+        // the stop recorded the working reading the request took.
+        panel("slept", {
+          kind: "agent",
+          launchAgentId: "claude",
+          lastAgentObservation: { agentState: "waiting", at: 30 },
+          stopObservation: { agentState: "working", at: 10 },
+        }),
+        // Stopped by a crash, so nothing recorded the stop.
+        panel("crashed", {
+          kind: "agent",
+          launchAgentId: "codex",
+          lastAgentObservation: { agentState: "working", at: 20 },
+        }),
+        panel("legacy", { kind: "agent", launchAgentId: "claude" }),
+        panel("garbled", {
+          kind: "agent",
+          launchAgentId: "claude",
+          stopObservation: { agentState: "directing", at: 5 } as never,
+          lastAgentObservation: { agentState: "idle", at: 6 },
+        }),
+        // Resumed, and idle when stopped, whatever the report after the stop said.
+        panel("resumedIdle", {
+          kind: "agent",
+          launchAgentId: "claude",
+          restoreProvenance: { at: 1, disposition: "resume" },
+          stopObservation: { agentState: "idle", at: 7 },
+          lastAgentObservation: { agentState: "working", at: 8 },
+        }),
+      ],
+      ctx
+    );
+    expect(
+      Object.fromEntries(wakeCandidates.map((c) => [c.terminalId, [c.outcome, c.lastSeen]]))
+    ).toStrictEqual({
+      slept: ["fresh", { agentState: "working", at: 10 }],
+      crashed: ["fresh", { agentState: "working", at: 20 }],
+      legacy: ["fresh", undefined],
+      garbled: ["fresh", { agentState: "idle", at: 6 }],
+      resumedIdle: ["resumed", { agentState: "idle", at: 7 }],
+    });
+  });
+
   it("respawns a PTY agent panel when reconnect returns not_found on cold restart", async () => {
     reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
     const ctx = makeContext();

@@ -93,6 +93,8 @@ const PTY_FIELD_CLASSIFICATION = {
   // held across restarts keeps the state last seen before the first of them.
   restoreProvenance: true,
   lastAgentObservation: true,
+  // What was seen when Main last stopped the pane (#17886), kept only while held.
+  stopObservation: true,
   launchedByPluginId: true,
   holdOnRestart: true,
   // The terminal's own notes (#12835) — persisted so they outlive a restart.
@@ -492,6 +494,7 @@ const terminalFixture: PtySerializeInput = {
     lastSeen: { agentState: "idle", at: 1_699_999_999_000 },
   },
   lastAgentObservation: { agentState: "idle", at: 1_700_000_000_003 },
+  stopObservation: { agentState: "working", at: 1_699_999_999_500 },
   launchedByPluginId: "acme.orchestrator",
   holdOnRestart: true,
   scratchpad: { content: "- check CI", collapsed: true, width: 320 },
@@ -670,11 +673,13 @@ describe("panel serializer field coverage", () => {
       string,
       unknown
     >;
-    // A held pane writes no process state, so the hold is covered by its own
-    // fixture below rather than alongside a live session.
+    // A held pane writes no process state, so the hold, and the stop it keeps
+    // until it runs, are covered by its own fixture below.
     assertCovers("terminal serializer", output, persistedKeys(PTY_FIELD_CLASSIFICATION), {}, [
       "restoreRecovery",
+      "stopObservation",
     ]);
+    expect(output).not.toHaveProperty("stopObservation");
   });
 
   it("terminal serializer persists a recovery hold without the process state it replaces (#12434)", () => {
@@ -693,6 +698,11 @@ describe("panel serializer field coverage", () => {
     // What was last observed for the pane outlives its process (#14017).
     expect(output.restoreProvenance).toEqual(terminalFixture.restoreProvenance);
     expect(output.lastAgentObservation).toEqual(terminalFixture.lastAgentObservation);
+    // It has run nothing since it was stopped (#17886).
+    expect(output).toHaveProperty("stopObservation", {
+      agentState: "working",
+      at: 1_699_999_999_500,
+    });
     // So is what the run it holds was first asked (#14592).
     expect(output.firstPrompt).toEqual(terminalFixture.firstPrompt);
     expect(output).not.toHaveProperty("agentSessionId");

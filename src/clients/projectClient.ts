@@ -4,6 +4,7 @@ import type {
   ProjectSettings,
   RunCommand,
   ProjectCloseResult,
+  ProjectSleepOptions,
   ProjectSleepResult,
   ProjectStats,
   BulkProjectStats,
@@ -351,9 +352,9 @@ export const projectClient = {
     return window.electron.project.close(projectId, options);
   },
 
-  sleepProject: (projectId: string): Promise<ProjectSleepResult> => {
+  sleepProject: (projectId: string, options?: ProjectSleepOptions): Promise<ProjectSleepResult> => {
     invalidateCurrentCache();
-    return window.electron.project.sleepProject(projectId);
+    return window.electron.project.sleepProject(projectId, options);
   },
 
   reopen: (

@@ -1,3 +1,4 @@
+import type { SleepRequestWorking } from "@shared/types/ipc/project";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { actionableWaitingReason } from "@shared/utils/waitingReasonDisplay";
@@ -104,12 +105,21 @@ interface Tracker {
   hiddenSeen: boolean;
 }
 
+/** Per project, the agents a Sleep request found working (#17886). */
+export type WorkingAtRequest = ReadonlyMap<string, readonly SleepRequestWorking[]>;
+
 interface ActiveRun {
   id: number;
   deadline: number;
   trackers: Map<string, Tracker>;
   notes: Map<string, "sent" | "refused">;
   timer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Read once, when the request began: by the time a project sleeps its agents
+   * have settled, and the restore after must still know which ones were
+   * interrupted mid-task.
+   */
+  workingAtRequest: Map<string, readonly SleepRequestWorking[]>;
 }
 
 let active: ActiveRun | null = null;
@@ -325,7 +335,7 @@ async function commit(run: ActiveRun, force: boolean): Promise<void> {
     }
     setProjectStatus(run, id, "sleeping");
     try {
-      await useProjectStore.getState().sleepProject(id);
+      await sleepWithRequest(id, run.workingAtRequest);
       setProjectStatus(run, id, "slept");
     } catch {
       setProjectStatus(run, id, "failed");
@@ -347,9 +357,12 @@ function finish(run: ActiveRun, forced: boolean): void {
   const failed = view.projects.filter((p) => p.status === "failed");
   // A retry keeps the user's last word: after a wait it waits again, after Sleep now it doesn't.
   if (failed.length > 0) {
+    const workingAtRequest = run.workingAtRequest;
     notifySleepFailed(
       failed,
-      forced ? sleepProjectsInOrder : (ids) => startSleepWait(ids, { pauseNote: false })
+      forced
+        ? (ids) => sleepProjectsInOrder(ids, workingAtRequest)
+        : (ids) => startSleepWait(ids, { pauseNote: false, workingAtRequest })
     );
   }
   if (leftOpen.length > 0) {
@@ -397,16 +410,31 @@ function notifySleepFailed(
 }
 
 /**
+ * One project's sleep, carrying the agents the request found working there.
+ * Without any, Main records what it reads just before the kill.
+ */
+function sleepWithRequest(id: string, workingAtRequest: WorkingAtRequest | undefined) {
+  const working = workingAtRequest?.get(id);
+  return working && working.length > 0
+    ? useProjectStore.getState().sleepProject(id, { workingAtRequest: [...working] })
+    : useProjectStore.getState().sleepProject(id);
+}
+
+/**
  * Sleeps each project at once, one after another, the view's own project
  * last. A failure doesn't stop the rest; the failures are reported together.
- * Resolves with how many slept, and never rejects.
+ * Resolves with how many slept, and never rejects. `workingAtRequest` is what
+ * an earlier request for these projects saw, kept when one is retried.
  */
-export async function sleepProjectsInOrder(ids: readonly string[]): Promise<number> {
+export async function sleepProjectsInOrder(
+  ids: readonly string[],
+  workingAtRequest?: WorkingAtRequest
+): Promise<number> {
   const failed: Array<{ id: string; name: string }> = [];
   let slept = 0;
   for (const id of inSleepOrder(ids)) {
     try {
-      await useProjectStore.getState().sleepProject(id);
+      await sleepWithRequest(id, workingAtRequest);
       slept++;
     } catch (error) {
       const name = useProjectStore.getState().projects.find((p) => p.id === id)?.name ?? id;
@@ -414,21 +442,56 @@ export async function sleepProjectsInOrder(ids: readonly string[]): Promise<numb
       failed.push({ id, name });
     }
   }
-  if (failed.length > 0) notifySleepFailed(failed, sleepProjectsInOrder);
+  if (failed.length > 0) {
+    notifySleepFailed(failed, (retry) => sleepProjectsInOrder(retry, workingAtRequest));
+  }
   return slept;
 }
 
 /**
- * Sent once, only when the user ticked it for this run, only to agents read as
- * working right now. Refused while an agent is on a choice dialog.
+ * The agents in these projects the request finds working, added to any an
+ * earlier request for them found. One a retry finds in a pane that another
+ * process or agent run held before replaces that run's reading, which Main
+ * would no longer credit to the pane.
  */
-async function sendPauseNotes(run: ActiveRun, ids: ReadonlySet<string>): Promise<void> {
-  let terminals: BackendTerminalInfo[];
-  try {
-    terminals = await terminalClient.getAll();
-  } catch {
-    return;
+function recordWorkingAtRequest(
+  run: ActiveRun,
+  terminals: readonly BackendTerminalInfo[],
+  ids: ReadonlySet<string>
+): void {
+  for (const t of terminals) {
+    if (t.projectId === undefined || !ids.has(t.projectId)) continue;
+    if (observeAgent(t) !== "working") continue;
+    const recorded = run.workingAtRequest.get(t.projectId) ?? [];
+    const earlier = recorded.find((entry) => entry.terminalId === t.id);
+    if (
+      earlier &&
+      earlier.spawnedAt === t.spawnedAt &&
+      earlier.agentIncarnation === t.agentIncarnation
+    ) {
+      continue;
+    }
+    run.workingAtRequest.set(t.projectId, [
+      ...recorded.filter((entry) => entry !== earlier),
+      {
+        terminalId: t.id,
+        ...(t.lastStateChange !== undefined && { at: t.lastStateChange }),
+        spawnedAt: t.spawnedAt,
+        ...(t.agentIncarnation !== undefined && { agentIncarnation: t.agentIncarnation }),
+      },
+    ]);
   }
+}
+
+/**
+ * Sent once, only when the user ticked it for this run, only to agents read as
+ * working when it began. Refused while an agent is on a choice dialog.
+ */
+async function sendPauseNotes(
+  run: ActiveRun,
+  terminals: readonly BackendTerminalInfo[],
+  ids: ReadonlySet<string>
+): Promise<void> {
   const recipients = terminals.filter(
     (t) =>
       t.projectId !== undefined &&
@@ -463,10 +526,12 @@ async function sendPauseNotes(run: ActiveRun, ids: ReadonlySet<string>): Promise
 /**
  * Starts waiting on these projects. A wait already running here is replaced,
  * unless it has started sleeping. Resolves once the first reading is in.
+ * `workingAtRequest` is what an earlier request for them saw, kept when one is
+ * retried.
  */
 export async function startSleepWait(
   ids: readonly string[],
-  options: { pauseNote: boolean }
+  options: { pauseNote: boolean; workingAtRequest?: WorkingAtRequest }
 ): Promise<void> {
   if (useProjectSleepWaitStore.getState().run?.phase === "sleeping") {
     throw new Error("Projects are already being put to sleep");
@@ -486,6 +551,7 @@ export async function startSleepWait(
     ),
     notes: new Map(),
     timer: null,
+    workingAtRequest: new Map(options.workingAtRequest ?? []),
   };
   active = run;
   useProjectSleepWaitStore.getState().setRun({
@@ -494,7 +560,29 @@ export async function startSleepWait(
     projects: targets,
     pauseNote: options.pauseNote,
   });
-  if (options.pauseNote) await sendPauseNotes(run, new Set(targets.map((t) => t.id)));
+  const targetIds = new Set(targets.map((t) => t.id));
+  // Presence is read beside the request, as every poll reads it, and counts as
+  // soon as it lands: a project opened while the listing is still coming is one
+  // the user came back to, Sleep now included.
+  const presence = readShown().then(
+    (shown) => {
+      for (const id of targetIds) {
+        if (!shown.has(id)) run.trackers.get(id)!.hiddenSeen = true;
+      }
+    },
+    () => {}
+  );
+  let listing: BackendTerminalInfo[] | null = null;
+  try {
+    listing = await terminalClient.getAll();
+  } catch {
+    // Unread: each agent's stop is recorded from Main's own pre-kill reading.
+  }
+  await presence;
+  if (listing) {
+    recordWorkingAtRequest(run, listing, targetIds);
+    if (options.pauseNote) await sendPauseNotes(run, listing, targetIds);
+  }
   if (active !== run) return;
   await tick(run);
 }

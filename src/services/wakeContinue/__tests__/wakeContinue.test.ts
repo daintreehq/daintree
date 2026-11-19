@@ -56,6 +56,7 @@ function candidate(id: string, overrides: Partial<WakeCandidate> = {}): WakeCand
     worktreeId: "wt-1",
     outcome: "resumed",
     restoredAt: RESTORED_AT,
+    lastSeen: { agentState: "working", at: 1 },
     ...overrides,
   };
 }
@@ -119,6 +120,56 @@ describe("publishWakeCandidates", () => {
       candidate("b", { outcome: "held", holdReason: "held-by-plugin" }),
     ]);
     expect(useWakeContinueStore.getState().offer).toBeNull();
+  });
+
+  it("offers only for agents last seen working, and lists only them", async () => {
+    publishWakeCandidates("p1", [
+      candidate("idle", { lastSeen: { agentState: "idle", at: 1 } }),
+      candidate("working"),
+      candidate("waiting", { lastSeen: { agentState: "waiting", at: 1 } }),
+      candidate("done", { lastSeen: { agentState: "completed", at: 1 } }),
+      candidate("gone", { lastSeen: { agentState: "exited", at: 1 } }),
+      // A snapshot from before observations were kept says nothing either way.
+      candidate("unknown", { lastSeen: undefined }),
+      candidate("fresh", { outcome: "fresh" }),
+      candidate("heldIdle", {
+        outcome: "held",
+        holdReason: "resume-deferred",
+        heldSessionId: "s-held",
+        lastSeen: { agentState: "idle", at: 1 },
+      }),
+    ]);
+    const offer = useWakeContinueStore.getState().offer!;
+    expect(offer.entries.map((e) => e.terminalId)).toEqual(["working", "fresh"]);
+
+    for (const id of ["idle", "working", "waiting", "done", "gone", "unknown", "fresh"]) {
+      setPane(id, { disposition: id === "fresh" ? "fresh" : "resume" });
+    }
+    const sending = sendWakeContinueNotes("Carry on");
+    await vi.advanceTimersByTimeAsync(SETTLE);
+    expect(deliveries.map((d) => targetOf(d.options))).toEqual(["working"]);
+    deliveries[0]!.settle();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await sending;
+    expect(deliveries).toHaveLength(1);
+  });
+
+  it("offers nothing when no agent it could reach was working, and withdraws the last offer", () => {
+    publishWakeCandidates("p1", [candidate("a")]);
+    const first = useWakeContinueStore.getState().offer!;
+    // Interrupted mid-task, but its conversation is gone: nothing to note.
+    publishWakeCandidates("p1", [
+      candidate("b", { outcome: "fresh" }),
+      candidate("c", { lastSeen: { agentState: "idle", at: 1 } }),
+      candidate("d", {
+        outcome: "held",
+        holdReason: "resume-deferred",
+        heldSessionId: "s-d",
+        lastSeen: { agentState: "completed", at: 1 },
+      }),
+    ]);
+    expect(useWakeContinueStore.getState().offer).toBeNull();
+    expect(cancelAgentRequests).toHaveBeenCalledWith(`wake-continue:${first.id}:`);
   });
 
   it("offers for a pane held only until the user starts it on a named session", () => {

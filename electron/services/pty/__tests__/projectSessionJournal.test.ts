@@ -47,6 +47,10 @@ interface FakeTerminal {
   trashExpiresAt?: number;
   isAssistantTerminal?: boolean;
   spawnedAt: number;
+  agentState?: string;
+  lastStateChange?: number;
+  agentIncarnation?: number;
+  isExited?: boolean;
 }
 
 function makePtyClient(config: {
@@ -635,6 +639,187 @@ describe("gracefulTeardownAndJournalProject", () => {
       });
 
       expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+    });
+
+    it("records what each agent it stopped was doing before the kill, captured id or not", async () => {
+      const { client } = makePtyClient({
+        terminals: [
+          {
+            id: "working",
+            projectId: "proj",
+            launchAgentId: "claude",
+            cwd: "/w",
+            spawnedAt: 1,
+            agentState: "working",
+            lastStateChange: 40,
+          },
+          {
+            id: "idle",
+            projectId: "proj",
+            launchAgentId: "codex",
+            cwd: "/i",
+            spawnedAt: 1,
+            agentState: "idle",
+            lastStateChange: 30,
+          },
+          // A plain shell has no agent to have been doing anything.
+          { id: "shell", projectId: "proj", cwd: "/s", spawnedAt: 1, agentState: "idle" },
+          // Exited on its own before the stop, so the stop stopped nothing there.
+          {
+            id: "exitedEarlier",
+            projectId: "proj",
+            launchAgentId: "claude",
+            cwd: "/x",
+            spawnedAt: 1,
+            isExited: true,
+            agentState: "exited",
+            lastStateChange: 35,
+          },
+          // The assistant isn't a grid pane.
+          {
+            id: "assistant",
+            projectId: "proj",
+            launchAgentId: "claude",
+            isAssistantTerminal: true,
+            cwd: "/a",
+            spawnedAt: 1,
+            agentState: "working",
+            lastStateChange: 45,
+          },
+          // Read before the kill, but the host never reported tearing it down.
+          {
+            id: "survivor",
+            projectId: "proj",
+            launchAgentId: "claude",
+            cwd: "/v",
+            spawnedAt: 1,
+            agentState: "working",
+            lastStateChange: 20,
+          },
+        ],
+        outcome: {
+          confirmed: true,
+          sessions: [
+            { id: "working", agentSessionId: null },
+            { id: "idle", agentSessionId: "s-idle" },
+            { id: "shell", agentSessionId: null },
+            { id: "exitedEarlier", agentSessionId: null },
+            { id: "assistant", agentSessionId: null },
+          ],
+        },
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      const state = {
+        terminals: [
+          { id: "working" },
+          { id: "idle" },
+          { id: "shell" },
+          { id: "survivor" },
+          { id: "exitedEarlier", stopObservation: { agentState: "working", at: 20 } },
+          { id: "assistant" },
+        ],
+      };
+      expect(updater(state)).toBe(state);
+      expect(state.terminals).toEqual([
+        { id: "working", stopObservation: { agentState: "working", at: 40 } },
+        { id: "idle", agentSessionId: "s-idle", stopObservation: { agentState: "idle", at: 30 } },
+        { id: "shell" },
+        { id: "survivor" },
+        { id: "exitedEarlier", stopObservation: { agentState: "working", at: 20 } },
+        { id: "assistant" },
+      ]);
+    });
+
+    it("drops what an earlier stop left on a pane it stopped but couldn't read", async () => {
+      // A host shard missed the inventory read but answered the kill.
+      const { client } = makePtyClient({
+        terminals: [],
+        degraded: true,
+        outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      const state = {
+        terminals: [
+          { id: "t1", stopObservation: { agentState: "working", at: 10 } },
+          { id: "other", stopObservation: { agentState: "working", at: 10 } },
+        ],
+      };
+      updater(state);
+      expect(state.terminals).toEqual([
+        { id: "t1", agentSessionId: "s1" },
+        { id: "other", stopObservation: { agentState: "working", at: 10 } },
+      ]);
+    });
+
+    it("keeps the working reading the Sleep request took for an agent that has settled since", async () => {
+      const settled = (id: string, spawnedAt: number, agentIncarnation: number) => ({
+        id,
+        projectId: "proj",
+        launchAgentId: "claude",
+        cwd: `/${id}`,
+        spawnedAt,
+        agentState: "waiting",
+        lastStateChange: 50,
+        agentIncarnation,
+      });
+      const { client } = makePtyClient({
+        terminals: [
+          settled("paused", 1, 2),
+          settled("replaced", 1, 3),
+          // A restart reuses the id, and its process counts runs from zero again.
+          settled("restarted", 7, 0),
+          settled("unasked", 1, 1),
+          settled("notStopped", 1, 0),
+        ],
+        outcome: {
+          confirmed: true,
+          sessions: ["paused", "replaced", "restarted", "unasked"].map((id) => ({
+            id,
+            agentSessionId: null,
+          })),
+        },
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+        workingAtRequest: [
+          { terminalId: "paused", at: 10, spawnedAt: 1, agentIncarnation: 2 },
+          // Another run of an agent took the pane after the request.
+          { terminalId: "replaced", at: 10, spawnedAt: 1, agentIncarnation: 2 },
+          { terminalId: "restarted", at: 10, spawnedAt: 1, agentIncarnation: 0 },
+          // Read by the request, but the kill never reached it.
+          { terminalId: "notStopped", at: 10, spawnedAt: 1, agentIncarnation: 0 },
+        ],
+      });
+
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      const state = {
+        terminals: [
+          { id: "paused" },
+          { id: "replaced" },
+          { id: "restarted" },
+          { id: "unasked" },
+          { id: "notStopped" },
+        ],
+      };
+      expect(updater(state)).toBe(state);
+      expect(state.terminals).toEqual([
+        { id: "paused", stopObservation: { agentState: "working", at: 10 } },
+        { id: "replaced", stopObservation: { agentState: "waiting", at: 50 } },
+        { id: "restarted", stopObservation: { agentState: "waiting", at: 50 } },
+        { id: "unasked", stopObservation: { agentState: "waiting", at: 50 } },
+        { id: "notStopped" },
+      ]);
     });
 
     it("bails out of the updater when the scope has no saved terminals", async () => {

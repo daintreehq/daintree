@@ -61,6 +61,7 @@ import type {
   CodexRestoreMatchScope,
 } from "@shared/types/ipc/agentSubagents";
 import { sanitizeFirstPrompt } from "@shared/utils/firstPrompt";
+import { readStopObservation } from "@shared/utils/restoreProvenance";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
 import type { TerminalGeometry } from "@shared/types/terminal";
 import type { WakeCandidate } from "@/services/wakeContinue/wakeCandidate";
@@ -1532,6 +1533,7 @@ export async function restorePanelsPhase(
                         }),
                       }),
                       restoredAt,
+                      lastSeen: readStopObservation(saved),
                     },
                   });
                 }

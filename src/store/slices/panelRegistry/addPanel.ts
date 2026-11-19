@@ -443,6 +443,8 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       ...(isRecoveryHold && { restoreRecovery: options.restoreRecovery, hasPty: false }),
       ...(options.restoreProvenance && { restoreProvenance: options.restoreProvenance }),
       ...(options.lastAgentObservation && { lastAgentObservation: options.lastAgentObservation }),
+      ...(isRecoveryHold &&
+        options.stopObservation && { stopObservation: options.stopObservation }),
       ...(options.launchedByPluginId && { launchedByPluginId: options.launchedByPluginId }),
       ...(options.holdOnRestart === true && { holdOnRestart: true as const }),
       ...(options.scratchpad && { scratchpad: options.scratchpad }),

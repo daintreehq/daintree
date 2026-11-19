@@ -2889,6 +2889,70 @@ describe("registerShutdownHandler", () => {
       vi.useRealTimers();
     });
 
+    it("records what each agent was doing before the quit's kill, captured id or not (#17886)", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { id: "proj-1" },
+        { id: "asleep" },
+      ] as never);
+      const ptyClient = makePtyClient({
+        // Read before the kill; the quit keys move the agents on afterwards.
+        getAllTerminalsAsync: vi.fn(async () => [
+          { ...agentTerminal, agentState: "working", lastStateChange: 40 },
+          { ...agentTerminal, id: "t2", agentState: "completed", lastStateChange: 30 },
+          { ...agentTerminal, id: "assistant", isAssistantTerminal: true, agentState: "working" },
+          { id: "shell", projectId: "proj-1", cwd: "/repo", agentState: "idle" },
+          // What a session-preserving Sleep left registered: no process this quit stops.
+          {
+            ...agentTerminal,
+            id: "retained",
+            projectId: "asleep",
+            isExited: true,
+            agentState: "exited",
+            lastStateChange: 50,
+          },
+        ]),
+        // t2 reported back; t1 didn't before the deadline but still goes with the
+        // app; "gone" answered the kill but missed the inventory read.
+        gracefulKillByProject: vi.fn(async (pid: string) =>
+          pid === "proj-1"
+            ? [
+                { id: "t2", agentSessionId: "sess-2" },
+                { id: "gone", agentSessionId: null },
+              ]
+            : [{ id: "retained", agentSessionId: null }]
+        ),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledTimes(1);
+      const [projectId, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      expect(projectId).toBe("proj-1");
+      const state = {
+        terminals: [
+          { id: "t1" },
+          { id: "t2" },
+          { id: "assistant" },
+          { id: "shell" },
+          { id: "gone", stopObservation: { agentState: "working", at: 5 } },
+        ],
+      };
+      expect(updater(state)).toBe(state);
+      expect(state.terminals).toEqual([
+        { id: "t1", stopObservation: { agentState: "working", at: 40 } },
+        {
+          id: "t2",
+          agentSessionId: "sess-2",
+          stopObservation: { agentState: "completed", at: 30 },
+        },
+        { id: "assistant" },
+        { id: "shell" },
+        { id: "gone" },
+      ]);
+    });
+
     it("writes nothing for a project that outran the deadline with no streamed captures", async () => {
       vi.useFakeTimers();
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);

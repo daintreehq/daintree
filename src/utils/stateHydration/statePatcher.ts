@@ -246,6 +246,8 @@ export interface SavedTerminalData {
    */
   restoreProvenance?: unknown;
   lastAgentObservation?: unknown;
+  /** Untrusted on-disk value (#17886), sanitized in `restoreProvenance.ts`. */
+  stopObservation?: unknown;
   launchedByPluginId?: unknown;
   holdOnRestart?: unknown;
   /** Untrusted on-disk value (#15941), read through {@link sanitizeSavedExitCode}. */
@@ -1191,6 +1193,13 @@ export function buildArgsForRespawn(
     // Carried as the pane's own until its new process reports something, so a
     // pane held again, or resumed and closed before reporting, keeps it (#14017).
     lastAgentObservation: lastSeen,
+    // A held pane has run nothing since its stop, so the next restore still
+    // judges it by that stop (#17886). A launched one is stopped again by
+    // whatever ends it, and Main records that stop itself.
+    ...(restoreRecovery &&
+      isAgentPanel && {
+        stopObservation: sanitizeAgentObservation(saved.stopObservation),
+      }),
     ...pluginHoldArgs(saved),
     // Prefer the launch env captured in the snapshot (#10922) so the restored
     // session replays the same provider environment (e.g. a Z.AI/GLM preset or a

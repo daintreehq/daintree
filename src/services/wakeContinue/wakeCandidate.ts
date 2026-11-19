@@ -1,3 +1,5 @@
+import type { TerminalAgentObservation } from "@shared/types/panel";
+
 /**
  * One agent pane a restore started again from its snapshot (#17883), and what
  * its launch did with the conversation it had.
@@ -19,4 +21,10 @@ export interface WakeCandidate {
   heldSessionId?: string;
   /** When the restore pass that launched it began (epoch ms). */
   restoredAt: number;
+  /**
+   * What was last observed of the agent before it was stopped (#17886): the
+   * pane's stop observation, or failing that its last host report. Absent on a
+   * snapshot from before either was kept.
+   */
+  lastSeen?: TerminalAgentObservation;
 }
