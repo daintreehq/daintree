@@ -386,8 +386,35 @@ describe("idleEndSentence (#17921)", () => {
     expect(idleEndSentence(idle, acme, null, { kind: "unknown" })).toBe(IDLE_STOP_UNKNOWN);
     // An unregistered provider promises nothing, whatever was found before it left.
     expect(idleEndSentence(idle, null, null, { kind: "stops" })).toBe(IDLE_STOP_UNKNOWN);
-    // A refused self-stop's own reason outranks it.
-    expect(idleEndSentence(idle, acme, refused, { kind: "stops" })).toBe(refused);
+  });
+
+  it("says why a machine can't stop itself, then that this device stops it instead while linked (#17924)", () => {
+    const said = idleEndSentence(idle, BOAT_PROVIDER, refused, { kind: "stops" })!;
+    expect(said.startsWith(refused)).toBe(true);
+    expect(said).toContain("While this device is linked to the host, it stops the machine");
+    // A machine with a runtime limit still stops once it runs out, so nothing is said of every device away.
+    expect(said).not.toContain("keeps running");
+    // Known from this device's own findings: the same before any summary.
+    expect(idleEndSentence(undefined, BOAT_PROVIDER, refused, { kind: "stops" })).toBe(said);
+    // The host's word that it stops the machine itself settles it.
+    expect(idleEndSentence(armed, BOAT_PROVIDER, refused, { kind: "stops" })).toBeNull();
+    // A reason with no closing stop still reads as two sentences.
+    expect(
+      idleEndSentence(idle, BOAT_PROVIDER, "It can't stop itself", { kind: "stops" })
+    ).toMatch(/^It can't stop itself\. While this device/);
+  });
+
+  it("says why a machine can't stop itself, then why this device doesn't either, or the reason alone (#17924)", () => {
+    const problem =
+      "This device doesn't stop the machine when the host's idle time ends: snapshots are off on it.";
+    expect(idleEndSentence(idle, BOAT_PROVIDER, refused, { kind: "blocked", problem })).toBe(
+      `${refused} ${problem}`
+    );
+    // Not yet known whether a stop from here keeps the disk, or no stop from here at all: the reason alone.
+    expect(idleEndSentence(idle, BOAT_PROVIDER, refused, { kind: "unknown" })).toBe(refused);
+    expect(idleEndSentence(idle, BOAT_PROVIDER, refused, null)).toBe(refused);
+    // An unregistered provider promises nothing beyond the reason.
+    expect(idleEndSentence(idle, null, refused, { kind: "stops" })).toBe(refused);
   });
 
   it("doesn't imply a stop where it can't be known", () => {

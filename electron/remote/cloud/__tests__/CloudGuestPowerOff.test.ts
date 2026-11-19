@@ -431,3 +431,98 @@ describe("CloudGuestPowerOff (#17362)", () => {
     expect(retryAt.has(BINDING)).toBe(false);
   });
 });
+
+describe("standing in for a refused power-off (#17924)", () => {
+  it("stands in for a confirmed machine whose OS refused only the power-off, on the link it was found on", async () => {
+    const env = setup();
+    env.system.probePowerOff.mockResolvedValue(
+      "The login Daintree runs as on this machine can't power it off without a password, so it can't stop itself when idle."
+    );
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.standsInFor(BINDING)).toBe(true);
+    expect(env.guest.problemFor(BINDING)).toMatch(/without a password/);
+
+    const next = env.newSession();
+    expect(env.guest.standsInFor(BINDING)).toBe(false);
+    await env.guest.arm(HOST, next);
+    expect(env.guest.standsInFor(BINDING)).toBe(true);
+  });
+
+  it("never stands in for a host on another machine, one that couldn't read its metadata, or another OS", async () => {
+    const mismatch = setup();
+    mismatch.system.verifyIdentity.mockResolvedValue({
+      ok: false,
+      definite: true,
+      problem: "This host runs on another machine than the one Daintree has for it.",
+    } as never);
+    await mismatch.guest.arm(HOST, mismatch.session);
+    expect(mismatch.guest.problemFor(BINDING)).toMatch(/another machine/);
+    expect(mismatch.guest.standsInFor(BINDING)).toBe(false);
+
+    const unreadable = setup();
+    unreadable.system.verifyIdentity.mockResolvedValue({
+      ok: false,
+      definite: false,
+      problem: "Daintree couldn't read this machine's identity.",
+    } as never);
+    await unreadable.guest.arm(HOST, unreadable.session);
+    expect(unreadable.guest.standsInFor(BINDING)).toBe(false);
+
+    const windows = setup();
+    windows.system.unsupported = () => "Only a Linux machine can power itself off when idle.";
+    await windows.guest.arm(HOST, windows.session);
+    expect(windows.guest.problemFor(BINDING)).toMatch(/Only a Linux machine/);
+    expect(windows.guest.standsInFor(BINDING)).toBe(false);
+  });
+
+  it("never stands in for a machine the provider found unsuitable, and stops once it turns so", async () => {
+    const env = setup();
+    env.check.mockResolvedValue({
+      eligible: false,
+      target: TARGET,
+      problem: "It belongs to an Auto Scaling group, which may replace it once it stops.",
+    });
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.problemFor(BINDING)).toMatch(/Auto Scaling group/);
+    expect(env.guest.standsInFor(BINDING)).toBe(false);
+
+    const later = setup();
+    later.system.probePowerOff.mockResolvedValue("Needs a password to power off.");
+    await later.guest.arm(HOST, later.session);
+    expect(later.guest.standsInFor(BINDING)).toBe(true);
+    later.check.mockResolvedValue({
+      eligible: false,
+      target: TARGET,
+      problem: "It belongs to an Auto Scaling group, which may replace it once it stops.",
+    });
+    later.clock.now += 31 * MINUTE;
+    await later.guest.tick();
+    expect(later.guest.standsInFor(BINDING)).toBe(false);
+    expect(later.guest.problemFor(BINDING)).toMatch(/Auto Scaling group/);
+  });
+
+  it("never stands in on a refusal from a host from before it said what it refused", async () => {
+    const env = setup();
+    env.call.mockResolvedValueOnce({
+      armed: false,
+      problem: "The login Daintree runs as on this machine can't power it off without a password.",
+    });
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.problemFor(BINDING)).toMatch(/without a password/);
+    expect(env.guest.standsInFor(BINDING)).toBe(false);
+  });
+
+  it("stops standing in once the host takes the permission", async () => {
+    const env = setup();
+    env.system.probePowerOff.mockResolvedValueOnce("Needs a password to power off.");
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.standsInFor(BINDING)).toBe(true);
+    env.changed.mockClear();
+    env.clock.now += 6 * MINUTE;
+    await env.guest.tick();
+    expect(env.keeper.status()).toEqual({ armed: true, problem: null });
+    expect(env.guest.standsInFor(BINDING)).toBe(false);
+    expect(env.guest.problemFor(BINDING)).toBeNull();
+    expect(env.changed).toHaveBeenCalled();
+  });
+});

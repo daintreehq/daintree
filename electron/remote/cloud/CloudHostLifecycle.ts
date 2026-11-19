@@ -608,6 +608,11 @@ export class CloudHostLifecycle {
   private readonly idleAsked = new Map<string, { session: LinkSession; interval: string }>();
   /** The link on which a host answered that its Daintree can't grant an idle claim. */
   private readonly idleUnsupported = new Map<string, LinkSession>();
+  /**
+   * Some machine is bound to a host, so the keeper looks for an idle one to
+   * stop; whether it may is its keepers' word, read as the pass goes.
+   */
+  private idleCandidates = false;
   /** An idle stop being prepared or carried out, per binding. */
   private readonly idleAttempts = new Map<string, Promise<void>>();
   /** The stopping operation each idle stop runs as, so a person's Stop can tell it from their own. */
@@ -676,13 +681,11 @@ export class CloudHostLifecycle {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    this.idleCandidates = machines;
     if (keeper && !this.keeperTimer) {
       this.keeperTimer = setInterval(() => {
         void this.renewDue();
-        // A machine bound to a host may be one to stop on its idle time; its keepers decide as they go.
-        if (this.deps.store.bindings().some((binding) => binding.resourceId && binding.hostId)) {
-          void this.stopIdleDue();
-        }
+        if (this.idleCandidates) void this.stopIdleDue();
         void this.deps.machineKeys?.tick();
         void this.deps.guestPowerOff?.tick();
       }, KEEPER_INTERVAL_MS);
