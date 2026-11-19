@@ -246,6 +246,11 @@ async function findTunnelCommand(command: string): Promise<string | null> {
   return found;
 }
 
+/** A public key as ssh compares it: its algorithm and blob, never its comment. */
+function keyIdentity(publicKey: string): string {
+  return publicKey.trim().split(/\s+/).slice(0, 2).join(" ");
+}
+
 /** One way of reaching a machine: a new one closes the master the old one opened. */
 function routeGeneration(access: CloudSshAccessRecord): string {
   return JSON.stringify([
@@ -497,6 +502,12 @@ export class CloudHostLifecycle {
   private readonly accessInFlight = new Map<string, Promise<CloudSshRoute>>();
   /** The route last written for each machine this run, so only a changed one retires its master. */
   private readonly writtenRoutes = new Map<string, string>();
+  /**
+   * The account key each machine Daintree created is known to hold, this run:
+   * the one its create sent, or one put on it since. A machine holding another
+   * key, or none known, has the key on disk put on it before it is reached.
+   */
+  private readonly heldKeys = new Map<string, string>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private keeperTimer: ReturnType<typeof setInterval> | null = null;
   /** When each machine's lifetime was last renewed or tried, this run. */
@@ -983,6 +994,8 @@ export class CloudHostLifecycle {
       }
       throw error;
     }
+    // The provider answered the create the key went with: the machine holds it.
+    if (publicKey !== null) this.heldKeys.set(bindingId, keyIdentity(publicKey));
     this.bindCreated(bindingId, resource);
     await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
   }
@@ -2171,9 +2184,12 @@ export class CloudHostLifecycle {
     }
     // Before any reuse: a tunnel's command can be uninstalled or moved at any time.
     const policy = await this.sshPolicy(bindingId, provider);
+    // Also before any reuse: a route names the key's path, and the key there may be gone or another.
+    const rekey = await this.keyToPutOn(bindingId, provider, binding);
     const access = binding.access;
     if (
       access &&
+      rekey === null &&
       this.now() - access.obtainedAt < ACCESS_TTL_MS &&
       // A key confirmed by the person is pinned only while it is still the trusted one.
       (!confirmed || access.hostKey === binding.trustedHostKey?.key) &&
@@ -2202,7 +2218,7 @@ export class CloudHostLifecycle {
     }
     let resolved: ProviderSshAccess;
     try {
-      resolved = await this.sshAccessFor(provider, credentials, binding);
+      resolved = await this.sshAccessFor(provider, credentials, binding, rekey);
     } catch (error) {
       const described = provider.describeError(error);
       if (described.code === "provider-unreachable") {
@@ -2251,6 +2267,8 @@ export class CloudHostLifecycle {
         obtainedAt: this.now(),
       },
     }));
+    // Only once its route is written: a dial cut short before that bypasses the cached route again.
+    if (rekey !== null) this.heldKeys.set(bindingId, keyIdentity(rekey));
     this.clearAccessErrors(bindingId);
     return route;
   }
@@ -2488,13 +2506,69 @@ export class CloudHostLifecycle {
   }
 
   /**
-   * A machine that took the account's key at create is only asked how to reach
-   * it; any other has the key authorized on it first.
+   * For a machine Daintree created on a provider that takes the key at create:
+   * the account key to put on it before it is reached, or null when it holds
+   * the key on disk. A key lost since its create is made again when the
+   * provider can put one on a machine that exists; for any other provider the
+   * dial is refused, saying the key is missing, and no key is made (#17929).
+   */
+  private async keyToPutOn(
+    bindingId: string,
+    provider: CloudProvider,
+    binding: StoredCloudBinding
+  ): Promise<string | null> {
+    if (binding.ownership === "imported" || sshKeyTiming(provider) !== "at-create") return null;
+    // A host removed while the dial waited takes its account's key with it: none is made for it.
+    const stillHere = () => {
+      if (!this.deps.store.binding(bindingId)) {
+        throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
+      }
+    };
+    stillHere();
+    const refuse = (said: string): never => {
+      const last = this.deps.store.binding(bindingId)?.lastError;
+      if (last?.code !== "ssh-authorization" || last.message !== said) {
+        this.recordError(bindingId, { code: "ssh-authorization", message: said, at: this.now() });
+      }
+      throw new UnusableConnectionError(said, said);
+    };
+    if (typeof provider.authorizeSsh !== "function") {
+      let present: boolean;
+      try {
+        present = await this.deps.files.hasKey(binding.accountId);
+      } catch (error) {
+        return refuse(
+          `SSH access couldn't be set up: ${formatErrorMessage(error, "the SSH key couldn't be read")}`
+        );
+      }
+      stillHere();
+      if (present) return null;
+      return refuse(
+        `This host's SSH key is missing from this device. ${nameOf(provider)} only gives a machine its key when it's created, so Daintree can't give this one a new key. Restore the key from a backup and connect again, or create a new machine.`
+      );
+    }
+    let publicKey: string;
+    try {
+      publicKey = await this.deps.files.publicKey(binding.accountId);
+    } catch (error) {
+      return refuse(
+        `SSH access couldn't be set up: this account's SSH key couldn't be made (${formatErrorMessage(error, "ssh-keygen failed")})`
+      );
+    }
+    stillHere();
+    return this.heldKeys.get(bindingId) === keyIdentity(publicKey) ? null : publicKey;
+  }
+
+  /**
+   * A machine that took the account's key at create, and still holds it, is
+   * only asked how to reach it; any other has the key (`rekey` when it was
+   * already read) authorized on it first.
    */
   private async sshAccessFor(
     provider: CloudProvider,
     credentials: ProviderCredentials,
-    binding: StoredCloudBinding
+    binding: StoredCloudBinding,
+    rekey: string | null
   ): Promise<ProviderSshAccess> {
     const timing = sshKeyTiming(provider);
     const problem = sshKeyContractProblem(provider, timing);
@@ -2503,8 +2577,9 @@ export class CloudHostLifecycle {
     const keyedAtCreate =
       timing === "at-create" &&
       (binding.ownership !== "imported" || typeof provider.authorizeSsh !== "function");
-    if (keyedAtCreate) return provider.sshAccess!(credentials, binding.resourceId!);
-    const publicKey = await this.deps.files.publicKey(binding.accountId);
+    if (keyedAtCreate && rekey === null)
+      return provider.sshAccess!(credentials, binding.resourceId!);
+    const publicKey = rekey ?? (await this.deps.files.publicKey(binding.accountId));
     return provider.authorizeSsh!(credentials, binding.resourceId!, publicKey);
   }
 
@@ -2968,6 +3043,7 @@ export class CloudHostLifecycle {
     this.deps.store.removeBinding(bindingId);
     this.renewals.delete(bindingId);
     this.observedTicket.delete(bindingId);
+    this.heldKeys.delete(bindingId);
     void this.deps.machineKeys?.revokePending();
     await this.deps.files.forget(this.deps.clientDir, bindingId).catch(() => {});
   }

@@ -112,20 +112,27 @@ export class CloudSshFiles {
     return pending;
   }
 
+  /**
+   * Whether the account's private key, the one ssh signs in with, is on disk.
+   * Asks nothing of ssh-keygen and makes nothing; a key being made now is
+   * waited for.
+   */
+  async hasKey(accountId: string): Promise<boolean> {
+    await this.generating.get(accountId)?.catch(() => {});
+    return isPresent(this.keyPathFor(accountId));
+  }
+
   private async readOrGenerate(accountId: string): Promise<string> {
     const keyPath = this.keyPathFor(accountId);
-    try {
-      return (await fs.readFile(`${keyPath}.pub`, "utf8")).trim();
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    // Machines that took the key at create can't be given another: a private key
-    // whose public half went missing gets it back instead of being replaced.
-    const hasPrivate = await fs.access(keyPath).then(
-      () => true,
-      () => false
-    );
-    if (hasPrivate) {
+    // A public half whose private key is gone signs nothing: it is replaced with a new pair.
+    if (await isPresent(keyPath)) {
+      try {
+        return (await fs.readFile(`${keyPath}.pub`, "utf8")).trim();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      // Machines that took the key at create can't be given another: a private key
+      // whose public half went missing gets it back instead of being replaced.
       // ssh-keygen refuses a key others can read; one that can't be made ours is kept as it is.
       await fs.chmod(keyPath, 0o600);
       const derived = await this.run("ssh-keygen", ["-y", "-P", "", "-f", keyPath], {
@@ -142,8 +149,10 @@ export class CloudSshFiles {
       }
     }
     await fs.mkdir(path.dirname(keyPath), { recursive: true, mode: 0o700 });
-    // A private key it can't read back (an interrupted run) would make ssh-keygen prompt.
+    // A private key it can't read back (an interrupted run) would make ssh-keygen prompt, and
+    // an old public half must never sit beside a new private key a cut-short run left alone.
     await fs.rm(keyPath, { force: true });
+    await fs.rm(`${keyPath}.pub`, { force: true });
     const made = await this.run(
       "ssh-keygen",
       ["-q", "-t", "ed25519", "-N", "", "-C", `daintree-${accountId}`, "-f", keyPath],
@@ -347,6 +356,17 @@ export class CloudSshFiles {
     await this.generating.get(accountId)?.catch(() => {});
     await fs.rm(keyPath, { force: true }).catch(() => {});
     await fs.rm(`${keyPath}.pub`, { force: true }).catch(() => {});
+  }
+}
+
+/** Only a file that isn't there reads as absent; any other failure to look is thrown. */
+async function isPresent(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 

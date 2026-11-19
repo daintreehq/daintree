@@ -16,6 +16,7 @@ import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import { FAKE_AGENT37_KEY, FakeAgent37Api } from "./fakeAgent37Api.js";
 
 const PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClientKeyForDaintree daintree";
+const OTHER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClientKeyMadeAgain daintree";
 const LABELS = { daintree: "1", "daintree-binding": "cb_0123456789ab" };
 
 function env(options: { now?: () => number } = {}) {
@@ -584,6 +585,118 @@ describe("Agent37Provider", () => {
     ).resolves.toMatchObject({
       user: "node",
     });
+  });
+
+  it("waits out a new key's delivery to a machine it created with a key that was lost since (#17929)", async () => {
+    let now = 1_000_000;
+    const { api, provider, credentials } = env({ now: () => now });
+    const created = await provider.create(credentials, createRequest());
+    // The key it booted with gets it straight through.
+    await expect(
+      provider.authorizeSsh(credentials, created.resourceId, PUBLIC_KEY)
+    ).resolves.toMatchObject({ user: "node" });
+    const error = await provider
+      .authorizeSsh(credentials, created.resourceId, OTHER_KEY)
+      .catch((e) => e);
+    expect(provider.describeError(error)).toMatchObject({
+      code: "provider-unreachable",
+      message: expect.stringContaining("still delivering"),
+    });
+    now += AGENT37_KEY_DELIVERY_MS - 1_000;
+    const still = await provider
+      .authorizeSsh(credentials, created.resourceId, OTHER_KEY)
+      .catch((e) => e);
+    expect(provider.describeError(still).message).toContain("still delivering");
+    now += 1_000;
+    await expect(
+      provider.authorizeSsh(credentials, created.resourceId, OTHER_KEY)
+    ).resolves.toMatchObject({ user: "node" });
+    expect(api.sshKeys.map((entry) => entry.key)).toEqual(
+      [PUBLIC_KEY, OTHER_KEY].map((key) => key.split(" ").slice(0, 2).join(" "))
+    );
+  });
+
+  it("holds every machine waiting on one new key until its registration is answered (#17929)", async () => {
+    const { api, client, provider, credentials } = env();
+    const first = api.seed();
+    const second = api.seed();
+    const register = client.registerSshKey.bind(client);
+    let release: () => void = () => {};
+    vi.spyOn(client, "registerSshKey").mockImplementationOnce(async (...args) => {
+      const answer = await register(...args);
+      // Registered at Agent 37, but the answer saying when arrives late.
+      await new Promise<void>((resolve) => (release = resolve));
+      return answer;
+    });
+    let settled = 0;
+    const one = provider
+      .authorizeSsh(credentials, first.id, OTHER_KEY)
+      .catch((e) => e)
+      .finally(() => settled++);
+    const other = provider
+      .authorizeSsh(credentials, second.id, OTHER_KEY)
+      .catch((e) => e)
+      .finally(() => settled++);
+    try {
+      await vi.waitFor(() => expect(api.sshKeys).toHaveLength(1));
+      await vi.waitFor(() => expect(api.calls("GET", `/instances/${second.id}`)).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Neither is answered while the registration's own answer is outstanding.
+      expect(settled).toBe(0);
+    } finally {
+      release();
+    }
+    for (const outcome of [await one, await other]) {
+      expect(provider.describeError(outcome)).toMatchObject({
+        code: "provider-unreachable",
+        message: expect.stringContaining("still delivering"),
+      });
+    }
+    expect(api.calls("POST", "/ssh-keys")).toHaveLength(1);
+  });
+
+  it("stops waiting on a shared registration when its own caller gives up, leaving it to the rest", async () => {
+    const { api, client, provider, credentials } = env();
+    const existing = api.seed();
+    const register = client.registerSshKey.bind(client);
+    let release: () => void = () => {};
+    const sent = vi.spyOn(client, "registerSshKey").mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return register(...args);
+    });
+    const abort = new AbortController();
+    const quitter = provider
+      .authorizeSsh({ ...credentials, signal: abort.signal }, existing.id, OTHER_KEY)
+      .catch((e) => e);
+    try {
+      await vi.waitFor(() => expect(sent).toHaveBeenCalled());
+      // Sent for everyone, so with no one caller's signal.
+      expect(sent.mock.calls[0]![0].signal).toBeUndefined();
+      const stayer = provider.authorizeSsh(credentials, existing.id, OTHER_KEY).catch((e) => e);
+      await vi.waitFor(() => expect(api.calls("GET", `/instances/${existing.id}`)).toHaveLength(2));
+      abort.abort();
+      expect(await quitter).toMatchObject({ kind: "cancelled" });
+      release();
+      expect(provider.describeError(await stayer)).toMatchObject({
+        code: "provider-unreachable",
+        message: expect.stringContaining("still delivering"),
+      });
+    } finally {
+      release();
+    }
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(api.sshKeys).toHaveLength(1);
+  });
+
+  it("sends nothing for a create cancelled before its key was registered", async () => {
+    const { api, provider, credentials } = env();
+    const abort = new AbortController();
+    abort.abort();
+    await expect(
+      provider.create({ ...credentials, signal: abort.signal }, createRequest())
+    ).rejects.toBeTruthy();
+    expect(api.calls("POST", "/ssh-keys")).toHaveLength(0);
+    expect(api.calls("POST", "/instances")).toHaveLength(0);
   });
 
   it("hands no tunnel to an instance that isn't awake: a sleeper would wake, a stopped one refuse", async () => {

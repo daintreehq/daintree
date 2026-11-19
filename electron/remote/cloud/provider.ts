@@ -157,8 +157,9 @@ export interface CloudProvider {
   /**
    * Puts `publicKey` on the machine and says how to reach its sshd. Required
    * when `provisioning.sshKey` is "after-create". A provider that takes the
-   * key at create may have it too, for a machine it didn't create with the
-   * key (an imported one); it is then called for those alone.
+   * key at create may have it too, for a machine that may not hold the
+   * account's key: an imported one, or a created one whose key was made again
+   * since (#17929). It is then called for those alone.
    */
   authorizeSsh?(
     credentials: ProviderCredentials,
@@ -168,7 +169,8 @@ export interface CloudProvider {
   /**
    * Says how to reach the sshd of a machine that took the key with its create,
    * changing nothing on it. Required when `provisioning.sshKey` is "at-create",
-   * and only called then.
+   * and only called then. Without `authorizeSsh`, a created machine whose key
+   * is missing from this device is refused instead.
    */
   sshAccess?(credentials: ProviderCredentials, resourceId: string): Promise<ProviderSshAccess>;
   /** A provider failure as a typed, user-facing error. */
