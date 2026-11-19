@@ -44,8 +44,12 @@ vi.mock("../../window/serviceRefs.js", () => ({
               if (options?.strict) throw new Error("timed out");
               return null;
             }
-            if (pty.recordedUnplaced.has(id)) return { id, unplaced: true };
-            return pty.recorded.has(id) ? { id, projectId: pty.recorded.get(id) } : null;
+            if (!pty.recorded.has(id) && !pty.recordedUnplaced.has(id)) return null;
+            return {
+              id,
+              projectId: pty.recorded.get(id),
+              ...(pty.recordedUnplaced.has(id) ? { unplaced: true } : {}),
+            };
           },
         },
 }));
@@ -299,9 +303,11 @@ describe("resolveLeaseTarget", () => {
       kind: "projects",
       projectIds: [],
     });
-    expect(resolveLeaseTarget(kill, [" t-picker "], null, resolvers)).toMatchObject({
-      kind: "unresolved",
-    });
+    for (const padded of [" t-picker ", "t-picker "]) {
+      expect(resolveLeaseTarget(kill, [padded], null, resolvers), padded).toMatchObject({
+        kind: "unresolved",
+      });
+    }
     // A project on the record always wins.
     expect(resolveLeaseTarget(kill, ["t-stamped"], null, resolvers)).toEqual({
       kind: "projects",
@@ -562,6 +568,12 @@ describe("createLeaseTargetResolvers", () => {
     await expect(Promise.resolve(r.describeTerminal("t-preserved"))).resolves.toEqual({
       projectId: null,
       unplaced: true,
+    });
+    // A project on the host's record wins over the marker.
+    pty.recorded.set("t-both", "b");
+    pty.recordedUnplaced.add("t-both");
+    await expect(Promise.resolve(r.describeTerminal("t-both"))).resolves.toEqual({
+      projectId: "b",
     });
     // A record with no project that main didn't place stays untraceable.
     pty.recorded.set("t-host-shell", "");

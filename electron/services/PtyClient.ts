@@ -2036,7 +2036,10 @@ export class PtyClient extends EventEmitter {
    * Null for unknown terminals — callers fall back to unscoped delivery.
    */
   getTerminalProjectId(id: string): string | null {
-    const projectId = this.pendingSpawns.get(id)?.projectId;
+    // The running incarnation's, while a duplicate awaits the host's answer:
+    // its output, input and lease are still that project's (#17926).
+    const projectId = (this.displacedSpawns.get(id)?.entry ?? this.pendingSpawns.get(id))
+      ?.projectId;
     return typeof projectId === "string" && projectId.length > 0 ? projectId : null;
   }
 

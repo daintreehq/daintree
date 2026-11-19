@@ -621,11 +621,26 @@ describe("PtyClient lifecycle ledger", () => {
       });
 
       client.spawn("t1", { ...baseOptions, projectId: null }); // generation 2
+      // Output, input and the lease still answer to the running terminal's project.
       expect(client.isUnplacedTerminal("t1")).toBe(false);
+      expect(client.getTerminalProjectId("t1")).toBe("p-live");
 
       refuseAsLive(2);
       expect(client.isUnplacedTerminal("t1")).toBe(false);
       expect(client.getTerminalProjectId("t1")).toBe("p-live");
+    });
+
+    it("doesn't read a live terminal main never placed as unplaced while an unplaced duplicate awaits the host", () => {
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions); // generation 1: no project, no active one either
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", { ...baseOptions, projectId: null }); // generation 2
+      expect(client.isUnplacedTerminal("t1")).toBe(false);
     });
 
     it("reads a live unplaced terminal as unplaced only while no duplicate naming a project awaits the host", () => {

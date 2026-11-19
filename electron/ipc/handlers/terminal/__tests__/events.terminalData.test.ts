@@ -327,7 +327,9 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
         // With no port taking it, the ordinary fallback reaches every local view.
         ptyClient.emit("data", "term-unplaced", "prompt");
         for (const wc of [activeA, cachedB, activeB, cachedA]) {
-          expect(dataSends(wc).at(-1)).toEqual([CHANNELS.TERMINAL_DATA, "term-unplaced", "prompt"]);
+          expect(dataSends(wc).filter((call) => call[2] === "prompt")).toEqual([
+            [CHANNELS.TERMINAL_DATA, "term-unplaced", "prompt"],
+          ]);
         }
         expect(remote.send).not.toHaveBeenCalled();
 

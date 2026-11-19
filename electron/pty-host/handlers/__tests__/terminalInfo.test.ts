@@ -105,9 +105,11 @@ describe("mapTerminalInfo", () => {
   // #17926: main's lease gate reads it here once a preserved exit has dropped its own record.
   it("reports a terminal placed in no project back to main", () => {
     const ctx = createCtx();
-    expect(
-      mapTerminalInfo(makeTerminal({ projectId: undefined, unplaced: true }), ctx)
-    ).toMatchObject({ unplaced: true });
+    for (const isExited of [false, true]) {
+      expect(
+        mapTerminalInfo(makeTerminal({ projectId: undefined, unplaced: true, isExited }), ctx)
+      ).toMatchObject({ unplaced: true });
+    }
     expect(mapTerminalInfo(makeTerminal(), ctx).unplaced).toBeUndefined();
   });
 
