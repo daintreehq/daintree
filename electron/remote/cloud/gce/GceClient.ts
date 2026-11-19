@@ -539,7 +539,6 @@ export class GceClient {
     let freshToken = false;
     let authRetried = false;
     let possiblyDelivered = false;
-    // A request refused for its token did nothing, so its fresh-token try is still the one send.
     const attempts = request.once ? 1 : MAX_ATTEMPTS;
     for (let attempt = 0; attempt < attempts;) {
       try {
@@ -553,7 +552,13 @@ export class GceClient {
         // Cancelled between attempts or before a send: whatever an earlier send did still stands.
         if (error.kind === "cancelled") throw this.settled(error, request, possiblyDelivered);
         // A kept token Google has stopped honouring gets one fresh try of its own; a fresh one refused is final.
-        if (error.kind === "unauthorized" && error.status === 401 && !authRetried) {
+        // A request sent once gets none: the exchange is time in which its reason may have lapsed.
+        if (
+          error.kind === "unauthorized" &&
+          error.status === 401 &&
+          !authRetried &&
+          !request.once
+        ) {
           authRetried = true;
           freshToken = true;
           lastError = error;

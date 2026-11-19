@@ -540,7 +540,8 @@ describe("standing in for a machine refused a key (#17924)", () => {
     await env.keys.arm(HOST, env.session);
     expect(env.keys.standsInFor(BINDING)).toBe(true);
     const account = env.store.account(ACCOUNT)!;
-    env.store.putAccount({ ...account, keyHint: "wxyz" });
+    // Replaced with a key that happens to end alike: told apart by its revision.
+    env.store.putAccount({ ...account, credentialRevision: "rev-2" });
     expect(env.keys.standsInFor(BINDING)).toBe(false);
     // The new key is asked at once, and its own refusal stands in again.
     await env.keys.arm(HOST, env.session);

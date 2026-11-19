@@ -1051,16 +1051,20 @@ describe("GceProvider", () => {
     expect(stops()).toHaveLength(3);
   });
 
-  it("gives an idle stop refused for its token one fresh-token try, and no more (#17924)", async () => {
+  it("sends an idle stop refused for its token no second time, where a person's stop gets a fresh token (#17924)", async () => {
     const google = fakeGoogle();
     const created = await google.provider.create(google.credentials(), CREATE);
     const stops = () => google.requests.filter((request) => request.path.endsWith("/stop"));
     google.state.script.push({ path: /\/stop$/, status: 401, reason: "authError" });
-    google.state.script.push({ path: /\/stop$/, status: 401, reason: "authError" });
     await expect(
       google.provider.stop(google.credentials(), created.resourceId, { once: true })
     ).rejects.toMatchObject({ kind: "unauthorized" });
-    expect(stops()).toHaveLength(2);
+    expect(stops()).toHaveLength(1);
+
+    google.state.script.push({ path: /\/stop$/, status: 401, reason: "authError" });
+    const stopped = await google.provider.stop(google.credentials(), created.resourceId);
+    expect(stopped?.machine).toBe("stopped");
+    expect(stops()).toHaveLength(3);
   });
 
   it("leaves a stop's progress to the VM when its operation can't be read", async () => {

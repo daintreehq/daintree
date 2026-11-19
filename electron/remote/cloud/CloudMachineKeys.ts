@@ -80,6 +80,17 @@ export function awaitsRevoke(key: StoredMachineKey): boolean {
   return key.state === "revoke" || key.state === "issuing";
 }
 
+/** What tells one account key from another without holding it. */
+type AccountKey = { keyHint: string | null; credentialRevision: string | null };
+
+/** A finding was made with the account's key as it is now. */
+function sameKey(
+  account: AccountKey,
+  found: { keyHint: string | null; revision: string | null }
+): boolean {
+  return account.keyHint === found.keyHint && account.credentialRevision === found.revision;
+}
+
 function errorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null || !("code" in error)) return null;
   return typeof error.code === "string" ? error.code : null;
@@ -111,6 +122,8 @@ export class CloudMachineKeys {
       message: string;
       at: number;
       keyHint: string | null;
+      /** The account's credential revision it was found with: a replaced key ending alike isn't this one. */
+      revision: string | null;
       retry: boolean;
       standIn: LinkSession | null;
     }
@@ -147,7 +160,8 @@ export class CloudMachineKeys {
     if (!problem || !session?.isOpen || !binding?.hostId) return false;
     if (this.deps.sessionFor(binding.hostId) !== session) return false;
     // Found with the account's key then: another key may make keys, or may not stop it.
-    return this.deps.store.account(binding.accountId)?.keyHint === problem.keyHint;
+    const account = this.deps.store.account(binding.accountId);
+    return Boolean(account && sameKey(account, problem));
   }
 
   /** A link to a host came up: make sure its machine holds a working key. */
@@ -269,12 +283,19 @@ export class CloudMachineKeys {
   private setProblem(
     bindingId: string,
     message: string,
-    keyHint: string | null,
+    key: AccountKey,
     retry: boolean,
     standIn: LinkSession | null = null
   ): void {
     const before = this.problems.get(bindingId);
-    this.problems.set(bindingId, { message, at: this.now(), keyHint, retry, standIn });
+    this.problems.set(bindingId, {
+      message,
+      at: this.now(),
+      keyHint: key.keyHint,
+      revision: key.credentialRevision,
+      retry,
+      standIn,
+    });
     if (retry) {
       this.armRetryAt.set(bindingId, this.now() + RETRY_MS);
       this.issueNotBefore.set(bindingId, this.now() + RETRY_MS);
@@ -310,7 +331,7 @@ export class CloudMachineKeys {
         this.setProblem(
           bindingId,
           "The Daintree on this machine is too old to stop it by itself. Update it to let it.",
-          account.keyHint,
+          account,
           false
         );
         return;
@@ -351,7 +372,7 @@ export class CloudMachineKeys {
     if (
       refused &&
       !refused.retry &&
-      refused.keyHint === account.keyHint &&
+      sameKey(account, refused) &&
       now - refused.at < REFUSED_RETRY_MS
     ) {
       // Still holding no key, as this link's host just said: a refusal that leaves the account's own
@@ -393,7 +414,7 @@ export class CloudMachineKeys {
       this.setProblem(
         bindingId,
         `This machine can't stop itself when idle: ${said}`,
-        account.keyHint,
+        account,
         true
       );
       // Nothing was asked of the provider: a replaced key is tried as soon as the link comes back.
@@ -437,7 +458,7 @@ export class CloudMachineKeys {
         this.setProblem(
           bindingId,
           `This machine can't stop itself when idle: ${described.message}`,
-          account.keyHint,
+          account,
           false,
           session
         );
@@ -448,7 +469,7 @@ export class CloudMachineKeys {
         this.setProblem(
           bindingId,
           `This machine can't stop itself when idle: ${provider.info(process.platform).name} didn't let this account's API key give it a key of its own. ${described.message}`,
-          account.keyHint,
+          account,
           false,
           STAND_IN_REFUSALS.has(described.code) ? session : null
         );
@@ -459,7 +480,7 @@ export class CloudMachineKeys {
       this.setProblem(
         bindingId,
         `This machine can't stop itself when idle yet: ${described.message}`,
-        account.keyHint,
+        account,
         true
       );
       return;
@@ -502,7 +523,7 @@ export class CloudMachineKeys {
         this.setProblem(
           bindingId,
           `This machine can't stop itself when idle: ${said}`,
-          account.keyHint,
+          account,
           false
         );
         return;

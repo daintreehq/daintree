@@ -496,6 +496,8 @@ describe("stopping a machine from the desktop when its own idle stop was refused
     };
     await env.lifecycle.stopIdleDue();
     expect(env.standInClaims()).toBe(1);
+    // Granted to this link, and spent: nobody stops the grouped instance on it.
+    expect(getRemoteService("hostIdle")!.mayClaim(Symbol("anyone"))).toBe(false);
     expect(env.fake.stop).not.toHaveBeenCalled();
     expect(env.status().selfStopProblem).toMatch(/Auto Scaling group/);
   });
@@ -514,6 +516,7 @@ describe("stopping a machine from the desktop when its own idle stop was refused
     await env.lifecycle.stopIdleDue();
     expect(env.status().selfStopProblem).toBeNull();
     expect(env.fake.stop).toHaveBeenCalledTimes(1);
+    expect(env.fake.stop.mock.calls[0]![2]).toEqual({ once: true });
     // The idle time was this link's: the machine's own keeper never acts on it.
     await env.host.keepersPass();
     expect(world.hostStops).toBe(0);
@@ -572,6 +575,33 @@ describe("stopping a machine from the desktop when its own idle stop was refused
     expect(env.fake.stop).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(env.status().selfStopProblem).toMatch(/Auto Scaling group/));
     expect(env.status().linkedIdleStop).toBeNull();
+  });
+
+  it("has the host's permission taken back when the check before the claim finds the machine unsuitable, even if an older look armed it meanwhile", async () => {
+    const env = await device("aws");
+    env.host.os.probe = NEEDS_PASSWORD;
+    await env.armed();
+    await env.host.idleTimeEnds();
+    const unsuitable = {
+      eligible: false as const,
+      target: TARGET,
+      problem: "It belongs to an Auto Scaling group, which may replace it once it stops.",
+    };
+    env.fake.check.mockImplementationOnce(async () => {
+      // The keeper's own look, with the provider's older answer, arms the host: sudo works now.
+      env.host.os.probe = null;
+      await env.guest.arm(HOST, env.link.session);
+      expect(getRemoteService("guestPowerOff")!.stopsWhenIdle()).toBe(true);
+      env.fake.check.mockResolvedValue(unsuitable);
+      return unsuitable;
+    });
+    await env.lifecycle.stopIdleDue();
+    expect(env.standInClaims()).toBe(0);
+    expect(env.fake.stop).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(getRemoteService("guestPowerOff")!.stopsWhenIdle()).toBe(false));
+    expect(env.status().selfStopProblem).toMatch(/Auto Scaling group/);
+    await env.host.keepersPass();
+    expect(env.host.os.powerOffs).toBe(0);
   });
 
   it("goes back to the machine stopping itself once its self-stop is accepted, with no stop from here", async () => {

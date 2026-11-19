@@ -3533,13 +3533,13 @@ export class CloudHostLifecycle {
     if (role === "stand-in" && typeof provider.checkGuestPowerOff === "function") {
       // Found fit up to half an hour ago; a machine that joined a group since isn't stopped from here.
       const check = await provider.checkGuestPowerOff(credentials, resourceId);
-      if (!holds() || !admits()) return;
       if (!check.eligible) {
-        // Its keeper looks again now, behind any look under way: it says why, and takes the
-        // permission back.
+        // Its keeper looks again now, behind any look under way, whatever changed meanwhile (an
+        // older answer may have armed its host): it says why, and takes the permission back.
         void this.deps.guestPowerOff?.arm(hostId, session, { again: true });
         return;
       }
+      if (!holds() || !admits()) return;
     }
     // Asked once from here, whatever the host answers or however its answer is lost.
     const asked = { session, interval };
