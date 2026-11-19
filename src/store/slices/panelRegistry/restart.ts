@@ -1885,13 +1885,14 @@ async function readOwnStepInputs(
 ): Promise<OwnStepInputs> {
   // Everything the launch awaits, so nothing yields between its check, its
   // claim and the teardown: no exit, replacement or edit can land in between.
-  const [agentSettings, tmpDir, launchConfigDir, cliDetail] = await Promise.all([
+  const [agentSettings, tmpDir, launchConfigDir] = await Promise.all([
     agentSettingsClient.get(),
     resolveHostTmpDir(() => systemClient.getTmpDir()).catch(() => ""),
     // Read while the launch still runs, as a kept conversation needs (#17087).
     keepConversation && reopensFromConversationStore(agentId) ? readLaunchConfigDir(id) : undefined,
-    getCurrentLaunchCliDetail(agentId),
   ]);
+  // Last, as the launch reads it: a change of CLI copy heard meanwhile lands first.
+  const cliDetail = await getCurrentLaunchCliDetail(agentId);
   return { agentSettings, tmpDir, launchConfigDir, cliDetail };
 }
 
@@ -2253,6 +2254,16 @@ async function respawnAgentOnPreset(
     // agent is the one the pane launched (as in `restartTerminal`).
     const captureTrusted =
       livePanel.detectedAgentId === undefined || livePanel.detectedAgentId === effectiveAgentId;
+
+    // Nothing yielded since the claim, so no exit can have been dropped: a
+    // caller that gave up in that stretch gets the pane back untouched.
+    if (requested.kind === "own-chain-step" && requested.deadlineAt !== undefined) {
+      if (Date.now() >= requested.deadlineAt) {
+        unmarkTerminalRestarting(id);
+        set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+        return { success: false, error: "the call's deadline passed before the move started" };
+      }
+    }
 
     peekTerminalService()?.destroy(id);
     withTerminalService((service) => service.suppressNextExit(id, 10000), id);
