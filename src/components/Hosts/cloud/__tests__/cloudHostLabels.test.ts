@@ -415,6 +415,7 @@ describe("idleEndSentence (#17921)", () => {
     expect(idleEndSentence(idle, BOAT_PROVIDER, refused, null)).toBe(refused);
     // An unregistered provider promises nothing beyond the reason.
     expect(idleEndSentence(idle, null, refused, { kind: "stops" })).toBe(refused);
+    expect(idleEndSentence(idle, null, refused, { kind: "blocked", problem })).toBe(refused);
   });
 
   it("doesn't imply a stop where it can't be known", () => {

@@ -266,7 +266,10 @@ export interface CloudHostLifecycleDeps {
   /** Where a tunnel's command is on this device's PATH; null when it isn't there. */
   findCommand?: (command: string) => Promise<string | null>;
   /** The keys machines renew and stop themselves with (#17361); absent where nothing issues them. */
-  machineKeys?: Pick<CloudMachineKeys, "problemFor" | "standsInFor" | "tick" | "revokePending">;
+  machineKeys?: Pick<
+    CloudMachineKeys,
+    "problemFor" | "standsInFor" | "tick" | "revokePending" | "forgetRemoved"
+  >;
   /** EC2 and Compute Engine machines powering themselves off once idle (#17362). */
   guestPowerOff?: Pick<
     CloudGuestPowerOff,
@@ -695,6 +698,7 @@ export class CloudHostLifecycle {
       this.keeperTimer = null;
       // Its pass would have forgotten a removed machine's findings; none comes now.
       this.deps.guestPowerOff?.forgetRemoved(bindings);
+      this.deps.machineKeys?.forgetRemoved(bindings);
     }
   }
 
@@ -3459,6 +3463,14 @@ export class CloudHostLifecycle {
     return { hostId, session, interval, provider, role };
   }
 
+  /** Whether the machine's keepers last found a reason it can't stop itself. */
+  private hasSelfStopProblem(bindingId: string): boolean {
+    return (
+      (this.deps.machineKeys?.problemFor(bindingId) ?? this.deps.guestPowerOff?.problemFor(bindingId)) !=
+      null
+    );
+  }
+
   /** The host is still this binding's: its connection names it, and it names the host. */
   private boundTo(hostId: HostId, bindingId: string): boolean {
     const connection = this.deps.hosts.get(hostId)?.connection;
@@ -3491,12 +3503,14 @@ export class CloudHostLifecycle {
       }
       return session.isOpen && this.deps.idleClaims?.sessionFor(hostId) === session;
     };
-    // Until the claim goes out, the machine's keeper still finds it one to stop from here; a
-    // self-stop accepted after the host granted the idle time can't take that idle time back.
+    // Until the claim goes out, the machine's keeper still finds it one to stop from here.
     const admits = () => {
       const binding = this.deps.store.binding(bindingId);
       return Boolean(binding && this.idleStopRole(binding, provider) === role);
     };
+    // Once granted, a self-stop accepted meanwhile can't take that idle time back, so the stop
+    // goes; a refusal that no longer leaves a stop from here (the machine turned unsuitable) wins.
+    const withdrawn = () => role === "stand-in" && !admits() && this.hasSelfStopProblem(bindingId);
     await this.settleRenewal(bindingId);
     const binding = this.deps.store.binding(bindingId);
     if (!binding || !holds() || !admits()) return;
@@ -3521,8 +3535,9 @@ export class CloudHostLifecycle {
       const check = await provider.checkGuestPowerOff(credentials, resourceId);
       if (!holds() || !admits()) return;
       if (!check.eligible) {
-        // Its keeper looks again now: it says why, and takes the permission back.
-        void this.deps.guestPowerOff?.arm(hostId, session);
+        // Its keeper looks again now, behind any look under way: it says why, and takes the
+        // permission back.
+        void this.deps.guestPowerOff?.arm(hostId, session, { again: true });
         return;
       }
     }
@@ -3537,7 +3552,7 @@ export class CloudHostLifecycle {
         (id) => this.deps.idleClaims?.sessionFor(id) ?? null,
         () => {
           // Granted: nothing may come between this and the stop going out.
-          if (!holds()) return null;
+          if (!holds() || withdrawn()) return null;
           const stopping = this.operate(bindingId, "stopping", (signal) =>
             this.runIdleStop(bindingId, provider, credentials, resourceId, signal)
           );

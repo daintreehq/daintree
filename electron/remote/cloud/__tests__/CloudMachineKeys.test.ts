@@ -532,6 +532,35 @@ describe("CloudMachineKeys", () => {
 });
 
 describe("standing in for a machine refused a key (#17924)", () => {
+  it("stops standing in once the account's key is replaced, until the new key is tried", async () => {
+    const env = setup();
+    env.machineKeys.issue.mockRejectedValue(
+      new BoatApiError("forbidden", "missing account.admin", 403, "api_key_action_forbidden", null)
+    );
+    await env.keys.arm(HOST, env.session);
+    expect(env.keys.standsInFor(BINDING)).toBe(true);
+    const account = env.store.account(ACCOUNT)!;
+    env.store.putAccount({ ...account, keyHint: "wxyz" });
+    expect(env.keys.standsInFor(BINDING)).toBe(false);
+    // The new key is asked at once, and its own refusal stands in again.
+    await env.keys.arm(HOST, env.session);
+    expect(env.machineKeys.issue).toHaveBeenCalledTimes(2);
+    expect(env.keys.standsInFor(BINDING)).toBe(true);
+  });
+
+  it("forgets a removed machine's finding, and the link it was found on", async () => {
+    const env = setup();
+    env.machineKeys.issue.mockRejectedValue(
+      new BoatApiError("forbidden", "missing account.admin", 403, "api_key_action_forbidden", null)
+    );
+    await env.keys.arm(HOST, env.session);
+    expect(env.keys.problemFor(BINDING)).not.toBeNull();
+    env.store.removeBinding(BINDING);
+    env.keys.forgetRemoved();
+    expect(env.keys.problemFor(BINDING)).toBeNull();
+    expect(env.keys.standsInFor(BINDING)).toBe(false);
+  });
+
   const leavesAccountStop = () => [
     new BoatApiError("forbidden", "missing account.admin", 403, "api_key_action_forbidden", null),
     new BoatApiError(
@@ -611,8 +640,7 @@ describe("standing in for a machine refused a key (#17924)", () => {
     expect(env.keys.standsInFor(BINDING)).toBe(true);
     env.changed.mockClear();
 
-    // Another device with an admin key armed it meanwhile.
-    const next = env.newSession();
+    // Another device with an admin key armed it meanwhile, as this link's host now says.
     env.call.mockImplementation(async (method: string, payload: unknown) =>
       method === MachineKeeperLinkMethod.STATUS
         ? {
@@ -623,7 +651,7 @@ describe("standing in for a machine refused a key (#17924)", () => {
           }
         : env.answer(method, payload)
     );
-    await env.keys.arm(HOST, next);
+    await env.keys.arm(HOST, env.session);
     expect(env.keys.standsInFor(BINDING)).toBe(false);
     expect(env.keys.problemFor(BINDING)).toBeNull();
     expect(env.changed).toHaveBeenCalled();

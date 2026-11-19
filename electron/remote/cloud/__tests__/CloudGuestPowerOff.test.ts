@@ -469,7 +469,8 @@ describe("standing in for a refused power-off (#17924)", () => {
     expect(unreadable.guest.standsInFor(BINDING)).toBe(false);
 
     const windows = setup();
-    windows.system.unsupported = () => "Only a Linux machine can power itself off when idle.";
+    (windows.system as { unsupported: () => string | null }).unsupported = () =>
+      "Only a Linux machine can power itself off when idle.";
     await windows.guest.arm(HOST, windows.session);
     expect(windows.guest.problemFor(BINDING)).toMatch(/Only a Linux machine/);
     expect(windows.guest.standsInFor(BINDING)).toBe(false);
@@ -510,6 +511,61 @@ describe("standing in for a refused power-off (#17924)", () => {
     await env.guest.arm(HOST, env.session);
     expect(env.guest.problemFor(BINDING)).toMatch(/without a password/);
     expect(env.guest.standsInFor(BINDING)).toBe(false);
+    env.call.mockResolvedValueOnce({
+      armed: false,
+      problem: "Needs a password to power off.",
+      powerOffProbeRefused: false,
+    });
+    env.clock.now += 6 * MINUTE;
+    await env.guest.tick();
+    expect(env.guest.standsInFor(BINDING)).toBe(false);
+  });
+
+  it("stops standing in on the same link once its host names another machine, or the provider finds it unsuitable", async () => {
+    const env = setup();
+    env.system.probePowerOff.mockResolvedValue("Needs a password to power off.");
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.standsInFor(BINDING)).toBe(true);
+    env.system.verifyIdentity.mockResolvedValueOnce({
+      ok: false,
+      definite: true,
+      problem: "This host runs on another machine than the one Daintree has for it.",
+    } as never);
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.standsInFor(BINDING)).toBe(false);
+
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.standsInFor(BINDING)).toBe(true);
+    // Unsuitable, and not even nameable: nothing to take back, and still never stopped from here.
+    env.check.mockResolvedValueOnce({ eligible: false, target: null, problem: "No account." });
+    await env.guest.arm(HOST, env.session);
+    expect(env.guest.standsInFor(BINDING)).toBe(false);
+  });
+
+  it("takes a fresh look behind one under way when asked again on the same link", async () => {
+    const env = setup();
+    let release!: () => void;
+    env.check.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ eligible: true as const, target: TARGET });
+        })
+    );
+    const first = env.guest.arm(HOST, env.session);
+    await vi.waitFor(() => expect(env.check).toHaveBeenCalledTimes(1));
+    env.check.mockResolvedValue({
+      eligible: false,
+      target: TARGET,
+      problem: "It belongs to an Auto Scaling group, which may replace it once it stops.",
+    });
+    // A plain repeat joins the look under way; `again` queues one after it.
+    void env.guest.arm(HOST, env.session);
+    void env.guest.arm(HOST, env.session, { again: true });
+    release();
+    await first;
+    await vi.waitFor(() => expect(env.check).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(env.guest.problemFor(BINDING)).toMatch(/Auto Scaling group/));
+    expect(env.sent.at(-1)).toEqual({ target: TARGET, enabled: false });
   });
 
   it("stops standing in once the host takes the permission", async () => {

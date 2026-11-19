@@ -421,10 +421,12 @@ describe("the claim a Shell makes standing in for a refused self-stop (#17924)",
     const stop = vi.fn(async () => null);
     driver.stop = stop;
     const host = make();
-    const other = host.link();
+    // Armed while the host still had work, so its keeper has claimed nothing when the Shell asks.
+    await host.link().call(MachineKeeperLinkMethod.ARM, request());
+    await getRemoteService("machineKeeper")!.tick();
     await host.idleOut();
-    await other.call(MachineKeeperLinkMethod.ARM, request());
     await expect(standIn(host.link())).resolves.toEqual({ granted: false });
+    expect(stop).not.toHaveBeenCalled();
     await getRemoteService("machineKeeper")!.tick();
     expect(stop).toHaveBeenCalledTimes(1);
   });

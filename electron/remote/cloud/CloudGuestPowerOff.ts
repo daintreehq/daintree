@@ -132,13 +132,20 @@ export class CloudGuestPowerOff {
     this.standIns.clear();
   }
 
-  arm(hostId: HostId, session: LinkSession): Promise<void> {
+  /**
+   * Checks the machine and gives or takes back its permission over `session`.
+   * `again` asks for a fresh look even behind one under way on the same link,
+   * whose provider answer may predate what the caller just found.
+   */
+  arm(hostId: HostId, session: LinkSession, options: { again?: boolean } = {}): Promise<void> {
     const binding = this.deps.store.bindingForHost(hostId);
     if (this.disposed || !binding?.resourceId) return Promise.resolve();
     const bindingId = binding.id;
     const running = this.arming.get(bindingId);
     if (running) {
-      if (running.session !== session) this.queued.set(bindingId, { hostId, session });
+      if (running.session !== session || options.again) {
+        this.queued.set(bindingId, { hostId, session });
+      }
       return running.promise;
     }
     const promise = this.armOnce(bindingId, hostId, session)

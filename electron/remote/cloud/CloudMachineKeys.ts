@@ -141,9 +141,13 @@ export class CloudMachineKeys {
    * stop it on an idle time it claims (#17924).
    */
   standsInFor(bindingId: string): boolean {
-    const session = this.problems.get(bindingId)?.standIn;
-    const hostId = this.deps.store.binding(bindingId)?.hostId;
-    return Boolean(session?.isOpen && hostId && this.deps.sessionFor(hostId) === session);
+    const problem = this.problems.get(bindingId);
+    const session = problem?.standIn;
+    const binding = this.deps.store.binding(bindingId);
+    if (!problem || !session?.isOpen || !binding?.hostId) return false;
+    if (this.deps.sessionFor(binding.hostId) !== session) return false;
+    // Found with the account's key then: another key may make keys, or may not stop it.
+    return this.deps.store.account(binding.accountId)?.keyHint === problem.keyHint;
   }
 
   /** A link to a host came up: make sure its machine holds a working key. */
@@ -206,7 +210,7 @@ export class CloudMachineKeys {
   }
 
   /** Forgets what was found for bindings no longer stored, links they were found on included. */
-  private forgetRemoved(bindings: readonly { id: string }[]): void {
+  forgetRemoved(bindings: readonly { id: string }[] = this.deps.store.bindings()): void {
     const live = new Set(bindings.map((binding) => binding.id));
     for (const map of [this.problems, this.checkedAt, this.armRetryAt, this.issueNotBefore]) {
       for (const id of map.keys()) if (!live.has(id)) map.delete(id);
@@ -236,6 +240,8 @@ export class CloudMachineKeys {
       })
       .finally(() => {
         if (this.arming.get(bindingId)?.promise === promise) this.arming.delete(bindingId);
+        // Its host was removed meanwhile: what it just wrote is about a binding that is gone.
+        if (!this.deps.store.binding(bindingId)) this.forgetRemoved();
         const next = this.queued.get(bindingId);
         this.queued.delete(bindingId);
         if (next && next.session.isOpen && this.deps.sessionFor(next.hostId) === next.session) {

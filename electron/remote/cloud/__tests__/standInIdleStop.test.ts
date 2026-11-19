@@ -65,7 +65,17 @@ const TARGET = {
   region: "eu-west-1",
   instanceId: "i-0abc0000000000001",
 };
-const MACHINES = { boat: "bx_23456789", aws: "eu-west-1/i-0abc0000000000001" } as const;
+const GCE_TARGET = {
+  provider: "gce" as const,
+  project: "daintree-test",
+  zone: "europe-west1-b",
+  instanceId: "1234567890123",
+};
+const MACHINES = {
+  boat: "bx_23456789",
+  aws: "eu-west-1/i-0abc0000000000001",
+  gce: "europe-west1-b/1234567890123",
+} as const;
 const ADMIN_MISSING = () =>
   new BoatApiError("forbidden", "missing account.admin", 403, "api_key_action_forbidden", null);
 const NEEDS_PASSWORD =
@@ -184,11 +194,17 @@ function cloudHost() {
           if (!entry) throw new AppError({ code: "UNSUPPORTED", message: `Unknown ${method}` });
           const parsed = entry.schema.safeParse(payload);
           if (!parsed.success) throw new AppError({ code: "VALIDATION", message: "Bad payload" });
-          return entry.handler(parsed.data);
+          const answer = await entry.handler(parsed.data);
+          // While the answer travels back.
+          await hooks.beforeAnswer?.(method);
+          return answer;
         },
       };
+      const hooks: { beforeAnswer: ((method: string) => Promise<void>) | null } = {
+        beforeAnswer: null,
+      };
       listener!({ session: session as unknown as LinkSession });
-      return { session: session as unknown as LinkSession, asked };
+      return { session: session as unknown as LinkSession, asked, hooks };
     },
     /** What the host tells its links of its clock, as its summaries do. */
     publish() {
@@ -232,7 +248,7 @@ function provider(kind: Kind) {
   }));
   const check = vi.fn(async (): Promise<GuestPowerOffCheck> => ({
     eligible: true,
-    target: TARGET,
+    target: kind === "gce" ? GCE_TARGET : TARGET,
   }));
   const stop = vi.fn(async (_credentials: unknown, _resourceId: string, _options?: unknown) => {
     world.machine = resource(kind, { machine: "stopped", rawState: "stopped" });
@@ -245,11 +261,14 @@ function provider(kind: Kind) {
       if (kind === "boat") return info;
       return {
         ...info,
-        name: "AWS",
+        name: kind === "gce" ? "Compute Engine" : "AWS",
         capabilities: {
           ...info.capabilities,
           persistence: { ...info.capabilities.persistence, retentionDays: null },
-          lifetime: { kind: "none" },
+          lifetime:
+            kind === "gce"
+              ? { kind: "fixed-at-create", canChangeWhileStopped: true }
+              : { kind: "none" },
         },
       };
     },
@@ -298,9 +317,9 @@ async function device(kind: Kind) {
     displayName: "Work",
     identity: "octocat",
     scope:
-      kind === "aws"
-        ? { kind: "account", id: TARGET.accountId, name: TARGET.accountId }
-        : { kind: "personal", id: "personal", name: "Personal" },
+      kind === "boat"
+        ? { kind: "personal", id: "personal", name: "Personal" }
+        : { kind: "account", id: TARGET.accountId, name: TARGET.accountId },
     apiUrl,
     keyHint: "abcd",
     credentialRevision: null,
@@ -437,23 +456,67 @@ describe("stopping a machine from the desktop when its own idle stop was refused
     expect(env.standInClaims()).toBe(1);
   });
 
-  it("stops an EC2 machine whose login sudo won't let power off, once it confirmed it is that machine", async () => {
+  it.each(["aws", "gce"] as const)(
+    "stops an %s machine whose login sudo won't let power off, once it confirmed it is that machine",
+    async (kind) => {
+      const env = await device(kind);
+      env.host.os.probe = NEEDS_PASSWORD;
+      await env.armed();
+      expect(env.status().selfStopProblem).toBe(NEEDS_PASSWORD);
+      expect(env.status().linkedIdleStop).toEqual({ kind: "stops" });
+
+      await env.host.idleTimeEnds();
+      await env.lifecycle.stopIdleDue();
+
+      expect(env.standInClaims()).toBe(1);
+      // Asked again at the provider right before the claim, as well as when the link came up.
+      expect(env.fake.check).toHaveBeenCalledTimes(2);
+      expect(env.fake.stop).toHaveBeenCalledTimes(1);
+      expect(env.fake.stop.mock.calls[0]![1]).toBe(MACHINES[kind]);
+      expect(env.fake.stop.mock.calls[0]![2]).toEqual({ once: true });
+      expect(env.host.os.powerOffs).toBe(0);
+      expect(env.status()).toMatchObject({ machine: "stopped" });
+    }
+  );
+
+  it("sends no stop on a granted idle time once the machine turned unsuitable while the answer travelled", async () => {
     const env = await device("aws");
     env.host.os.probe = NEEDS_PASSWORD;
     await env.armed();
-    expect(env.status().selfStopProblem).toBe(NEEDS_PASSWORD);
-    expect(env.status().linkedIdleStop).toEqual({ kind: "stops" });
-
     await env.host.idleTimeEnds();
+    env.link.hooks.beforeAnswer = async (method) => {
+      if (method !== LinkMethod.CLAIM_IDLE_STAND_IN) return;
+      // The keeper's own look lands first: the instance joined an Auto Scaling group.
+      env.fake.check.mockResolvedValue({
+        eligible: false,
+        target: TARGET,
+        problem: "It belongs to an Auto Scaling group, which may replace it once it stops.",
+      });
+      await env.guest.arm(HOST, env.link.session);
+    };
     await env.lifecycle.stopIdleDue();
-
     expect(env.standInClaims()).toBe(1);
-    // Asked again at the provider right before the claim, as well as when the link came up.
-    expect(env.fake.check).toHaveBeenCalledTimes(2);
+    expect(env.fake.stop).not.toHaveBeenCalled();
+    expect(env.status().selfStopProblem).toMatch(/Auto Scaling group/);
+  });
+
+  it("still stops on a granted idle time when the self-stop was accepted while the answer travelled, once", async () => {
+    const env = await device("boat");
+    env.fake.issue.mockRejectedValueOnce(ADMIN_MISSING());
+    await env.armed();
+    await env.host.idleTimeEnds();
+    env.link.hooks.beforeAnswer = async (method) => {
+      if (method !== LinkMethod.CLAIM_IDLE_STAND_IN) return;
+      // The account's key may now make keys: the machine takes one, after the host granted this link.
+      env.host.clock.wall += 61 * MINUTE;
+      await env.keys.tick();
+    };
+    await env.lifecycle.stopIdleDue();
+    expect(env.status().selfStopProblem).toBeNull();
     expect(env.fake.stop).toHaveBeenCalledTimes(1);
-    expect(env.fake.stop.mock.calls[0]![2]).toEqual({ once: true });
-    expect(env.host.os.powerOffs).toBe(0);
-    expect(env.status()).toMatchObject({ machine: "stopped" });
+    // The idle time was this link's: the machine's own keeper never acts on it.
+    await env.host.keepersPass();
+    expect(world.hostStops).toBe(0);
   });
 
   it("never stops a machine whose host answered as another machine, and keeps saying why", async () => {

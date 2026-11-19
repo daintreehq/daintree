@@ -1335,6 +1335,17 @@ describe("AwsProvider", () => {
     });
   });
 
+  it("asks its client for an idle stop sent once (#17924)", async () => {
+    const { provider, credentials, client, fake } = setup();
+    const { resourceId } = await provider.create(credentials, CREATE);
+    fake.instances[0]!.state = "running";
+    const stop = vi.spyOn(client, "stopInstance");
+    await provider.stop(credentials, resourceId, { once: true });
+    expect(stop).toHaveBeenCalledWith(expect.anything(), fake.instances[0]!.id, {
+      once: true,
+    });
+  });
+
   it("starts, stops, renames and terminates the instance in its region", async () => {
     const { provider, credentials, fake } = setup();
     const { resourceId } = await provider.create(credentials, CREATE);
