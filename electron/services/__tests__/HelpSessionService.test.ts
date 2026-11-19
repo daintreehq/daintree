@@ -61,6 +61,8 @@ const {
     setAssistantControl: vi.fn(),
     disconnectHelpBearer: vi.fn(),
     resetHelpTransports: vi.fn(),
+    bindHelpConversation: vi.fn(),
+    forgetAssistantConversation: vi.fn(),
     recordTurnOutcome: vi.fn(),
     getRuntimeState: vi.fn<
       () => import("../../../shared/types/ipc/mcpServer.js").McpRuntimeSnapshot
@@ -3897,6 +3899,124 @@ describe("HelpSessionService", () => {
         await service.revokeSession(result.sessionId);
 
         expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("claude-conv-2");
+      });
+
+      describe("conversation ownership (#17919)", () => {
+        // Provisioning wires conversation ownership to the MCP server's ledger.
+        const listener = {
+          bind: mockMcpServerService.bindHelpConversation,
+          forget: mockMcpServerService.forgetAssistantConversation,
+        };
+        const ownershipOfLane = (slot = 0) =>
+          (backing.get(slotKey("proj-1", slot)) as { conversationOwnershipId?: string } | undefined)
+            ?.conversationOwnershipId;
+
+        beforeEach(() => {
+          listener.bind.mockClear();
+          listener.forget.mockClear();
+        });
+
+        it("keeps the id when the lane resumes its conversation, and binds each bearer to it", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+          expect(id).toEqual(expect.any(String));
+          expect(listener.bind).toHaveBeenLastCalledWith(first.sessionId, id);
+          expect(service.getConversationOwnershipId(first.sessionId)).toBe(id);
+          await service.revokeSession(first.sessionId);
+          expect(service.getConversationOwnershipId(first.sessionId)).toBeNull();
+
+          const resumed = await launchLane("term-2", "conv-1");
+
+          expect(ownershipOfLane()).toBe(id);
+          expect(listener.bind).toHaveBeenLastCalledWith(resumed.sessionId, id);
+          expect(service.getConversationOwnershipId(resumed.sessionId)).toBe(id);
+          expect(listener.forget).not.toHaveBeenCalled();
+        });
+
+        it("gives another conversation its own id and keeps the lane's previous one to pick back", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id1 = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+          const other = await launchLane("term-2", "conv-2");
+          const id2 = ownershipOfLane();
+          expect(id2).not.toBe(id1);
+          await service.revokeSession(other.sessionId);
+
+          const pickedBack = await launchLane("term-3", "conv-1");
+          expect(ownershipOfLane()).toBe(id1);
+          expect(listener.bind).toHaveBeenLastCalledWith(pickedBack.sessionId, id1);
+          expect(listener.forget).not.toHaveBeenCalled();
+          await service.revokeSession(pickedBack.sessionId);
+
+          // A third conversation pushes out the oldest the lane remembers.
+          await launchLane("term-4", "conv-3");
+          expect([id1, id2]).not.toContain(ownershipOfLane());
+          expect(listener.forget).toHaveBeenCalledExactlyOnceWith(id2);
+        });
+
+        it("starts afresh when main turned the resume into a fresh start, or there was no id to match", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id1 = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+
+          const restarted = await service.provisionSession(provisionInput());
+          if (!restarted) throw new Error("expected provision");
+          expect(service.markTerminalForToken(restarted.token, "term-2")).toBe(true);
+          await service.recordLaneLaunchForToken(restarted.token, "conv-1", {
+            freshConversation: true,
+          });
+          const id2 = ownershipOfLane();
+          expect(id2).not.toBe(id1);
+          await service.revokeSession(restarted.sessionId);
+
+          const idless = await launchLane("term-3");
+          const id3 = ownershipOfLane();
+          await service.revokeSession(idless.sessionId);
+          await launchLane("term-4");
+          expect(new Set([id1, id2, id3, ownershipOfLane()]).size).toBe(4);
+        });
+
+        it("forgets every conversation the lane kept when it is cleared", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id1 = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+          const second = await launchLane("term-2", "conv-2");
+          const id2 = ownershipOfLane();
+
+          await service.discardConversation("proj-1", 0);
+
+          expect(listener.forget).toHaveBeenCalledWith(id1);
+          expect(listener.forget).toHaveBeenCalledWith(id2);
+          expect(service.getConversationOwnershipId(second.sessionId)).toBeNull();
+          await service.revokeSession(second.sessionId);
+          await launchLane("term-3", "conv-1");
+          expect([id1, id2]).not.toContain(ownershipOfLane());
+        });
+
+        it("carries the id through a capture that learns the conversation's id", async () => {
+          mockPtyGracefulKill.mockResolvedValueOnce("codex-thread-1");
+          const first = await launchLane("term-codex");
+          const id = ownershipOfLane();
+
+          await service.revokeByWebContentsId(42);
+          await Promise.resolve();
+          await Promise.resolve();
+          expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("codex-thread-1");
+          expect(ownershipOfLane()).toBe(id);
+          expect(service.getConversationOwnershipId(first.sessionId)).toBeNull();
+
+          await launchLane("term-codex-2", "codex-thread-1");
+          expect(ownershipOfLane()).toBe(id);
+        });
+
+        it("keeps the lane's id private to main", async () => {
+          await launchLane("term-1", "conv-1");
+
+          const taken = await service.takePendingHibernation("proj-1", 0, 11);
+
+          expect(taken).not.toHaveProperty("conversationOwnershipId");
+          expect(service.listKeptLanes("proj-1")[0]).not.toHaveProperty("conversationOwnershipId");
+        });
       });
 
       it("never downgrades a known id to the empty sentinel when an eviction capture finds nothing", async () => {

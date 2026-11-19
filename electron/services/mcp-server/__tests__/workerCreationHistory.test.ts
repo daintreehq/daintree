@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   ResourceOwnershipLedger,
   assistantPrincipalOf,
+  helpConversationKey,
   helpOwnershipPrincipal,
   principalOwnerKey,
   relayOwnershipPrincipal,
 } from "../resourceOwnership.js";
 import { TerminalAdoptionLedger } from "../terminalAdoption.js";
-import { WorkerCreationHistory, readRunAssistantWork } from "../workerCreationHistory.js";
+import {
+  WorkerCreationHistory,
+  isCreationOf,
+  readRunAssistantWork,
+} from "../workerCreationHistory.js";
 
 function records(generations: Record<string, number> = {}) {
   const generationOf = (id: string) => generations[id] ?? null;
@@ -20,14 +25,24 @@ function records(generations: Record<string, number> = {}) {
 }
 
 /** What a trusted dispatch does: record ownership, then note what it created. */
-function create(r: ReturnType<typeof records>, principalId: string, terminalId: string) {
+function create(
+  r: ReturnType<typeof records>,
+  principalId: string,
+  terminalId: string,
+  conversationId?: string
+) {
   // A bearer's handshake binds its principal before anything is recorded under it.
   r.resourceOwnership.bindPrincipal(`session-of-${principalId}`, principalId);
+  if (conversationId !== undefined) {
+    r.resourceOwnership.attachConversation(principalId, helpConversationKey(conversationId));
+  }
   const owner = principalOwnerKey(principalId);
-  const recorded = r.resourceOwnership.record(owner, [{ kind: "terminal", id: terminalId }]);
-  r.workerCreations.note(
+  const drafts = [{ kind: "terminal" as const, id: terminalId }];
+  const recorded = r.resourceOwnership.record(owner, drafts);
+  r.workerCreations.noteDrafts(
     owner,
-    recorded.map((record) => record.id)
+    drafts.filter((draft) => recorded.some((record) => record.id === draft.id)),
+    recorded
   );
 }
 
@@ -175,5 +190,47 @@ describe("readRunAssistantWork", () => {
     expect(readRunAssistantWork(r, "t1", 1)).toEqual({ createdBy: null, controlledBy: null });
     expect(readRunAssistantWork(r, "t1", 2).controlledBy?.basis).toBe("creation");
     expect(readRunAssistantWork(r, "t1", 2).createdBy).toMatchObject({ helpSessionId: "help-b" });
+  });
+});
+
+describe("a resumed Assistant's runs (#17919)", () => {
+  const HELP_B = helpOwnershipPrincipal("help-b");
+
+  it("hands control of a conversation's run to its resumed bearer, creation staying with the first", () => {
+    const r = records({ t1: 1 });
+    create(r, HELP_A, "t1", "conv-1");
+    r.resourceOwnership.revokePrincipal(HELP_A);
+    expect(readRunAssistantWork(r, "t1", 1)).toEqual({
+      createdBy: { kind: "help", helpSessionId: "help-a" },
+      controlledBy: null,
+    });
+
+    r.resourceOwnership.bindPrincipal("session-of-b", HELP_B);
+    r.resourceOwnership.attachConversation(HELP_B, helpConversationKey("conv-1"));
+    expect(readRunAssistantWork(r, "t1", 1)).toEqual({
+      createdBy: { kind: "help", helpSessionId: "help-a" },
+      controlledBy: { principal: { kind: "help", helpSessionId: "help-b" }, basis: "creation" },
+    });
+  });
+
+  it("counts the run as the resumed bearer's own creation only while it holds that record", () => {
+    const r = records({ t1: 1 });
+    create(r, HELP_A, "t1", "conv-1");
+    r.resourceOwnership.revokePrincipal(HELP_A);
+    r.resourceOwnership.bindPrincipal("session-of-b", HELP_B);
+    r.resourceOwnership.attachConversation(HELP_B, helpConversationKey("conv-1"));
+    const ownerB = principalOwnerKey(HELP_B);
+    const creation = r.workerCreations.get("t1", 1);
+    const held = r.resourceOwnership.get(ownerB, "terminal", "t1");
+
+    expect(isCreationOf(creation, ownerB, held)).toBe(true);
+    // The bearer that made it still did; a session that made nothing never did.
+    expect(isCreationOf(creation, principalOwnerKey(HELP_A), undefined)).toBe(true);
+    expect(isCreationOf(creation, "api-session", undefined)).toBe(false);
+    // A record the id got later is not this run's.
+    r.resourceOwnership.record(ownerB, [{ kind: "terminal", id: "t1" }]);
+    const later = r.resourceOwnership.get(ownerB, "terminal", "t1");
+    expect(isCreationOf(creation, ownerB, later)).toBe(false);
+    expect(isCreationOf(undefined, ownerB, later)).toBe(false);
   });
 });
