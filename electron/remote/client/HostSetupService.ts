@@ -498,7 +498,7 @@ export class HostSetupService {
     if (!parsed || !outcome.result.startsOnConnect || signal?.aborted) return false;
     if (liveHostRecord(parsed)?.startMethod !== "on-connect") return false;
     const stopped = await channel.exec(
-      stopScript("linux", parsed.hostPid, false, parsed.hostStartedAt),
+      stopScript("linux", parsed.hostPid, false, parsed.hostStartedAt, "wait"),
       { timeoutMs: 90_000, signal }
     );
     return stopped.code === 0 && stopped.stdout.includes("@@dt:stopped yes");

@@ -685,6 +685,57 @@ describe("AddHostDialog", () => {
     expect(remoteHosts.add).toHaveBeenCalledOnce();
   });
 
+  it("on a machine with no systemd, says Host mode runs in the background and what that doesn't cover", async () => {
+    const box = (overrides: Partial<HostProbeResult> = {}) =>
+      probeResult({
+        platform: "linux",
+        arch: "x64",
+        install: {
+          path: "/home/node/Applications/Daintree.AppImage",
+          version: "1.4.0",
+          commit: "abcdef0",
+          packaging: "appimage",
+        },
+        advice: { ...probeResult().advice, systemd: false, hostModeUnit: false },
+        startsOnConnect: true,
+        ...overrides,
+      });
+    remoteHosts.probe!.mockResolvedValue(box({ hostModeListening: false, hostModeState: null }));
+    remoteHosts.startHostMode!.mockResolvedValueOnce({
+      probe: box({
+        hostModeState: {
+          pid: 4242,
+          enabled: true,
+          startMethod: "on-connect",
+          startAtLogin: false,
+          startAtLoginInstalled: null,
+          startAtLoginError: null,
+          keychain: { state: "unknown", detail: "Not checked yet", checked: false },
+        },
+      }),
+      lingerRefused: null,
+    });
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
+    const before = await screen.findByText(
+      /studio has no systemd, so there's no Host mode service/
+    );
+    expect(before.textContent).toContain("Connecting from Daintree starts it again.");
+    expect(document.body.textContent).not.toContain("systemd user unit");
+    fireEvent.click(screen.getByRole("button", { name: "Turn on Host mode" }));
+    const after = await screen.findByText(/Host mode is on there and runs in the background/);
+    expect(after.textContent).toContain(
+      "doesn't come back by itself after the machine reboots, stops or is rebuilt"
+    );
+    expect(remoteHosts.add).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "studio", startsOnConnect: true })
+    );
+  });
+
   it("says a taken or reserved name, or an added target, before anything is checked", () => {
     useRemoteHostsStore.getState().setHosts([known("lab", "studio", "admin@lab.local")]);
     render(<AddHostDialog isOpen onClose={() => {}} />);

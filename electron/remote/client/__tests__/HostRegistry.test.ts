@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { isValidRemoteHostId, type HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { HostRegistry, type RemoteHostsStore, type RemoteHostsValue } from "../HostRegistry.js";
 
@@ -152,6 +152,49 @@ describe("HostRegistry", () => {
     expect(() => registry.update({ hostId: "missing", name: "x" })).toThrow(
       expect.objectContaining({ code: "NOT_FOUND" })
     );
+  });
+
+  it("keeps how Daintree runs there as last seen, written only on a change, and drops it with the target", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const host = registry.add({
+      name: "box",
+      connection: { kind: "ssh", target: "box.example" },
+      startsOnConnect: true,
+    });
+    expect(host.startsOnConnect).toBe(true);
+    expect(new HostRegistry(store).get(host.id)?.startsOnConnect).toBe(true);
+    const writes = store.writes;
+    expect(registry.recordStartsOnConnect(host.id, true)?.startsOnConnect).toBe(true);
+    expect(store.writes).toBe(writes);
+    expect(registry.recordStartsOnConnect(host.id, false)).not.toHaveProperty("startsOnConnect");
+    registry.recordStartsOnConnect(host.id, true);
+    const moved = registry.update({
+      hostId: host.id,
+      connection: { kind: "ssh", target: "other.example" },
+    });
+    expect(moved).not.toHaveProperty("startsOnConnect");
+    expect(registry.recordStartsOnConnect("missing", true)).toBeNull();
+  });
+
+  it("never keeps a WSL distro as started on connect, from setup or a hand-edited file", () => {
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    onTestFinished(() => Object.defineProperty(process, "platform", { value: platform }));
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const distro = registry.add({
+      name: "ubuntu",
+      connection: { kind: "wsl", distro: "Ubuntu" },
+      startsOnConnect: true,
+    });
+    expect(distro).not.toHaveProperty("startsOnConnect");
+    expect(registry.recordStartsOnConnect(distro.id, true)).not.toHaveProperty("startsOnConnect");
+    store.set("remoteHosts", {
+      ...(store.value as object),
+      hosts: [{ ...distro, startsOnConnect: true }],
+    } as never);
+    expect(new HostRegistry(store).get(distro.id)).not.toHaveProperty("startsOnConnect");
   });
 
   it("keeps assistant control apart from notifications, and across a rename and a change of target", () => {
