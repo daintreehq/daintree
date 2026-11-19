@@ -131,8 +131,7 @@ in one session:
   export DAINTREE_MCP_SESSION=$handle
   daintree call agent.launch --arg agentId=claude --json
   daintree call terminal.sendCommandOwned --args - < send.json
-  daintree session end
-  unset DAINTREE_MCP_SESSION
+  daintree session end && unset DAINTREE_MCP_SESSION
 
 where send.json is {"terminalId": "<the launch's terminalId>", "command": "..."}.
 
