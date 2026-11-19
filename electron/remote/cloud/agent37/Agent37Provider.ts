@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   CloudAccountCheckResult,
   CloudCredentialValues,
@@ -218,7 +219,7 @@ export class Agent37Provider implements CloudProvider {
   private readonly registered = new Map<string, { localAt: number; serverAt: number | null }>();
   /** Each key with an instance this process created after registering it, which booted with it. */
   private readonly bootedWithKey = new Set<string>();
-  /** Registrations sent and not answered yet, by key: every caller waits on the one answer. */
+  /** Registrations sent and not answered yet, by key and API key: every caller waits on the one answer. */
   private readonly registering = new Map<string, Promise<void>>();
 
   constructor(
@@ -491,18 +492,23 @@ export class Agent37Provider implements CloudProvider {
     beforeCreate: boolean
   ): Promise<void> {
     const keyId = this.keyId(credentials, publicKey);
+    // Shared only under the same API key: another workspace registers the key for itself.
+    const bearer = createHash("sha256")
+      .update(credentials.values.apiKey ?? "")
+      .digest("hex");
+    const flight = `${keyId}\n${bearer}`;
     const cancelled = () => new Agent37ApiError("cancelled", "Cancelled", null, null);
     try {
       if (credentials.signal?.aborted) throw cancelled();
       // A caller sending its own would hear "already registered" before the first answer said
       // when, and hand out a machine still waiting for the key (#17929).
-      let pending = this.registering.get(keyId);
+      let pending = this.registering.get(flight);
       if (!pending) {
         // Tied to no one caller's signal: one that gives up mustn't fail the others waiting.
         pending = this.sendKey({ ...credentials, signal: undefined }, publicKey, keyId).finally(
-          () => this.registering.delete(keyId)
+          () => this.registering.delete(flight)
         );
-        this.registering.set(keyId, pending);
+        this.registering.set(flight, pending);
       }
       if ((await raceAbort(pending, credentials.signal, CANCELLED)) === CANCELLED)
         throw cancelled();

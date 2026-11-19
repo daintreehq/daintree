@@ -2231,7 +2231,6 @@ export class CloudHostLifecycle {
       this.recordError(bindingId, { ...described, code: "ssh-authorization", message: said });
       throw new UnusableConnectionError(said, said);
     }
-    if (rekey !== null) this.heldKeys.set(bindingId, keyIdentity(rekey));
     const checked = checkedAccess(resolved, policy.trust, nameOf(provider));
     if ("problem" in checked) {
       const said = `SSH access couldn't be set up: ${checked.problem}`;
@@ -2268,6 +2267,8 @@ export class CloudHostLifecycle {
         obtainedAt: this.now(),
       },
     }));
+    // Only once its route is written: a dial cut short before that bypasses the cached route again.
+    if (rekey !== null) this.heldKeys.set(bindingId, keyIdentity(rekey));
     this.clearAccessErrors(bindingId);
     return route;
   }
@@ -2517,8 +2518,18 @@ export class CloudHostLifecycle {
     binding: StoredCloudBinding
   ): Promise<string | null> {
     if (binding.ownership === "imported" || sshKeyTiming(provider) !== "at-create") return null;
+    // A host removed while the dial waited takes its account's key with it: none is made for it.
+    const stillHere = () => {
+      if (!this.deps.store.binding(bindingId)) {
+        throw new UnusableConnectionError("This cloud host isn't set up on this device", null);
+      }
+    };
+    stillHere();
     const refuse = (said: string): never => {
-      this.recordError(bindingId, { code: "ssh-authorization", message: said, at: this.now() });
+      const last = this.deps.store.binding(bindingId)?.lastError;
+      if (last?.code !== "ssh-authorization" || last.message !== said) {
+        this.recordError(bindingId, { code: "ssh-authorization", message: said, at: this.now() });
+      }
       throw new UnusableConnectionError(said, said);
     };
     if (typeof provider.authorizeSsh !== "function") {
@@ -2543,6 +2554,7 @@ export class CloudHostLifecycle {
         `SSH access couldn't be set up: this account's SSH key couldn't be made (${formatErrorMessage(error, "ssh-keygen failed")})`
       );
     }
+    stillHere();
     return this.heldKeys.get(bindingId) === keyIdentity(publicKey) ? null : publicKey;
   }
 
