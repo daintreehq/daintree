@@ -9,6 +9,7 @@ import { setupResourceListeners } from "./listeners/panel/resource";
 import { setupWatchdogHealthListeners } from "./listeners/panel/watchdogHealth";
 import { setupFirstPromptListeners } from "./listeners/panel/firstPrompt";
 import { setupComposerDraftListeners } from "./listeners/panel/composerDrafts";
+import { setupUpdateInstalledListeners } from "./listeners/panel/updateInstalled";
 
 let store: DisposableStore | null = null;
 
@@ -42,6 +43,7 @@ export function setupTerminalStoreListeners() {
   disposables.add(setupWatchdogHealthListeners());
   disposables.add(setupFirstPromptListeners());
   disposables.add(setupComposerDraftListeners());
+  disposables.add(setupUpdateInstalledListeners());
 
   return cleanupTerminalStoreListeners;
 }

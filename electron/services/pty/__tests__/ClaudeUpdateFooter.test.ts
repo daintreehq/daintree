@@ -36,6 +36,9 @@ describe("scanClaudeUpdateFooter", () => {
       true,
     ],
     ["a server-set offer that doesn't", "✔ Update installed · reopen to apply", false],
+    ["a server-set offer that names /restart in brackets", "✔ Update installed · apply (/restart)", true],
+    ["an offer naming a longer command", "✔ Update installed · /restart-all to apply", false],
+    ["an offer naming a path under it", "✔ Update installed · see /restart/notes", false],
     [
       "the package-manager updater's form",
       "✓ Update installed via homebrew · restart to apply",

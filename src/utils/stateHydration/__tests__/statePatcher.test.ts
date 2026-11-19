@@ -4820,3 +4820,55 @@ describe("first prompt restore (#14592)", () => {
     });
   });
 });
+
+describe("update-installed observation on restore (#17905)", () => {
+  const observed = { observedAt: 1_700_000_000_000, namesRestart: true };
+
+  // A view attached after the footer appeared learns of it from the host's
+  // record alone: nothing replays the event it missed.
+  it("carries the host's observation through every restore path", () => {
+    const record = { id: "t1", cwd: "/p", kind: "terminal" as const, title: "Claude" };
+    expect(
+      buildArgsForBackendTerminal(
+        { ...record, updateInstalled: observed },
+        { id: "t1", location: "grid" },
+        "/p"
+      ).updateInstalled
+    ).toEqual(observed);
+    expect(
+      buildArgsForReconnectedFallback(
+        { ...record, updateInstalled: observed },
+        { id: "t1", location: "grid" },
+        "/p"
+      ).updateInstalled
+    ).toEqual(observed);
+    expect(
+      buildArgsForOrphanedTerminal({ ...record, updateInstalled: observed }, "/p").updateInstalled
+    ).toEqual(observed);
+  });
+
+  it("restores none where the host has none", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Claude" },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.updateInstalled).toBeUndefined();
+  });
+
+  it("is never persisted with the pane", () => {
+    const snapshot = serializePtyPanel({
+      id: "t1",
+      kind: "terminal",
+      title: "Claude",
+      cwd: "/p",
+      cols: 80,
+      rows: 24,
+      location: "grid",
+      launchAgentId: "claude",
+      updateInstalled: observed,
+    } as PtyPanelData);
+    expect(JSON.stringify(snapshot)).not.toContain("updateInstalled");
+  });
+});
+

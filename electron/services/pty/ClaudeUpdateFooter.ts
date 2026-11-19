@@ -37,7 +37,9 @@ const FOOTER = new RegExp(
 // notice or warning sharing the row.
 const OFFER_END = new RegExp(String.raw`\s*[${SEPARATORS}]|\s{2}`);
 
-const RESTART = /(?:^|\s)\/restart(?![\w-])/;
+// The command as a word of its own: "(/restart)" names it, "/restart-all" and
+// "/restart/x" don't.
+const RESTART = /(?<![\w/-])\/restart(?![\w/-])/;
 
 function offerOf(rest: string): string {
   const end = OFFER_END.exec(rest);

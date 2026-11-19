@@ -105,6 +105,33 @@ describe("terminal.getStatus", () => {
     expect(result.terminals[0]?.armed).toBe(false);
   });
 
+  it("reports a working pane's update footer beside its state, not as a waiting reason (#17905)", async () => {
+    const updateInstalled = { observedAt: 1_000, namesRestart: true };
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2"],
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          location: "grid",
+          detectedAgentId: "claude",
+          agentState: "working",
+          updateInstalled,
+        },
+        t2: { id: "t2", kind: "terminal", location: "grid", agentState: "idle" },
+      },
+    });
+
+    const result = await callGetStatus(setupActions());
+
+    expect(result.terminals[0]).toMatchObject({ agentState: "working", updateInstalled });
+    expect(result.terminals[0]?.waitingReason).toBeUndefined();
+    expect(result.terminals[1]).not.toHaveProperty("updateInstalled");
+    expect(TerminalStatusResultSchema.parse(result).terminals[0]?.updateInstalled).toEqual(
+      updateInstalled
+    );
+  });
+
   it("emits no hasPty key rather than a value it cannot observe (#12336)", async () => {
     // Nothing in the renderer writes `PtyPanelData.hasPty` — not `addPanel`,
     // not `statePatcher` on restore or reconnect, not the `onExit` listener —
