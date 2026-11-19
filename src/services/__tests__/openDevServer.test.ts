@@ -239,16 +239,27 @@ describe("openDevServerExternally", () => {
 
   it("holds a Remote Host's port here at the same port, then opens the address", async () => {
     remote.hostId = "host-1";
-    remote.resolve.mockImplementation((url) => Promise.resolve(`${url}#held`));
+    remote.resolve.mockImplementation(() => Promise.resolve("http://localhost:5824/"));
     await openDevServerExternally("http://localhost:5824/app?tab=2");
-    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824/app?tab=2", "Dev server");
-    expect(openedExternally()).toEqual(["http://localhost:5824/app?tab=2#held"]);
+    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824", "Dev server");
+    expect(openedExternally()).toEqual(["http://localhost:5824/app?tab=2"]);
+  });
+
+  it("forwards only the origin, so the server's own path and query reach the browser whole", async () => {
+    remote.hostId = "host-1";
+    // What the resolver makes of a whole address: normalized, 0.0.0.0 rewritten throughout.
+    remote.resolve.mockImplementation((url) =>
+      Promise.resolve(new URL(url.replace(/0\.0\.0\.0/g, "localhost")).href)
+    );
+    await openDevServerExternally("http://localhost:5824/docs/0.0.0.0?bind=0.0.0.0#setup");
+    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824", "Dev server");
+    expect(openedExternally()).toEqual(["http://localhost:5824/docs/0.0.0.0?bind=0.0.0.0#setup"]);
   });
 
   it("forwards an address spelled the way the system browser reads it", async () => {
     remote.hostId = "host-1";
     await openDevServerExternally("http:localhost:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824/", "Dev server");
+    expect(remote.resolve).toHaveBeenCalledWith("http://localhost:5824", "Dev server");
     expect(openedExternally()).toEqual(["http://localhost:5824/"]);
   });
 
@@ -264,8 +275,10 @@ describe("openDevServerExternally", () => {
 
   it("forwards a host's wildcard address as its loopback", async () => {
     remote.hostId = "host-1";
-    await openDevServerExternally("http://0.0.0.0:5824");
-    expect(remote.resolve).toHaveBeenCalledWith("http://0.0.0.0:5824/", "Dev server");
+    remote.resolve.mockResolvedValue("http://localhost:5824/");
+    await openDevServerExternally("http://0.0.0.0:5824/app");
+    expect(remote.resolve).toHaveBeenCalledWith("http://0.0.0.0:5824", "Dev server");
+    expect(openedExternally()).toEqual(["http://localhost:5824/app"]);
   });
 
   it.each([
@@ -301,6 +314,6 @@ describe("openDevServerExternally", () => {
     remote.hostId = "host-1";
     await openDevServerExternally("http://127.0.0.1:5824");
     expect(remote.resolveLink).not.toHaveBeenCalled();
-    expect(remote.resolve).toHaveBeenCalledWith("http://127.0.0.1:5824/", "Dev server");
+    expect(remote.resolve).toHaveBeenCalledWith("http://127.0.0.1:5824", "Dev server");
   });
 });

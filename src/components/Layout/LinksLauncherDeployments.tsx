@@ -231,6 +231,7 @@ export function LinksLauncherDeployments({
               url={row.url}
               external
               onOpen={onOpen}
+              onOpenExternal={onOpen}
             />
           ))}
         </ul>

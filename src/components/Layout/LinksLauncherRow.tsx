@@ -1,16 +1,37 @@
 import type { ReactNode } from "react";
+import { Copy, Globe } from "lucide-react";
 import { ChoiceCard } from "@/components/ui/card";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
+import { ROW_MENU_TARGET_CLASS } from "@/components/ui/paletteRowStyles";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { copyWithToast } from "@/lib/copyWithToast";
+import { isRowMenuKey, openRowMenuFromKeyboard } from "@/lib/rowContextMenu";
 import { cn } from "@/lib/utils";
 import { opensInPanel } from "@/services/openLinkUrl";
+
+/**
+ * Marks the launcher's content, so a close can tell whether focus was inside
+ * it. A row's menu carries it too: portalled to the page, it is outside the
+ * content in the DOM while still a part of it.
+ */
+export const LINKS_LAUNCHER_CONTENT_ATTR = "data-links-launcher";
+
+const MENU_ICON_CLASS = "mr-2 h-3.5 w-3.5 shrink-0";
 
 /**
  * One address in the links launcher: named by its title, described by its
  * detail line, opened on activation. A local address comes forward in a
  * panel, which takes focus as it does; the close mustn't pull it back. An
  * `external` row always goes to the system browser, so it never hands off.
- * Without a `url` the row is read-only text: a fact with nowhere to go.
+ * Without a `url` the row is read-only text: a fact with nowhere to go. With
+ * one, its context menu opens that address in the system browser or copies it
+ * whole, wherever the row itself would take it.
  * `actions` sit beside the row rather than in it, so pressing one never also
  * opens the row, and they stay mounted while the row gains or loses its
  * address, so a focused one keeps the keyboard.
@@ -28,6 +49,7 @@ export function LinksLauncherRow({
   external = false,
   opensPanel = opensInPanel,
   onOpen,
+  onOpenExternal,
 }: {
   rowId: string;
   icon: ReactNode;
@@ -44,6 +66,8 @@ export function LinksLauncherRow({
   /** Whether opening `url` brings a panel forward, asked at activation. */
   opensPanel?: (url: string) => boolean;
   onOpen: (url: string) => void;
+  /** Opens `url` in the system browser, from the row's menu. */
+  onOpenExternal: (url: string) => void;
 }) {
   const focusRestore = useOverlayFocusRestore();
   const titleId = `${rowId}-title`;
@@ -102,19 +126,46 @@ export function LinksLauncherRow({
   }
   return (
     <li className="flex w-full items-center">
-      <ChoiceCard
-        tone="row"
-        padding="sm"
-        aria-labelledby={titleId}
-        aria-describedby={detailId}
-        onClick={() => {
-          if (!external && opensPanel(url)) focusRestore?.expectHandoff();
-          onOpen(url);
-        }}
-        className="group flex min-w-0 flex-1 items-center gap-2.5 text-left"
-      >
-        {body}
-      </ChoiceCard>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <ChoiceCard
+            tone="row"
+            padding="sm"
+            aria-labelledby={titleId}
+            aria-describedby={detailId}
+            // Stands the global Shift+F10 / Menu-key handler down, which would
+            // open the focused panel's menu instead of this row's.
+            data-row-menu=""
+            onClick={() => {
+              if (!external && opensPanel(url)) focusRestore?.expectHandoff();
+              onOpen(url);
+            }}
+            onKeyDown={(event) => {
+              if (!isRowMenuKey(event)) return;
+              // Also keeps the browser's own contextmenu for the key from opening it twice.
+              event.preventDefault();
+              event.stopPropagation();
+              openRowMenuFromKeyboard(event.currentTarget);
+            }}
+            className={cn(
+              "group flex min-w-0 flex-1 items-center gap-2.5 text-left",
+              ROW_MENU_TARGET_CLASS
+            )}
+          >
+            {body}
+          </ChoiceCard>
+        </ContextMenuTrigger>
+        <ContextMenuContent {...{ [LINKS_LAUNCHER_CONTENT_ATTR]: "" }}>
+          <ContextMenuItem onSelect={() => onOpenExternal(url)}>
+            <Globe className={MENU_ICON_CLASS} aria-hidden="true" />
+            Open in external browser
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => copyWithToast("URL", url)}>
+            <Copy className={MENU_ICON_CLASS} aria-hidden="true" />
+            Copy URL
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
       {actionSlot}
     </li>
   );

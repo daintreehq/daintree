@@ -298,39 +298,12 @@ export function stopFileRowMenuPropagation(event: React.MouseEvent): void {
   event.stopPropagation();
 }
 
-/**
- * Opens a file row's context menu from the keyboard, anchored to the row.
- *
- * Radix's ContextMenu derives its position from the `contextmenu` event and has
- * no imperative open, so the Menu key and Shift+F10 are replayed as a synthetic
- * event on the row's own node. Returns false when there is no row to anchor to,
- * leaving the keypress for whoever else wants it.
- */
-export function openFileRowMenuFromKeyboard(row: HTMLElement | null): boolean {
-  if (row === null) return false;
-  const rect = row.getBoundingClientRect();
-  row.dispatchEvent(
-    new MouseEvent("contextmenu", {
-      bubbles: true,
-      cancelable: true,
-      clientX: rect.left + 8,
-      clientY: rect.top + rect.height / 2,
-    })
-  );
-  return true;
-}
-
-/** Whether a keyboard event is the "open the context menu" gesture. */
-export function isFileRowMenuKey(event: {
-  key: string;
-  shiftKey: boolean;
-  ctrlKey: boolean;
-  metaKey: boolean;
-  altKey: boolean;
-}): boolean {
-  if (event.key === "ContextMenu") return true;
-  return event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
-}
+// Shared with rows that aren't files (the links launcher's), which shouldn't
+// pull this module's plugin and file-browser imports in to reach them.
+export {
+  isRowMenuKey as isFileRowMenuKey,
+  openRowMenuFromKeyboard as openFileRowMenuFromKeyboard,
+} from "@/lib/rowContextMenu";
 
 /**
  * The one file-row context menu, shared by every surface that lists files

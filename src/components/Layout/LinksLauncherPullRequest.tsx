@@ -147,11 +147,13 @@ export function LinksLauncherPullRequest({
   checks,
   sectionId,
   onOpen,
+  onOpenExternal,
 }: {
   pullRequest: LauncherPullRequest;
   checks: LauncherChecks;
   sectionId: string;
   onOpen: (url: string) => void;
+  onOpenExternal: (url: string) => void;
 }) {
   const words = pullRequestWords(usePullRequestTerm(pullRequest.providerId));
   const showSkeleton = useSkeletonFloor(useSkeletonGate(checks.kind === "loading"));
@@ -174,6 +176,7 @@ export function LinksLauncherPullRequest({
           detail={<FactRun facts={pullRequestFacts(pullRequest, words)} />}
           url={pullRequest.url}
           onOpen={onOpen}
+          onOpenExternal={onOpenExternal}
         />
         {checks.kind === "loaded" &&
           !showSkeleton &&
@@ -191,6 +194,7 @@ export function LinksLauncherPullRequest({
               detail={row.outcome.label}
               url={row.detailsUrl!}
               onOpen={onOpen}
+              onOpenExternal={onOpenExternal}
             />
           ))}
       </ul>
