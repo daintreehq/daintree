@@ -63,6 +63,20 @@ export interface AgentInputSuggestionConfig {
   borderPattern: string;
   /** Fixed placeholders an empty box shows, matched against its styled text: they read as `empty`. */
   placeholderPatterns?: string[];
+  /**
+   * How the box's edges are drawn. `rules` (the default): rows matching
+   * `borderPattern` above and below it. `band`: a background of its own, not
+   * the terminal's default, opening and closing on rows matching
+   * `borderPattern`; every row inside it, blank ones included, is the box.
+   */
+  frame?: "rules" | "band";
+  /** The style echoes of sent messages draw the prompt glyph in: a row whose glyph is drawn so is never the box. */
+  echoGlyphStyle?: "dim";
+  /**
+   * The box always shows one of `placeholderPatterns` when empty, so a box
+   * with nothing visible in it holds something not drawn and reads `unknown`.
+   */
+  emptyShowsPlaceholder?: boolean;
 }
 
 /**
