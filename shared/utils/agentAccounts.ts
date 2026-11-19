@@ -38,20 +38,17 @@ export function isUsableAccountFolder(value: string): boolean {
   return sanitizeAgentEnv({ ACCOUNT_FOLDER: value })?.ACCOUNT_FOLDER === value;
 }
 
-function capAccountName(name: string): string | undefined {
-  let capped = name.slice(0, ACCOUNT_NAME_MAX_CHARS);
-  // Never half of a character a cap, this one or an older one, cut through.
-  if (/[\ud800-\udbff]$/.test(capped)) capped = capped.slice(0, -1);
-  return capped.trimEnd() || undefined;
-}
+// Half of a character: a high surrogate with no low one after it, or the reverse.
+const LONE_SURROGATES = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 
 /**
- * A saved account's name as every reader takes it. Kept as lenient as the
+ * A saved account's name as every reader takes it. Exactly as lenient as the
  * names already saved, since one it refused would drop that account.
  */
 export function sanitizeAccountName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  return capAccountName(value.replace(CONTROL_CHARACTERS, " ").trim());
+  const name = value.replace(CONTROL_CHARACTERS, " ").trim();
+  return name ? name.slice(0, ACCOUNT_NAME_MAX_CHARS) : undefined;
 }
 
 /**
@@ -61,12 +58,16 @@ export function sanitizeAccountName(value: unknown): string | undefined {
  */
 export function sanitizeLoginName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  return capAccountName(
-    value
-      .replace(LOGIN_NAME_FORMAT_CHARACTERS, "")
-      .replace(LOGIN_NAME_CONTROL_CHARACTERS, " ")
-      .trim()
-  );
+  let name = value
+    .replace(LONE_SURROGATES, "")
+    .replace(LOGIN_NAME_FORMAT_CHARACTERS, "")
+    .replace(LOGIN_NAME_CONTROL_CHARACTERS, " ")
+    .trim()
+    .slice(0, ACCOUNT_NAME_MAX_CHARS);
+  // Never half of a character the cap cut through. Cleaning a cleaned name
+  // changes nothing, so what a field sends is what main saves.
+  if (/[\ud800-\udbff]$/.test(name)) name = name.slice(0, -1);
+  return name.trimEnd() || undefined;
 }
 
 /**

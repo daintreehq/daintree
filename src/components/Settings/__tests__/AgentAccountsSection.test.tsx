@@ -685,19 +685,59 @@ describe("renaming against other views and a Settings close (#17080)", () => {
     const flush = flushers[0]!;
 
     // A close while the Enter's save is in flight waits on that save.
-    const first = flush("close") as Promise<unknown>;
-    expect(renameAccount).toHaveBeenCalledTimes(1);
     let firstResult: unknown = "pending";
+    const first = (flush("close") as Promise<unknown>).then((result) => (firstResult = result));
+    await act(async () => {});
+    expect(firstResult).toBe("pending");
+    expect(renameAccount).toHaveBeenCalledTimes(1);
     await act(async () => {
       finish();
-      firstResult = await first;
+      await first;
     });
     expect(firstResult).toBeUndefined();
 
     // A close queued behind it reaches the row before it unregisters.
+    expect(renameAccount).toHaveBeenCalledTimes(1);
     await act(async () => {
       await flush("close");
     });
     expect(renameAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a close through an untouched name saved before today's cleaning, and saves a cleanup", async () => {
+    const flushers: Array<(reason: "close" | "hide") => unknown> = [];
+    const register = vi.fn((_tab: string, fn: (reason: "close" | "hide") => unknown) => {
+      flushers.push(fn);
+      return () => flushers.splice(flushers.indexOf(fn), 1);
+    });
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    const marked = { id: "marked", name: "W\u200bork", configDir: "/Users/me/.codex-m" };
+    const blank = { id: "blank", name: "\u200b", configDir: "/Users/me/.codex-b" };
+    render(
+      <SettingsFlushContext.Provider value={{ register, flushAll: vi.fn() }}>
+        <AgentAccountsSection
+          agentId="codex"
+          agentName="Codex"
+          entry={{ accounts: [marked, blank] }}
+        />
+      </SettingsFlushContext.Provider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename \u200b" }));
+    let result: unknown = "pending";
+    await act(async () => {
+      result = await flushers[0]!("close");
+    });
+    expect(result).toBeUndefined();
+    expect(renameAccount).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename W\u200bork" }));
+    const input = screen.getByRole("textbox", { name: "Account name" });
+    fireEvent.change(input, { target: { value: "Work" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(renameAccount).toHaveBeenCalledWith("codex", "marked", "Work");
   });
 });

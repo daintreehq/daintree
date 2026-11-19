@@ -5,6 +5,7 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import type { AgentUsageReading } from "../../../shared/types/ipc/agentUsage.js";
 import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
+import { sanitizeLoginName } from "../../../shared/utils/agentAccounts.js";
 import type {
   RemoteAgentUsage,
   RemoteAgentUsageSource,
@@ -51,10 +52,7 @@ export function onShellClock(reading: AgentUsageReading, offset: number): AgentU
   };
   // The host's name for its default login (#17080), kept only where it can
   // label something: a default reading, with text left once it's made safe.
-  const name =
-    reading.isDefault && reading.defaultLoginName !== undefined
-      ? displaySafeText(reading.defaultLoginName).trim()
-      : "";
+  const name = reading.isDefault ? sanitizeLoginName(reading.defaultLoginName) : undefined;
   if (name) next.defaultLoginName = name;
   else delete next.defaultLoginName;
   return next;

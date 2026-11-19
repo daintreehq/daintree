@@ -49,8 +49,8 @@ export function AccountLoginRow({
   const [saving, setSaving] = useState(false);
   // The save in flight, which a Settings close waits on; true when it saved.
   const savingRef = useRef<Promise<boolean> | null>(null);
-  // The name the edit began from: a rename another view makes meanwhile is
-  // not undone by leaving this field untouched.
+  // The name the edit began from, as saved: a rename another view makes
+  // meanwhile is not undone by leaving this field untouched.
   const startNameRef = useRef("");
   const inputRef = useRef<HTMLInputElement>(null);
   const renameButtonRef = useRef<HTMLButtonElement>(null);
@@ -75,7 +75,7 @@ export function AccountLoginRow({
   }, [editing]);
 
   const startEdit = () => {
-    startNameRef.current = sanitizeLoginName(name) ?? "";
+    startNameRef.current = name;
     setDraft(name);
     setError(null);
     setEditing(true);
@@ -85,14 +85,16 @@ export function AccountLoginRow({
   const commit = (): Promise<boolean> => {
     if (savingRef.current) return savingRef.current;
     const next = sanitizeLoginName(draft) ?? "";
+    // Untouched, or cleaned back to the saved name: nothing to send. Checked
+    // first, so a name saved before today's cleaning never blocks a close.
+    if (draft === startNameRef.current || next === startNameRef.current) {
+      setEditing(false);
+      return Promise.resolve(true);
+    }
     if (!next && requireName) {
       restoreFocusRef.current = false;
       setError("Give the account a name");
       return Promise.resolve(false);
-    }
-    if (next === startNameRef.current) {
-      setEditing(false);
-      return Promise.resolve(true);
     }
     setSaving(true);
     // Cleared before the field can unmount, so the blur that brings isn't

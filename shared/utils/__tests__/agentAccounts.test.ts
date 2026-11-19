@@ -51,10 +51,26 @@ describe("defaultLoginLabel and defaultLoginPhrase (#17080)", () => {
     expect(defaultLoginPhrase("  Work\u0007Lab ")).toBe("Work Lab (the default login)");
   });
 
-  it("keeps a saved account whose name is only marks a login name now drops", () => {
-    const saved = { id: "a", name: "\u200b", configDir: "/Users/me/.codex-a" };
-    expect(sanitizeAgentAccounts([saved])).toEqual([saved]);
-    expect(sanitizeLoginName("\u200b")).toBeUndefined();
+  it("keeps a saved account whose name a login name's cleaning would empty", () => {
+    for (const name of ["\u200b", "\u200c\u2067", "\ud800", "\u0085"]) {
+      const saved = { id: "a", name, configDir: "/Users/me/.codex-a" };
+      expect(sanitizeAgentAccounts([saved])).toEqual([saved]);
+      expect(sanitizeLoginName(name)).toBeUndefined();
+    }
+  });
+
+  it("cleans a login name to the same name a second time, so what a field sends is what's saved", () => {
+    for (const raw of [
+      "\ud800\ud801",
+      `${"x".repeat(59)}😀`,
+      " Work\u202e\u00ad ",
+      "a\udc00b",
+      "Wörk 😀",
+    ]) {
+      const once = sanitizeLoginName(raw);
+      expect(sanitizeLoginName(once)).toBe(once);
+    }
+    expect(sanitizeLoginName("a\udc00b😀")).toBe("ab😀");
   });
 
   it("drops marks that would reorder the words beside a name, or leave it looking empty", () => {

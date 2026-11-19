@@ -62,6 +62,11 @@ describe("shellClockOffset and onShellClock", () => {
       onShellClock({ ...defaultReading, defaultLoginName: "  Work\u202e\u0007Lab " }, 0)
         .defaultLoginName
     ).toBe("Work Lab");
+    // Cleaned as main cleans it, so the same name reads the same on both machines.
+    expect(
+      onShellClock({ ...defaultReading, defaultLoginName: "Work\u0007\u0008Lab" }, 0)
+        .defaultLoginName
+    ).toBe("Work Lab");
     expect(
       onShellClock({ ...defaultReading, defaultLoginName: "\u200b\u0001" }, 0)
     ).not.toHaveProperty("defaultLoginName");
