@@ -398,6 +398,60 @@ export function getMergedPreset(
   return merged.find((f) => f.id === presetId);
 }
 
+export interface SettledLaunchPreset {
+  /** The preset the launch runs, fallback included. `undefined` is the bare CLI. */
+  preset: AgentPreset | undefined;
+  /** The id the launch asked for before any fallback: the caller's, else the saved one. */
+  resolvedPresetId: string | undefined;
+  /** Whether `resolvedPresetId` itself was found, so a vanished saved id can be cleared. */
+  primaryFound: boolean;
+}
+
+/**
+ * The preset one launch of `agentId` runs: the requested one, else the
+ * worktree's pick, else the agent's default, else the registry's own; a
+ * worktree pick that's gone falls back to the agent's default. `null`, asked
+ * or saved for the worktree, is the bare CLI. Shared by the launch plan and
+ * the account listing (#17079), so the account a listing says a launch lands
+ * on is the one a launch reads off this preset.
+ */
+export function settleLaunchPreset(
+  agentId: string,
+  entry: AgentSettingsEntry,
+  worktreeId: string | null | undefined,
+  requestedPresetId: string | null | undefined,
+  ccrPresets?: AgentPreset[],
+  projectPresets?: AgentPreset[]
+): SettledLaunchPreset {
+  const scopedId =
+    worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
+  const explicitDefault =
+    requestedPresetId === null || (requestedPresetId === undefined && scopedId === null);
+  if (explicitDefault) {
+    return { preset: undefined, resolvedPresetId: undefined, primaryFound: false };
+  }
+  const resolvedPresetId = requestedPresetId ?? resolveEffectivePresetId(entry, worktreeId);
+  const primary = getMergedPreset(
+    agentId,
+    resolvedPresetId,
+    entry.customPresets,
+    ccrPresets,
+    projectPresets
+  );
+  if (primary) return { preset: primary, resolvedPresetId, primaryFound: true };
+  // A worktree pick that's gone launches on the agent's default now; the
+  // stale slot is still reported, so the next launch reads the default.
+  const fallback =
+    requestedPresetId === undefined &&
+    scopedId &&
+    scopedId === resolvedPresetId &&
+    entry.presetId &&
+    entry.presetId !== scopedId
+      ? getMergedPreset(agentId, entry.presetId, entry.customPresets, ccrPresets, projectPresets)
+      : undefined;
+  return { preset: fallback, resolvedPresetId, primaryFound: false };
+}
+
 /**
  * The saved preset a plain launch settles on, from an agent's merged presets:
  * the worktree's pick, else the agent's default, which also stands in for a

@@ -73,6 +73,19 @@ export const AgentListPresetsArgsSchema = z.object({
     ),
 });
 
+// A plain string, as the preset writes take: the run refuses an agent with no
+// accounts, and the launch union would cost every account tool its wire budget.
+export const AgentListAccountsArgsSchema = z.object({
+  agentId: z.string().min(1).describe("Agent id from the agent listing."),
+  worktreeId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Also say which account a launch in this worktree uses when it names no account or preset."
+    ),
+});
+
 // Worktree-scoped so the caller must assert WHERE the session lives, using the
 // shared location vocabulary (#11543) rather than a bespoke `worktreeId` field.
 // The selector scopes the lookup; it never chooses the launch directory, which

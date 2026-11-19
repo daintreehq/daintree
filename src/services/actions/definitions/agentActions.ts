@@ -32,6 +32,7 @@ import { WorktreeCreationSourceSchema } from "./workflowCreationActionArgs";
 import {
   AgentCreatePresetArgsSchema,
   AgentDeletePresetArgsSchema,
+  AgentListAccountsArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
   AgentUpdatePresetArgsSchema,
@@ -754,6 +755,54 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.listPresets", args, ctx, callbacks),
+  }));
+
+  // Every `accountId` on the surface is one of these (#17079). Identity only:
+  // an account's folder holds its login and names the user's home.
+  actions.set("agent.listAccounts", () => ({
+    id: "agent.listAccounts",
+    title: "List agent accounts",
+    description:
+      "List an agent's saved accounts, the ids agent.launch's accountId takes. With worktreeId, also says which account a launch there uses when it names no account or preset, and why. Agents that sign in one way only are refused.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: AgentListAccountsArgsSchema,
+    examples: [
+      {
+        args: { agentId: "claude", worktreeId: "wt-1" },
+        description: "Find Claude's account ids and the one a launch in wt-1 signs in as",
+      },
+    ],
+    resultSchema: z.object({
+      accounts: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          isDefault: z.boolean().describe("The agent's Default account in Settings."),
+        })
+      ),
+      worktreeLaunch: z
+        .object({
+          accountId: z.string().nullable().describe("null is the CLI's default login."),
+          source: z
+            .enum(["worktree", "preset", "agentDefault", "cliDefault"])
+            .describe("What chose it: the worktree's pick, a preset's pin, or a default."),
+          presetId: z.string().optional().describe("The preset whose pin chose it."),
+          missing: z
+            .literal(true)
+            .optional()
+            .describe("No saved account has this id, so a launch is refused."),
+          presetsComplete: z
+            .boolean()
+            .describe("false: a preset source is loading, so a preset's pin may be missed."),
+        })
+        .optional(),
+    }),
+    mcpOutputSchema: true,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.listAccounts", args, ctx, callbacks),
   }));
 
   // The user-preset writes (#16047). Confirm tier, so an agent's call raises

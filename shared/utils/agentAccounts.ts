@@ -1,4 +1,4 @@
-import { getAgentConfigFolderAccount } from "../config/agentRegistry.js";
+import { getAgentConfigFolderAccount, type AgentPreset } from "../config/agentRegistry.js";
 import type { AgentAccount, AgentSettingsEntry } from "../types/agentSettings.js";
 import { isAccountId } from "./agentAccountId.js";
 import { sanitizeAgentEnv } from "./agentPresets.js";
@@ -122,6 +122,69 @@ export function resolveEffectiveAccountId(
   }
   if (typeof presetAccountId === "string") return presetAccountId;
   return typeof entry?.accountId === "string" ? entry.accountId : null;
+}
+
+/** One saved account as an agent sees it (#17079): never its folder, which names the user's home. */
+export interface AgentAccountIdentity {
+  id: string;
+  name: string;
+  /** The agent's Default account in Settings. */
+  isDefault: boolean;
+}
+
+export function listAgentAccountIdentities(
+  entry: AgentSettingsEntry | null | undefined
+): AgentAccountIdentity[] {
+  const defaultId = typeof entry?.accountId === "string" ? entry.accountId : undefined;
+  return sanitizeAgentAccounts(entry?.accounts).map(({ id, name }) => ({
+    id,
+    name,
+    isDefault: id === defaultId,
+  }));
+}
+
+/** Which step of {@link resolveEffectiveAccountId} chose a launch's account. */
+export type LaunchAccountSource = "worktree" | "preset" | "agentDefault" | "cliDefault";
+
+export interface LaunchAccountChoice {
+  /** `null` is the CLI's default login. */
+  accountId: string | null;
+  source: LaunchAccountSource;
+  /** The preset whose pin chose it, when `source` is `"preset"`. */
+  presetId?: string;
+  /** The id names no saved account, so a launch refuses it rather than signing in elsewhere. */
+  missing?: true;
+}
+
+/**
+ * The account a launch in `worktreeId` signs in as when it names neither an
+ * account nor a preset, and which step chose it (#17079). `preset` is the
+ * preset that launch settles on ({@link settleLaunchPreset}).
+ */
+export function describeLaunchAccount(
+  entry: AgentSettingsEntry | null | undefined,
+  worktreeId: string | null | undefined,
+  preset: Pick<AgentPreset, "id" | "accountId"> | undefined
+): LaunchAccountChoice {
+  const accountId = resolveEffectiveAccountId(entry, worktreeId, undefined, preset?.accountId);
+  const scoped = entry?.worktreeAccounts;
+  let source: LaunchAccountSource;
+  if (worktreeId && scoped && typeof scoped === "object" && Object.hasOwn(scoped, worktreeId)) {
+    source = "worktree";
+  } else if (typeof preset?.accountId === "string") {
+    source = "preset";
+  } else {
+    source = accountId === null ? "cliDefault" : "agentDefault";
+  }
+  const missing =
+    accountId !== null &&
+    !sanitizeAgentAccounts(entry?.accounts).some((account) => account.id === accountId);
+  return {
+    accountId,
+    source,
+    ...(source === "preset" && preset ? { presetId: preset.id } : {}),
+    ...(missing ? { missing: true as const } : {}),
+  };
 }
 
 export type LaunchAccountResolution =

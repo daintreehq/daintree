@@ -46,9 +46,13 @@ import {
 } from "./agentPresetMutation";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import type { ActionContext } from "@shared/types/actions";
-import type { AgentPreset } from "@shared/config/agentRegistry";
+import { getAgentConfigFolderAccount, type AgentPreset } from "@shared/config/agentRegistry";
+import { describeLaunchAccount, listAgentAccountIdentities } from "@shared/utils/agentAccounts";
+import { settleLaunchPreset } from "@shared/utils/agentPresets";
+import { findUnloadedLaunchPreset } from "@shared/utils/agentLaunchPlan";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 import {
+  AgentListAccountsArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
   BookmarkAndCloseArgsSchema,
@@ -1007,6 +1011,64 @@ export const agentActionRuns = {
         sources.ccrPresets,
         sources.projectPresets
       ),
+    };
+  },
+  "agent.listAccounts": async (args: unknown, ctx: ActionContext) => {
+    const { agentId, worktreeId } = AgentListAccountsArgsSchema.parse(args ?? {});
+    if (!isRegisteredAgent(agentId)) throw new UnactionableTargetError(unknownAgentIdMessage(agentId));
+    if (!getAgentConfigFolderAccount(agentId)) {
+      throw new UnactionableTargetError(
+        `${getAgentDisplayTitle(agentId)} has no accounts: it signs in one way only.`
+      );
+    }
+    const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
+    if (!useAgentSettingsStore.getState().isInitialized) {
+      await useAgentSettingsStore.getState().initialize();
+    }
+    // An unread store is a failure, never an agent with no accounts.
+    const settings = useAgentSettingsStore.getState().settings;
+    if (!settings) throw new Error("Couldn't read the agent settings, so no accounts were listed.");
+    const agents = settings.agents;
+    const entry = agents && Object.hasOwn(agents, agentId) ? agents[agentId] : undefined;
+    const accounts = listAgentAccountIdentities(entry);
+    if (worktreeId === undefined) return { accounts };
+
+    // Refused as a launch refuses it, without echoing the id: a worktree id
+    // can be its path, which names the user.
+    const { worktrees, isInitialized } = getCurrentViewStore().getState();
+    if (isInitialized && !worktrees.has(worktreeId)) {
+      throw new UnactionableTargetError(
+        "No worktree in this project has that id. Use an id from the worktree listing."
+      );
+    }
+    const { readLaunchPresetSources } = await import("@/utils/presetInventory");
+    const sources = readLaunchPresetSources(agentId, {
+      projectId: ctx.projectId,
+      scratchId: ctx.scratchId,
+    });
+    const settled = settleLaunchPreset(
+      agentId,
+      entry ?? {},
+      worktreeId,
+      undefined,
+      sources.ccrPresets,
+      sources.projectPresets
+    );
+    return {
+      accounts,
+      worktreeLaunch: {
+        ...describeLaunchAccount(entry, worktreeId, settled.preset),
+        // A launch waits for a preset it can't find yet, so the pin it
+        // would read may not be known.
+        presetsComplete:
+          findUnloadedLaunchPreset({
+            agentId,
+            isAgent: true,
+            worktreeId,
+            settings,
+            ...sources,
+          }) === undefined,
+      },
     };
   },
   "agent.createPreset": (args: unknown, ctx: ActionContext) =>
