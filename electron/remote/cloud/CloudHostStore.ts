@@ -486,7 +486,8 @@ function readObservation(raw: unknown): StoredCloudObservation | null {
     dataExpired: value.dataExpired === true,
     asleep: value.asleep === true,
     idleSleep: readIdleSleep(value.idleSleep),
-    snapshotsDisabled: typeof value.snapshotsDisabled === "boolean" ? value.snapshotsDisabled : null,
+    snapshotsDisabled:
+      typeof value.snapshotsDisabled === "boolean" ? value.snapshotsDisabled : null,
     observedAt: num(value.observedAt) ?? 0,
   };
 }

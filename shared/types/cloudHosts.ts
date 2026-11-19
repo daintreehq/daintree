@@ -716,9 +716,7 @@ export interface CloudHostStatus {
  * yet whether a stop would keep this machine's disk. `blocked`: why it doesn't.
  */
 export type CloudLinkedIdleStop =
-  | { kind: "stops" }
-  | { kind: "unknown" }
-  | { kind: "blocked"; problem: string };
+  { kind: "stops" } | { kind: "unknown" } | { kind: "blocked"; problem: string };
 
 /** The machine as it would be created. */
 export interface CloudHostCreateRequest {
