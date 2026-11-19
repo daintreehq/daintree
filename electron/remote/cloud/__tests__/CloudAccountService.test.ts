@@ -254,6 +254,7 @@ describe("CloudAccountService", () => {
         operationId: "op",
         idempotencyKey: "key",
         sentAt: 5,
+        lastSentAt: 5,
         name: "pending",
         machineType: "2x4",
       },

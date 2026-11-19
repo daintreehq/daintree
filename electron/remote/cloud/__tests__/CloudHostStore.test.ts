@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { CloudHostCreatedFor } from "../../../../shared/types/cloudHosts.js";
 import {
   CloudHostStore,
+  cloudMachineClaim,
+  madeInSendWindow,
   readConsoleUrl,
   type CloudHostsValue,
   type StoredCloudBinding,
@@ -46,6 +48,7 @@ function binding(overrides: Partial<StoredCloudBinding> = {}): StoredCloudBindin
       operationId: "op",
       idempotencyKey: "key",
       sentAt: null,
+      lastSentAt: null,
       name: "build",
       machineType: "default",
     },
@@ -725,5 +728,95 @@ describe("CloudHostStore plugin provider consents", () => {
     });
     counting.removeProviderConsent("acme.clouds");
     expect(writes).toBe(0);
+  });
+});
+
+describe("CloudHostStore machine claims (#17927)", () => {
+  const SENT = Date.parse("2026-11-17T10:00:00.000Z");
+  const at = (minutes: number) => new Date(SENT + minutes * 60_000).toISOString();
+  const pending = binding({ creation: { ...binding().creation!, sentAt: SENT, lastSentAt: SENT } });
+  const labels = { "daintree-binding": pending.id };
+
+  it("places a machine in a send's window by its create time, inclusively", () => {
+    expect(madeInSendWindow(SENT, at(-5))).toBe(true);
+    expect(madeInSendWindow(SENT, at(15))).toBe(true);
+    expect(madeInSendWindow(SENT, at(-5.01))).toBe(false);
+    expect(madeInSendWindow(SENT, at(15.01))).toBe(false);
+    expect(madeInSendWindow(SENT, null)).toBeNull();
+    expect(madeInSendWindow(SENT, "not a time")).toBeNull();
+    expect(madeInSendWindow(null, at(0))).toBe(false);
+  });
+
+  it("reserves a machine any send may have made, from the first send's window to the latest's", () => {
+    const replayed = binding({
+      creation: { ...binding().creation!, sentAt: SENT, lastSentAt: SENT + 60 * 60_000 },
+    });
+    const claim = (minutes: number) =>
+      cloudMachineClaim([replayed], "boat", {
+        resourceId: "bx_late00001",
+        labels: { "daintree-binding": replayed.id },
+        createdAt: at(minutes),
+      });
+    expect(claim(61)).toEqual({ binding: replayed, pending: true });
+    expect(claim(1)).toEqual({ binding: replayed, pending: true });
+    expect(claim(30)).toEqual({ binding: replayed, pending: true });
+    expect(claim(-6)).toBeNull();
+    expect(claim(76)).toBeNull();
+    const setBack = {
+      ...replayed,
+      creation: { ...replayed.creation!, lastSentAt: SENT - 60 * 60_000 },
+    };
+    expect(
+      cloudMachineClaim([setBack], "boat", {
+        resourceId: "bx_late00001",
+        labels: { "daintree-binding": replayed.id },
+        createdAt: at(-59),
+      })
+    ).toEqual({ binding: setBack, pending: true });
+  });
+
+  it("gives a labelled machine to the pending create that may have made it, and a copy made later to nobody", () => {
+    expect(
+      cloudMachineClaim([pending], "boat", { resourceId: "bx_orig00001", labels, createdAt: at(1) })
+    ).toEqual({ binding: pending, pending: true });
+    expect(
+      cloudMachineClaim([pending], "boat", { resourceId: "bx_orig00001", labels, createdAt: null })
+    ).toEqual({ binding: pending, pending: true });
+    expect(
+      cloudMachineClaim([pending], "boat", {
+        resourceId: "bx_fork00001",
+        labels,
+        createdAt: at(120),
+      })
+    ).toBeNull();
+    expect(
+      cloudMachineClaim([pending], "boat", {
+        resourceId: "bx_orig00001",
+        labels: { "daintree-binding": "cb_someone0001" },
+        createdAt: at(1),
+      })
+    ).toBeNull();
+  });
+
+  it("lets the binding that holds a machine win over a pending label, and ignores other providers and the asker", () => {
+    const holder = binding({ id: "cb_holder0001", hostId: "other", resourceId: "bx_orig00001" });
+    const machine = { resourceId: "bx_orig00001", labels, createdAt: at(1) };
+    expect(cloudMachineClaim([pending, holder], "boat", machine)).toEqual({
+      binding: holder,
+      pending: false,
+    });
+    expect(cloudMachineClaim([pending, holder], "boat", machine, holder.id)).toEqual({
+      binding: pending,
+      pending: true,
+    });
+    expect(cloudMachineClaim([pending, holder], "agent37", machine)).toBeNull();
+  });
+
+  it("gives no claim to a create that was never sent or already holds another machine", () => {
+    const machine = { resourceId: "bx_orig00001", labels, createdAt: at(1) };
+    expect(cloudMachineClaim([binding()], "boat", machine)).toBeNull();
+    expect(
+      cloudMachineClaim([{ ...pending, resourceId: "bx_other0001" }], "boat", machine)
+    ).toBeNull();
   });
 });

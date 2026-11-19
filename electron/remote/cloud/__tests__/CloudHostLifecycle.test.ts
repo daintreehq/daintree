@@ -1485,7 +1485,11 @@ describe("CloudHostLifecycle review fixes", () => {
     const bindingId = store.bindings()[0]!.id;
     // Boat had made it after all: the retry finds it by label and creates nothing.
     vi.mocked(provider.list).mockResolvedValueOnce([
-      resource({ resourceId: "bx_found0000", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0000",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await lifecycle.retryCreate("build");
     expect(provider.create).toHaveBeenCalledTimes(1);
@@ -1507,7 +1511,11 @@ describe("CloudHostLifecycle review fixes", () => {
     await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
     const bindingId = store.bindings()[0]!.id;
     vi.mocked(provider.list).mockResolvedValueOnce([
-      resource({ resourceId: "bx_found0000", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0000",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await lifecycle.deleteMachine("build", null);
     expect(vi.mocked(provider.delete).mock.calls[0]![1]).toBe("bx_found0000");
@@ -2858,7 +2866,13 @@ describe("CloudHostLifecycle worktree marks", () => {
     made: boolean
   ) =>
     vi.mocked(provider.create).mockImplementationOnce(async (_c, sent) => {
-      if (made) state.machine = resource({ name: "build-box", labels: sent.labels });
+      if (made) {
+        state.machine = resource({
+          name: "build-box",
+          labels: sent.labels,
+          createdAt: new Date().toISOString(),
+        });
+      }
       throw new BoatApiError("network", "lost", null, null, null);
     });
 
@@ -3125,7 +3139,11 @@ describe("CloudHostLifecycle provisioning", () => {
     await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
     const bindingId = store.bindings()[0]!.id;
     vi.mocked(provider.list).mockResolvedValueOnce([
-      resource({ resourceId: "bx_found0000", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0000",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await lifecycle.retryCreate("build");
     expect(provider.list).toHaveBeenCalledWith(expect.anything(), {
@@ -3212,6 +3230,10 @@ describe("CloudHostLifecycle provisioning", () => {
     });
 
     const next = restart(lifecycle);
+    // Every machine this fake makes has one id; the replay answers with this host's own.
+    vi.mocked(provider.create).mockResolvedValueOnce(
+      resource({ resourceId: "bx_build0001", machine: "starting", rawState: "provisioning" })
+    );
     await next.lifecycle.retryCreate("build");
     const calls = vi.mocked(provider.create).mock.calls;
     const first = calls[0]![1];
@@ -3222,6 +3244,9 @@ describe("CloudHostLifecycle provisioning", () => {
       next.lifecycle.statuses().find((s) => s.hostId === "build")?.provisioning?.location
     ).toEqual({ label: "Region", id: "eu-west-1", value: "Europe (Ireland)" });
     expect(next.store.account(account.id)?.lastProvisioning).toEqual(VIRGINIA);
+    expect(next.store.bindings().find((b) => b.hostId === "build")?.resourceId).toBe(
+      "bx_build0001"
+    );
   });
 
   it("won't send a retry whose saved choice can't be read back, even where nothing is required", async () => {
@@ -4234,7 +4259,11 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     // Once the machine shows up, the next look binds it.
     const bindingId = env.store.bindings()[0]!.id;
     vi.mocked(env.provider.list).mockResolvedValue([
-      resource({ resourceId: "bx_found0001", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0001",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await env.lifecycle.retryCreate("build");
     expect(env.store.bindings()[0]!.resourceId).toBe("bx_found0001");
@@ -4301,7 +4330,11 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     expect(next.store.bindings()[0]!.creation).toEqual(env.store.bindings()[0]!.creation);
     expect(await hint(next.lifecycle)).toContain("to retry");
     vi.mocked(env.provider.list).mockResolvedValue([
-      resource({ resourceId: "bx_found0001", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0001",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await next.lifecycle.retryCreate("build");
     expect(next.store.bindings()[0]).toMatchObject({ resourceId: "bx_found0001", lastError: null });
@@ -4553,7 +4586,11 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     const removing = next.lifecycle.deleteMachine("build", null);
     await vi.waitFor(() => expect(held).toHaveLength(2));
     held[0]!.answer([
-      resource({ resourceId: "bx_found0001", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0001",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await vi.waitFor(() => expect(next.store.bindings()[0]?.resourceId).toBe("bx_found0001"));
     held[1]!.answer([]);
@@ -4605,7 +4642,7 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it("binds the earliest machine carrying a lost create's labels, never a later copy of it", async () => {
+  it("binds the machine made as a lost create was sent, never a later copy carrying its labels", async () => {
     const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
     vi.mocked(env.provider.create).mockRejectedValueOnce(
       new BoatApiError("network", "lost", null, null, null)
@@ -4615,10 +4652,15 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
       expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
     );
     await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    const sentAt = env.store.bindings()[0]!.creation!.sentAt!;
     const labels = { "daintree-binding": env.store.bindings()[0]!.id };
     vi.mocked(env.provider.list).mockResolvedValue([
-      resource({ resourceId: "bx_fork00001", labels, createdAt: "2026-11-17T10:05:00.000Z" }),
-      resource({ resourceId: "bx_orig00001", labels, createdAt: "2026-11-17T10:00:00.000Z" }),
+      resource({
+        resourceId: "bx_fork00001",
+        labels,
+        createdAt: new Date(sentAt + 2 * 3_600_000).toISOString(),
+      }),
+      resource({ resourceId: "bx_orig00001", labels, createdAt: new Date(sentAt).toISOString() }),
     ]);
     await env.lifecycle.retryCreate("build");
     expect(env.store.bindings()[0]!.resourceId).toBe("bx_orig00001");
@@ -5289,5 +5331,395 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     expect(provider.delete).toHaveBeenCalledTimes(1);
     lifecycle.dispose();
     expect(stopListening).toHaveBeenCalled();
+  });
+});
+
+describe("CloudHostLifecycle with a lost create's label on a machine it didn't make (#17927)", () => {
+  const SENT = Date.parse("2026-11-17T10:00:00.000Z");
+  const minutesAfterSend = (minutes: number) => new Date(SENT + minutes * 60_000).toISOString();
+
+  /** A host whose create went out at SENT and whose answer was lost. */
+  async function lostCreate(options: { lookupOnly?: boolean; now?: () => number } = {}) {
+    const env = await setup({}, { now: options.now ?? (() => SENT) });
+    if (options.lookupOnly) {
+      (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    }
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await env.lifecycle.create({
+      accountId: env.account.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    const bindingId = env.store.bindings()[0]!.id;
+    const labelled = (overrides: Partial<ProviderResource>) =>
+      resource({ labels: { daintree: "1", "daintree-binding": bindingId }, ...overrides });
+    const bindingOf = (hostId: string) => env.store.bindings().find((b) => b.hostId === hostId);
+    return { ...env, bindingId, labelled, bindingOf };
+  }
+
+  it("never binds a fork that outlived its deleted original: not on Retry, a restart, or removal", async () => {
+    const env = await lostCreate({ lookupOnly: true });
+    // The original is gone from the list; only a copy made two hours later carries its labels,
+    // beside a machine another create labelled while this one was sent.
+    vi.mocked(env.provider.list).mockResolvedValue([
+      env.labelled({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(120) }),
+      resource({
+        resourceId: "bx_other0001",
+        labels: { daintree: "1", "daintree-binding": "cb_someone0001" },
+        createdAt: minutesAfterSend(1),
+      }),
+    ]);
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/isn't in the account/);
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.lastError?.message).toContain("hasn't shown a machine")
+    );
+    expect(next.store.bindings()[0]!.resourceId).toBeNull();
+    await next.lifecycle.deleteMachine("build", null);
+    expect(env.provider.delete).not.toHaveBeenCalled();
+    expect(env.hosts).toEqual([]);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    next.lifecycle.dispose();
+  });
+
+  it("lets the fork be added as a host of its own, and still binds the original while it lives", async () => {
+    const env = await lostCreate();
+    const original = env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) });
+    const fork = env.labelled({
+      resourceId: "bx_fork00001",
+      name: "copy",
+      createdAt: minutesAfterSend(120),
+    });
+    vi.mocked(env.provider.list).mockResolvedValue([original, fork]);
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(fork);
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_fork00001",
+      name: "copy",
+    });
+    await env.lifecycle.retryCreate("build");
+    expect(env.bindingOf("build")!.resourceId).toBe("bx_orig00001");
+    expect(env.bindingOf("copy")!.resourceId).toBe("bx_fork00001");
+  });
+
+  const UNCLEAR = /can't tell whether a machine carrying this host's label/;
+  const MISSING = /isn't in the account/;
+  type Rows = (r: (o: Partial<ProviderResource>) => ProviderResource) => ProviderResource[];
+  it.each<[string, Rows, RegExp]>([
+    [
+      "two made while it was sent",
+      (r) => [
+        r({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+        r({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(3) }),
+      ],
+      UNCLEAR,
+    ],
+    [
+      "one whose create time is unknown beside one made while it was sent",
+      (r) => [
+        r({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+        r({ resourceId: "bx_fork00001", createdAt: null }),
+      ],
+      UNCLEAR,
+    ],
+    [
+      "a lone one whose create time is unknown",
+      (r) => [r({ resourceId: "bx_orig00001", createdAt: null })],
+      UNCLEAR,
+    ],
+    [
+      "a deleted original and a copy made long after",
+      (r) => [
+        r({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1), machine: "deleted" }),
+        r({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(120) }),
+      ],
+      MISSING,
+    ],
+    [
+      "an older machine its labels were copied onto, beside the original",
+      (r) => [
+        r({ resourceId: "bx_older0001", createdAt: minutesAfterSend(-1) }),
+        r({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+      ],
+      UNCLEAR,
+    ],
+    [
+      "a machine made well before it was sent",
+      (r) => [r({ resourceId: "bx_older0001", createdAt: minutesAfterSend(-10) })],
+      MISSING,
+    ],
+  ])(
+    "binds and deletes nothing when it can't tell its machine apart: %s",
+    async (_, rows, said) => {
+      const env = await lostCreate({ lookupOnly: true });
+      vi.mocked(env.provider.list).mockResolvedValue(rows(env.labelled));
+      await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(said);
+      expect(env.bindingOf("build")!.resourceId).toBeNull();
+      await env.lifecycle.deleteMachine("build", null);
+      expect(env.provider.delete).not.toHaveBeenCalled();
+      expect(env.hosts).toEqual([]);
+    }
+  );
+
+  it("says after a restart that it saw machines it can't tell apart, not that there are none", async () => {
+    const env = await lostCreate({ lookupOnly: true });
+    vi.mocked(env.provider.list).mockResolvedValue([
+      env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+      env.labelled({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(2) }),
+    ]);
+    const next = env.restart(env.lifecycle);
+    try {
+      await vi.waitFor(() =>
+        expect(next.lifecycle.statuses()[0]?.lastError?.message).toMatch(UNCLEAR)
+      );
+      expect(next.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+      expect(next.store.bindings()[0]!.resourceId).toBeNull();
+    } finally {
+      next.lifecycle.dispose();
+    }
+  });
+
+  it("reserves the machine a later replay may have made, but binds and deletes it only once it can tell", async () => {
+    let now = SENT;
+    const env = await lostCreate({ now: () => now });
+    now = SENT + 60 * 60_000;
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow();
+    // Made around the replay: the replay's own machine, or a copy made then; nothing says which.
+    const made = env.labelled({ resourceId: "bx_late00001", createdAt: minutesAfterSend(61) });
+    vi.mocked(env.provider.list).mockResolvedValue([made]);
+    const listed = await env.accounts.listResources(env.account.id);
+    expect(listed.find((r) => r.resourceId === "bx_late00001")?.boundHostId).toBe("build");
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(UNCLEAR);
+    expect(env.provider.create).toHaveBeenCalledTimes(2);
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+    await env.lifecycle.deleteMachine("build", null);
+    expect(env.provider.delete).not.toHaveBeenCalled();
+    expect(env.hosts).toEqual([]);
+  });
+
+  it("asks a provider with an idempotency key for no other machine when it can't tell its own apart", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.list).mockResolvedValue([
+      env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+      env.labelled({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(2) }),
+    ]);
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(UNCLEAR);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+  });
+
+  it("lists the machine a pending create may have made as that host's, and won't import it", async () => {
+    const env = await lostCreate();
+    const original = env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) });
+    const fork = env.labelled({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(120) });
+    const held = resource({ resourceId: "bx_held00001" });
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(held);
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_held00001",
+      name: "held",
+    });
+    vi.mocked(env.provider.list).mockResolvedValue([original, fork, held]);
+    const listed = await env.accounts.listResources(env.account.id);
+    expect(listed.find((r) => r.resourceId === "bx_orig00001")?.boundHostId).toBe("build");
+    expect(listed.find((r) => r.resourceId === "bx_fork00001")?.boundHostId).toBeNull();
+    expect(listed.find((r) => r.resourceId === "bx_held00001")?.boundHostId).toBe("held");
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(original);
+    await expect(
+      env.lifecycle.importMachine({
+        accountId: env.account.id,
+        resourceId: "bx_orig00001",
+        name: "other",
+      })
+    ).rejects.toThrow(/build is still being set up/);
+    expect(env.hosts.map((host) => host.id)).toEqual(["build", "held"]);
+  });
+
+  it("refuses an import whose inspect was out while the recovery bound the machine", async () => {
+    const env = await lostCreate();
+    const original = env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) });
+    vi.mocked(env.provider.list).mockResolvedValue([original]);
+    let release: () => void = () => {};
+    vi.mocked(env.provider.inspect).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return original;
+    });
+    const importing = env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_orig00001",
+      name: "other",
+    });
+    await vi.waitFor(() => expect(env.provider.inspect).toHaveBeenCalled());
+    await env.lifecycle.retryCreate("build");
+    expect(env.bindingOf("build")!.resourceId).toBe("bx_orig00001");
+    release();
+    await expect(importing).rejects.toThrow(/already in your host list as build/);
+    await env.lifecycle.deleteMachine("build", "bx_orig00001");
+    expect(vi.mocked(env.provider.delete).mock.calls).toEqual([
+      [expect.anything(), "bx_orig00001"],
+    ]);
+    expect(env.hosts).toEqual([]);
+  });
+
+  it("never takes a machine an import landed on while the recovery looked, and removal keeps it", async () => {
+    const env = await lostCreate();
+    const original = env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) });
+    let answer: (rows: ProviderResource[]) => void = () => {};
+    vi.mocked(env.provider.list).mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    const retrying = env.lifecycle.retryCreate("build");
+    await vi.waitFor(() => expect(env.provider.list).toHaveBeenCalled());
+    // An inspect that carries no labels, so the import can't see the pending create.
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce({ ...original, labels: {} });
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_orig00001",
+      name: "other",
+    });
+    answer([original]);
+    await expect(retrying).rejects.toThrow(/already in your host list as other/);
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+
+    vi.mocked(env.provider.list).mockResolvedValue([original]);
+    // So what the restart says is its own look's, not the Retry's.
+    env.store.updateBinding(env.bindingId, (current) => ({ ...current, lastError: null }));
+    const next = env.restart(env.lifecycle);
+    try {
+      await vi.waitFor(() =>
+        expect(
+          next.lifecycle.statuses().find((s) => s.hostId === "build")?.lastError?.message
+        ).toContain("already in your host list as other")
+      );
+      // Still unsettled, so removing it warns before a delete it may make.
+      expect(next.lifecycle.statuses().find((s) => s.hostId === "build")?.lastError?.code).toBe(
+        "outcome-unknown"
+      );
+      expect(next.store.bindings().find((b) => b.hostId === "build")!.resourceId).toBeNull();
+      await next.lifecycle.deleteMachine("build", null);
+      expect(env.provider.delete).not.toHaveBeenCalled();
+      expect(env.hosts.map((host) => host.id)).toEqual(["other"]);
+      expect(next.store.bindings().find((b) => b.hostId === "other")!.resourceId).toBe(
+        "bx_orig00001"
+      );
+    } finally {
+      next.lifecycle.dispose();
+    }
+  });
+
+  it("binds nothing when a same-key replay answers with a machine another host holds", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(resource({ resourceId: "bx_orig00001" }));
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_orig00001",
+      name: "other",
+    });
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    vi.mocked(env.provider.create).mockResolvedValueOnce(
+      resource({ resourceId: "bx_orig00001", machine: "starting", rawState: "provisioning" })
+    );
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(
+      /already in your host list as other/
+    );
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+    await env.lifecycle.deleteMachine("build", null);
+    expect(env.provider.delete).not.toHaveBeenCalled();
+    expect(env.bindingOf("other")!.resourceId).toBe("bx_orig00001");
+  });
+
+  it("deletes the machine a Retry bound while removal was looking", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.list).mockImplementationOnce(async () => {
+      env.store.updateBinding(env.bindingId, (current) => ({
+        ...current,
+        resourceId: "bx_orig00001",
+        creation: null,
+      }));
+      return [];
+    });
+    await env.lifecycle.deleteMachine("build", null);
+    expect(vi.mocked(env.provider.delete).mock.calls).toEqual([
+      [expect.anything(), "bx_orig00001"],
+    ]);
+    expect(env.hosts).toEqual([]);
+  });
+
+  it("never lets removal's older look replace the machine bound while it looked", async () => {
+    const env = await lostCreate();
+    const seen = env.labelled({ resourceId: "bx_seen00001", createdAt: minutesAfterSend(1) });
+    let answer: (rows: ProviderResource[]) => void = () => {};
+    vi.mocked(env.provider.list).mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    const removing = env.lifecycle.deleteMachine("build", null);
+    await vi.waitFor(() => expect(env.provider.list).toHaveBeenCalledTimes(1));
+    // Retry is refused while the removal looks; a restart's lookup that began first can still bind.
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/being removed/);
+    env.store.updateBinding(env.bindingId, (current) => ({
+      ...current,
+      resourceId: "bx_named0001",
+      creation: null,
+    }));
+    answer([seen]);
+    await removing;
+    expect(vi.mocked(env.provider.delete).mock.calls).toEqual([
+      [expect.anything(), "bx_named0001"],
+    ]);
+    expect(env.hosts).toEqual([]);
+  });
+
+  it("fails a Retry that names the machine a provider answered with after the host settled on another", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    vi.mocked(env.provider.create).mockImplementationOnce(async () => {
+      env.store.updateBinding(env.bindingId, (current) => ({
+        ...current,
+        resourceId: "bx_first0001",
+        creation: null,
+      }));
+      return resource({
+        resourceId: "bx_extra0001",
+        name: "build-2",
+        machine: "starting",
+        rawState: "provisioning",
+      });
+    });
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(
+      /answered with a machine \(build-2\)/
+    );
+    expect(env.bindingOf("build")!.resourceId).toBe("bx_first0001");
+    expect(env.lifecycle.statuses()[0]?.lastError?.message).toContain("Check your Boat account");
+  });
+
+  it("never deletes a machine another host also holds, however the two came to share it", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(resource({ resourceId: "bx_orig00001" }));
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_orig00001",
+      name: "other",
+    });
+    // As an earlier version could leave them: the stuck host bound to the same machine.
+    env.store.updateBinding(env.bindingId, (current) => ({
+      ...current,
+      resourceId: "bx_orig00001",
+      creation: null,
+    }));
+    await expect(env.lifecycle.deleteMachine("build", "bx_orig00001")).rejects.toThrow(
+      /also in your host list as other/
+    );
+    expect(env.provider.delete).not.toHaveBeenCalled();
+    expect(env.hosts.map((host) => host.id)).toEqual(["build", "other"]);
   });
 });

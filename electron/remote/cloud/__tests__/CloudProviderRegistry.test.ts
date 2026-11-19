@@ -865,7 +865,10 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
 
   it("looks for a create a restart left unanswered once its provider registers", async () => {
     const env = await pendingCreateEnv();
-    const created = resource({ labels: { "daintree-binding": "cb_abcdefgh12" } });
+    const created = resource({
+      labels: { "daintree-binding": "cb_abcdefgh12" },
+      createdAt: new Date(2).toISOString(),
+    });
     const provider = fakeProvider(PLUGIN_PROVIDER, () => created);
     env.lifecycle.start();
     try {
@@ -912,7 +915,10 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
 
   it("looks again when its provider left while it was being asked", async () => {
     const env = await pendingCreateEnv();
-    const created = resource({ labels: { "daintree-binding": "cb_abcdefgh12" } });
+    const created = resource({
+      labels: { "daintree-binding": "cb_abcdefgh12" },
+      createdAt: new Date(2).toISOString(),
+    });
     const provider = fakeProvider(PLUGIN_PROVIDER, () => created);
     let unregister = () => {};
     vi.mocked(provider.list).mockImplementationOnce(async () => {
@@ -940,7 +946,10 @@ describe("cloud accounts and hosts whose provider isn't registered", () => {
 
   it("looks again when its provider came back before the old lookup failed", async () => {
     const env = await pendingCreateEnv();
-    const created = resource({ labels: { "daintree-binding": "cb_abcdefgh12" } });
+    const created = resource({
+      labels: { "daintree-binding": "cb_abcdefgh12" },
+      createdAt: new Date(2).toISOString(),
+    });
     const provider = fakeProvider(PLUGIN_PROVIDER, () => created);
     let fail!: (error: Error) => void;
     vi.mocked(provider.list).mockImplementationOnce(
