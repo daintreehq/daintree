@@ -849,6 +849,19 @@ describe("GlobalWorkerSteer (#14551)", () => {
       fake.screen = box("❯ ");
     });
 
+    /** A steer over the same fake whose screen read answers `snapshot`. */
+    const steerWithScreen = (snapshot: { data: string; partial?: true }) =>
+      new GlobalWorkerSteer({
+        getTerminalProjectId: () => fake.projectId,
+        getLiveGeneration: () => fake.generation,
+        isAssistantTerminal: () => fake.assistant,
+        getTerminal: async () => (fake.record ? { ...fake.record } : null),
+        serializedState: async () => snapshot,
+        submit: () => {},
+        write: () => {},
+        doubleEscape: () => {},
+      });
+
     it.each([
       ["waiting at its prompt", {}, "handback"],
       ["waiting with no reason", { waitingReason: undefined }, "handback"],
@@ -863,6 +876,11 @@ describe("GlobalWorkerSteer (#14551)", () => {
         agentId: "claude",
         title: "Fix the flaky test",
       });
+    });
+
+    it("reads a screen whose scrollback was left out as the whole screen it is", async () => {
+      const read = steerWithScreen({ data: box("❯ "), partial: true });
+      await expect(read.closeTarget(PROJECT, WORKER)).resolves.not.toBeNull();
     });
 
     it("takes one whose input box holds only the CLI's own suggestion", async () => {

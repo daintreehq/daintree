@@ -444,7 +444,7 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
     expect(ask.lines.join("\n")).toContain(OTHER);
     expect(ask.lines.join("\n")).not.toContain(SHELL);
     expect(ask.lines.join("\n")).not.toContain(MINE);
-    expect(ask.lines.join("\n")).toContain("also closes 1 panel the assistant launched");
+    expect(ask.lines.join("\n")).toContain("also closes up to 1 panel the assistant launched");
     expect(
       dispatchAction.mock.calls.map(([, args]) => (args as { terminalId: string }).terminalId)
     ).toEqual([WORKER, MINE, OTHER]);
@@ -474,6 +474,28 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
     ]);
     expect(h.dispatchAction).not.toHaveBeenCalled();
     expect(h.store.resourceOwnership.get(h.owner, "terminal", WORKER)).toBeDefined();
+  });
+
+  it("keeps a batch item it read as ineligible refused, whatever the ledger says later", async () => {
+    const h = harness();
+    h.askClose.mockImplementationOnce(async () => {
+      h.store.resourceOwnership.record(h.owner, [{ kind: "terminal", id: SHELL }]);
+      return APPROVED;
+    });
+    const server = await serve(h.deps);
+
+    const result = await callTool(
+      server,
+      relayed("terminal.closeMany", { terminalIds: [WORKER, SHELL] })
+    );
+
+    expect(batchAnswer(result).results.map(({ target, ok }) => [target, ok])).toEqual([
+      [WORKER, true],
+      [SHELL, false],
+    ]);
+    expect(
+      h.dispatchAction.mock.calls.map(([, args]) => (args as { terminalId: string }).terminalId)
+    ).toEqual([WORKER]);
   });
 
   it("makes a batch holding an agent stopped on an error the person's question", async () => {

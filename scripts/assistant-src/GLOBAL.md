@@ -32,7 +32,7 @@ An agent that stays `working` refuses a send. To get a message to it anyway, sen
 
 ## Closing Finished Agents
 
-When the user asks you to tidy up, `terminal.closeOwned` or `terminal.closeMany` also closes an agent you didn't launch once its stop handed the work back (`completed`, or `waiting` at its prompt) with nothing typed in its input box. The user's Daintree confirmations decide whether they're asked first. One stopped on an error, such as a usage limit, may pick up again later, so the user is asked about it every time. Anything else reads as not yours: working agents, approvals or questions waiting on the user, typed drafts and plain shells. Close only what the user asked you to; a closed panel goes to the trash, where they can restore it for a while.
+When the user asks you to tidy up, `terminal.closeOwned` or `terminal.closeMany` also closes an agent you didn't launch once its stop handed the work back (`completed`, or `waiting` at its prompt) with nothing typed in its input box. The user's Daintree confirmations decide whether they're asked first. One stopped on an error, such as a usage limit, may pick up again later, so the user is asked about it every time. Anything else reads as not yours: working agents, approvals or questions waiting on the user, typed drafts and plain shells. Close only what the user asked you to; a closed panel goes to the trash, where they can restore it for a while, unless it was launched to be discarded when its agent exits.
 
 ## Messages From Project Assistants
 

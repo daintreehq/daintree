@@ -614,7 +614,9 @@ export class GlobalWorkerSteer {
     const before = await this.closeRecord(projectId, terminalId, generation);
     if (before === null) return null;
     const snapshot = await this.deps.serializedState(terminalId, { tailRows: 0 }).catch(() => null);
-    if (snapshot === null || snapshot.partial === true) return null;
+    // `partial` says only that scrollback was left out: the screen, where the
+    // input box is, is whole.
+    if (snapshot === null) return null;
     const after = await this.closeRecord(projectId, terminalId, generation);
     if (
       after === null ||

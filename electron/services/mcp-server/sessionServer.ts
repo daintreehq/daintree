@@ -1358,6 +1358,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Its audit mark, set once the agent read as one it may close, so a
     // declined or unanswered close is on record as the global close it was.
     let globalCloseAudited = false;
+    // Until when the answer that admitted a global close holds, checked again
+    // right before its dispatch, whatever was awaited since the last read.
+    let globalCloseDeadline: number | undefined;
     // The record the gate accepted. A release drops only this record, so a
     // cleanup that completes after another session on the same bearer
     // recorded a new resource under the id cannot take the new one with it.
@@ -1388,22 +1391,30 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       entry: RendererOwnedResourceTool,
       resourceId: string
     ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> =>
-      dispatchOwnedResource(
-        {
-          sessionId,
-          actionId,
-          args,
-          sessionStore,
-          ownershipOwner,
-          adoptedRecordFor,
-          admittedAdoption,
-          dispatchToRenderer,
-          dispatchConfirmed,
-          revealOwnedRun: deps.revealOwnedRun,
-        },
-        entry,
-        resourceId
-      );
+      globalCloseDeadline !== undefined &&
+      (Date.now() > globalCloseDeadline || extra.signal.aborted)
+        ? Promise.resolve({
+            envelope: {
+              result: { ok: false, error: globalCloseExpired(`'${resourceId}'`) },
+            },
+            raised: true,
+          })
+        : dispatchOwnedResource(
+            {
+              sessionId,
+              actionId,
+              args,
+              sessionStore,
+              ownershipOwner,
+              adoptedRecordFor,
+              admittedAdoption,
+              dispatchToRenderer,
+              dispatchConfirmed,
+              revealOwnedRun: deps.revealOwnedRun,
+            },
+            entry,
+            resourceId
+          );
 
     const askedAt = Date.now();
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void =>
@@ -1752,6 +1763,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       if (!sameGlobalCloseTarget(first, now)) return refuseGlobalClose(terminalId);
       // An answer covers the close only so long, whatever waited before it.
       if (Date.now() > answered.deadline) return refuseCall(globalCloseExpired(`'${terminalId}'`));
+      globalCloseDeadline = answered.deadline;
       return undefined;
     };
 
@@ -2385,13 +2397,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           let ownCloses = 0;
           if (globalBatchProject !== undefined) {
             const candidates: string[] = [];
+            let assistants = 0;
             for (const terminalId of new Set((parsed.data as TerminalCloseManyArgs).terminalIds)) {
-              if (isAssistantId(terminalId)) continue;
-              if (ownedRecordFor("terminal", terminalId) !== undefined) ownCloses += 1;
+              // An assistant closes only under its own starter's check, so it
+              // counts with the call's own panels, as one it may close.
+              if (isAssistantId(terminalId)) assistants += 1;
+              else if (ownedRecordFor("terminal", terminalId) !== undefined) ownCloses += 1;
               else candidates.push(terminalId);
             }
-            // The project's drive rule, asked before anything is read of an id.
-            if (candidates.length > 0) {
+            ownCloses += assistants;
+            // The project's drive rule, asked before anything is read of an id
+            // that isn't the call's own.
+            if (candidates.length > 0 || assistants > 0) {
               const standing = assistantWriteRefusal(globalBatchProject);
               if (standing) return refuseWrite(standing);
             }

@@ -87,8 +87,8 @@ export function globalCloseBatchQuestion(
       ...(ownCount > 0
         ? [
             ownCount === 1
-              ? "The call also closes 1 panel the assistant launched itself; declining closes nothing."
-              : `The call also closes ${ownCount} panels the assistant launched itself; declining closes nothing.`,
+              ? "The call also closes up to 1 panel the assistant launched itself; declining closes nothing."
+              : `The call also closes up to ${ownCount} panels the assistant launched itself; declining closes nothing.`,
           ]
         : []),
       TRASH_LINE,
