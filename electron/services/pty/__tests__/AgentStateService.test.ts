@@ -1891,4 +1891,3 @@ describe("AgentStateService update-installed observation (#17905)", () => {
     expect(cleared).toEqual(["term-1"]);
   });
 });
-

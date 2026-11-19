@@ -4871,4 +4871,3 @@ describe("update-installed observation on restore (#17905)", () => {
     expect(JSON.stringify(snapshot)).not.toContain("updateInstalled");
   });
 });
-

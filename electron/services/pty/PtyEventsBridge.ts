@@ -127,9 +127,7 @@ function claudeUsageObservation(
  * from its two fields so nothing else rides to the renderer. Undefined when it
  * isn't one.
  */
-function updateInstalledObservation(
-  value: unknown
-): UpdateInstalledObservation | null | undefined {
+function updateInstalledObservation(value: unknown): UpdateInstalledObservation | null | undefined {
   if (value === null) return null;
   if (!value || typeof value !== "object") return undefined;
   const { observedAt, namesRestart } = value as Partial<UpdateInstalledObservation>;

@@ -3,7 +3,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
-import { HEADER_CHIP_CLASS, HEADER_CHIP_FOCUS_CLASS, HEADER_CHIP_SURFACE } from "./terminalHeaderChip";
+import {
+  HEADER_CHIP_CLASS,
+  HEADER_CHIP_FOCUS_CLASS,
+  HEADER_CHIP_SURFACE,
+} from "./terminalHeaderChip";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import type { UpdateInstalledObservation } from "@shared/types/ipc/agent";
