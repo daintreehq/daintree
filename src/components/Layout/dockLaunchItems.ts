@@ -26,6 +26,7 @@ import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { defaultLoginLabel } from "@shared/utils/agentAccounts";
 import { isOwnPluginAction } from "@shared/utils/remotePluginContributions";
 import { isBuiltInActionId } from "@shared/utils/builtInActionIds";
 import {
@@ -447,11 +448,16 @@ export function buildPresetChoices(
  */
 export function buildAccountChoices(
   accounts: ReadonlyArray<{ id: string; name: string }>,
-  launchAccountId: string | null
+  launchAccountId: string | null,
+  defaultLoginName?: string
 ): DockLaunchAccountChoice[] {
   if (accounts.length === 0) return [];
   return [
-    { accountId: null, label: "Default login", isSelected: launchAccountId === null },
+    {
+      accountId: null,
+      label: defaultLoginLabel(defaultLoginName),
+      isSelected: launchAccountId === null,
+    },
     ...accounts.map((account) => ({
       accountId: account.id,
       label: account.name,

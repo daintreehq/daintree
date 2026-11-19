@@ -153,11 +153,15 @@ const usageAccountNames = z
   .array(z.string().max(MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS))
   .max(MAX_AGENT_USAGE_ACCOUNT_NAMES);
 
+// Optional, so a host from before #17080 still sends a reading this accepts.
+const usageDefaultLoginName = z.string().max(MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS).optional();
+
 const AgentUsageReadingSchema = z.discriminatedUnion("agentId", [
   z.object({
     agentId: z.literal("codex"),
     accountNames: usageAccountNames,
     isDefault: z.boolean(),
+    defaultLoginName: usageDefaultLoginName,
     windowDurationMins: z.number().int().positive(),
     usedPercent: percent,
     resetsAt: epochMs.nullable(),
@@ -167,6 +171,7 @@ const AgentUsageReadingSchema = z.discriminatedUnion("agentId", [
     agentId: z.literal("claude"),
     accountNames: usageAccountNames,
     isDefault: z.boolean(),
+    defaultLoginName: usageDefaultLoginName,
     window: z.enum(CLAUDE_USAGE_WINDOWS),
     statement: z.enum(CLAUDE_USAGE_STATEMENTS),
     usedPercent: percent.nullable(),

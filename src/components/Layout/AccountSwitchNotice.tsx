@@ -21,7 +21,7 @@ import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfir
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { defaultLoginLabel, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import type { RestartAccountChoice } from "@/components/Terminal/RestartOnAccount";
 import { restartPanesOnPreset } from "@/components/Terminal/restartPanesOnPreset";
 
@@ -296,8 +296,11 @@ export function MoveTerminalsToAccountDialog({
   const savedAccounts = useAgentSettingsStore(
     (state) => state.settings?.agents?.[agentId]?.accounts
   );
+  const defaultLoginName = useAgentSettingsStore(
+    (state) => state.settings?.agents?.[agentId]?.defaultLoginName
+  );
   const choices: RestartAccountChoice[] = [
-    { id: null, name: "Default login" },
+    { id: null, name: defaultLoginLabel(defaultLoginName) },
     ...sanitizeAgentAccounts(savedAccounts).map(({ id, name }) => ({ id, name })),
   ];
   const [request, setRequest] = useState<AccountSwitchRequest | null>(() =>

@@ -13,6 +13,11 @@ interface AgentUsageReadingBase {
   accountNames: string[];
   /** The login a launch with no account of its own lands on. */
   isDefault: boolean;
+  /**
+   * The name the user gave that host's default login (#17080), on a default
+   * reading only. The host's own, so another machine's name never labels it.
+   */
+  defaultLoginName?: string;
   /** Epoch ms of the reset the reading names; null when it named none. */
   resetsAt: number | null;
   /** Epoch ms: when Codex answered, or when a Claude Code pane printed the message. */

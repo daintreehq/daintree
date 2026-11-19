@@ -1,4 +1,5 @@
 import type { AgentUsageReadout } from "@shared/types/ipc/agentUsage";
+import { defaultLoginLabel, sanitizeAccountName } from "@shared/utils/agentAccounts";
 import { AGENT_USAGE_STALE_AFTER_MS, isAgentUsagePastAttention } from "@shared/utils/agentUsage";
 import { claudeWindowLabel, formatResetClock } from "./agentAccountHeadroom";
 import { windowLabel } from "./codexQuotaFormat";
@@ -58,15 +59,22 @@ function limitLine(readout: AgentUsageReadout): string {
   return `Approaching ${reading.window}`;
 }
 
+/** The name the reading's own host gave its default login (#17080). */
+function loginName(readout: AgentUsageReadout): string | undefined {
+  const { reading } = readout;
+  return reading.isDefault ? sanitizeAccountName(reading.defaultLoginName) : undefined;
+}
+
 function accountLabel(readout: AgentUsageReadout): string {
   const { reading } = readout;
   const names = reading.accountNames.join(", ");
-  if (reading.agentId === "codex") {
-    if (reading.isDefault) return names ? `Default profile · ${names}` : "Default profile";
-    return names || "Other profile";
+  if (!reading.isDefault) {
+    return names || (reading.agentId === "codex" ? "Other profile" : "Other config folder");
   }
-  if (reading.isDefault) return names ? `Default login · ${names}` : "Default login";
-  return names || "Other config folder";
+  const name = loginName(readout);
+  const login =
+    reading.agentId === "codex" && !name ? "Default profile" : defaultLoginLabel(name);
+  return names ? `${login} · ${names}` : login;
 }
 
 /**
@@ -86,9 +94,11 @@ export function describeAgentUsage(
     reading.agentId === "codex" && now - reading.observedAt > AGENT_USAGE_STALE_AFTER_MS;
   const reset =
     reading.resetsAt === null ? undefined : `resets ${formatResetClock(reading.resetsAt, now)}`;
+  const name = loginName(readout);
+  const names = name ? [name, ...reading.accountNames] : reading.accountNames;
   const parts = [
     `${agentName} ${figure(readout)}`,
-    reading.accountNames.length > 0 ? reading.accountNames.join(", ") : undefined,
+    names.length > 0 ? names.join(", ") : undefined,
     machine ?? undefined,
     reset,
   ].filter((part): part is string => Boolean(part));

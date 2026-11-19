@@ -44,11 +44,20 @@ export function shellClockOffset(
  * neither from the host's clock.
  */
 export function onShellClock(reading: AgentUsageReading, offset: number): AgentUsageReading {
-  return {
+  const next: AgentUsageReading = {
     ...reading,
     accountNames: reading.accountNames.map(displaySafeText),
     observedAt: reading.observedAt + offset,
   };
+  // The host's name for its default login (#17080), kept only where it can
+  // label something: a default reading, with text left once it's made safe.
+  const name =
+    reading.isDefault && reading.defaultLoginName !== undefined
+      ? displaySafeText(reading.defaultLoginName).trim()
+      : "";
+  if (name) next.defaultLoginName = name;
+  else delete next.defaultLoginName;
+  return next;
 }
 
 /**
