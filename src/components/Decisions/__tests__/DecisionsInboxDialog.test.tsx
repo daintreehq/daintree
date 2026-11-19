@@ -947,8 +947,9 @@ describe("DecisionsInboxDialog", () => {
       listQuestions.mockResolvedValue(marked({ ...unmarked, seen: true }));
       open();
       await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      let land!: (read: DecisionQuestionContentResult) => void;
       getQuestionContentByReference.mockImplementation(
-        () => new Promise<DecisionQuestionContentResult>(() => {})
+        () => new Promise<DecisionQuestionContentResult>((resolve) => (land = resolve))
       );
       push(marked({ ...unmarked, ask: "note-1" }, 3));
       const clear = screen.getByTestId("decisions-inbox-clear");
@@ -956,6 +957,47 @@ describe("DecisionsInboxDialog", () => {
       fireEvent.click(clear);
       await act(async () => {});
       expect(markQuestions.mock.calls.filter(([p]) => p.action === "clear")).toHaveLength(0);
+
+      // The read with the follow-up lands: Clear takes it, at that ask.
+      await act(async () =>
+        land({
+          result: "read",
+          question: {
+            ...CONTENT["question-2"]!,
+            thread: [
+              {
+                type: "message",
+                messageId: "note-1",
+                from: "agent",
+                text: "One more thing",
+                images: [],
+                expectsReply: false,
+                sentAt: "2026-11-02T10:05:00.000Z",
+                deliveryStatus: null,
+                unreadable: false,
+              },
+            ],
+          },
+        })
+      );
+      await waitFor(() => expect(clear.getAttribute("aria-disabled")).toBeNull());
+      fireEvent.click(clear);
+      await waitFor(() =>
+        expect(markQuestions).toHaveBeenCalledWith({
+          action: "clear",
+          questions: [{ reference: reference("question-2"), ask: "note-1" }],
+        })
+      );
+    });
+
+    it("marks the first question to reach an empty inbox seen as it shows, with no focus moving", async () => {
+      listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+      open();
+      await waitFor(() => expect(screen.getByTestId("decisions-inbox-empty")).toBeTruthy());
+      await act(async () => {});
+      push(marked(unmarked, 2));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      await waitFor(() => expect(seenCalls()).toHaveLength(1));
     });
 
     it("marks a follow-up seen only once it's scrolled into view", async () => {
@@ -965,6 +1007,7 @@ describe("DecisionsInboxDialog", () => {
         class implements IntersectionObserver {
           readonly root = null;
           readonly rootMargin = "0px";
+          readonly scrollMargin = "0px";
           readonly thresholds = [0];
           constructor(private readonly callback: IntersectionObserverCallback) {}
           observe(target: Element) {

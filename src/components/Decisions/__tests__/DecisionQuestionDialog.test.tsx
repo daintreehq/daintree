@@ -377,6 +377,8 @@ describe("DecisionQuestionDialog seen on this computer (#17895)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("decision-question-body").textContent).toContain("Question 8")
     );
+    // qb's own read, not qa's thread left behind.
+    expect(screen.getByTestId("decision-question-body").textContent).not.toContain("Merged");
     await act(async () => {});
     expect(markQuestions).not.toHaveBeenCalled();
   });

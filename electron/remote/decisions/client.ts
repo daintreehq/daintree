@@ -303,11 +303,18 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
   /** Sessions whose Host answered the list with its asks UNSUPPORTED: from before #17895. */
   private readonly beforeAsks = new WeakSet<DecisionsHostSession>();
   /**
-   * Sessions with a read of the list with its asks out. A Host answers that
-   * read with its list as it stands then, after any v1 push it sent before
-   * the read reached it, so such a push never supersedes the read.
+   * Reads of the list with its asks out, per session. A Host answers one with
+   * its list as it stands then, after any v1 push it sent before the read
+   * reached it, so such a push never supersedes the read.
    */
-  private readonly readingAsks = new WeakSet<DecisionsHostSession>();
+  private readonly readingAsks = new WeakMap<DecisionsHostSession, number>();
+  /**
+   * Sessions whose Host lists asks to this Shell: from then on it pushes only
+   * v2, so a v1 push that arrives later was sent before and is stale.
+   */
+  private readonly listsAsks = new WeakSet<DecisionsHostSession>();
+  /** The newest v2 list each session has delivered, by its `seq`. */
+  private readonly listSeqs = new WeakMap<DecisionsHostSession, number>();
   private readonly questionListeners = new Set<() => void>();
   private readonly now: () => number;
 
@@ -481,7 +488,7 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     let withAsks = !this.beforeAsks.has(session);
     try {
       if (withAsks) {
-        this.readingAsks.add(session);
+        this.readingAsks.set(session, (this.readingAsks.get(session) ?? 0) + 1);
         try {
           raw = await session.call(
             DecisionsLinkMethod.QUESTION_LIST_V2,
@@ -494,7 +501,9 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
           this.beforeAsks.add(session);
           withAsks = false;
         } finally {
-          this.readingAsks.delete(session);
+          const out = (this.readingAsks.get(session) ?? 1) - 1;
+          if (out > 0) this.readingAsks.set(session, out);
+          else this.readingAsks.delete(session);
         }
       }
       if (!withAsks) {
@@ -515,12 +524,17 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       }
       return;
     }
-    if (this.questionTurns.get(hostId) !== turn) return;
     if (withAsks) {
+      // Ordered by the Host's own count, not by turns: a push can arrive after a newer reply.
       const parsed = HostQuestionListV2Schema.safeParse(raw);
-      if (parsed.success) this.hearQuestions(hostId, session, parsed.data, parsed.data.asks);
+      if (!parsed.success) return;
+      this.listsAsks.add(session);
+      if (this.newerList(session, parsed.data.seq)) {
+        this.hearQuestions(hostId, session, parsed.data, parsed.data.asks);
+      }
       return;
     }
+    if (this.questionTurns.get(hostId) !== turn) return;
     const parsed = HostQuestionListSchema.safeParse(raw);
     if (parsed.success) this.hearQuestions(hostId, session, parsed.data);
   }
@@ -568,6 +582,13 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     this.questionsChanged();
   }
 
+  /** Whether `seq` is newer than any v2 list `session` delivered, taking it as the newest when it is. */
+  private newerList(session: DecisionsHostSession, seq: number): boolean {
+    if (seq <= (this.listSeqs.get(session) ?? 0)) return false;
+    this.listSeqs.set(session, seq);
+    return true;
+  }
+
   /** A list heard over the Host's current link, served to the owner this computer speaks as now. */
   private takesList(
     hostId: string,
@@ -613,6 +634,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       (payload) => {
         // A replaced link's list, or one served to another owner, moves nothing: not even a read's turn.
         if (!this.takesList(hostId, session, payload)) return null;
+        // Sent before the Host knew this Shell reads asks: what it listed since is newer.
+        if (this.listsAsks.has(session)) return null;
         // Newer than any read still waiting for its answer, except one of the list with its asks.
         if (!this.readingAsks.has(session)) {
           this.questionTurns.set(hostId, (this.questionTurns.get(hostId) ?? 0) + 1);
@@ -626,7 +649,8 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
       HostQuestionsChangedV2PayloadSchema,
       (payload) => {
         if (!this.takesList(hostId, session, payload)) return null;
-        this.questionTurns.set(hostId, (this.questionTurns.get(hostId) ?? 0) + 1);
+        this.listsAsks.add(session);
+        if (!this.newerList(session, payload.seq)) return null;
         this.hearQuestions(hostId, session, payload, payload.asks);
         return null;
       }

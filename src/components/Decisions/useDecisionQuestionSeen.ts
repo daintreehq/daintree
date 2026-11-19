@@ -71,7 +71,9 @@ export function useDecisionQuestionSeen(
   const sent = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!watched || hostId === null || projectId === null) return;
+    // Checked as it stands, not only as last heard: the reader can mount after the dialog
+    // opened (an empty inbox's first question) with no focus moving to say so.
+    if (!active || !isWatched(scope.current) || hostId === null || projectId === null) return;
     if (terminalId === null || questionId === null) return;
     const key = JSON.stringify([hostId, questionId, ask]);
     if (sent.current === key) return;
@@ -108,8 +110,9 @@ export function useDecisionQuestionSeen(
       retired = true;
       observer.disconnect();
     };
-    // `shown` is a dependency so a read that renders the entry looks for it again.
-  }, [watched, hostId, projectId, terminalId, questionId, ask, shown, scope]);
+    // `watched` re-runs it as focus or a cover comes and goes; `shown` so a read that renders
+    // the entry looks for it again.
+  }, [active, watched, hostId, projectId, terminalId, questionId, ask, shown, scope]);
 }
 
 /**

@@ -74,12 +74,10 @@ const OFF = { result: "off" } as const;
 
 /** What a Shell this Host doesn't serve its questions to is told: a list of none. */
 const NO_QUESTIONS = { hostId: null, owner: null, questions: [] } as const;
-const noQuestionsV2 = (): HostQuestionListV2Payload => ({
-  hostId: null,
-  owner: null,
-  questions: [],
-  asks: [],
-});
+/** A v2 list before the session's next `seq` is put on it. */
+type UnsequencedListV2 = Omit<HostQuestionListV2Payload, "seq">;
+
+const NO_QUESTIONS_V2: UnsequencedListV2 = { ...NO_QUESTIONS, questions: [], asks: [] };
 
 /** The longest owner ids a list can name, for sizing its envelope before knowing which owner. */
 const LONGEST_OWNER = { installationId: "x".repeat(64), ownerDeviceId: "x".repeat(64) };
@@ -123,7 +121,7 @@ function servedTo(list: HostQuestionList, owner: OwnerOf): HostQuestionListPaylo
 }
 
 /** `servedTo`, with what each of its questions in Needs you asks now (#17895). */
-function servedToV2(list: HostQuestionList, owner: OwnerOf): HostQuestionListV2Payload {
+function servedToV2(list: HostQuestionList, owner: OwnerOf): UnsequencedListV2 {
   const asks: { questionId: string; ask: string | null }[] = [];
   for (const question of list.questions) {
     const ask = list.asks?.get(question.reference.questionId);
@@ -212,8 +210,15 @@ export function installDecisionsHostWith(
   const beforeQuestions = new WeakSet<LinkSession>();
   /** Sessions whose Shell reads the list with its asks (#17895): their pushes carry them too. */
   const listsV2 = new WeakSet<LinkSession>();
-  /** The list as last bounded to send, so a push told again as v1 tells what holds now. */
-  let latestList: HostQuestionList | null = null;
+  /** The last `seq` each v2 session was sent, read or pushed. */
+  const listSeqs = new WeakMap<LinkSession, number>();
+  const sequenced = (session: LinkSession, list: UnsequencedListV2): HostQuestionListV2Payload => {
+    const seq = (listSeqs.get(session) ?? 0) + 1;
+    listSeqs.set(session, seq);
+    return { ...list, seq };
+  };
+  /** This Host's Decisions once loaded, so a list told again reads what it lists now. */
+  let loadedLifetime: DecisionsHostLifetime | null = null;
 
   /** The session's owner enrolled this Host and has Decisions on: only it reads the questions. */
   const servesQuestions = (session: LinkSession): boolean => {
@@ -225,23 +230,26 @@ export function installDecisionsHostWith(
   const tellQuestions = (session: LinkSession, list: HostQuestionList, owner: OwnerOf): void => {
     const v2 = listsV2.has(session);
     const payload: HostQuestionListPayload = v2 ? servedToV2(list, owner) : servedTo(list, owner);
+    // What was said, not when: the same list again isn't sent.
     const key = JSON.stringify(payload);
     if (toldQuestions.get(session) === key || beforeQuestions.has(session)) return;
     toldQuestions.set(session, key);
     const method = v2
       ? DecisionsLinkMethod.QUESTIONS_CHANGED_V2
       : DecisionsLinkMethod.QUESTIONS_CHANGED;
-    session.call(method, payload).catch((error: unknown) => {
+    const sent = v2 ? sequenced(session, payload as UnsequencedListV2) : payload;
+    session.call(method, sent).catch((error: unknown) => {
       const unsupported = (error as { code?: unknown } | null)?.code === "UNSUPPORTED";
       if (toldQuestions.get(session) === key) toldQuestions.delete(session);
       if (!unsupported) return;
       if (v2) {
-        // A Shell that read the list with its asks takes them pushed; one that doesn't hears v1,
-        // the list as it stands now, and only while this Host still serves it its questions.
+        // A Shell that read the list with its asks takes them pushed; one that doesn't hears v1:
+        // the list this Host's Decisions holds now, only while it still serves that session.
         listsV2.delete(session);
         const current = owners.get(session);
-        if (latestList !== null && current !== undefined && servesQuestions(session)) {
-          tellQuestions(session, latestList, current);
+        const now = loadedLifetime?.questions() ?? null;
+        if (now !== null && current !== undefined && servesQuestions(session)) {
+          tellQuestions(session, bounded(now), current);
         }
       } else {
         beforeQuestions.add(session);
@@ -256,7 +264,6 @@ export function installDecisionsHostWith(
     // A Host that stopped serving its questions says nothing: its owner keeps what it last heard.
     if (list === null) return;
     const sent = bounded(list);
-    latestList = sent;
     for (const [session, owner] of owners) {
       if (servesQuestions(session)) tellQuestions(session, sent, owner);
     }
@@ -280,14 +287,15 @@ export function installDecisionsHostWith(
   const followLifetime = (): Promise<DecisionsHostLifetime> | null => {
     if (!runtime || disposed) return null;
     if (!lifetime) {
-      const made = runtime.load().then((loadedLifetime) => {
+      const made = runtime.load().then((lifetimeOf) => {
         if (!disposed && offChanged === null) {
-          offChanged = loadedLifetime.onChanged(() => tellOwners(loadedLifetime));
-          offQuestions = loadedLifetime.onQuestionsChanged(() => pushQuestions(loadedLifetime));
+          loadedLifetime = lifetimeOf;
+          offChanged = lifetimeOf.onChanged(() => tellOwners(lifetimeOf));
+          offQuestions = lifetimeOf.onQuestionsChanged(() => pushQuestions(lifetimeOf));
           // Sessions told "not enrolled" before an enrollment hear what it is now.
-          tellOwners(loadedLifetime);
+          tellOwners(lifetimeOf);
         }
-        return loadedLifetime;
+        return lifetimeOf;
       });
       lifetime = made;
       // A failed load is tried again by the next announcement.
@@ -403,8 +411,7 @@ export function installDecisionsHostWith(
       const list = made.questions();
       const owner = owners.get(session);
       if (list === null || owner === undefined) return NO_QUESTIONS;
-      latestList = bounded(list);
-      const sent = servedTo(latestList, owner);
+      const sent = servedTo(bounded(list), owner);
       toldQuestions.set(session, JSON.stringify(sent));
       return sent;
     }
@@ -418,17 +425,16 @@ export function installDecisionsHostWith(
     if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
     // Its pushes carry the asks from now on, whatever this read answers.
     listsV2.add(session);
-    if (!servesQuestions(session)) return noQuestionsV2();
+    if (!servesQuestions(session)) return sequenced(session, NO_QUESTIONS_V2);
     const made = await followLifetime();
     if (!made || disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
-    if (!servesQuestions(session)) return noQuestionsV2();
+    if (!servesQuestions(session)) return sequenced(session, NO_QUESTIONS_V2);
     const list = made.questions();
     const owner = owners.get(session);
-    if (list === null || owner === undefined) return noQuestionsV2();
-    latestList = bounded(list);
-    const sent = servedToV2(latestList, owner);
+    if (list === null || owner === undefined) return sequenced(session, NO_QUESTIONS_V2);
+    const sent = servedToV2(bounded(list), owner);
     toldQuestions.set(session, JSON.stringify(sent));
-    return sent;
+    return sequenced(session, sent);
   };
 
   const cancelQuestion = async (

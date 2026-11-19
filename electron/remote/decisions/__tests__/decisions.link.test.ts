@@ -1816,6 +1816,7 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
         owner: SERVED,
         questions: [item(1)],
         asks: [{ questionId: first, ask: "msg_agent_0002" }],
+        seq: 1,
       };
     });
     const shell = shellOf([STUDIO]);
@@ -1823,6 +1824,44 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     await vi.waitFor(() =>
       expect(shell.client.hostQuestions()[0]?.asks?.get(first)).toBe("msg_agent_0002")
     );
+  });
+
+  it("drops a v1 push that arrives after the list with its asks, and an older v2 list after a newer one", async () => {
+    const { host, client } = await pair();
+    const first = item(1).reference.questionId;
+    const v2 = (seq: number, ask: string, questions = [item(1)]) => ({
+      hostId: QHOST,
+      owner: SERVED,
+      questions,
+      asks: [{ questionId: first, ask }],
+      seq,
+    });
+    host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+      runtime: RUNNING,
+    }));
+    host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V2, z.unknown(), () =>
+      v2(2, "msg_agent_0002")
+    );
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() =>
+      expect(shell.client.hostQuestions()[0]?.asks?.get(first)).toBe("msg_agent_0002")
+    );
+
+    // A large v1 push sent before the read reached the Host lands after its reply.
+    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED, {
+      hostId: QHOST,
+      owner: SERVED,
+      questions: [item(1), item(2)],
+    });
+    // So does a v2 push sent before the reply.
+    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED_V2, v2(1, "msg_agent_0001"));
+    expect(shell.client.hostQuestions()[0]?.questions).toEqual([item(1)]);
+    expect(shell.client.hostQuestions()[0]?.asks?.get(first)).toBe("msg_agent_0002");
+
+    // A newer one is taken.
+    await host.call(DecisionsLinkMethod.QUESTIONS_CHANGED_V2, v2(3, "msg_agent_0003"));
+    expect(shell.client.hostQuestions()[0]?.asks?.get(first)).toBe("msg_agent_0003");
   });
 
   it("reads a Host from before #17895 without asks, asking for them once per link", async () => {

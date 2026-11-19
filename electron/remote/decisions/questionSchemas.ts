@@ -159,13 +159,25 @@ export const HostQuestionAskSchema = z
 /** The asks a v2 list carries beside its questions, at most one per question. */
 const Asks = z.array(z.unknown()).max(MAX_HOST_QUESTIONS);
 
+/**
+ * Where a v2 list stands among those one session was sent, read or pushed:
+ * it rises with each, so a Shell keeps the newest whatever order they arrive
+ * in. A reply and a push travel apart on the link, and a large one comes in
+ * parts, so arrival order alone can't say.
+ */
+const ListSeq = Count;
+
 /** A Host's list as `QUESTION_LIST_V2` reads it: the v1 list, with the asks (#17895). */
-export const HostQuestionListV2Schema = HostQuestionListSchema.extend({ asks: Asks }).strict();
+export const HostQuestionListV2Schema = HostQuestionListSchema.extend({
+  asks: Asks,
+  seq: ListSeq,
+}).strict();
 export type HostQuestionListV2Payload = z.infer<typeof HostQuestionListV2Schema>;
 
 /** A Host's pushed v2 list (#17895): `HostQuestionsChangedPayloadSchema`, with the asks. */
 export const HostQuestionsChangedV2PayloadSchema = HostQuestionsChangedPayloadSchema.extend({
   asks: Asks,
+  seq: ListSeq,
 }).strict();
 
 /** A v2 read of the list names nothing: the owner it serves is the session's. */
