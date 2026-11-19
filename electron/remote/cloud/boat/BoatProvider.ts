@@ -407,10 +407,15 @@ export class BoatProvider implements CloudProvider {
 
   async stop(
     credentials: ProviderCredentials,
-    resourceId: string
+    resourceId: string,
+    options: { once?: boolean } = {}
   ): Promise<ProviderResource | null> {
     return boatStopResource(
-      await this.clientFor(credentials.apiUrl).stopSandbox(this.ctx(credentials), resourceId)
+      await this.clientFor(credentials.apiUrl).stopSandbox(
+        this.ctx(credentials),
+        resourceId,
+        options.once ? { once: true } : {}
+      )
     );
   }
 

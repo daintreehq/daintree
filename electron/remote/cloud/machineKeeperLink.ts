@@ -99,6 +99,14 @@ export const GuestPowerOffStatusSchema = z.object({
   armed: z.boolean(),
   /** Why it won't, in a sentence; null while armed or never asked. */
   problem: z.string().max(500).nullable(),
+  /**
+   * Set only on the answer to a grant whose machine the metadata server
+   * confirmed and whose OS then wouldn't let it power off (sudo wanting a
+   * password, no systemctl): the machine is the one asked about and only the
+   * power-off stands in the way, so a stop from the provider's API still fits
+   * (#17924). Absent from hosts from before it, which counts as not confirmed.
+   */
+  powerOffProbeRefused: z.boolean().optional(),
 });
 export type GuestPowerOffStatus = z.infer<typeof GuestPowerOffStatusSchema>;
 

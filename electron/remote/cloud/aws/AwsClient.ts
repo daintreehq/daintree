@@ -654,9 +654,19 @@ export class AwsClient {
     return parseStateChange(await this.instanceAction(ctx, "StartInstances", instanceId));
   }
 
-  /** A normal stop that lets the OS shut down. Never forced from here. */
-  async stopInstance(ctx: AwsRequestContext, instanceId: string): Promise<string | null> {
-    return parseStateChange(await this.instanceAction(ctx, "StopInstances", instanceId));
+  /**
+   * A normal stop that lets the OS shut down. Never forced from here. `once`
+   * sends it a single time, for a stop whose reason has to be checked again
+   * before any second try.
+   */
+  async stopInstance(
+    ctx: AwsRequestContext,
+    instanceId: string,
+    options: { once?: boolean } = {}
+  ): Promise<string | null> {
+    return parseStateChange(
+      await this.instanceAction(ctx, "StopInstances", instanceId, options.once !== true)
+    );
   }
 
   async terminateInstance(ctx: AwsRequestContext, instanceId: string): Promise<string | null> {
@@ -767,7 +777,8 @@ export class AwsClient {
   private async instanceAction(
     ctx: AwsRequestContext,
     action: "StartInstances" | "StopInstances" | "TerminateInstances",
-    instanceId: string
+    instanceId: string,
+    retry = true
   ): Promise<XmlNode> {
     if (!isEc2InstanceId(instanceId)) {
       throw new AwsApiError("invalid-request", "Not an EC2 instance id", null, null, null);
@@ -775,7 +786,7 @@ export class AwsClient {
     // A repeat of a terminate joins the one under way; a start or stop resent after a lost answer
     // may be refused as the instance's state already moved, which the provider reads as joining it.
     return this.call(ctx, "ec2", action, [["InstanceId.1", instanceId]], {
-      retry: true,
+      retry,
       mutation: true,
     });
   }

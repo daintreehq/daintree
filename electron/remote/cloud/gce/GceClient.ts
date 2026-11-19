@@ -186,6 +186,8 @@ interface RequestOptions {
   timeoutMs?: number;
   /** A write: once one attempt may have reached Google, a later refusal no longer proves nothing happened. */
   mutation?: boolean;
+  /** Sent a single time: no resend after a lost answer, a 5xx or throttling. */
+  once?: boolean;
 }
 
 /**
@@ -387,13 +389,24 @@ export class GceClient {
     return this.mutate(ctx, "POST", `${this.instancePath(ctx, zone, instance)}/resume`, undefined);
   }
 
-  /** A normal stop: the guest gets its shutdown, and the disks are kept. */
+  /**
+   * A normal stop: the guest gets its shutdown, and the disks are kept.
+   * `once` sends it a single time, for a stop whose reason has to be checked
+   * again before any second try.
+   */
   async stopInstance(
     ctx: GceRequestContext,
     zone: string,
-    instance: string
+    instance: string,
+    options: { once?: boolean } = {}
   ): Promise<GceOperation> {
-    return this.mutate(ctx, "POST", `${this.instancePath(ctx, zone, instance)}/stop`, undefined);
+    return this.mutate(
+      ctx,
+      "POST",
+      `${this.instancePath(ctx, zone, instance)}/stop`,
+      undefined,
+      options.once === true
+    );
   }
 
   /** Replaces the scheduling policy; Compute Engine takes a runtime limit only while the instance is stopped. */
@@ -480,11 +493,12 @@ export class GceClient {
     ctx: GceRequestContext,
     method: "POST" | "DELETE",
     path: string,
-    body: unknown
+    body: unknown,
+    once = false
   ): Promise<GceOperation> {
     return this.call(
       ctx,
-      { method, path, query: { requestId: crypto.randomUUID() }, body, mutation: true },
+      { method, path, query: { requestId: crypto.randomUUID() }, body, mutation: true, once },
       gceOperationSchema
     );
   }
@@ -525,7 +539,9 @@ export class GceClient {
     let freshToken = false;
     let authRetried = false;
     let possiblyDelivered = false;
-    for (let attempt = 0; attempt < MAX_ATTEMPTS;) {
+    // A request refused for its token did nothing, so its fresh-token try is still the one send.
+    const attempts = request.once ? 1 : MAX_ATTEMPTS;
+    for (let attempt = 0; attempt < attempts;) {
       try {
         if (attempt > 0 && !freshToken) {
           const backoff = Math.min(500 * 2 ** (attempt - 1), 4_000) + Math.random() * 250;

@@ -54,6 +54,12 @@ export class CloudGuestPowerOff {
   private readonly retryAt = new Map<string, number>();
   /** A host's word that a take-back didn't last yet, kept until a reply on the current link says it did. */
   private readonly unconfirmed = new Map<string, string>();
+  /**
+   * The link on which a machine the provider found fit was confirmed by its
+   * host, which refused only the power-off itself (#17924): a stop through
+   * the provider's API still fits it, for as long as that link lasts.
+   */
+  private readonly standIns = new Map<string, LinkSession>();
   private disposed = false;
 
   constructor(private readonly deps: CloudGuestPowerOffDeps) {}
@@ -65,6 +71,18 @@ export class CloudGuestPowerOff {
   /** Why this machine can't stop itself when idle, as last found here; null when nothing stands in the way. */
   problemFor(bindingId: string): string | null {
     return this.problems.get(bindingId) ?? null;
+  }
+
+  /**
+   * Whether the machine can't stop itself only because its OS won't let its
+   * host power it off, as its host said on its current link: a stop through
+   * the provider's API still keeps its disk, so a linked Shell may make it on
+   * an idle time it claims (#17924).
+   */
+  standsInFor(bindingId: string): boolean {
+    const session = this.standIns.get(bindingId);
+    const hostId = this.deps.store.binding(bindingId)?.hostId;
+    return Boolean(session?.isOpen && hostId && this.deps.sessionFor(hostId) === session);
   }
 
   /** A link to a host came up: make sure its machine may stop itself. */
@@ -97,7 +115,13 @@ export class CloudGuestPowerOff {
   /** Forgets what was found for bindings no longer stored; the keeper may not pass again to do it. */
   forgetRemoved(bindings = this.deps.store.bindings()): void {
     const live = new Set(bindings.map((binding) => binding.id));
-    for (const map of [this.problems, this.checkedAt, this.retryAt, this.unconfirmed]) {
+    for (const map of [
+      this.problems,
+      this.checkedAt,
+      this.retryAt,
+      this.unconfirmed,
+      this.standIns,
+    ]) {
       for (const id of map.keys()) if (!live.has(id)) map.delete(id);
     }
   }
@@ -105,6 +129,7 @@ export class CloudGuestPowerOff {
   dispose(): void {
     this.disposed = true;
     this.queued.clear();
+    this.standIns.clear();
   }
 
   arm(hostId: HostId, session: LinkSession): Promise<void> {
@@ -159,7 +184,16 @@ export class CloudGuestPowerOff {
   }
 
   private clearProblem(bindingId: string): void {
-    if (this.problems.delete(bindingId)) this.deps.changed();
+    const standIn = this.standIns.delete(bindingId);
+    if (this.problems.delete(bindingId) || standIn) this.deps.changed();
+  }
+
+  /** Records the link a stand-in stop fits on, or that none does. */
+  private setStandIn(bindingId: string, session: LinkSession | null): void {
+    if (this.standIns.get(bindingId) === (session ?? undefined)) return;
+    if (session) this.standIns.set(bindingId, session);
+    else this.standIns.delete(bindingId);
+    this.deps.changed();
   }
 
   private async armOnce(bindingId: string, hostId: HostId, session: LinkSession): Promise<void> {
@@ -180,6 +214,7 @@ export class CloudGuestPowerOff {
       const said =
         error instanceof AppError && error.userMessage ? error.userMessage : String(error);
       this.checkedAt.set(bindingId, this.now());
+      this.setStandIn(bindingId, null);
       this.setProblem(bindingId, `${CANT} ${said}`);
       this.retryAt.set(bindingId, this.now() + RETRY_MS);
       return;
@@ -191,6 +226,8 @@ export class CloudGuestPowerOff {
     this.checkedAt.set(bindingId, this.now());
     if (!check.eligible) {
       const said = () => `${CANT} ${check.problem}`;
+      // Unsuitable to the provider: never stopped from here either.
+      this.setStandIn(bindingId, null);
       this.setProblem(bindingId, said());
       // Given before, perhaps by another device: no longer safe, so taken back. A take-back that
       // may not have arrived, or that the host couldn't make last, is sent again soon, and the
@@ -220,6 +257,7 @@ export class CloudGuestPowerOff {
     } catch (error) {
       if (!this.reaches(hostId, bindingId, resourceId, session)) return;
       if (errorCode(error) === "UNSUPPORTED") {
+        this.setStandIn(bindingId, null);
         this.setProblem(
           bindingId,
           "The Daintree on this machine is too old to stop it by itself. Update it to let it."
@@ -234,6 +272,10 @@ export class CloudGuestPowerOff {
       this.clearProblem(bindingId);
       return;
     }
+    // Only the host's word that it is this machine and that only its OS refused: never a mismatch,
+    // a metadata server it couldn't read, another OS, or a host from before it said so.
+    const standIn = !status.armed && status.problem !== null && status.powerOffProbeRefused === true;
+    this.setStandIn(bindingId, standIn ? session : null);
     this.setProblem(
       bindingId,
       status.problem ?? `${CANT} its host didn't take the permission to power it off.`

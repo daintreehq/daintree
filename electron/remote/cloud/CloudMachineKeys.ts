@@ -41,6 +41,17 @@ const REFUSED: ReadonlySet<CloudHostError["code"]> = new Set([
 /** The host's own answer to an arm: the key was refused, never lost. */
 const ARM_REFUSALS: ReadonlySet<string> = new Set(["VALIDATION", "UNSUPPORTED", "PERMISSION"]);
 
+/**
+ * Refusals of a key for the machine that leave the account's own key able to
+ * stop it normally (#17924): one without the right to make keys, or a
+ * provider not making any. An account key that no longer works can't stop it
+ * either, and a billing refusal says nothing of a stop.
+ */
+const STAND_IN_REFUSALS: ReadonlySet<CloudHostError["code"]> = new Set([
+  "permission",
+  "unsupported",
+]);
+
 export interface CloudMachineKeysDeps {
   store: CloudHostStore;
   accounts: Pick<CloudAccountService, "provider" | "providerUnavailable" | "credentials">;
@@ -89,10 +100,20 @@ export class CloudMachineKeys {
   private readonly queued = new Map<string, { hostId: HostId; session: LinkSession }>();
   /** Records whose create is out right now: never looked for or revoked meanwhile. */
   private readonly issuing = new Set<string>();
-  /** Why a machine can't stop itself, by binding, with the account key it was found with. */
+  /**
+   * Why a machine can't stop itself, by binding, with the account key it was
+   * found with. `standIn` is the link on which it was found to hold no key for
+   * a reason that leaves the account's own stop (#17924), or null.
+   */
   private readonly problems = new Map<
     string,
-    { message: string; at: number; keyHint: string | null; retry: boolean }
+    {
+      message: string;
+      at: number;
+      keyHint: string | null;
+      retry: boolean;
+      standIn: LinkSession | null;
+    }
   >();
   /** When a linked machine was last asked what it holds. */
   private readonly checkedAt = new Map<string, number>();
@@ -114,6 +135,17 @@ export class CloudMachineKeys {
     return this.problems.get(bindingId)?.message ?? null;
   }
 
+  /**
+   * Whether the machine holds no key of its own for a reason that leaves the
+   * account's normal stop, as found on its current link: a linked Shell may
+   * stop it on an idle time it claims (#17924).
+   */
+  standsInFor(bindingId: string): boolean {
+    const session = this.problems.get(bindingId)?.standIn;
+    const hostId = this.deps.store.binding(bindingId)?.hostId;
+    return Boolean(session?.isOpen && hostId && this.deps.sessionFor(hostId) === session);
+  }
+
   /** A link to a host came up: make sure its machine holds a working key. */
   sessionOpened(hostId: HostId, session: LinkSession): void {
     void this.arm(hostId, session);
@@ -127,7 +159,9 @@ export class CloudMachineKeys {
   async tick(): Promise<void> {
     if (this.disposed) return;
     const now = this.now();
-    for (const binding of this.deps.store.bindings()) {
+    const bindings = this.deps.store.bindings();
+    this.forgetRemoved(bindings);
+    for (const binding of bindings) {
       if (!binding.hostId) continue;
       const session = this.deps.sessionFor(binding.hostId);
       if (!session?.isOpen) continue;
@@ -171,9 +205,18 @@ export class CloudMachineKeys {
     throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
   }
 
+  /** Forgets what was found for bindings no longer stored, links they were found on included. */
+  private forgetRemoved(bindings: readonly { id: string }[]): void {
+    const live = new Set(bindings.map((binding) => binding.id));
+    for (const map of [this.problems, this.checkedAt, this.armRetryAt, this.issueNotBefore]) {
+      for (const id of map.keys()) if (!live.has(id)) map.delete(id);
+    }
+  }
+
   dispose(): void {
     this.disposed = true;
     this.queued.clear();
+    this.problems.clear();
   }
 
   arm(hostId: HostId, session: LinkSession): Promise<void> {
@@ -221,15 +264,16 @@ export class CloudMachineKeys {
     bindingId: string,
     message: string,
     keyHint: string | null,
-    retry: boolean
+    retry: boolean,
+    standIn: LinkSession | null = null
   ): void {
-    const before = this.problems.get(bindingId)?.message;
-    this.problems.set(bindingId, { message, at: this.now(), keyHint, retry });
+    const before = this.problems.get(bindingId);
+    this.problems.set(bindingId, { message, at: this.now(), keyHint, retry, standIn });
     if (retry) {
       this.armRetryAt.set(bindingId, this.now() + RETRY_MS);
       this.issueNotBefore.set(bindingId, this.now() + RETRY_MS);
     }
-    if (before !== message) this.deps.changed();
+    if (before?.message !== message || (before?.standIn ?? null) !== standIn) this.deps.changed();
   }
 
   private clearProblem(bindingId: string): void {
@@ -304,6 +348,12 @@ export class CloudMachineKeys {
       refused.keyHint === account.keyHint &&
       now - refused.at < REFUSED_RETRY_MS
     ) {
+      // Still holding no key, as this link's host just said: a refusal that leaves the account's own
+      // stop carries over to it, never asking for another key before its hour is up.
+      if (refused.standIn && refused.standIn !== session) {
+        refused.standIn = session;
+        this.deps.changed();
+      }
       return;
     }
     // A failure that may pass waits out its pause, however often the link comes back.
@@ -382,7 +432,8 @@ export class CloudMachineKeys {
           bindingId,
           `This machine can't stop itself when idle: ${described.message}`,
           account.keyHint,
-          false
+          false,
+          session
         );
         return;
       }
@@ -392,7 +443,8 @@ export class CloudMachineKeys {
           bindingId,
           `This machine can't stop itself when idle: ${provider.info(process.platform).name} didn't let this account's API key give it a key of its own. ${described.message}`,
           account.keyHint,
-          false
+          false,
+          STAND_IN_REFUSALS.has(described.code) ? session : null
         );
         return;
       }
