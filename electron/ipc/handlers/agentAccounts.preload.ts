@@ -4,6 +4,8 @@ export const AGENT_ACCOUNTS_METHOD_CHANNELS = {
   add: "agent-accounts:add",
   remove: "agent-accounts:remove",
   rename: "agent-accounts:rename",
+  listChoicesAway: "agent-accounts:list-choices-away",
+  applyEverywhere: "agent-accounts:apply-everywhere",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof AGENT_ACCOUNTS_METHOD_CHANNELS;

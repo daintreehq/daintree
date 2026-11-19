@@ -17,6 +17,12 @@ export interface GeneratedElectronAPI {
     add(
       ...args: IpcInvokeMap["agent-accounts:add"]["args"]
     ): Promise<IpcInvokeMap["agent-accounts:add"]["result"]>;
+    applyEverywhere(
+      ...args: IpcInvokeMap["agent-accounts:apply-everywhere"]["args"]
+    ): Promise<IpcInvokeMap["agent-accounts:apply-everywhere"]["result"]>;
+    listChoicesAway(
+      ...args: IpcInvokeMap["agent-accounts:list-choices-away"]["args"]
+    ): Promise<IpcInvokeMap["agent-accounts:list-choices-away"]["result"]>;
     remove(
       ...args: IpcInvokeMap["agent-accounts:remove"]["args"]
     ): Promise<IpcInvokeMap["agent-accounts:remove"]["result"]>;
