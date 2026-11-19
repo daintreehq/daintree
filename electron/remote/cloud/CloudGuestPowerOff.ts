@@ -143,7 +143,9 @@ export class CloudGuestPowerOff {
     const bindingId = binding.id;
     const running = this.arming.get(bindingId);
     if (running) {
-      if (running.session !== session || options.again) {
+      // A link since replaced never takes the place of the current link's queued look.
+      const current = session.isOpen && this.deps.sessionFor(hostId) === session;
+      if (current && (running.session !== session || options.again)) {
         this.queued.set(bindingId, { hostId, session });
       }
       return running.promise;

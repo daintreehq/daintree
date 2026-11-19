@@ -1341,6 +1341,7 @@ describe("AwsProvider", () => {
     fake.instances[0]!.state = "running";
     const stop = vi.spyOn(client, "stopInstance");
     await provider.stop(credentials, resourceId, { once: true });
+    expect(stop).toHaveBeenCalledTimes(1);
     expect(stop).toHaveBeenCalledWith(expect.anything(), fake.instances[0]!.id, {
       once: true,
     });

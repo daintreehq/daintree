@@ -542,6 +542,28 @@ describe("standing in for a refused power-off (#17924)", () => {
     expect(env.guest.standsInFor(BINDING)).toBe(false);
   });
 
+  it("keeps the new link's queued look when a replaced link asks again", async () => {
+    const env = setup();
+    let release!: () => void;
+    env.check.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ eligible: true as const, target: TARGET });
+        })
+    );
+    const old = env.session;
+    const first = env.guest.arm(HOST, old);
+    await vi.waitFor(() => expect(env.check).toHaveBeenCalledTimes(1));
+    const next = env.newSession();
+    void env.guest.arm(HOST, next);
+    void env.guest.arm(HOST, old, { again: true });
+    release();
+    await first;
+    await vi.waitFor(() => expect(env.call).toHaveBeenCalledTimes(1));
+    expect(env.check).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(env.keeper.status().armed).toBe(true));
+  });
+
   it("takes a fresh look behind one under way when asked again on the same link", async () => {
     const env = setup();
     let release!: () => void;
