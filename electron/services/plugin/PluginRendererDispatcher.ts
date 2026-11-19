@@ -572,22 +572,28 @@ export class PluginRendererDispatcher {
    * local view bound to a Remote Host lists that host's agents, under that
    * host's terminal ids; every other answer is this machine's, a Shell's for a
    * Host plugin included, since the plugin runs where its terminals do.
+   * `projectId` is the project on that machine the panes belong to, when the
+   * answer says: the bound project, or the answering view's own. Null when no
+   * view answered, or a Host plugin's ambient read went to its Shell.
    */
   async sendAgentsListWithHost(
     projectId?: PluginTargetProjectId,
     pluginId?: string
-  ): Promise<{ hostId: string; agents: PluginAgentPaneObservation[] }> {
+  ): Promise<{ hostId: string; projectId: string | null; agents: PluginAgentPaneObservation[] }> {
     const frontend = projectId != null ? null : this.routedFrontend(null, pluginId);
     if (projectId != null || (frontend !== null && frontend.kind !== "local")) {
       return {
         hostId: LOCAL_HOST_ID,
+        projectId: projectId ?? null,
         agents: await this.sendAgentsListToRenderer(projectId, pluginId),
       };
     }
     const read = await this.readAmbientAgentsView(pluginId);
-    if (read === null) return { hostId: LOCAL_HOST_ID, agents: [] };
-    const hostId = read.viewKey === null ? LOCAL_HOST_ID : parseHostScopedKey(read.viewKey).hostId;
-    return { hostId, agents: read.agents };
+    if (read === null) return { hostId: LOCAL_HOST_ID, projectId: null, agents: [] };
+    if (read.viewKey === null)
+      return { hostId: LOCAL_HOST_ID, projectId: null, agents: read.agents };
+    const scoped = parseHostScopedKey(read.viewKey);
+    return { hostId: scoped.hostId, projectId: scoped.projectId, agents: read.agents };
   }
 
   /**

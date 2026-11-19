@@ -84,6 +84,14 @@ export interface RunWaitRecord {
 export type RunCanopyRefinement =
   | {
       kind: "asked";
+      /**
+       * Which ask the reading saw: an approval of something the agent is about
+       * to do, or a question only the user can answer. Both place the run the
+       * same way; a reader may still sort them, since a policy can settle an
+       * approval and never a question. Absent on a row from a Remote Host
+       * whose build predates it.
+       */
+      ask?: "approval" | "question";
       /** The question, verbatim from the screen. */
       quote: string;
       /** When the screen behind the verdict was read (epoch ms). */

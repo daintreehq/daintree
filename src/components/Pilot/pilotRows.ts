@@ -3,8 +3,8 @@ import { AGENT_BUCKET_LABEL } from "@/lib/agentStateVocabulary";
 import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
 import {
   bandForRun,
+  canopyPlacingRun,
   isAgentReportedNeed,
-  runCanopyPlacement,
   bandLabel,
   bandTimestamp,
   compareWithinBand,
@@ -477,8 +477,7 @@ function canopyEvidenceFor(
   band: FleetBand,
   nowMs: number
 ): CanopyEvidenceParts | null {
-  if (band === "parked" || band === "snoozed" || isAgentReportedNeed(run)) return null;
-  const placement = runCanopyPlacement(run);
+  const placement = canopyPlacingRun(run, band);
   return placement === undefined ? null : canopyEvidenceParts(placement, nowMs);
 }
 

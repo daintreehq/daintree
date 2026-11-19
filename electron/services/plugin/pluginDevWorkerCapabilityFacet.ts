@@ -46,6 +46,7 @@ import { validatePluginWorktreeReviewChecks } from "../../../shared/utils/plugin
 import { validatePluginTerminalStatus } from "../../../shared/utils/pluginTerminalStatus.js";
 import { validatePluginPanelActivity } from "../../../shared/utils/pluginPanelActivity.js";
 import {
+  normalizePluginAgentPlacement,
   normalizePluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
 } from "../../../shared/utils/pluginAllAgentsSnapshot.js";
@@ -653,7 +654,17 @@ export class PluginDevWorkerCapabilityFacet {
       // capability gate, the consent prompt and the project binding. Grace
       // values match the host's own unload answers ([] / cancelled).
       agents: {
-        list: () => this.rpc.callWithGrace<PluginAgentPane[]>("agents.list", undefined, []),
+        // Each pane's placement is rebuilt and frozen again after the clone.
+        // Main already decided the quote, so whatever it sent is kept.
+        list: () =>
+          this.rpc.callWithGrace<PluginAgentPane[]>("agents.list", undefined, []).then((panes) =>
+            Array.isArray(panes)
+              ? panes.map(({ band, canopy, ...pane }) => ({
+                  ...pane,
+                  ...normalizePluginAgentPlacement({ band, canopy }, { withQuotes: true }),
+                }))
+              : []
+          ),
         // Re-frozen on arrival: the port's structured clone drops main's freeze.
         listAll: () =>
           this.rpc
