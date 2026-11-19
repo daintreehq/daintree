@@ -75,6 +75,22 @@ describe("assistantPolicySkips (#16752)", () => {
     ).toBe(true);
   });
 
+  // The add's checklist is where the person ticks each folder (#17079): no
+  // mode skips it, and it can't be ticked away under ask-except either.
+  it("never skips adding agent accounts, in any mode", () => {
+    for (const mode of ["inherit", "always-ask", "never-ask", "ask-except", undefined] as const) {
+      const policy = resolveAssistantConfirmationPolicy(mode, ["agent.addAccount"], true);
+      expect(assistantPolicySkips(policy, "agent.addAccount"), String(mode)).toBe(false);
+    }
+    // The same never-ask still skips everything else it did.
+    expect(
+      assistantPolicySkips(
+        resolveAssistantConfirmationPolicy("never-ask", [], false),
+        "agent.createPreset"
+      )
+    ).toBe(true);
+  });
+
   it("reads ask-except as a valid mode that skips nothing on its own", () => {
     expect(isHelpAssistantDaintreeConfirmations("ask-except")).toBe(true);
     expect(assistantSkipsDaintreeConfirmations("ask-except", true)).toBe(false);
