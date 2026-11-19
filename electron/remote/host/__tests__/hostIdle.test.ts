@@ -175,23 +175,23 @@ describe("installHostIdle (#17357)", () => {
     const dispose = installHostIdle(sessionHost);
     await vi.advanceTimersByTimeAsync(0);
     const endsAt = idle().idleEndsAt!;
+    const idleTime = idle().idleAfterMinutes * MINUTE;
 
     // Ten seconds before the idle time ends, five after the last check.
-    await vi.advanceTimersByTimeAsync(30 * MINUTE - 10_000);
+    await vi.advanceTimersByTimeAsync(idleTime - 10_000);
     sessionHost.servesViews = true;
     sessionHost.openView();
     sessionHost.servesViews = false;
     expect(idle().busy).toBe(true);
 
+    // The check that ends the old idle time can't see the window, but it was
+    // counted: the first check to find none starts a full idle time again.
     await vi.advanceTimersByTimeAsync(endsAt - Date.now());
-    // The last look before a stop can't see the window, but it was counted:
-    // the first check to find none starts a full idle time again.
+    const restarted = { busy: false, lastWorkAt: endsAt, idleEndsAt: endsAt + idleTime };
+    expect(idle()).toMatchObject(restarted);
+    // And so is the last look before a stop.
     await getRemoteService("hostIdle")!.checkFresh();
-    expect(idle()).toMatchObject({
-      busy: false,
-      lastWorkAt: endsAt,
-      idleEndsAt: endsAt + 30 * MINUTE,
-    });
+    expect(idle()).toMatchObject(restarted);
     dispose();
   });
 
@@ -200,8 +200,9 @@ describe("installHostIdle (#17357)", () => {
     const dispose = installHostIdle(sessionHost);
     await vi.advanceTimersByTimeAsync(0);
     const endsAt = idle().idleEndsAt!;
+    const idleTime = idle().idleAfterMinutes * MINUTE;
 
-    await vi.advanceTimersByTimeAsync(30 * MINUTE - 10_000);
+    await vi.advanceTimersByTimeAsync(idleTime - 10_000);
     sessionHost.servesViews = true;
     sessionHost.transport(true);
     sessionHost.servesViews = false;
@@ -209,30 +210,28 @@ describe("installHostIdle (#17357)", () => {
     expect(idle().busy).toBe(true);
 
     await vi.advanceTimersByTimeAsync(endsAt - Date.now());
+    const restarted = { busy: false, lastWorkAt: endsAt, idleEndsAt: endsAt + idleTime };
+    expect(idle()).toMatchObject(restarted);
     await getRemoteService("hostIdle")!.checkFresh();
-    expect(idle()).toMatchObject({
-      busy: false,
-      lastWorkAt: endsAt,
-      idleEndsAt: endsAt + 30 * MINUTE,
-    });
+    expect(idle()).toMatchObject(restarted);
     dispose();
   });
 
-  it("leaves the idle time running for a background link, or a link dropping (#17920)", async () => {
+  it("leaves the idle time running when a link only drops (#17920)", async () => {
+    // A link with no view raises nothing at all (SessionHost.test.ts); one
+    // that drops takes its views away, which is no new work.
     const sessionHost = fakeSessionHost();
     const dispose = installHostIdle(sessionHost);
     await vi.advanceTimersByTimeAsync(0);
     const endsAt = idle().idleEndsAt!;
 
-    // A summary-only link raises nothing here; a dropped one takes work away.
-    await vi.advanceTimersByTimeAsync(30 * MINUTE - 10_000);
+    await vi.advanceTimersByTimeAsync(idle().idleAfterMinutes * MINUTE - 10_000);
     sessionHost.transport(false);
     expect(idle()).toMatchObject({ busy: false, idleEndsAt: endsAt });
 
     await vi.advanceTimersByTimeAsync(endsAt - Date.now());
     await getRemoteService("hostIdle")!.checkFresh();
     expect(idle()).toMatchObject({ busy: false, idleEndsAt: endsAt });
-    expect(idle().idleEndsAt).toBeLessThanOrEqual(Date.now());
     dispose();
   });
 
@@ -240,6 +239,7 @@ describe("installHostIdle (#17357)", () => {
     const sessionHost = fakeSessionHost();
     const dispose = installHostIdle(sessionHost);
     await vi.advanceTimersByTimeAsync(0);
+    expect(sessionHost.listeners).toBe(2);
     dispose();
 
     expect(getRemoteService("hostIdle")).toBeUndefined();
