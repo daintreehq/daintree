@@ -63,6 +63,8 @@ export interface AssistantPaneCreationLedger {
   supersede(drafts: readonly OwnedResourceDraft[]): void;
 }
 
+const TERMINAL: OwnedResourceKind = "terminal";
+
 /** A kept record whose pane hasn't come back in this long is dropped. */
 export const STORED_ASSISTANT_PANE_CREATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -191,11 +193,11 @@ function forgetConversationRows(holder: string): boolean {
  */
 export const assistantPaneCreationObserver: OwnershipRecordObserver = {
   created(kind: OwnedResourceKind, id: string): void {
-    if (kind !== "terminal" || persistence === null) return;
+    if (kind !== TERMINAL || persistence === null) return;
     if (forgetRow(id)) persist();
   },
   held(holder: string, record: OwnedResourceRecord, durable: boolean): void {
-    if (record.kind !== "terminal" || persistence === null) return;
+    if (record.kind !== TERMINAL || persistence === null) return;
     // Anything kept for the id went when it was created; this only adds.
     const scope = durable && record.workspaceId !== undefined ? scopeOf(holder) : null;
     if (scope === null) return;
@@ -214,7 +216,7 @@ export const assistantPaneCreationObserver: OwnershipRecordObserver = {
     persist();
   },
   released(holder: string, record: OwnedResourceRecord): void {
-    if (record.kind !== "terminal" || persistence === null || quitting) return;
+    if (record.kind !== TERMINAL || persistence === null || quitting) return;
     const kept = stored.get(record.id);
     if (kept === undefined || conversationKeyOf(kept) !== holder) return;
     forgetRow(record.id);

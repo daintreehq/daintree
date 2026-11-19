@@ -829,17 +829,16 @@ describe("ownership recording coverage", () => {
 });
 
 describe("ResourceOwnershipLedger and what a restart keeps (#16845)", () => {
+  const readable = (holder: string) => holder.split("\u0000").join("|");
+
   function observed() {
     const events: string[] = [];
     const ledger = new ResourceOwnershipLedger({
       created: (kind, id) => events.push(`created ${kind}:${id}`),
       held: (holder, record, durable) =>
-        events.push(
-          `held ${holder.replace(/\u0000/g, "|")} ${record.id}${durable ? "" : " named"}`
-        ),
-      released: (holder, record) =>
-        events.push(`released ${holder.replace(/\u0000/g, "|")} ${record.id}`),
-      dropped: (holder) => events.push(`dropped ${holder.replace(/\u0000/g, "|")}`),
+        events.push(`held ${readable(holder)} ${record.id}${durable ? "" : " named"}`),
+      released: (holder, record) => events.push(`released ${readable(holder)} ${record.id}`),
+      dropped: (holder) => events.push(`dropped ${readable(holder)}`),
     });
     return { ledger, events };
   }
