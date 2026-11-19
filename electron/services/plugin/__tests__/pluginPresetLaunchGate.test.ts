@@ -179,6 +179,14 @@ describe("gatePluginPresetLaunch", () => {
       (await summaryFor({ settings: { agents: { codex: { customPresets: [work] } } } as never }))
         .continuesAtLimitReset
     ).toBe(true);
+    // Nor is an off preset described as armed.
+    expect(
+      (
+        await summaryFor({
+          settings: { agents: { codex: { customPresets: [{ id: "work", name: "Work" }] } } } as never,
+        })
+      ).continuesAtLimitReset
+    ).toBeUndefined();
     // A repository's preset can't turn it on.
     expect(
       (await summaryFor({ settings: { agents: {} } as never, projectPresets: [work] }))
