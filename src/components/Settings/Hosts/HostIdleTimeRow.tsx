@@ -140,11 +140,15 @@ export function HostIdleTimeRow({
   const withConsequence = (text: string) =>
     consequence ? `${/[.!?]$/.test(text) ? text : `${text}.`} ${consequence}` : text;
 
+  // What the host's latest summary says of its clock, whether or not the setting could be read:
+  // a confirmed self-stop shows there too.
+  const clock = connected && idle ? idleClockSentence(idle, sampledAt) : IDLE_TIME_COUNTED;
+
   if (setting?.unavailable) {
     return (
       <SettingsRow
         label={LABEL}
-        description={withConsequence(IDLE_TIME_COUNTED)}
+        description={withConsequence(clock)}
         disabled
         disabledReason={`Needs a newer Daintree on ${hostName}`}
       />
@@ -159,7 +163,7 @@ export function HostIdleTimeRow({
       <SettingsRow
         label={LABEL}
         description={withConsequence(
-          connected ? IDLE_TIME_COUNTED : `Kept on ${hostName}. Connect to see or change it`
+          connected ? clock : `Kept on ${hostName}. Connect to see or change it`
         )}
         error={loadError ? <span role="alert">{loadError}</span> : undefined}
         control={
@@ -252,9 +256,7 @@ export function HostIdleTimeRow({
     <SettingsSelect
       label={LABEL}
       description={withConsequence(
-        connected
-          ? idleClockSentence(idle, sampledAt)
-          : `Kept on ${hostName}, as last read. Connect to change it`
+        connected ? clock : `Kept on ${hostName}, as last read. Connect to change it`
       )}
       value={String(leaf.minutes)}
       onValueChange={save}

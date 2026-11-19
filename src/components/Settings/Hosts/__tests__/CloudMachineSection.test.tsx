@@ -843,7 +843,7 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
   it("says a Droplet doesn't stop and bills stopped in full, known with no link", () => {
     show(running("digitalocean", { lifetime: { kind: "none" } }), [digitalOcean]);
     expect(idleRow()).toContain(
-      "On DigitalOcean, the machine doesn't stop when its idle time ends. DigitalOcean bills a stopped Droplet in full until it's deleted."
+      "On DigitalOcean, the machine doesn't stop when the host's idle time ends. DigitalOcean bills a stopped Droplet in full until it's deleted."
     );
     // Its own lifetime is still said on its own row.
     expect(screen.getByTestId("cloud-machine-lifetime").textContent).toContain(
@@ -862,7 +862,9 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
       id: "agent37",
     };
     show(running("agent37", { lifetime: { kind: "idle-sleep", idleSeconds: 1800 } }), [agent37]);
-    expect(idleRow()).toContain("On Agent 37, the machine doesn't stop when its idle time ends.");
+    expect(idleRow()).toContain(
+      "On Agent 37, the machine doesn't stop when the host's idle time ends."
+    );
     expect(idleRow()).not.toContain("bills");
     expect(screen.getByText("Sleeps when idle")).toBeTruthy();
     expect(screen.getByTestId("cloud-machine-lifetime").textContent).toContain(
@@ -870,9 +872,18 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
     );
   });
 
+  it("keeps a refused self-stop's reason, word for word", () => {
+    const refused = "This machine can't stop itself when idle: its instance type can't be stopped.";
+    show(running("boat", { selfStopProblem: refused }), [BOAT_PROVIDER]);
+    expect(idleRow()).toContain(`Connect to see or change it. ${refused}`);
+    expect(idleRow()).not.toContain(IDLE_STOP_UNKNOWN);
+  });
+
   it("says a plugin provider's machine doesn't stop, and that it can't tell once the provider is gone", () => {
     show(running("acme.droplets.droplets"), [provider({ name: "Droplets" })]);
-    expect(idleRow()).toContain("On Droplets, the machine doesn't stop when its idle time ends.");
+    expect(idleRow()).toContain(
+      "On Droplets, the machine doesn't stop when the host's idle time ends."
+    );
     cleanup();
     show(running("acme.droplets.droplets", { lifetime: null }));
     expect(idleRow()).toContain(IDLE_STOP_UNKNOWN);

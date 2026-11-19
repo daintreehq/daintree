@@ -385,10 +385,9 @@ describe("HostIdleTimeRow says what its idle time ending does (#17921)", () => {
     api.read.mockResolvedValue(snapshot(30));
     await renderRow({ idle, sampledAt: endsAt + 60_000, provider: digitalOcean });
 
-    expect(description()).toContain(
-      `${ended} On DigitalOcean, the machine doesn't stop when its idle time ends. DigitalOcean bills a stopped Droplet in full until it's deleted.`
+    expect(description()).toBe(
+      `Idle since ${clockTime(new Date(lastWorkAt).toISOString())}. ${ended} On DigitalOcean, the machine doesn't stop when the host's idle time ends. DigitalOcean bills a stopped Droplet in full until it's deleted.`
     );
-    expect(description()).not.toContain("stops by itself");
   });
 
   it("says a plugin provider's machine doesn't stop, in its provider's name", async () => {
@@ -400,7 +399,7 @@ describe("HostIdleTimeRow says what its idle time ending does (#17921)", () => {
     });
 
     expect(description()).toContain(
-      `${ended} On Acme Droplets, the machine doesn't stop when its idle time ends.`
+      `${ended} On Acme Droplets, the machine doesn't stop when the host's idle time ends.`
     );
   });
 
@@ -410,12 +409,27 @@ describe("HostIdleTimeRow says what its idle time ending does (#17921)", () => {
       idle: { ...idle, stopsWhenIdle: true },
       sampledAt: endsAt + 60_000,
       provider: BOAT_PROVIDER,
+      selfStopProblem: "This machine can't stop itself when idle: the key isn't allowed.",
     });
 
-    expect(description()).toContain(
+    expect(description()).toBe(
+      `Idle since ${clockTime(new Date(lastWorkAt).toISOString())}. Its idle time ended ${clockTime(new Date(endsAt).toISOString())}, so it stops by itself.`
+    );
+  });
+
+  it("says a confirmed self-stop while the idle time itself can't be read", async () => {
+    api.read.mockRejectedValue(new Error("link dropped"));
+    await renderRow({
+      idle: { ...idle, stopsWhenIdle: true },
+      sampledAt: endsAt + 60_000,
+      provider: BOAT_PROVIDER,
+    });
+
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(document.body.textContent).toContain(
       `Its idle time ended ${clockTime(new Date(endsAt).toISOString())}, so it stops by itself.`
     );
-    expect(description()).not.toContain(IDLE_STOP_UNKNOWN);
+    expect(document.body.textContent).not.toContain(IDLE_STOP_UNKNOWN);
   });
 
   it("says it can't tell, rather than implying a stop, without a current summary or link", async () => {

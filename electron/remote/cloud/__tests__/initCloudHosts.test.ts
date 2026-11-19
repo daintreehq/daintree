@@ -91,6 +91,31 @@ describe("initCloudHosts", () => {
     }
   });
 
+  it("says which providers' hosts can stop a machine once idle, from what each implements (#17921)", () => {
+    publishPluginCloudProviders("acme.clouds", [ec2()], "Acme Clouds");
+    const runtime = initCloudHosts({
+      backend: { get: () => undefined, set: () => {} },
+      emit: vi.fn(),
+    });
+    try {
+      const stops = Object.fromEntries(
+        runtime.cloudHosts
+          .snapshot()
+          .providers.map((provider) => [provider.name, provider.hostIdleStop])
+      );
+      expect(stops).toEqual({
+        Boat: true,
+        AWS: true,
+        "Google Cloud": true,
+        DigitalOcean: false,
+        "Agent 37": false,
+        EC2: false,
+      });
+    } finally {
+      runtime.dispose();
+    }
+  });
+
   it("passes Reload configuration on to the store's listeners until disposed", () => {
     let stored: unknown;
     const runtime = initCloudHosts({

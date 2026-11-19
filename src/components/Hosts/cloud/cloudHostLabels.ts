@@ -192,7 +192,7 @@ export function idleClockSentence(
 
 /** Said where nothing current shows what a host's idle time ending does to its machine. */
 export const IDLE_STOP_UNKNOWN =
-  "Daintree can't tell whether the machine stops when its idle time ends.";
+  "Daintree can't tell whether the machine stops when the host's idle time ends.";
 
 /**
  * What a host's idle time ending does to its machine, beside its idle clock:
@@ -212,7 +212,7 @@ export function idleEndSentence(
   if (selfStopProblem) return selfStopProblem;
   if (provider?.hostIdleStop !== false) return IDLE_STOP_UNKNOWN;
   // Its own idle sleep or lifetime, if it has one, is described on its own.
-  const doesnt = `On ${provider.name}, the machine doesn't stop when its idle time ends.`;
+  const doesnt = `On ${provider.name}, the machine doesn't stop when the host's idle time ends.`;
   return billsWhileStopped(provider) ? `${doesnt} ${stoppedComputeBilling(provider)}` : doesnt;
 }
 
