@@ -12,6 +12,7 @@ import {
 } from "../cloud/machineKeeperLink.js";
 import type { LinkSession } from "../link/session.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
+import { EmptyPayloadSchema, LinkMethod, type IdleClaimAnswer } from "./linkMethods.js";
 import { GuestPowerOffKeeper } from "./GuestPowerOffKeeper.js";
 import { createGuestPowerOffSystem, type GuestPowerOffSystem } from "./guestPowerOffSystem.js";
 import { MachineKeeper } from "./MachineKeeper.js";
@@ -33,6 +34,10 @@ export interface MachineKeeperHostServer {
  * Compute Engine, the permission to power it off once idle (#17362). Nothing
  * runs and no request is made until a Shell hands one over, or one was handed
  * over earlier in this boot.
+ *
+ * Also answers a Shell about to act on this host's idleness itself (#17922):
+ * the same claim the keepers make, so one idle time is acted on once, by a
+ * keeper or by one link, whichever claims it first.
  */
 export function installMachineKeeperHost(
   server: MachineKeeperHostServer,
@@ -66,8 +71,20 @@ export function installMachineKeeperHost(
   });
   const unregisterGuest = registerRemoteService("guestPowerOff", guest);
   void guest.restore().catch(() => {});
+  let live = true;
+  const claimIdle = async (session: LinkSession, claimant: symbol): Promise<IdleClaimAnswer> => {
+    const reading = await idle.checkFresh();
+    // A link gone, or Host mode stopping, before the decision claims nothing; one gone after it
+    // leaves the idle time spent, its answer perhaps lost.
+    return { granted: live && session.isOpen && idle.tryClaim(reading, claimant) };
+  };
   const off = server.onSession(({ session }) => {
+    // Each link claims as itself, once: one resumed after a drop is a new link, never the old claim.
+    const claimant = Symbol("shell-link");
     const handlers = [
+      session.registerCallHandler(LinkMethod.CLAIM_IDLE, EmptyPayloadSchema, () =>
+        claimIdle(session, claimant)
+      ),
       session.registerCallHandler(
         MachineKeeperLinkMethod.STATUS,
         MachineKeeperStatusRequestSchema,
@@ -85,6 +102,7 @@ export function installMachineKeeperHost(
     });
   });
   return () => {
+    live = false;
     off();
     unregisterGuest();
     guest.dispose();

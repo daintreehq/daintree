@@ -235,6 +235,72 @@ describe("installHostIdle (#17357)", () => {
     dispose();
   });
 
+  describe("a claim on the ended idle time (#17922)", () => {
+    const claim = async () => {
+      const tracker = getRemoteService("hostIdle")!;
+      return tracker.tryClaim(await tracker.checkFresh(), Symbol("shell-link"));
+    };
+
+    it.each([
+      [
+        "working agent",
+        {
+          terminals: [{ id: "t1", detectedAgentId: "claude", agentState: "working" }],
+          degraded: false,
+        },
+      ],
+      [
+        "agent whose state can't be read",
+        {
+          terminals: [{ id: "t1", detectedAgentId: "claude", agentState: "thinking" }],
+          degraded: false,
+        },
+      ],
+      ["degraded read", { terminals: [], degraded: true }],
+    ])(
+      "is refused for a %s the PTY host reports, whatever the shared snapshot says",
+      async (_name, live) => {
+        const dispose = installHostIdle(fakeSessionHost());
+        await vi.advanceTimersByTimeAsync(31 * MINUTE);
+        expect(idle().busy).toBe(false);
+        terminals.live = live;
+        expect(await claim()).toBe(false);
+        expect(idle().busy).toBe(true);
+        dispose();
+      }
+    );
+
+    it("is ended by work a check finds, so the next idle time can be claimed", async () => {
+      const dispose = installHostIdle(fakeSessionHost());
+      await vi.advanceTimersByTimeAsync(31 * MINUTE);
+      expect(await claim()).toBe(true);
+      terminals.snapshot = { terminals: [], degraded: true };
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(idle().busy).toBe(true);
+      terminals.snapshot = { terminals: [], degraded: false };
+      await vi.advanceTimersByTimeAsync(31 * MINUTE);
+      expect(await claim()).toBe(true);
+      dispose();
+    });
+
+    it("is spent across a link only dropping, and restarted by a view opening", async () => {
+      const sessionHost = fakeSessionHost();
+      const dispose = installHostIdle(sessionHost);
+      await vi.advanceTimersByTimeAsync(31 * MINUTE);
+      expect(await claim()).toBe(true);
+      sessionHost.transport(false);
+      await vi.advanceTimersByTimeAsync(31 * MINUTE);
+      expect(await claim()).toBe(false);
+
+      sessionHost.servesViews = true;
+      sessionHost.openView();
+      sessionHost.servesViews = false;
+      await vi.advanceTimersByTimeAsync(31 * MINUTE);
+      expect(await claim()).toBe(true);
+      dispose();
+    });
+  });
+
   it("stops, unsubscribes and unregisters when disposed", async () => {
     const sessionHost = fakeSessionHost();
     const dispose = installHostIdle(sessionHost);

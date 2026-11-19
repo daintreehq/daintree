@@ -1,4 +1,3 @@
-import type { HostIdleObservation } from "../../../shared/types/hostIdle.js";
 import { AppError } from "../../utils/errorTypes.js";
 import {
   sameGuestPowerOffTarget,
@@ -7,14 +6,10 @@ import {
   type GuestPowerOffTarget,
 } from "../cloud/machineKeeperLink.js";
 import type { GuestPowerOffSystem } from "./guestPowerOffSystem.js";
+import type { HostIdleActorSource } from "./HostIdleTracker.js";
 
 export interface GuestPowerOffKeeperDeps {
-  idle: {
-    observation(): HostIdleObservation;
-    /** A check whose read starts now, after any already under way. */
-    checkFresh(): Promise<void>;
-    noteWork(): void;
-  };
+  idle: HostIdleActorSource;
   system: GuestPowerOffSystem;
   now?: () => number;
   tickMs?: number;
@@ -54,7 +49,7 @@ export class GuestPowerOffKeeper {
    * to the permission: taking the permission back and giving it again never
    * lets a second one go while the first may still be under way.
    */
-  private poweringOff: { since: number } | null = null;
+  private poweringOff: { since: number; claimed: number } | null = null;
   /** The saved permission was taken back but its file couldn't be removed yet. */
   private removalPending = false;
   /** Requests in the order they arrived, so a grant checked after a later revoke can't land. */
@@ -73,6 +68,13 @@ export class GuestPowerOffKeeper {
   private controller = new AbortController();
   /** Permission changes, one at a time in the order they came. */
   private changes: Promise<unknown> = Promise.resolve();
+  /** Who this keeper is to the idle clock, when it claims an idle time to power off on. */
+  private readonly claimant = Symbol("guest-power-off");
+  /**
+   * Its last power-off on the idle time it claimed was refused by the OS, so
+   * it never happened: the same permission may try again on that claim.
+   */
+  private retryOwnClaim = false;
   private disposed = false;
 
   constructor(private readonly deps: GuestPowerOffKeeperDeps) {}
@@ -248,6 +250,7 @@ export class GuestPowerOffKeeper {
     if (!holds(this.armed)) {
       this.generation += 1;
       this.powerOffProblem = null;
+      this.retryOwnClaim = false;
       this.retryAt = 0;
       this.failures = 0;
     }
@@ -266,6 +269,7 @@ export class GuestPowerOffKeeper {
     this.restoring = null;
     this.armProblem = null;
     this.powerOffProblem = null;
+    this.retryOwnClaim = false;
     this.retryAt = 0;
     this.failures = 0;
     if (!this.removalPending && this.deferred === null) this.stopTimer();
@@ -366,15 +370,17 @@ export class GuestPowerOffKeeper {
     const now = this.now();
     if (this.poweringOff) {
       if (now - this.poweringOff.since < SHUTDOWN_SETTLE_MS) return;
-      // Still here: something held the shutdown off. It counts as use, so a full idle time passes first.
+      // Still here: something held the shutdown off. It counts as use, so a full idle time passes
+      // first, unless newer work already restarted the clock, perhaps for an idle time a Shell claimed.
+      const { claimed } = this.poweringOff;
       this.poweringOff = null;
       this.powerOffProblem =
         "This machine asked to power itself off but kept running. It tries again after its next idle time.";
-      this.deps.idle.noteWork();
+      this.deps.idle.noteWorkIfCurrent(claimed);
       this.backOff();
       return;
     }
-    if (now < this.retryAt || !this.idleEnded(this.deps.idle.observation())) return;
+    if (now < this.retryAt || !this.deps.idle.mayClaim(this.claimant, this.retryOwnClaim)) return;
     const generation = this.generation;
     const current = () => !this.disposed && this.generation === generation && this.armed !== null;
     // Everything that can wait is done before the last look, so nothing comes between it and the launch.
@@ -385,10 +391,13 @@ export class GuestPowerOffKeeper {
       this.backOff();
       return;
     }
-    await this.deps.idle.checkFresh();
-    if (!current() || this.poweringOff || !this.idleEnded(this.deps.idle.observation())) return;
+    const reading = await this.deps.idle.checkFresh();
+    if (!current() || this.poweringOff || reading === null) return;
+    // A Shell or the other keeper that claimed this idle time first acts on it alone.
+    if (!this.deps.idle.tryClaim(reading, this.claimant, this.retryOwnClaim)) return;
     // Recorded before it goes: an answer lost on the way back is never followed by a second one.
-    this.poweringOff = { since: this.now() };
+    this.poweringOff = { since: this.now(), claimed: reading };
+    this.retryOwnClaim = false;
     const outcome = await launch(this.controller.signal);
     if (this.disposed) return;
     if (outcome.kind === "accepted") {
@@ -396,13 +405,12 @@ export class GuestPowerOffKeeper {
       this.failures = 0;
     } else if (outcome.kind === "refused") {
       this.poweringOff = null;
-      if (this.generation === generation) this.powerOffProblem = outcome.problem;
+      if (this.generation === generation) {
+        this.powerOffProblem = outcome.problem;
+        this.retryOwnClaim = true;
+      }
       this.backOff();
     }
-  }
-
-  private idleEnded(idle: HostIdleObservation): boolean {
-    return !idle.busy && idle.idleEndsAt !== null && idle.idleEndsAt <= this.now();
   }
 
   private backOff(): void {
