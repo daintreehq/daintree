@@ -262,6 +262,20 @@ describe("CloudAccountService", () => {
       accounts.replaceCredentials(summary.id, { apiKey: "sk_live_old" })
     ).rejects.toThrow(/hasn't been confirmed yet/);
     expect(vault.sets.get(summary.id)).toEqual({ apiKey: "sk_live_same" });
+    // One not yet sent is about to be, with this account's key (#17928).
+    const pending = store.bindings().at(-1)!;
+    store.putBinding({ ...pending, creation: { ...pending.creation!, sentAt: null } });
+    await expect(
+      accounts.replaceCredentials(summary.id, { apiKey: "sk_live_old" })
+    ).rejects.toThrow(/hasn't been confirmed yet/);
+    expect(vault.sets.get(summary.id)).toEqual({ apiKey: "sk_live_same" });
+    // Unless its host was never added: a crash between the two writes, and it's never sent.
+    store.putBinding({
+      ...pending,
+      hostId: null,
+      creation: { ...pending.creation!, sentAt: null },
+    });
+    await accounts.replaceCredentials(summary.id, { apiKey: "sk_live_same" });
   });
 
   it("connects a second workspace whose provider can't say who a key is, named after the provider (#17347)", async () => {

@@ -772,8 +772,14 @@ export class CloudAccountService {
     values: CloudCredentialValues
   ): Promise<void> {
     const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
-    // A create sent and not yet found is looked for, and deleted, with the account's key.
-    if (bound.some((binding) => binding.resourceId === null && binding.creation?.sentAt != null)) {
+    // A create sent and not yet found is looked for, and deleted, with the account's key; one
+    // still being readied (Agent 37 registers its key first) is about to be sent with it (#17928).
+    // One whose host was never added (a crash between the two writes) is never sent.
+    if (
+      bound.some(
+        (binding) => binding.resourceId === null && binding.creation && binding.hostId !== null
+      )
+    ) {
       throw invalid(
         "A machine this account asked for hasn't been confirmed yet, and a new key may not see it. Replace the key once it has, or remove that host first."
       );
