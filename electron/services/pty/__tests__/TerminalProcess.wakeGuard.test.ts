@@ -55,6 +55,7 @@ interface Internals {
     detectedAgentId?: string;
     agentIncarnation?: number;
     agentSessionId?: string;
+    updateInstalled?: { observedAt: number; namesRestart: boolean };
   };
 }
 
@@ -922,5 +923,51 @@ describe("TerminalProcess no-choice-dialog guard (#16209)", () => {
     terminal.submit("ls", "tok-3", undefined, "no-choice-dialog");
     await vi.advanceTimersByTimeAsync(3_000);
     expect(terminal.getSubmission("tok-3")).toMatchObject({ phase: "pty_written" });
+  });
+});
+
+describe("TerminalProcess settled-prompt-exact guard pinned to an update observation (#17908)", () => {
+  const UPDATE: ExactPromptGuard = {
+    kind: "settled-prompt-exact",
+    agentIncarnation: 0,
+    updateObservedAt: 900,
+  };
+
+  beforeEach(() => {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-19T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function restartInto(patch: Partial<Internals["terminalInfo"]>) {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      detectedAgentId: "claude",
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+      ...patch,
+    });
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    await vi.advanceTimersByTimeAsync(3_000);
+    return terminal.getSubmission("tok-1")?.phase;
+  }
+
+  it("writes the line while the terminal still reports the observation main read", async () => {
+    expect(await restartInto({})).toBe("pty_written");
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart", "\r"]);
+  });
+
+  it.each([
+    ["cleared", { updateInstalled: undefined }],
+    ["seen anew", { updateInstalled: { observedAt: 1_200, namesRestart: true } }],
+    ["no longer naming /restart", { updateInstalled: { observedAt: 900, namesRestart: false } }],
+  ])("refuses it once the observation was %s", async (_label, patch) => {
+    expect(await restartInto(patch)).toBe("cancelled");
+    expect(ptyWriteMock).not.toHaveBeenCalled();
   });
 });

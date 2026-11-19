@@ -1444,35 +1444,41 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
             };
       const run = () =>
-        service.exclusive(terminalId, async () => {
-          const pin = await service.preflight(terminalId, generation, ownershipOwner);
-          const approval = await dispatchOwnedResourceAction(
-            ownedResource as RendererOwnedResourceTool,
-            terminalId
-          );
-          if (!approval.envelope.result.ok) return approval;
-          // A relayed call's caller stops waiting at its deadline (#15699):
-          // the line goes in early enough for the answer to reach it, and not
-          // at all once it has been answered.
-          let deadline: number | undefined;
-          if (relayCallId !== undefined) {
-            const at = sessionStore.sessionRelayMap.get(sessionId)?.callDeadline?.(relayCallId);
-            deadline =
-              at === undefined
-                ? Date.now()
-                : at -
-                  CLAUDE_UPDATE_DELIVERY_MS -
-                  CLAUDE_UPDATE_WATCH_MS -
-                  MCP_REMOTE_CONFIRM_MARGIN_MS;
+        service.exclusive(
+          terminalId,
+          async (): Promise<{
+            envelope: DispatchEnvelope;
+            raised: boolean;
+          }> => {
+            const pin = await service.preflight(terminalId, generation, ownershipOwner);
+            const approval = await dispatchOwnedResourceAction(
+              ownedResource as RendererOwnedResourceTool,
+              terminalId
+            );
+            if (!approval.envelope.result.ok) return approval;
+            // A relayed call's caller stops waiting at its deadline (#15699):
+            // the line goes in early enough for the answer to reach it, and not
+            // at all once it has been answered.
+            let deadline: number | undefined;
+            if (relayCallId !== undefined) {
+              const at = sessionStore.sessionRelayMap.get(sessionId)?.callDeadline?.(relayCallId);
+              deadline =
+                at === undefined
+                  ? Date.now()
+                  : at -
+                    CLAUDE_UPDATE_DELIVERY_MS -
+                    CLAUDE_UPDATE_WATCH_MS -
+                    MCP_REMOTE_CONFIRM_MARGIN_MS;
+            }
+            const result = await service.apply(pin, {
+              inputOwner: ownershipOwner,
+              authorize,
+              signal: extra.signal,
+              ...(deadline !== undefined ? { deadline } : {}),
+            });
+            return { envelope: { result: { ok: true, result } }, raised: true };
           }
-          const result = await service.apply(pin, {
-            inputOwner: ownershipOwner,
-            authorize,
-            signal: extra.signal,
-            ...(deadline !== undefined ? { deadline } : {}),
-          });
-          return { envelope: { result: { ok: true, result } }, raised: true };
-        });
+        );
       return steer !== undefined ? deps.globalSteer!.applyUpdate(steer, run) : run();
     };
 

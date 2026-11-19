@@ -565,7 +565,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.applyClaudeUpdateOwned",
     title: "Apply Claude Code update",
     description:
-      "Once the user approves, type /restart once into a Claude Code panel whose updateInstalled names it, when it waits at its empty prompt (30s at most). Reports any refusal Claude prints, never whether the conversation came back. Never resent.",
+      "After the user approves, types /restart once into a Claude Code panel whose updateInstalled names it, when it waits at its empty prompt (up to 30s). Quotes any refusal Claude prints; never says the conversation came back.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

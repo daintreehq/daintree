@@ -619,7 +619,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 26_965): the two external account tools above, plus `agent.addAccount`,
   // in-app only. The add has to say the user ticks each account with its folder
   // shown, and that the caller launches on the returned id to sign in.
-  const MAX_COHORT_TOTAL_BYTES = 27_550;
+  // 27_550 → 27_750 for #17908, measured at 27_734 B (+221 over develop's
+  // 27_513): `terminal.applyClaudeUpdateOwned`, so an assistant can apply a
+  // Claude Code update. It has to say the user approves, that `/restart` goes in
+  // once and only at an empty prompt, and that the answer never claims the
+  // conversation came back. In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 27_750;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

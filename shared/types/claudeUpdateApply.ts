@@ -47,19 +47,17 @@ export const ApplyClaudeUpdateResultSchema = z.object({
   terminalId: z.string(),
   status: z
     .enum(["sent", "not-sent", "unconfirmed"])
-    .describe(
-      "sent: `/restart` and Enter reached the terminal. unconfirmed: handed over, outcome unknown."
-    ),
-  reason: z.enum(CLAUDE_UPDATE_NOT_SENT_REASONS).optional().describe("Why it wasn't sent."),
+    .describe("sent: `/restart` and Enter went in. unconfirmed: outcome unknown."),
+  reason: z.enum(CLAUDE_UPDATE_NOT_SENT_REASONS).optional(),
   refusal: z
     .string()
     .nullable()
     .optional()
-    .describe("Once sent: Claude's `Can't restart` line as drawn, or null if none was seen."),
+    .describe("Claude's `Can't restart` line as drawn; null if none was seen."),
   output: z
     .enum(["read", "lost", "unavailable"])
     .optional()
-    .describe("Once sent: whether Claude's answer could be read."),
+    .describe("Whether Claude's answer could be read."),
   message: z.string(),
 });
 
