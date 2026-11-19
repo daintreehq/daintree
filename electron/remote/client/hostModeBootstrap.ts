@@ -302,8 +302,8 @@ export function detachedStartScript(
     `if [ -n "\${LANG:-}" ]; then set -- "$@" LANG="$LANG"; fi`,
     `if [ -n "\${XDG_CONFIG_HOME:-}" ]; then set -- "$@" XDG_CONFIG_HOME="$XDG_CONFIG_HOME"; fi`,
     `s=""; if command -v setsid >/dev/null 2>&1; then s=setsid; fi`,
-    `nohup $s env -i "$@" ${argv.map(sq).join(" ")} </dev/null >>"$l" 2>&1 &`,
-    `lp=$!`,
+    // `&` ends the command itself: a `;` after it would be a syntax error.
+    `nohup $s env -i "$@" ${argv.map(sq).join(" ")} </dev/null >>"$l" 2>&1 & lp=$!`,
     processStartShell("lp", "ln"),
     `printf '%s %s\\n' "$lp" "$ln" > "$r.tmp" && mv -f "$r.tmp" "$r"`,
     `echo "${MARK}launched $lp $ln new"`,

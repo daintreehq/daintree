@@ -12,6 +12,7 @@ import {
   type DetachedLaunch,
 } from "../hostModeBootstrap.js";
 import { stopScript } from "../hostInstaller.js";
+import { adoptProcessForKill } from "../../../__tests__/helpers/processKillGuard.js";
 
 /**
  * The start a Linux host with no init system gets, under a real /bin/sh with
@@ -54,7 +55,11 @@ function launch(flags: string[] = []): DetachedLaunch {
   expect(run.status).toBe(0);
   const launched = parseDetachedLaunch(run.stdout);
   expect(launched).not.toBeNull();
-  started.add(launched!.pid);
+  if (launched!.fresh) {
+    // Orphaned to PID 1 once its shell exits: started here, so this test may end it.
+    adoptProcessForKill(launched!.pid);
+    started.add(launched!.pid);
+  }
   return launched!;
 }
 
