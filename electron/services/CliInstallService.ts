@@ -98,10 +98,16 @@ export function generateAppImageWrapper(
 ): string {
   const escaped = appImagePath.replace(/'/g, "'\\''");
   const quotedVersion = version.replace(/[^0-9A-Za-z.+-]/g, "");
+  // A repoint can pair this template with a block from an older install, which
+  // has `call` but no `session`.
+  const hasSession = callClient !== null && callClient.includes("\ndaintree_session() {\n");
   const callUsage =
-    callClient === null
+    (callClient === null
       ? ""
-      : ` "       ${CLI_COMMAND_NAME} call <tool> [options]  (see ${CLI_COMMAND_NAME} call --help)"`;
+      : ` "       ${CLI_COMMAND_NAME} call <tool> [options]  (see ${CLI_COMMAND_NAME} call --help)"`) +
+    (hasSession
+      ? ` "       ${CLI_COMMAND_NAME} session start|end      (see ${CLI_COMMAND_NAME} session --help)"`
+      : "");
   return [
     "#!/usr/bin/env bash",
     APPIMAGE_WRAPPER_HEADER,
@@ -112,6 +118,7 @@ export function generateAppImageWrapper(
     `    printf '%s\\n' "Usage: ${CLI_COMMAND_NAME} [directory]"${callUsage} "" "Open a directory as a project in Daintree." "" "Arguments:" "  directory    Path to open (defaults to current directory)" "" "Options:" "  -h, --help       Show this help message" "  -v, --version    Show the Daintree CLI version" "  -s, --status     Check if Daintree is running"`,
     "    exit 0 ;;",
     ...(callClient === null ? [] : ["  call)", "    shift", '    daintree_call "$@" ;;']),
+    ...(hasSession ? ["  session)", "    shift", '    daintree_session "$@" ;;'] : []),
     "  --version|-v)",
     `    echo "${CLI_COMMAND_NAME} ${quotedVersion}"`,
     "    exit 0 ;;",

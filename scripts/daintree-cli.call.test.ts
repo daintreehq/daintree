@@ -31,7 +31,9 @@ interface Seen {
   host: string | undefined;
   sessionId: string | undefined;
   protocolVersion: string | undefined;
-  rpc: { method?: string; params?: { name?: string; arguments?: unknown } } | undefined;
+  rpc:
+    | { id?: unknown; method?: string; params?: { name?: string; arguments?: unknown } }
+    | undefined;
   /** What the server wrote back, as sent. */
   response: string;
 }
@@ -73,9 +75,17 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
     releaseSlow = resolve;
   });
 
+  // What each MCP session created, as the server records it for an api key:
+  // the session, not the bearer, holds the authority.
+  const owned = new Map<string, Set<unknown>>();
+
   const tools: Record<
     string,
-    (args: Record<string, unknown>, notify: () => Promise<void>) => Promise<CallToolResult>
+    (
+      args: Record<string, unknown>,
+      notify: () => Promise<void>,
+      sessionId: string | undefined
+    ) => Promise<CallToolResult>
   > = {
     "fixture.echo": async (args) => ({
       content: [{ type: "text", text: JSON.stringify(args) }],
@@ -105,6 +115,17 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
       await slowReleased;
       return { content: [{ type: "text", text: "late" }] };
     },
+    "fixture.launch": async (args, _notify, sessionId) => {
+      if (sessionId === undefined) throw new Error("no session");
+      const ids = owned.get(sessionId) ?? new Set<unknown>();
+      ids.add(args.terminalId);
+      owned.set(sessionId, ids);
+      return { content: [{ type: "text", text: `launched ${String(args.terminalId)}` }] };
+    },
+    "fixture.send": async (args, _notify, sessionId) =>
+      sessionId !== undefined && owned.get(sessionId)?.has(args.terminalId)
+        ? { content: [{ type: "text", text: `sent to ${String(args.terminalId)}` }] }
+        : { isError: true, content: [{ type: "text", text: "RESOURCE_NOT_OWNED: not yours" }] },
   };
 
   const newSessionServer = () => {
@@ -116,11 +137,14 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
       const tool = tools[request.params.name];
       if (!tool)
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${request.params.name}`);
-      return tool(request.params.arguments ?? {}, () =>
-        extra.sendNotification({
-          method: "notifications/message",
-          params: { level: "info", data: "working" },
-        })
+      return tool(
+        request.params.arguments ?? {},
+        () =>
+          extra.sendNotification({
+            method: "notifications/message",
+            params: { level: "info", data: "working" },
+          }),
+        extra.sessionId
       );
     });
     return server;
@@ -282,9 +306,10 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
   function start(
     args: string[],
     env: Record<string, string | undefined> = {},
-    stdin?: string | null
+    stdin?: string | null,
+    command = "call"
   ) {
-    const child = spawn("bash", [SCRIPT, "call", ...args], {
+    const child = spawn("bash", [SCRIPT, command, ...args], {
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
@@ -313,6 +338,18 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
 
   const call = (args: string[], env?: Record<string, string | undefined>, stdin?: string) =>
     start(args, env, stdin).done;
+  const session = (args: string[], env?: Record<string, string | undefined>) =>
+    start(args, env, undefined, "session").done;
+
+  /** Opens a held session and returns its handle. */
+  async function held(): Promise<string> {
+    const run = await session(["start"]);
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    const handle = run.stdout.replace(/\n$/, "");
+    expect(handle).not.toContain("\n");
+    return handle;
+  }
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-call-tmp-"));
@@ -757,5 +794,236 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     expect(JSON.parse(run.stdout)).toEqual({ a: "b" });
     expect(fixture.seen[2].response.startsWith("{")).toBe(true);
     expect(fixture.sessions.size).toBe(0);
+  });
+
+  describe("held session", () => {
+    const sessionOf = (handle: string) => {
+      const opened = fixture.seen.find((r) => r.rpc?.method === "notifications/initialized");
+      expect(opened?.sessionId).toBeTruthy();
+      expect(handle).toContain(opened?.sessionId ?? "");
+      return opened?.sessionId ?? "";
+    };
+
+    it("lets a later process drive what an earlier one launched, where one-shot calls can't", async () => {
+      expect((await call(["fixture.launch", "--arg", "terminalId=t-0"])).status).toBe(0);
+      const oneShot = await call(["fixture.send", "--arg", "terminalId=t-0"]);
+      expect(oneShot.status).toBe(1);
+      expect(oneShot.stderr).toContain("RESOURCE_NOT_OWNED");
+      fixture.seen.length = 0;
+
+      const handle = await held();
+      expect(handle).not.toContain(TOKEN);
+      const sessionId = sessionOf(handle);
+      const env = { DAINTREE_MCP_SESSION: handle };
+
+      const launched = await call(["fixture.launch", "--arg", "terminalId=t-1"], env);
+      expect(launched.stderr).toBe("");
+      expect(launched.status).toBe(0);
+      const sent = await call(["fixture.send", "--arg", "terminalId=t-1"], env);
+      expect(sent.stderr).toBe("");
+      expect(sent.status).toBe(0);
+      expect(sent.stdout).toBe("sent to t-1\n");
+
+      expect(fixture.seen.map((request) => [request.method, request.rpc?.method])).toEqual([
+        ["POST", "initialize"],
+        ["POST", "notifications/initialized"],
+        ["POST", "tools/call"],
+        ["POST", "tools/call"],
+      ]);
+      const calls = fixture.seen.filter((request) => request.rpc?.method === "tools/call");
+      for (const request of calls) {
+        expect(request.sessionId).toBe(sessionId);
+        expect(request.protocolVersion).toBe(NEGOTIATED_VERSION);
+        expect(Number.isSafeInteger(request.rpc?.id)).toBe(true);
+        expect(request.rpc?.id).not.toBe(fixture.seen[0].rpc?.id);
+      }
+      expect(calls[0].rpc?.id).not.toBe(calls[1].rpc?.id);
+      // Held open between calls, and nothing left on disk by any of them.
+      expect(fixture.sessions.size).toBe(1);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it("gives concurrent calls in one session different ids", async () => {
+      const env = { DAINTREE_MCP_SESSION: await held() };
+
+      const runs = await Promise.all(
+        Array.from({ length: 4 }, (_, i) => call(["fixture.echo", "--arg", `n=${i}`], env))
+      );
+
+      expect(runs.map((run) => run.status)).toEqual([0, 0, 0, 0]);
+      expect(runs.map((run) => JSON.parse(run.stdout))).toEqual(
+        Array.from({ length: 4 }, (_, i) => ({ n: String(i) }))
+      );
+      const ids = fixture.seen
+        .filter((request) => request.rpc?.method === "tools/call")
+        .map((request) => request.rpc?.id);
+      expect(new Set(ids).size).toBe(4);
+    });
+
+    it("ends the session, after which its handle fails with its own status", async () => {
+      const handle = await held();
+      const sessionId = sessionOf(handle);
+
+      const ended = await session(["end"], { DAINTREE_MCP_SESSION: handle });
+
+      expect(ended.stderr).toBe("");
+      expect(ended.status).toBe(0);
+      const last = fixture.seen.at(-1);
+      expect(last?.method).toBe("DELETE");
+      expect(last?.sessionId).toBe(sessionId);
+      expect(last?.protocolVersion).toBe(NEGOTIATED_VERSION);
+      expect(fixture.sessions.size).toBe(0);
+
+      const after = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: handle });
+      expect(after.status).toBe(5);
+      expect(after.stderr).toContain("DAINTREE_MCP_SESSION");
+      const again = await session(["end"], { DAINTREE_MCP_SESSION: handle });
+      expect(again.status).toBe(5);
+      expect(fixture.seen.filter((request) => request.rpc?.method === "initialize")).toHaveLength(1);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it("fails a handle whose session has gone, without opening another", async () => {
+      const handle = await held();
+      const sessionId = sessionOf(handle);
+      // As the server's idle reaper, a listener stop or a key rotation would.
+      await fixture.sessions.get(sessionId)?.close();
+      fixture.seen.length = 0;
+
+      const run = await call(["fixture.launch", "--arg", "terminalId=t-1"], {
+        DAINTREE_MCP_SESSION: handle,
+      });
+
+      expect(run.status).toBe(5);
+      expect(run.stdout).toBe("");
+      expect(run.stderr).toContain("session start");
+      expect(fixture.seen.map((request) => [request.method, request.rpc?.method])).toEqual([
+        ["POST", "tools/call"],
+      ]);
+      expect(fixture.sessions.size).toBe(0);
+
+      const ended = await session(["end"], { DAINTREE_MCP_SESSION: handle });
+      expect(ended.status).toBe(5);
+    });
+
+    it("leaves the session open when a held call is stopped mid-call", async () => {
+      const handle = await held();
+      const { child, done } = start(["fixture.slow"], { DAINTREE_MCP_SESSION: handle });
+      await fixture.callArrived;
+
+      child.kill("SIGTERM");
+      const run = await done;
+
+      expect(run.status).toBe(143);
+      expect(fixture.seen.some((request) => request.method === "DELETE")).toBe(false);
+      expect(fixture.sessions.size).toBe(1);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it("exits 4 when Daintree refuses the bearer on a held call", async () => {
+      const handle = await held();
+
+      const run = await call(["fixture.echo"], {
+        DAINTREE_MCP_SESSION: handle,
+        DAINTREE_MCP_TOKEN: "rotated",
+      });
+
+      expect(run.status).toBe(4);
+      expect(fixture.seen.some((request) => request.method === "DELETE")).toBe(false);
+    });
+
+    it("closes a session it opened but couldn't hand over", async () => {
+      await fixture.close();
+      fixture = await startFixture({ refuse: "notifications/initialized" });
+
+      const refused = await session(["start"]);
+      expect(refused.status).toBe(4);
+      expect(refused.stdout).toBe("");
+      expect(fixture.seen.at(-1)?.method).toBe("DELETE");
+
+      // stdout closed: the handle can't reach the script, so the session closes.
+      await fixture.close();
+      fixture = await startFixture();
+      const child = spawn("bash", ["-c", 'exec 1>&-; exec bash "$0" session start', SCRIPT], {
+        env: {
+          PATH: process.env.PATH,
+          TMPDIR: tmpDir,
+          DAINTREE_MCP_URL: fixture.url,
+          DAINTREE_MCP_TOKEN: TOKEN,
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      children.add(child);
+      const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
+      children.delete(child);
+      expect(code).toBe(3);
+      expect(fixture.seen.at(-1)?.method).toBe("DELETE");
+      expect(fixture.sessions.size).toBe(0);
+      expect(fs.readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it.each([
+      [[], "start or end"],
+      [["bogus"], "start or end"],
+      [["start", "extra"], "start or end"],
+    ])("refuses session %j before contacting Daintree", async (args, message) => {
+      const run = await session(args);
+
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain(message);
+      expect(fixture.seen).toEqual([]);
+    });
+
+    it.each([
+      [["end"], { DAINTREE_MCP_SESSION: undefined }],
+      [["end"], { DAINTREE_MCP_SESSION: "" }],
+      [["end"], { DAINTREE_MCP_SESSION: "no-version" }],
+      // Replacing a held session would leave it open with no handle to end it.
+      [["start"], { DAINTREE_MCP_SESSION: `${NEGOTIATED_VERSION}:held` }],
+    ])("refuses session %j with %j before contacting Daintree", async (args, env) => {
+      const run = await session(args, env);
+
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain("DAINTREE_MCP_SESSION");
+      expect(fixture.seen).toEqual([]);
+    });
+
+    it.each(["no-version", "2025-06-18:", ":abc", "2025-06-18:has space", "v 1:abc"])(
+      "refuses a malformed handle %j before contacting Daintree",
+      async (handle) => {
+        const run = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: handle });
+
+        expect(run.status).toBe(2);
+        expect(run.stderr).toContain("DAINTREE_MCP_SESSION");
+        expect(fixture.seen).toEqual([]);
+      }
+    );
+
+    it("makes a one-shot call when the handle is empty", async () => {
+      const run = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: "" });
+
+      expect(run.status).toBe(0);
+      expect(fixture.seen.map((request) => request.method)).toEqual([
+        "POST",
+        "POST",
+        "POST",
+        "DELETE",
+      ]);
+    });
+
+    it("needs the credential to start", async () => {
+      const run = await session(["start"], { DAINTREE_MCP_TOKEN: undefined });
+
+      expect(run.status).toBe(4);
+      expect(fixture.seen).toEqual([]);
+    });
+
+    it("explains itself with --help", async () => {
+      const run = await session(["--help"]);
+
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain("Usage: daintree session start");
+      expect(fixture.seen).toEqual([]);
+    });
   });
 });
