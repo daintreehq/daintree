@@ -89,7 +89,9 @@ function readCallClient(): string | null {
  * commands as the packaged CLI script (resources/daintree-cli.sh); the version
  * and the `call` client are written in because the image's files can't be read
  * without mounting it, and the wrapper is rewritten whenever its content no
- * longer matches.
+ * longer matches. `--status` runs the client block's own when the block has
+ * one; without it (no block, or one kept from before #17904) the wrapper still
+ * answers, with the MCP fields it can't read as null.
  */
 export function generateAppImageWrapper(
   appImagePath: string,
@@ -101,6 +103,7 @@ export function generateAppImageWrapper(
   // A repoint can pair this template with a block from an older install, which
   // has `call` but no `session`.
   const hasSession = callClient !== null && callClient.includes("\ndaintree_session() {\n");
+  const hasStatus = callClient !== null && callClient.includes("\ndaintree_status() {\n");
   const callUsage =
     (callClient === null
       ? ""
@@ -113,9 +116,11 @@ export function generateAppImageWrapper(
     APPIMAGE_WRAPPER_HEADER,
     "set -euo pipefail",
     ...(callClient === null ? [] : [callClient]),
+    // `--json --status` asks the same as `--status --json`.
+    'if [ "${1:-}" = --json ] && { [ "${2:-}" = --status ] || [ "${2:-}" = -s ]; }; then set -- "$2" "$1" "${@:3}"; fi',
     'case "${1:-}" in',
     "  --help|-h)",
-    `    printf '%s\\n' "Usage: ${CLI_COMMAND_NAME} [directory]"${callUsage} "" "Open a directory as a project in Daintree." "" "Arguments:" "  directory    Path to open (defaults to current directory)" "" "Options:" "  -h, --help       Show this help message" "  -v, --version    Show the Daintree CLI version" "  -s, --status     Check if Daintree is running"`,
+    `    printf '%s\\n' "Usage: ${CLI_COMMAND_NAME} [directory]"${callUsage} "" "Open a directory as a project in Daintree." "" "Arguments:" "  directory    Path to open (defaults to current directory)" "" "Options:" "  -h, --help       Show this help message" "  -v, --version    Show the Daintree CLI version" "  -s, --status     Check if Daintree is running (exit 0 if it is, 1 if not)" "  --status --json  The same, as one JSON object: version, running, mcpEnabled and mcpPort"`,
     "    exit 0 ;;",
     ...(callClient === null ? [] : ["  call)", "    shift", '    daintree_call "$@" ;;']),
     ...(hasSession ? ["  session)", "    shift", '    daintree_session "$@" ;;'] : []),
@@ -123,14 +128,25 @@ export function generateAppImageWrapper(
     `    echo "${CLI_COMMAND_NAME} ${quotedVersion}"`,
     "    exit 0 ;;",
     "  --status|-s)",
-    // The pattern also matches this script and any shell whose command line
-    // names it; only the app's own binary counts.
-    '    for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)"); do',
-    '      exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue',
-    '      exe="${exe% (deleted)}"',
-    '      if [ "${exe##*/}" = daintree ]; then echo "Daintree is running"; exit 0; fi',
-    "    done",
-    '    echo "Daintree is not running"; exit 1 ;;',
+    ...(hasStatus
+      ? ["    shift", `    daintree_status "${quotedVersion}" "$@" ;;`]
+      : [
+          '    if [ "${2:-}" = --json ] && [ "$#" -gt 2 ]; then',
+          `      echo "${CLI_COMMAND_NAME}: --status --json takes no other arguments" >&2; exit 2`,
+          "    fi",
+          "    running=false",
+          // The pattern also matches this script and any shell whose command
+          // line names it; only the app's own binary counts.
+          '    for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)|daintree-app"); do',
+          '      exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue',
+          '      exe="${exe% (deleted)}"',
+          '      case "${exe##*/}" in daintree|daintree-app) running=true; break ;; esac',
+          "    done",
+          `    if [ "\${2:-}" = --json ]; then echo "{\\"version\\":\\"${quotedVersion}\\",\\"running\\":$running,\\"mcpEnabled\\":null,\\"mcpPort\\":null}"`,
+          '    elif [ "$running" = true ]; then echo "Daintree is running"; else echo "Daintree is not running"; fi',
+          '    if [ "$running" = true ]; then exit 0; fi',
+          "    exit 1 ;;",
+        ]),
     "esac",
     // One folder only: extra operands would otherwise be dropped silently.
     'if [ "$#" -gt 1 ]; then',

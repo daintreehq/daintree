@@ -445,6 +445,7 @@ describe("HttpLifecycle retirement routes against a real store (#15624)", () => 
       emitStatusChange: vi.fn(),
       emitRuntimeStateChange: vi.fn(),
       setConfig: vi.fn(),
+      publishDiscoveryPort: vi.fn(),
     } as unknown as HttpLifecycleDeps;
     const lifecycle = new HttpLifecycle(deps);
     lc = lifecycle;

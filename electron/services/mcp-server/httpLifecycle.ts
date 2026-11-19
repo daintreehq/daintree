@@ -128,6 +128,12 @@ export interface HttpLifecycleDeps extends SessionServerDepsSource {
   emitStatusChange: () => void;
   emitRuntimeStateChange: () => void;
   setConfig: (patch: Record<string, unknown>) => void;
+  /**
+   * The control surface's port for scripts outside a pane to find (#17904),
+   * or null once it no longer serves there. Synchronous, so a withdrawal and a
+   * later start's publication land in order.
+   */
+  publishDiscoveryPort: (port: number | null) => void;
 }
 
 /**
@@ -1034,6 +1040,7 @@ export class HttpLifecycle {
         console.log(
           `[MCP] Server started on http://127.0.0.1:${this.port}/mcp (Streamable HTTP) and /sse (legacy SSE)`
         );
+        this.deps.publishDiscoveryPort(this.port);
         this.deps.emitStatusChange();
       } catch (err) {
         this.lastError = formatErrorMessage(err, "MCP server failed to start");
@@ -1242,6 +1249,7 @@ export class HttpLifecycle {
 
   private handleUnexpectedClose(): void {
     const wasRunning = !this.holdsOnly;
+    this.deps.publishDiscoveryPort(null);
     this.drainControl("MCP server closed unexpectedly");
     this.closeHeldRoutes();
 
@@ -1337,6 +1345,9 @@ export class HttpLifecycle {
           }
         }
 
+        // Before the drain: a closing listener stops accepting at once, but the
+        // drain can take seconds, and another process could take the port meanwhile.
+        this.deps.publishDiscoveryPort(null);
         const wasRunning = this.isRunning;
         // A hold keeps the listener open: from here it answers only held routes.
         const keepListener = !closeListener && this.holds.size > 0 && this.isListening;

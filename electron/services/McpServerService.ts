@@ -1,5 +1,6 @@
 // eager-import-allow: reads MCP server settings via store.get synchronously during service init
 import { randomUUID } from "node:crypto";
+import { app } from "electron";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
@@ -83,6 +84,7 @@ import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle, sendToPinnedView } from "./mcp-server/httpLifecycle.js";
+import { McpDiscoveryFile } from "./mcp-server/discoveryFile.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
 import { routedViewWorktreePort } from "./mcp-server/worktreeViewPort.js";
@@ -218,6 +220,7 @@ export class McpServerService {
   private readonly auditService: AuditService;
   private readonly turnOutcomeService: TurnOutcomeService;
   private readonly httpLifecycle: HttpLifecycle;
+  private readonly discoveryFile = new McpDiscoveryFile({ dir: () => app.getPath("userData") });
   /** Notices an orchestrating pane asked for, and the lines that deliver them. */
   private readonly terminalNotify: TerminalNotifyService;
   /** Prompts the global Assistant held for a busy worker's next prompt (#16187), on its notice line. */
@@ -634,6 +637,7 @@ export class McpServerService {
       emitStatusChange: () => this.emitStatusChange(),
       emitRuntimeStateChange: () => this.emitRuntimeStateChange(),
       setConfig: (patch) => this.persistConfig(patch),
+      publishDiscoveryPort: (port) => this.discoveryFile.publish(port),
     });
 
     this.httpLifecycle.setPluginRouteHandler(
