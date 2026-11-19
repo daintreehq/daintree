@@ -7,6 +7,7 @@ import type {
 } from "@shared/types/codexLimitContinuation";
 import { useCodexLimitContinueBridge } from "@/hooks/useCodexLimitContinueBridge";
 import { useCodexLimitContinueStore } from "@/store/codexLimitContinueStore";
+import { notifyHostResync } from "@/store/hostResyncSignal";
 
 let pushChange: ((change: CodexLimitContinueChange) => void) | null = null;
 let resolveList: ((entries: CodexLimitContinueEntry[]) => void) | null = null;
@@ -16,7 +17,7 @@ const waiting = { status: "waiting", resetsAt: 1_000, continueAt: 61_000 } as co
 
 beforeEach(() => {
   offChanged.mockReset();
-  useCodexLimitContinueStore.setState({ panes: {} });
+  useCodexLimitContinueStore.setState({ panes: {}, disarmed: {} });
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -57,6 +58,40 @@ describe("useCodexLimitContinueBridge (#17909)", () => {
     });
     expect(useCodexLimitContinueStore.getState().panes).toEqual({
       t2: { revision: 8, state: { status: "armed" } },
+    });
+  });
+
+  it("keeps a list entry newer than a push that arrived before it", async () => {
+    renderHook(() => useCodexLimitContinueBridge());
+    act(() => {
+      pushChange!({ terminalId: "t1", revision: 4, state: { status: "armed" } });
+    });
+    await act(async () => {
+      resolveList!([{ terminalId: "t1", revision: 5, state: waiting }]);
+    });
+    expect(useCodexLimitContinueStore.getState().panes.t1).toEqual({ revision: 5, state: waiting });
+  });
+
+  it("never brings back a pane disarmed after the arm a late push carries", () => {
+    renderHook(() => useCodexLimitContinueBridge());
+    act(() => {
+      pushChange!({ terminalId: "t1", revision: 6, state: null });
+      pushChange!({ terminalId: "t1", revision: 5, state: { status: "armed" } });
+    });
+    expect(useCodexLimitContinueStore.getState().panes).toEqual({});
+  });
+
+  it("reads the list again when a remote view's link comes back", async () => {
+    renderHook(() => useCodexLimitContinueBridge());
+    await act(async () => {
+      resolveList!([]);
+    });
+    act(() => notifyHostResync());
+    await act(async () => {
+      resolveList!([{ terminalId: "t1", revision: 9, state: waiting }]);
+    });
+    expect(useCodexLimitContinueStore.getState().panes).toEqual({
+      t1: { revision: 9, state: waiting },
     });
   });
 

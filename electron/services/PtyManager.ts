@@ -14,6 +14,7 @@ import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmis
 import type { CodexLimitAnswer, CodexLimitQuery } from "../../shared/types/codexLimitReset.js";
 import type {
   CodexLimitContinueResult,
+  CodexLimitContinueSkipReason,
   CodexLimitStopRef,
 } from "../../shared/types/codexLimitContinuation.js";
 import { createLogger } from "../utils/logger.js";
@@ -846,16 +847,19 @@ export class PtyManager extends EventEmitter {
   /**
    * Type the line that continues the terminal's Codex run at `stop` (#17909);
    * see {@link TerminalProcess.continueAtCodexLimit}. A trashed pane is no
-   * longer where its user left it.
+   * longer where its user left it, asked again at every check up to the write,
+   * along with whatever `hostBlocker` adds.
    */
   async continueAtCodexLimit(
     id: string,
-    stop: CodexLimitStopRef
+    stop: CodexLimitStopRef,
+    hostBlocker: () => CodexLimitContinueSkipReason | null = () => null
   ): Promise<CodexLimitContinueResult> {
     const terminal = this.registry.get(id);
     if (!terminal) return { status: "skipped", reason: "process-changed" };
-    if (this.isInTrash(id)) return { status: "skipped", reason: "agent-gone" };
-    return terminal.continueAtCodexLimit(stop);
+    return terminal.continueAtCodexLimit(stop, () =>
+      this.isInTrash(id) ? "agent-gone" : hostBlocker()
+    );
   }
 
   /** Undefined when the registry holds no such terminal. */

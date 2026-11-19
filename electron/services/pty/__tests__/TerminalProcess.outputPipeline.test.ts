@@ -1925,6 +1925,37 @@ describe("TerminalProcess continuing at a Codex limit's reset (#17909)", () => {
     terminal.dispose();
   });
 
+  it("counts an Enter alone, sent through the input lane, as input since the stop", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    terminal.submit("\r");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).not.toContain("continue");
+    terminal.dispose();
+  });
+
+  it("keeps what happened since the stop when the same banner comes back after a while", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    // A transcript opened over the stop for a while, then closed.
+    terminal.write("\x14");
+    ptyOnDataCallback!("\x1b[2J\x1b[H  Transcript\r\n");
+    await vi.advanceTimersByTimeAsync(10_000);
+    terminal.write("q");
+    ptyOnDataCallback!(stopScreen());
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen.stops).toHaveLength(2);
+    const redisplayed = seen.stops[1] as { run: string; seq: number };
+    expect(await continueAt(terminal, { run: redisplayed.run, seq: redisplayed.seq })).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).toBe("\x14q");
+    terminal.dispose();
+  });
+
   it("types nothing once a choice dialog showed after the stop, though it has gone", async () => {
     const { terminal, seen, typed } = await stoppedPane();
     const info = infoOf(terminal);

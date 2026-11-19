@@ -1,5 +1,5 @@
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
-import { getMergedPresets } from "../../../shared/utils/agentPresets.js";
+import { getMergedPresets, sanitizePreset } from "../../../shared/utils/agentPresets.js";
 
 /**
  * Whether a pane stopped by a usage limit falls back to another preset rather
@@ -51,10 +51,14 @@ export function decideLimitFallback(
   const originalId = run.originalPresetId ?? run.presetId;
   // The chain as the renderer resolves it: every source, so a fallback to a
   // project preset is kept rather than filtered out as unknown.
-  const chain =
-    getMergedPresets(run.agentId, customPresets, undefined, projectPresets).find(
-      (preset) => preset.id === originalId
-    )?.fallbacks ?? [];
+  const merged = getMergedPresets(run.agentId, customPresets, undefined, projectPresets);
+  // A fallback named but not read may be a preset file that failed to read
+  // rather than one deleted, and dropping it would move every later hop.
+  const known = new Set(merged.map((preset) => preset.id));
+  const ownOriginal = customPresets?.find((preset) => preset.id === originalId);
+  const named = (ownOriginal && sanitizePreset(ownOriginal)?.fallbacks) ?? [];
+  if (named.some((id) => !known.has(id))) return "unknown";
+  const chain = merged.find((preset) => preset.id === originalId)?.fallbacks ?? [];
   // A launch that doesn't say is the original's first, never a guess at a hop.
   const index = run.chainIndex ?? (run.presetId === originalId ? 0 : undefined);
   if (index === undefined) return "unknown";

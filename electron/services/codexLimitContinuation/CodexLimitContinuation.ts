@@ -20,6 +20,15 @@ export const CONTINUE_AFTER_RESET_MS = 60_000;
 const MAX_TIMER_MS = 2_147_483_647;
 /** Reset instants remembered per pane, so one already continued never fires twice. */
 const MAX_FIRED_PER_PANE = 8;
+/**
+ * How long after the machine wakes before a wait is judged: the pty host holds
+ * its terminals' reads for a moment after a resume and releases them one by
+ * one, and a pane read before then can't be told apart from one that moved on.
+ */
+export const WAKE_SETTLE_MS = 15_000;
+/** How soon a pane whose output was held unread is asked again, and how many times. */
+export const READS_PAUSED_RETRY_MS = 10_000;
+const READS_PAUSED_RETRIES = 6;
 
 /** A pane as its host reports it, as far as arming and the fallback read it. */
 export interface ContinuationTerminal {
@@ -30,6 +39,8 @@ export interface ContinuationTerminal {
   originalAgentPresetId: string | undefined;
   fallbackChainIndex: number | undefined;
   isAssistantTerminal: boolean;
+  /** Names the pane's process: a successor under the same id has another. */
+  spawnedAt: number | undefined;
 }
 
 export type Timer = unknown;
@@ -55,7 +66,7 @@ export interface CodexLimitContinuationDeps {
 export class CodexLimitContinuationError extends Error {
   constructor(
     message: string,
-    readonly code: "NOT_FOUND" | "UNSUPPORTED"
+    readonly code: "NOT_FOUND" | "UNSUPPORTED" | "DRIVEN_ELSEWHERE"
   ) {
     super(message);
     this.name = "CodexLimitContinuationError";
@@ -64,10 +75,14 @@ export class CodexLimitContinuationError extends Error {
 
 interface PendingWait {
   stop: CodexLimitStopRef;
+  /** The process that stopped, so a late exit of an earlier one leaves the wait alone. */
+  spawnedAt: number | undefined;
   resetsAt: number;
   continueAt: number;
   /** Taken for checking and typing: a timer and a wake landing together share it. */
   claimed: boolean;
+  /** Times the host found the pane's output held unread. */
+  pausedRetries: number;
 }
 
 interface ArmedPane {
@@ -101,6 +116,8 @@ export class CodexLimitContinuation {
   private nextRequest = 1;
   private timer: Timer | null = null;
   private timerAt: number | null = null;
+  /** No wait is judged before this, after the machine wakes. */
+  private wakeHoldUntil = 0;
 
   constructor(private readonly deps: CodexLimitContinuationDeps) {}
 
@@ -117,18 +134,42 @@ export class CodexLimitContinuation {
   /**
    * Arm a pane of `projectId` for agents whose limit Daintree can wait out,
    * or disarm it, which drops a pending wait at once. Asked twice in quick
-   * succession, the later request wins.
+   * succession from the project, the later request wins; another project's
+   * pane is never touched. `mayAct` is asked again once the host has answered,
+   * so a caller that stopped driving the project meanwhile arms nothing.
    */
-  async set(terminalId: string, enabled: boolean, projectId: string): Promise<void> {
-    const request = this.nextRequest++;
-    this.requests.set(terminalId, request);
+  async set(
+    terminalId: string,
+    enabled: boolean,
+    projectId: string,
+    mayAct: () => boolean = () => true
+  ): Promise<void> {
+    const owned = this.panes.get(terminalId);
+    if (owned && owned.projectId !== projectId) {
+      throw new CodexLimitContinuationError(
+        `No terminal ${terminalId} in this project`,
+        "NOT_FOUND"
+      );
+    }
+    const requestKey = `${projectId}\u0000${terminalId}`;
     if (!enabled) {
+      // An arm still waiting on its host read is superseded too.
+      this.requests.delete(requestKey);
       this.disarm(terminalId);
       return;
     }
-    if (this.panes.has(terminalId)) return;
+    if (owned) return;
+    const request = this.nextRequest++;
+    this.requests.set(requestKey, request);
     const terminal = await this.deps.readTerminal(terminalId).catch(() => null);
-    if (this.requests.get(terminalId) !== request) return;
+    if (this.requests.get(requestKey) !== request) return;
+    this.requests.delete(requestKey);
+    if (!mayAct()) {
+      throw new CodexLimitContinuationError(
+        "This project is being driven from another screen",
+        "DRIVEN_ELSEWHERE"
+      );
+    }
     if (!terminal || terminal.projectId !== projectId) {
       throw new CodexLimitContinuationError(
         `No terminal ${terminalId} in this project`,
@@ -213,7 +254,14 @@ export class CodexLimitContinuation {
       return this.record(pane, "already-continued");
     }
     const continueAt = reset.resetsAt + CONTINUE_AFTER_RESET_MS;
-    pane.wait = { stop, resetsAt: reset.resetsAt, continueAt, claimed: false };
+    pane.wait = {
+      stop,
+      spawnedAt: terminal.spawnedAt,
+      resetsAt: reset.resetsAt,
+      continueAt,
+      claimed: false,
+      pausedRetries: 0,
+    };
     this.setState(pane, { status: "waiting", resetsAt: reset.resetsAt, continueAt });
     this.checkDue();
   }
@@ -221,11 +269,15 @@ export class CodexLimitContinuation {
   /**
    * The pane's process changed: it exited, restarted, fell back or moved to
    * another account. A pending wait was for the old process and is dropped;
-   * the pane stays armed for the new one.
+   * the pane stays armed for the new one. `spawnedAt` names the process the
+   * fact is about, when known: a late exit of an earlier one leaves a
+   * successor's wait alone.
    */
-  handleProcessChange(terminalId: string): void {
+  handleProcessChange(terminalId: string, spawnedAt?: number): void {
     const pane = this.panes.get(terminalId);
     if (!pane) return;
+    const waitedFor = pane.wait?.spawnedAt;
+    if (spawnedAt !== undefined && waitedFor !== undefined && spawnedAt !== waitedFor) return;
     pane.epoch++;
     const hadWait = pane.wait !== null;
     pane.wait = null;
@@ -241,16 +293,29 @@ export class CodexLimitContinuation {
   }
 
   /**
+   * The machine woke. A wait whose time passed in sleep is judged once the
+   * pty host has let its terminals' reads go again, through the same checks;
+   * the timer is set again from the wall clock, as one that stopped counting
+   * in sleep would fire late.
+   */
+  handleWake(): void {
+    this.wakeHoldUntil = this.deps.now() + WAKE_SETTLE_MS;
+    this.reschedule(true);
+  }
+
+  /**
    * Continue every wait whose time has come, by the wall clock: after a
    * timer, and after the machine wakes, when one passed while it slept.
    */
   checkDue(): void {
     const now = this.deps.now();
-    for (const pane of this.panes.values()) {
-      const wait = pane.wait;
-      if (wait && !wait.claimed && wait.continueAt <= now) {
-        wait.claimed = true;
-        void this.fire(pane, wait);
+    if (now >= this.wakeHoldUntil) {
+      for (const pane of this.panes.values()) {
+        const wait = pane.wait;
+        if (wait && !wait.claimed && wait.continueAt <= now) {
+          wait.claimed = true;
+          void this.fire(pane, wait);
+        }
       }
     }
     this.reschedule();
@@ -266,13 +331,25 @@ export class CodexLimitContinuation {
   }
 
   private async fire(pane: ArmedPane, wait: PendingWait): Promise<void> {
-    const fired = this.fired.get(pane.terminalId) ?? [];
-    fired.push(wait.resetsAt);
-    this.fired.set(pane.terminalId, fired.slice(-MAX_FIRED_PER_PANE));
     const result = await this.deps
       .continueAt(pane.terminalId, wait.stop)
       .catch((): CodexLimitContinueResult => ({ status: "skipped", reason: "host-unanswered" }));
     if (this.panes.get(pane.terminalId) !== pane || pane.wait !== wait) return;
+    // Output held unread says nothing yet: the same wait is judged again soon.
+    if (
+      result.status === "skipped" &&
+      result.reason === "reads-paused" &&
+      wait.pausedRetries < READS_PAUSED_RETRIES
+    ) {
+      wait.pausedRetries++;
+      wait.claimed = false;
+      wait.continueAt = this.deps.now() + READS_PAUSED_RETRY_MS;
+      this.reschedule();
+      return;
+    }
+    const fired = this.fired.get(pane.terminalId) ?? [];
+    fired.push(wait.resetsAt);
+    this.fired.set(pane.terminalId, fired.slice(-MAX_FIRED_PER_PANE));
     pane.wait = null;
     if (result.status === "continued") {
       this.setState(pane, { status: "continued", at: this.deps.now(), line: result.line });
@@ -299,8 +376,12 @@ export class CodexLimitContinuation {
     });
   }
 
-  /** One timer, for the earliest wait still to come; none while nothing waits. */
-  private reschedule(): void {
+  /**
+   * One timer, for the earliest wait still to come, never before a wake's
+   * hold ends; none while nothing waits. `force` sets it again even for the
+   * same deadline.
+   */
+  private reschedule(force = false): void {
     let earliest: number | null = null;
     for (const pane of this.panes.values()) {
       const wait = pane.wait;
@@ -308,7 +389,8 @@ export class CodexLimitContinuation {
         earliest = wait.continueAt;
       }
     }
-    if (earliest === this.timerAt) return;
+    if (earliest !== null) earliest = Math.max(earliest, this.wakeHoldUntil);
+    if (!force && earliest === this.timerAt) return;
     if (this.timer !== null) this.deps.clearTimer(this.timer);
     this.timer = null;
     this.timerAt = earliest;

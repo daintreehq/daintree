@@ -26,6 +26,7 @@ async function readTerminal(terminalId: string): Promise<ContinuationTerminal | 
     originalAgentPresetId: info.originalAgentPresetId,
     fallbackChainIndex: info.fallbackChainIndex,
     isAssistantTerminal: info.isAssistantTerminal === true,
+    spawnedAt: info.spawnedAt,
   };
 }
 
@@ -84,15 +85,16 @@ function startListening(target: CodexLimitContinuation): void {
   const onStop = (fact: { terminalId: string } & CodexLimitStopRef) =>
     void target.handleStop(fact.terminalId, { run: fact.run, seq: fact.seq });
   const onSpawn = (terminalId: string) => target.handleSpawn(terminalId);
-  const onExit = (fact: PtyIncarnationExit) => target.handleProcessChange(fact.terminalId);
+  const onExit = (fact: PtyIncarnationExit) =>
+    target.handleProcessChange(fact.terminalId, fact.spawnedAt);
   const onLost = (fact: PtyIncarnationLost) => target.handleProcessChange(fact.terminalId);
   const onTerminalLost = (terminalId: string) => target.handleProcessChange(terminalId);
   const offAgentExit = events.on("agent:exited", (payload) =>
     target.handleProcessChange(payload.terminalId)
   );
-  // The raw event: a wait whose time passed in sleep is judged as soon as the
-  // machine is back, through the same checks.
-  const onResume = () => target.checkDue();
+  // The raw event: a wait whose time passed in sleep is judged once the
+  // machine is back and its terminals are read again, through the same checks.
+  const onResume = () => target.handleWake();
   ptyClient?.on("codex-limit-stopped", onStop);
   ptyClient?.on("spawn-result", onSpawn);
   ptyClient?.on("incarnation-exit", onExit);

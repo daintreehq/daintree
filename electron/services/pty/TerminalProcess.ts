@@ -124,6 +124,16 @@ import {
   type VisibleContentSnapshot,
 } from "./SustainedChangeTracker.js";
 
+/** What has happened to a pane since its Codex stop first showed (#17909). */
+interface CodexStopGuard {
+  /** The banner it was for. */
+  key: string;
+  /** The terminal's input count when it first showed: any later write is input since the stop. */
+  inputSeq: number;
+  /** A choice dialog was observed since, whatever the screen shows now. */
+  dialogSeen: boolean;
+}
+
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
 const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
 /**
@@ -317,11 +327,16 @@ export class TerminalProcess {
     /** When a look last showed it, and when one first stopped showing it (null while shown). */
     lastSeenAt: number;
     hiddenSince: number | null;
-    /** The terminal's input count at the sighting: any later write is input since the stop (#17909). */
-    inputSeq: number;
-    /** A choice dialog was observed after the sighting, whatever the screen shows now (#17909). */
-    dialogSeen: boolean;
+    /** What has happened to the pane since this stop first showed (#17909). */
+    guard: CodexStopGuard;
   } | null = null;
+  /**
+   * The guard of the stop last seen, kept for a redisplay of the same banner
+   * after it was off screen a while (a transcript or picker closed): the same
+   * stop, so what happened since it first showed still counts. A turn the
+   * agent works through ends it, and the next stop starts afresh.
+   */
+  private codexStopGuard: CodexStopGuard | null = null;
   /** Whether the latest look showed a readable stop, a half-drawn or unreadable one, or none. */
   private codexLimitLook: "banner" | "unreadable" | "none" = "none";
   private codexLimitSeq = 0;
@@ -827,6 +842,24 @@ export class TerminalProcess {
     }
     this.flushAgentOutput();
     this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
+    this.noteCodexStopState();
+  }
+
+  /**
+   * Every state the pane is observed in, whenever it arrives (#17909): a
+   * choice dialog marks the stop on screen, and a turn worked through ends the
+   * guard a redisplay of the same banner would keep.
+   */
+  private noteCodexStopState(): void {
+    const t = this.terminalInfo;
+    if (t.agentState === "working") {
+      this.codexStopGuard = null;
+      return;
+    }
+    if (t.agentState === "waiting" && t.waitingReason === "approval") {
+      if (this.codexLimit) this.codexLimit.guard.dialogSeen = true;
+      if (this.codexStopGuard) this.codexStopGuard.dialogSeen = true;
+    }
   }
 
   private handleAnalysisWaitingTimeout(spawnedAt: number): void {
@@ -2248,6 +2281,7 @@ export class TerminalProcess {
     if (banner?.kind !== "unreadable") this.codexSettledLookAt = now;
     if (!live) {
       this.codexLimit = null;
+      this.codexStopGuard = null;
       this.codexLimitLook = "none";
       this.trackCodexStop();
       return;
@@ -2255,9 +2289,7 @@ export class TerminalProcess {
     const held = this.codexLimit;
     // A dialog that came and went leaves the same screen behind, so the
     // sighting remembers it.
-    if (held && t.agentState === "waiting" && t.waitingReason === "approval") {
-      held.dialogSeen = true;
-    }
+    this.noteCodexStopState();
     // A half-drawn or unreadable stop answers for itself, but doesn't replace
     // the one held: a repaint that passes through it may bring that one back.
     if (banner === null || banner.kind === "unreadable") {
@@ -2301,8 +2333,7 @@ export class TerminalProcess {
       observedSince,
       lastSeenAt: now,
       hiddenSince: null,
-      inputSeq: this.inputController.inputSequence,
-      dialogSeen: false,
+      guard: this.codexStopGuardFor(key),
       observation: {
         banner,
         observedAt: now,
@@ -2367,6 +2398,15 @@ export class TerminalProcess {
     }
     const evidence = readCodexLimitEvidence(query.evidence);
     return { reset: resolveCodexLimitReset(observation, evidence, Date.now()), stamp };
+  }
+
+  /** The guard for a new sighting of `key`: the last stop's when it is the same banner again. */
+  private codexStopGuardFor(key: string): CodexStopGuard {
+    const kept = this.codexStopGuard;
+    if (kept && kept.key === key) return kept;
+    const guard = { key, inputSeq: this.inputController.inputSequence, dialogSeen: false };
+    this.codexStopGuard = guard;
+    return guard;
   }
 
   /**
@@ -2461,7 +2501,8 @@ export class TerminalProcess {
    */
   private codexContinueBlocker(
     stop: CodexLimitStopRef,
-    inLane: boolean
+    inLane: boolean,
+    hostBlocker: () => CodexLimitContinueSkipReason | null
   ): CodexLimitContinueSkipReason | null {
     const t = this.terminalInfo;
     const held = this.codexLimit;
@@ -2476,14 +2517,14 @@ export class TerminalProcess {
     if (this.codexLimitLook !== "banner" || held.hiddenSince !== null) return "banner-gone";
     // A banner seen before a gap in the read may have been replaced unseen.
     if (this.analysis.observedSince() !== held.observedSince) return "not-observed";
-    if (this.inputController.inputSequence !== held.inputSeq) return "input-since";
-    if (held.dialogSeen || (t.agentState === "waiting" && t.waitingReason === "approval")) {
+    if (this.inputController.inputSequence !== held.guard.inputSeq) return "input-since";
+    if (held.guard.dialogSeen || (t.agentState === "waiting" && t.waitingReason === "approval")) {
       return "dialog-since";
     }
     if (this.inputController.isInputLocked) return "input-locked";
     if (!inLane && this.writeQueue.hasPendingSubmission()) return "input-pending";
     if (t.agentState === "working") return "agent-working";
-    return null;
+    return hostBlocker();
   }
 
   /**
@@ -2495,23 +2536,28 @@ export class TerminalProcess {
    * submission, so the checks run again the moment it takes the lane and input
    * arriving between its text and its Enter abandons the Enter.
    */
-  async continueAtCodexLimit(stop: CodexLimitStopRef): Promise<CodexLimitContinueResult> {
+  async continueAtCodexLimit(
+    stop: CodexLimitStopRef,
+    hostBlocker: () => CodexLimitContinueSkipReason | null = () => null
+  ): Promise<CodexLimitContinueResult> {
     const skipped = (reason: CodexLimitContinueSkipReason): CodexLimitContinueResult => ({
       status: "skipped",
       reason,
     });
-    const before = this.codexContinueBlocker(stop, false);
+    const before = this.codexContinueBlocker(stop, false, hostBlocker);
     if (before !== null) return skipped(before);
     const streamOffset = this.emittedBytes;
     // The whole buffer, so the read carries its continuation: proof the
     // mirror parsed every byte emitted before it, which a capped read lacks.
     const snapshot = await this.getSerializedStateAsync().catch(() => null);
-    const after = this.codexContinueBlocker(stop, false);
+    const after = this.codexContinueBlocker(stop, false, hostBlocker);
     if (after !== null) return skipped(after);
     if (this.emittedBytes !== streamOffset) return skipped("output-since");
     if (snapshot?.continuation?.streamOffset !== streamOffset) return skipped("unreadable-screen");
     const cols = readPtyDimension(() => this.terminalInfo.ptyProcess.cols, null) ?? undefined;
-    const verdict = judgeCodexLimitScreen(snapshot.data, cols);
+    const held = this.codexLimit;
+    if (held === null) return skipped("banner-changed");
+    const verdict = judgeCodexLimitScreen(snapshot.data, cols, held.key);
     if ("skip" in verdict) return skipped(verdict.skip);
     const { line } = verdict;
     return new Promise<CodexLimitContinueResult>((resolve) => {
@@ -2531,7 +2577,7 @@ export class TerminalProcess {
         // Already answered (the lane took too long): it must not type after all.
         if (settled) return false;
         const blocker =
-          this.codexContinueBlocker(stop, true) ??
+          this.codexContinueBlocker(stop, true, hostBlocker) ??
           (this.emittedBytes !== streamOffset ? "output-since" : null);
         if (blocker === null) return true;
         settle(skipped(blocker));

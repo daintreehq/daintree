@@ -115,13 +115,12 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
         send({ status: "skipped", reason: "process-changed" });
         return;
       }
-      // Bytes the PTY holds unread may already say the pane moved on.
-      if (ctx.getPauseCoordinator(msg.id)?.isReadPaused) {
-        send({ status: "skipped", reason: "not-observed" });
-        return;
-      }
+      // Bytes the PTY holds unread may already say the pane moved on: asked
+      // at every check up to the write, as reads pause and resume meanwhile.
+      const readsPaused = () =>
+        ctx.getPauseCoordinator(msg.id)?.isReadPaused ? ("reads-paused" as const) : null;
       void ptyManager
-        .continueAtCodexLimit(msg.id, stop)
+        .continueAtCodexLimit(msg.id, stop, readsPaused)
         .then(send, () => send({ status: "skipped", reason: "not-delivered" }));
     },
 

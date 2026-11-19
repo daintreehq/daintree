@@ -62,7 +62,18 @@ describe("decideLimitFallback (#17909)", () => {
   it("keeps a fallback to a project preset in the chain", () => {
     const ownWork = preset("work", { fallbacks: ["team"], fallbackOnRateLimit: true });
     expect(decideLimitFallback(run(), [ownWork], [preset("team")])).toBe("fallback");
-    expect(decideLimitFallback(run(), [ownWork], undefined)).toBe("none");
+  });
+
+  it("can't tell when a fallback the preset names wasn't among the presets read", () => {
+    // A project preset file that failed to read looks just like a deleted one.
+    const ownWork = preset("work", { fallbacks: ["team", "spare"], fallbackOnRateLimit: true });
+    expect(
+      decideLimitFallback(
+        run({ presetId: "spare", chainIndex: 2 }),
+        [ownWork, preset("spare")],
+        undefined
+      )
+    ).toBe("unknown");
   });
 
   it("can't tell when a source it needs went unread, or a hop wasn't reported", () => {

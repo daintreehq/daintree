@@ -39,6 +39,8 @@ export type CodexLimitContinueSkipReason =
   | "agent-working"
   /** The pane printed while it was being checked. */
   | "output-since"
+  /** The pane's output was held unread (a sleep, backpressure); asked again shortly. */
+  | "reads-paused"
   | "unreadable-screen"
   /** Something was printed below the banner. */
   | "banner-not-last"

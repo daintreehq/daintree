@@ -7,6 +7,8 @@ import type {
 import type { CodexLimitStop } from "../../codex/CodexLimitReset.js";
 import {
   CONTINUE_AFTER_RESET_MS,
+  READS_PAUSED_RETRY_MS,
+  WAKE_SETTLE_MS,
   CodexLimitContinuation,
   CodexLimitContinuationError,
   type CodexLimitContinuationDeps,
@@ -27,6 +29,7 @@ const codexPane = (extra: Partial<ContinuationTerminal> = {}): ContinuationTermi
   originalAgentPresetId: undefined,
   fallbackChainIndex: undefined,
   isAssistantTerminal: false,
+  spawnedAt: 1_000,
   ...extra,
 });
 
@@ -131,15 +134,46 @@ describe("CodexLimitContinuation (#17909)", () => {
     expect(h.state()).toEqual({ status: "continued", at: expect.any(Number), line: "continue" });
   });
 
-  it("judges a wait whose time passed in sleep on wake, once, though its timer fires too", async () => {
+  it("judges a wait whose time passed in sleep once the host reads again, once", async () => {
     const h = harness();
     await h.service.set("t1", true, PROJECT);
     await h.service.handleStop("t1", STOP);
     // Asleep: the wall clock moves on, the timer doesn't.
     vi.setSystemTime(RESETS_AT + 6 * 60 * 60_000);
-    h.service.checkDue();
-    await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS);
+    h.service.handleWake();
+    // The host still holds its terminals' reads just after a resume.
+    await vi.advanceTimersByTimeAsync(WAKE_SETTLE_MS - 1);
+    expect(h.continueAt).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(h.continueAt).toHaveBeenCalledTimes(1);
+    await vi.runAllTimersAsync();
+    expect(h.continueAt).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets the timer again on wake, so a sleep before the reset doesn't delay it", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    await h.service.handleStop("t1", STOP);
+    const continueAt = RESETS_AT + CONTINUE_AFTER_RESET_MS;
+    // Slept 90 minutes of the wait: a timer that stopped counting would still
+    // have nearly all of it to run.
+    vi.setSystemTime(START + 90 * 60_000);
+    h.service.handleWake();
+    await vi.advanceTimersByTimeAsync(continueAt - Date.now());
+    expect(h.continueAt).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks again while the host holds the pane's output unread, without spending the reset", async () => {
+    const h = harness();
+    h.continueAt.mockResolvedValueOnce({ status: "skipped", reason: "reads-paused" });
+    await h.service.set("t1", true, PROJECT);
+    await h.service.handleStop("t1", STOP);
+    await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS - START);
+    expect(h.continueAt).toHaveBeenCalledTimes(1);
+    expect(h.state()).toMatchObject({ status: "waiting" });
+    await vi.advanceTimersByTimeAsync(READS_PAUSED_RETRY_MS);
+    expect(h.continueAt).toHaveBeenCalledTimes(2);
+    expect(h.state()).toMatchObject({ status: "continued", line: "continue" });
   });
 
   it("records the host's reason when the pane wasn't where the limit left it", async () => {
@@ -174,10 +208,13 @@ describe("CodexLimitContinuation (#17909)", () => {
     expect(h.continueAt).not.toHaveBeenCalled();
   });
 
-  it("never times one stop by another's reset", async () => {
+  it.each([
+    ["a later sighting", { run: "run-a", seq: 2 }],
+    ["another process's", { run: "run-b", seq: 1 }],
+  ])("never times one stop by %s reset", async (_name, answered) => {
     const h = harness();
     await h.service.set("t1", true, PROJECT);
-    h.setStop(known(RESETS_AT, { run: "run-a", seq: 2 }));
+    h.setStop(known(RESETS_AT, answered));
     await h.service.handleStop("t1", STOP);
     expect(h.state()).toMatchObject({ status: "skipped", reason: "banner-changed" });
   });
@@ -211,6 +248,16 @@ describe("CodexLimitContinuation (#17909)", () => {
     expect(h.continueAt).not.toHaveBeenCalled();
   });
 
+  it("keeps a wait when an earlier process's exit arrives late", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    await h.service.handleStop("t1", STOP);
+    h.service.handleProcessChange("t1", 500);
+    expect(h.state()).toMatchObject({ status: "waiting" });
+    h.service.handleProcessChange("t1", 1_000);
+    expect(h.state()).toEqual({ status: "armed" });
+  });
+
   it("drops a stop answered after the process changed under it", async () => {
     const h = harness();
     await h.service.set("t1", true, PROJECT);
@@ -232,9 +279,32 @@ describe("CodexLimitContinuation (#17909)", () => {
     await h.service.set("t1", true, PROJECT);
     await h.service.handleStop("t1", STOP);
     await h.service.set("t1", false, PROJECT);
+    expect(vi.getTimerCount()).toBe(0);
     await vi.runAllTimersAsync();
     expect(h.continueAt).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("never lets another project disarm a pane, or arm one", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    await h.service.handleStop("t1", STOP);
+    await expect(h.service.set("t1", false, "other-project")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(h.service.set("t1", true, "other-project")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(h.state()).toMatchObject({ status: "waiting" });
+  });
+
+  it("arms nothing for a caller that stopped driving the project while the host answered", async () => {
+    const h = harness();
+    let driving = true;
+    const arming = h.service.set("t1", true, PROJECT, () => driving);
+    driving = false;
+    await expect(arming).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(h.service.list(PROJECT)).toEqual([]);
+    expect(h.hostArmed).toEqual([]);
   });
 
   it("orders every push by revision, so a reloaded view can merge the list with them", async () => {

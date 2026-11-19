@@ -22,6 +22,14 @@ const GOAL_USAGE_LIMITED = "Goal hit usage limits (/goal resume)";
 const GOAL_WORD = /\bgoal\b/i;
 /** Plan mode's indicator takes the footer slot a goal status would show in. */
 const PLAN_MODE = /\bPlan mode\b/;
+/**
+ * Rows Codex draws below an empty composer: its footer, and room for a status
+ * line, each indented as Codex draws them. Anything longer, or a row written
+ * from the left edge, is something else printed after it (a shell prompt once
+ * Codex has exited).
+ */
+const MAX_FOOTER_ROWS = 3;
+const FOOTER_ROW = /^\s+\S/;
 
 export type CodexLimitScreenVerdict =
   { line: CodexLimitContinueLine } | { skip: CodexLimitContinueSkipReason };
@@ -35,14 +43,16 @@ function plainRows(serialized: string): string[] {
 
 /**
  * Whether a Codex pane's screen is still the one its usage limit left (#17909),
- * and the line that continues it: the stop banner the last thing above an
- * empty composer, and a footer that says which line. A plain turn takes
- * `continue`, a `/goal` run that hit the limit takes `/goal resume`, and
- * anything else is a skip. Nothing of the screen leaves here.
+ * and the line that continues it: the stop banner `bannerKey` names, the last
+ * thing above an empty composer that is the last thing on screen but its
+ * footer, and a footer that says which line. A plain turn takes `continue`, a
+ * `/goal` run that hit the limit takes `/goal resume`, and anything else is a
+ * skip. Nothing of the screen leaves here.
  */
 export function judgeCodexLimitScreen(
   serialized: string,
-  cols: number | undefined
+  cols: number | undefined,
+  bannerKey: string
 ): CodexLimitScreenVerdict {
   const rows = plainRows(serialized);
   // The banner reader takes the rows without the blank ones between cells.
@@ -52,15 +62,24 @@ export function judgeCodexLimitScreen(
     cols
   );
   if (located === null || located.banner.kind === "unreadable") return { skip: "banner-gone" };
+  // Another stop drawn since the one the wait was for, which the pane's last
+  // look may not have caught up with yet.
+  if (JSON.stringify(located.banner) !== bannerKey) return { skip: "banner-changed" };
   const promptAt = located.end + 1;
   if (promptAt >= written.length) return { skip: "no-composer" };
   if (!PROMPT_ROW.test(rows[written[promptAt]!]!)) return { skip: "banner-not-last" };
+  const below = written.slice(promptAt + 1).map((index) => rows[index]!);
+  if (
+    below.length > MAX_FOOTER_ROWS ||
+    below.some((row) => PROMPT_ROW.test(row) || !FOOTER_ROW.test(row))
+  ) {
+    return { skip: "banner-not-last" };
+  }
   const inputLine = observeInputLine(serialized, inputSuggestionRuleFor("codex")).inputLine;
   if (inputLine.state === "unknown") return { skip: "no-composer" };
   if (inputLine.state !== "empty") return { skip: "draft" };
-  const footer = written.slice(promptAt + 1).map((index) => rows[index]!);
-  if (footer.some((row) => row.includes(GOAL_USAGE_LIMITED))) return { line: "/goal resume" };
-  if (footer.some((row) => GOAL_WORD.test(row) || PLAN_MODE.test(row))) {
+  if (below.some((row) => row.includes(GOAL_USAGE_LIMITED))) return { line: "/goal resume" };
+  if (below.some((row) => GOAL_WORD.test(row) || PLAN_MODE.test(row))) {
     return { skip: "unrecognized-footer" };
   }
   return { line: "continue" };

@@ -24,9 +24,12 @@ async function handleSet(ctx: IpcContext, terminalId: string, enabled: boolean):
     throw new AppError({ code: "VALIDATION", message: "enabled must be a boolean" });
   }
   // Arming lets Daintree type into the agent later, so only the project's
-  // driver may, as for a submit.
-  const lease = peekDriveLeaseService();
-  if (lease && ctx.endpoint && !lease.isDriving(projectId, ctx.endpoint)) {
+  // driver may, as for a submit: asked now, and again once the host answered.
+  const isDriver = (): boolean => {
+    const lease = peekDriveLeaseService();
+    return !lease || !ctx.endpoint || lease.isDriving(projectId, ctx.endpoint);
+  };
+  if (!isDriver()) {
     throw new AppError({
       code: "DRIVEN_ELSEWHERE",
       message: `terminal ${terminalId} is driven elsewhere; only its driver may arm it`,
@@ -39,7 +42,7 @@ async function handleSet(ctx: IpcContext, terminalId: string, enabled: boolean):
   const { CodexLimitContinuationError } =
     await import("../../services/codexLimitContinuation/CodexLimitContinuation.js");
   try {
-    await getCodexLimitContinuation().set(terminalId, enabled, projectId);
+    await getCodexLimitContinuation().set(terminalId, enabled, projectId, isDriver);
   } catch (error) {
     if (error instanceof CodexLimitContinuationError) {
       throw new AppError({
