@@ -20,13 +20,19 @@ const REFUSALS = [
 ];
 
 describe("findClaudeRestartRefusal", () => {
-  it("covers every refusal head the shipped CLI prints", () => {
-    for (const head of CLAUDE_RESTART_REFUSAL_HEADS) {
-      expect(
-        REFUSALS.some((line) => line.startsWith(head)),
-        head
-      ).toBe(true);
-    }
+  it("knows every refusal head the shipped CLI prints", () => {
+    // Written out here, not read from the list: a head dropped from it must fail.
+    expect([...CLAUDE_RESTART_REFUSAL_HEADS].sort()).toEqual(
+      [
+        "Can't restart automatically.",
+        "Can't restart while work is running in the background.",
+        "Can't restart while Remote Control is connected.",
+        "Can't restart this session. It isn't saved to disk,",
+        "Can't restart this session here.",
+        "Can't restart. The installed version wasn't found.",
+        "Can't restart on the installed version.",
+      ].sort()
+    );
   });
 
   it.each(REFUSALS)("quotes %s exactly as drawn", (line) => {
@@ -80,5 +86,49 @@ describe("findClaudeRestartRefusal", () => {
 
   it("finds nothing in empty output", () => {
     expect(findClaudeRestartRefusal("")).toBeNull();
+  });
+
+  it("reads only below the last echo of the command", () => {
+    const text = ["❯ /restart", `  ⎿  ${REFUSALS[0]}`, "❯ /restart", `  ⎿  ${REFUSALS[1]}`].join(
+      "\n"
+    );
+    expect(findClaudeRestartRefusal(text)).toBe(REFUSALS[1]);
+    expect(findClaudeRestartRefusal(text.split("\n").slice(0, 3).join("\n"))).toBeNull();
+  });
+
+  it.each([
+    ["a boxed result", "│ ⎿  ", "│    "],
+    ["a result at another indent", "⎿ ", "  "],
+  ])("joins the wrap of %s", (_name, gutter, indent) => {
+    const text = answered(
+      `${gutter}Can't restart this session here. Its folder,`,
+      `${indent}/a/b, can't be found.`
+    );
+    expect(findClaudeRestartRefusal(text)).toBe(
+      "Can't restart this session here. Its folder, /a/b, can't be found."
+    );
+  });
+
+  it("stops a wrap at a row in another column", () => {
+    const text = [
+      "  ⎿  Can't restart automatically. Type /restart at the prompt.",
+      "  unrelated",
+    ].join("\n");
+    expect(findClaudeRestartRefusal(text)).toBe(
+      "Can't restart automatically. Type /restart at the prompt."
+    );
+  });
+
+  it("reads a typographic apostrophe under the gutter too", () => {
+    expect(findClaudeRestartRefusal(answered("  ⎿  Can’t restart while it runs."))).toBe(
+      "Can’t restart while it runs."
+    );
+  });
+
+  it.each([
+    ["an unknown head without the gutter", "Can't restart the dev server until the port frees."],
+    ["the phrase mid-sentence, capitalised", "  ⎿  It said Can't restart right now."],
+  ])("finds nothing in %s", (_name, row) => {
+    expect(findClaudeRestartRefusal(answered(row))).toBeNull();
   });
 });

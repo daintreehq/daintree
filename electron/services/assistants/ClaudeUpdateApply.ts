@@ -87,6 +87,8 @@ export interface ClaudeUpdateRequest {
   signal?: AbortSignal;
   /** Epoch ms by which the line must be handed over, so the call can still answer in time. */
   deadline?: number;
+  /** Told once the terminal has written the line, before Claude's answer is read. */
+  onWritten?: () => void;
 }
 
 type Check =
@@ -273,6 +275,18 @@ export class ClaudeUpdateApply {
       }
       await this.sleep(POLL_MS);
     }
+    // The ready read was awaited: the call may have ended, or its time run
+    // out, while it was in flight. Nothing is typed for a caller already answered.
+    if (request.signal?.aborted === true) {
+      return this.notSent(pin, "cancelled", "The call ended before the pane was ready.");
+    }
+    if (this.now() >= deadline) {
+      return this.notSent(
+        pin,
+        "expired",
+        "The pane reached its empty prompt only after the request's time ran out."
+      );
+    }
     try {
       request.authorize();
     } catch (error) {
@@ -292,7 +306,7 @@ export class ClaudeUpdateApply {
       },
       request.inputOwner
     );
-    return this.follow(pin, token);
+    return this.follow(pin, token, request);
   }
 
   /** What the pane looks like to the request now. */
@@ -347,9 +361,19 @@ export class ClaudeUpdateApply {
   }
 
   /** Follow the line the terminal was handed to its end, then read Claude's answer. */
-  private async follow(pin: ClaudeUpdatePin, token: string): Promise<ApplyClaudeUpdateResult> {
+  private async follow(
+    pin: ClaudeUpdatePin,
+    token: string,
+    request: ClaudeUpdateRequest
+  ): Promise<ApplyClaudeUpdateResult> {
     const { terminalId } = pin;
     const handedAt = this.now();
+    let withdrawn = false;
+    const withdraw = () => {
+      if (withdrawn) return;
+      withdrawn = true;
+      this.deps.withdraw(terminalId, token);
+    };
     let written: TerminalSubmissionRecord | undefined;
     while (written === undefined) {
       const submission = (await this.deps.getTerminal(terminalId, token).catch(() => null))
@@ -358,13 +382,15 @@ export class ClaudeUpdateApply {
         case "pty_written":
           written = submission;
           continue;
+        // Refused as it reached the lane, or its Enter held back after the
+        // line went in: the record doesn't say which.
         case "cancelled":
           return {
             terminalId,
             status: "not-sent",
             reason: "withheld",
             message:
-              "The terminal refused the line as it arrived, because the pane stopped waiting at an empty prompt: Enter wasn't pressed. If the line was already typed, `/restart` may sit at the prompt. A later attempt needs a new request and approval.",
+              "Enter wasn't pressed: the pane stopped waiting at its empty prompt as the line reached it. If the line had already gone in, `/restart` may sit typed at the prompt. A later attempt needs a new request and approval.",
           };
         case "failed":
           return {
@@ -378,26 +404,37 @@ export class ClaudeUpdateApply {
             terminalId,
             status: "unconfirmed",
             message:
-              "The terminal lost its record of the line, so whether `/restart` went in is unknown. It won't be sent again.",
+              "The terminal holds no record of the line, so whether `/restart` went in is unknown. It won't be sent again.",
           };
         default:
           break;
       }
+      // A call that ended takes the line back if it can; what became of it is still read.
+      if (request.signal?.aborted === true) withdraw();
       if (this.now() - handedAt >= CLAUDE_UPDATE_DELIVERY_MS) {
-        this.deps.withdraw(terminalId, token);
+        withdraw();
         return {
           terminalId,
           status: "unconfirmed",
           message:
-            "The terminal hadn't written the line after it was handed over, so it was taken back; if it had started, `/restart` may sit at the prompt. It won't be sent again.",
+            "The terminal hadn't written the line in time, so taking it back was asked for; whether it went in is unknown, and `/restart` may sit at the prompt. It won't be sent again.",
         };
       }
       await this.sleep(POLL_MS / 2);
     }
+    try {
+      request.onWritten?.();
+    } catch (error) {
+      console.error("[ClaudeUpdateApply] A written line's follow-up failed:", error);
+    }
     return this.watch(pin, token, written);
   }
 
-  /** Read what the terminal drew after the Enter, until a refusal shows or the watch ends. */
+  /**
+   * Read what the terminal drew after the Enter, until a refusal shows or the
+   * watch ends. A refusal is quoted from a read after the one it first showed
+   * in, so a row still being drawn isn't cut short.
+   */
   private async watch(
     pin: ClaudeUpdatePin,
     token: string,
@@ -406,35 +443,47 @@ export class ClaudeUpdateApply {
     const { terminalId } = pin;
     const until = this.now() + CLAUDE_UPDATE_WATCH_MS;
     let latest = written;
+    // Whether the last read reached this line's record: a capture that can't
+    // be followed any more is no evidence that nothing came after it.
+    let followed = true;
+    let seen: string | null = null;
     for (;;) {
       const output = latest.output;
       const refusal = output === undefined ? null : findClaudeRestartRefusal(output.text);
-      if (refusal !== null) {
+      // Quoted from the read after it first showed, or as first seen if that
+      // read lost it: a sighting is never taken back.
+      if (seen !== null || (refusal !== null && this.now() >= until)) {
+        const quoted =
+          seen === null || (refusal !== null && refusal.length > seen.length) ? refusal! : seen;
         return {
           terminalId,
           status: "sent",
-          refusal,
+          refusal: quoted,
           output: "read",
-          message: `\`/restart\` was typed and Enter pressed; Claude Code answered with a refusal, quoted as drawn. It won't be sent again: a later attempt is a new request.`,
+          message:
+            "`/restart` was typed and Enter pressed; Claude Code answered with a refusal, quoted as drawn. It won't be sent again: a later attempt is a new request.",
         };
       }
+      seen = refusal;
       // Nothing more will be drawn into it: the run moved on, or what was kept is all there is.
       const ended = output !== undefined && output.state !== "capturing";
-      if (ended || this.now() >= until) {
-        const readable = output !== undefined && output.state !== "lost";
+      if (seen === null && (ended || this.now() >= until)) {
+        const complete =
+          output !== undefined && followed && output.state !== "lost" && !output.truncated;
         return {
           terminalId,
           status: "sent",
           refusal: null,
-          output: output === undefined ? "unavailable" : readable ? "read" : "lost",
-          message: readable
+          output: output === undefined ? "unavailable" : complete ? "read" : "lost",
+          message: complete
             ? `\`/restart\` was typed and Enter pressed; no refusal from Claude Code was seen in what the terminal drew after it${ended ? "" : ` in ${Math.round(CLAUDE_UPDATE_WATCH_MS / 1000)}s`}. Whether the conversation came back isn't known from here: check the pane.`
-            : `\`/restart\` was typed and Enter pressed, but what the terminal drew after it couldn't be read, so a refusal can't be ruled out. Check the pane before asking again.`,
+            : "`/restart` was typed and Enter pressed, but what the terminal drew after it couldn't all be read, so a refusal can't be ruled out. Check the pane before asking again.",
         };
       }
       await this.sleep(POLL_MS);
       const next = (await this.deps.getTerminal(terminalId, token).catch(() => null))?.submission;
-      if (next?.phase === "pty_written") latest = next;
+      followed = next?.phase === "pty_written";
+      if (followed) latest = next!;
     }
   }
 

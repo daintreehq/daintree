@@ -14,44 +14,63 @@ export const CLAUDE_RESTART_REFUSAL_HEADS = [
   "Can't restart on the installed version.",
 ] as const;
 
-// Every refusal above opens this way, and a later build's new one will too.
-// Either apostrophe: Claude's copy uses the straight one, but a terminal font
-// or a future string may not.
-const REFUSAL_HEAD = /^Can[’']t restart\b/;
+// Claude's copy uses the straight apostrophe; a terminal font or a later
+// string may not.
+const normalizeApostrophe = (text: string) => text.replace(/’/g, "'");
+
+// Under the result gutter, any `Can't restart` opens a refusal, a later
+// build's new one included. Without it only a known head does: a transcript
+// row can open the same way.
+const REFUSAL_HEAD = /^Can't restart\b/;
+const KNOWN_HEADS = CLAUDE_RESTART_REFUSAL_HEADS.map(normalizeApostrophe);
 
 // A command's result hangs off its echo under this gutter, sometimes inside a
 // box edge. Not the reply glyph: an agent's own sentence there is no refusal.
-const GUTTER = /^[\s│┃]*(?:⎿\s*)?/;
+const EDGE = /^[\s│┃]*/;
+const GUTTER = /^[\s│┃]*⎿\s*/;
+
+// The command as the transcript echoes it, at the prompt glyph.
+const ECHO = /^[\s│┃]*[❯>]\s*\/restart\s*$/;
 
 // A row Claude draws for something else: its prompt, a reply, a rule or a
 // status glyph. Never the next part of a wrapped message.
-const NOT_CONTINUATION = /^\s*(?:[⎿⏺●❯>✻✽✶✳✢·│┃╭╰]|[─━═]{3})/;
-
-function leadingSpaces(row: string): number {
-  return row.length - row.trimStart().length;
-}
+const NOT_CONTINUATION = /^[\s│┃]*(?:[⎿⏺●❯>✻✽✶✳✢·╭╰]|[─━═]{3})/;
 
 /**
- * The first `/restart` refusal in `text`, as drawn: its opening row from the
- * refusal's first word, joined with the rows Claude wrapped it onto. Null when
- * no row opens with one.
+ * The first `/restart` refusal in `text` below its last echo of the command,
+ * as drawn: its opening row from the refusal's first word, joined with the
+ * rows Claude wrapped it onto. Rows above the echo answered something else.
+ * Null when no row opens with one.
  */
 export function findClaudeRestartRefusal(text: string): string | null {
   const rows = text.split("\n");
-  for (let i = 0; i < rows.length; i++) {
+  let from = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (ECHO.test(rows[i]!)) {
+      from = i + 1;
+      break;
+    }
+  }
+  for (let i = from; i < rows.length; i++) {
     const row = rows[i]!;
-    const gutter = GUTTER.exec(row)?.[0] ?? "";
-    const message = row.slice(gutter.length);
-    if (!REFUSAL_HEAD.test(message)) continue;
+    const gutter = GUTTER.exec(row)?.[0];
+    const lead = gutter ?? EDGE.exec(row)?.[0] ?? "";
+    const message = row.slice(lead.length);
+    const normalized = normalizeApostrophe(message);
+    const opens =
+      gutter !== undefined
+        ? REFUSAL_HEAD.test(normalized)
+        : KNOWN_HEADS.some((head) => normalized.startsWith(head));
+    if (!opens) continue;
     const parts = [message.trim()];
     // Claude wraps a long message onto rows indented to its first word; a
     // terminal's own soft wrap already arrives joined.
-    const column = gutter.length;
     for (let j = i + 1; j < rows.length; j++) {
       const next = rows[j]!;
       if (next.trim() === "" || NOT_CONTINUATION.test(next)) break;
-      if (leadingSpaces(next) !== column) break;
-      parts.push(next.trim());
+      const edge = EDGE.exec(next)?.[0] ?? "";
+      if (edge.length !== lead.length) break;
+      parts.push(next.slice(edge.length).trim());
     }
     return parts.join(" ");
   }

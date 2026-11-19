@@ -129,8 +129,11 @@ describe("submit guards (#16015)", () => {
     send({ kind: "settled-prompt-exact", acceptQuestion: false });
     // An update's observation pin (#17908) crosses only as a finite number.
     send({ kind: "settled-prompt-exact", agentIncarnation: 2, updateObservedAt: 900 });
+    send({ kind: "settled-prompt-exact", updateObservedAt: 1_763_500_000_123 });
     send({ kind: "settled-prompt-exact", updateObservedAt: "900" });
     send({ kind: "settled-prompt-exact", updateObservedAt: Number.NaN });
+    send({ kind: "settled-prompt-exact", updateObservedAt: Number.POSITIVE_INFINITY });
+    send({ kind: "settled-prompt-exact", updateObservedAt: Number.NEGATIVE_INFINITY });
 
     const refusing = { kind: "settled-prompt-exact", agentIncarnation: -1 };
     expect(ptyManager.submit.mock.calls.map((call) => call[4])).toEqual([
@@ -144,6 +147,9 @@ describe("submit guards (#16015)", () => {
       refusing,
       refusing,
       { kind: "settled-prompt-exact", agentIncarnation: 2, updateObservedAt: 900 },
+      { kind: "settled-prompt-exact", updateObservedAt: 1_763_500_000_123 },
+      refusing,
+      refusing,
       refusing,
       refusing,
     ]);

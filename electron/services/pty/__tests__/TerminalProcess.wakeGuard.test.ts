@@ -970,4 +970,43 @@ describe("TerminalProcess settled-prompt-exact guard pinned to an update observa
     expect(await restartInto(patch)).toBe("cancelled");
     expect(ptyWriteMock).not.toHaveBeenCalled();
   });
+
+  it("judges the observation when the line takes the lane, not when it was queued", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+    });
+    // A line already in the lane holds it through its Enter delay.
+    terminal.submit("earlier");
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    info(terminal).updateInstalled = { observedAt: 1_234, namesRestart: true };
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).not.toContain("/restart");
+  });
+
+  it.each([
+    ["seen anew", { updateInstalled: { observedAt: 1_234, namesRestart: true } }],
+    ["no longer naming /restart", { updateInstalled: { observedAt: 900, namesRestart: false } }],
+    ["replaced by a choice dialog", { agentState: "waiting", waitingReason: "approval" }],
+  ])(
+    "holds back the Enter when the observation is %s between the line and its Enter",
+    async (_label, patch) => {
+      const terminal = createTerminal();
+      settleAtPrompt(terminal, Date.now() - 5_000);
+      Object.assign(info(terminal), {
+        agentIncarnation: 0,
+        updateInstalled: { observedAt: 900, namesRestart: true },
+      });
+      terminal.submit("/restart", "tok-1", undefined, UPDATE);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+      Object.assign(info(terminal), patch);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+      expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+    }
+  );
 });

@@ -889,6 +889,105 @@ describe.each(LANES)(
       expect(pty.submit).not.toHaveBeenCalled();
     });
 
+    it("reaches a worker handed to it the same way, through the steer's gate", async () => {
+      const { deps, pty, records } = harness({ shellName, global: true });
+      records.set(HANDED, offering());
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: HANDED, generation: 3 },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "terminal.applyClaudeUpdate",
+        { terminalId: HANDED },
+        false
+      );
+      expect(pty.submit).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks nobody about a worker of another project", async () => {
+      const { deps, pty, records, generations } = harness({ shellName, global: true });
+      records.set(
+        "term-elsewhere",
+        offering({ projectId: "proj-2" } as Partial<ClaudeUpdateRecord>)
+      );
+      generations.set("term-elsewhere", 6);
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "term-elsewhere", generation: 6 },
+      });
+
+      expect(toolErrorPayload(result).code).toBe(WORKER_STEER_REFUSALS.notFound);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(pty.submit).not.toHaveBeenCalled();
+    });
+
+    it("asks nobody while another window drives the project", async () => {
+      const { deps, pty, records } = harness({
+        shellName,
+        global: true,
+        refuseWrite: { code: "DRIVEN_ELSEWHERE", message: "Another window drives it." },
+      });
+      records.set(WORKER, offering());
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: WORKER, generation: 4 },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("DRIVEN_ELSEWHERE");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(pty.submit).not.toHaveBeenCalled();
+    });
+
+    it("types nothing when another window takes the project while the person decides", async () => {
+      const { deps, pty, records, refuseWrite } = harness({ shellName, global: true });
+      records.set(WORKER, offering());
+      vi.mocked(deps.dispatchAction).mockImplementationOnce(async () => {
+        refuseWrite.mockReturnValue({
+          code: "DRIVEN_ELSEWHERE",
+          message: "Another window drives it.",
+        });
+        return { result: { ok: true, result: { terminalId: WORKER } } };
+      });
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: WORKER, generation: 4 },
+      });
+
+      expect(answerOf(result)).toMatchObject({ status: "not-sent", reason: "not-allowed" });
+      expect(pty.submit).not.toHaveBeenCalled();
+    });
+
+    it("still refuses /restart sent as a steer's prompt, at the prompt or held", async () => {
+      const { deps, pty, records, wakes } = harness({ shellName, global: true });
+      records.set(WORKER, offering());
+      const server = await serve(deps);
+
+      const now = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: WORKER, command: "/restart", generation: 4 },
+      });
+      expect(toolErrorPayload(now).code).toBe(WORKER_STEER_REFUSALS.commandNotAllowed);
+
+      records.set(WORKER, offering({ agentState: "working", waitingReason: undefined }));
+      const held = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: WORKER, command: "/restart", generation: 4, whenBusy: "queue" },
+      });
+      expect(toolErrorPayload(held).code).toBe(WORKER_STEER_REFUSALS.commandNotAllowed);
+      expect(pty.submit).not.toHaveBeenCalled();
+      expect(wakes).toEqual([]);
+    });
+
     it("leaves a project assistant's relayed call to the panes it launched", async () => {
       const { deps, pty, records } = harness({ shellName, global: false });
       records.set(WORKER, offering());

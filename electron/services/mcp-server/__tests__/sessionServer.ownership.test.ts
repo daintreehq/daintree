@@ -1315,10 +1315,11 @@ describe("session-scoped resource ownership (#11909)", () => {
           ? approval
           : { result: { ok: true as const, result: null } }
       );
+      type Service = NonNullable<SessionServerDeps["claudeUpdate"]>;
       const claudeUpdate = {
-        exclusive: vi.fn(async <T>(_terminalId: string, run: () => Promise<T>) => run()),
-        preflight: vi.fn(async () => PIN),
-        apply: vi.fn(async () => APPLIED),
+        exclusive: vi.fn<Service["exclusive"]>(async (_terminalId, run) => run()),
+        preflight: vi.fn<Service["preflight"]>(async () => PIN),
+        apply: vi.fn<Service["apply"]>(async () => APPLIED),
       };
       const deps = fakeDeps({
         sessionStore: store,
@@ -1361,6 +1362,36 @@ describe("session-scoped resource ownership (#11909)", () => {
         claudeUpdate.apply.mock.invocationCallOrder[0]!
       );
       expect(payloadOf<typeof APPLIED>(result)).toEqual(APPLIED);
+    });
+
+    it("holds the pane for one request at a time, from before anyone is asked", async () => {
+      const { server, claudeUpdate, dispatchAction } = updateHarness("s-update-lock");
+
+      await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(claudeUpdate.exclusive).toHaveBeenCalledWith("terminal-1", expect.any(Function));
+      expect(claudeUpdate.exclusive.mock.invocationCallOrder[0]).toBeLessThan(
+        claudeUpdate.preflight.mock.invocationCallOrder[0]!
+      );
+      expect(claudeUpdate.exclusive.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchAction.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("refuses a misspelled run rather than taking the run there now", async () => {
+      const { server, claudeUpdate, dispatchAction } = updateHarness("s-update-generation");
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1", generation: "4" },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      expect(claudeUpdate.preflight).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
     });
 
     it("applies nothing when the person declines", async () => {
@@ -1414,7 +1445,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     it("holds the pane to the session at the moment of the send", async () => {
       const { store, server, claudeUpdate } = updateHarness("s-update-released");
       let authorize: (() => void) | undefined;
-      claudeUpdate.apply.mockImplementationOnce(async (_pin, request: { authorize(): void }) => {
+      claudeUpdate.apply.mockImplementationOnce(async (_pin, request) => {
         authorize = request.authorize;
         return APPLIED;
       });

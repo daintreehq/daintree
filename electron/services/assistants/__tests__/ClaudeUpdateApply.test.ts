@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WORKER_STEER_REFUSALS } from "../../../../shared/types/assistantControl.js";
 import {
   CLAUDE_UPDATE_NOT_OFFERED,
@@ -10,9 +10,11 @@ import { AssistantTargetError } from "../AssistantTerminalControl.js";
 import {
   CLAUDE_RESTART_COMMAND,
   ClaudeUpdateApply,
+  liveClaudeUpdateApply,
   type ClaudeUpdatePin,
   type ClaudeUpdateRecord,
 } from "../ClaudeUpdateApply.js";
+import type { PtyClient } from "../../PtyClient.js";
 
 const TERMINAL = "term-worker";
 const OWNER = "principal-a";
@@ -36,6 +38,8 @@ interface Fake {
   onSubmit: (submit: Submit, fake: Fake) => void;
   /** Changes the pane between polls. */
   onSleep: (fake: Fake) => void;
+  /** Runs inside each record read, before it answers: time can pass there. */
+  beforeRead?: (fake: Fake, token?: string) => void;
 }
 
 function atPrompt(extra: Partial<ClaudeUpdateRecord> = {}): ClaudeUpdateRecord {
@@ -78,6 +82,7 @@ function harness(overrides: Partial<Fake> = {}) {
   };
   const service = new ClaudeUpdateApply({
     getTerminal: async (_terminalId, token) => {
+      fake.beforeRead?.(fake, token);
       if (fake.record === null) return null;
       if (token === undefined) return { ...fake.record };
       const submission = fake.submissions.get(token);
@@ -132,19 +137,33 @@ describe("ClaudeUpdateApply.preflight", () => {
     });
   });
 
-  it.each<[string, Partial<ClaudeUpdateRecord>]>([
-    ["another agent", { detectedAgentId: "codex" }],
-    ["no detected agent", { detectedAgentId: undefined }],
-    ["no update observation", { updateInstalled: undefined }],
+  it.each<[string, Partial<ClaudeUpdateRecord>, RegExp]>([
+    ["another agent", { detectedAgentId: "codex" }, /it runs codex/],
+    ["no detected agent", { detectedAgentId: undefined }, /no agent is detected/],
+    ["no update observation", { updateInstalled: undefined }, /hasn't shown/],
     [
       "a footer that didn't name /restart",
       { updateInstalled: { observedAt: 900, namesRestart: false } },
+      /didn't name \/restart/,
     ],
-  ])("refuses a pane with %s as not offering /restart", async (_name, extra) => {
+  ])("refuses a pane with %s as not offering /restart", async (_name, extra, why) => {
     const { fake, service } = harness({ record: atPrompt(extra) });
     const error = await refusal(service.preflight(TERMINAL, undefined, OWNER));
     expect(error.code).toBe(CLAUDE_UPDATE_NOT_OFFERED);
+    expect(error.message).toMatch(why);
     expect(error.message).toContain("Nothing was sent.");
+    expect(fake.submits).toEqual([]);
+  });
+
+  it("refuses a run replaced while its record was being read", async () => {
+    const { fake, service } = harness({
+      beforeRead: (f) => {
+        f.generation = 5;
+      },
+    });
+    expect((await refusal(service.preflight(TERMINAL, 4, OWNER))).code).toBe(
+      WORKER_STEER_REFUSALS.restarted
+    );
     expect(fake.submits).toEqual([]);
   });
 
@@ -178,19 +197,24 @@ describe("ClaudeUpdateApply.preflight", () => {
     ).toBe(WORKER_STEER_REFUSALS.notFound);
   });
 
-  it.each<[string, Partial<ClaudeUpdateRecord>]>([
-    ["a person's draft", { lastTypedInputAt: 1_500, lastForeignInputAt: 1_500 }],
+  it.each<[string, Partial<ClaudeUpdateRecord>, RegExp]>([
+    [
+      "a person's draft",
+      { lastTypedInputAt: 1_500, lastForeignInputAt: 1_500 },
+      /Someone has typed/,
+    ],
     [
       "the caller's own keys",
       { lastTypedInputAt: 1_500, lastOwnedInput: { owner: OWNER, at: 1_500 } },
+      /keys you sent/,
     ],
-    ["a submission going in", { hasPendingSubmission: true }],
-    ["no settle seen", { lastStateChange: undefined }],
-  ])("refuses a pane holding %s", async (_name, extra) => {
+    ["a submission going in", { hasPendingSubmission: true }, /still being written/],
+    ["no settle seen", { lastStateChange: undefined }, /hasn't been seen settling/],
+  ])("refuses a pane holding %s", async (_name, extra, why) => {
     const { service } = harness({ record: atPrompt(extra) });
-    expect((await refusal(service.preflight(TERMINAL, undefined, OWNER))).code).toBe(
-      WORKER_STEER_REFUSALS.typing
-    );
+    const error = await refusal(service.preflight(TERMINAL, undefined, OWNER));
+    expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
+    expect(error.message).toMatch(why);
   });
 });
 
@@ -199,10 +223,12 @@ describe("ClaudeUpdateApply.apply", () => {
     const { fake, service, pin } = await pinned();
     const result = await service.apply(pin, allow);
     expect(fake.submits).toHaveLength(1);
-    expect(fake.submits[0]).toMatchObject({
+    expect(fake.submits[0]).toEqual({
       terminalId: TERMINAL,
       text: CLAUDE_RESTART_COMMAND,
+      token: expect.any(String),
       owner: OWNER,
+      // Never widened: no mid-turn queueing and no question taken as its prompt.
       guard: {
         kind: "settled-prompt-exact",
         agentIncarnation: 2,
@@ -441,5 +467,299 @@ describe("ClaudeUpdateApply.exclusive", () => {
     release();
     await first;
     await expect(service.exclusive(TERMINAL, async () => "again")).resolves.toBe("again");
+  });
+});
+
+describe("ClaudeUpdateApply.apply, at its edges", () => {
+  it("types nothing while the pane is busy, and once when it settles", async () => {
+    const { fake, service, pin } = await pinned();
+    fake.record = atPrompt({ agentState: "working", waitingReason: undefined });
+    const submitsWhileBusy: number[] = [];
+    let polls = 0;
+    fake.onSleep = (f) => {
+      polls += 1;
+      if (f.record?.agentState === "working") submitsWhileBusy.push(f.submits.length);
+      if (polls === 4) f.record = atPrompt({ lastStateChange: f.now });
+    };
+    await service.apply(pin, allow);
+    expect(submitsWhileBusy).toEqual([0, 0, 0, 0]);
+    expect(fake.submits).toHaveLength(1);
+  });
+
+  it("waits out a submission someone else started after the approval", async () => {
+    const { fake, service, pin } = await pinned();
+    fake.record = atPrompt({ hasPendingSubmission: true });
+    let polls = 0;
+    fake.onSleep = (f) => {
+      polls += 1;
+      if (polls === 3) f.record = atPrompt();
+    };
+    expect((await service.apply(pin, allow)).status).toBe("sent");
+    expect(polls).toBeGreaterThanOrEqual(3);
+  });
+
+  it("says it waited at a question, and types there only once the prompt is empty", async () => {
+    const { fake, service, pin } = await pinned();
+    fake.record = atPrompt({ waitingReason: "question" });
+    const result = await service.apply(pin, allow);
+    expect(result.reason).toBe("expired");
+    expect(result.message).toContain("question");
+    expect(fake.submits).toEqual([]);
+  });
+
+  it.each<[string, Partial<ClaudeUpdateRecord>]>([
+    [
+      "foreign input newer",
+      { lastForeignPromptInputAt: 700, lastOwnedPromptInput: { owner: OWNER, at: 400 } },
+    ],
+    [
+      "the caller's own input newer",
+      { lastForeignPromptInputAt: 400, lastOwnedPromptInput: { owner: OWNER, at: 700 } },
+    ],
+  ])("pins the newest prompt input of anyone, %s", async (_name, extra) => {
+    const { fake, service, pin } = await pinned({ record: atPrompt(extra) });
+    expect(pin.promptInputAt).toBe(700);
+    // Unchanged input lets it go...
+    expect((await service.apply(pin, allow)).status).toBe("sent");
+    // ...and input newer than the pin, of either kind, drops it.
+    for (const later of [
+      { lastForeignPromptInputAt: 701 },
+      { lastOwnedPromptInput: { owner: OWNER, at: 701 } },
+    ]) {
+      fake.record = atPrompt({ ...extra, ...later });
+      fake.submits = [];
+      expect((await service.apply(pin, allow)).reason).toBe("typed");
+      expect(fake.submits).toEqual([]);
+    }
+  });
+
+  it("drops it when the pane moves to another worktree", async () => {
+    const { fake, service, pin } = await pinned({ record: atPrompt({ worktreeId: "wt-1" }) });
+    fake.record = atPrompt({ worktreeId: "wt-2" });
+    expect((await service.apply(pin, allow)).reason).toBe("restarted");
+    expect(fake.submits).toEqual([]);
+  });
+
+  it("types nothing when the ready read answers after the time ran out", async () => {
+    const { fake, service, pin } = await pinned();
+    const started = fake.now;
+    fake.beforeRead = (f) => {
+      f.now = started + 2_000;
+    };
+    const result = await service.apply(pin, { ...allow, deadline: started + 1_000 });
+    expect(result).toMatchObject({ status: "not-sent", reason: "expired" });
+    expect(fake.submits).toEqual([]);
+  });
+
+  it("types nothing when the call ends while the ready read is out", async () => {
+    const { fake, service, pin } = await pinned();
+    const controller = new AbortController();
+    fake.beforeRead = () => controller.abort();
+    const result = await service.apply(pin, { ...allow, signal: controller.signal });
+    expect(result).toMatchObject({ status: "not-sent", reason: "cancelled" });
+    expect(fake.submits).toEqual([]);
+  });
+
+  it("holds the full wait before it expires", async () => {
+    const { fake, service, pin } = await pinned();
+    fake.record = atPrompt({ agentState: "working", waitingReason: undefined });
+    const started = fake.now;
+    await service.apply(pin, allow);
+    expect(fake.now - started).toBeGreaterThan(CLAUDE_UPDATE_WAIT_MS - 1_000);
+  });
+
+  it("tells the caller once the line is written, and not when it isn't", async () => {
+    const sent = await pinned();
+    let told = 0;
+    await sent.service.apply(sent.pin, { ...allow, onWritten: () => (told += 1) });
+    expect(told).toBe(1);
+
+    const withheld = await pinned({
+      onSubmit: (submit, f) =>
+        f.submissions.set(submit.token, { token: submit.token, phase: "cancelled", at: f.now }),
+    });
+    let toldWithheld = 0;
+    await withheld.service.apply(withheld.pin, {
+      ...allow,
+      onWritten: () => (toldWithheld += 1),
+    });
+    expect(toldWithheld).toBe(0);
+  });
+
+  it("asks to take back a line still queued when the call ends, and reports what became of it", async () => {
+    const controller = new AbortController();
+    let reads = 0;
+    const { fake, service, pin } = await pinned({
+      onSubmit: (submit, f) => {
+        f.submissions.set(submit.token, { token: submit.token, phase: "queued", at: f.now });
+        controller.abort();
+      },
+      beforeRead: (f, token) => {
+        if (token === undefined) return;
+        reads += 1;
+        if (reads === 3) {
+          f.submissions.set(token, { token, phase: "cancelled", at: f.now });
+        }
+      },
+    });
+    const result = await service.apply(pin, { ...allow, signal: controller.signal });
+    expect(fake.withdrawn).toEqual([fake.submits[0]!.token]);
+    expect(result).toMatchObject({ status: "not-sent", reason: "withheld" });
+  });
+
+  it.each<[TerminalSubmissionRecord["phase"], RegExp]>([
+    ["failed", /failed partway/],
+    ["unknown", /holds no record/],
+  ])("answers a line that ended %s at once, never taking it back", async (phase, why) => {
+    const { fake, service, pin } = await pinned({
+      onSubmit: (submit, f) =>
+        f.submissions.set(submit.token, { token: submit.token, phase, at: f.now }),
+    });
+    const started = fake.now;
+    const result = await service.apply(pin, allow);
+    expect(result.status).toBe("unconfirmed");
+    expect(result.message).toMatch(why);
+    expect(fake.withdrawn).toEqual([]);
+    expect(fake.now - started).toBeLessThan(1_000);
+  });
+
+  it("asks to take back a stuck line once, only after its delivery time", async () => {
+    let askedAt: number | undefined;
+    const { fake, service, pin } = await pinned({
+      onSubmit: (submit, f) =>
+        f.submissions.set(submit.token, { token: submit.token, phase: "writing", at: f.now }),
+    });
+    const handedAt = fake.now;
+    const original = fake.withdrawn.push.bind(fake.withdrawn);
+    fake.withdrawn.push = (...tokens: string[]) => {
+      askedAt = fake.now;
+      return original(...tokens);
+    };
+    const result = await service.apply(pin, allow);
+    expect(fake.withdrawn).toHaveLength(1);
+    expect(askedAt! - handedAt).toBeGreaterThanOrEqual(5_000);
+    expect(result.message).toContain("unknown");
+  });
+
+  it("reads a refusal drawn just before the watch ends", async () => {
+    const { fake, service, pin } = await pinned();
+    const line = "Can't restart automatically. Type /restart at the prompt.";
+    fake.onSleep = (f) => {
+      const submit = f.submits[0];
+      if (submit === undefined) return;
+      const record = f.submissions.get(submit.token)!;
+      if (f.now - record.at! >= 3_800) written(`❯ /restart\n  ⎿  ${line}`)(submit, f);
+    };
+    expect((await service.apply(pin, allow)).refusal).toBe(line);
+  });
+
+  it("quotes a refusal whole when it was first read half drawn", async () => {
+    const { fake, service, pin } = await pinned({
+      onSubmit: written("❯ /restart\n  ⎿  Can't restart while Remote Control is"),
+    });
+    fake.onSleep = (f) => {
+      const submit = f.submits[0];
+      if (submit === undefined) return;
+      written("❯ /restart\n  ⎿  Can't restart while Remote Control is connected. Disconnect it.")(
+        submit,
+        f
+      );
+    };
+    expect((await service.apply(pin, allow)).refusal).toBe(
+      "Can't restart while Remote Control is connected. Disconnect it."
+    );
+  });
+
+  it("reads no refusal into an earlier attempt's answer above this line's echo", async () => {
+    const { service, pin } = await pinned({
+      onSubmit: written(
+        [
+          "❯ /restart",
+          "  ⎿  Can't restart automatically. Type /restart at the prompt.",
+          "❯ /restart",
+          "",
+        ].join("\n"),
+        "closed"
+      ),
+    });
+    const result = await service.apply(pin, allow);
+    expect(result).toMatchObject({ status: "sent", refusal: null, output: "read" });
+    expect(result.message).toContain("no refusal");
+    expect(result.message).toContain("isn't known");
+  });
+
+  it.each<[string, (submit: Submit, fake: Fake) => void]>([
+    ["capture lost", written("❯ /restart", "lost")],
+    [
+      "capture cut short",
+      (submit, f) =>
+        f.submissions.set(submit.token, {
+          token: submit.token,
+          phase: "pty_written",
+          at: f.now,
+          output: { text: "❯ /restart", truncated: true, state: "closed" },
+        }),
+    ],
+  ])("never says none was seen when the answer was %s", async (_name, onSubmit) => {
+    const { service, pin } = await pinned({ onSubmit });
+    const result = await service.apply(pin, allow);
+    expect(result).toMatchObject({ status: "sent", refusal: null, output: "lost" });
+    expect(result.message).toContain("can't be ruled out");
+  });
+
+  it("calls the answer lost once its line can no longer be followed", async () => {
+    const { fake, service, pin } = await pinned();
+    fake.onSleep = (f) => {
+      // The relaunch took the record with it: later reads find no line.
+      f.submissions.clear();
+    };
+    const result = await service.apply(pin, allow);
+    expect(result).toMatchObject({ status: "sent", refusal: null, output: "lost" });
+  });
+});
+
+describe("liveClaudeUpdateApply", () => {
+  it("hands the pty host the literal line under the guard, as nobody's prompt and with no handback", async () => {
+    const submit = vi.fn();
+    const pty = {
+      getTerminalAsync: vi.fn(async (_id: string, token?: string) =>
+        token === undefined
+          ? atPrompt()
+          : {
+              ...atPrompt(),
+              submission: {
+                token,
+                phase: "pty_written",
+                at: 1,
+                output: { text: "❯ /restart", truncated: false, state: "closed" },
+              },
+            }
+      ),
+      getLiveGeneration: vi.fn(() => 4),
+      submit,
+      withdrawGuardedSubmission: vi.fn(),
+      write: vi.fn(),
+    };
+    const service = liveClaudeUpdateApply(() => pty as unknown as PtyClient);
+    const pin = await service.preflight(TERMINAL, 4, OWNER);
+    await service.apply(pin, allow);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0]).toEqual([
+      TERMINAL,
+      "/restart",
+      expect.any(String),
+      undefined,
+      {
+        kind: "settled-prompt-exact",
+        agentIncarnation: 2,
+        agentSessionId: "session-1",
+        updateObservedAt: 900,
+      },
+      undefined,
+      null,
+      undefined,
+      OWNER,
+    ]);
+    expect(pty.write).not.toHaveBeenCalled();
   });
 });

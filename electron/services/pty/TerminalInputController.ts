@@ -499,7 +499,22 @@ export class TerminalInputController {
           : guard !== undefined && guard !== "no-choice-dialog"
             ? this.admitExact(guard)
             : undefined;
-    this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths, atChoice);
+    // A Claude Code update's `/restart` (#17908) waits a submit delay between
+    // its body and its Enter: a footer seen anew or a dialog drawn then must
+    // not get the Enter the person approved for an empty prompt.
+    const holdsAtEnter =
+      typeof guard === "object" && guard.updateObservedAt !== undefined
+        ? () => this.stillOffersUpdate(guard.updateObservedAt!)
+        : undefined;
+    this.host.writeQueue.submit(
+      text,
+      token,
+      onPtyWritten,
+      admit,
+      imagePaths,
+      atChoice,
+      holdsAtEnter
+    );
   }
 
   /**
@@ -519,11 +534,7 @@ export class TerminalInputController {
       if (run.agentSessionId !== undefined && terminal.agentSessionId !== run.agentSessionId) {
         return false;
       }
-      if (
-        run.updateObservedAt !== undefined &&
-        (terminal.updateInstalled?.observedAt !== run.updateObservedAt ||
-          terminal.updateInstalled.namesRestart !== true)
-      ) {
+      if (run.updateObservedAt !== undefined && !this.stillOffersUpdate(run.updateObservedAt)) {
         return false;
       }
       return this.admitStrict({
@@ -533,6 +544,19 @@ export class TerminalInputController {
         acceptQuestion: run.acceptQuestion === true,
       });
     };
+  }
+
+  /**
+   * The terminal still reports the update observation main read, naming
+   * `/restart`, and no choice dialog has taken the prompt's place.
+   */
+  private stillOffersUpdate(observedAt: number): boolean {
+    const terminal = this.host.terminalInfo;
+    return (
+      terminal.updateInstalled?.observedAt === observedAt &&
+      terminal.updateInstalled.namesRestart === true &&
+      !isAtChoiceDialog(wakeGateSnapshot(terminal))
+    );
   }
 
   /**

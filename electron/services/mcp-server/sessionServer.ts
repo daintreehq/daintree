@@ -1415,12 +1415,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           "This host can't apply agent updates right now. Nothing was sent."
         );
       }
-      const generation =
-        typeof callArgs.generation === "number" &&
-        Number.isInteger(callArgs.generation) &&
-        callArgs.generation >= 0
-          ? callArgs.generation
-          : undefined;
+      // A run the caller named holds it to that run; one it misspelled must
+      // not quietly become the run that is there now.
+      const generation = callArgs.generation;
+      if (
+        generation !== undefined &&
+        !(typeof generation === "number" && Number.isInteger(generation) && generation >= 0)
+      ) {
+        throw new AssistantTargetError(
+          "VALIDATION_ERROR",
+          "`generation` must be the whole number the run was listed with. Nothing was sent."
+        );
+      }
       const steer =
         globalUpdateTerminalId !== undefined ? globalSteerTarget(terminalId) : undefined;
       // Asked right before `/restart` is typed, long after the approval: the
@@ -1438,9 +1444,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   `Terminal '${terminalId}' is no longer this session's.`
                 );
               }
+              // As `agent.resumeOwned` asks it: a write main makes itself
+              // answers to whoever drives the project now, a view of this
+              // machine's included.
               const projectId =
                 ownedResourceRecord?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
-              const refusal = projectId !== undefined ? assistantWriteRefusal(projectId) : null;
+              const refusal = deps.relay
+                ? deps.relay.refuseWrite(projectId)
+                : (deps.refuseWrite ?? deps.refuseViewWrite)?.(projectId);
               if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
             };
       const run = () =>
@@ -1475,8 +1486,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               authorize,
               signal: extra.signal,
               ...(deadline !== undefined ? { deadline } : {}),
+              // What this pane heard about the worker's last prompt is stale
+              // once `/restart` is in, as after any prompt it sends (#16187).
+              onWritten: () => {
+                const pane = tier === "external" ? null : ownPane();
+                if (pane !== null) terminalNotify?.supersede(pane, terminalId);
+              },
             });
-            return { envelope: { result: { ok: true, result } }, raised: true };
+            // The approval's own record (its decision, a session grant, the
+            // workspace it ran in) stays with the answer; only the result is main's.
+            return {
+              envelope: { ...approval.envelope, result: { ok: true, result } },
+              raised: approval.raised,
+            };
           }
         );
       return steer !== undefined ? deps.globalSteer!.applyUpdate(steer, run) : run();
@@ -1853,10 +1875,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           assistantTarget === undefined
             ? readOwnedResourceId(args, ownedResource.idArg)
             : undefined;
+        // An update takes the owned path only for a pane the Assistant
+        // launched: one handed to it reaches as far as any worker (#17908),
+        // since the owned form refuses a hand-over.
         const globalSteerTerminalId =
           steerTerminalId !== undefined &&
           ownedRecordFor(ownedResource!.resourceKind, steerTerminalId) === undefined &&
-          adoptedRecordFor(ownedResource!.resourceKind, steerTerminalId) === undefined
+          (actionId === CLAUDE_UPDATE_TOOL ||
+            adoptedRecordFor(ownedResource!.resourceKind, steerTerminalId) === undefined)
             ? steerTerminalId
             : undefined;
         // A reveal is no write: it goes out on the owned reveal's own dispatch

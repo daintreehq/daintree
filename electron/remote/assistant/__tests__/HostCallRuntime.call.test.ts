@@ -471,9 +471,11 @@ describe("relayRunMs", () => {
     expect(
       relayRunMs("terminal.applyClaudeUpdateOwned", {}) - MCP_REMOTE_CONFIRM_MARGIN_MS
     ).toBeGreaterThan(MCP_REMOTE_DISPATCH_TIMEOUT_MS + CLAUDE_UPDATE_AFTER_APPROVAL_MS);
-    expect(relayRunMs("terminal.applyClaudeUpdateOwned", {})).toBeGreaterThan(
-      relayRunMs("terminal.restartOnPresetOwned", {})
-    );
+    // Exactly the wait, the line going in and the read on top of a plain confirmation.
+    expect(
+      relayRunMs("terminal.applyClaudeUpdateOwned", {}) -
+        relayRunMs("terminal.restartOnPresetOwned", {})
+    ).toBe(CLAUDE_UPDATE_AFTER_APPROVAL_MS);
   });
 
   it("leaves a call that never asks anyone its own floor", () => {
