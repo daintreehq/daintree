@@ -2,6 +2,8 @@ import type { HelpAssistantDaintreeConfirmations } from "../types/ipc/api.js";
 import {
   ASSISTANT_ACCOUNT_ADD_CONFIRMATION,
   ASSISTANT_HOST_SETTINGS_CONFIRMATION,
+  ASSISTANT_NEXT_FALLBACK_CONFIRMATION,
+  ASSISTANT_PRESET_MOVE_TOOL,
   sanitizeDelegatedConfirmations,
 } from "../config/assistantConfirmationDelegation.js";
 import {
@@ -117,4 +119,21 @@ export function assistantPolicySkips(
 ): boolean {
   if (policy.delegated.has(calledActionId)) return true;
   return policy.skipsAll && !NEVER_BLANKET_SKIPPED.has(calledActionId);
+}
+
+/**
+ * Whether the assistant's call to `calledActionId` may run without asking
+ * once the pane's own view finds it the next step of the chain the pane
+ * walks (#17917). Only a preset move, under its own tick, and only when
+ * nothing already skips the call outright: Never ask stays a plain skip.
+ */
+export function assistantPolicyChecksNextFallback(
+  policy: AssistantConfirmationPolicy,
+  calledActionId: string
+): boolean {
+  return (
+    calledActionId === ASSISTANT_PRESET_MOVE_TOOL &&
+    policy.delegated.has(ASSISTANT_NEXT_FALLBACK_CONFIRMATION) &&
+    !assistantPolicySkips(policy, calledActionId)
+  );
 }
