@@ -243,10 +243,10 @@ async function buildHostListener(
         caller: relayCallerOf(spec),
       });
     },
-    retirePrincipal: (senderId, helpSessionId) => {
+    retirePrincipal: (senderId, helpSessionId, keepConversationUntil) => {
       void import("../../services/McpServerService.js")
         .then(({ mcpServerService }) =>
-          mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
+          mcpServerService.retireRelayPrincipal(senderId, helpSessionId, keepConversationUntil)
         )
         .catch((error: unknown) => {
           logger.warn("Couldn't retire a relay principal", { error });

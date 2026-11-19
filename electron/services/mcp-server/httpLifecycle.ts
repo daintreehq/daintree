@@ -30,7 +30,11 @@ import type {
   McpWorkspaceBinding,
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
-import { helpOwnershipPrincipal, relayOwnershipPrincipal } from "./resourceOwnership.js";
+import {
+  helpOwnershipPrincipal,
+  relayConversationKey,
+  relayOwnershipPrincipal,
+} from "./resourceOwnership.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
@@ -1976,10 +1980,16 @@ export class HttpLifecycle {
     const workspaceBinding = this.describePaneWorkspaceBinding(spec.workspaceId);
     store.sessionTierMap.set(sessionId, spec.tier);
     store.sessionOriginMap.set(sessionId, "external");
-    store.resourceOwnership.bindPrincipal(
-      sessionId,
-      relayOwnershipPrincipal(spec.caller.senderId, spec.caller.helpSessionId)
-    );
+    const principal = relayOwnershipPrincipal(spec.caller.senderId, spec.caller.helpSessionId);
+    store.resourceOwnership.bindPrincipal(sessionId, principal);
+    // What the caller's conversation launched here before it resumed is its
+    // own again (#17919), held under the sender this host authenticated.
+    if (spec.caller.conversationId !== undefined) {
+      store.resourceOwnership.attachConversation(
+        principal,
+        relayConversationKey(spec.caller.senderId, spec.caller.conversationId)
+      );
+    }
     store.sessionWorkspaceMap.set(sessionId, workspaceBinding.workspaceId);
     // When each call in flight here gives up (#15699), so what it waits on
     // ends first and nothing it approves runs after its caller was told no.

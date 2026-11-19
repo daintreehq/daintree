@@ -30,6 +30,13 @@ export interface PendingHelpHibernation {
   agentSessionId: string;
   cwd: string;
   capturedAt: number;
+  /**
+   * The ownership id main gave this lane's conversation (#17919): what it
+   * launched is held under it, so resuming the same conversation keeps it and
+   * a fresh one gets another. Main's own, never handed to a view. Absent from
+   * an entry written before it, whose next launch mints one.
+   */
+  conversationOwnershipId?: string;
   // In-memory only — whether the assistant panel was open when this token was
   // captured this session. Drives auto-reopen + auto-resume on cold
   // switch-back. Deliberately stripped before persisting (see `persist()`):
@@ -112,8 +119,18 @@ export class PendingHelpHibernationStore {
         // corruption, or a regression in `persist()`): the field is in-memory
         // only and a disk-loaded `true` would auto-resume a prior-session token
         // on app restart — the exact invariant this feature must never break.
-        const { panelWasOpen: _panelWasOpen, ...safeEntry } = entry as PendingHelpHibernation;
-        this.entries.set(key, safeEntry);
+        const {
+          panelWasOpen: _panelWasOpen,
+          conversationOwnershipId,
+          ...safeEntry
+        } = entry as PendingHelpHibernation;
+        // A malformed ownership id costs only the ownership, never the conversation.
+        this.entries.set(
+          key,
+          typeof conversationOwnershipId === "string" && conversationOwnershipId !== ""
+            ? { ...safeEntry, conversationOwnershipId }
+            : safeEntry
+        );
       }
       if (parsed.resumeAtLaunch !== undefined) {
         // Off disk before anything can resume from it: a crash during this

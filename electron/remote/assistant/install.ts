@@ -84,6 +84,8 @@ const helpSessions = {
   getSessionAgent: (sessionId: string) =>
     loadedHelpSessionService()?.getSessionAgent(sessionId) ?? null,
   listRunningLanes: () => loadedHelpSessionService()?.listRunningLanes() ?? [],
+  getConversationOwnershipId: (sessionId: string) =>
+    loadedHelpSessionService()?.getConversationOwnershipId(sessionId) ?? null,
 };
 
 /**
@@ -169,12 +171,14 @@ function localRunOf(helpSessionId: string): OpenRun | null {
   }
   const launchGeneration = getPtyClient()?.getLiveGeneration(running.terminalId) ?? null;
   if (launchGeneration === null) return null;
+  const conversationOwnershipId = helpSessions.getConversationOwnershipId(running.sessionId);
   return {
     projectId: lane.projectId,
     slot: lane.slot,
     sessionId: running.sessionId,
     terminalId: running.terminalId,
     launchGeneration,
+    ...(conversationOwnershipId !== null ? { conversationOwnershipId } : {}),
   };
 }
 
@@ -301,10 +305,10 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           logger.warn("Couldn't drop what an ended assistant held for busy agents", { error });
         });
     },
-    retirePrincipal: (senderId, helpSessionId) => {
+    retirePrincipal: (senderId, helpSessionId, keepConversationUntil) => {
       void mcpServer()
         .then(({ mcpServerService }) =>
-          mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
+          mcpServerService.retireRelayPrincipal(senderId, helpSessionId, keepConversationUntil)
         )
         .catch((error: unknown) => {
           logger.warn("Couldn't retire a local relay principal", { error });

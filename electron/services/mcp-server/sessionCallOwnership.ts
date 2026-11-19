@@ -752,5 +752,5 @@ export function recordOwnershipFromDispatch(
   // What was created, by whom, kept past the authority itself (#14166):
   // from the trusted result, so a creation that landed after its creator's
   // revocation still says who made it, while recording no authority.
-  sessionStore.workerCreations.noteDrafts(ownershipOwner, drafts);
+  sessionStore.workerCreations.noteDrafts(ownershipOwner, drafts, recorded);
 }

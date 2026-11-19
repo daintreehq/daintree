@@ -126,6 +126,7 @@ import { WorktreeRetireOwnedArgsSchema } from "../../../shared/types/worktreeRet
 import { LAST_MESSAGE_TEXT_MAX_BYTES } from "../../../shared/types/agentLastMessage.js";
 import type { OwnedResourceRecord } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
+import { isCreationOf } from "./workerCreationHistory.js";
 import {
   NOTIFY_NOT_ELIGIBLE,
   NOTIFY_CLOSE_TOOLS,
@@ -1430,7 +1431,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       if (!closedIdsInclude(envelope.result.result, terminalId)) return;
       const record = ownedRecordFor("terminal", terminalId);
       if (record === undefined) return;
-      if (sessionStore.workerCreations.get(terminalId, generation)?.owner !== ownershipOwner)
+      if (
+        !isCreationOf(
+          sessionStore.workerCreations.get(terminalId, generation),
+          ownershipOwner,
+          record
+        )
+      )
         return;
       sessionStore.resourceOwnership.release(ownershipOwner, "terminal", terminalId, record);
       noteClosedTerminals({ sessionId, sessionStore, ownershipOwner }, envelope, () => generation);
@@ -2072,12 +2079,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           terminalId: string,
           launchGeneration: number | undefined
         ): RetirementAttribution => {
-          const ledgerRecord = ownedRecordFor("terminal", terminalId) !== undefined;
+          const heldRecord = ownedRecordFor("terminal", terminalId);
+          const ledgerRecord = heldRecord !== undefined;
           const createdByThisSession =
             launchGeneration === undefined
               ? ledgerRecord
-              : sessionStore.workerCreations.get(terminalId, launchGeneration)?.owner ===
-                ownershipOwner;
+              : isCreationOf(
+                  sessionStore.workerCreations.get(terminalId, launchGeneration),
+                  ownershipOwner,
+                  heldRecord
+                );
           const closed = sessionStore.resourceOwnership.closedRecord(ownershipOwner, terminalId);
           return {
             createdByThisSession,

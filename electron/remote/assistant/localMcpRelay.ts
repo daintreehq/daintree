@@ -116,12 +116,18 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
   let disposed = false;
   // One spec for each principal and project, whichever call opens its session first.
   const specFor = (
-    target: { helpSessionId: string; projectId: string; tier: "core" | "full" },
+    target: {
+      helpSessionId: string;
+      conversationId?: string;
+      projectId: string;
+      tier: "core" | "full";
+    },
     global: boolean
   ): RelayMcpSessionSpec => ({
     linkSessionId: LOCAL_RELAY_LINK_SESSION_ID,
     senderId: LOCAL_RELAY_SENDER_ID,
     helpSessionId: target.helpSessionId,
+    ...(target.conversationId !== undefined ? { conversationId: target.conversationId } : {}),
     projectId: target.projectId,
     tier: target.tier,
     shellName: deps.machineName(),

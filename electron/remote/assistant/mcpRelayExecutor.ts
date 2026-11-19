@@ -31,6 +31,8 @@ export interface RelayMcpSessionSpec {
   senderId: string;
   /** The Shell assistant's own help session, as the Shell named it: never one of this host's. */
   helpSessionId: string;
+  /** Its lane's conversation, as the Shell's main named it (#17919); absent from an older Shell. */
+  conversationId?: string;
   projectId: string;
   tier: "core" | "full";
   /** The Shell's machine name from its handshake: display only, never identity. */
@@ -68,6 +70,7 @@ export function relayCallerOf(spec: RelayMcpSessionSpec): McpRelayCaller {
     linkSessionId: spec.linkSessionId,
     senderId: spec.senderId,
     helpSessionId: spec.helpSessionId,
+    ...(spec.conversationId !== undefined ? { conversationId: spec.conversationId } : {}),
     shellName: spec.shellName,
     ...(spec.local === true ? { local: true as const } : {}),
     ...(spec.global === true ? { global: true as const } : {}),
@@ -98,7 +101,7 @@ export interface McpRelayExecutorDeps {
    * Ends a relay principal's hold on what it made here, once unused for long
    * enough or crowded out; the terminals and worktrees themselves stay.
    */
-  retirePrincipal?(senderId: string, helpSessionId: string): void;
+  retirePrincipal?(senderId: string, helpSessionId: string, keepConversationUntil?: number): void;
   /**
    * The calls of a relay principal that still have notices armed or waiting
    * in this host's notice service (#13930); absent, none do.
@@ -329,7 +332,16 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
         cached.helpSessionId === helpSessionId &&
         (cached.session === null || cached.session.isOpen())
     );
-  const retire = (senderId: string, helpSessionId: string): void => {
+  /**
+   * `keepConversationUntil`, for a principal that ended rather than aged out or
+   * was crowded out: what its conversation launched stays for that long, as
+   * its own hold would have (#17919), for the conversation resumed.
+   */
+  const retire = (
+    senderId: string,
+    helpSessionId: string,
+    keepConversationUntil?: number
+  ): void => {
     const held = principals.get(senderId);
     held?.delete(helpSessionId);
     if (held?.size === 0) principals.delete(senderId);
@@ -341,11 +353,13 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     }
     if (calls?.size === 0) noticeCalls.delete(senderId);
     try {
-      deps.retirePrincipal?.(senderId, helpSessionId);
+      deps.retirePrincipal?.(senderId, helpSessionId, keepConversationUntil);
     } catch (error) {
       logger.warn("Couldn't retire a relay principal", { error });
     }
   };
+  const retireEnded = (senderId: string, helpSessionId: string, record: { usedAt: number }): void =>
+    retire(senderId, helpSessionId, record.usedAt + RELAY_PRINCIPAL_RETENTION_MS);
   /** Retires the least recent of a sender's principals past its bound; one in use stays. */
   const boundPrincipals = (senderId: string): void => {
     const held = principals.get(senderId);
@@ -376,7 +390,7 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
         principals.get(senderId)?.get(helpSessionId) === record &&
         !principalInUse(senderId, helpSessionId)
       ) {
-        retire(senderId, helpSessionId);
+        retireEnded(senderId, helpSessionId, record);
       }
     };
   };
@@ -411,6 +425,8 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       spec.linkSessionId,
       spec.senderId,
       spec.helpSessionId,
+      // A session a read opened without it never binds the conversation (#17919).
+      spec.conversationId ?? "",
       spec.projectId,
       spec.tier,
       spec.global === true ? "global" : "",
@@ -630,6 +646,8 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     call: async (spec, payload) => {
       const digest = canonicalArgsHash(payload.tool, {
         helpSessionId: payload.helpSessionId,
+        // A callId resent naming another conversation is another call (#17919).
+        ...(spec.conversationId !== undefined ? { conversationId: spec.conversationId } : {}),
         projectId: payload.projectId,
         tier: payload.tier,
         args: payload.args,
@@ -688,7 +706,7 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       );
       // One still running or admitting a call keeps its hold until that call settles.
       if (record !== undefined && !principalInUse(senderId, helpSessionId)) {
-        retire(senderId, helpSessionId);
+        retireEnded(senderId, helpSessionId, record);
       }
     },
     dispose: () => {

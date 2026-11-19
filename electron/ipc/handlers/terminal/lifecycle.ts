@@ -1395,10 +1395,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // value (no `getDefaultShell()` fallback) so the PTY pool can match —
     // see `acquirePtyProcess` in `terminalSpawn.ts`.
     let spawnAgentSessionId = validatedOptions.agentSessionId;
+    // A resume main turned into a fresh start is a new conversation, whatever
+    // its id: what the old one launched isn't its to clean up (#17919).
+    let startsFreshConversation = false;
     if (untouchedSessionId) {
       const relaunch = relaunchResumeAsAssignedSession(safeCommand, launchAgentId);
       if (relaunch?.sessionId === untouchedSessionId) {
         safeCommand = relaunch.command;
+        startsFreshConversation = true;
         // A caller that only had the command still gets the id on the record, so
         // teardown hands it back like any other assigned launch.
         spawnAgentSessionId ??= untouchedSessionId;
@@ -1654,7 +1658,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // The PTY is already up, so a failure here must not fail the spawn.
       if (isHelpLaunch) {
         try {
-          helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId).catch((err) => {
+          (startsFreshConversation
+            ? helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId, {
+                freshConversation: true,
+              })
+            : helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
+          ).catch((err) => {
             console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
           });
         } catch (err) {
