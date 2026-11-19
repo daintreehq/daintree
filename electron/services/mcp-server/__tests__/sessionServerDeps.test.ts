@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MCP_REMOTE_CONFIRM_MARGIN_MS } from "../../../../shared/config/mcpConfirmWindow.js";
 
 const { webContentsById } = vi.hoisted(() => ({
   webContentsById: new Map<number, { isDestroyed: () => boolean }>(),
@@ -483,6 +484,75 @@ describe("createSessionServerDeps", () => {
       await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
     }
   );
+
+  // #16750: the close's read follows the binding, and no binding is no agent to close.
+  it("reads a close target through the steer bound at each call", async () => {
+    const { state, host } = mutableHost();
+    const sessionDeps = createSessionServerDeps(fakeSource(), host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: { ...RELAY, global: true },
+    });
+    const steer = sessionDeps.globalSteer!;
+
+    await expect(steer.closeTarget("p", "t")).resolves.toBeNull();
+
+    const found = { generation: 1, closeClass: "handback" as const };
+    const closeTarget = vi.fn(async () => found);
+    state.binding = {
+      control: {} as AssistantControlBinding["control"],
+      sessionProject: () => null,
+      steer: { closeTarget } as never,
+    };
+    await expect(steer.closeTarget("p", "t")).resolves.toBe(found);
+    expect(closeTarget).toHaveBeenCalledWith("p", "t");
+  });
+
+  // #16750: the close's question goes to the Shell inside the call's own wait.
+  it("asks the Shell about a global close inside its call's deadline, and not after it", async () => {
+    const requestApproval = vi.fn(async () => ({ decision: "approved" as const, deadline: 1 }));
+    let deadline: number | undefined = 100_000;
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: {
+        ...RELAY,
+        global: true,
+        requestApproval,
+        callDeadline: () => deadline,
+      },
+    });
+    const ask = {
+      actionId: "terminal.close",
+      args: { terminalId: "t" },
+      subject: "Fix it",
+      lines: ["Panel: Fix it (t)"],
+      closeClass: "handback" as const,
+    };
+
+    await sessionDeps.relay!.askClose!("call-1", ask);
+    expect(requestApproval).toHaveBeenCalledWith({
+      ...ask,
+      callId: "call-1",
+      holdUntil: 100_000 - MCP_REMOTE_CONFIRM_MARGIN_MS,
+    });
+
+    // The call has already been answered: nobody is asked about it.
+    deadline = undefined;
+    await expect(sessionDeps.relay!.askClose!("call-1", ask)).resolves.toEqual({
+      decision: "timeout",
+    });
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a project assistant's relay session no way to ask about a close", () => {
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: { ...RELAY, requestApproval: vi.fn() },
+    });
+    expect(sessionDeps.relay?.askClose).toBeUndefined();
+  });
 
   it.each([
     ["a project assistant's relay session", { relay: RELAY }],

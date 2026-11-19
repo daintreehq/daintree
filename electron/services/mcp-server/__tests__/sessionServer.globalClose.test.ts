@@ -47,6 +47,7 @@ function claudeScreen(box: string): string {
 }
 const EMPTY_BOX = claudeScreen("❯ ");
 const TYPED_BOX = claudeScreen("❯ also fix the lint");
+const SUGGESTION_BOX = claudeScreen("❯ \x1b[2mopen the PR\x1b[22m");
 
 function atPrompt(extra: Partial<WorkerSteerRecord> = {}): WorkerSteerRecord {
   return {
@@ -78,7 +79,13 @@ afterEach(() => {
   }
 });
 
-function harness(options: { global?: boolean; answer?: ViewlessApprovalDecision } = {}) {
+function harness(
+  options: {
+    global?: boolean;
+    answer?: ViewlessApprovalDecision;
+    refuseWrite?: { code: string; message: string };
+  } = {}
+) {
   const records = new Map<string, WorkerSteerRecord>([
     [WORKER, atPrompt()],
     [OTHER, atPrompt({ agentState: "completed" })],
@@ -144,7 +151,7 @@ function harness(options: { global?: boolean; answer?: ViewlessApprovalDecision 
     relay: {
       shellName: "studio-01",
       ...(options.global !== false ? { global: true as const } : {}),
-      refuseWrite: () => null,
+      refuseWrite: () => options.refuseWrite ?? null,
       askClose,
     },
     globalSteer: steer,
@@ -227,6 +234,47 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
     expect(deps.appendAuditRecord).toHaveBeenCalledWith(
       expect.objectContaining({ admission: "global-close", authorization: "skip-preference" })
     );
+  });
+
+  it("closes one whose input box holds only the CLI's own suggestion", async () => {
+    const { deps, screens, dispatchAction } = harness();
+    screens.set(WORKER, SUGGESTION_BOX);
+    const server = await serve(deps);
+
+    const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+
+    expect(result.isError).toBeFalsy();
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes nothing once the answer's time has run out", async () => {
+    const { deps, dispatchAction } = harness({
+      answer: { decision: "approved", deadline: Date.now() - 1 },
+    });
+    const server = await serve(deps);
+
+    const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+
+    expect(toolErrorPayload(result).code).toBe(CONFIRMATION_TIMEOUT_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("answers a project driven elsewhere alike for every id, before reading any", async () => {
+    const { deps, askClose, dispatchAction } = harness({
+      refuseWrite: { code: "DRIVEN_ELSEWHERE", message: "Another machine drives this project." },
+    });
+    const server = await serve(deps);
+
+    const eligible = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
+    const missing = await callTool(
+      server,
+      relayed("terminal.closeOwned", { terminalId: "term-nope" })
+    );
+
+    expect(toolErrorPayload(eligible)).toEqual(toolErrorPayload(missing));
+    expect(toolErrorPayload(eligible).code).toBe("DRIVEN_ELSEWHERE");
+    expect(askClose).not.toHaveBeenCalled();
+    expect(dispatchAction).not.toHaveBeenCalled();
   });
 
   it("puts an agent stopped on an error to the person, and no skip closes it", async () => {
@@ -346,6 +394,8 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
 
     const result = await callTool(server, relayed("terminal.closeOwned", { terminalId: WORKER }));
 
+    // Asked, so the refusal came from the read after the answer.
+    expect(h.askClose).toHaveBeenCalledTimes(1);
     expect(toolErrorPayload(result).code).toBe(RESOURCE_NOT_OWNED_CODE);
     expect(h.dispatchAction).not.toHaveBeenCalled();
   });
@@ -394,14 +444,36 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
     expect(ask.lines.join("\n")).toContain(OTHER);
     expect(ask.lines.join("\n")).not.toContain(SHELL);
     expect(ask.lines.join("\n")).not.toContain(MINE);
+    expect(ask.lines.join("\n")).toContain("also closes 1 panel the assistant launched");
     expect(
       dispatchAction.mock.calls.map(([, args]) => (args as { terminalId: string }).terminalId)
     ).toEqual([WORKER, MINE, OTHER]);
     const { results } = batchAnswer(result);
-    expect(results.find((item) => item.target === SHELL)).toMatchObject({
-      ok: false,
-      error: { code: RESOURCE_NOT_OWNED_CODE },
+    expect(results.map(({ target, ok, error }) => [target, ok, error?.code])).toEqual([
+      [WORKER, true, undefined],
+      [SHELL, false, RESOURCE_NOT_OWNED_CODE],
+      [MINE, true, undefined],
+      [OTHER, true, undefined],
+    ]);
+  });
+
+  it("keeps a batch item on the admission its question read, whatever the ledger says later", async () => {
+    const h = harness();
+    h.askClose.mockImplementationOnce(async () => {
+      // The run is replaced and a record lands under its id while asked.
+      h.generations.set(WORKER, 9);
+      h.store.resourceOwnership.record(h.owner, [{ kind: "terminal", id: WORKER }]);
+      return APPROVED;
     });
+    const server = await serve(h.deps);
+
+    const result = await callTool(server, relayed("terminal.closeMany", { terminalIds: [WORKER] }));
+
+    expect(batchAnswer(result).results).toMatchObject([
+      { target: WORKER, ok: false, error: { code: RESOURCE_NOT_OWNED_CODE } },
+    ]);
+    expect(h.dispatchAction).not.toHaveBeenCalled();
+    expect(h.store.resourceOwnership.get(h.owner, "terminal", WORKER)).toBeDefined();
   });
 
   it("makes a batch holding an agent stopped on an error the person's question", async () => {
@@ -414,14 +486,30 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
       relayed("terminal.closeMany", { terminalIds: [WORKER, OTHER, MINE] })
     );
 
+    expect(askClose).toHaveBeenCalledTimes(1);
     expect(askClose.mock.calls[0]![1].closeClass).toBe("requires-person");
-    // The skip answered nothing, so only what it launched closed.
-    expect(
-      dispatchAction.mock.calls.map(([, args]) => (args as { terminalId: string }).terminalId)
-    ).toEqual([MINE]);
-    const { results } = batchAnswer(result);
-    expect(results.find((item) => item.target === WORKER)?.error?.code).toBe(
-      CONFIRMATION_REQUIRED_CODE
+    // The skip answered nothing, and a question nobody approved closes nothing,
+    // the assistant's own panel included.
+    expect(toolErrorPayload(result).code).toBe(CONFIRMATION_REQUIRED_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["declined", { decision: "rejected" as const }, USER_REJECTED_CODE],
+    ["unanswered", { decision: "timeout" as const }, CONFIRMATION_TIMEOUT_CODE],
+  ])("closes nothing of a batch whose question was %s", async (_how, answer, code) => {
+    const { deps, dispatchAction } = harness({ answer });
+    const server = await serve(deps);
+
+    const result = await callTool(
+      server,
+      relayed("terminal.closeMany", { terminalIds: [WORKER, MINE] })
+    );
+
+    expect(toolErrorPayload(result).code).toBe(code);
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.closeMany", admission: "global-close" })
     );
   });
 });

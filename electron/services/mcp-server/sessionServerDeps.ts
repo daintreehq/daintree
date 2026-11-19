@@ -1314,6 +1314,10 @@ export function createSessionServerDeps(
             keys: async (...args) => boundSteer(host).keys(...args),
             interrupt: async (...args) => boundSteer(host).interrupt(...args),
             reveal: async (target, show) => boundSteer(host).reveal(target, show),
+            // No steer to read with is no agent it may close: the uniform refusal (#16750).
+            closeTarget: async (projectId, terminalId) =>
+              (await host.assistantControlBinding()?.steer?.closeTarget(projectId, terminalId)) ??
+              null,
           },
         }
       : {}),

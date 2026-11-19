@@ -71,10 +71,10 @@ export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
  * command only as one of the agent's fixed forms (#16101); `terminal.revealOwned`
  * reaches the same workers through the same checks, which writes nothing and so
  * waits on no one (#16096); `terminal.closeOwned` and `terminal.closeMany`
- * close an agent it didn't launch only once its stop handed the work back, or
- * stopped on an error, with nothing typed, and the person's Daintree
- * confirmations or the person said yes (#16750); every other owned form keeps
- * the ledger.
+ * close an agent it didn't launch only with nothing typed in it: one whose
+ * stop handed the work back once the person's Daintree confirmations or the
+ * person say yes, and one stopped on an error only on the person's own yes
+ * (#16750); every other owned form keeps the ledger.
  * `worktree.resource.teardown` and `recipe.run` are here on purpose: both are
  * `danger: "confirm"`, so the person approves each run. So are the user-preset
  * writes (#16047), each previewed as the exact change, and the account add

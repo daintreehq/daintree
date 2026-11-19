@@ -202,10 +202,22 @@ describe("askShellApproval (#13501)", () => {
       });
     });
 
-    it("takes no skip as an answer about an agent stopped on an error", async () => {
+    it("takes no skip as an answer about an agent stopped on an error, only the person's yes", async () => {
+      const link = linkAnswering(skipped);
       await expect(
-        askShellApproval(linkAnswering(skipped), { ...CLOSE, closeClass: "requires-person" })
+        askShellApproval(link, { ...CLOSE, closeClass: "requires-person" })
       ).resolves.toEqual({ decision: "unavailable" });
+      expect(RelayApproveTimedPayloadSchema.parse(link.call.mock.calls[0]![1])).toMatchObject({
+        closeClass: "requires-person",
+      });
+      const approved = linkAnswering((payload) => ({
+        approvalId: payload.approvalId,
+        argsHash: payload.argsHash,
+        decision: "approved",
+      }));
+      await expect(
+        askShellApproval(approved, { ...CLOSE, closeClass: "requires-person" })
+      ).resolves.toMatchObject({ decision: "approved" });
     });
 
     it("sends nothing of a close to any other ask", async () => {

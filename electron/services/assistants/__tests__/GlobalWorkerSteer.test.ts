@@ -841,6 +841,73 @@ describe("GlobalWorkerSteer (#14551)", () => {
     });
   });
 
+  describe("reading a finished agent to close (#16750)", () => {
+    const EDGE = "────────";
+    const box = (line: string) => `⏺ Done.\r\n${EDGE}\r\n${line}\r\n${EDGE}\r\n  ? for shortcuts`;
+
+    beforeEach(() => {
+      fake.screen = box("❯ ");
+    });
+
+    it.each([
+      ["waiting at its prompt", {}, "handback"],
+      ["waiting with no reason", { waitingReason: undefined }, "handback"],
+      ["completed", { agentState: "completed" as const, waitingReason: undefined }, "handback"],
+      ["stopped on an error", { waitingReason: "error" as const }, "requires-person"],
+    ])("takes an agent %s, as the close its stop allows", async (_what, extra, closeClass) => {
+      fake.record = atPrompt({ title: "  Fix the flaky test  ", ...extra });
+
+      await expect(steer.closeTarget(PROJECT, WORKER)).resolves.toMatchObject({
+        generation: 4,
+        closeClass,
+        agentId: "claude",
+        title: "Fix the flaky test",
+      });
+    });
+
+    it("takes one whose input box holds only the CLI's own suggestion", async () => {
+      fake.screen = box("❯ \x1b[2mopen the PR\x1b[22m");
+      await expect(steer.closeTarget(PROJECT, WORKER)).resolves.not.toBeNull();
+    });
+
+    it.each([
+      ["a plain shell", () => (fake.record = atPrompt({ detectedAgentId: undefined }))],
+      ["an assistant by its record", () => (fake.record = atPrompt({ isAssistantTerminal: true }))],
+      ["an assistant by main's stamp", () => (fake.assistant = true)],
+      ["another project's terminal", () => (fake.projectId = "proj-2")],
+      ["a record of another project", () => (fake.record = atPrompt({ projectId: "proj-2" }))],
+      ["a terminal with no live run", () => (fake.generation = null)],
+      ["an ended process", () => (fake.record = atPrompt({ isExited: true }))],
+      ["one in the trash", () => (fake.record = atPrompt({ isTrashed: true }))],
+      ["one taking a submission", () => (fake.record = atPrompt({ hasPendingSubmission: true }))],
+      ["one working", () => (fake.record = atPrompt({ agentState: "working" }))],
+      ["one idle", () => (fake.record = atPrompt({ agentState: "idle" }))],
+      ["one waiting on an approval", () => (fake.record = atPrompt({ waitingReason: "approval" }))],
+      ["one holding a typed draft", () => (fake.screen = box("❯ also fix the lint"))],
+      ["one whose input box can't be read", () => (fake.screen = "$ ")],
+      ["one whose record can't be read", () => (fake.record = null)],
+    ])("refuses %s", async (_what, arrange) => {
+      arrange();
+      await expect(steer.closeTarget(PROJECT, WORKER)).resolves.toBeNull();
+    });
+
+    it.each([
+      ["the run is replaced", () => (fake.generation = 5)],
+      ["a key reaches it", () => personTypes()],
+      ["its state changes", () => (fake.record = atPrompt({ lastStateChange: 1_500 }))],
+      ["another agent is seen", () => (fake.record = atPrompt({ detectedAgentId: "codex" }))],
+      [
+        "the read fails",
+        () => {
+          throw new Error("pty host gone");
+        },
+      ],
+    ])("refuses when %s while its screen is read", async (_what, change) => {
+      duringRead = change;
+      await expect(steer.closeTarget(PROJECT, WORKER)).resolves.toBeNull();
+    });
+  });
+
   describe("showing the person a worker's panel (#16096)", () => {
     const shown = () => vi.fn(async () => "shown");
 

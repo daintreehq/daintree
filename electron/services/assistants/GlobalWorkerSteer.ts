@@ -595,6 +595,17 @@ export class GlobalWorkerSteer {
    * between is null: what was read is no longer what is there.
    */
   async closeTarget(projectId: string, terminalId: string): Promise<GlobalCloseTarget | null> {
+    try {
+      return await this.readCloseTarget(projectId, terminalId);
+    } catch {
+      return null;
+    }
+  }
+
+  private async readCloseTarget(
+    projectId: string,
+    terminalId: string
+  ): Promise<GlobalCloseTarget | null> {
     if (this.writing.has(terminalId)) return null;
     if (this.deps.getTerminalProjectId(terminalId) !== projectId) return null;
     if (this.deps.isAssistantTerminal(terminalId)) return null;

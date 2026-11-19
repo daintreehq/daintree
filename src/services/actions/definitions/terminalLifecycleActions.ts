@@ -226,7 +226,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.closeOwned",
     title: "Close owned panel",
     description:
-      "Close a panel this session created, usually to the trash, where it stays briefly recoverable. Panels opened by the user, another client or a plugin are refused, as are unknown ids; the global Assistant may also close a finished agent it didn't launch, with nothing typed in it. The result names what closed.",
+      "Close a panel this session created, usually to the trash, where it stays briefly recoverable. Panels opened by the user, another client or a plugin are refused, as are unknown ids. The result names what closed.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -242,7 +242,7 @@ export function registerTerminalLifecycleActions(
         .string()
         .min(1)
         .describe(
-          "Panel `id` this session got when creating it, or a finished agent's for the global Assistant. Required; there is no focus fallback."
+          "Panel `id` this session got when creating it. Required; there is no focus fallback."
         ),
     }),
     resultSchema: PanelCloseResultSchema,

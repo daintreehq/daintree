@@ -264,6 +264,7 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
 
     it("asks the person about one close, offering its own tick", async () => {
       delegable = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+      reply = { delegate: true };
       duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId));
 
       await closeCall();
@@ -272,6 +273,8 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       expect(asked[0]).toMatchObject({ actionId: "terminal.close", args: { terminalId: "t-1" } });
       expect(asked[0]?.delegation?.label).toBe(ASSISTANT_GLOBAL_CLOSE_CONFIRMATION);
       expect(answers[0]?.decision).toBe("approved");
+      // The tick is the close's own, never the owned close as a whole.
+      expect(commits).toEqual([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
     });
 
     it("answers for the person under their Never ask, or the close's own tick", async () => {
@@ -303,6 +306,24 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       expect(answers[0]?.decision).toBe("skip-preference");
     });
 
+    it("refuses a batch ask about other panels than the call named", async () => {
+      skips = true;
+      const other = { terminalIds: ["t-1", "t-9"] };
+      duringCall = (r, callId) =>
+        r.receiveApproval(
+          "studio",
+          closeAsk(callId, "handback", {
+            actionId: "terminal.closeMany",
+            args: other,
+            argsHash: canonicalArgsHash("terminal.closeMany", other),
+          })
+        );
+
+      await closeCall("g", "terminal.closeMany", { terminalIds: ["t-1", "t-2"] });
+
+      expect(answers[0]?.decision).toBe("refused");
+    });
+
     it("puts an agent stopped on an error to the person, past any skip and with no tick", async () => {
       skips = true;
       delegable = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
@@ -316,6 +337,9 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       expect(answers[0]?.decision).toBe("approved");
       expect(commits).toEqual([]);
       expect(skipNotes).toBe(0);
+      // Neither the preference nor the tick is read for it.
+      expect(skipReads).toEqual([]);
+      expect(delegationReads).toEqual([]);
     });
 
     it("refuses a close ask about a project assistant's call, or one that doesn't say how it read the stop", async () => {
