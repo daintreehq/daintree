@@ -5486,10 +5486,10 @@ export interface PluginAgentCanopyNote {
   readonly ask?: "approval" | "question";
   /**
    * The question, verbatim from the screen. Only on an ask, and only for a
-   * plugin that declares `terminal:read` and holds the user's lasting grant
-   * of it ("Allow and remember" at a {@link PluginTerminalsApi.readScreen}
-   * prompt): reading the list never raises the consent prompt itself. Up to
-   * 160 characters.
+   * plugin that declares `terminal:read` and is a built-in or holds the user's
+   * lasting grant of it ("Allow and remember" at a
+   * {@link PluginTerminalsApi.readScreen} prompt): reading the list never
+   * raises the consent prompt itself. Up to 160 characters.
    */
   readonly quote?: string;
 }

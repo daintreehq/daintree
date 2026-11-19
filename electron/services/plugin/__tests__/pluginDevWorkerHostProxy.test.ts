@@ -616,6 +616,7 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
             band: "needs-you",
             canopy: { readAt: 2, ask: "question", quote: "Which?", extra: 1 },
           },
+          { workspaceId: "p1", terminalId: "t-2", band: "quiet", canopy: { readAt: 4, extra: 1 } },
         ],
         degraded: true,
         lastSuccessfulAt: null,
@@ -634,6 +635,13 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.agents[0])).toBe(true);
     expect(Object.isFrozen(snapshot.agents[0].canopy)).toBe(true);
+    expect(snapshot.agents[1]).toEqual({
+      workspaceId: "p1",
+      workspaceKind: "project",
+      terminalId: "t-2",
+      band: "quiet",
+      canopy: { readAt: 4 },
+    });
   });
 
   it("subscribes focused-panel and rebuilds each focus to the allowlist, frozen", async () => {

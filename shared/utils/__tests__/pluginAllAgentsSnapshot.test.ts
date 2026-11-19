@@ -241,11 +241,13 @@ describe("toPluginAgentPlacement", () => {
   it("gives no note when the user's decision or the agent's own report placed the run", () => {
     const parked = row({ canopy: ASK, park: { parkedAt: 2 } });
     const snoozed = row({ canopy: ASK, snooze: { snoozedAt: 2, snoozedUntil: 9 } });
+    const reported = row({ canopy: ASK, handbackReport: "needs-you" });
     // Seen, the reading alone would land the run in idle.
-    const reported = row({ canopy: { ...ASK, seen: true }, handbackReport: "needs-you" });
+    const reportedSeen = row({ canopy: { ...ASK, seen: true }, handbackReport: "needs-you" });
     expect(toPluginAgentPlacement(parked, QUOTES)).toEqual({ band: "parked" });
     expect(toPluginAgentPlacement(snoozed, QUOTES)).toEqual({ band: "snoozed" });
     expect(toPluginAgentPlacement(reported, QUOTES)).toEqual({ band: "needs-you" });
+    expect(toPluginAgentPlacement(reportedSeen, QUOTES)).toEqual({ band: "needs-you" });
   });
 
   it("notes a question wait the reading found asking nothing, without its status line", () => {
@@ -307,6 +309,8 @@ describe("toPluginAgentPlacement", () => {
     const long = row({ canopy: { ...ASK, quote: words } });
     const quote = toPluginAgentPlacement(long, QUOTES).canopy?.quote ?? "";
     expect(quote.length).toBeLessThanOrEqual(MAX_PLUGIN_CANOPY_QUOTE_LENGTH);
+    // Cut at the bound, give or take the space it trims, not to nothing.
+    expect(quote.length).toBeGreaterThanOrEqual(MAX_PLUGIN_CANOPY_QUOTE_LENGTH - 2);
     expect(quote.endsWith("…")).toBe(true);
     expect(words.startsWith(quote.slice(0, -1))).toBe(true);
     // Cut again, it is already short enough to keep.
