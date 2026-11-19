@@ -29,7 +29,7 @@ Project tools such as `agent.launch`, `terminal.sendCommand` and `worktree.list`
 2. Find the tool with `actions.search` through `host.call` on that project; never guess a name or report a capability missing without searching. Read its schema with `actions.getSchema` the same way.
 3. Call it through `host.call`. Give `worktreeId` explicitly: there is no active worktree to default to.
 
-A project's tools run as another machine's assistant's would: the `*Owned` terminal tools (`terminal.sendCommandOwned`, `terminal.sendKeysOwned`, `terminal.closeOwned`) act on what you launched there or the user handed you, and you can close only what you launched. Calling your own project is refused; you have none.
+A project's tools run as another machine's assistant's would: `terminal.sendCommandOwned` and `terminal.sendKeysOwned` act on what you launched there or the user handed you; `terminal.closeOwned`, the owned restarts, `worktree.deleteOwned` and `worktree.retireOwned` act only on what you launched, and a hand-over does not change that. Calling your own project is refused; you have none.
 
 ## Steering Agents You Didn't Launch
 
