@@ -33,6 +33,23 @@ let home: string;
 let executable: string;
 const started = new Set<number>();
 
+/**
+ * A long-lived process named `daintree`. A script rather than a renamed copy of
+ * sleep: where sleep is a multicall binary (uutils, Ubuntu 26.04's default), it
+ * picks its utility from argv[0] and a copy named daintree exits at once.
+ */
+function fakeRunningDaintree(): string {
+  const daintree = path.join(home, "bin", "daintree");
+  fs.writeFileSync(
+    daintree,
+    "#!/bin/sh\ntrap 'kill $! 2>/dev/null; exit 0' TERM\nsleep 600 &\nwait\n",
+    {
+      mode: 0o755,
+    }
+  );
+  return daintree;
+}
+
 function sh(script: string) {
   return spawnSync("/bin/sh", ["-c", script], {
     env: {
@@ -175,9 +192,7 @@ describe.skipIf(process.platform !== "linux")("the detached Host start under a r
 
   it("stops the Daintree an unpacked AppImage runs, so its runtime can clean up and go", async () => {
     // A runtime that runs Daintree as its child and waits for it, as an unpacked AppImage does.
-    const daintree = path.join(home, "bin", "daintree");
-    fs.copyFileSync(fs.realpathSync("/bin/sleep"), daintree);
-    fs.chmodSync(daintree, 0o755);
+    const daintree = fakeRunningDaintree();
     fs.writeFileSync(executable, `#!/bin/sh\n"${daintree}" 600 &\nwait\n`, { mode: 0o755 });
     const runtime = launch();
     const child = () =>
@@ -205,9 +220,7 @@ describe.skipIf(process.platform !== "linux")("the detached Host start under a r
 
   it("counts a start that handed over to a Daintree already running as still under way", async () => {
     // A Daintree already running there, which the new start hands its request to.
-    const daintree = path.join(home, "bin", "daintree");
-    fs.copyFileSync(fs.realpathSync("/bin/sleep"), daintree);
-    fs.chmodSync(daintree, 0o755);
+    const daintree = fakeRunningDaintree();
     const running = spawn(daintree, ["600"], { stdio: "ignore" });
     started.add(running.pid!);
     // The start itself exits at once, as a second instance does once it has handed over.
@@ -215,7 +228,8 @@ describe.skipIf(process.platform !== "linux")("the detached Host start under a r
     const handedOver = launch();
     await until(() => !alive(handedOver.pid), "the start to hand over and exit");
     expect(parseDetachedAlive(sh(detachedAliveScript(handedOver)).stdout)).toBe(true);
-    running.kill("SIGKILL");
+    // TERM, so it takes its sleep along rather than leaving it orphaned.
+    running.kill("SIGTERM");
     await until(() => !alive(running.pid!), "the running Daintree to go");
     expect(parseDetachedAlive(sh(detachedAliveScript(handedOver)).stdout)).toBe(false);
   });
