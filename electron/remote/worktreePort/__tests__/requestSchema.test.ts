@@ -106,3 +106,16 @@ describe("remote attachment-action", () => {
     expect(drives("status")).toBe(false);
   });
 });
+
+describe("remote idle pause (#17925)", () => {
+  it.each([
+    ["get-idle-pause", { worktreeId: "/repos/project-a-x" }],
+    ["set-idle-pause", { worktreeId: "/repos/project-a-x", enabled: true, fingerprint: "f" }],
+  ])("refuses %s from another device", (action, payload) => {
+    expect(checkRemoteWorktreePortRequest({ id: "i-1", action, payload }, ROOT)).toEqual({
+      ok: false,
+      id: "i-1",
+      error: expect.stringMatching(/only taken from this device/),
+    });
+  });
+});

@@ -114,6 +114,20 @@ export interface ResolvedResourceEnvironments {
   path: string;
 }
 
+/** The resource block a resource action runs, and which file and entry supplied it. */
+export interface ResolvedResourceSelection {
+  resource: ResourceConfig;
+  resolvedConfig: ResolvedLifecycleConfig | null;
+  /** Set when the block came from a settings file's environments. */
+  environments: ResolvedResourceEnvironments | null;
+  /** Which block: `resources:<key>`, `resource`, or `settings:<key>`. */
+  selector: string;
+  /** The block's name as the person knows it. */
+  name: string;
+  origin: ResolvedLifecycleConfig["origin"];
+  path: string;
+}
+
 /**
  * A resource block the file itself names. Keys arrive from the file and from a
  * worktree's mode, so a plain index can return something inherited from
@@ -321,6 +335,85 @@ export class WorktreeLifecycleService {
     const attachments = resolved?.config.attachments;
     if (!resolved || !attachments || Object.keys(attachments).length === 0) return null;
     return { resolved, attachments };
+  }
+
+  /**
+   * The resource block a resource action on this worktree runs: `resources`
+   * by `environmentId`, then `default`, then the first; then `resource`; and
+   * only when the config resolves none of those, the settings environment
+   * named by the worktree's mode. The config is returned either way, since
+   * its approval decides whether the block may run.
+   */
+  async resolveResourceSelection(
+    worktreePath: string,
+    projectRootPath: string,
+    environmentId: string | undefined,
+    /** Read once the config has loaded, as the mode may change while it does. */
+    worktreeMode: () => string | undefined
+  ): Promise<{
+    resolvedConfig: ResolvedLifecycleConfig | null;
+    selection: ResolvedResourceSelection | null;
+  }> {
+    const resolvedConfig = await this.resolveConfig(worktreePath, projectRootPath);
+    const config = resolvedConfig?.config;
+    const fromConfig = (
+      resource: ResourceConfig,
+      selector: string,
+      name: string
+    ): ResolvedResourceSelection => ({
+      resource,
+      resolvedConfig,
+      environments: null,
+      selector,
+      name,
+      origin: resolvedConfig!.origin,
+      path: resolvedConfig!.path,
+    });
+    if (config?.resources) {
+      const named = ownResource(config.resources, environmentId);
+      if (named) {
+        return {
+          resolvedConfig,
+          selection: fromConfig(named, `resources:${environmentId}`, environmentId!),
+        };
+      }
+      if (config.resources["default"]) {
+        return {
+          resolvedConfig,
+          selection: fromConfig(config.resources["default"], "resources:default", "default"),
+        };
+      }
+      const [first] = Object.keys(config.resources);
+      if (first !== undefined) {
+        return {
+          resolvedConfig,
+          selection: fromConfig(config.resources[first]!, `resources:${first}`, first),
+        };
+      }
+    }
+    if (config?.resource) {
+      return { resolvedConfig, selection: fromConfig(config.resource, "resource", "resource") };
+    }
+    const mode = worktreeMode();
+    if (mode && mode !== "local") {
+      const environments = await this.resolveProjectResourceEnvironments(projectRootPath);
+      const resource = ownResource(environments?.environments, mode);
+      if (environments && resource) {
+        return {
+          resolvedConfig,
+          selection: {
+            resource,
+            resolvedConfig,
+            environments,
+            selector: `settings:${mode}`,
+            name: mode,
+            origin: environments.origin,
+            path: environments.path,
+          },
+        };
+      }
+    }
+    return { resolvedConfig, selection: null };
   }
 
   /**

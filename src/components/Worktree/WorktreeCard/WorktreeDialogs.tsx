@@ -11,6 +11,10 @@ const LazyWorktreeDeleteDialog = lazy(() =>
   import("../WorktreeDeleteDialog").then((m) => ({ default: m.WorktreeDeleteDialog }))
 );
 
+const LazyIdlePauseDialog = lazy(() =>
+  import("../IdlePauseDialog").then((m) => ({ default: m.IdlePauseDialog }))
+);
+
 const LazyIssuePickerDialog = lazy(() =>
   import("../IssuePickerDialog").then((m) => ({ default: m.IssuePickerDialog }))
 );
@@ -29,6 +33,8 @@ export interface WorktreeDialogsProps {
   onCloseTitleDialog: () => void;
   customTitle: string | undefined;
   restoreTitleDialogFocusTo?: RestoreFocusTarget;
+  showIdlePauseDialog?: boolean;
+  onCloseIdlePauseDialog?: () => void;
 }
 
 export function WorktreeDialogs({
@@ -45,6 +51,8 @@ export function WorktreeDialogs({
   onCloseTitleDialog,
   customTitle,
   restoreTitleDialogFocusTo,
+  showIdlePauseDialog = false,
+  onCloseIdlePauseDialog,
 }: WorktreeDialogsProps) {
   // Keep-mounted is NOT for a close animation — it avoids re-suspending on
   // reopen of a lazily-loaded dialog.
@@ -55,6 +63,7 @@ export function WorktreeDialogs({
   // still plays the exit.
   const confirmDialogMounted = useKeepMounted(confirmDialog.isOpen);
   const titleDialogMounted = useKeepMounted(showTitleDialog);
+  const idlePauseDialogMounted = useKeepMounted(showIdlePauseDialog);
   return (
     <>
       {confirmDialogMounted && (
@@ -87,6 +96,17 @@ export function WorktreeDialogs({
             isOpen={showDeleteDialog}
             onClose={onCloseDeleteDialog}
             worktree={worktree}
+          />
+        </Suspense>
+      )}
+
+      {idlePauseDialogMounted && onCloseIdlePauseDialog && (
+        <Suspense fallback={null}>
+          <LazyIdlePauseDialog
+            isOpen={showIdlePauseDialog}
+            onClose={onCloseIdlePauseDialog}
+            worktreeId={worktree.id}
+            restoreFocusTo={restoreTitleDialogFocusTo}
           />
         </Suspense>
       )}

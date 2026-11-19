@@ -12,6 +12,7 @@
  */
 
 import type { HostLogEvent } from "./host-log.js";
+import type { IdlePauseCheck, IdlePauseGuard, IdlePauseRunOutcome } from "./idlePause.js";
 import type {
   BranchInfo,
   CreateWorktreeOptions,
@@ -630,6 +631,18 @@ export type WorkspaceHostRequest =
       worktreeId: string;
       guard: UnattendedRemovalGuard;
     }
+  /**
+   * Main asking whether an idle pause of the worktree may run, before it
+   * claims the worktree's host's idle time (#17925). Answered with
+   * `idle-pause-result` carrying `check`.
+   */
+  | { type: "idle-pause-check"; requestId: string; worktreeId: string }
+  /**
+   * The pause itself, sent once the host granted the claim: a manual pause
+   * that is refused if anything `guard` was checked against has changed.
+   * Answered with `idle-pause-result` carrying `outcome`.
+   */
+  | { type: "idle-pause-run"; requestId: string; worktreeId: string; guard: IdlePauseGuard }
   /**
    * What deleting the worktree would discard and run, read fresh, for a
    * delete main puts to the person itself with no view open (#13501): the
@@ -1307,6 +1320,12 @@ export type WorkspaceHostEvent =
       type: "has-resource-config-result";
       requestId: string;
       hasConfig: boolean;
+    }
+  | {
+      type: "idle-pause-result";
+      requestId: string;
+      check?: IdlePauseCheck;
+      outcome?: IdlePauseRunOutcome;
     }
   // Forge RPC request (workspace-host → main). Forge provider impls live in
   // main (registered by `PluginService` on plugin activate); the workspace-host

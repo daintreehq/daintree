@@ -14,6 +14,7 @@ import type {
 import type { PRServiceStatus } from "@shared/types/workspace-host";
 import type { WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
+import type { IdlePausePolicy } from "@shared/types/idlePause";
 import { mintRemoteOperationId } from "@/clients/operationsClient";
 import { runHostOperation } from "@/hooks/useHostConnection";
 
@@ -297,6 +298,25 @@ export const worktreeClient = {
     await window.electron.worktreePort.request("approve-lifecycle-commands", {
       worktreeId,
       fingerprint,
+    });
+  },
+
+  getIdlePause: async (worktreeId: string): Promise<IdlePausePolicy> => {
+    const { policy } = await window.electron.worktreePort.request("get-idle-pause", {
+      worktreeId,
+    });
+    return policy;
+  },
+
+  setIdlePause: async (
+    worktreeId: string,
+    enabled: boolean,
+    fingerprint?: string
+  ): Promise<void> => {
+    await window.electron.worktreePort.request("set-idle-pause", {
+      worktreeId,
+      enabled,
+      ...(fingerprint !== undefined && { fingerprint }),
     });
   },
 

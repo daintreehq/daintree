@@ -54,6 +54,7 @@ import {
   Scissors,
   Server,
   SquareTerminal,
+  Timer,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -260,6 +261,8 @@ export interface WorktreeMenuItemsProps {
   onResourceProvision?: () => void;
   onResourceResume?: () => void;
   onResourcePause?: () => void;
+  /** Opens idle pause for the worktree's environment on this device (#17925). */
+  onIdlePause?: () => void;
   onResourceConnect?: () => void;
   onResourceStatus?: () => void;
   onResourceTeardown?: () => void;
@@ -394,6 +397,7 @@ export function WorktreeMenuItems({
   onResourceProvision,
   onResourceResume,
   onResourcePause,
+  onIdlePause,
   onResourceConnect,
   onResourceStatus,
   onResourceTeardown,
@@ -1039,6 +1043,12 @@ export function WorktreeMenuItems({
             <C.Item key="pause" onSelect={onResourcePause}>
               <Pause className={ICON} />
               Pause
+            </C.Item>
+          ),
+          !isLocalEnvironment && onIdlePause && (
+            <C.Item key="idle-pause" onSelect={onIdlePause}>
+              <Timer className={ICON} />
+              Idle pause…
             </C.Item>
           ),
         ].filter(Boolean)

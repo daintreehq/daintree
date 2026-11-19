@@ -95,6 +95,12 @@ const PAYLOAD_SCHEMAS = {
   "run-lifecycle-setup": z.object({ worktreeId }),
   "get-lifecycle-command-approval": z.object({ worktreeId }),
   "approve-lifecycle-commands": z.object({ worktreeId, fingerprint: z.string().min(1).max(512) }),
+  "get-idle-pause": z.object({ worktreeId }),
+  "set-idle-pause": z.object({
+    worktreeId,
+    enabled: z.boolean(),
+    fingerprint: z.string().min(1).max(512).optional(),
+  }),
   "switch-worktree-environment": z.object({ worktreeId, envKey: z.string().min(1).max(256) }),
   "has-resource-config": z.object({ rootPath }),
   "get-worktree-changes": z.object({ worktreeId }),
@@ -110,6 +116,16 @@ const PAYLOAD_SCHEMAS = {
 } satisfies Record<WorktreePortAction, z.ZodType>;
 
 const ACTIONS = Object.keys(PAYLOAD_SCHEMAS) as [WorktreePortAction, ...WorktreePortAction[]];
+
+/**
+ * This device's own choices, which only a view of a project on this machine
+ * makes: idle pause runs a project's pause commands unattended here (#17925),
+ * and a Shell linked to this machine is not this device.
+ */
+const LOCAL_ONLY_ACTIONS: ReadonlySet<WorktreePortAction> = new Set([
+  "get-idle-pause",
+  "set-idle-pause",
+]);
 
 /**
  * The actions that change a project: only its lease holder may send them,
@@ -168,6 +184,9 @@ export function checkRemoteWorktreePortRequest(
     return { ok: false, id: id.success ? id.data : null, error: "Invalid worktree request" };
   }
   const { id, action } = envelope.data;
+  if (LOCAL_ONLY_ACTIONS.has(action)) {
+    return { ok: false, id, error: `${action} is only taken from this device` };
+  }
   const payload = PAYLOAD_SCHEMAS[action].safeParse(envelope.data.payload);
   if (!payload.success) {
     return { ok: false, id, error: `Invalid payload for ${action}` };
