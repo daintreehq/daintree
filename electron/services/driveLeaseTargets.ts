@@ -86,7 +86,7 @@ function resolveSource(
     const optional = "optional" in source ? source.optional : undefined;
     if (optional === true) return [];
     if (optional === "caller") return one(callerProjectId, "the caller's project");
-    if (optional === "caller-or-none") return callerProjectId ? [callerProjectId] : [];
+    if (optional === "caller-or-none") return callerProjectId?.trim() ? [callerProjectId] : [];
     return { unresolved: `no ${source.from} argument` };
   }
   if (typeof value !== "string" || value.length === 0) {
@@ -113,7 +113,8 @@ function resolveSource(
     case "terminal":
       return then(resolvers.describeTerminal(value), (record) =>
         record !== "missing"
-          ? record.unplaced === true && record.projectId === null
+          ? // Padded, it could reach the saved state of the terminal it trims to.
+            record.unplaced === true && record.projectId === null && value === value.trim()
             ? []
             : one(record.projectId, "a terminal with no owning project")
           : // A handler's session cleanup trims the id it's given, so a padded

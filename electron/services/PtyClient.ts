@@ -160,6 +160,8 @@ const __dirname = path.dirname(__filename);
 interface TerminalInfoResponse {
   id: string;
   projectId?: string;
+  /** Placed in no project on purpose (#17926), as its spawn said. */
+  unplaced?: true;
   kind?: PanelKind;
   launchAgentId?: AgentId;
   /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
@@ -2040,7 +2042,13 @@ export class PtyClient extends EventEmitter {
 
   /** Whether main holds `id`'s spawn record as one placed in no project on purpose (#17926). */
   isUnplacedTerminal(id: string): boolean {
-    return this.pendingSpawns.get(id)?.unplaced === true;
+    // A duplicate still awaiting the host's answer doesn't speak for the
+    // terminal it would displace, which may still be running in a project.
+    const displaced = this.displacedSpawns.get(id)?.entry;
+    return (
+      this.pendingSpawns.get(id)?.unplaced === true &&
+      (displaced === undefined || displaced.unplaced === true)
+    );
   }
 
   /**

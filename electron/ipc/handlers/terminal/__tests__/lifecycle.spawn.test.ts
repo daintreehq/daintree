@@ -527,13 +527,20 @@ describe("terminal spawn handler - projectId resolution", () => {
     const os = await import("os");
     registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
 
-    await getSpawnHandler()({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 });
+    // A blank binding is no project either, as the lease gate reads it.
+    for (const event of [{}, { projectId: "  " }]) {
+      await getSpawnHandler()(event as unknown as Electron.IpcMainInvokeEvent, {
+        cols: 80,
+        rows: 24,
+      });
+    }
 
-    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    // Null, not left out: PtyClient hands a spawn naming nothing its active project.
-    expect(spawnArgs.projectId).toBeNull();
-    expect(spawnArgs.cwd).toBe(os.homedir());
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    for (const [, spawnArgs] of ptyClient.spawn.mock.calls) {
+      // Null, not left out: PtyClient hands a spawn naming nothing its active project.
+      expect(spawnArgs.projectId).toBeNull();
+      expect(spawnArgs.cwd).toBe(os.homedir());
+    }
     expect(mockGetProjectSettings).not.toHaveBeenCalled();
   });
 
@@ -831,16 +838,16 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
     );
   });
 
-  // #5182: a worktreeId with no project resolved anywhere stamps no pair, so
-  // there is nothing to check and nothing to drop.
-  it("checks nothing when no project resolves at all", async () => {
-    mockGetCurrentProject.mockReturnValue(null);
+  // #17926: a terminal placed in no project has no project to check a worktree
+  // against, and a journaled one would count against that worktree's history.
+  it("drops the worktree claim of a terminal placed in no project", async () => {
     mockGetProjectById.mockReturnValue(null);
 
     await spawnWith({ worktreeId: "wt-a1" });
 
     expect(worktreeService.isWorktreeOwnedByProject).not.toHaveBeenCalled();
-    expect(spawnArgsOf().worktreeId).toBe("wt-a1");
+    expect(spawnArgsOf().projectId).toBeNull();
+    expect(spawnArgsOf().worktreeId).toBeUndefined();
   });
 
   // A blank id is treated as absent everywhere else in the spawn path, so it
@@ -992,8 +999,7 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
-    await handler({} as Electron.IpcMainInvokeEvent, {
-      projectId: "p1",
+    await handler({ projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent, {
       cwd: "/nonexistent/path",
       cols: 80,
       rows: 24,
@@ -1025,8 +1031,9 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
     const handler = getSpawnHandler();
     const os = await import("os");
+    // From a window showing a project: one placed in none carries no worktree.
     await handler(
-      {} as Electron.IpcMainInvokeEvent,
+      { projectId: "p1" } as unknown as Electron.IpcMainInvokeEvent,
       {
         cwd: os.homedir(),
         cols: 80,

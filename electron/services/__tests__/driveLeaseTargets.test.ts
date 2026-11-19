@@ -10,6 +10,7 @@ const { projects, pty, gitProbe } = vi.hoisted(() => ({
     tracked: new Map<string, string>(),
     unplaced: new Set<string>(),
     recorded: new Map<string, string>(),
+    recordedUnplaced: new Set<string>(),
     timingOut: new Set<string>(),
     absent: false,
   },
@@ -43,6 +44,7 @@ vi.mock("../../window/serviceRefs.js", () => ({
               if (options?.strict) throw new Error("timed out");
               return null;
             }
+            if (pty.recordedUnplaced.has(id)) return { id, unplaced: true };
             return pty.recorded.has(id) ? { id, projectId: pty.recorded.get(id) } : null;
           },
         },
@@ -268,6 +270,11 @@ describe("resolveLeaseTarget", () => {
         projectIds: [],
       });
     }
+    // A blank binding is none too, as the handler reads it.
+    expect(resolveLeaseTarget(spawn, [{ cols: 80, rows: 24 }], "  ", stubResolvers())).toEqual({
+      kind: "projects",
+      projectIds: [],
+    });
     // Its folder still counts: a shell opened inside a project's repository changes that project.
     expect(
       resolveLeaseTarget(spawn, [{ cols: 80, rows: 24, cwd: "/repo/b" }], null, stubResolvers())
@@ -276,6 +283,30 @@ describe("resolveLeaseTarget", () => {
     expect(
       resolveLeaseTarget(target("artifact:save-to-file"), [{ content: "x" }], null, stubResolvers())
     ).toMatchObject({ kind: "unresolved" });
+  });
+
+  it("lets only a canonical id of a terminal placed in no project change none", () => {
+    const resolvers = stubResolvers({
+      describeTerminal: (id) =>
+        id.trim() === "t-picker"
+          ? { projectId: null, unplaced: true }
+          : id === "t-stamped"
+            ? { projectId: "a", unplaced: true }
+            : "missing",
+    });
+    const kill = target("terminal:kill");
+    expect(resolveLeaseTarget(kill, ["t-picker"], null, resolvers)).toEqual({
+      kind: "projects",
+      projectIds: [],
+    });
+    expect(resolveLeaseTarget(kill, [" t-picker "], null, resolvers)).toMatchObject({
+      kind: "unresolved",
+    });
+    // A project on the record always wins.
+    expect(resolveLeaseTarget(kill, ["t-stamped"], null, resolvers)).toEqual({
+      kind: "projects",
+      projectIds: ["a"],
+    });
   });
 
   it("refuses a project id that a handler would trim into another project", () => {
@@ -526,6 +557,12 @@ describe("createLeaseTargetResolvers", () => {
         projectIds: [],
       });
     }
+    // A preserved exit drops main's record; the host's still says so.
+    pty.recordedUnplaced.add("t-preserved");
+    await expect(Promise.resolve(r.describeTerminal("t-preserved"))).resolves.toEqual({
+      projectId: null,
+      unplaced: true,
+    });
     // A record with no project that main didn't place stays untraceable.
     pty.recorded.set("t-host-shell", "");
     await expect(

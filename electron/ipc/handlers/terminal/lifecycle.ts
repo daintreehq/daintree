@@ -486,7 +486,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // project, which names whatever some window last showed, another window's
     // or, for a remote window, one of the Host's own (#17926). The lease gate
     // places it the same way (`"caller-or-none"`).
-    const workspaceId = validatedOptions.projectId?.trim() || ctx.projectId || undefined;
+    const callerWorkspaceId = ctx.projectId?.trim() ? ctx.projectId : undefined;
+    const workspaceId = validatedOptions.projectId?.trim() || callerWorkspaceId;
     const resolvedProject = workspaceId ? projectStore.getProjectById(workspaceId) : null;
 
     // Ownership is the workspace id; project-only enrichment below (settings, shell
@@ -636,7 +637,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const forwardedAgentSocket = projectId
       ? (getRemoteService("agentForwardingHost")?.socketForSpawn(projectId) ?? null)
       : null;
-    let spawnWorktreeId = validatedOptions.worktreeId;
+    // Placed in no project, nothing can vouch for a worktree, and a journaled
+    // one would count against that worktree's own history.
+    let spawnWorktreeId = projectId === undefined ? undefined : validatedOptions.worktreeId;
     const agentSocketPath = await forwardedAgentSocket;
     if ((await worktreeOwnership) === false) {
       console.warn(

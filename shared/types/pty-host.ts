@@ -1345,6 +1345,8 @@ export interface PtyHostTerminalInfo {
    */
   submission?: TerminalSubmissionRecord;
   projectId?: string;
+  /** Placed in no project on purpose (#17926), as its spawn said. */
+  unplaced?: true;
   kind?: PanelKind;
   /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
   isAssistantTerminal?: boolean;

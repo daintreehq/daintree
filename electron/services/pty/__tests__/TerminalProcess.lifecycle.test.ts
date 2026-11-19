@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubProcessKillForFile } from "../../../__tests__/helpers/processKillGuard.js";
+import { createHash } from "crypto";
+import fs from "fs";
 import os from "os";
 import path from "path";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
+import { TerminalRegistry } from "../TerminalRegistry.js";
 import type { InThreadAnalysisBackend } from "../analysis/InThreadAnalysisBackend.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
@@ -184,6 +187,36 @@ describe("TerminalProcess — Claude store on the record (#16269)", () => {
       expect(terminal.getPublicState().claudeConfigDir).toBeUndefined();
     } finally {
       terminal.dispose();
+    }
+  });
+});
+
+// #17926: what the registry reads to keep it out of the project its cwd is in.
+describe("TerminalProcess — placed in no project", () => {
+  it("records a spawn placed in no project, which the registry then never infers one for", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-unplaced-"));
+    fs.mkdirSync(path.join(root, ".git"));
+    const projectId = createHash("sha256")
+      .update(path.normalize(fs.realpathSync(root)))
+      .digest("hex");
+    const unplaced = createTerminal(
+      createControllablePty(),
+      { cwd: root, unplaced: true },
+      {},
+      "t-u"
+    );
+    const legacy = createTerminal(createControllablePty(), { cwd: root }, {}, "t-l");
+    try {
+      expect(unplaced.getInfo().unplaced).toBe(true);
+      expect(legacy.getInfo().unplaced).toBeUndefined();
+      const registry = new TerminalRegistry();
+      registry.add("t-u", unplaced);
+      registry.add("t-l", legacy);
+      expect(registry.getForProject(projectId)).toEqual(["t-l"]);
+    } finally {
+      unplaced.dispose();
+      legacy.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

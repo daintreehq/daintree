@@ -166,7 +166,12 @@ function describeTerminal(terminalId: string): TerminalRecord | Promise<Terminal
   // Strict: a lookup that times out throws rather than reading as "no such terminal".
   return pty.getTerminalAsync(terminalId, undefined, { strict: true }).then(
     (info): TerminalRecord => {
-      if (info) return { projectId: info.projectId || null };
+      if (info) {
+        // The host's record carries it past main's, which a preserved exit drops.
+        return info.unplaced === true && !info.projectId
+          ? { projectId: null, unplaced: true }
+          : { projectId: info.projectId || null };
+      }
       // A pty-host that answers nothing for a spawn main still holds (a dead
       // one answers null too) hasn't confirmed it gone.
       return pty.hasTerminal(terminalId) ? { projectId: null } : "missing";

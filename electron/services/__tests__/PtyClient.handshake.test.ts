@@ -1085,10 +1085,10 @@ describe("PtyClient projectId assignment", () => {
     expect(client.getTerminalProjectId("t4")).toBeNull();
     expect(client.isUnplacedTerminal("t4")).toBe(true);
 
-    // The id reused for a project's spawn is that project's.
-    client.spawn("t4", { cwd: "/tmp", cols: 80, rows: 24 });
-    expect(client.getTerminalProjectId("t4")).toBe("project-a");
-    expect(client.isUnplacedTerminal("t4")).toBe(false);
+    // Left out, it still takes the active project.
+    client.spawn("t5", { cwd: "/tmp", cols: 80, rows: 24 });
+    expect(client.getTerminalProjectId("t5")).toBe("project-a");
+    expect(client.isUnplacedTerminal("t5")).toBe(false);
   });
 });
 

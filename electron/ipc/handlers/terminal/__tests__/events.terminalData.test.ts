@@ -324,6 +324,13 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
           ]);
         }
 
+        // With no port taking it, the ordinary fallback reaches every local view.
+        ptyClient.emit("data", "term-unplaced", "prompt");
+        for (const wc of [activeA, cachedB, activeB, cachedA]) {
+          expect(dataSends(wc).at(-1)).toEqual([CHANNELS.TERMINAL_DATA, "term-unplaced", "prompt"]);
+        }
+        expect(remote.send).not.toHaveBeenCalled();
+
         // One main can no longer place still reaches them, as before.
         ptyClient.emit("data", "term-untracked", "late output");
         expect(remote.send).toHaveBeenCalledTimes(1);

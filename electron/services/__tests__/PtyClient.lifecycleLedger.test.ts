@@ -610,6 +610,44 @@ describe("PtyClient lifecycle ledger", () => {
       expect(client.isAssistantTerminal("t1")).toBe(true);
     });
 
+    // #17926: the lease gate lets anyone end a terminal that reads as unplaced.
+    it("doesn't read a live project terminal as unplaced while an unplaced duplicate awaits the host", () => {
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, projectId: "p-live" }); // generation 1
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", { ...baseOptions, projectId: null }); // generation 2
+      expect(client.isUnplacedTerminal("t1")).toBe(false);
+
+      refuseAsLive(2);
+      expect(client.isUnplacedTerminal("t1")).toBe(false);
+      expect(client.getTerminalProjectId("t1")).toBe("p-live");
+    });
+
+    it("reads a live unplaced terminal as unplaced only while no duplicate naming a project awaits the host", () => {
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, projectId: null }); // generation 1
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", { ...baseOptions, projectId: null }); // generation 2
+      expect(client.isUnplacedTerminal("t1")).toBe(true);
+      refuseAsLive(2);
+      expect(client.isUnplacedTerminal("t1")).toBe(true);
+
+      client.spawn("t1", { ...baseOptions, projectId: "p-duplicate" }); // generation 3
+      expect(client.isUnplacedTerminal("t1")).toBe(false);
+      refuseAsLive(3);
+      expect(client.isUnplacedTerminal("t1")).toBe(true);
+    });
+
     it("reports the running incarnation as live while a duplicate awaits the host", () => {
       const client = createReadyClient();
       client.spawn("t1", baseOptions); // generation 1
