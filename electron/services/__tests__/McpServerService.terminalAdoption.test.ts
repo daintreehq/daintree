@@ -36,6 +36,7 @@ import { McpServerService, mcpServerService } from "../McpServerService.js";
 import {
   helpOwnershipPrincipal,
   principalOwnerKey,
+  relayConversationKey,
   relayOwnershipPrincipal,
 } from "../mcp-server/resourceOwnership.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
@@ -665,6 +666,31 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
     ownership.bindPrincipal("relay-session", relayOwnershipPrincipal("local", GLOBAL.sessionId));
     ownership.record(globalOwner, [{ kind: "terminal", id: "terminal-1" }]);
     expect(adoptGlobal()).toMatchObject({ reason: "launched-by-orchestrator" });
+    ownership.revokePrincipal(relayOwnershipPrincipal("local", GLOBAL.sessionId));
+    ownership.clearSession("relay-session");
+  });
+
+  // #17919: what its conversation launched before a resume is still its own,
+  // and the conversation forgotten, what it held is no one's.
+  it("refuses what its conversation launched before a resume as its own, until the lane forgets it", () => {
+    const ownership = service._sessionStore.resourceOwnership;
+    const before = relayOwnershipPrincipal("local", "help-before-resume");
+    ownership.bindPrincipal("relay-before", before);
+    ownership.attachConversation(before, relayConversationKey("local", "conv-g"));
+    ownership.record(principalOwnerKey(before), [{ kind: "terminal", id: "terminal-1" }]);
+    service.retireRelayPrincipal("local", "help-before-resume", Date.now() + 60_000);
+    ownership.clearSession("relay-before");
+    expect(adoptGlobal()).toMatchObject({ reason: "launched-by-another" });
+
+    ownership.bindPrincipal("relay-session", relayOwnershipPrincipal("local", GLOBAL.sessionId));
+    ownership.attachConversation(
+      relayOwnershipPrincipal("local", GLOBAL.sessionId),
+      relayConversationKey("local", "conv-g")
+    );
+    expect(adoptGlobal()).toMatchObject({ reason: "launched-by-orchestrator" });
+
+    service.forgetAssistantConversation("conv-g");
+    expect(adoptGlobal()).toMatchObject({ status: "handed-over" });
     ownership.revokePrincipal(relayOwnershipPrincipal("local", GLOBAL.sessionId));
     ownership.clearSession("relay-session");
   });
