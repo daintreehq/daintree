@@ -599,7 +599,9 @@ describe("Agent37Provider", () => {
     });
     // Outside what Agent 37 takes: refused before anything is sent.
     for (const seconds of [299, 86_401, 900.5]) {
-      await expect(provider.setIdleSleep(credentials, instance.id, seconds, true)).rejects.toThrow();
+      await expect(
+        provider.setIdleSleep(credentials, instance.id, seconds, true)
+      ).rejects.toThrow();
     }
     expect(api.calls("PATCH", `/instances/${instance.id}`)).toHaveLength(2);
   });
