@@ -1,6 +1,7 @@
 import type { IdlePausePreparation, IdlePauseRunOutcome } from "../../../shared/types/idlePause.js";
 import {
   sameHostAccount,
+  sameHostMachine,
   sshConnection,
   type HostDescriptor,
   type HostId,
@@ -147,10 +148,21 @@ export function watchIdleResourcePause(options: IdleResourcePauseOptions): () =>
     }
   };
 
+  /** A host the person added themselves on the same machine, through another account or alias. */
+  const theirsToo = (host: HostDescriptor): boolean =>
+    options.registry
+      .list()
+      .some(
+        (other) =>
+          other.id !== host.id &&
+          other.ownerWorktreeId === undefined &&
+          sameHostMachine(other.connection, host.connection)
+      );
+
   const consider = (hostId: HostId): void => {
     if (disposed || inFlight.has(hostId)) return;
     const host = options.registry.get(hostId);
-    if (!ownedBox(host)) return;
+    if (!ownedBox(host) || theirsToo(host)) return;
     const session = options.sessionFor(hostId);
     if (!session?.isOpen) return;
     const idleTime = endedIdleTime(hostId, session);

@@ -4385,6 +4385,10 @@ export class WorkspaceService {
         // kept off it, and one already admitted is waited out first.
         releaseIdlePause = this.resourceActionExecutor.holdAgainstIdlePause(worktreeId);
         await this.resourceActionExecutor.whenIdlePauseSettled(worktreeId);
+        // A worktree made again at this path while the pause finished isn't the one asked about.
+        if (this.monitors.get(worktreeId) !== monitor) {
+          throw new Error("The worktree changed while its idle pause finished");
+        }
         await this.runLifecycleTeardown(worktreeId, monitor);
       }
 

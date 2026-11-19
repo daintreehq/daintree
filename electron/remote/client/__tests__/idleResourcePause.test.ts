@@ -230,6 +230,19 @@ describe("watchIdleResourcePause (#17925)", () => {
     expect(session.call).not.toHaveBeenCalled();
   });
 
+  it("leaves a machine alone that a host the person added also reaches", async () => {
+    hosts.set("their-host", {
+      id: "their-host",
+      name: "box",
+      connection: { kind: "ssh", target: "box-1.example" },
+    } as HostDescriptor);
+
+    await hear();
+
+    expect(prepare).not.toHaveBeenCalled();
+    expect(session.call).not.toHaveBeenCalled();
+  });
+
   it("asks nothing when the environment reports another machine", async () => {
     prepare.mockResolvedValue({
       ok: true,

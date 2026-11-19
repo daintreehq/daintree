@@ -2589,7 +2589,9 @@ describe("WorkspaceService idle pause (#17925)", () => {
           }
         },
         clear: async (_root: string, selector: string, fingerprint: string) => {
-          if (consents.get(selector)?.fingerprint === fingerprint) consents.delete(selector);
+          if (consents.get(selector)?.fingerprint !== fingerprint) return false;
+          consents.delete(selector);
+          return true;
         },
       },
     });

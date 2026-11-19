@@ -180,6 +180,22 @@ describe("idle pause consent (#17925)", () => {
     expect(await confirmed()).toEqual({ ok: true, fingerprint });
   });
 
+  it("turns off when the provider every command gets changes", async () => {
+    await writeJson(appSettings, {
+      resourceEnvironments: { [MODE]: { pause: ["stop-box"], provider: "aws" } },
+    });
+    await turnOn();
+
+    await writeJson(appSettings, {
+      resourceEnvironments: { [MODE]: { pause: ["stop-box"], provider: "gcp" } },
+    });
+
+    expect(await confirmed()).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/changed since/),
+    });
+  });
+
   it("forgets it when turned off", async () => {
     await userEnvironments(["stop-box"]);
     const fingerprint = await turnOn();
@@ -222,10 +238,10 @@ describe("FileIdlePauseConsentStore", () => {
     const store = new FileIdlePauseConsentStore(consentsDir);
     await store.set(project, "settings:gpu", "c".repeat(64));
 
-    await store.clear(project, "settings:gpu", "d".repeat(64));
+    expect(await store.clear(project, "settings:gpu", "d".repeat(64))).toBe(false);
     expect(await store.get(project, "settings:gpu")).toEqual({ fingerprint: "c".repeat(64) });
 
-    await store.clear(project, "settings:gpu", "c".repeat(64));
+    expect(await store.clear(project, "settings:gpu", "c".repeat(64))).toBe(true);
     expect(await store.get(project, "settings:gpu")).toBeNull();
   });
 

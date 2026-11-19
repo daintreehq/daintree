@@ -25,6 +25,8 @@ const RESOURCE_ENVIRONMENT_CHANGED_ERROR = "Resource environment changed";
 
 /** Longer than a pause's default timeout, so only a command that never exits is cut off. */
 const IDLE_PAUSE_DELETE_WAIT_MS = 5 * 60_000;
+/** Past a pause's own timeout, for its killed commands to exit. */
+const IDLE_PAUSE_KILL_MARGIN_MS = 30_000;
 
 const DEFAULT_TIMEOUT_MS = {
   provision: 300_000,
@@ -109,6 +111,8 @@ export class ResourceActionExecutor {
    * commands name now, so an idle pause waits for a fresh reading.
    */
   private statusReadings = new Map<string, WorktreeValues>();
+  /** The running idle pause's own command timeout, which bounds a delete's wait on it. */
+  private idlePauseTimeouts = new Map<string, number>();
   private disposed = false;
 
   constructor(private readonly ctx: ResourceActionContext) {}
@@ -262,6 +266,20 @@ export class ResourceActionExecutor {
       },
       this.ctx.getProjectEnvVars()
     );
+    // The environment is built after the approval read, from the monitor as it
+    // is now: a rename in between leaves commands and environment disagreeing.
+    const valuesHeld = sameValues(values, {
+      path: monitor.path,
+      name: monitor.name,
+      branch: monitor.branch,
+    });
+    if (idleGuard && !valuesHeld) {
+      return {
+        success: false,
+        error: "The worktree changed while the pause was being prepared",
+        skipped: true,
+      };
+    }
 
     // Idempotent provision: route to resume when paused, no-op when already running.
     let effectiveAction = action;
@@ -378,7 +396,9 @@ export class ResourceActionExecutor {
               ? parsed.ssh
               : undefined,
         });
-        this.statusReadings.set(worktreeId, values);
+        // Only a reading whose commands and environment saw the same worktree vouches for its box.
+        if (valuesHeld) this.statusReadings.set(worktreeId, values);
+        else this.statusReadings.delete(worktreeId);
       } catch {
         // Non-JSON output: if command succeeded (exit 0), treat as "unknown" (neutral) rather
         // than "unhealthy" — the script may not emit JSON but still indicates a live resource.
@@ -456,6 +476,7 @@ export class ResourceActionExecutor {
       configTimeoutSec != null
         ? configTimeoutSec * 1000
         : (DEFAULT_TIMEOUT_MS[effectiveAction] ?? 120_000);
+    if (idleGuard) this.idlePauseTimeouts.set(worktreeId, timeoutMs);
 
     const startedAt = Date.now();
     // This run's own, so a status poll that takes the slot between commands
@@ -676,12 +697,17 @@ export class ResourceActionExecutor {
 
   /**
    * Resolves once an idle pause already admitted for this worktree has ended,
-   * or after `maxWaitMs`: a command that never lets go of its output must not
-   * hold a delete forever.
+   * or a margin past its own command timeout: by then its commands were
+   * killed, and one that never lets go of its output must not hold a delete
+   * forever.
    */
-  whenIdlePauseSettled(worktreeId: string, maxWaitMs = IDLE_PAUSE_DELETE_WAIT_MS): Promise<void> {
+  whenIdlePauseSettled(worktreeId: string): Promise<void> {
     const running = this.idlePausesRunning.get(worktreeId);
     if (!running) return Promise.resolve();
+    const maxWaitMs = Math.max(
+      IDLE_PAUSE_DELETE_WAIT_MS,
+      (this.idlePauseTimeouts.get(worktreeId) ?? 0) + IDLE_PAUSE_KILL_MARGIN_MS
+    );
     return new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, maxWaitMs);
       void running.finally(() => {
@@ -821,6 +847,7 @@ export class ResourceActionExecutor {
       void ended.finally(() => {
         if (this.idlePausesRunning.get(worktreeId) === ended) {
           this.idlePausesRunning.delete(worktreeId);
+          this.idlePauseTimeouts.delete(worktreeId);
         }
       });
     }

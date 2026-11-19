@@ -32,18 +32,24 @@ export interface IdlePauseConsentStore {
   set(projectRootPath: string, selector: string, fingerprint: string): Promise<void>;
   /** Marks it revoked, only while it still holds `fingerprint`. */
   revoke(projectRootPath: string, selector: string, fingerprint: string): Promise<void>;
-  /** Removes it, only while it still holds `fingerprint`. */
-  clear(projectRootPath: string, selector: string, fingerprint: string): Promise<void>;
+  /** Removes it, only while it still holds `fingerprint`; says whether it did. */
+  clear(projectRootPath: string, selector: string, fingerprint: string): Promise<boolean>;
 }
 
-/** The pause commands as written, with the block and file they came from. */
+/**
+ * The pause commands as written, with the block and file they came from, and
+ * the provider every command gets as `DAINTREE_RESOURCE_PROVIDER`.
+ */
 export function fingerprintIdlePause(
   selector: string,
   sourcePath: string,
-  pause: readonly string[]
+  pause: readonly string[],
+  provider: string | undefined
 ): string {
   return createHash("sha256")
-    .update(JSON.stringify([FINGERPRINT_VERSION, selector, sourcePath, [...pause]]))
+    .update(
+      JSON.stringify([FINGERPRINT_VERSION, selector, sourcePath, [...pause], provider ?? null])
+    )
     .digest("hex");
 }
 
@@ -87,10 +93,14 @@ export class FileIdlePauseConsentStore implements IdlePauseConsentStore {
     });
   }
 
-  clear(projectRootPath: string, selector: string, fingerprint: string): Promise<void> {
-    return this.update(projectRootPath, (consents) => {
-      if (consents.get(selector)?.fingerprint === fingerprint) consents.delete(selector);
+  async clear(projectRootPath: string, selector: string, fingerprint: string): Promise<boolean> {
+    let cleared = false;
+    await this.update(projectRootPath, (consents) => {
+      if (consents.get(selector)?.fingerprint !== fingerprint) return;
+      consents.delete(selector);
+      cleared = true;
     });
+    return cleared;
   }
 
   private update(
@@ -247,8 +257,10 @@ export class IdlePauseService {
       if (!selection || !consent || consent.fingerprint !== fingerprint) {
         throw new Error("This worktree's environment changed. Review it again.");
       }
-      // Read again in the write: a newer consent saved meanwhile stays.
-      await this.consents.clear(projectRootPath, selection.selector, fingerprint);
+      // Read again in the write: a newer consent saved meanwhile stays, and says so.
+      if (!(await this.consents.clear(projectRootPath, selection.selector, fingerprint))) {
+        throw new Error("This worktree's environment changed. Review it again.");
+      }
       return;
     }
     const eligibility = this.eligibility(selection);
@@ -313,7 +325,12 @@ export class IdlePauseService {
     return {
       ok: true,
       commands,
-      fingerprint: fingerprintIdlePause(selection.selector, selection.path, pause),
+      fingerprint: fingerprintIdlePause(
+        selection.selector,
+        selection.path,
+        pause,
+        selection.resource.provider
+      ),
     };
   }
 }
