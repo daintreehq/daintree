@@ -211,19 +211,56 @@ describe("CliInstallService — following a moved AppImage", () => {
         const env = { ...process.env };
         delete env.DAINTREE_MCP_URL;
         delete env.DAINTREE_MCP_TOKEN;
+        delete env.DAINTREE_MCP_SESSION;
         return spawnSync("bash", [wrapper, ...args], { encoding: "utf8", env, timeout: 10_000 });
       };
 
       expect(run(["--help"]).stdout).toContain("daintree call <tool>");
+      expect(run(["--help"]).stdout).toContain("daintree session start|end");
       const help = run(["call", "--help"]);
       expect(help.status).toBe(0);
       expect(help.stdout).toContain("Usage: daintree call <tool>");
       const outsidePane = run(["call", "terminal.list"]);
       expect(outsidePane.status).toBe(4);
       expect(outsidePane.stderr).toContain("DAINTREE_MCP_URL");
+      const sessionHelp = run(["session", "--help"]);
+      expect(sessionHelp.status).toBe(0);
+      expect(sessionHelp.stdout).toContain("Usage: daintree session start");
+      const start = run(["session", "start"]);
+      expect(start.status).toBe(4);
+      expect(start.stderr).toContain("daintree session: DAINTREE_MCP_URL");
       // The launch line and the version stamp still read back as before.
       expect(service.appImageOfWrapper(content)).toBe("/nonexistent/Daintree.AppImage");
       expect(run(["--version"]).stdout.trim()).toBe("daintree 1.2.3");
+    }
+  );
+
+  // A repoint that can't read the packaged script keeps the block already
+  // installed, which can predate `session`: that word stays a directory there.
+  it.skipIf(process.platform === "win32")(
+    "dispatches session only to a client block that has it",
+    async () => {
+      const service = await load();
+      const oldBlock = [
+        "# >>> daintree call >>>",
+        "daintree_call() { echo old-call; exit 0; }",
+        "# <<< daintree call <<<",
+      ].join("\n");
+      const content = service.generateAppImageWrapper(
+        "/nonexistent/Daintree.AppImage",
+        "1.2.3",
+        oldBlock
+      );
+      const wrapper = path.join(root, "daintree-cli.sh");
+      fs.writeFileSync(wrapper, content, { mode: 0o755 });
+      const run = (...args: string[]) =>
+        spawnSync("bash", [wrapper, ...args], { encoding: "utf8", timeout: 10_000 });
+
+      expect(run("call").stdout).toBe("old-call\n");
+      expect(run("--help").stdout).not.toContain("session");
+      const session = run("session", "start");
+      expect(session.status).toBe(2);
+      expect(session.stderr).toContain("expected one directory");
     }
   );
 
