@@ -92,6 +92,7 @@ vi.mock("@/components/Settings/SettingsSelect", () => ({
 }));
 
 import { AgentAccountsSection } from "../AgentAccountsSection";
+import { SettingsFlushContext } from "../SettingsFlushRegistry";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import type { AgentSettingsEntry } from "@shared/types";
@@ -571,5 +572,88 @@ describe("naming the default login and renaming accounts (#17080)", () => {
     expect(renameAccount).not.toHaveBeenCalled();
     expect(screen.queryByRole("textbox", { name: "Account name" })).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Rename Company" }));
+  });
+});
+
+describe("renaming against other views and a Settings close (#17080)", () => {
+  it("lists the default login first, above the saved accounts", () => {
+    renderSection({ accounts: [COMPANY] });
+    expect(
+      [...document.querySelectorAll("[data-settings-row-label]")].map((label) => label.textContent)
+    ).toEqual(["Default login", "Company"]);
+  });
+
+  it("leaves a rename another view made alone when the field is left untouched", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    const view = renderSection({ accounts: [COMPANY], defaultLoginName: "Work" });
+    fireEvent.click(screen.getByRole("button", { name: "Rename default login" }));
+
+    view.rerender(
+      <AgentAccountsSection
+        agentId="codex"
+        agentName="Codex"
+        entry={{ accounts: [COMPANY], defaultLoginName: "Team" }}
+      />
+    );
+    await act(async () => {
+      fireEvent.blur(screen.getByRole("textbox", { name: "Default login name" }));
+    });
+
+    expect(renameAccount).not.toHaveBeenCalled();
+  });
+
+  it("clears a refused name's reason once the name changes", async () => {
+    renderSection({ accounts: [COMPANY] });
+    fireEvent.click(screen.getByRole("button", { name: "Rename Company" }));
+    const input = screen.getByRole("textbox", { name: "Account name" });
+    fireEvent.change(input, { target: { value: "" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "Acme" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("saves an open edit when Settings closes, and holds the close on the field when the save is refused", async () => {
+    const flushers: Array<(reason: "close" | "hide") => unknown> = [];
+    const register = vi.fn((_tab: string, fn: (reason: "close" | "hide") => unknown) => {
+      flushers.push(fn);
+      return () => flushers.splice(flushers.indexOf(fn), 1);
+    });
+    const renameAccount = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("This host can't rename accounts yet."))
+      .mockResolvedValueOnce(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    render(
+      <SettingsFlushContext.Provider value={{ register, flushAll: vi.fn() }}>
+        <AgentAccountsSection agentId="codex" agentName="Codex" entry={{ accounts: [COMPANY] }} />
+      </SettingsFlushContext.Provider>
+    );
+    expect(flushers).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename Company" }));
+    const input = screen.getByRole("textbox", { name: "Account name" });
+    fireEvent.change(input, { target: { value: "Acme" } });
+    expect(register).toHaveBeenCalledWith("agents", expect.any(Function));
+
+    let failure: unknown;
+    await act(async () => {
+      failure = await flushers[0]!("close");
+    });
+    expect(renameAccount).toHaveBeenCalledWith("codex", "company", "Acme");
+    expect(failure).toEqual({ landOn: input.id });
+    expect(screen.getByRole("alert").textContent).toBe("This host can't rename accounts yet.");
+
+    let saved: unknown;
+    await act(async () => {
+      saved = await flushers[0]!("close");
+    });
+    expect(saved).toBeUndefined();
+    expect(flushers).toHaveLength(0);
   });
 });

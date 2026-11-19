@@ -249,12 +249,32 @@ describe("link messages", () => {
       observedAt: 20,
     };
     const { defaultLoginName: _name, ...unnamed } = named;
-    expect(hostSummary({ agentUsage: [named, unnamed] }).agentUsage).toEqual([named, unnamed]);
-    for (const bad of [
-      { ...named, defaultLoginName: 7 },
-      { ...named, defaultLoginName: "x".repeat(257) },
-    ]) {
-      expect(hostSummary({ agentUsage: [bad, unnamed] }).agentUsage).toEqual([unnamed]);
+    const codexNamed = {
+      agentId: "codex",
+      accountNames: [],
+      isDefault: true,
+      defaultLoginName: "Lab",
+      windowDurationMins: 300,
+      usedPercent: 40,
+      resetsAt: null,
+      observedAt: 10,
+    };
+    const { defaultLoginName: _lab, ...codexUnnamed } = codexNamed;
+    expect(hostSummary({ agentUsage: [named, unnamed, codexNamed] }).agentUsage).toEqual([
+      named,
+      unnamed,
+      codexNamed,
+    ]);
+    // A name this can't take is dropped, and the reading it labelled stands.
+    for (const name of [7, "x".repeat(257)]) {
+      const parsed = hostSummary({
+        agentUsage: [
+          { ...named, defaultLoginName: name },
+          { ...codexNamed, defaultLoginName: name },
+        ],
+      }).agentUsage;
+      expect(parsed).toEqual([unnamed, codexUnnamed]);
+      expect(parsed?.every((reading) => reading.defaultLoginName === undefined)).toBe(true);
     }
   });
 

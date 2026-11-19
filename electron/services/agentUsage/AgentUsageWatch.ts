@@ -322,8 +322,12 @@ export class AgentUsageWatch {
     const claudeAccounts = claudeKeys.size > 0 ? await this.deps.readClaudeAccounts() : [];
     if (generation !== this.generation) return;
     // Read on every tick, apart from Codex's cached quota, so a rename shows
-    // without asking Codex again.
-    const names = (await this.deps.readDefaultLoginNames?.()) ?? {};
+    // without asking Codex again. A failed read only leaves the readings unnamed.
+    const names: DefaultLoginNames =
+      (await this.deps.readDefaultLoginNames?.().catch((error: unknown) => {
+        logger.warn("Couldn't read the default login names", { error });
+        return undefined;
+      })) ?? {};
     if (generation !== this.generation) return;
 
     const readings = [

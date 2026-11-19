@@ -21,7 +21,10 @@ const FULLY_QUALIFIED_PATH = /^(?:\/|[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTER = /[\x00-\x1F\x7F]/;
 // eslint-disable-next-line no-control-regex
-const CONTROL_CHARACTERS = /[\x00-\x1F\x7F]+/g;
+const NAME_CONTROL_CHARACTERS = /[\x00-\x1F\x7F-\x9F]+/g;
+// Directional marks and overrides would let a name reorder the words shown
+// beside it ("· default login"), or read as empty while it isn't.
+const NAME_FORMAT_CHARACTERS = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
 
 /**
  * A folder an account can name: fully qualified, and one the launch env keeps
@@ -35,8 +38,14 @@ export function isUsableAccountFolder(value: string): boolean {
 
 export function sanitizeAccountName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const name = value.replace(CONTROL_CHARACTERS, " ").trim();
-  return name ? name.slice(0, ACCOUNT_NAME_MAX_CHARS) : undefined;
+  let name = value.replace(NAME_FORMAT_CHARACTERS, "").replace(NAME_CONTROL_CHARACTERS, " ").trim();
+  if (name.length > ACCOUNT_NAME_MAX_CHARS) {
+    name = name.slice(0, ACCOUNT_NAME_MAX_CHARS);
+    // Never half of a character the cap cut through.
+    if (/[\ud800-\udbff]$/.test(name)) name = name.slice(0, -1);
+    name = name.trimEnd();
+  }
+  return name || undefined;
 }
 
 /**

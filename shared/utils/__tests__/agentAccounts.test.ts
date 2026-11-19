@@ -47,6 +47,18 @@ describe("defaultLoginLabel and defaultLoginPhrase (#17080)", () => {
     expect(defaultLoginPhrase("Work")).toBe("Work (the default login)");
     const long = "x".repeat(80);
     expect(defaultLoginLabel(long)).toBe(`${"x".repeat(60)} · default login`);
+    expect(defaultLoginPhrase("  Work\u0007Lab ")).toBe("Work Lab (the default login)");
+  });
+
+  it("drops marks that would reorder the words beside a name, or leave it looking empty", () => {
+    expect(defaultLoginLabel("Work\u202enigol")).toBe("Worknigol · default login");
+    expect(defaultLoginLabel("\u200f\u202e\u2066")).toBe("Default login");
+    expect(defaultLoginLabel("Work\u0085Lab")).toBe("Work Lab · default login");
+  });
+
+  it("never cuts a character in half at the cap, nor leaves a space where it cut", () => {
+    expect(defaultLoginLabel(`${"x".repeat(59)}😀tail`)).toBe(`${"x".repeat(59)} · default login`);
+    expect(defaultLoginLabel(`${"x".repeat(59)} tail`)).toBe(`${"x".repeat(59)} · default login`);
   });
 });
 

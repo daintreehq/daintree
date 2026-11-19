@@ -153,8 +153,13 @@ const usageAccountNames = z
   .array(z.string().max(MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS))
   .max(MAX_AGENT_USAGE_ACCOUNT_NAMES);
 
-// Optional, so a host from before #17080 still sends a reading this accepts.
-const usageDefaultLoginName = z.string().max(MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS).optional();
+// Optional, so a host from before #17080 still sends a reading this accepts,
+// and a name this can't take drops the name, never the reading it labels.
+const usageDefaultLoginName = z
+  .string()
+  .max(MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS)
+  .optional()
+  .catch(undefined);
 
 const AgentUsageReadingSchema = z.discriminatedUnion("agentId", [
   z.object({

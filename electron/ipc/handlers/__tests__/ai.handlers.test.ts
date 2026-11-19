@@ -431,6 +431,17 @@ describe("ai handler payload validation", () => {
 
     await handler({} as never, { agentType: "codex", settings: { defaultLoginName: 7 } } as never);
     expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", { codex: {} });
+
+    // One already saved wrong is cleaned by a write that doesn't touch it.
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) =>
+      key === "agentSettings"
+        ? { agents: { codex: { defaultLoginName: { name: "Work" } } } }
+        : defaultValue
+    );
+    await handler({} as never, { agentType: "codex", settings: { customFlags: "--x" } } as never);
+    expect(storeMock.set).toHaveBeenLastCalledWith("agentSettings.agents", {
+      codex: { customFlags: "--x" },
+    });
   });
 
   it("trims AGENT_SETTINGS_RESET agentType and blocks reserved values after trimming", async () => {

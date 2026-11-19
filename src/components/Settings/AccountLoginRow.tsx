@@ -6,6 +6,7 @@ import { inlineRenameFieldInputProps } from "@/components/Panel/inlineRenameFiel
 import { ACCOUNT_NAME_MAX_CHARS, sanitizeAccountName } from "@shared/utils/agentAccounts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SETTINGS_CONTROL_WIDTH, SettingsRow, SettingsRowActions } from "./SettingsGroup";
+import { useSettingsTabFlush } from "./SettingsFlushRegistry";
 
 interface AccountLoginRowProps {
   /** How the row reads at rest. */
@@ -46,7 +47,11 @@ export function AccountLoginRow({
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const savingRef = useRef(false);
+  // The save in flight, which a Settings close waits on; true when it saved.
+  const savingRef = useRef<Promise<boolean> | null>(null);
+  // The name the edit began from: a rename another view makes meanwhile is
+  // not undone by leaving this field untouched.
+  const startNameRef = useRef("");
   const inputRef = useRef<HTMLInputElement>(null);
   const renameButtonRef = useRef<HTMLButtonElement>(null);
   // Enter and Escape end the edit from the field, so focus goes back to the
@@ -54,6 +59,7 @@ export function AccountLoginRow({
   // Set, it also stops the blur the field's unmount brings from committing.
   const restoreFocusRef = useRef(false);
   const errorId = useId();
+  const inputId = useId();
 
   // Select-all on entry: a new name usually replaces the old one.
   useEffect(() => {
@@ -69,36 +75,54 @@ export function AccountLoginRow({
   }, [editing]);
 
   const startEdit = () => {
+    startNameRef.current = sanitizeAccountName(name) ?? "";
     setDraft(name);
     setError(null);
     setEditing(true);
   };
 
-  const commit = async () => {
-    if (savingRef.current) return;
+  /** Resolves true once the name is saved, or there was nothing to save. */
+  const commit = (): Promise<boolean> => {
+    if (savingRef.current) return savingRef.current;
     const next = sanitizeAccountName(draft) ?? "";
     if (!next && requireName) {
       restoreFocusRef.current = false;
       setError("Give the account a name");
-      return;
+      return Promise.resolve(false);
     }
-    if (next === (sanitizeAccountName(name) ?? "")) {
+    if (next === startNameRef.current) {
       setEditing(false);
-      return;
+      return Promise.resolve(true);
     }
-    savingRef.current = true;
     setSaving(true);
-    try {
-      await onRename(next);
-      setEditing(false);
-    } catch (e) {
-      restoreFocusRef.current = false;
-      setError(formatErrorMessage(e, "Couldn't rename the account."));
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
+    // Cleared before the field can unmount, so the blur that brings isn't
+    // taken for the user leaving mid-save.
+    const save = onRename(next).then(
+      () => {
+        savingRef.current = null;
+        setSaving(false);
+        setEditing(false);
+        return true;
+      },
+      (e: unknown) => {
+        savingRef.current = null;
+        setSaving(false);
+        restoreFocusRef.current = false;
+        setError(formatErrorMessage(e, "Couldn't rename the account."));
+        return false;
+      }
+    );
+    savingRef.current = save;
+    return save;
   };
+
+  // Closing Settings saves an open edit first, and a refused save keeps
+  // Settings open on the field with its reason.
+  useSettingsTabFlush(
+    "agents",
+    async () => ((await commit()) ? undefined : { landOn: inputId }),
+    editing
+  );
 
   return (
     <SettingsRow
@@ -106,6 +130,7 @@ export function AccountLoginRow({
         editing ? (
           <Input
             ref={inputRef}
+            id={inputId}
             {...inlineRenameFieldInputProps}
             density="compact"
             className={`${SETTINGS_CONTROL_WIDTH.wide} max-w-full text-sm font-medium`}
@@ -113,7 +138,10 @@ export function AccountLoginRow({
             maxLength={ACCOUNT_NAME_MAX_CHARS}
             readOnly={saving}
             aria-busy={saving || undefined}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setError(null);
+            }}
             onBlur={() => {
               // Leaving while the save is in flight: focus stays where it went.
               if (savingRef.current) {
@@ -123,9 +151,9 @@ export function AccountLoginRow({
               if (!restoreFocusRef.current) void commit();
             }}
             onKeyDown={(e) => {
+              // Keys that confirm or cancel an IME composition are text entry.
+              if (e.nativeEvent.isComposing) return;
               if (e.key === "Enter") {
-                // An Enter that confirms an IME composition is text entry.
-                if (e.nativeEvent.isComposing) return;
                 e.preventDefault();
                 restoreFocusRef.current = true;
                 void commit();

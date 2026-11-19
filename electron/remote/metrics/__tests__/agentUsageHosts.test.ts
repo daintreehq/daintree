@@ -59,7 +59,7 @@ describe("shellClockOffset and onShellClock", () => {
   it("keeps a host's name for its default login only on a default reading, made safe to show (#17080)", () => {
     const defaultReading: AgentUsageReading = { ...codex, isDefault: true, accountNames: [] };
     expect(
-      onShellClock({ ...defaultReading, defaultLoginName: "Work\u202e\u0007Lab " }, 0)
+      onShellClock({ ...defaultReading, defaultLoginName: "  Work\u202e\u0007Lab " }, 0)
         .defaultLoginName
     ).toBe("Work Lab");
     expect(

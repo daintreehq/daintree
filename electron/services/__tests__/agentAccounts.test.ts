@@ -238,10 +238,14 @@ describe("renameAgentAccount (#17080)", () => {
     });
 
     renameAgentAccount("codex", account.id, "Acme");
+    renameAgentAccount("codex", other.account.id, "Home");
 
     expect(savedCodex()).toEqual({
       presetId: "keep-me",
-      accounts: [{ ...account, name: "Acme" }, other.account],
+      accounts: [
+        { ...account, name: "Acme" },
+        { ...other.account, name: "Home" },
+      ],
       accountId: account.id,
       worktreeAccounts: { wt1: account.id },
       customPresets: [{ id: "work", name: "Work", accountId: account.id }],
@@ -271,9 +275,9 @@ describe("renameAgentAccount (#17080)", () => {
     expect(savedCodex().accounts).toEqual([{ ...personal.account, name: "Home" }, lab.account]);
 
     broadcastMock.mockClear();
-    const before = structuredClone(savedCodex());
+    fakeStore.set.mockClear();
     expect(() => renameAgentAccount("codex", account.id, "Back")).toThrow(/isn't saved/);
-    expect(savedCodex()).toEqual(before);
+    expect(fakeStore.set).not.toHaveBeenCalled();
     expect(broadcastMock).not.toHaveBeenCalled();
   });
 
@@ -284,16 +288,19 @@ describe("renameAgentAccount (#17080)", () => {
       folder: { kind: "create" },
     });
     broadcastMock.mockClear();
+    fakeStore.set.mockClear();
     const before = structuredClone(savedCodex());
 
     expect(() => renameAgentAccount("codex", account.id, " \t ")).toThrow(
       /Give the account a name/
     );
+    expect(() => renameAgentAccount("codex", undefined, "Work")).toThrow(/Invalid account/);
     expect(() => renameAgentAccount("codex", null, undefined)).toThrow(/Invalid account name/);
     expect(() => renameAgentAccount("codex", "bad id", "Work")).toThrow(/Invalid account/);
     expect(() => renameAgentAccount("cursor", null, "Work")).toThrow(/no accounts/);
     expect(() => renameAgentAccount("__proto__", null, "Work")).toThrow(/Invalid agent/);
     expect(savedCodex()).toEqual(before);
+    expect(fakeStore.set).not.toHaveBeenCalled();
     expect(broadcastMock).not.toHaveBeenCalled();
   });
 });

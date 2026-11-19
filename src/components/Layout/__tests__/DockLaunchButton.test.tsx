@@ -153,6 +153,7 @@ let mockAgentSettings: {
       accounts?: Array<{ id: string; name: string; configDir: string }>;
       accountId?: string;
       worktreeAccounts?: Record<string, string | null>;
+      defaultLoginName?: string;
     }
   >;
 } | null = { agents: {} };

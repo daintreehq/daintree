@@ -582,6 +582,14 @@ describe("AgentButton preset UX", () => {
         ]);
       });
 
+      it("names the default login's row as the user named it (#17080)", () => {
+        const { getAllByRole } = renderCodex({ defaultLoginName: "Team" });
+        act(() => dropdownOnOpenChange!(true));
+        expect(getAllByRole("menuitemradio")[0]?.textContent).toBe(
+          "Team · default login5-hour limit 10% used"
+        );
+      });
+
       it("takes the default login's window from the preset a launch settles on", () => {
         mockActiveWorktreeId = "wt1";
         mockMergedPresetsFn = () => [

@@ -146,6 +146,41 @@ describe("AgentUsageWatch", () => {
     h.watch.dispose();
   });
 
+  it("never names a Codex account's reading after the default login, and shows readings unnamed when the names can't be read (#17080)", async () => {
+    const h = harness();
+    h.live.current = {
+      complete: true,
+      codexHomes: ["/home/.codex", "/accts/work"],
+      claudeConfigDirs: [],
+    };
+    h.codexAnswers.set("/home/.codex", () => codexQuota("/home/.codex", 30));
+    h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 95));
+    h.names.current = { codex: "Work" };
+    h.watch.acquire();
+    await settle();
+    expect(h.watch.latest()).toMatchObject([
+      { agentId: "codex", isDefault: false, usedPercent: 95 },
+    ]);
+    expect(h.watch.latest()[0]).not.toHaveProperty("defaultLoginName");
+    h.watch.dispose();
+
+    const failing = harness();
+    failing.live.current = { complete: true, codexHomes: ["/home/.codex"], claudeConfigDirs: [] };
+    failing.codexAnswers.set("/home/.codex", () => codexQuota("/home/.codex", 30));
+    Object.defineProperty(failing.names, "current", {
+      get: () => {
+        throw new Error("store unreadable");
+      },
+    });
+    failing.watch.acquire();
+    await settle();
+    expect(failing.watch.latest()).toMatchObject([
+      { agentId: "codex", isDefault: true, usedPercent: 30 },
+    ]);
+    expect(failing.watch.latest()[0]).not.toHaveProperty("defaultLoginName");
+    failing.watch.dispose();
+  });
+
   it("asks nothing and shows nothing while no Codex or Claude Code agent runs", async () => {
     const h = harness();
     h.watch.acquire();

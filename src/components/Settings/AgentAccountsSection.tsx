@@ -21,6 +21,7 @@ import {
   readUsageLimitedPaneIds,
   switchPanesLabel,
   useAccountSwitchPaneIds,
+  useCurrentAccountName,
   type AccountSwitchNoticeState,
   type AccountSwitchRequest,
 } from "@/components/Layout/AccountSwitchNotice";
@@ -89,6 +90,7 @@ export function AgentAccountsSection({
   const offerGenerationRef = useRef(0);
   const [switchRequest, setSwitchRequest] = useState<AccountSwitchRequest | null>(null);
   const offerPaneIds = useAccountSwitchPaneIds(offer);
+  const offerAccountName = useCurrentAccountName(agentId, offer?.account) ?? "";
   // Quota is read only while the list of accounts is showing (#16407).
   const [defaultListOpen, setDefaultListOpen] = useState(false);
   const headroomFor = useAgentAccountHeadroom(agentId, defaultListOpen);
@@ -97,7 +99,8 @@ export function AgentAccountsSection({
   if (!declaration) return null;
 
   const accounts = sanitizeAgentAccounts(entry.accounts);
-  const defaultLogin = defaultLoginLabel(entry.defaultLoginName);
+  const defaultLoginName = sanitizeAccountName(entry.defaultLoginName);
+  const defaultLogin = defaultLoginLabel(defaultLoginName);
   const defaultId = accounts.find((account) => account.id === entry.accountId)?.id ?? DEFAULT_LOGIN;
   // A saved default no account answers to any more refuses every launch, so
   // it shows as changed and can be reset even with nothing left to choose.
@@ -152,7 +155,7 @@ export function AgentAccountsSection({
             reads wherever it is offered (#17080). */}
         <AccountLoginRow
           label={defaultLogin}
-          name={sanitizeAccountName(entry.defaultLoginName) ?? ""}
+          name={defaultLoginName ?? ""}
           folder={`~/${declaration.defaultDir}`}
           nameLabel="Default login name"
           renameLabel="Rename default login"
@@ -248,7 +251,11 @@ export function AgentAccountsSection({
                 if (moved) offerSwitch(generation, { id: null, name: defaultLogin });
               })();
             }}
-            resetAriaLabel={`Use ${agentName}'s default login`}
+            resetAriaLabel={
+              defaultLoginName
+                ? `Use ${agentName}'s default login, ${defaultLoginName}`
+                : `Use ${agentName}'s default login`
+            }
           />
         </SettingsGroup>
       )}
@@ -258,7 +265,7 @@ export function AgentAccountsSection({
           <SettingsRow
             label={<span role="status">{limitedPanesLabel(offerPaneIds.length, agentName)}</span>}
             layout="stacked"
-            description={`${offerPaneIds.length === 1 ? "It restarts" : "Each restarts"} on ${offer.account.name}, and you choose which before any do`}
+            description={`${offerPaneIds.length === 1 ? "It restarts" : "Each restarts"} on ${offerAccountName}, and you choose which before any do`}
             control={
               <SettingsRowActions>
                 <Button
@@ -269,7 +276,7 @@ export function AgentAccountsSection({
                     setOffer(null);
                   }}
                 >
-                  {switchPanesLabel(offerPaneIds.length, offer.account.name)}
+                  {switchPanesLabel(offerPaneIds.length, offerAccountName)}
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => setOffer(null)}>
                   Keep
