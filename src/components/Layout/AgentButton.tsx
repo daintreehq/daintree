@@ -25,7 +25,11 @@ import { getBrandColorHex } from "@/lib/colorUtils";
 import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
-import { resolveEffectiveAccountId, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import {
+  defaultLoginLabel,
+  resolveEffectiveAccountId,
+  sanitizeAgentAccounts,
+} from "@shared/utils/agentAccounts";
 import { resolveSettledSavedPreset } from "@shared/utils/agentPresets";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -427,6 +431,7 @@ export function AgentButton({
   // Accounts are a choice of their own beside the preset (#16040).
   const accounts = getAgentConfigFolderAccount(type) ? sanitizeAgentAccounts(entry.accounts) : [];
   const hasAccounts = accounts.length > 0;
+  const defaultLogin = defaultLoginLabel(entry.defaultLoginName);
   // Worktree-scoped pick wins over the agent-level default so switching
   // worktrees doesn't silently surface another worktree's selection.
   const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
@@ -638,7 +643,7 @@ export function AgentButton({
         if (switchNoticeGenerationRef.current !== generation || paneIds.length === 0) return;
         setAccountNotice({
           agentId: type,
-          account: { id: accountId, name: picked?.name ?? "Default login" },
+          account: { id: accountId, name: picked?.name ?? defaultLogin },
           paneIds,
         });
       })
@@ -1060,7 +1065,7 @@ export function AgentButton({
                         value={DEFAULT_LOGIN_VALUE}
                         onSelect={(event) => event.preventDefault()}
                       >
-                        <AccountChoiceText name="Default login" headroom={defaultLoginHeadroom} />
+                        <AccountChoiceText name={defaultLogin} headroom={defaultLoginHeadroom} />
                       </DropdownMenuRadioItem>
                       {accounts.map((account) => (
                         <DropdownMenuRadioItem
@@ -1219,7 +1224,7 @@ export function AgentButton({
                   args={{ accountId: null }}
                 >
                   <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                  Default login
+                  {defaultLogin}
                 </ContextMenuActionItem>
                 {accounts.map((account) => (
                   <ContextMenuActionItem

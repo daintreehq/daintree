@@ -22,6 +22,11 @@ const FULLY_QUALIFIED_PATH = /^(?:\/|[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)
 const CONTROL_CHARACTER = /[\x00-\x1F\x7F]/;
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTERS = /[\x00-\x1F\x7F]+/g;
+// eslint-disable-next-line no-control-regex
+const LOGIN_NAME_CONTROL_CHARACTERS = /[\x00-\x1F\x7F-\x9F]+/g;
+// Directional marks and overrides would let a name reorder the words shown
+// beside it ("· default login"), or read as empty while it isn't.
+const LOGIN_NAME_FORMAT_CHARACTERS = /[\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
 
 /**
  * A folder an account can name: fully qualified, and one the launch env keeps
@@ -33,10 +38,52 @@ export function isUsableAccountFolder(value: string): boolean {
   return sanitizeAgentEnv({ ACCOUNT_FOLDER: value })?.ACCOUNT_FOLDER === value;
 }
 
+// Half of a character: a high surrogate with no low one after it, or the reverse.
+const LONE_SURROGATES = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+/**
+ * A saved account's name as every reader takes it. Exactly as lenient as the
+ * names already saved, since one it refused would drop that account.
+ */
 export function sanitizeAccountName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const name = value.replace(CONTROL_CHARACTERS, " ").trim();
   return name ? name.slice(0, ACCOUNT_NAME_MAX_CHARS) : undefined;
+}
+
+/**
+ * A name given to a login from now on (#17080): the default login's, or a
+ * saved account's rename. Stricter than {@link sanitizeAccountName}: marks that
+ * reorder or hide text go, so a name can't move the words shown beside it.
+ */
+export function sanitizeLoginName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let name = value
+    .replace(LONE_SURROGATES, "")
+    .replace(LOGIN_NAME_FORMAT_CHARACTERS, "")
+    .replace(LOGIN_NAME_CONTROL_CHARACTERS, " ")
+    .trim()
+    .slice(0, ACCOUNT_NAME_MAX_CHARS);
+  // Never half of a character the cap cut through. Cleaning a cleaned name
+  // changes nothing, so what a field sends is what main saves.
+  if (/[\ud800-\udbff]$/.test(name)) name = name.slice(0, -1);
+  return name.trimEnd() || undefined;
+}
+
+/**
+ * How the default login reads among an agent's logins (#17080): the name the
+ * user gave it, with "default login" kept beside it so nobody takes it for a
+ * saved account, else "Default login".
+ */
+export function defaultLoginLabel(name: unknown): string {
+  const safe = sanitizeLoginName(name);
+  return safe ? `${safe} · default login` : "Default login";
+}
+
+/** The default login inside a sentence: "on Work (the default login)". */
+export function defaultLoginPhrase(name: unknown): string {
+  const safe = sanitizeLoginName(name);
+  return safe ? `${safe} (the default login)` : "the default login";
 }
 
 /** The saved accounts that are well formed, first of each id. Never throws. */

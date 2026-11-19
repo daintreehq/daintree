@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   accountFolderName,
+  defaultLoginLabel,
+  defaultLoginPhrase,
   isUsableAccountFolder,
   keepPaneAccount,
   paneAccountEnv,
   resolveEffectiveAccountId,
   resolveLaunchAccount,
   sanitizeAgentAccounts,
+  sanitizeLoginName,
   withAccountEnv,
 } from "../agentAccounts.js";
 
@@ -29,6 +32,56 @@ describe("sanitizeAgentAccounts", () => {
       { id: "f", name: "Windows", configDir: "C:\\Users\\me\\.codex-f" },
     ]);
     expect(sanitizeAgentAccounts({ not: "an array" })).toEqual([]);
+  });
+});
+
+describe("defaultLoginLabel and defaultLoginPhrase (#17080)", () => {
+  it("falls back to the default login when no usable name is saved", () => {
+    for (const name of [undefined, null, "", "   ", "\u0000\n\t", 42, { name: "Work" }]) {
+      expect(defaultLoginLabel(name)).toBe("Default login");
+      expect(defaultLoginPhrase(name)).toBe("the default login");
+    }
+  });
+
+  it("keeps the default login beside the name, as an account name is cleaned", () => {
+    expect(defaultLoginLabel("  Work\u0007ChatGPT  ")).toBe("Work ChatGPT · default login");
+    expect(defaultLoginPhrase("Work")).toBe("Work (the default login)");
+    const long = "x".repeat(80);
+    expect(defaultLoginLabel(long)).toBe(`${"x".repeat(60)} · default login`);
+    expect(defaultLoginPhrase("  Work\u0007Lab ")).toBe("Work Lab (the default login)");
+  });
+
+  it("keeps a saved account whose name a login name's cleaning would empty", () => {
+    for (const name of ["\u200b", "\u200c\u2067", "\ud800", "\u0085"]) {
+      const saved = { id: "a", name, configDir: "/Users/me/.codex-a" };
+      expect(sanitizeAgentAccounts([saved])).toEqual([saved]);
+      expect(sanitizeLoginName(name)).toBeUndefined();
+    }
+  });
+
+  it("cleans a login name to the same name a second time, so what a field sends is what's saved", () => {
+    for (const raw of [
+      "\ud800\ud801",
+      `${"x".repeat(59)}😀`,
+      " Work\u202e\u00ad ",
+      "a\udc00b",
+      "Wörk 😀",
+    ]) {
+      const once = sanitizeLoginName(raw);
+      expect(sanitizeLoginName(once)).toBe(once);
+    }
+    expect(sanitizeLoginName("a\udc00b😀")).toBe("ab😀");
+  });
+
+  it("drops marks that would reorder the words beside a name, or leave it looking empty", () => {
+    expect(defaultLoginLabel("Work\u202enigol")).toBe("Worknigol · default login");
+    expect(defaultLoginLabel("\u200f\u202e\u2066\u00ad\u061c")).toBe("Default login");
+    expect(defaultLoginLabel("Work\u0085Lab")).toBe("Work Lab · default login");
+  });
+
+  it("never cuts a character in half at the cap, nor leaves a space where it cut", () => {
+    expect(defaultLoginLabel(`${"x".repeat(59)}😀tail`)).toBe(`${"x".repeat(59)} · default login`);
+    expect(defaultLoginLabel(`${"x".repeat(59)} tail`)).toBe(`${"x".repeat(59)} · default login`);
   });
 });
 

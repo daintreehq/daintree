@@ -35,6 +35,7 @@ import {
   isUsableAccountFolder,
   sanitizeAccountName,
   sanitizeAgentAccounts,
+  sanitizeLoginName,
 } from "../../shared/utils/agentAccounts.js";
 
 const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -231,4 +232,39 @@ export function removeAgentAccount(agentId: unknown, accountId: unknown): AgentS
     });
   }
   return writeAgentEntry(id, next);
+}
+
+/**
+ * Renames one login by id (#17080): a saved account, or with `accountId`
+ * null the CLI's own default login, whose name only changes what is shown.
+ * Read and written here in one step, so a rename never brings back an account
+ * another view removed or drops one it added, and every choice that names
+ * the account keeps naming it. An empty name clears the default login's name
+ * and is refused for a saved account.
+ */
+export function renameAgentAccount(
+  agentId: unknown,
+  accountId: unknown,
+  rawName: unknown
+): AgentSettings {
+  const { agentId: id } = folderAccount(agentId);
+  // A missing argument is refused rather than read as clearing the name.
+  if (typeof rawName !== "string") throw invalid("Invalid account name");
+  const name = sanitizeLoginName(rawName);
+  const entry = readSettings().agents[id] ?? {};
+
+  if (accountId === null) {
+    const next: AgentSettingsEntry = { ...entry };
+    if (name) next.defaultLoginName = name;
+    else delete next.defaultLoginName;
+    return writeAgentEntry(id, next);
+  }
+
+  if (!isAccountId(accountId)) throw invalid("Invalid account");
+  if (!name) throw invalid("Give the account a name");
+  const accounts = sanitizeAgentAccounts(entry.accounts);
+  const index = accounts.findIndex((account) => account.id === accountId);
+  if (index < 0) throw invalid("That account isn't saved any more.");
+  accounts[index] = { ...accounts[index]!, name };
+  return writeAgentEntry(id, { ...entry, accounts });
 }

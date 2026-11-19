@@ -6,6 +6,7 @@ import {
   liveAgentFolders,
   liveAgentOf,
   type AgentUsageWatchDeps,
+  type DefaultLoginNames,
   type LiveAgentFolders,
 } from "../AgentUsageWatch.js";
 
@@ -59,6 +60,7 @@ interface Harness {
   readClaudeAccounts: ReturnType<typeof vi.fn<AgentUsageWatchDeps["readClaudeAccounts"]>>;
   codexAnswers: Map<string, () => CodexHomeQuota>;
   claudeAccounts: { current: ClaudeUsageAccount[] };
+  names: { current: DefaultLoginNames };
 }
 
 function harness(): Harness {
@@ -67,6 +69,7 @@ function harness(): Harness {
   };
   const codexAnswers = new Map<string, () => CodexHomeQuota>();
   const claudeAccounts: Harness["claudeAccounts"] = { current: [] };
+  const names: Harness["names"] = { current: {} };
   const readCodexHomes = vi.fn<AgentUsageWatchDeps["readCodexHomes"]>(async (homes) =>
     [...homes.keys()].flatMap((home) => {
       const answer = codexAnswers.get(home);
@@ -82,10 +85,11 @@ function harness(): Harness {
     claudeAccountKey: async (dir) => `key:${dir}`,
     readCodexHomes,
     readClaudeAccounts,
+    readDefaultLoginNames: async () => names.current,
     now: () => Date.now(),
     monotonic: () => Date.now(),
   });
-  return { watch, live, readCodexHomes, readClaudeAccounts, codexAnswers, claudeAccounts };
+  return { watch, live, readCodexHomes, readClaudeAccounts, codexAnswers, claudeAccounts, names };
 }
 
 async function settle(): Promise<void> {
@@ -100,6 +104,81 @@ describe("AgentUsageWatch", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("labels only the default login's readings with this host's name for it, and picks up a rename without asking Codex again (#17080)", async () => {
+    const h = harness();
+    h.live.current = {
+      complete: true,
+      codexHomes: ["/home/.codex", "/accts/work"],
+      claudeConfigDirs: ["/home/.claude", "/accts/work"],
+    };
+    h.codexAnswers.set("/home/.codex", () => codexQuota("/home/.codex", 90));
+    h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 60));
+    h.claudeAccounts.current = [
+      claudeAccount("key:/home/.claude", [claudeReading({ usedPercent: 50 })], "default"),
+      claudeAccount("key:/accts/work", [claudeReading({ usedPercent: 20 })]),
+    ];
+    h.names.current = { codex: "Work", claude: "Home" };
+
+    h.watch.acquire();
+    await settle();
+    const codexReads = h.readCodexHomes.mock.calls.length;
+    const shown = () =>
+      h.watch.latest().map((r) => [r.agentId, r.isDefault, r.defaultLoginName] as const);
+    expect(shown()).toEqual([
+      ["codex", true, "Work"],
+      ["claude", true, "Home"],
+    ]);
+
+    // An account's reading never carries the default login's name.
+    h.claudeAccounts.current = [
+      claudeAccount("key:/home/.claude", [claudeReading({ usedPercent: 5 })], "default"),
+      claudeAccount("key:/accts/work", [claudeReading({ usedPercent: 30 })]),
+    ];
+    h.names.current = { codex: "Lab", claude: "Home" };
+    await vi.advanceTimersByTimeAsync(TICK);
+    expect(shown()).toEqual([
+      ["codex", true, "Lab"],
+      ["claude", false, undefined],
+    ]);
+    expect(h.readCodexHomes).toHaveBeenCalledTimes(codexReads);
+    h.watch.dispose();
+  });
+
+  it("never names a Codex account's reading after the default login, and shows readings unnamed when the names can't be read (#17080)", async () => {
+    const h = harness();
+    h.live.current = {
+      complete: true,
+      codexHomes: ["/home/.codex", "/accts/work"],
+      claudeConfigDirs: [],
+    };
+    h.codexAnswers.set("/home/.codex", () => codexQuota("/home/.codex", 30));
+    h.codexAnswers.set("/accts/work", () => codexQuota("/accts/work", 95));
+    h.names.current = { codex: "Work" };
+    h.watch.acquire();
+    await settle();
+    expect(h.watch.latest()).toMatchObject([
+      { agentId: "codex", isDefault: false, usedPercent: 95 },
+    ]);
+    expect(h.watch.latest()[0]).not.toHaveProperty("defaultLoginName");
+    h.watch.dispose();
+
+    const failing = harness();
+    failing.live.current = { complete: true, codexHomes: ["/home/.codex"], claudeConfigDirs: [] };
+    failing.codexAnswers.set("/home/.codex", () => codexQuota("/home/.codex", 30));
+    Object.defineProperty(failing.names, "current", {
+      get: () => {
+        throw new Error("store unreadable");
+      },
+    });
+    failing.watch.acquire();
+    await settle();
+    expect(failing.watch.latest()).toMatchObject([
+      { agentId: "codex", isDefault: true, usedPercent: 30 },
+    ]);
+    expect(failing.watch.latest()[0]).not.toHaveProperty("defaultLoginName");
+    failing.watch.dispose();
   });
 
   it("asks nothing and shows nothing while no Codex or Claude Code agent runs", async () => {

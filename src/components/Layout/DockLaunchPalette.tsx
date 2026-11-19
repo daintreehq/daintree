@@ -290,7 +290,8 @@ export function DockLaunchPalette({
         const settledPreset = resolveSettledSavedPreset(presets, entry, activeWorktreeId);
         const accountChoices = buildAccountChoices(
           accounts,
-          resolveEffectiveAccountId(entry, activeWorktreeId, undefined, settledPreset?.accountId)
+          resolveEffectiveAccountId(entry, activeWorktreeId, undefined, settledPreset?.accountId),
+          entry?.defaultLoginName
         );
         return {
           ...agent,

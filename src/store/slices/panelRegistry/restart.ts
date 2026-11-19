@@ -58,6 +58,7 @@ import { loadModelTitleCatalog } from "@shared/utils/agentModelTitle";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import { agentPresetTitle } from "@shared/utils/agentLaunchPlan";
 import {
+  defaultLoginPhrase,
   keepPaneAccount,
   paneAccountEnv,
   sanitizeAgentAccounts,
@@ -2088,7 +2089,7 @@ async function respawnAgentOnPreset(
         ? mode.account
           ? (sanitizeAgentAccounts(entry.accounts).find((saved) => saved.id === mode.account?.id)
               ?.name ?? "that account")
-          : "the default login"
+          : defaultLoginPhrase(entry.defaultLoginName)
         : (nextPreset?.name ?? "that preset");
     if (keepConversation) {
       resumedSessionId =

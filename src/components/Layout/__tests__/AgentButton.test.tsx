@@ -582,6 +582,14 @@ describe("AgentButton preset UX", () => {
         ]);
       });
 
+      it("names the default login's row as the user named it (#17080)", () => {
+        const { getAllByRole } = renderCodex({ defaultLoginName: "Team" });
+        act(() => dropdownOnOpenChange!(true));
+        expect(getAllByRole("menuitemradio")[0]?.textContent).toBe(
+          "Team · default login5-hour limit 10% used"
+        );
+      });
+
       it("takes the default login's window from the preset a launch settles on", () => {
         mockActiveWorktreeId = "wt1";
         mockMergedPresetsFn = () => [
@@ -2761,6 +2769,13 @@ describe("Move terminals to account in the agent's menu (#17089)", () => {
     // Moving terminals leaves the account new launches use where it was.
     expect(updateWorktreeAccountMock).not.toHaveBeenCalled();
     expect(updateAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("names the default login as the user named it (#17080)", () => {
+    mockSettings = settingsWith({ claude: { accounts: [COMPANY], defaultLoginName: "Home" } });
+    render(<AgentButton type="claude" availability="ready" />);
+
+    expect(moveRows().map((row) => row.textContent)).toEqual(["Home · default login", "Company"]);
   });
 
   it("isn't offered to an agent with no saved account", () => {

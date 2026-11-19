@@ -45,11 +45,18 @@ export interface AgentUsageWatchDeps {
   /** Canonical home key to the home as a pane's env named it. */
   readCodexHomes(homes: ReadonlyMap<string, string>): Promise<CodexHomeQuota[]>;
   readClaudeAccounts(): Promise<ClaudeUsageAccount[]>;
+  /** The names the user gave this host's Codex and Claude Code default logins (#17080). */
+  readDefaultLoginNames?(): Promise<DefaultLoginNames>;
   now(): number;
   /** Elapsed time for the Codex cadence, which a wall-clock correction mustn't stretch or shrink. */
   monotonic(): number;
   tickMs?: number;
   codexIntervalMs?: number;
+}
+
+export interface DefaultLoginNames {
+  codex?: string;
+  claude?: string;
 }
 
 type Listener = (readings: AgentUsageReading[]) => void;
@@ -107,7 +114,7 @@ export function liveAgentFolders(
   return { complete, codexHomes: [...codexHomes], claudeConfigDirs: [...claudeConfigDirs] };
 }
 
-function codexReadings(quota: CodexHomeQuota): AgentUsageReading[] {
+function codexReadings(quota: CodexHomeQuota, defaultLoginName?: string): AgentUsageReading[] {
   if (quota.result.status !== "ok") return [];
   const { windows, fetchedAt } = quota.result;
   const accountNames = boundAgentUsageAccountNames(
@@ -117,6 +124,7 @@ function codexReadings(quota: CodexHomeQuota): AgentUsageReading[] {
     agentId: "codex",
     accountNames,
     isDefault: quota.isDefault,
+    ...(quota.isDefault && defaultLoginName && { defaultLoginName }),
     windowDurationMins: window.windowDurationMins,
     usedPercent: window.usedPercent,
     resetsAt: window.resetsAt,
@@ -124,12 +132,17 @@ function codexReadings(quota: CodexHomeQuota): AgentUsageReading[] {
   }));
 }
 
-function claudeReadings(account: ClaudeUsageAccount): AgentUsageReading[] {
+function claudeReadings(
+  account: ClaudeUsageAccount,
+  defaultLoginName?: string
+): AgentUsageReading[] {
   const accountNames = boundAgentUsageAccountNames(account.accountNames);
+  const isDefault = account.kind === "default";
   return account.readings.map((reading) => ({
     agentId: "claude",
     accountNames,
-    isDefault: account.kind === "default",
+    isDefault,
+    ...(isDefault && defaultLoginName && { defaultLoginName }),
     window: reading.window,
     statement: reading.statement,
     usedPercent: reading.usedPercent,
@@ -308,14 +321,22 @@ export class AgentUsageWatch {
     if (generation !== this.generation) return;
     const claudeAccounts = claudeKeys.size > 0 ? await this.deps.readClaudeAccounts() : [];
     if (generation !== this.generation) return;
+    // Read on every tick, apart from Codex's cached quota, so a rename shows
+    // without asking Codex again. A failed read only leaves the readings unnamed.
+    const names: DefaultLoginNames =
+      (await this.deps.readDefaultLoginNames?.().catch((error: unknown) => {
+        logger.warn("Couldn't read the default login names", { error });
+        return undefined;
+      })) ?? {};
+    if (generation !== this.generation) return;
 
     const readings = [
       ...[...this.codexByHome.entries()]
         .filter(([home]) => codexHomes.has(home))
-        .flatMap(([, quota]) => codexReadings(quota)),
+        .flatMap(([, quota]) => codexReadings(quota, names.codex)),
       ...claudeAccounts
         .filter((account) => account.kind !== "unknown" && claudeKeys.has(account.key))
-        .flatMap(claudeReadings),
+        .flatMap((account) => claudeReadings(account, names.claude)),
     ];
     const now = this.deps.now();
     const shown = agentUsageWithSuccessors(readings, now);
@@ -400,6 +421,19 @@ function defaultDeps(): AgentUsageWatchDeps {
       const { readClaudeUsageAccountsWithoutPanes } =
         await import("../claude/ClaudeUsageService.js");
       return readClaudeUsageAccountsWithoutPanes();
+    },
+    async readDefaultLoginNames() {
+      const [{ store }, { sanitizeLoginName }] = await Promise.all([
+        import("../../store.js"),
+        import("../../../shared/utils/agentAccounts.js"),
+      ]);
+      const settings = store.get("agentSettings") as
+        { agents?: Record<string, { defaultLoginName?: unknown } | undefined> } | undefined;
+      const agents = settings && typeof settings === "object" ? settings.agents : undefined;
+      return {
+        codex: sanitizeLoginName(agents?.codex?.defaultLoginName),
+        claude: sanitizeLoginName(agents?.claude?.defaultLoginName),
+      };
     },
     now: Date.now,
     monotonic: () => performance.now(),
