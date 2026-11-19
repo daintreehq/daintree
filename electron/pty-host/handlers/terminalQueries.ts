@@ -47,7 +47,9 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
         // one `get-terminal` per id, so correlating a submission costs it no
         // extra round trip. Only this query passes it — the bulk families keep
         // the unconditional projection.
-        terminal: terminal ? mapTerminalInfo(terminal, ctx, msg.submissionToken) : null,
+        terminal: terminal
+          ? mapTerminalInfo(terminal, ctx, msg.submissionToken, msg.codexLimit)
+          : null,
       });
     },
 

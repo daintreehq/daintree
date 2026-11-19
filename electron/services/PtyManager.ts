@@ -11,6 +11,7 @@ import type { AnalysisWorkerPool } from "./pty/analysis/AnalysisWorkerPool.js";
 import type { PanelTitleMode } from "../../shared/types/panel.js";
 import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
+import type { CodexLimitAnswer, CodexLimitQuery } from "../../shared/types/codexLimitReset.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("pty-host:PtyManager");
@@ -818,6 +819,19 @@ export class PtyManager extends EventEmitter {
 
   getSubmission(id: string, submissionToken: string): TerminalSubmissionRecord | undefined {
     return this.registry.get(id)?.getSubmission(submissionToken);
+  }
+
+  /** When the terminal's spent Codex window resets (#17906); see {@link TerminalProcess.answerCodexLimit}. */
+  answerCodexLimit(
+    id: string,
+    query: CodexLimitQuery,
+    observedSince: number | null
+  ): CodexLimitAnswer {
+    return (
+      this.registry.get(id)?.answerCodexLimit(query, observedSince) ?? {
+        reset: { status: "unknown", reason: "no-banner" },
+      }
+    );
   }
 
   /** Undefined when the registry holds no such terminal. */

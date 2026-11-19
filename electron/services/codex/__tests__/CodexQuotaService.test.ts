@@ -14,19 +14,29 @@ vi.mock("../CodexAppServerClient.js", async () => {
   return { ...actual, runCodexAppServerSession: runSession };
 });
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexAppServerError } from "../CodexAppServerClient.js";
 import { canonicalCodexHomeKey } from "../CodexQuotaProfiles.js";
 import {
   normalizeCodexRateLimits,
+  readCodexHomeLimitEvidence,
   readCodexQuota,
   readCodexQuotaForHomes,
   readCodexQuotaProfiles,
   refreshCodexQuota,
   refreshCodexQuotaProfiles,
   resetCodexQuotaCacheForTests,
+  toCodexLimitEvidence,
 } from "../CodexQuotaService.js";
 
 type Call = (method: string, params?: unknown) => Promise<unknown>;
@@ -828,5 +838,170 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     );
     const profiles = await readCodexQuotaProfiles();
     expect(profiles.map((p) => p.result.status)).toEqual(["unavailable", "ok"]);
+  });
+});
+
+describe("toCodexLimitEvidence (#17906)", () => {
+  it("keeps every bucket of the per-limit map, a window with no duration included", () => {
+    const evidence = toCodexLimitEvidence(
+      {
+        rateLimits: { limitId: "codex", primary: FIVE_HOURS },
+        rateLimitsByLimitId: {
+          codex: { limitId: "codex", limitName: null, primary: FIVE_HOURS, secondary: WEEK },
+          codex_bengalfox: {
+            limitId: "codex_bengalfox",
+            limitName: "GPT-5.5-Codex",
+            primary: { usedPercent: 100, windowDurationMins: null, resetsAt: 1_700_000_100 },
+            secondary: null,
+          },
+          // No id inside the snapshot, and a spent window with no reset.
+          "gpt-reserve": {
+            limitName: "gpt-reserve",
+            primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: null },
+          },
+        },
+      },
+      7,
+      9
+    );
+    expect(evidence).toEqual({
+      requestedAt: 7,
+      receivedAt: 9,
+      buckets: [
+        {
+          limitId: "codex",
+          limitName: null,
+          windows: [
+            { usedPercent: 42.4, resetsAt: 1_700_000_000_000 },
+            { usedPercent: 12, resetsAt: 1_700_500_000_000 },
+          ],
+          unreadable: false,
+        },
+        {
+          limitId: "codex_bengalfox",
+          limitName: "GPT-5.5-Codex",
+          windows: [{ usedPercent: 100, resetsAt: 1_700_000_100_000 }],
+          unreadable: false,
+        },
+        {
+          limitId: "gpt-reserve",
+          limitName: "gpt-reserve",
+          windows: [{ usedPercent: 100, resetsAt: null }],
+          unreadable: false,
+        },
+      ],
+    });
+  });
+
+  it("reads an older CLI's single snapshot, and marks a window it can't read", () => {
+    expect(
+      toCodexLimitEvidence(
+        { rateLimits: { primary: { usedPercent: "full" }, secondary: WEEK } },
+        1,
+        2
+      )
+    ).toEqual({
+      requestedAt: 1,
+      receivedAt: 2,
+      buckets: [
+        {
+          limitId: null,
+          limitName: null,
+          windows: [{ usedPercent: 12, resetsAt: 1_700_500_000_000 }],
+          unreadable: true,
+        },
+      ],
+    });
+    expect(toCodexLimitEvidence(null, 1, 2)).toBeNull();
+  });
+});
+
+describe("readCodexHomeLimitEvidence (#17906)", () => {
+  let root: string;
+  let home: string;
+
+  beforeEach(() => {
+    runSession.mockReset();
+    resetCodexQuotaCacheForTests();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    root = mkdtempSync(path.join(os.tmpdir(), "codex-limit-"));
+    home = path.join(root, "work");
+    mkdirSync(home);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("asks the pane's own home, stamped with when the request went out and came back", async () => {
+    runSession.mockImplementation(
+      async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
+        expect(options.codexHome).toBe(realpathSync(home));
+        // Queued behind other work: the request leaves later than the caller asked.
+        vi.setSystemTime(1_000_500);
+        return run(async () => {
+          vi.setSystemTime(1_002_000);
+          return { rateLimits: { primary: FIVE_HOURS } };
+        });
+      }
+    );
+    const evidence = await readCodexHomeLimitEvidence(home);
+    expect(evidence).toMatchObject({ requestedAt: 1_000_500, receivedAt: 1_002_000 });
+    expect(evidence?.buckets[0]?.windows).toEqual([
+      { usedPercent: 42.4, resetsAt: 1_700_000_000_000 },
+    ]);
+  });
+
+  it("asks anew every time, never taking or leaving a cached reading", async () => {
+    respondWith(() => ({ rateLimits: { primary: FIVE_HOURS } }));
+    const homes = new Map([[await canonicalCodexHomeKey(realpathSync(home)), realpathSync(home)]]);
+    await readCodexQuotaForHomes(homes);
+    await readCodexHomeLimitEvidence(home);
+    await readCodexHomeLimitEvidence(home);
+    expect(runSession).toHaveBeenCalledTimes(3);
+    // The usage read still serves its own cache, untouched by the two above.
+    await readCodexQuotaForHomes(homes);
+    expect(runSession).toHaveBeenCalledTimes(3);
+  });
+
+  it("asks the folder a link names, as it names it when asked", async () => {
+    const link = path.join(root, "current");
+    symlinkSync(home, link, "junction");
+    const asked: Array<string | undefined> = [];
+    runSession.mockImplementation(
+      async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
+        asked.push(options.codexHome);
+        return run(async () => ({ rateLimits: { primary: FIVE_HOURS } }));
+      }
+    );
+    await readCodexHomeLimitEvidence(link);
+    expect(asked).toEqual([realpathSync(home)]);
+  });
+
+  it("keeps the evidence when the session dies during the account read", async () => {
+    runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) => {
+      void run(async (method) => {
+        if (method === "account/rateLimits/read") {
+          return { rateLimits: { primary: FIVE_HOURS }, accountId: "ws-1" };
+        }
+        return new Promise(() => {});
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      vi.setSystemTime(1_009_000);
+      throw new CodexAppServerError("timeout", "session deadline");
+    });
+    const evidence = await readCodexHomeLimitEvidence(home);
+    expect(evidence).toMatchObject({
+      requestedAt: 1_000_000,
+      receivedAt: 1_000_000,
+      buckets: [{ limitId: null, windows: [{ usedPercent: 42.4 }] }],
+    });
+  });
+
+  it("never asks about a home Codex hasn't made", async () => {
+    expect(await readCodexHomeLimitEvidence(path.join(root, "missing"))).toBeNull();
+    expect(runSession).not.toHaveBeenCalled();
   });
 });

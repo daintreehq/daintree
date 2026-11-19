@@ -149,6 +149,7 @@ import type {
 } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
+import type { CodexLimitAnswer, CodexLimitQuery } from "../../shared/types/codexLimitReset.js";
 import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
 import type { UpdateInstalledObservation } from "../../shared/types/ipc/agent.js";
@@ -255,6 +256,8 @@ interface TerminalInfoResponse {
   submission?: TerminalSubmissionRecord;
   /** Most recent handback marker observed for a request this terminal held (#12488). */
   lastHandback?: TerminalHandback;
+  /** Present only when {@link PtyClient.getTerminalAsync} asked about the Codex limit (#17906). */
+  codexLimit?: CodexLimitAnswer;
 }
 
 /**
@@ -2840,18 +2843,26 @@ export class PtyClient extends EventEmitter {
    * `strict` rejects when a live host fails to answer in time instead of
    * resolving `null`, so a caller confirming that a terminal is gone doesn't
    * mistake a stalled query for its absence. A host that is gone still resolves
-   * `null` — its terminals went with it.
+   * `null` — its terminals went with it. `codexLimit` asks when the pane's
+   * spent Codex window resets (#17906).
    */
   async getTerminalAsync(
     id: string,
     submissionToken?: string,
-    options?: { strict?: boolean }
+    options?: { strict?: boolean; codexLimit?: CodexLimitQuery }
   ): Promise<TerminalInfoResponse | null> {
     const shard = this.shardForTerminal(id);
+    const codexLimit = options?.codexLimit;
     const promise = sendPtyHostRpc<TerminalInfoResponse | null>(
       shard,
       submissionToken === undefined ? `terminal-${id}` : `terminal-${id}-sub-${submissionToken}`,
-      (requestId) => ({ type: "get-terminal", id, requestId, submissionToken })
+      (requestId) => ({
+        type: "get-terminal",
+        id,
+        requestId,
+        submissionToken,
+        ...(codexLimit !== undefined && { codexLimit }),
+      })
     );
     return promise.catch((error) => {
       if (

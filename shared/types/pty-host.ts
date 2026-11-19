@@ -31,6 +31,7 @@ import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { MemorySource } from "./memoryAccounting.js";
 import type { SerializedTerminalSnapshot } from "./terminal.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
+import type { CodexLimitAnswer, CodexLimitQuery } from "./codexLimitReset.js";
 import type { TerminalHandback } from "./handback.js";
 import type {
   ClosedProcessKillResult,
@@ -449,7 +450,14 @@ export type PtyHostRequest =
   // The project's full terminal records in one round trip, for restore
   // (#17776); `get-terminals-for-project` stays for callers that need ids only.
   | { type: "get-project-terminals"; projectId: string; requestId: string }
-  | { type: "get-terminal"; id: string; requestId: string; submissionToken?: string }
+  | {
+      type: "get-terminal";
+      id: string;
+      requestId: string;
+      submissionToken?: string;
+      /** Asks when the pane's spent Codex window resets (#17906). */
+      codexLimit?: CodexLimitQuery;
+    }
   /**
    * The few fields a status read needs, for many terminals in one round trip
    * (#17809), instead of a full `get-terminal` record per id. An id the shard
@@ -1355,6 +1363,11 @@ export interface PtyHostTerminalInfo {
    * query family omits it, so bulk inventory reads are unchanged.
    */
   submission?: TerminalSubmissionRecord;
+  /**
+   * When the pane's spent Codex window resets, or the banner to resolve
+   * against a reading (#17906). Only on a targeted `get-terminal` that asked.
+   */
+  codexLimit?: CodexLimitAnswer;
   projectId?: string;
   /** Placed in no project on purpose (#17926), as its spawn said. */
   unplaced?: true;

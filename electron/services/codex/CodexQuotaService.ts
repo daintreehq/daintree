@@ -11,7 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import {
   CodexAppServerError,
   runCodexAppServerSession,
@@ -24,6 +24,11 @@ import {
   type CodexQuotaProfileTarget,
 } from "./CodexQuotaProfiles.js";
 import type { AgentSettingsEntry } from "../../../shared/types/agentSettings.js";
+import type {
+  CodexLimitBucketEvidence,
+  CodexLimitEvidence,
+  CodexLimitWindowEvidence,
+} from "../../../shared/types/codexLimitReset.js";
 import type {
   CodexQuotaProfile,
   CodexQuotaProfileHomeReason,
@@ -53,6 +58,8 @@ interface CodexAccountIdentity {
 interface HomeReading {
   result: CodexQuotaResult;
   identity: CodexAccountIdentity | null;
+  /** Every bucket as the server sent it, for a stopped pane's reset (#17906); null with no answer. */
+  evidence: CodexLimitEvidence | null;
 }
 
 interface HomeCacheEntry {
@@ -127,6 +134,61 @@ export function normalizeCodexRateLimits(raw: unknown, fetchedAt: number): Codex
   };
 }
 
+/** Undefined for a window the server didn't send; null for one it sent that can't be read. */
+function toEvidenceWindow(raw: unknown): CodexLimitWindowEvidence | null | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  if (typeof raw !== "object") return null;
+  const { usedPercent, resetsAt } = raw as Record<string, unknown>;
+  if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent) || usedPercent < 0) {
+    return null;
+  }
+  if (resetsAt === null || resetsAt === undefined) return { usedPercent, resetsAt: null };
+  if (typeof resetsAt !== "number" || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  return { usedPercent, resetsAt: Math.round(resetsAt * 1000) };
+}
+
+function toEvidenceBucket(raw: unknown, key: string | null): CodexLimitBucketEvidence {
+  const snapshot = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  const windows: CodexLimitWindowEvidence[] = [];
+  let unreadable = snapshot === null;
+  for (const slot of [snapshot?.primary, snapshot?.secondary]) {
+    const window = toEvidenceWindow(slot);
+    if (window === null) unreadable = true;
+    else if (window !== undefined) windows.push(window);
+  }
+  return {
+    limitId: nonEmptyString(snapshot?.limitId) ?? key,
+    limitName: nonEmptyString(snapshot?.limitName),
+    windows,
+    unreadable,
+  };
+}
+
+/**
+ * Every bucket of a `GetAccountRateLimitsResponse`, for judging a stopped
+ * pane's banner by (#17906): the per-limit map, or the single snapshot an
+ * older CLI sends. Unlike {@link normalizeCodexRateLimits} it keeps the model
+ * buckets, since the banner names the one it means, and a window with no
+ * duration. Null when the response isn't one.
+ */
+export function toCodexLimitEvidence(
+  raw: unknown,
+  requestedAt: number,
+  receivedAt: number
+): CodexLimitEvidence | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { rateLimits, rateLimitsByLimitId } = raw as Record<string, unknown>;
+  const buckets =
+    rateLimitsByLimitId && typeof rateLimitsByLimitId === "object"
+      ? Object.entries(rateLimitsByLimitId).map(([key, snapshot]) =>
+          toEvidenceBucket(snapshot, key)
+        )
+      : rateLimits && typeof rateLimits === "object"
+        ? [toEvidenceBucket(rateLimits, null)]
+        : null;
+  return buckets === null ? null : { requestedAt, receivedAt, buckets };
+}
+
 function toUnavailableReason(error: unknown): CodexQuotaUnavailableReason {
   if (error instanceof CodexAppServerError) {
     if (error.reason === "cli-missing") return "cli-missing";
@@ -167,9 +229,11 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
   // Held outside the session: if the deadline lands during the optional account
   // read, the quota that already arrived is still the answer.
   let quota: { raw: unknown; fetchedAt: number } | null = null;
+  let requestedAt = Date.now();
   try {
     const { raw, accountId, email } = await runCodexAppServerSession(
       async (call) => {
+        requestedAt = Date.now();
         const raw = await call<unknown>("account/rateLimits/read");
         quota = { raw, fetchedAt: Date.now() };
         const accountId =
@@ -183,18 +247,25 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
       codexHome === undefined ? {} : { codexHome }
     );
     const result = normalizeCodexRateLimits(raw, Date.now());
+    const answered = quota as { raw: unknown; fetchedAt: number } | null;
     return {
       result,
       identity: result.status === "ok" && accountId && email ? { accountId, email } : null,
+      evidence: toCodexLimitEvidence(raw, requestedAt, answered?.fetchedAt ?? Date.now()),
     };
   } catch (error) {
     const answered = quota as { raw: unknown; fetchedAt: number } | null;
     if (answered) {
-      return { result: normalizeCodexRateLimits(answered.raw, answered.fetchedAt), identity: null };
+      return {
+        result: normalizeCodexRateLimits(answered.raw, answered.fetchedAt),
+        identity: null,
+        evidence: toCodexLimitEvidence(answered.raw, requestedAt, answered.fetchedAt),
+      };
     }
     return {
       result: { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() },
       identity: null,
+      evidence: null,
     };
   }
 }
@@ -456,6 +527,27 @@ export async function readCodexQuotaForHomes(
     });
   }
   return readings;
+}
+
+/**
+ * A reading of the Codex home a stopped pane runs on, for judging its banner
+ * by (#17906). Always a new request, through the same queue but past the
+ * cache: one asked for now is after the banner showed whatever the clock
+ * says, and a stopped pane's home is kept nowhere after. `home` is the
+ * absolute home the pane's env named, resolved once to the folder it names
+ * now; one Codex hasn't made is never read. Null when there is no reading.
+ * Never rejects.
+ */
+export async function readCodexHomeLimitEvidence(home: string): Promise<CodexLimitEvidence | null> {
+  if (!(await isDirectory(home))) return null;
+  let physical: string;
+  try {
+    physical = await realpath(home);
+  } catch {
+    return null;
+  }
+  const reading = await enqueue(() => fetchCodexQuota(physical));
+  return reading.evidence;
 }
 
 /** The queue is kept: a read still running from before the reset must still finish first. */
