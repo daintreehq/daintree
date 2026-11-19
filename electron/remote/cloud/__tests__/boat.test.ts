@@ -659,6 +659,22 @@ describe("machine keys (#17361)", () => {
     expect(person.fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("sends an idle stop from the desktop once, where a person's stop retries (#17924)", async () => {
+    const idle = clientWith([jsonResponse(429, { message: "slow down" })]);
+    const provider = new BoatProvider(() => idle.client);
+    await expect(
+      provider.stop(credentials, "bx_23456789", { once: true })
+    ).rejects.toMatchObject({ kind: "rate-limited" });
+    expect(idle.fetch).toHaveBeenCalledTimes(1);
+
+    const person = clientWith([
+      jsonResponse(500, { message: "oops" }),
+      jsonResponse(202, { ok: true, sandbox: { ...SANDBOX, state: "archiving" } }),
+    ]);
+    await new BoatProvider(() => person.client).stop(credentials, "bx_23456789");
+    expect(person.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("drops the machine's key on a refusal, and retries anything that may pass", () => {
     expect(
       boatMachineKeyFailure(new BoatApiError("unauthorized", "no", 401, null, null)).kind

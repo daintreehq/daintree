@@ -707,6 +707,28 @@ describe("AwsClient", () => {
     expect(refused.seen).toEqual(["DescribeRegions"]);
   });
 
+  it("sends an idle stop once, where a person's stop retries a throttled send (#17924)", async () => {
+    const idle = clientWith([
+      ec2Error("RequestLimitExceeded", "Request limit exceeded.", 503),
+      ec2Error("X", "never sent"),
+    ]);
+    await expect(
+      idle.client.stopInstance(ctx, "i-0aaaaaaaaaaaaaaa1", { once: true })
+    ).rejects.toMatchObject({ kind: "rate-limited" });
+    expect(idle.seen).toEqual(["StopInstances"]);
+
+    const person = clientWith([
+      ec2Error("RequestLimitExceeded", "Request limit exceeded.", 503),
+      xml(
+        `<StopInstancesResponse><instancesSet><item><currentState><name>stopping</name></currentState></item></instancesSet></StopInstancesResponse>`
+      ),
+    ]);
+    await expect(person.client.stopInstance(ctx, "i-0aaaaaaaaaaaaaaa1")).resolves.toBe(
+      "stopping"
+    );
+    expect(person.seen).toEqual(["StopInstances", "StopInstances"]);
+  });
+
   it("keeps a mutation's lost answer unknown when its resend is refused", async () => {
     const { client, seen } = clientWith([
       new TypeError("socket hang up"),
