@@ -134,6 +134,8 @@ export const OPAQUE_HOLDERS: Readonly<Record<string, string>> = {
     "the cache's own sweep interval handle (a Node Timeout under real timers)",
   "resourceOwnership.callerNamed":
     "a WeakSet of creation records whose caller named the id (#16845): keyed by the record objects, so an entry goes with its record and names no session",
+  "resourceOwnership.restored":
+    "a WeakSet of creation records an earlier run kept and this one gave back (#16845): keyed by the record objects, so an entry goes with its record and names no session",
 };
 
 export interface SeedOptions {
