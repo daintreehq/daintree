@@ -80,7 +80,10 @@ const StallSchema = z
   })
   .strict();
 
-/** A list item as a Host sends it: never with `remoteHost`, which only the Shell adds. */
+/**
+ * A list item as a Host sends it: never with `remoteHost` or `inbox`, which
+ * only the Shell adds, so an older owner's strict read still takes it.
+ */
 export const HostQuestionItemSchema = z
   .object({
     reference: QuestionReferenceSchema,
@@ -98,7 +101,7 @@ export const HostQuestionItemSchema = z
     replyRequest: Id.nullable(),
     stall: StallSchema.nullable(),
   })
-  .strict() satisfies z.ZodType<Omit<DecisionQuestionListItem, "remoteHost">>;
+  .strict() satisfies z.ZodType<Omit<DecisionQuestionListItem, "remoteHost" | "inbox">>;
 
 /** The owner a Host served a list to, as that owner's announcement named it. */
 const ListOwnerSchema = z
@@ -130,7 +133,9 @@ export type HostQuestionListPayload = z.infer<typeof HostQuestionListSchema>;
 /** A Host's own questions, as its Decisions lists them: its id, and every one of them. */
 export interface HostQuestionList {
   hostId: string;
-  questions: Omit<DecisionQuestionListItem, "remoteHost">[];
+  questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[];
+  /** What each of them in Needs you asks now (#17895), by question id; absent from a v1 list. */
+  asks?: ReadonlyMap<string, string | null>;
 }
 
 /** A Host's pushed list always names the Host and its owner: one that serves none sends nothing. */
@@ -141,6 +146,42 @@ export const HostQuestionsChangedPayloadSchema = z
     questions: z.array(z.unknown()).max(MAX_HOST_QUESTIONS),
   })
   .strict();
+
+/**
+ * What one of a Host's questions in Needs you asks now (#17895): the agent's
+ * latest follow-up on it, or null for the question alone. Read on its own,
+ * like each question, so one this Daintree can't read costs only itself.
+ */
+export const HostQuestionAskSchema = z
+  .object({ questionId: QuestionId, ask: Id.nullable() })
+  .strict();
+
+/** The asks a v2 list carries beside its questions, at most one per question. */
+const Asks = z.array(z.unknown()).max(MAX_HOST_QUESTIONS);
+
+/**
+ * Where a v2 list stands among those one session was sent, read or pushed:
+ * it rises with each, so a Shell keeps the newest whatever order they arrive
+ * in. A reply and a push travel apart on the link, and a large one comes in
+ * parts, so arrival order alone can't say.
+ */
+const ListSeq = Count;
+
+/** A Host's list as `QUESTION_LIST_V2` reads it: the v1 list, with the asks (#17895). */
+export const HostQuestionListV2Schema = HostQuestionListSchema.extend({
+  asks: Asks,
+  seq: ListSeq,
+}).strict();
+export type HostQuestionListV2Payload = z.infer<typeof HostQuestionListV2Schema>;
+
+/** A Host's pushed v2 list (#17895): `HostQuestionsChangedPayloadSchema`, with the asks. */
+export const HostQuestionsChangedV2PayloadSchema = HostQuestionsChangedPayloadSchema.extend({
+  asks: Asks,
+  seq: ListSeq,
+}).strict();
+
+/** A v2 read of the list names nothing: the owner it serves is the session's. */
+export const HostQuestionListV2ReadSchema = z.object({}).strict();
 
 export const HostQuestionReadSchema = z.discriminatedUnion("read", [
   z.object({ read: z.literal("list") }).strict(),
@@ -198,10 +239,13 @@ const ThreadEntrySchema = z.discriminatedUnion("type", [
       text: Words.nullable(),
       images: z.array(ThreadImageSchema).max(32),
       expectsReply: z.boolean(),
+      // Optional: absent from a Host from before #17238, as the type has it.
+      onComputer: z.boolean().optional(),
       sentAt: Time,
       deliveryStatus: z
         .enum(["received", "terminal-delivered", "needs-attention", "delivery-uncertain"])
         .nullable(),
+      deliveryStopped: z.boolean().optional(),
       unreadable: z.boolean(),
     })
     .strict(),

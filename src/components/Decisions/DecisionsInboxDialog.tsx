@@ -32,6 +32,7 @@ import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -53,17 +54,19 @@ import { aliasLabel } from "./decisionQuestionModel";
 import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 import {
   agentName,
+  askShownIn,
   attentionText,
   connectionNotice,
   emptyText,
   expiresSoon,
-  groupOf,
+  inboxGroupOf,
   inboxGroups,
+  inboxRowNote,
   isAttention,
   isClosed,
+  markedText,
   referenceKey,
   resolveSelection,
-  rowNote,
   standingText,
   whereFacts,
   worktreeName,
@@ -75,6 +78,7 @@ import {
   useDecisionsReaderRetention,
   useQuestionCancel,
 } from "./useDecisionQuestionReader";
+import { useDecisionQuestionSeen } from "./useDecisionQuestionSeen";
 
 /** A pane's Decisions chip, where the close returns when the inbox was opened from it. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
@@ -363,7 +367,8 @@ function InboxRow({
   onSelect: () => void;
   nowMs: number | null;
 }) {
-  const note = rowNote(item.standing);
+  const note = inboxRowNote(item);
+  const cleared = inboxGroupOf(item) === "cleared";
   const expiry =
     item.expiresAt !== null && nowMs !== null && expiresSoon(item, nowMs)
       ? `Due ${formatRelativeTime(Date.parse(item.expiresAt), nowMs)}`
@@ -436,6 +441,7 @@ function InboxRow({
           {!(closed && note !== null) && (
             <span className="sr-only">
               {standingText(item.standing)}
+              {cleared && ", cleared on this computer"}
               {expiry !== null && `, ${expiry.toLowerCase()}`}
             </span>
           )}
@@ -698,10 +704,31 @@ export function DecisionsInboxDialog() {
   const detailHeadingId = useId();
   // Where the needs-attention list hands the keyboard back once it closes over the inbox.
   const detailDomId = useId();
-  // Once the one shown no longer needs the person, the next that does is one press away.
+  // Once the one shown no longer needs the person, the next that does is one press away:
+  // the first they haven't seen yet, when there is one.
   const waiting = groups.find((group) => group.id === "needs-you")?.items ?? [];
+  const cleared = groups.find((group) => group.id === "cleared")?.items ?? [];
   const nextUp =
-    selected !== null && groupOf(selected.standing) !== "needs-you" ? (waiting[0] ?? null) : null;
+    selected !== null && inboxGroupOf(selected) !== "needs-you"
+      ? (waiting.find((item) => item.inbox?.seen !== true) ?? waiting[0] ?? null)
+      : null;
+  const announce = useAnnouncerStore((state) => state.announce);
+  // Clearing and restoring stay on this computer: nothing is answered, declined or typed in,
+  // and each question goes with the ask it was shown with, so one asking something new stays.
+  const markShown = (action: "clear" | "restore", items: readonly DecisionQuestionListItem[]) => {
+    const questions = items.flatMap((item) =>
+      item.inbox === undefined ? [] : [{ reference: item.reference, ask: item.inbox.ask }]
+    );
+    if (questions.length === 0) return;
+    const say = (text: string | null) => {
+      if (text !== null) announce(text);
+    };
+    decisionsClient.markQuestions(action, questions).then(
+      (result) => say(markedText(action, result)),
+      () => say(markedText(action, { result: "failed" }))
+    );
+  };
+  const selectedGroup = selected === null ? null : inboxGroupOf(selected);
   const showNext = () => {
     if (nextUp === null) return;
     const key = referenceKey(nextUp.reference);
@@ -728,6 +755,14 @@ export function DecisionsInboxDialog() {
   // Next question's hand-off: once the question it asked for is read, its words take the keyboard,
   // unless the keyboard went somewhere else meanwhile or another question was chosen.
   const shownRead = reader.current?.result === "read" ? reader.current.question : null;
+  useDecisionQuestionSeen(selected, shownRead, active, detailRef);
+  // Clearing waits while the read on screen predates what the list says it asks now; with
+  // no read on screen (one that can't be read, its Host away) it goes by the list alone.
+  const clearWaits =
+    selected !== null &&
+    selectedGroup === "needs-you" &&
+    shownRead !== null &&
+    !askShownIn(selected, shownRead);
   useEffect(() => {
     const pending = pendingFocus.current;
     if (pending === null || shownRead === null) return;
@@ -875,36 +910,57 @@ export function DecisionsInboxDialog() {
         ) : (
           // Two columns that scroll on their own, so a plain element rather than the dialog's body column.
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div
-              className="decisions-inbox-list flex w-80 shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-divider lg:w-[26rem]"
-              data-testid="decisions-inbox-list"
-            >
-              {listRead.state === "loading" && showListSkeleton && <ListSkeleton />}
-              {listRead.state === "failed" && (
-                <div className="p-3">
-                  <Callout
-                    severity="warning"
-                    size="compact"
-                    action={
-                      <Button variant="outline" size="xs" onClick={retry}>
-                        Retry
-                      </Button>
-                    }
-                    data-testid="decisions-inbox-failed"
+            <div className="flex w-80 shrink-0 flex-col border-r border-divider lg:w-[26rem]">
+              <div
+                className="decisions-inbox-list flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
+                data-testid="decisions-inbox-list"
+              >
+                {listRead.state === "loading" && showListSkeleton && <ListSkeleton />}
+                {listRead.state === "failed" && (
+                  <div className="p-3">
+                    <Callout
+                      severity="warning"
+                      size="compact"
+                      action={
+                        <Button variant="outline" size="xs" onClick={retry}>
+                          Retry
+                        </Button>
+                      }
+                      data-testid="decisions-inbox-failed"
+                    >
+                      The questions couldn&apos;t be read.
+                    </Callout>
+                  </div>
+                )}
+                {groups.length > 0 && (
+                  <InboxList
+                    groups={groups}
+                    lines={lines}
+                    partsOf={partsOf}
+                    nowMs={nowMs}
+                    selectedKey={selectedKey}
+                    onSelect={(key, index) => setChoice({ seq: request.seq, key, index })}
+                  />
+                )}
+              </div>
+              {/* Below the list rather than on its heading, so the dialog's first focus stays on the
+                question list. Kept while anything is cleared, so a press that empties Needs you
+                leaves the keyboard here rather than nowhere. */}
+              {(waiting.length > 0 || cleared.length > 0) && (
+                <div className="decisions-inbox-list-footer flex shrink-0 items-center justify-end border-t border-divider px-3 py-2">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    aria-disabled={waiting.length === 0 || undefined}
+                    onClick={() => {
+                      if (waiting.length > 0) markShown("clear", waiting);
+                    }}
+                    className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+                    data-testid="decisions-inbox-clear-all"
                   >
-                    The questions couldn&apos;t be read.
-                  </Callout>
+                    Clear Needs you
+                  </Button>
                 </div>
-              )}
-              {groups.length > 0 && (
-                <InboxList
-                  groups={groups}
-                  lines={lines}
-                  partsOf={partsOf}
-                  nowMs={nowMs}
-                  selectedKey={selectedKey}
-                  onSelect={(key, index) => setChoice({ seq: request.seq, key, index })}
-                />
               )}
             </div>
             <section
@@ -948,6 +1004,28 @@ export function DecisionsInboxDialog() {
                             data-testid="decisions-inbox-go-to-terminal"
                           >
                             Go to terminal
+                          </Button>
+                        )}
+                        {/* One button that turns into its inverse, so the keyboard stays on it as the
+                            question moves between groups. Needs only the list: it works whether or
+                            not the question can be read or its terminal reached. */}
+                        {(selectedGroup === "needs-you" || selectedGroup === "cleared") && (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            aria-disabled={clearWaits || undefined}
+                            onClick={() => {
+                              if (clearWaits) return;
+                              markShown(selectedGroup === "cleared" ? "restore" : "clear", [
+                                selected,
+                              ]);
+                            }}
+                            className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+                            data-testid="decisions-inbox-clear"
+                          >
+                            {selectedGroup === "cleared"
+                              ? "Restore to Needs you"
+                              : "Clear from Needs you"}
                           </Button>
                         )}
                         {reader.cancellable &&

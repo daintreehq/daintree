@@ -374,7 +374,56 @@ export interface DecisionQuestionListItem {
    * connected keeps the questions it last reported, as it last reported them.
    */
   remoteHost?: DecisionQuestionRemoteHost;
+  /**
+   * What a waiting or queued question asks of the person now, and what they
+   * did with that on this computer (#17895). Only this computer's list
+   * carries it, never a Host's own, and only while the question is in Needs you.
+   */
+  inbox?: DecisionQuestionInbox;
 }
+
+/**
+ * The person's own reading of what a question asks of them, kept on this
+ * computer only (#17895). Neither mark answers or declines anything: the
+ * question waits for the agent just the same, and stays answerable.
+ */
+export interface DecisionQuestionInbox {
+  /**
+   * The agent's latest follow-up the ask takes in, by message id; null for
+   * the question alone. A new one is a new ask, which no earlier mark covers.
+   * A Host's question takes in only a follow-up asking for a reply.
+   */
+  ask: string | null;
+  /** Shown to the person here: it no longer counts as waiting on them. */
+  seen: boolean;
+  /** Set aside by the person here: it leaves Needs you and the counts. */
+  cleared: boolean;
+}
+
+/** The most questions one mark names; more are marked a page at a time. */
+export const DECISION_QUESTION_MARKS_PER_CALL = 500;
+
+/**
+ * What the person does with a question's current ask on this computer:
+ * `seen`, it was shown to them; `clear`, they set it aside; `restore`, they
+ * took it back into Needs you. Each question is named with the ask it was
+ * shown with, so one that has asked something new since is left alone.
+ */
+export interface MarkDecisionQuestionsPayload {
+  action: "seen" | "clear" | "restore";
+  questions: { reference: DecisionQuestionReference; ask: string | null }[];
+}
+
+/**
+ * Marks recorded. `marked`: how many questions it changed; a question no
+ * longer in Needs you, or asking something new, isn't. `failed`: the store
+ * couldn't save it, so nothing changed. `off` and `not-running` as for a read.
+ */
+export type DecisionQuestionMarkResult =
+  | { result: "marked"; marked: number }
+  | { result: "failed" }
+  | { result: "off" }
+  | { result: "not-running" };
 
 /**
  * An answer, or follow-ups after it, that delivery stopped on and a person

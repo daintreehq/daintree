@@ -5,16 +5,23 @@ import { decisionItems } from "@/components/Terminal/decisionsChipModel";
 import type {
   DecisionQuestionListItem,
   DecisionQuestionStanding,
+  DecisionThreadEntry,
+  DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
 import {
   agentName,
+  askShownIn,
   connectionNotice,
   groupOf,
+  inboxGroupOf,
   inboxGroups,
+  inboxRowNote,
   isAttention,
+  markedText,
   originFacts,
   referenceKey,
   resolveSelection,
+  seeableAsk,
   standingText,
   worktreeName,
 } from "../decisionsInboxModel";
@@ -280,5 +287,103 @@ describe("decisionsInboxModel", () => {
       expect(stopped!.text).not.toMatch(/reconnect/);
     }
     expect(dropped!.text).toMatch(/reconnect/);
+  });
+});
+
+describe("seen and cleared on this computer (#17895)", () => {
+  const marked = (questionId: string, seen: boolean, cleared: boolean, ask: string | null = null) =>
+    item(questionId, OPEN, { inbox: { ask, seen, cleared } });
+
+  it("lists a cleared question under Cleared, before History, and a seen one still in Needs you", () => {
+    const groups = inboxGroups([
+      marked("q1", true, false),
+      marked("q2", false, true),
+      item("q3", { kind: "settled", outcome: "expired" }),
+      marked("q4", false, false),
+    ]);
+    expect(
+      groups.map((group) => [group.id, group.items.map((i) => i.reference.questionId)])
+    ).toEqual([
+      ["needs-you", ["q1", "q4"]],
+      ["cleared", ["q2"]],
+      ["history", ["q3"]],
+    ]);
+    expect(groups.find((group) => group.id === "cleared")?.title).toBe("Cleared");
+  });
+
+  it("goes by standing for anything not in Needs you, whatever it carries", () => {
+    expect(
+      inboxGroupOf(
+        item("q1", { kind: "to-type" }, { inbox: { ask: null, seen: true, cleared: true } })
+      )
+    ).toBe("delivering");
+    expect(inboxGroupOf(marked("q2", false, true))).toBe("cleared");
+  });
+
+  it("says on a cleared row that it was cleared, where an open one says nothing", () => {
+    expect(inboxRowNote(marked("q1", false, true))).not.toBeNull();
+    expect(inboxRowNote(marked("q1", true, false))).toBeNull();
+    expect(inboxRowNote(item("q1", { kind: "waiting", reason: "reply" }))).toBe(
+      standingText({ kind: "waiting", reason: "reply" })
+    );
+  });
+
+  describe("seeableAsk", () => {
+    const shown = (questionId: string, thread: DecisionThreadEntry[] = []) => ({
+      reference: { hostId: "h1", projectId: "p1", terminalId: "t9", questionId },
+      thread,
+    });
+    const agentMessage = (messageId: string, unreadable = false): DecisionThreadMessage => ({
+      type: "message",
+      messageId,
+      from: "agent",
+      text: null,
+      images: [],
+      expectsReply: false,
+      sentAt: "2026-11-02T10:00:00.000Z",
+      deliveryStatus: null,
+      unreadable,
+    });
+
+    it("lets a read of the question alone see an ask with no follow-up, wherever its pane moved", () => {
+      expect(seeableAsk(marked("q1", false, false), shown("q1"))).toEqual({ ask: null });
+    });
+
+    it("needs the follow-up the ask takes in, readable, in the read shown", () => {
+      const q = marked("q1", false, false, "note-2");
+      expect(seeableAsk(q, shown("q1", [agentMessage("note-1")]))).toBeNull();
+      expect(seeableAsk(q, shown("q1", [agentMessage("note-2", true)]))).toBeNull();
+      expect(
+        seeableAsk(q, shown("q1", [{ ...agentMessage("note-2"), from: "person" }]))
+      ).toBeNull();
+      expect(seeableAsk(q, shown("q1", [agentMessage("note-1"), agentMessage("note-2")]))).toEqual({
+        ask: "note-2",
+      });
+    });
+
+    it("sees nothing of another question, of one already seen, or of one with nothing to mark", () => {
+      expect(seeableAsk(marked("q1", false, false), shown("q2"))).toBeNull();
+      expect(seeableAsk(marked("q1", true, true), shown("q1"))).toBeNull();
+      expect(seeableAsk(item("q1", OPEN), shown("q1"))).toBeNull();
+      // A cleared question can still be seen: seeing never takes it back into Needs you.
+      expect(seeableAsk(marked("q1", false, true), shown("q1"))).toEqual({ ask: null });
+    });
+
+    it("lets a read show an ask whose follow-up couldn't be opened, for clearing (askShownIn)", () => {
+      const q = marked("q1", true, false, "note-2");
+      expect(askShownIn(q, shown("q1", [agentMessage("note-1")]))).toBe(false);
+      expect(askShownIn(q, shown("q1", [agentMessage("note-2", true)]))).toBe(true);
+      expect(askShownIn(marked("q1", false, false), shown("q1"))).toBe(true);
+    });
+  });
+
+  it("says what a clear or restore did, only when it did something", () => {
+    expect(markedText("clear", { result: "marked", marked: 3 })).toContain("3 questions");
+    expect(markedText("restore", { result: "marked", marked: 1 })).toContain("1 question");
+    expect(markedText("clear", { result: "marked", marked: 0 })).toBeNull();
+    expect(markedText("clear", { result: "failed" })).not.toBeNull();
+    expect(markedText("clear", { result: "failed" })).not.toBe(
+      markedText("restore", { result: "failed" })
+    );
   });
 });

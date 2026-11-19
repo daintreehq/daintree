@@ -597,6 +597,9 @@ export interface GeneratedElectronAPI {
     markAnswerHandled(
       ...args: IpcInvokeMap["decisions:mark-answer-handled"]["args"]
     ): Promise<IpcInvokeMap["decisions:mark-answer-handled"]["result"]>;
+    markQuestions(
+      ...args: IpcInvokeMap["decisions:mark-questions"]["args"]
+    ): Promise<IpcInvokeMap["decisions:mark-questions"]["result"]>;
     prepareRelayDeploy(
       ...args: IpcInvokeMap["decisions:prepare-relay-deploy"]["args"]
     ): Promise<IpcInvokeMap["decisions:prepare-relay-deploy"]["result"]>;

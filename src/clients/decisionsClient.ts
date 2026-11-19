@@ -19,10 +19,13 @@ import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionImageResult,
   DecisionQuestionList,
+  DecisionQuestionMarkResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
+  MarkDecisionQuestionsPayload,
   SendDecisionFollowUpPayload,
 } from "@shared/types/decisionsQuestion";
+import { DECISION_QUESTION_MARKS_PER_CALL } from "@shared/types/decisionsQuestion";
 import type {
   DecisionsInvolvementRead,
   DecisionsInvolvementSaveResult,
@@ -217,6 +220,27 @@ export const decisionsClient = {
    * stands, never its words.
    */
   listQuestions: (): Promise<DecisionQuestionList> => window.electron.decisions.listQuestions(),
+
+  /**
+   * The person seeing, clearing or restoring questions on this computer
+   * (#17895), each named with the ask it was shown with: recorded here only,
+   * and the list changes once it is. Nothing is answered, declined or typed
+   * in. More than one call takes are marked a page at a time, stopping at
+   * the first page that isn't, whose result is the one returned.
+   */
+  markQuestions: async (
+    action: MarkDecisionQuestionsPayload["action"],
+    questions: MarkDecisionQuestionsPayload["questions"]
+  ): Promise<DecisionQuestionMarkResult> => {
+    let marked = 0;
+    for (let start = 0; start < questions.length; start += DECISION_QUESTION_MARKS_PER_CALL) {
+      const page = questions.slice(start, start + DECISION_QUESTION_MARKS_PER_CALL);
+      const result = await window.electron.decisions.markQuestions({ action, questions: page });
+      if (result.result !== "marked") return result;
+      marked += result.marked;
+    }
+    return { result: "marked", marked };
+  },
 
   /** Every change to that list, with the new list. */
   onQuestionsChanged: (callback: (list: DecisionQuestionList) => void): (() => void) =>

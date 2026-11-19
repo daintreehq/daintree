@@ -189,7 +189,13 @@ export interface DecisionsHostQuestions {
   connected: boolean;
   /** The id the Host's questions name it by: each one's `reference.hostId`. */
   questionHostId: string;
-  questions: Omit<DecisionQuestionListItem, "remoteHost">[];
+  questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[];
+  /**
+   * What each of its questions in Needs you asks now (#17895), by question
+   * id; absent from a Host from before it, whose list says only which wait
+   * for a reply.
+   */
+  asks?: ReadonlyMap<string, string | null>;
 }
 
 /** One of a Host's questions read on the Host by its reference (#17230). */

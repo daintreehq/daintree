@@ -56,6 +56,18 @@ export const DecisionsLinkMethod = {
    * is sent no more.
    */
   QUESTIONS_CHANGED: "decisions.questionsChanged",
+  /**
+   * Shell → Host (#17895): the Host's list as `QUESTIONS` reads it, with what
+   * each of its questions in Needs you asks now. A Host from before it
+   * answers UNSUPPORTED, and is read with `QUESTIONS` instead: that list's
+   * items are strict, so a field an older Shell doesn't know would fail them.
+   */
+  QUESTION_LIST_V2: "decisions.questionList.v2",
+  /**
+   * Host → Shell (#17895): `QUESTIONS_CHANGED` with the asks, to a Shell
+   * that read the list with `QUESTION_LIST_V2`, also when only an ask moved.
+   */
+  QUESTIONS_CHANGED_V2: "decisions.questionsChanged.v2",
 } as const;
 
 /**
@@ -71,6 +83,8 @@ export const DECISIONS_LINK_METHOD_LOCALITY = {
   [DecisionsLinkMethod.QUESTIONS]: "host",
   [DecisionsLinkMethod.CANCEL_QUESTION]: "host",
   [DecisionsLinkMethod.QUESTIONS_CHANGED]: "shell",
+  [DecisionsLinkMethod.QUESTION_LIST_V2]: "host",
+  [DecisionsLinkMethod.QUESTIONS_CHANGED_V2]: "shell",
 } as const satisfies Record<
   (typeof DecisionsLinkMethod)[keyof typeof DecisionsLinkMethod],
   "host" | "shell"

@@ -1626,6 +1626,8 @@ export const CHANNELS = {
   DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE: "decisions:get-question-image-by-reference",
   DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE: "decisions:get-question-summaries-by-reference",
   DECISIONS_CANCEL_QUESTION_BY_REFERENCE: "decisions:cancel-question-by-reference",
+  // The person seeing, clearing or restoring questions on this computer only (#17895).
+  DECISIONS_MARK_QUESTIONS: "decisions:mark-questions",
   DECISIONS_ANSWER_QUESTION: "decisions:answer-question",
   DECISIONS_GET_ANSWER_RESULT: "decisions:get-answer-result",
   // The person's decline, signed by this computer's owner key (#17239).
