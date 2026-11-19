@@ -431,6 +431,7 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
     [{ DAINTREE_MCP_TOKEN: "bad\nInjected: header" }, "malformed"],
     [{ DAINTREE_MCP_TOKEN: "two words" }, "malformed"],
     [{ DAINTREE_MCP_TOKEN: "pane-bearer-é" }, "malformed"],
+    [{ DAINTREE_MCP_TOKEN: "pane-bearer-\u007f" }, "malformed"],
     [{ DAINTREE_MCP_URL: "http://127.0.0.1:45454/mcp\n" }, "local endpoint"],
   ])(
     "exits 4 without contacting Daintree when the credential is unusable (%j)",
@@ -648,7 +649,7 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
 
       expect(run.status).toBe(3);
       expect(run.stderr).toContain("no answer within 10 seconds");
-      expect(Date.now() - started).toBeLessThan(25_000);
+      expect(Date.now() - started).toBeLessThan(20_000);
       expect(seen).toEqual([
         { method: "POST", sessionId: undefined },
         { method: "DELETE", sessionId: "trickling" },
@@ -900,23 +901,6 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
       expect(fixture.sessions.size).toBe(0);
     });
 
-    it("closes the session when the reader of its handle has gone", async () => {
-      // The console stream reports a write to a closed pipe as written; the
-      // handle would never arrive, and the session would be handed to no one.
-      const { child, done } = start(["start"], {}, undefined, "session");
-      child.stdout.destroy();
-
-      const run = await done;
-
-      expect(run.status).toBe(3);
-      expect(run.stderr).toContain("could not print the session's handle");
-      expect(fixture.seen.at(-1)).toMatchObject({
-        method: "DELETE",
-        sessionId: fixture.seen[1].sessionId,
-      });
-      expect(fixture.sessions.size).toBe(0);
-    });
-
     it.each([
       [[], "start or end"],
       [["bogus"], "start or end"],
@@ -948,6 +932,7 @@ describe.skipIf(POWERSHELL === null)("daintree call on Windows: the PowerShell c
       "2025-06-18:has space",
       "v 1:abc",
       "2025-06-18:abc\n",
+      "2025-06-18\n:abc",
     ])("refuses a malformed handle %j before contacting Daintree", async (handle) => {
       const run = await call(["fixture.echo"], { DAINTREE_MCP_SESSION: handle });
 

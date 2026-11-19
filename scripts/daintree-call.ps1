@@ -173,29 +173,6 @@ Exit status:
 '@
 }
 
-# stdout as a stream that fails when the reader has gone. The console stream
-# .NET hands out reports a broken pipe as a successful write, which would let
-# `session start` hand over a session whose handle never arrived; a FileStream
-# over the same handle reports it. Falls back to the console stream.
-function Get-DtcStdOut {
-  if ($null -ne $script:StdOut) { return $script:StdOut }
-  $console = [Console]::OpenStandardOutput()
-  $script:StdOut = $console
-  try {
-    $field = $console.GetType().GetField('_handle', [System.Reflection.BindingFlags]'NonPublic, Instance')
-    if ($null -ne $field) {
-      $handle = $field.GetValue($console)
-      if ($handle -is [IntPtr]) { $handle = New-Object Microsoft.Win32.SafeHandles.SafeFileHandle($handle, $false) }
-      if ($handle -is [Microsoft.Win32.SafeHandles.SafeFileHandle] -and -not $handle.IsInvalid) {
-        $script:StdOut = New-Object System.IO.FileStream($handle, [System.IO.FileAccess]::Write, 1)
-      }
-    }
-  } catch {
-    $script:StdOut = $console
-  }
-  return $script:StdOut
-}
-
 # Text to stdout or stderr: UTF-8 when redirected, as the agent or script that
 # captures it reads it, and the console's own encoding when it is a console.
 function Write-DtcText([string]$text, [bool]$toErr) {
@@ -210,10 +187,10 @@ function Write-DtcText([string]$text, [bool]$toErr) {
     }
   } else {
     if ([Console]::IsOutputRedirected) {
-      $stream = Get-DtcStdOut
+      if ($null -eq $script:StdOut) { $script:StdOut = [Console]::OpenStandardOutput() }
       $bytes = $script:Utf8.GetBytes($text)
-      $stream.Write($bytes, 0, $bytes.Length)
-      $stream.Flush()
+      $script:StdOut.Write($bytes, 0, $bytes.Length)
+      $script:StdOut.Flush()
     } else {
       [Console]::Out.Write($text)
     }
@@ -459,7 +436,7 @@ function Test-DtcType($node, [string]$type) {
 function Get-DtcLines([string]$body) {
   $lines = New-Object System.Collections.Generic.List[string]
   foreach ($line in $body.Split([char]10)) {
-    if ($line.EndsWith("`r")) { $line = $line.Substring(0, $line.Length - 1) }
+    if ($line.Length -gt 0 -and $line[$line.Length - 1] -ceq "`r") { $line = $line.Substring(0, $line.Length - 1) }
     $lines.Add($line)
   }
   return , $lines
@@ -486,7 +463,7 @@ function Find-DtcResponse([string]$body, [string]$want) {
     }
     if ($line -cmatch '^data:') {
       $value = $line.Substring(5)
-      if ($value.StartsWith(' ')) { $value = $value.Substring(1) }
+      if ($value.Length -gt 0 -and $value[0] -ceq ' ') { $value = $value.Substring(1) }
       if ($has) { [void]$data.Append("`n") }
       [void]$data.Append($value)
       $has = $true
@@ -555,11 +532,11 @@ function Get-DtcFailure($task) {
 }
 
 # Waits on a task in short steps, so Ctrl+C can stop the script between them.
-# False once `deadline` (a tick count; 0 for none) has passed, without waiting
+# False once `deadline` (a Stopwatch timestamp; 0 for none) has passed, without waiting
 # for the task: the caller cancels the request, which aborts it.
 function Wait-DtcTask($task, [long]$deadline) {
   while (-not $task.IsCompleted) {
-    if ($deadline -gt 0 -and [DateTime]::UtcNow.Ticks -gt $deadline) { return $false }
+    if ($deadline -gt 0 -and [System.Diagnostics.Stopwatch]::GetTimestamp() -gt $deadline) { return $false }
     try { [void]$task.Wait(100) } catch { }
   }
   return $true
@@ -573,9 +550,11 @@ function Initialize-DtcHttp {
   $handler.UseProxy = $false
   $handler.AllowAutoRedirect = $false
   $handler.UseCookies = $false
-  $script:Http = New-Object System.Net.Http.HttpClient($handler)
-  $script:Http.Timeout = [System.Threading.Timeout]::InfiniteTimeSpan
-  $script:Http.DefaultRequestHeaders.ExpectContinue = $false
+  # The handler alone, not an HttpClient: HttpClient disposes the token source
+  # it links the caller's token into once the headers arrive, after which, on
+  # .NET Framework, cancelling no longer aborts the body's read. The handler
+  # returns at the headers either way, its content still streaming.
+  $script:Http = New-Object System.Net.Http.HttpMessageInvoker($handler, $true)
 }
 
 # One request to the endpoint: a POST of `body`, or with none, the DELETE that
@@ -597,7 +576,7 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
   $deadline = 0
   if ($timeoutMs -gt 0) {
     $cts.CancelAfter($timeoutMs)
-    $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs).Ticks
+    $deadline = [System.Diagnostics.Stopwatch]::GetTimestamp() + [long]($timeoutMs * [System.Diagnostics.Stopwatch]::Frequency / 1000)
   }
   try {
     [void]$request.Headers.TryAddWithoutValidation('Authorization', 'Bearer ' + $script:Token)
@@ -610,7 +589,7 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
       $content.Headers.ContentType = New-Object System.Net.Http.Headers.MediaTypeHeaderValue('application/json')
       $request.Content = $content
     }
-    $send = $script:Http.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token)
+    $send = $script:Http.SendAsync($request, $cts.Token)
     if (-not (Wait-DtcTask $send $deadline)) { $result.Error = $late; return $result }
     if ($send.IsFaulted -or $send.IsCanceled) {
       $result.Error = Get-DtcFailure $send
@@ -638,7 +617,7 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
     while ($true) {
       # Checked on every read, not only on a stalled one: a body that keeps
       # trickling in must still end at the deadline.
-      if ($deadline -gt 0 -and [DateTime]::UtcNow.Ticks -gt $deadline) { $result.Error = $late; return $result }
+      if ($deadline -gt 0 -and [System.Diagnostics.Stopwatch]::GetTimestamp() -gt $deadline) { $result.Error = $late; return $result }
       $read = $stream.ReadAsync($buffer, 0, $buffer.Length)
       if (-not (Wait-DtcTask $read $deadline)) { $result.Error = $late; return $result }
       if ($read.IsFaulted -or $read.IsCanceled) {
@@ -673,7 +652,6 @@ function Invoke-DtcRequest([string]$body, [int]$timeoutMs, [bool]$adopt) {
 # process opened and hasn't handed over, never a held one.
 function Close-Dtc {
   if ($null -eq $script:Http) { return }
-  try { $script:Http.CancelPendingRequests() } catch { }
   if ($script:Close -and $script:Session -cne '') {
     # Best effort and bounded: a refused DELETE must not read as a failed call.
     try { [void](Invoke-DtcRequest '' 2000 $false) } catch { }
@@ -700,7 +678,7 @@ function Assert-DtcSessionLive($result) {
 # The session a handle from `daintree session start` names: the protocol
 # version negotiated when it opened, a colon, then its id.
 function Read-DtcHandle([string]$handle) {
-  $colon = $handle.IndexOf(':')
+  $colon = $handle.IndexOf([char]':')
   $version = ''
   $session = ''
   if ($colon -ge 0) {
@@ -837,7 +815,7 @@ function Invoke-DtcCall($argv) {
       } else {
         $pair = $a.Substring(6)
       }
-      $eq = $pair.IndexOf('=')
+      $eq = $pair.IndexOf([char]'=')
       if ($eq -lt 0) { Stop-Dtc 2 ("--arg needs key=value, got '" + $pair + "'") }
       $key = $pair.Substring(0, $eq)
       $value = $pair.Substring($eq + 1)
@@ -974,8 +952,9 @@ function Start-DtcSession {
   }
   Initialize-Dtc
   Open-DtcSession
-  # Handed over only once the handle is out: a closed stdout fails the write,
-  # and the session no one was told about is closed again.
+  # Handed over only once the handle is out: a write that fails closes the
+  # session no one was told about. .NET reports a write to a pipe whose reader
+  # has gone as written, though, so that case isn't caught here as bash does.
   try {
     Write-DtcText ($script:Version + ':' + $script:Session + "`n") $false
   } catch {
