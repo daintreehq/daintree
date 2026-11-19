@@ -3978,6 +3978,62 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     next.lifecycle.dispose();
   });
 
+  /** A create that went out just before Daintree quit: the mark stays, with no answer and no error. */
+  async function quitWhileSent(env: Awaited<ReturnType<typeof setup>>) {
+    vi.mocked(env.provider.create).mockImplementationOnce(() => new Promise(() => {}));
+    await create(env);
+    await vi.waitFor(() => expect(env.provider.create).toHaveBeenCalledTimes(1));
+    expect(env.store.bindings()[0]).toMatchObject({
+      creation: { sentAt: expect.any(Number) },
+      lastError: null,
+    });
+  }
+
+  it("leaves a startup lookup that couldn't reach the provider with a Retry, which finds the machine once online (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    await quitWhileSent(env);
+    vi.mocked(env.provider.list).mockRejectedValueOnce(
+      new BoatApiError("network", "offline", null, null, null)
+    );
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(next.lifecycle.statuses()[0]?.lastError).not.toBeNull());
+    // What Settings needs to offer Retry, which the connect message points to.
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      resourceId: null,
+      operation: null,
+      providerUnavailable: null,
+      lastError: { code: "outcome-unknown", message: expect.stringContaining("Retry") },
+    });
+    const bindingId = next.store.bindings()[0]!.id;
+    vi.mocked(env.provider.list).mockResolvedValue([
+      resource({ resourceId: "bx_found0001", labels: { "daintree-binding": bindingId } }),
+    ]);
+    await next.lifecycle.retryCreate("build");
+    expect(next.store.bindings()[0]).toMatchObject({ resourceId: "bx_found0001", lastError: null });
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    next.lifecycle.dispose();
+  });
+
+  it("sends a create again with its own key once online, after a startup lookup that couldn't reach a same-key provider (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    await quitWhileSent(env);
+    const key = env.store.bindings()[0]!.creation!.idempotencyKey;
+    vi.mocked(env.provider.list).mockRejectedValueOnce(
+      new BoatApiError("network", "offline", null, null, null)
+    );
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
+    );
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    await next.lifecycle.retryCreate("build");
+    expect(env.provider.create).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(env.provider.create).mock.calls[1]![1].idempotencyKey).toBe(key);
+    expect(next.store.bindings()[0]).toMatchObject({ resourceId: "bx_23456789", lastError: null });
+    next.lifecycle.dispose();
+  });
+
   it("binds the earliest machine carrying a lost create's labels, never a later copy of it", async () => {
     const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
     vi.mocked(env.provider.create).mockRejectedValueOnce(
