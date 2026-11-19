@@ -2970,9 +2970,6 @@ export const NOTIFY_CLOSE_TOOLS: ReadonlySet<string> = new Set([
 export const NOTIFY_RESTART_TOOLS: ReadonlySet<string> = new Set([
   "terminal.restartOnPresetOwned",
   "terminal.restartOnAccountOwned",
-  // Claude Code restarting itself on `/restart` (#17908): the same run, but
-  // what the notice would quote after it is the restart, not the last task.
-  "terminal.applyClaudeUpdateOwned",
 ]);
 
 /** The key paths that take `notify: true`. */

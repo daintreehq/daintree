@@ -32,14 +32,25 @@ const GUTTER = /^[\s│┃]*⎿\s*/;
 // The command as the transcript echoes it, at the prompt glyph.
 const ECHO = /^[\s│┃]*[❯>]\s*\/restart\s*$/;
 
-// The composer's top edge: a rule with the prompt row under it. Rows from
-// there down are the input, where a person's draft can read `/restart` too.
-const RULE = /^[\s╭╰─━═╮╯]*[─━═]{8}[\s─━═╮╯]*$/;
+// The composer: a rule, the prompt row under it and a rule within a draft's
+// height below. Rows from its top edge down are the input, where a person's
+// draft can read `/restart` too. A rule alone is no composer: the transcript
+// can hold one above the echo. Two single-class tests, each linear, so a long
+// rule followed by text never backtracks.
+const RULE_RUN = /[─━═]{8}/;
+const RULE_ONLY = /^[\s─━═╭╮╰╯]+$/;
 const PROMPT_ROW = /^\s*(?:[│┃]\s*)?[❯>](?:\s|$)/;
+const MAX_INPUT_ROWS = 8;
+
+function isRule(row: string): boolean {
+  return RULE_RUN.test(row) && RULE_ONLY.test(row);
+}
 
 function transcriptEnd(rows: readonly string[]): number {
-  for (let i = rows.length - 2; i >= 0; i--) {
-    if (RULE.test(rows[i]!) && PROMPT_ROW.test(rows[i + 1]!)) return i;
+  let bottom = rows.length - 1;
+  while (bottom >= 0 && !isRule(rows[bottom]!)) bottom--;
+  for (let i = bottom - 1; i >= 1 && bottom - i <= MAX_INPUT_ROWS; i--) {
+    if (PROMPT_ROW.test(rows[i]!) && isRule(rows[i - 1]!)) return i - 1;
   }
   return rows.length;
 }

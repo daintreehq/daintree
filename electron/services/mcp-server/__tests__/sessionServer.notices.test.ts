@@ -761,6 +761,11 @@ describe("terminal notices", () => {
       ],
       ["never went in", { status: "not-sent", reason: "typed" }, false],
       ["may or may not have gone in", { status: "unconfirmed" }, false],
+      [
+        "went in but its answer couldn't all be read",
+        { status: "sent", refusal: null, output: "lost" },
+        false,
+      ],
     ])(
       "holds the pane's notice across a Claude Code update, dropping it only when it %s",
       async (_name, answer, replaced) => {

@@ -1026,4 +1026,21 @@ describe("TerminalProcess settled-prompt-exact guard pinned to an update observa
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
     expect(info(terminal).lastTypedInputAt).toBe(typedBefore);
   });
+
+  it("still counts the line as a draft when only the agent's detection went away", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+    });
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    await vi.advanceTimersByTimeAsync(0);
+    const typedBefore = info(terminal).lastTypedInputAt;
+    // The CLI may still hold the body: the same incarnation, detection blinking.
+    Object.assign(info(terminal), { detectedAgentId: undefined, updateInstalled: undefined });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+    expect(info(terminal).lastTypedInputAt).not.toBe(typedBefore);
+  });
 });

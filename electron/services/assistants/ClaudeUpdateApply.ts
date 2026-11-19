@@ -478,7 +478,8 @@ export class ClaudeUpdateApply {
             terminalId,
             status: "sent",
             refusal: seen.text,
-            output: complete ? "read" : "lost",
+            // Cut off before it stopped growing, the quote may be part of the line.
+            output: complete && settled ? "read" : "lost",
             message:
               "`/restart` was typed and Enter pressed; Claude Code answered with a refusal, quoted as drawn. It won't be sent again: a later attempt is a new request.",
           };
@@ -491,7 +492,7 @@ export class ClaudeUpdateApply {
             terminalId,
             status: "sent",
             refusal: null,
-            output: output === undefined ? "unavailable" : complete ? "read" : "lost",
+            output: complete ? "read" : output === undefined && followed ? "unavailable" : "lost",
             message: complete
               ? `\`/restart\` was typed and Enter pressed; no refusal from Claude Code was seen in what the terminal drew after it${ended ? "" : ` in ${Math.round(CLAUDE_UPDATE_WATCH_MS / 1000)}s`}. Whether the conversation came back isn't known from here: check the pane.`
               : "`/restart` was typed and Enter pressed, but what the terminal drew after it couldn't all be read, so a refusal can't be ruled out. Check the pane before asking again.",

@@ -143,4 +143,16 @@ describe("findClaudeRestartRefusal", () => {
     ].join("\n");
     expect(findClaudeRestartRefusal(text)).toBe(REFUSALS[0]);
   });
+
+  it("takes a rule above the echo for transcript, not the composer", () => {
+    const text = ["─".repeat(60), "❯ /restart", `  ⎿  ${REFUSALS[0]}`].join("\n");
+    expect(findClaudeRestartRefusal(text)).toBe(REFUSALS[0]);
+  });
+
+  it("reads a long rule followed by text in linear time", () => {
+    const row = `${"─".repeat(20_000)}x`;
+    const started = performance.now();
+    expect(findClaudeRestartRefusal([row, row, row].join("\n"))).toBeNull();
+    expect(performance.now() - started).toBeLessThan(500);
+  });
 });

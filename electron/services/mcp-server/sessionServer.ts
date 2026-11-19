@@ -178,6 +178,7 @@ import type { WorkerSteerTarget } from "../assistants/GlobalWorkerSteer.js";
 import {
   CLAUDE_UPDATE_DELIVERY_MS,
   CLAUDE_UPDATE_WATCH_MS,
+  type ApplyClaudeUpdateResult,
 } from "../../../shared/types/claudeUpdateApply.js";
 import { MCP_REMOTE_CONFIRM_MARGIN_MS } from "../../../shared/config/mcpConfirmWindow.js";
 import type { SessionServerDeps } from "./sessionServerDepsContract.js";
@@ -805,11 +806,12 @@ function auditCodeForAssistantRefusal(
   }
 }
 
-/** Whether a Claude Code update's answer says `/restart` went in and no refusal was seen (#17908). */
-function restartedWithoutRefusal(result: unknown): boolean {
-  const record =
-    result !== null && typeof result === "object" ? (result as Record<string, unknown>) : {};
-  return record.status === "sent" && record.refusal === null;
+/**
+ * Whether a Claude Code update's answer is evidence the run restarted (#17908):
+ * `/restart` went in, and all of Claude's answer was read with no refusal in it.
+ */
+function restartedWithoutRefusal(result: ApplyClaudeUpdateResult): boolean {
+  return result.status === "sent" && result.refusal === null && result.output === "read";
 }
 
 /** A relayed write refused at its last check, just before its side effect (#13493). */
@@ -1460,6 +1462,43 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 : (deps.refuseWrite ?? deps.refuseViewWrite)?.(projectId);
               if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
             };
+      const approveAndApply = async (
+        pin: Awaited<ReturnType<typeof service.preflight>>,
+        settled: (result: ApplyClaudeUpdateResult) => void
+      ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
+        const approval = await dispatchOwnedResourceAction(
+          ownedResource as RendererOwnedResourceTool,
+          terminalId
+        );
+        if (!approval.envelope.result.ok) return approval;
+        // A relayed call's caller stops waiting at its deadline (#15699):
+        // the line goes in early enough for the answer to reach it, and not
+        // at all once it has been answered.
+        let deadline: number | undefined;
+        if (relayCallId !== undefined) {
+          const at = sessionStore.sessionRelayMap.get(sessionId)?.callDeadline?.(relayCallId);
+          deadline =
+            at === undefined
+              ? Date.now()
+              : at -
+                CLAUDE_UPDATE_DELIVERY_MS -
+                CLAUDE_UPDATE_WATCH_MS -
+                MCP_REMOTE_CONFIRM_MARGIN_MS;
+        }
+        const result = await service.apply(pin, {
+          inputOwner: ownershipOwner,
+          authorize,
+          signal: extra.signal,
+          ...(deadline !== undefined ? { deadline } : {}),
+        });
+        settled(result);
+        // The approval's own record (its decision, a session grant, the
+        // workspace it ran in) stays with the answer; only the result is main's.
+        return {
+          envelope: { ...approval.envelope, result: { ok: true, result } },
+          raised: approval.raised,
+        };
+      };
       const run = () =>
         service.exclusive(
           terminalId,
@@ -1468,37 +1507,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             raised: boolean;
           }> => {
             const pin = await service.preflight(terminalId, generation, ownershipOwner);
-            const approval = await dispatchOwnedResourceAction(
-              ownedResource as RendererOwnedResourceTool,
-              terminalId
-            );
-            if (!approval.envelope.result.ok) return approval;
-            // A relayed call's caller stops waiting at its deadline (#15699):
-            // the line goes in early enough for the answer to reach it, and not
-            // at all once it has been answered.
-            let deadline: number | undefined;
-            if (relayCallId !== undefined) {
-              const at = sessionStore.sessionRelayMap.get(sessionId)?.callDeadline?.(relayCallId);
-              deadline =
-                at === undefined
-                  ? Date.now()
-                  : at -
-                    CLAUDE_UPDATE_DELIVERY_MS -
-                    CLAUDE_UPDATE_WATCH_MS -
-                    MCP_REMOTE_CONFIRM_MARGIN_MS;
+            // The pane's notice for the worker is held from here, as across a
+            // preset move, and taken inside the lock so a second request for
+            // the same worker can't take it over (#17908). `/restart` keeps
+            // the run, so only evidence that Claude restarted drops it; a
+            // refusal, nothing sent or an unread answer gives it back.
+            const notePane = tier === "external" ? null : ownPane();
+            const hold = notePane !== null && terminalNotify ? createNoticeHold() : undefined;
+            if (hold) terminalNotify!.holdTarget(notePane!, terminalId, hold);
+            let restarted = false;
+            try {
+              return await approveAndApply(pin, (result) => {
+                restarted = restartedWithoutRefusal(result);
+              });
+            } finally {
+              if (hold) terminalNotify!.settleTargetHold(notePane!, hold, restarted);
             }
-            const result = await service.apply(pin, {
-              inputOwner: ownershipOwner,
-              authorize,
-              signal: extra.signal,
-              ...(deadline !== undefined ? { deadline } : {}),
-            });
-            // The approval's own record (its decision, a session grant, the
-            // workspace it ran in) stays with the answer; only the result is main's.
-            return {
-              envelope: { ...approval.envelope, result: { ok: true, result } },
-              raised: approval.raised,
-            };
           }
         );
       return steer !== undefined ? deps.globalSteer!.applyUpdate(steer, run) : run();
@@ -3967,13 +3991,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               closeGenerations.get(id)
             );
           }
-          // An update answers ok whether or not `/restart` went in (#17908):
-          // only one sent with no refusal seen replaced what the notice was about.
-          settleRestartHold?.(
-            actionId === CLAUDE_UPDATE_TOOL
-              ? envelope.result.ok && restartedWithoutRefusal(envelope.result.result)
-              : envelope.result.ok
-          );
+          settleRestartHold?.(envelope.result.ok);
           settleRestartHold = undefined;
           // Hand the notice what the action reported: the send's submission
           // token or the launch's terminal id. A failed dispatch drops it —
