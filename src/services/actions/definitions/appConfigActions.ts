@@ -22,6 +22,36 @@ import {
 
 const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
 
+/**
+ * `agentSettings.set` can't change whether a preset's panes continue at their
+ * usage limit's reset (#17912): arming lets Daintree type into the agent
+ * later, which only the user's own editor agrees to. Each preset the caller
+ * sends keeps what the stored preset with its id holds, so replacing a preset
+ * wholesale neither turns it on nor quietly turns it off.
+ */
+async function keepStoredLimitResets(
+  agentId: string,
+  settings: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const incoming = settings.customPresets;
+  if (!Array.isArray(incoming)) return settings;
+  const stored = (await agentSettingsClient.get())?.agents?.[agentId]?.customPresets;
+  const kept = new Set(
+    (Array.isArray(stored) ? stored : [])
+      .filter((preset) => preset?.continueAtLimitReset === true)
+      .map((preset) => preset.id)
+  );
+  return {
+    ...settings,
+    customPresets: incoming.map((preset: Record<string, unknown>) => {
+      const { continueAtLimitReset: _caller, ...rest } = preset;
+      return typeof rest.id === "string" && kept.has(rest.id)
+        ? { ...rest, continueAtLimitReset: true }
+        : rest;
+    }),
+  };
+}
+
 /** Shared by `sessionRestore.updateConfig`'s declared schema and its body. */
 const SessionRestoreConfigPatchSchema = z.object({ enabled: z.boolean().optional() });
 
@@ -88,7 +118,10 @@ export function registerAppConfigActions(
     argsSchema: z.object({ agentId: z.string(), settings: AgentSettingsEntrySchema }),
     run: async (args: unknown) => {
       const { agentId, settings } = args as { agentId: string; settings: Record<string, unknown> };
-      const updated = await agentSettingsClient.set(agentId, settings as any);
+      const updated = await agentSettingsClient.set(
+        agentId,
+        (await keepStoredLimitResets(agentId, settings)) as any
+      );
       useAgentSettingsStore.setState({
         settings: updated,
         isLoading: false,

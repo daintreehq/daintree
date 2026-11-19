@@ -1156,6 +1156,62 @@ describe("preferences action hardening", () => {
     });
   });
 
+  it("can't switch a preset's continuing at its limit's reset on, even by replacing it (#17912)", async () => {
+    mocks.agentSettingsClient.get.mockResolvedValueOnce({
+      agents: { codex: { customPresets: [{ id: "work", name: "Work" }] } },
+    });
+    mocks.agentSettingsClient.set.mockResolvedValueOnce({ agents: {} });
+    const { service } = buildService(registerPreferencesActions);
+
+    const result = await service.dispatch(
+      "agentSettings.set",
+      {
+        agentId: "codex",
+        settings: {
+          customPresets: [
+            { id: "work", name: "Work", continueAtLimitReset: true },
+            { id: "new", name: "New", continueAtLimitReset: true },
+          ],
+        },
+      },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mocks.agentSettingsClient.set).toHaveBeenCalledWith("codex", {
+      customPresets: [
+        { id: "work", name: "Work" },
+        { id: "new", name: "New" },
+      ],
+    });
+  });
+
+  it("keeps a stored preset's continuing at its limit's reset when the caller leaves it out (#17912)", async () => {
+    mocks.agentSettingsClient.get.mockResolvedValueOnce({
+      agents: {
+        codex: { customPresets: [{ id: "work", name: "Work", continueAtLimitReset: true }] },
+      },
+    });
+    mocks.agentSettingsClient.set.mockResolvedValueOnce({ agents: {} });
+    const { service } = buildService(registerPreferencesActions);
+
+    const result = await service.dispatch(
+      "agentSettings.set",
+      {
+        agentId: "codex",
+        settings: {
+          customPresets: [{ id: "work", name: "Work (renamed)", continueAtLimitReset: false }],
+        },
+      },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mocks.agentSettingsClient.set).toHaveBeenCalledWith("codex", {
+      customPresets: [{ id: "work", name: "Work (renamed)", continueAtLimitReset: true }],
+    });
+  });
+
   it("calls Electron window actions directly and allows agent-driven quit (danger:safe)", async () => {
     resetEscapeStack();
     const escapeHandler = vi.fn();

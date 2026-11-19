@@ -36,6 +36,7 @@ describe("presetLaunchContent", () => {
     ["the fallback chain", { fallbacks: ["other", "third"] }],
     ["the rate-limit fallback switch", { fallbackOnRateLimit: true }],
     ["keeping the conversation", { keepConversationOnRateLimit: true }],
+    ["continuing at the limit's reset", { continueAtLimitReset: true }],
     ["the name", { name: "Z.ai (work)" }],
     ["the description", { description: "routes to Z.ai" }],
     ["the title", { displayTitle: "Z" }],

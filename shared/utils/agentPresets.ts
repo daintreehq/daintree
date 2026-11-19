@@ -147,6 +147,7 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
     fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true ? true : undefined,
     keepConversationOnRateLimit: preset.keepConversationOnRateLimit === true ? true : undefined,
+    continueAtLimitReset: preset.continueAtLimitReset === true ? true : undefined,
     // Kept even when no account answers to it any more: a launch refuses a
     // pin it can't find rather than running on another login.
     accountId: isAccountId(preset.accountId) ? preset.accountId : undefined,

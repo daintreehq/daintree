@@ -110,7 +110,7 @@ export function presetLaunchContent(preset: AgentPreset): string {
       : Object.keys(preset.env)
           .sort()
           .map((key) => [key, preset.env![key]]);
-  return JSON.stringify([
+  const fields: unknown[] = [
     1,
     preset.id,
     preset.name,
@@ -129,7 +129,11 @@ export function presetLaunchContent(preset: AgentPreset): string {
     preset.fallbackOnRateLimit ?? null,
     preset.keepConversationOnRateLimit ?? null,
     preset.accountId ?? null,
-  ]);
+  ];
+  // Fields added after version 1 go on the end only when set (#17912), so a
+  // grant for a preset that never set one still matches.
+  if (preset.continueAtLimitReset !== undefined) fields.push(preset.continueAtLimitReset);
+  return JSON.stringify(fields);
 }
 
 /**
