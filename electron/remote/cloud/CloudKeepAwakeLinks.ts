@@ -34,8 +34,14 @@ function errorCode(error: unknown): string | null {
   return typeof error.code === "string" ? error.code : null;
 }
 
+/** The sentence an error carries for the person: an AppError's, or a host's over the link. */
 function said(error: unknown, fallback: string): string {
-  return error instanceof AppError && error.userMessage ? error.userMessage : fallback;
+  return error instanceof Error &&
+    "userMessage" in error &&
+    typeof error.userMessage === "string" &&
+    error.userMessage
+    ? error.userMessage
+    : fallback;
 }
 
 export interface CloudKeepAwakeLinksDeps {
