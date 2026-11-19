@@ -965,13 +965,6 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     // kept running by a service or login item is left as it is.
     onRemoving: async (descriptor): Promise<void> => {
       if (descriptor.startsOnConnect !== true) return;
-      // A cloud machine not running has no Daintree to stop, and reaching it would only wait.
-      if (descriptor.connection.kind === "cloud") {
-        const machine = cloudLifecycle
-          ?.statuses()
-          .find((status) => status.hostId === descriptor.id)?.machine;
-        if (machine !== undefined && machine !== "running") return;
-      }
       await setup.stopStartedOnConnect(descriptor.connection, AbortSignal.timeout(REMOVE_STOP_MS));
     },
     onForget: async (descriptor): Promise<void> => {

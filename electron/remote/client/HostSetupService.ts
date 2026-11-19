@@ -41,6 +41,7 @@ import { runHostInstall, stopScript } from "./hostInstaller.js";
 import { RestartImpactSchema } from "../metrics/linkMethods.js";
 import {
   bootstrapHostMode,
+  DETACHED_LAUNCH_STOP_SCRIPT,
   DETACHED_LOG_PATH,
   DETACHED_LOG_SCRIPT,
   detachedAliveScript,
@@ -531,14 +532,16 @@ export class HostSetupService {
     // Only Host mode switched on for good: a listener for this run alone isn't one Daintree started.
     const consented = (record: HostModeObservation | null) =>
       record?.startMethod === "on-connect" && record.enabled;
+    const live = liveHostRecord(parsed);
     let stop: string;
-    if (outcome.result.hostModeListening) {
-      if (!consented(liveHostRecord(parsed))) return false;
+    if (outcome.result.hostModeListening && consented(live)) {
       stop = stopScript("linux", parsed.hostPid, false, parsed.hostStartedAt, "wait");
+    } else if (!live && consented(parsed.hostModeState)) {
+      // Not listening, or not recorded yet: a start may still be unpacking. Only
+      // that start, as its receipt names it, is ended; nothing else there is touched.
+      stop = DETACHED_LAUNCH_STOP_SCRIPT;
     } else {
-      // Not listening yet, but a start may still be unpacking: that start is ended too.
-      if (!consented(parsed.hostModeState) || parsed.hostModeState?.stopped) return false;
-      stop = stopScript("linux", null, false, null, "stop");
+      return false;
     }
     const stopped = await channel.exec(stop, { timeoutMs: 90_000, signal });
     return stopped.code === 0 && stopped.stdout.includes("@@dt:stopped yes");

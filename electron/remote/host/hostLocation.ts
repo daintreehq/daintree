@@ -28,18 +28,6 @@ export function hostStartsOnConnect(): boolean {
   return startsOnConnect;
 }
 
-/**
- * The account's home as SSH logins get it: an AppImage's portable home
- * (`<image>.home`) changes `$HOME` for the process, not where a client looks.
- */
-function accountHome(): string {
-  try {
-    return os.userInfo().homedir;
-  } catch {
-    return os.homedir();
-  }
-}
-
 /** Forget the cached reading; tests only. */
 export function resetHostStartsOnConnectForTests(): void {
   startsOnConnect = undefined;
@@ -60,7 +48,8 @@ export function hostLocation(): HostSocketLocation {
     // Dev and packaged builds must not fight over one socket.
     dirName: app.isPackaged ? "daintree" : "daintree-dev",
     startsOnConnect: hostStartsOnConnect(),
-    home: accountHome(),
+    // $HOME, as every SSH-side script and the start that runs this host use it.
+    home: os.homedir(),
   });
 }
 

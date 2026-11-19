@@ -24,13 +24,10 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
-  // The account's home, not $HOME: an AppImage's portable home changes only the latter.
-  const userInfo = () => ({ ...actual.userInfo(), homedir: "/home/node" });
   return {
     ...actual,
-    default: { ...actual, homedir: () => "/home/node/Daintree.AppImage.home", userInfo },
-    homedir: () => "/home/node/Daintree.AppImage.home",
-    userInfo,
+    default: { ...actual, homedir: () => "/home/node" },
+    homedir: () => "/home/node",
   };
 });
 

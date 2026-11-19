@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  DETACHED_LAUNCH_STOP_SCRIPT,
   detachedAliveScript,
   detachedStartScript,
   detachedStopScript,
@@ -200,6 +201,14 @@ describe.skipIf(process.platform !== "linux")("the detached Host start under a r
     await until(() => !alive(daintreePid), "Daintree to quit");
     // Its runtime saw it go and went too: nothing was left orphaned.
     await until(() => !alive(runtime.pid), "its runtime to go");
+  });
+
+  it("ends only the start its receipt names when a host is removed before it listens", async () => {
+    expect(sh(DETACHED_LAUNCH_STOP_SCRIPT).stdout).toContain("@@dt:stopped yes");
+    const first = launch();
+    const stopped = sh(DETACHED_LAUNCH_STOP_SCRIPT);
+    expect(stopped.stdout).toContain("@@dt:stopped yes");
+    expect(alive(first.pid)).toBe(false);
   });
 
   it("is taken down by a recovery stop before it is named Daintree", async () => {

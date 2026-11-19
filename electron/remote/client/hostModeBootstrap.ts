@@ -362,6 +362,14 @@ export function stopLaunchShell(pidVar: string): string {
   return `if [ "$(cat "/proc/$${pidVar}/comm" 2>/dev/null)" = daintree ]; then kill -TERM "$${pidVar}" 2>/dev/null; else kids=""; for s in /proc/[0-9]*/stat; do set -- $(sed 's/.*) //' "$s" 2>/dev/null); if [ "\${2:-}" = "$${pidVar}" ]; then d=\${s%/stat}; kids="$kids \${d#/proc/}"; fi; done; if [ -n "$kids" ]; then kill -TERM $kids 2>/dev/null; else kill -TERM "$${pidVar}" 2>/dev/null; fi; fi`;
 }
 
+/**
+ * End the last start {@link detachedStartScript} made, and only it, while it
+ * is still that process; prints `stopped yes` once it has gone or there was
+ * none. Removing a host whose Daintree isn't listening yet (still unpacking,
+ * or not yet recorded) touches nothing else on the account.
+ */
+export const DETACHED_LAUNCH_STOP_SCRIPT = `${DETACHED_LAUNCH_READ}; if [ -n "$lp" ]; then ${stopLaunchShell("lp")}; i=0; while kill -0 "$lp" 2>/dev/null && ${notZombieShell("lp")} && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; fi; if [ -n "$lp" ] && kill -0 "$lp" 2>/dev/null && ${notZombieShell("lp")}; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
+
 /** Ask a launch that is still the process it was to quit; anything since given its pid is left alone. */
 export function detachedStopScript(launch: DetachedLaunch): string {
   return `${whileSameLaunch(launch, stopLaunchShell("p"))}; true`;

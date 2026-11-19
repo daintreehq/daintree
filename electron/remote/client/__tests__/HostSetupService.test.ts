@@ -513,8 +513,6 @@ describe("HostSetupService", () => {
             "@@dt:init docker-init",
             "@@dt:init systemd"
           ),
-          // Not running, and quit there on purpose: nothing is starting.
-          box({ state: onConnectState({ pid: 0, stopped: true }) }),
           // Running for this run only: not a start Daintree made.
           box({ listening: true, state: onConnectState({ enabled: false }) }),
           // Running, but not by its own account started on connect.
@@ -551,9 +549,27 @@ describe("HostSetupService", () => {
         });
         await expect(stopping.setup.stopStartedOnConnect(studio)).resolves.toBe(true);
         const stop = left.scripts.find((c) => c.includes("@@dt:stopped"))!;
-        // The last start's own process is asked to quit, not merely waited for.
+        // Only the last start, as its receipt names it, is asked to quit.
         expect(stop).toContain("host-launch.pid");
         expect(stop).toContain("/proc/$lp/comm");
+        // Nothing else on the account: no Daintree found by name.
+        expect(stop).not.toContain("pkill");
+        expect(stop).not.toContain("pgrep");
+
+        // Brought back after a quit: its old record still says stopped, and the start is still ended.
+        const quit = recording([box({ state: onConnectState({ pid: 0, stopped: true }) })]);
+        const afterQuit = service("", {
+          run: async (command, args) => {
+            const script = args.at(-1) ?? "";
+            if (script.includes("@@dt:stopped")) {
+              quit.scripts.push(script);
+              return ok("@@dt:stopped yes\n");
+            }
+            return quit.run(command, args);
+          },
+        });
+        await expect(afterQuit.setup.stopStartedOnConnect(studio)).resolves.toBe(true);
+        expect(quit.scripts.some((c) => c.includes("host-launch.pid"))).toBe(true);
       });
 
       it("says at once when the start it made exits, in the log's words", async () => {
