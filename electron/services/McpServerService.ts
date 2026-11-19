@@ -342,7 +342,13 @@ export class McpServerService {
     attachAssistantPaneCreationLedger(
       assistantPaneCreationLedgerFor(
         this.sessionStore.resourceOwnership,
-        this.sessionStore.terminalAdoption
+        this.sessionStore.terminalAdoption,
+        (terminalId) => {
+          const pty = getPtyClient();
+          return pty?.hasTerminal(terminalId) === true
+            ? pty.getTerminalProjectId(terminalId)
+            : null;
+        }
       )
     );
 
@@ -381,6 +387,17 @@ export class McpServerService {
       forgetTrashedAssistantPane(payload.id);
     });
     this.persistentListeners.push(offTrashed);
+
+    // A terminal starting under an id in another project ends what an earlier
+    // run kept for that id's pane elsewhere (#16845).
+    const offLifecycle = events.on("terminal:lifecycle", (observation) => {
+      if (observation.type !== "spawned" || observation.projectId === undefined) return;
+      this.sessionStore.resourceOwnership.supersedeRestoredOutside(
+        observation.terminalId,
+        observation.projectId
+      );
+    });
+    this.persistentListeners.push(offLifecycle);
 
     const offExited = events.on("terminal:exited", (payload) => {
       this.turnOutcomeService.dropTerminal(payload.terminalId);

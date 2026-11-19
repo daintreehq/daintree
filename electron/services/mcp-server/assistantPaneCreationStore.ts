@@ -30,14 +30,5 @@ export async function admitRestoredAssistantPanesFromStore(
   const { getPendingHelpHibernationStore } = await import("../PendingHelpHibernationStore.js");
   const pointers = getPendingHelpHibernationStore();
   await pointers.load();
-  const { getPtyClient } = await import("../../window/serviceRefs.js");
-  admitRestoredAssistantPanes(
-    workspaceId,
-    panes,
-    pointers.loadedConversationOwnershipIds(),
-    (id) => {
-      const pty = getPtyClient();
-      return pty?.hasTerminal(id) === true ? pty.getTerminalProjectId(id) : null;
-    }
-  );
+  admitRestoredAssistantPanes(workspaceId, panes, pointers.loadedConversationOwnershipIds());
 }

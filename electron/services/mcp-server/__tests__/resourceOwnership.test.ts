@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CLOSED_TERMINAL_TTL_MS,
   ResourceOwnershipLedger,
@@ -930,6 +930,51 @@ describe("ResourceOwnershipLedger and what a restart keeps (#16845)", () => {
       "superseded terminal:kept -",
       "released conversation|help|c kept",
     ]);
+  });
+
+  it("lets a creation that landed after its session was gone end only what was recorded before it was asked", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const ledger = new ResourceOwnershipLedger();
+      const older = principalOwnerKey(helpOwnershipPrincipal("help-a"));
+      ledger.bindPrincipal("s-a", helpOwnershipPrincipal("help-a"));
+      ledger.record(older, [{ kind: "terminal", id: "t1" }], "p");
+      vi.setSystemTime(2_000);
+      const newer = principalOwnerKey(helpOwnershipPrincipal("help-b"));
+      ledger.bindPrincipal("s-b", helpOwnershipPrincipal("help-b"));
+      ledger.record(newer, [{ kind: "worktree", id: "/wt" }], "p");
+
+      ledger.supersedeOlder(
+        [
+          { kind: "terminal", id: "t1" },
+          { kind: "worktree", id: "/wt" },
+        ],
+        1_500
+      );
+
+      expect(ledger.get(older, "terminal", "t1")).toBeUndefined();
+      expect(ledger.get(newer, "worktree", "/wt")).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends a given-back record when its id starts in another workspace, never this run's or its own", () => {
+    const ledger = new ResourceOwnershipLedger();
+    const owner = principalOwnerKey(helpOwnershipPrincipal("help-a"));
+    ledger.bindPrincipal("s-a", helpOwnershipPrincipal("help-a"));
+    ledger.attachConversation(helpOwnershipPrincipal("help-a"), helpConversationKey("c"));
+    ledger.restoreIfUnclaimed(helpConversationKey("c"), { kind: "terminal", id: "kept" }, "p");
+    ledger.record(owner, [{ kind: "terminal", id: "made" }], "p");
+
+    ledger.supersedeRestoredOutside("kept", "p");
+    ledger.supersedeRestoredOutside("made", "q");
+    expect(ledger.get(owner, "terminal", "kept")).toBeDefined();
+    expect(ledger.get(owner, "terminal", "made")).toBeDefined();
+
+    ledger.supersedeRestoredOutside("kept", "q");
+    expect(ledger.get(owner, "terminal", "kept")).toBeUndefined();
   });
 
   it("reports a creation that replaces the holder's own record of the id", () => {

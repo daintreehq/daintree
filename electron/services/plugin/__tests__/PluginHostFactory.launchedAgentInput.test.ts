@@ -360,7 +360,7 @@ describe("host.agents input on agents the plugin launched (#14018)", () => {
     _resetAssistantPaneCreationsForTests();
     attachAssistantPaneCreationPersistence({
       load: () => ({
-        chosen: { scope: "help", conversationId: "c", projectId: "p", seenAt: Date.now() },
+        chosen: { scope: "help", conversationId: "c", projectId: PROJECT_ID, seenAt: Date.now() },
       }),
       save: () => {},
     });
@@ -368,6 +368,7 @@ describe("host.agents input on agents the plugin launched (#14018)", () => {
     await launch(h, {
       result: launchResult("chosen"),
       args: { agentId: "claude", requestedId: "chosen" },
+      binding: BOUND,
     });
 
     expect(isKeptAssistantPane("chosen")).toBe(false);

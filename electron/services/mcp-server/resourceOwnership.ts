@@ -262,6 +262,8 @@ export class ResourceOwnershipLedger {
   private readonly callerNamed = new WeakSet<OwnedResourceRecord>();
   /** Records an earlier run kept and this one gave back (#16845). */
   private readonly restored = new WeakSet<OwnedResourceRecord>();
+  /** When each record was made or given back, to order a late creation against it (#16845). */
+  private readonly recordedAt = new WeakMap<OwnedResourceRecord, number>();
 
   constructor(private readonly observer?: OwnershipRecordObserver) {}
 
@@ -418,6 +420,7 @@ export class ResourceOwnershipLedger {
         ...(workspaceId !== undefined ? { workspaceId } : {}),
       };
       if (options?.callerNamedId === true) this.callerNamed.add(record);
+      this.recordedAt.set(record, Date.now());
       owned.set(key, record);
       this.ownerByResource.set(key, holder);
       added.push(record);
@@ -436,19 +439,19 @@ export class ResourceOwnershipLedger {
   }
 
   /**
-   * Panes were created under these ids with no one to record them for: one
-   * whose session was gone when it landed, or a plugin's launch (#16845). A
-   * record this run made stays, being of a pane at least as new; a record an
-   * earlier run kept, given back or not, is of the pane the new one replaced,
-   * so it goes. With `workspaceId`, only one kept for that workspace.
+   * A plugin's launch created panes under these ids, recorded for no one
+   * (#16845). A record this run made stays, as it always has: a plugin's
+   * result can report a pane the terminal host then refuses under a live id.
+   * A record an earlier run kept, given back or not, is of the pane the new
+   * one replaced, so it goes. With `workspaceId`, only one kept for that
+   * workspace; without, nothing kept on disk, since the pane could be anywhere.
    */
   supersedeRestored(drafts: readonly OwnedResourceDraft[], workspaceId?: string): void {
     for (const draft of drafts) {
       if (draft.kind !== TERMINAL_KIND || draft.id.length === 0) continue;
       this.notify((observer) => observer.superseded(draft.kind, draft.id, workspaceId));
       const key = resourceKey(draft.kind, draft.id);
-      const holder = this.ownerByResource.get(key);
-      const record = holder === undefined ? undefined : this.byOwner.get(holder)?.get(key);
+      const record = this.recordFor(key);
       if (
         record !== undefined &&
         this.restored.has(record) &&
@@ -457,6 +460,49 @@ export class ResourceOwnershipLedger {
         this.evict(key);
       }
     }
+  }
+
+  /**
+   * A creation this ledger checked landed after its session was gone, so it
+   * records nothing (#16845). The ids name something new: a record made before
+   * the call was asked is of what it replaced, and goes, as an earlier run's
+   * kept for its workspace does; one made while it ran is newer, and stays.
+   */
+  supersedeOlder(
+    drafts: readonly OwnedResourceDraft[],
+    askedAt: number,
+    workspaceId?: string
+  ): void {
+    for (const draft of drafts) {
+      if (draft.id.length === 0) continue;
+      this.notify((observer) => observer.superseded(draft.kind, draft.id, workspaceId));
+      const key = resourceKey(draft.kind, draft.id);
+      const record = this.recordFor(key);
+      if (record !== undefined && (this.recordedAt.get(record) ?? 0) < askedAt) this.evict(key);
+    }
+  }
+
+  /**
+   * A terminal under `id` started in `workspaceId` (#16845): a record an
+   * earlier run kept for a pane of another workspace is of a pane that came
+   * back under a new id, or never did, so it goes.
+   */
+  supersedeRestoredOutside(id: string, workspaceId: string): void {
+    const key = resourceKey(TERMINAL_KIND, id);
+    const record = this.recordFor(key);
+    if (
+      record !== undefined &&
+      this.restored.has(record) &&
+      record.workspaceId !== undefined &&
+      record.workspaceId !== workspaceId
+    ) {
+      this.evict(key);
+    }
+  }
+
+  private recordFor(key: string): OwnedResourceRecord | undefined {
+    const holder = this.ownerByResource.get(key);
+    return holder === undefined ? undefined : this.byOwner.get(holder)?.get(key);
   }
 
   /**
@@ -481,6 +527,7 @@ export class ResourceOwnershipLedger {
     }
     const record: OwnedResourceRecord = { kind: draft.kind, id: draft.id, workspaceId };
     this.restored.add(record);
+    this.recordedAt.set(record, Date.now());
     owned.set(key, record);
     this.ownerByResource.set(key, conversationKey);
     return true;

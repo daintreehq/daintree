@@ -738,10 +738,11 @@ export function recordOwnershipFromDispatch(
     !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) &&
     !sessionStore.hasLiveTransport(sessionId)
   ) {
-    // Still a new pane under those ids: what an earlier run kept for them is
-    // of the pane it replaced (#16845).
-    sessionStore.resourceOwnership.supersedeRestored(
+    // Still something new under those ids: what was recorded for them before
+    // this call was asked is of what it replaced (#16845).
+    sessionStore.resourceOwnership.supersedeOlder(
       drafts,
+      call.askedAt ?? Date.now(),
       envelope.dispatchedWorkspace?.workspaceId
     );
     return;

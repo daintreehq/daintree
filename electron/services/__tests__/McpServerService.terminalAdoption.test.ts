@@ -196,6 +196,39 @@ describe("McpServerService terminal hand-over (#12490)", () => {
     _resetAssistantPaneCreationsForTests();
   });
 
+  it("ends what an earlier run kept for an id once it starts in another project (#16845)", () => {
+    const ownership = (
+      service as unknown as {
+        sessionStore: {
+          resourceOwnership: import("../mcp-server/resourceOwnership.js").ResourceOwnershipLedger;
+        };
+      }
+    ).sessionStore.resourceOwnership;
+    ownership.restoreIfUnclaimed(
+      "conversation\u0000help\u0000c",
+      { kind: "terminal", id: "kept-1" },
+      "proj-a"
+    );
+
+    events.emit("terminal:lifecycle", {
+      type: "spawned",
+      terminalId: "kept-1",
+      projectId: "proj-a",
+      kind: "terminal",
+      timestamp: Date.now(),
+    });
+    expect(ownership.creatorOf("terminal", "kept-1")).toBeDefined();
+    events.emit("terminal:lifecycle", {
+      type: "spawned",
+      terminalId: "kept-1",
+      projectId: "proj-b",
+      kind: "terminal",
+      timestamp: Date.now(),
+    });
+
+    expect(ownership.creatorOf("terminal", "kept-1")).toBeUndefined();
+  });
+
   it("ends when the handed-over terminal is trashed", () => {
     adopt();
 

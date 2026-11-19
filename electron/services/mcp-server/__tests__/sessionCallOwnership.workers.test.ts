@@ -14,7 +14,7 @@ afterEach(() => {
 
 // A session with no authority left: a launch still happened, and is still the run's.
 const sessionStore = {
-  resourceOwnership: { isPrincipalOwner: () => false, supersedeRestored: () => {} },
+  resourceOwnership: { isPrincipalOwner: () => false, supersedeOlder: () => {} },
   terminalAdoption: {},
   workerCreations: {},
   hasLiveTransport: () => false,
