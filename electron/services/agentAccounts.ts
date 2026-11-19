@@ -26,6 +26,7 @@ import {
   type AgentSettingsEntry,
 } from "../../shared/types/agentSettings.js";
 import type {
+  AccountChoicesAway,
   AddAgentAccountRequest,
   AddAgentAccountResult,
 } from "../../shared/types/ipc/agentAccounts.js";
@@ -33,6 +34,8 @@ import {
   accountFolderName,
   isAccountId,
   isUsableAccountFolder,
+  listAccountChoicesAway,
+  presetIdCounts,
   sanitizeAccountName,
   sanitizeAgentAccounts,
   sanitizeLoginName,
@@ -306,4 +309,127 @@ export function renameAgentAccount(
   if (index < 0) throw invalid("That account isn't saved any more.");
   accounts[index] = { ...accounts[index]!, name };
   return writeAgentEntry(id, { ...entry, accounts });
+}
+
+function targetAccount(entry: AgentSettingsEntry, accountId: unknown): string | null {
+  if (accountId === null) return null;
+  if (!isAccountId(accountId)) throw invalid("Invalid account");
+  if (!sanitizeAgentAccounts(entry.accounts).some((account) => account.id === accountId)) {
+    throw invalid("That account isn't saved any more.");
+  }
+  return accountId;
+}
+
+/**
+ * Whether no checkout is at a worktree slot's path on this host any more. A
+ * deleted worktree leaves its slot behind, and only this list can reach it.
+ * The `.git` marker (a folder in a main checkout, a file in a linked one), or
+ * a bare repository's `HEAD`, is what's probed, so a folder reused for
+ * something else reads as gone too. A path that can't be read is left as
+ * there: only a missing one is gone.
+ */
+async function isGoneWorktree(worktreeId: string): Promise<boolean> {
+  // Worktree ids are absolute paths; anything else names no checkout.
+  if (!path.isAbsolute(worktreeId)) return true;
+  // A bare repository listed as its project's main row is its own git folder.
+  for (const marker of [".git", "HEAD"]) {
+    try {
+      await stat(path.join(worktreeId, marker));
+      return false;
+    } catch (error) {
+      const code = fsCode(error);
+      if (code !== "ENOENT" && code !== "ENOTDIR") return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * What using `accountId` everywhere would clear (#17893): each worktree pick
+ * and preset pin naming another login, read from this host's own settings.
+ */
+export async function listAccountChoicesAwayOnHost(
+  agentId: unknown,
+  accountId: unknown
+): Promise<AccountChoicesAway> {
+  const { agentId: id } = folderAccount(agentId);
+  const entry = readSettings().agents[id] ?? {};
+  const { worktrees, presets } = listAccountChoicesAway(entry, targetAccount(entry, accountId));
+  const gone = await Promise.all(worktrees.map((choice) => isGoneWorktree(choice.worktreeId)));
+  return {
+    worktrees: worktrees.map((choice, index) => ({ ...choice, gone: gone[index] === true })),
+    presets,
+  };
+}
+
+/** A clear list read whole: one malformed row refuses the request rather than shrinking it. */
+function clearList<T>(value: unknown, read: (item: Record<string, unknown>) => T | null): T[] {
+  if (!Array.isArray(value)) throw invalid("Invalid request");
+  return value.map((item) => {
+    const parsed = isPlainRecord(item) ? read(item) : null;
+    if (!parsed) throw invalid("Invalid request");
+    return parsed;
+  });
+}
+
+/**
+ * Makes `accountId` the agent's default and clears the listed worktree picks
+ * and preset pins (#17893), in one write read in the same turn. Each is
+ * cleared only while it still names the account it was listed under, so a
+ * choice another view changed since the list was made is never cleared
+ * unseen, and a preset whose id another preset shares is never cleared by it.
+ */
+export function applyAccountEverywhere(request: unknown): AgentSettings {
+  if (!isPlainRecord(request)) throw invalid("Invalid request");
+  const { agentId: id } = folderAccount(request.agentId);
+  const accountId = request.accountId;
+  if (accountId !== null && !isAccountId(accountId)) throw invalid("Invalid account");
+  const clear = isPlainRecord(request.clear) ? request.clear : {};
+  const worktrees = clearList(clear.worktrees, ({ worktreeId, accountId: listed }) =>
+    typeof worktreeId === "string" &&
+    worktreeId !== "" &&
+    (listed === null || typeof listed === "string")
+      ? { worktreeId, accountId: listed }
+      : null
+  );
+  const pins = clearList(clear.presets, ({ presetId, accountId: listed }) =>
+    typeof presetId === "string" && presetId !== "" && isAccountId(listed)
+      ? { presetId, accountId: listed }
+      : null
+  );
+  // Nothing the list offers names the target: clearing one would only drop a
+  // choice that already launches there.
+  if ([...worktrees, ...pins].some((choice) => choice.accountId === accountId)) {
+    throw invalid("Invalid request");
+  }
+
+  const entry = readSettings().agents[id] ?? {};
+  const target = targetAccount(entry, accountId);
+  const next: AgentSettingsEntry = { ...entry };
+  if (target === null) delete next.accountId;
+  else next.accountId = target;
+
+  if (worktrees.length > 0 && isPlainRecord(entry.worktreeAccounts)) {
+    const scoped = { ...entry.worktreeAccounts } as Record<string, string | null>;
+    for (const { worktreeId, accountId: listed } of worktrees) {
+      if (!Object.hasOwn(scoped, worktreeId)) continue;
+      const saved = scoped[worktreeId];
+      if ((typeof saved === "string" ? saved : null) === listed) delete scoped[worktreeId];
+    }
+    next.worktreeAccounts = Object.keys(scoped).length > 0 ? scoped : undefined;
+  }
+  if (pins.length > 0 && Array.isArray(entry.customPresets)) {
+    const counts = presetIdCounts(entry.customPresets);
+    next.customPresets = entry.customPresets.map((preset) => {
+      // An id another preset has too, by now if not when listed, can't say which is meant.
+      if (!isPlainRecord(preset) || counts.get(preset.id as string) !== 1) return preset;
+      const listed = pins.some(
+        (pin) => pin.presetId === preset.id && pin.accountId === preset.accountId
+      );
+      if (!listed) return preset;
+      const { accountId: _cleared, ...rest } = preset;
+      return rest as typeof preset;
+    });
+  }
+  return writeAgentEntry(id, next);
 }

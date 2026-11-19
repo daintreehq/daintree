@@ -5,7 +5,10 @@ import type {
   AgentSettingsEntry,
   ResumeOnRestart,
 } from "@shared/types";
-import type { AddAgentAccountRequest } from "@shared/types/ipc/agentAccounts";
+import type {
+  AddAgentAccountRequest,
+  ApplyAccountEverywhereRequest,
+} from "@shared/types/ipc/agentAccounts";
 import { agentSettingsClient } from "@/clients";
 import { getSafeBootPromise } from "@/lib/bootPromise";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
@@ -107,6 +110,12 @@ interface AgentSettingsActions {
    * never as a list this view holds, so another view's add or remove stands.
    */
   renameAccount: (agentId: string, accountId: string | null, name: string) => Promise<void>;
+  /**
+   * Make an account the agent's default and clear the worktree picks and
+   * preset pins the user left ticked (#17893), checked against what main
+   * holds when it lands. Resolves to the settings saved.
+   */
+  applyAccountEverywhere: (request: ApplyAccountEverywhereRequest) => Promise<AgentSettings>;
   reset: (agentId?: string) => Promise<void>;
 }
 
@@ -487,6 +496,15 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     const settings = await agentSettingsClient.renameAccount(agentId, accountId, name);
     const next = settleWrite(normalizeSaved(settings), heardAtStart);
     if (next) set({ settings: next });
+  },
+
+  applyAccountEverywhere: async (request: ApplyAccountEverywhereRequest) => {
+    ++normalizeEpoch;
+    const heardAtStart = savedChangesHeard;
+    const settings = await agentSettingsClient.applyAccountEverywhere(request);
+    const next = settleWrite(normalizeSaved(settings), heardAtStart);
+    if (next) set({ settings: next });
+    return settings;
   },
 
   reset: async (agentId?: string) => {

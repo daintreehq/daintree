@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { BrandMark } from "@/components/icons";
+import { BrandMark, UserRoundCheck } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import {
@@ -103,6 +103,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { UseAccountEverywhereDialog } from "./UseAccountEverywhereDialog";
 import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 
 import { resolveEffectivePresetId } from "@shared/types";
@@ -173,6 +174,25 @@ interface WorktreeMenuItemsProps {
 // onSelect is the only dispatch site: it launches where the ref says and
 // resets it to grid. pointerDown/pointerUp still stopPropagation to keep
 // Radix from treating the icon press as the row's primary selection event.
+// Picking an account opens the confirm, which takes focus, so the menu's close
+// is a handoff rather than a pick whose focus comes back to the button. A
+// component of its own because only something under the ContextMenu root can
+// reach its focus policy.
+function EverywhereAccountRow({ onPick, children }: { onPick: () => void; children: ReactNode }) {
+  const focusRestore = useOverlayFocusRestore();
+  return (
+    <ContextMenuItem
+      onSelect={() => {
+        focusRestore?.expectHandoff();
+        onPick();
+      }}
+    >
+      <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+      {children}
+    </ContextMenuItem>
+  );
+}
+
 function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
   const { worktrees } = useWorktrees();
   const customTitles = useWorktreeFilterStore((state) => state.worktreeCustomTitles);
@@ -351,6 +371,12 @@ export function AgentButton({
   const [accountSwitchRequest, setAccountSwitchRequest] = useState<AccountSwitchRequest | null>(
     null
   );
+  // "Use account everywhere" (#17893), new on every opening so each starts
+  // from its own account and boxes.
+  const [everywhereOpening, setEverywhereOpening] = useState<{
+    key: number;
+    account: { id: string | null; name: string };
+  } | null>(null);
   const panesLeftOnPreset = usePanesLeftOnPreset(type, presetNotice);
   const panesOnAccountNotice = useAccountSwitchPaneIds(accountNotice);
   const isRestoringFocusRef = useRef(false);
@@ -768,99 +794,116 @@ export function AgentButton({
     </div>
   );
 
+  // Mounted in both branches: removing the agent's last account while the
+  // confirm is open swaps the branch, and the confirm then asks for another.
+  const everywhereDialog = everywhereOpening && (
+    <UseAccountEverywhereDialog
+      key={everywhereOpening.key}
+      agentId={type}
+      account={everywhereOpening.account}
+      onClose={() => setEverywhereOpening(null)}
+    />
+  );
+
   if (!hasPresets && !hasAccounts) {
     return (
-      <ContextMenu
-        onOpenChange={(open) => {
-          if (open) {
-            setPrimaryTooltipOpen(false);
-            setChevronTooltipOpen(false);
-          }
-        }}
-      >
-        <ContextMenuTrigger asChild>
-          {/* Real DOM element as the trigger child: ContextMenuTrigger's
+      <>
+        <ContextMenu
+          onOpenChange={(open) => {
+            if (open) {
+              setPrimaryTooltipOpen(false);
+              setChevronTooltipOpen(false);
+            }
+          }}
+        >
+          <ContextMenuTrigger asChild>
+            {/* Real DOM element as the trigger child: ContextMenuTrigger's
               asChild Slot binds onContextMenu + ref here. Wrapping <Tooltip>
               directly drops both (Tooltip.Root is a non-DOM provider), so
               right-click never opens the menu. Mirrors the presets branch. */}
-          <span className="inline-flex">
-            <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleClick}
-                    aria-disabled={isLoading || undefined}
-                    data-toolbar-item={dataToolbarItem}
-                    onPointerEnter={(e) => {
-                      clearFocusRestoreSuppression();
-                      hover.onPointerEnter(e);
-                    }}
-                    onPointerLeave={hover.onPointerLeave}
-                    onPointerDown={hover.onPointerDown}
-                    onFocus={hover.onFocus}
-                    onBlur={hover.onBlur}
-                    className={cn(
-                      "toolbar-agent-button text-text-primary relative",
-                      needsSetup && "opacity-50",
-                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                    )}
-                    aria-label={ariaLabel}
-                    aria-keyshortcuts={ariaShortcut}
-                  >
-                    {iconElement}
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipContent(tooltipLabel, tooltipShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </span>
-        </ContextMenuTrigger>
-        <ContextMenuContent
-          className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-          onCloseAutoFocus={suppressTooltipsDuringFocusRestore}
-        >
-          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
-            {agentMenuMark}
-            Launch {config.name}
-          </ContextMenuActionItem>
-          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
-            <PanelBottom data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Launch {config.name} in dock
-          </ContextMenuActionItem>
-          {hasWorktrees && (
-            <ContextMenuSub>
-              <ContextMenuSubTrigger>
-                <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                Launch in worktree
-              </ContextMenuSubTrigger>
-              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-                <WorktreeMenuItems agentType={type} />
-              </ContextMenuSubContent>
-            </ContextMenuSub>
-          )}
-          <ContextMenuSeparator />
-          <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
-          <ContextMenuActionItem
-            actionId="app.settings.openTab"
-            args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
+            <span className="inline-flex">
+              <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={handleClick}
+                      aria-disabled={isLoading || undefined}
+                      data-toolbar-item={dataToolbarItem}
+                      onPointerEnter={(e) => {
+                        clearFocusRestoreSuppression();
+                        hover.onPointerEnter(e);
+                      }}
+                      onPointerLeave={hover.onPointerLeave}
+                      onPointerDown={hover.onPointerDown}
+                      onFocus={hover.onFocus}
+                      onBlur={hover.onBlur}
+                      className={cn(
+                        "toolbar-agent-button text-text-primary relative",
+                        needsSetup && "opacity-50",
+                        "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                      )}
+                      aria-label={ariaLabel}
+                      aria-keyshortcuts={ariaShortcut}
+                    >
+                      {iconElement}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {createTooltipContent(tooltipLabel, tooltipShortcut)}
+                </TooltipContent>
+              </Tooltip>
+            </span>
+          </ContextMenuTrigger>
+          <ContextMenuContent
+            className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+            onCloseAutoFocus={suppressTooltipsDuringFocusRestore}
           >
-            <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Manage {config.name} presets…
-          </ContextMenuActionItem>
-          <ContextMenuActionItem
-            actionId="app.settings.openTab"
-            args={{ tab: "agents", subtab: type }}
-          >
-            <Plug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            {config.name} settings…
-          </ContextMenuActionItem>
-          <AgentExternalLinkItems links={config.externalLinks} />
-        </ContextMenuContent>
-      </ContextMenu>
+            <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
+              {agentMenuMark}
+              Launch {config.name}
+            </ContextMenuActionItem>
+            <ContextMenuActionItem
+              actionId="agent.launch"
+              args={{ agentId: type, location: "dock" }}
+            >
+              <PanelBottom data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              Launch {config.name} in dock
+            </ContextMenuActionItem>
+            {hasWorktrees && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  Launch in worktree
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                  <WorktreeMenuItems agentType={type} />
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            )}
+            <ContextMenuSeparator />
+            <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
+            <ContextMenuActionItem
+              actionId="app.settings.openTab"
+              args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
+            >
+              <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              Manage {config.name} presets…
+            </ContextMenuActionItem>
+            <ContextMenuActionItem
+              actionId="app.settings.openTab"
+              args={{ tab: "agents", subtab: type }}
+            >
+              <Plug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              {config.name} settings…
+            </ContextMenuActionItem>
+            <AgentExternalLinkItems links={config.externalLinks} />
+          </ContextMenuContent>
+        </ContextMenu>
+        {everywhereDialog}
+      </>
     );
   }
 
@@ -1239,6 +1282,32 @@ export function AgentButton({
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
+          {hasAccounts && (
+            // The account new launches use, in every project (#17893): the
+            // default, and the worktree picks and preset pins the confirm
+            // leaves checked. Running terminals move only through the offer after.
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <UserRoundCheck data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Use account everywhere
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                {[{ id: null, name: defaultLogin }, ...accounts].map((account) => (
+                  <EverywhereAccountRow
+                    key={account.id ?? DEFAULT_LOGIN_VALUE}
+                    onPick={() =>
+                      setEverywhereOpening((current) => ({
+                        key: (current?.key ?? 0) + 1,
+                        account: { id: account.id, name: account.name },
+                      }))
+                    }
+                  >
+                    {account.name}
+                  </EverywhereAccountRow>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
           <ContextMenuSeparator />
           <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
           <ContextMenuActionItem
@@ -1266,6 +1335,7 @@ export function AgentButton({
         request={accountSwitchRequest}
         onClose={() => setAccountSwitchRequest(null)}
       />
+      {everywhereDialog}
     </>
   );
 }

@@ -19,6 +19,21 @@ vi.mock("@/components/Layout/AccountSwitchNotice", async (importOriginal) => ({
   readUsageLimitedPaneIds,
 }));
 
+// The confirm itself is covered with the dialog; here only which account the row opens it on.
+const everywhereDialog = vi.hoisted(() => ({
+  props: null as null | {
+    account?: { id: string | null; name: string };
+    onSaved?: () => void;
+    onClose: () => void;
+  },
+}));
+vi.mock("@/components/Layout/UseAccountEverywhereDialog", () => ({
+  UseAccountEverywhereDialog: (props: NonNullable<typeof everywhereDialog.props>) => {
+    everywhereDialog.props = props;
+    return <div data-testid="use-everywhere-dialog" />;
+  },
+}));
+
 // The reading itself is covered with the hook; here only what the row asks of it.
 const headroomHook = vi.hoisted(() => ({
   calls: [] as Array<[string | undefined, boolean]>,
@@ -99,6 +114,7 @@ import type { AgentSettingsEntry } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
 
 const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.codex-personal" };
 
 function renderSection(
   entry: AgentSettingsEntry,
@@ -207,6 +223,122 @@ describe("AgentAccountsSection (#16040)", () => {
     await act(async () => {});
 
     expect(updateAgent).toHaveBeenCalledWith("codex", { accountId: undefined });
+  });
+
+  it("says a preset's pin wins over the default too", () => {
+    renderSection({ accounts: [COMPANY] });
+    expect(
+      screen.getByText(
+        "What a new launch signs in as, unless its worktree picks another in the toolbar or its preset pins one"
+      )
+    ).toBeTruthy();
+  });
+
+  describe("using one account everywhere (#17893)", () => {
+    beforeEach(() => {
+      everywhereDialog.props = null;
+    });
+
+    const open = () => fireEvent.click(screen.getByRole("button", { name: "Use everywhere…" }));
+
+    it("opens on the saved default, or the default login when none is saved", () => {
+      renderSection({ accounts: [PERSONAL, COMPANY], accountId: "company" });
+      expect(screen.queryByTestId("use-everywhere-dialog")).toBeNull();
+      open();
+      expect(everywhereDialog.props?.account).toEqual({ id: "company", name: "Company" });
+
+      cleanup();
+      renderSection({ accounts: [COMPANY], defaultLoginName: "Home" });
+      open();
+      expect(everywhereDialog.props?.account).toEqual({
+        id: null,
+        name: "Home · default login",
+      });
+    });
+
+    it("leaves the account to the dialog when the saved default is gone", () => {
+      renderSection({ accounts: [], accountId: "gone" });
+      open();
+      expect(screen.getByTestId("use-everywhere-dialog")).toBeTruthy();
+      expect(everywhereDialog.props?.account).toBeUndefined();
+
+      cleanup();
+      renderSection({ accounts: [COMPANY], accountId: "gone" });
+      open();
+      expect(everywhereDialog.props?.account).toBeUndefined();
+    });
+
+    it("is offered when only a worktree pick or preset pin names an account that's gone", () => {
+      renderSection({ worktreeAccounts: { "/work/app/main": "gone" } });
+      open();
+      expect(everywhereDialog.props?.account).toEqual({ id: null, name: "Default login" });
+
+      cleanup();
+      renderSection({ customPresets: [{ id: "review", name: "Review", accountId: "gone" }] });
+      expect(screen.getByRole("button", { name: "Use everywhere…" })).toBeTruthy();
+
+      cleanup();
+      // On the default login already: nothing for the action to reach.
+      renderSection({ worktreeAccounts: { "/work/app/main": null } });
+      expect(screen.queryByRole("button", { name: "Use everywhere…" })).toBeNull();
+    });
+
+    it("drops an offer the Default account select raised once the change is saved", async () => {
+      usePanelStore.setState({
+        panelsById: {
+          p1: {
+            id: "p1",
+            kind: "terminal",
+            title: "Parser",
+            cwd: "/repo",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            launchAgentId: "codex",
+            agentState: "waiting",
+          } as PtyPanelData,
+        },
+        panelIds: ["p1"],
+      });
+      readUsageLimitedPaneIds.mockResolvedValue(["p1"]);
+      useAgentSettingsStore.setState({ updateAgent: vi.fn().mockResolvedValue(undefined) });
+      renderSection({ accounts: [COMPANY] });
+      await act(async () => {
+        fireEvent.change(screen.getByRole("combobox", { name: "Default account" }), {
+          target: { value: "company" },
+        });
+      });
+      expect(screen.getByRole("status").textContent).toBe(
+        "1 Codex terminal stopped on a usage limit"
+      );
+
+      open();
+      act(() => everywhereDialog.props?.onSaved?.());
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("tells Settings once the change is saved, and closes on the dialog's word", () => {
+      const onSettingsChange = vi.fn();
+      render(
+        <AgentAccountsSection
+          agentId="codex"
+          agentName="Codex"
+          entry={{ accounts: [COMPANY] }}
+          onSettingsChange={onSettingsChange}
+        />
+      );
+      open();
+      expect(onSettingsChange).not.toHaveBeenCalled();
+      act(() => everywhereDialog.props?.onSaved?.());
+      expect(onSettingsChange).toHaveBeenCalledTimes(1);
+      act(() => everywhereDialog.props?.onClose());
+      expect(screen.queryByTestId("use-everywhere-dialog")).toBeNull();
+    });
+
+    it("isn't offered until there's an account, or a saved default, to use", () => {
+      renderSection({});
+      expect(screen.queryByRole("button", { name: "Use everywhere…" })).toBeNull();
+    });
   });
 
   it("asks before forgetting an account, then removes it", async () => {
@@ -580,7 +712,7 @@ describe("renaming against other views and a Settings close (#17080)", () => {
     renderSection({ accounts: [COMPANY] });
     expect(
       [...document.querySelectorAll("[data-settings-row-label]")].map((label) => label.textContent)
-    ).toEqual(["Default login", "Company"]);
+    ).toEqual(["Default login", "Company", "Use one account everywhere"]);
   });
 
   it("leaves a rename another view made alone when the field is left untouched", async () => {

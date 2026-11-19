@@ -37,6 +37,8 @@ export const CHANNEL_LEASE_POLICY = {
   "agent-accounts:add": "free",
   "agent-accounts:remove": "free",
   "agent-accounts:rename": "free",
+  "agent-accounts:list-choices-away": "free",
+  "agent-accounts:apply-everywhere": "free",
   "agent-cli-copies:changed": "free",
   "agent-cli-copies:choose": "free",
   "agent-cli-copies:list": "free",

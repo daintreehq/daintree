@@ -9,6 +9,7 @@ import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import type { AgentAccount, AgentSettingsEntry } from "@shared/types";
 import {
   defaultLoginLabel,
+  listAccountChoicesAway,
   sanitizeLoginName,
   sanitizeAgentAccounts,
 } from "@shared/utils/agentAccounts";
@@ -25,6 +26,8 @@ import {
   type AccountSwitchNoticeState,
   type AccountSwitchRequest,
 } from "@/components/Layout/AccountSwitchNotice";
+import { UseAccountEverywhereDialog } from "@/components/Layout/UseAccountEverywhereDialog";
+import type { RestartAccountChoice } from "@/components/Terminal/RestartOnAccount";
 import { AccountLoginRow } from "./AccountLoginRow";
 import { AddAccountDialog } from "./AddAccountDialog";
 import { SettingsSection } from "./SettingsSection";
@@ -91,6 +94,11 @@ export function AgentAccountsSection({
   const [switchRequest, setSwitchRequest] = useState<AccountSwitchRequest | null>(null);
   const offerPaneIds = useAccountSwitchPaneIds(offer);
   const offerAccountName = useCurrentAccountName(agentId, offer?.account) ?? "";
+  // "Use account everywhere" (#17893), new on every opening.
+  const [everywhereOpening, setEverywhereOpening] = useState<{
+    key: number;
+    account: RestartAccountChoice | undefined;
+  } | null>(null);
   // Quota is read only while the list of accounts is showing (#16407).
   const [defaultListOpen, setDefaultListOpen] = useState(false);
   const headroomFor = useAgentAccountHeadroom(agentId, defaultListOpen);
@@ -105,6 +113,13 @@ export function AgentAccountsSection({
   // A saved default no account answers to any more refuses every launch, so
   // it shows as changed and can be reset even with nothing left to choose.
   const hasSavedDefault = typeof entry.accountId === "string";
+  // A worktree pick or preset pin naming an account that's gone refuses its
+  // launches too, and using one account everywhere is what reaches it (#17893).
+  const awayFromDefaultLogin = listAccountChoicesAway(entry, null);
+  const hasDanglingChoice = [
+    ...awayFromDefaultLogin.worktrees,
+    ...awayFromDefaultLogin.presets,
+  ].some((choice) => !accounts.some((account) => account.id === choice.accountId));
 
   // A sign-in runs in a terminal, so Settings closes first and the terminal
   // takes focus once it has gone.
@@ -199,14 +214,14 @@ export function AgentAccountsSection({
         )}
       </SettingsGroup>
 
-      {(accounts.length > 0 || hasSavedDefault) && (
+      {(accounts.length > 0 || hasSavedDefault || hasDanglingChoice) && (
         <SettingsGroup>
           <SettingsSelect
             label="Default account"
             description={
               hasSavedDefault && defaultId === DEFAULT_LOGIN
                 ? "The saved account was removed, so launches are refused until this is reset"
-                : "What a new launch signs in as, unless its worktree picks another in the toolbar"
+                : "What a new launch signs in as, unless its worktree picks another in the toolbar or its preset pins one"
             }
             value={defaultId}
             onValueChange={(value) => {
@@ -257,6 +272,31 @@ export function AgentAccountsSection({
                 : `Use ${agentName}'s default login`
             }
           />
+          <SettingsRow
+            label="Use one account everywhere"
+            description="Makes an account the default in every project. Lists each worktree pick and preset pin on another account, and clears the ones you leave checked."
+            control={
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  // The saved default is where it starts; one that's gone leaves the choice open.
+                  const account =
+                    defaultId !== DEFAULT_LOGIN
+                      ? accounts.find((candidate) => candidate.id === defaultId)
+                      : hasSavedDefault
+                        ? undefined
+                        : { id: null, name: defaultLogin };
+                  setEverywhereOpening((current) => ({
+                    key: (current?.key ?? 0) + 1,
+                    account: account ? { id: account.id, name: account.name } : undefined,
+                  }));
+                }}
+              >
+                Use everywhere…
+              </Button>
+            }
+          />
         </SettingsGroup>
       )}
 
@@ -305,6 +345,20 @@ export function AgentAccountsSection({
       />
 
       <AccountSwitchDialog request={switchRequest} onClose={() => setSwitchRequest(null)} />
+
+      {everywhereOpening && (
+        <UseAccountEverywhereDialog
+          key={everywhereOpening.key}
+          agentId={agentId}
+          account={everywhereOpening.account}
+          onSaved={() => {
+            // The default picked there replaces any offer the select raised.
+            beginOffer();
+            onSettingsChange?.();
+          }}
+          onClose={() => setEverywhereOpening(null)}
+        />
+      )}
 
       <ConfirmDialog
         isOpen={removing !== null}

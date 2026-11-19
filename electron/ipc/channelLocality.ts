@@ -37,6 +37,8 @@ export const CHANNEL_LOCALITY = {
   "agent-accounts:add": "host",
   "agent-accounts:remove": "host",
   "agent-accounts:rename": "host",
+  "agent-accounts:list-choices-away": "host",
+  "agent-accounts:apply-everywhere": "host",
   "agent-capabilities:get-agent-ids": "host",
   "agent-capabilities:get-agent-metadata": "host",
   "agent-capabilities:get-ccr-presets": "host",

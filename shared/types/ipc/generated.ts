@@ -12,6 +12,14 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./agentAccounts.js").AddAgentAccountRequest];
     result: import("./agentAccounts.js").AddAgentAccountResult;
   };
+  "agent-accounts:apply-everywhere": {
+    args: [request: import("./agentAccounts.js").ApplyAccountEverywhereRequest];
+    result: import("../agentSettings.js").AgentSettings;
+  };
+  "agent-accounts:list-choices-away": {
+    args: [agentId: string, accountId: string | null];
+    result: import("./agentAccounts.js").AccountChoicesAway;
+  };
   "agent-accounts:remove": {
     args: [agentId: string, accountId: string];
     result: import("../agentSettings.js").AgentSettings;

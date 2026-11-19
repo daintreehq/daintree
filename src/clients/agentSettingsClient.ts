@@ -1,7 +1,9 @@
 import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "@shared/types";
 import type {
+  AccountChoicesAway,
   AddAgentAccountRequest,
   AddAgentAccountResult,
+  ApplyAccountEverywhereRequest,
 } from "@shared/types/ipc/agentAccounts";
 
 // Value cache + singleflight on get(): burst paths (bulk restart, duplicate,
@@ -89,6 +91,19 @@ export const agentSettingsClient = {
   ): Promise<AgentSettings> => {
     invalidate();
     return window.electron.agentAccounts.rename(agentId, accountId, name).finally(invalidate);
+  },
+
+  /** What using the account everywhere would clear, read from the host each time (#17893). */
+  listAccountChoicesAway: (
+    agentId: string,
+    accountId: string | null
+  ): Promise<AccountChoicesAway> =>
+    window.electron.agentAccounts.listChoicesAway(agentId, accountId),
+
+  /** Make the account the default and clear the ticked choices, in one write in main (#17893). */
+  applyAccountEverywhere: (request: ApplyAccountEverywhereRequest): Promise<AgentSettings> => {
+    invalidate();
+    return window.electron.agentAccounts.applyEverywhere(request).finally(invalidate);
   },
 
   stampVersion: (version: number): Promise<Record<string, unknown>> => {
