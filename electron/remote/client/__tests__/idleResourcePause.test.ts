@@ -204,6 +204,12 @@ describe("watchIdleResourcePause (#17925)", () => {
     expect(prepare).not.toHaveBeenCalled();
   });
 
+  it("acts once the host's idle time ends exactly at its reading", async () => {
+    await hear(summary({ idleEndsAt: 10_000 }, 10_000));
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["an earlier link", false],
     ["no link at all", null],

@@ -161,8 +161,9 @@ describe("idle pause consent (#17925)", () => {
     await userEnvironments(["stop-box"]);
     await turnOn();
 
+    // Seen by a pause check alone, with nobody opening the dialog.
     await userEnvironments([]);
-    expect(await policy()).toMatchObject({ status: "unavailable", reason: "no-pause" });
+    expect(await confirmed()).toEqual({ ok: false, reason: expect.stringMatching(/no pause/) });
 
     await userEnvironments(["stop-box"]);
     expect(await policy()).toMatchObject({ enabled: false, changed: true });
@@ -214,6 +215,17 @@ describe("FileIdlePauseConsentStore", () => {
       }),
       "utf-8"
     );
+    expect(await store.get(project, "settings:gpu")).toBeNull();
+  });
+
+  it("clears only the consent it was shown", async () => {
+    const store = new FileIdlePauseConsentStore(consentsDir);
+    await store.set(project, "settings:gpu", "c".repeat(64));
+
+    await store.clear(project, "settings:gpu", "d".repeat(64));
+    expect(await store.get(project, "settings:gpu")).toEqual({ fingerprint: "c".repeat(64) });
+
+    await store.clear(project, "settings:gpu", "c".repeat(64));
     expect(await store.get(project, "settings:gpu")).toBeNull();
   });
 

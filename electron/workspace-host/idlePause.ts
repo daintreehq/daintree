@@ -32,7 +32,8 @@ export interface IdlePauseConsentStore {
   set(projectRootPath: string, selector: string, fingerprint: string): Promise<void>;
   /** Marks it revoked, only while it still holds `fingerprint`. */
   revoke(projectRootPath: string, selector: string, fingerprint: string): Promise<void>;
-  clear(projectRootPath: string, selector: string): Promise<void>;
+  /** Removes it, only while it still holds `fingerprint`. */
+  clear(projectRootPath: string, selector: string, fingerprint: string): Promise<void>;
 }
 
 /** The pause commands as written, with the block and file they came from. */
@@ -86,9 +87,9 @@ export class FileIdlePauseConsentStore implements IdlePauseConsentStore {
     });
   }
 
-  clear(projectRootPath: string, selector: string): Promise<void> {
+  clear(projectRootPath: string, selector: string, fingerprint: string): Promise<void> {
     return this.update(projectRootPath, (consents) => {
-      consents.delete(selector);
+      if (consents.get(selector)?.fingerprint === fingerprint) consents.delete(selector);
     });
   }
 
@@ -246,7 +247,8 @@ export class IdlePauseService {
       if (!selection || !consent || consent.fingerprint !== fingerprint) {
         throw new Error("This worktree's environment changed. Review it again.");
       }
-      await this.consents.clear(projectRootPath, selection.selector);
+      // Read again in the write: a newer consent saved meanwhile stays.
+      await this.consents.clear(projectRootPath, selection.selector, fingerprint);
       return;
     }
     const eligibility = this.eligibility(selection);

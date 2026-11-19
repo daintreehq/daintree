@@ -23,6 +23,9 @@ const RESUMABLE_STATUSES = new Set(["paused", "stopped"]);
 
 const RESOURCE_ENVIRONMENT_CHANGED_ERROR = "Resource environment changed";
 
+/** Longer than a pause's default timeout, so only a command that never exits is cut off. */
+const IDLE_PAUSE_DELETE_WAIT_MS = 5 * 60_000;
+
 const DEFAULT_TIMEOUT_MS = {
   provision: 300_000,
   teardown: 300_000,
@@ -55,6 +58,22 @@ export interface ResourceActionResult {
   skipped?: true;
 }
 
+/** What fills in a worktree's commands and their environment. */
+interface WorktreeValues {
+  path: string;
+  name: string;
+  branch: string | undefined;
+}
+
+function sameValues(a: WorktreeValues | undefined, b: WorktreeValues): boolean {
+  return a !== undefined && a.path === b.path && a.name === b.name && a.branch === b.branch;
+}
+
+/** The pause as it would run: its commands filled in, and the values its environment carries. */
+function digestPause(commands: readonly string[], values: WorktreeValues): string {
+  return digestCommands([...commands, "\0", values.path, values.name, values.branch ?? ""]);
+}
+
 /** The workspace service stamps its process epoch on the guard. */
 export type ExecutorIdlePauseCheck =
   | { ok: true; guard: Omit<IdlePauseGuard, "processEpoch"> }
@@ -84,6 +103,12 @@ export class ResourceActionExecutor {
   private idlePauseHolds = new Map<string, number>();
   /** Each worktree's idle pause from admission to its end, for a delete to wait out. */
   private idlePausesRunning = new Map<string, Promise<unknown>>();
+  /**
+   * The worktree values each worktree's last ready status reading ran under.
+   * A rename since means the box that reading named may not be the one its
+   * commands name now, so an idle pause waits for a fresh reading.
+   */
+  private statusReadings = new Map<string, WorktreeValues>();
   private disposed = false;
 
   constructor(private readonly ctx: ResourceActionContext) {}
@@ -164,11 +189,16 @@ export class ResourceActionExecutor {
       monitor.branch
     );
     const sub = (cmd: string) => this.ctx.lifecycleService.substituteVariables(cmd, vars);
+    const values: WorktreeValues = {
+      path: monitor.path,
+      name: monitor.name,
+      branch: monitor.branch,
+    };
     // The commands this run would start, filled in now: a branch renamed since
     // the check would name another machine in the same template.
     if (
       idleGuard &&
-      digestCommands((resourceConfig.pause ?? []).map(sub)) !== idleGuard.commandsDigest
+      digestPause((resourceConfig.pause ?? []).map(sub), values) !== idleGuard.commandsDigest
     ) {
       return {
         success: false,
@@ -348,6 +378,7 @@ export class ResourceActionExecutor {
               ? parsed.ssh
               : undefined,
         });
+        this.statusReadings.set(worktreeId, values);
       } catch {
         // Non-JSON output: if command succeeded (exit 0), treat as "unknown" (neutral) rather
         // than "unhealthy" — the script may not emit JSON but still indicates a live resource.
@@ -587,10 +618,11 @@ export class ResourceActionExecutor {
       monitor.name,
       monitor.branch
     );
-    const commandsDigest = digestCommands(
+    const commandsDigest = digestPause(
       (selection!.resource.pause ?? []).map((command) =>
         this.ctx.lifecycleService.substituteVariables(command, vars)
-      )
+      ),
+      { path: monitor.path, name: monitor.name, branch: monitor.branch }
     );
     return {
       ok: true,
@@ -642,15 +674,21 @@ export class ResourceActionExecutor {
     };
   }
 
-  /** Resolves once an idle pause already admitted for this worktree has ended. */
-  whenIdlePauseSettled(worktreeId: string): Promise<void> {
+  /**
+   * Resolves once an idle pause already admitted for this worktree has ended,
+   * or after `maxWaitMs`: a command that never lets go of its output must not
+   * hold a delete forever.
+   */
+  whenIdlePauseSettled(worktreeId: string, maxWaitMs = IDLE_PAUSE_DELETE_WAIT_MS): Promise<void> {
     const running = this.idlePausesRunning.get(worktreeId);
-    return running
-      ? running.then(
-          () => undefined,
-          () => undefined
-        )
-      : Promise.resolve();
+    if (!running) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, maxWaitMs);
+      void running.finally(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 
   private async idlePauseCheck(
@@ -671,6 +709,13 @@ export class ResourceActionExecutor {
     // down: the box main's host must be, or this worktree has none to pause.
     const sshTarget = monitor.resourceStatus?.ssh;
     if (!sshTarget) return { ok: false, reason: "The environment reports no ready machine" };
+    const values = { path: monitor.path, name: monitor.name, branch: monitor.branch };
+    if (!sameValues(this.statusReadings.get(monitor.id), values)) {
+      return {
+        ok: false,
+        reason: "The worktree changed since its environment last reported its machine",
+      };
+    }
     return {
       ok: true,
       selector: selection!.selector,
@@ -685,6 +730,7 @@ export class ResourceActionExecutor {
   }
 
   cleanupResourceActionState(worktreeId: string): void {
+    this.statusReadings.delete(worktreeId);
     const controller = this.resourceActionAbortControllers.get(worktreeId);
     if (controller) {
       controller.abort();
@@ -752,10 +798,12 @@ export class ResourceActionExecutor {
     // against another the worktree switched to while it waited.
     const environmentEpoch = monitor.resourceEnvironmentEpoch;
 
+    // An abort settles the queue's promise before the commands have exited.
+    let executing: Promise<unknown> | undefined;
     const run = queue
       .add(
         () =>
-          this.execute(
+          (executing = this.execute(
             requestId,
             worktreeId,
             action,
@@ -763,14 +811,15 @@ export class ResourceActionExecutor {
             environmentEpoch,
             controller.signal,
             idleGuard
-          ),
+          )),
         { signal: controller.signal }
       )
       .catch(() => undefined);
     if (idleGuard) {
-      this.idlePausesRunning.set(worktreeId, run);
-      void run.finally(() => {
-        if (this.idlePausesRunning.get(worktreeId) === run) {
+      const ended = run.then(() => executing?.catch(() => undefined));
+      this.idlePausesRunning.set(worktreeId, ended);
+      void ended.finally(() => {
+        if (this.idlePausesRunning.get(worktreeId) === ended) {
           this.idlePausesRunning.delete(worktreeId);
         }
       });

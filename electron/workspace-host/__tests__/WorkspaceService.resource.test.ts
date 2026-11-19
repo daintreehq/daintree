@@ -2588,8 +2588,8 @@ describe("WorkspaceService idle pause (#17925)", () => {
             consents.set(selector, { fingerprint, revoked: true });
           }
         },
-        clear: async (_root: string, selector: string) => {
-          consents.delete(selector);
+        clear: async (_root: string, selector: string, fingerprint: string) => {
+          if (consents.get(selector)?.fingerprint === fingerprint) consents.delete(selector);
         },
       },
     });
@@ -2621,6 +2621,12 @@ describe("WorkspaceService idle pause (#17925)", () => {
     );
     monitor.setResourceStatus({ lastStatus: "ready", ssh: "dev@box-1" });
     service["monitors"].set(wt.id, monitor);
+    // What the status poll that reported this box ran under.
+    service["resourceActionExecutor"]["statusReadings"].set(wt.id, {
+      path: monitor.path,
+      name: monitor.name,
+      branch: monitor.branch,
+    });
     return monitor;
   }
 
@@ -2799,7 +2805,9 @@ describe("WorkspaceService idle pause (#17925)", () => {
 
   it("refuses when the worktree's own values in the commands changed since the check", async () => {
     const monitor = readyBox();
-    await configAt(USER_CONFIG, { resource: { pause: ["box pause {{branch-slug}}"] } });
+    await configAt(USER_CONFIG, {
+      resource: { pause: ["box prepare", "box pause {{branch-slug}}"] },
+    });
     await turnOn();
     const guard = await checkedGuard();
 
@@ -2823,6 +2831,43 @@ describe("WorkspaceService idle pause (#17925)", () => {
     });
 
     expect(outcome).toEqual({ ran: false, reason: expect.stringMatching(/restarted/) });
+    expect(ran).toEqual([]);
+  });
+
+  it("waits for a fresh status reading once the worktree is renamed", async () => {
+    const monitor = readyBox();
+    await configAt(USER_CONFIG, {
+      resource: { pause: ["box pause {{branch-slug}}"], status: "box status" },
+    });
+    await turnOn();
+
+    monitor.branch = "feature/renamed";
+    expect(await service.checkIdlePause("/test/worktree")).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/last reported its machine/),
+    });
+
+    vi.spyOn(service["lifecycleService"], "runCommands").mockResolvedValueOnce({
+      success: true,
+      output: JSON.stringify({ status: "ready", ssh: "dev@box-2" }),
+    });
+    await service.runResourceAction("req-status", "/test/worktree", "status");
+
+    const check = await service.checkIdlePause("/test/worktree");
+    expect(check).toMatchObject({ ok: true, guard: { sshTarget: "dev@box-2" } });
+  });
+
+  it("refuses a pause asked for while a delete holds the worktree", async () => {
+    readyBox();
+    await configAt(USER_CONFIG, { resource: { pause: ["stop-box"] } });
+    await turnOn();
+    const guard = await checkedGuard();
+
+    const release = service["resourceActionExecutor"].holdAgainstIdlePause("/test/worktree");
+    const outcome = await service.runIdlePause("req-idle", "/test/worktree", guard);
+    release();
+
+    expect(outcome).toEqual({ ran: false, reason: expect.stringMatching(/being deleted/) });
     expect(ran).toEqual([]);
   });
 
