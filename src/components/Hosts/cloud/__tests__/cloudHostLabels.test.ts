@@ -472,6 +472,9 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
     expect(linked).not.toContain("as the host said");
     expect(linked).not.toContain("no request through it");
 
+    expect(sentence({ ...held, reached: false }, true)).toContain(
+      "though no request through it has reached the host yet."
+    );
     // Taken while the host was idle, it hasn't been tried: said so, not taken for protection.
     expect(sentence({ ...held, reached: false })).toContain(
       `holds that link until ${dayTime(expiresAt)}, though no request through it has reached the host yet (as the host said ${dayTime(confirmedAt)}).`
@@ -498,6 +501,7 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
     );
     expect(refusedLinked).toContain("even while the host sees work: Refused.");
     expect(refusedLinked).not.toContain("Refused..");
+    expect(sentence({ kind: "none", problem: "Refused!" })).toContain("work: Refused! ");
 
     // Nothing handed over yet, or a status from before it: the timer, as before.
     for (const nothing of [{ kind: "none" as const, problem: null }, null, undefined]) {

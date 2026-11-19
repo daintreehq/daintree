@@ -31,6 +31,8 @@ const REFUSED_RETRY_MS = 60 * 60_000;
  */
 const REMINT_AFTER_MS = 30 * 60_000;
 const CALL_TIMEOUT_MS = 30_000;
+/** An arm waits behind other devices' arms at the host, each with a request to check. */
+const ARM_TIMEOUT_MS = 60_000;
 
 const TOO_OLD =
   "The Daintree on this machine is too old to keep it awake with no device connected. Update it to let it.";
@@ -242,15 +244,25 @@ export class CloudKeepAwakeLinks {
     this.running.set(bindingId, attempt);
     attempt.promise = this.runOnce(bindingId, hostId, attempt)
       .catch(() => {
-        // A failure that may pass is retried by tick().
-        this.retryAt.set(bindingId, this.now() + RETRY_MS);
+        // A mint that failed in a way that may pass is retried by tick(), never sooner than a pause
+        // already set; a question that failed is just asked again on the next pass.
+        if (!attempt.mint) return;
+        const later = this.now() + RETRY_MS;
+        this.retryAt.set(bindingId, Math.max(this.retryAt.get(bindingId) ?? later, later));
       })
       .finally(() => {
         if (this.running.get(bindingId) === attempt) this.running.delete(bindingId);
         if (!this.deps.store.binding(bindingId)) this.forgetRemoved();
         const next = this.queued.get(bindingId);
         this.queued.delete(bindingId);
-        if (next && next.session.isOpen && this.deps.sessionFor(next.hostId) === next.session) {
+        // One that minted on this link covers whatever was queued on it, refused or not.
+        const covered = next?.session === attempt.session && attempt.mint;
+        if (
+          next &&
+          !covered &&
+          next.session.isOpen &&
+          this.deps.sessionFor(next.hostId) === next.session
+        ) {
           void this.run(next.hostId, next.session, next.mint);
         }
       });
@@ -405,8 +417,10 @@ export class CloudKeepAwakeLinks {
       }
     } else {
       this.confirmedAt.delete(bindingId);
+      // A reason found here (a refusal, a failed mint) stays through its pause, though the host
+      // itself says nothing of it.
       if (problem) this.problems.set(bindingId, withoutLink(problem));
-      else this.problems.delete(bindingId);
+      else if (!this.retryAt.has(bindingId)) this.problems.delete(bindingId);
       if (this.deps.store.binding(bindingId)?.keepAwake) {
         this.deps.store.updateBinding(bindingId, (binding) => {
           const { keepAwake: _dropped, ...rest } = binding;
@@ -422,8 +436,7 @@ export class CloudKeepAwakeLinks {
     method: string,
     payload: KeepAwakeArmRequest | null
   ): Promise<KeepAwakeStatus> {
-    return KeepAwakeStatusSchema.parse(
-      await session.call(method, payload, { timeoutMs: CALL_TIMEOUT_MS })
-    );
+    const timeoutMs = method === KeepAwakeLinkMethod.ARM ? ARM_TIMEOUT_MS : CALL_TIMEOUT_MS;
+    return KeepAwakeStatusSchema.parse(await session.call(method, payload, { timeoutMs }));
   }
 }

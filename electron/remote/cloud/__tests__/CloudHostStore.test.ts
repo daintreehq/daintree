@@ -623,7 +623,7 @@ describe("CloudHostStore keep-awake (#17918)", () => {
     expect(new CloudHostStore(backend).bindings()[0]!.keepAwake).toEqual(held);
     // Not yet reached reads back as such, and anything but true is not reached.
     const { reached: _reached, ...untried } = held;
-    for (const reached of [undefined, "yes", 1]) {
+    for (const reached of [undefined, "yes", "true", 1]) {
       backend.write({
         version: 1,
         accounts: [],

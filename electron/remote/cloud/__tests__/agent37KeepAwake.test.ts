@@ -245,8 +245,8 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
       current = null;
     },
     /** A link comes up, with nothing run on it yet. */
-    attach: () => {
-      current = link();
+    attach: (answers?: Record<string, (payload: unknown) => Promise<unknown>>) => {
+      current = link(answers);
       return current;
     },
     /** A new link takes the host's place, the old one not yet closed. */
@@ -328,6 +328,31 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     await env.run(30);
     expect(env.machine.status).toBe("sleeping");
     expect(env.edgeRequests).toHaveLength(1);
+  });
+
+  it("mints once when a pass that found the URL lost and a renewal on the same link overlap", async () => {
+    const env = await agent37({ idle_timeout_seconds: 86_400 });
+    await env.connect();
+    env.api.signedUrls.splice(0, 1, { ...env.api.signedUrls[0]!, token: "revoked" });
+    await env.run(1860);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const session = env.attach({
+      [KeepAwakeLinkMethod.STATUS]: async () => {
+        await gate;
+        return env.keeper.open();
+      },
+    });
+    // A question finds the URL lost and decides to mint; meanwhile a renewal is asked for.
+    const asking = env.links.run("build", session, false);
+    const renewal = env.links.run("build", session, true);
+    release();
+    await asking;
+    await renewal;
+    await vi.waitFor(() => expect(env.status().keepAwake).toMatchObject({ kind: "held" }));
+    // Long enough for a queued second mint against the in-memory fake to have gone out.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(2);
   });
 
   it("hands the host a URL as soon as a link to it opens", async () => {
@@ -440,13 +465,12 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     expect(env.api.signedUrls).toHaveLength(0);
 
     // A URL whose request never reaches the host is refused, and nothing is held.
+    let statusFails = false;
     const listened = await env.connect({
-      [KeepAwakeLinkMethod.STATUS]: async () => ({
-        port: PORT + 1,
-        expiresAt: null,
-        reachedAt: null,
-        problem: null,
-      }),
+      [KeepAwakeLinkMethod.STATUS]: async () => {
+        if (statusFails) throw Object.assign(new Error("Timed out"), { code: "TIMEOUT" });
+        return { port: PORT + 1, expiresAt: null, reachedAt: null, problem: null };
+      },
       [KeepAwakeLinkMethod.ARM]: async () => {
         throw Object.assign(new Error("refused"), {
           code: "VALIDATION",
@@ -465,8 +489,16 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     const asked = env.calls.filter((call) => call.method === KeepAwakeLinkMethod.STATUS).length;
     for (let i = 0; i < 59; i++) {
       env.api.advance(60);
+      // A question that fails partway through the pause doesn't bring the next offer forward.
+      statusFails = i === 20;
       await env.links.tick();
     }
+    statusFails = false;
+    // The host says nothing of the refusal, but its reason stays said through the pause.
+    expect(env.status().keepAwake).toEqual({
+      kind: "none",
+      problem: "Agent 37 couldn't reach this host through the link Daintree gave it.",
+    });
     expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(mints);
     expect(
       env.calls.filter((call) => call.method === KeepAwakeLinkMethod.STATUS).length

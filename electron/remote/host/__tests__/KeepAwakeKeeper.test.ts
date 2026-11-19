@@ -18,7 +18,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-type Answer = { status: number; reaches: boolean };
+/** How the edge answers: a status, whether the request reached the listener, and whether the answer then never comes back. */
+type Answer = { status: number; reaches: boolean; lost?: boolean };
 
 /**
  * A keeper over a listener and an edge the test drives: the edge answers each
@@ -59,6 +60,7 @@ function setup() {
       const nonce = url.pathname.slice(KEEP_AWAKE_PATH.length);
       if (expected.delete(nonce)) received.add(nonce);
     }
+    if (said.lost) throw new DOMException("The operation timed out.", "TimeoutError");
     return new Response(null, { status: said.status });
   });
   const listen = vi.fn(async () => listener);
@@ -181,6 +183,7 @@ describe("KeepAwakeKeeper (#17918)", () => {
       `https://${RESOURCE}-${PORT}.agent37.app.example.com/?a37_token=t`,
       `https://${RESOURCE}-${PORT}.agent37.app/`,
       `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=`,
+      `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=&x=1`,
       `https://user@${RESOURCE}-${PORT}.agent37.app/?a37_token=t`,
       `https://${RESOURCE}-${PORT}.agent37.app:443/?a37_token=t`,
       `https://${RESOURCE}-${PORT}.agent37.app:444/?a37_token=t`,
@@ -310,6 +313,19 @@ describe("KeepAwakeKeeper (#17918)", () => {
       expiresAt: null,
       problem: expect.stringContaining("expired"),
     });
+  });
+
+  it("counts a request that arrived as reaching it, though its answer timed out", async () => {
+    const env = setup();
+    await env.keeper.open();
+    env.answer(() => ({ status: 204, reaches: true, lost: true }));
+    await expect(env.arm()).resolves.toMatchObject({ reachedAt: env.now() });
+    await env.passes(6, 60_000);
+    expect(env.keeper.status()).toMatchObject({ reachedAt: env.now(), problem: null });
+    // One that never arrived, its answer lost too, is a try that may pass.
+    env.answer(() => ({ status: 204, reaches: false, lost: true }));
+    await env.passes(1, 60_000);
+    expect(env.keeper.status().reachedAt).toBe(env.now() - 60_000);
   });
 
   it("keeps a URL that reached it through failures that may pass", async () => {

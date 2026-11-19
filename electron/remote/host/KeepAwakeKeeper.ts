@@ -371,8 +371,8 @@ export class KeepAwakeKeeper {
       status = response.status;
       await response.body?.cancel().catch(() => {});
     } catch {
-      listener.take(nonce);
-      return { kind: "retry" };
+      // Arrived, its answer slow or lost on the way back: it went through the edge all the same.
+      return listener.take(nonce) ? { kind: "reached" } : { kind: "retry" };
     }
     const arrived = listener.take(nonce);
     if (status >= 200 && status < 300) {
