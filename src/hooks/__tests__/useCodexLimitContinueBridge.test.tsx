@@ -95,6 +95,37 @@ describe("useCodexLimitContinueBridge (#17909)", () => {
     });
   });
 
+  it("drops a pane disarmed while the link was down, though a stale push lands mid-refresh", async () => {
+    useCodexLimitContinueStore.setState({
+      panes: { t1: { revision: 5, state: { status: "armed" } } },
+      disarmed: {},
+    });
+    renderHook(() => useCodexLimitContinueBridge());
+    await act(async () => {
+      resolveList!([{ terminalId: "t1", revision: 5, state: { status: "armed" } }]);
+    });
+    act(() => notifyHostResync());
+    act(() => {
+      pushChange!({ terminalId: "t1", revision: 4, state: { status: "armed" } });
+    });
+    await act(async () => {
+      resolveList!([]);
+    });
+    expect(useCodexLimitContinueStore.getState().panes).toEqual({});
+  });
+
+  it("believes a list from a host restarted with its clock behind the view's last disarm", async () => {
+    useCodexLimitContinueStore.setState({ panes: {}, disarmed: { t1: 9_000 } });
+    renderHook(() => useCodexLimitContinueBridge());
+    await act(async () => {
+      resolveList!([{ terminalId: "t1", revision: 4_000, state: waiting }]);
+    });
+    expect(useCodexLimitContinueStore.getState().panes.t1).toEqual({
+      revision: 4_000,
+      state: waiting,
+    });
+  });
+
   it("ignores a push older than what the view holds", () => {
     renderHook(() => useCodexLimitContinueBridge());
     act(() => {

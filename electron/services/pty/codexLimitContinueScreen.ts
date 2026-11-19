@@ -28,6 +28,9 @@ const PLAN_MODE = /\bPlan mode\b/;
  * a footer without one says nothing about whether a goal is running.
  */
 const MIN_COLS_FOR_GOAL_LABEL = GOAL_USAGE_LIMITED.length + 4;
+/** Codex's Vim mode label, which outranks the goal label for room on its row. */
+const VIM_LABEL = /\bVim\b/;
+const VIM_LABEL_COLS = "Vim: Insert · ".length;
 /**
  * Rows Codex draws below an empty composer: its footer, and room for a status
  * line, each indented as Codex draws them. Anything longer, or a row written
@@ -36,6 +39,24 @@ const MIN_COLS_FOR_GOAL_LABEL = GOAL_USAGE_LIMITED.length + 4;
  */
 const MAX_FOOTER_ROWS = 3;
 const FOOTER_ROW = /^\s+\S/;
+
+/** History above a stop banner, as text, that tells a redisplay of it from a new stop with the same words. */
+const STOP_CONTEXT_ROWS = 8;
+const STOP_CONTEXT_CHARS = 80;
+
+/**
+ * The history just above the banner at `bannerStart` (#17909): its last
+ * characters with every space dropped, so a rewrap at another width reads the
+ * same and only other history reads differently.
+ */
+export function codexStopContext(lines: readonly string[], bannerStart: number): string {
+  return lines
+    .slice(Math.max(0, bannerStart - STOP_CONTEXT_ROWS), bannerStart)
+    .map((line) => stripAnsiCodes(line))
+    .join("")
+    .replace(/\s+/g, "")
+    .slice(-STOP_CONTEXT_CHARS);
+}
 
 export type CodexLimitScreenVerdict =
   { line: CodexLimitContinueLine } | { skip: CodexLimitContinueSkipReason };
@@ -88,6 +109,8 @@ export function judgeCodexLimitScreen(
   if (below.some((row) => GOAL_WORD.test(row) || PLAN_MODE.test(row))) {
     return { skip: "unrecognized-footer" };
   }
-  if (cols === undefined || cols < MIN_COLS_FOR_GOAL_LABEL) return { skip: "unrecognized-footer" };
+  const roomForGoal =
+    MIN_COLS_FOR_GOAL_LABEL + (below.some((row) => VIM_LABEL.test(row)) ? VIM_LABEL_COLS : 0);
+  if (cols === undefined || cols < roomForGoal) return { skip: "unrecognized-footer" };
   return { line: "continue" };
 }

@@ -16,8 +16,10 @@ export function useCodexLimitContinueBridge(): void {
     let pushedSince = new Set<string>();
 
     const offChanged = api.onChanged((change) => {
-      pushedSince.add(change.terminalId);
-      useCodexLimitContinueStore.getState().applyChange(change);
+      // Only a push the view took is newer than the list it may be racing.
+      if (useCodexLimitContinueStore.getState().applyChange(change)) {
+        pushedSince.add(change.terminalId);
+      }
     });
     const refresh = () => {
       const asked = new Set<string>();

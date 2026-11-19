@@ -21,10 +21,13 @@ interface CodexLimitContinueStoreState {
   panes: Readonly<Record<string, ArmedPane>>;
   /** The revision each pane was disarmed at, so an older arm arriving later changes nothing. */
   disarmed: Readonly<Record<string, number>>;
-  applyChange: (change: CodexLimitContinueChange) => void;
+  /** False when the view already holds something at least as new. */
+  applyChange: (change: CodexLimitContinueChange) => boolean;
   /**
    * Main's list, merged by revision. A pane missing from it is dropped unless
-   * a push named it after the list was asked for (`pushedSince`).
+   * a push applied after the list was asked for named it (`pushedSince`). The
+   * list was read after every push before it, so it supersedes their disarm
+   * marks: a host restarted since, whose clock may run behind, is believed.
    */
   mergeSnapshot: (
     entries: readonly CodexLimitContinueEntry[],
@@ -32,34 +35,40 @@ interface CodexLimitContinueStoreState {
   ) => void;
 }
 
-export const useCodexLimitContinueStore = create<CodexLimitContinueStoreState>((set) => ({
+export const useCodexLimitContinueStore = create<CodexLimitContinueStoreState>((set, get) => ({
   panes: {},
   disarmed: {},
-  applyChange: ({ terminalId, revision, state }) =>
-    set((current) => {
-      const floor = Math.max(
-        current.panes[terminalId]?.revision ?? 0,
-        current.disarmed[terminalId] ?? 0
-      );
-      if (revision <= floor) return current;
-      if (state === null) {
-        const { [terminalId]: _dropped, ...rest } = current.panes;
-        return { panes: rest, disarmed: { ...current.disarmed, [terminalId]: revision } };
-      }
-      return { panes: { ...current.panes, [terminalId]: { revision, state } } };
-    }),
+  applyChange: ({ terminalId, revision, state }) => {
+    const current = get();
+    const floor = Math.max(
+      current.panes[terminalId]?.revision ?? 0,
+      current.disarmed[terminalId] ?? 0
+    );
+    if (revision <= floor) return false;
+    if (state === null) {
+      const { [terminalId]: _dropped, ...rest } = current.panes;
+      set({ panes: rest, disarmed: { ...current.disarmed, [terminalId]: revision } });
+      return true;
+    }
+    set({ panes: { ...current.panes, [terminalId]: { revision, state } } });
+    return true;
+  },
   mergeSnapshot: (entries, pushedSince) =>
     set((current) => {
       const panes: Record<string, ArmedPane> = {};
+      const disarmed: Record<string, number> = {};
+      for (const [terminalId, revision] of Object.entries(current.disarmed)) {
+        if (pushedSince.has(terminalId)) disarmed[terminalId] = revision;
+      }
       for (const { terminalId, revision, state } of entries) {
-        if ((current.disarmed[terminalId] ?? 0) >= revision) continue;
-        const held = current.panes[terminalId];
+        if ((disarmed[terminalId] ?? 0) >= revision) continue;
+        const held = pushedSince.has(terminalId) ? current.panes[terminalId] : undefined;
         panes[terminalId] = held && held.revision > revision ? held : { revision, state };
       }
       for (const [terminalId, held] of Object.entries(current.panes)) {
         if (!(terminalId in panes) && pushedSince.has(terminalId)) panes[terminalId] = held;
       }
-      return { panes };
+      return { panes, disarmed };
     }),
 }));
 

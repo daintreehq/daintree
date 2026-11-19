@@ -71,8 +71,7 @@ import type {
   CodexLimitContinueSkipReason,
   CodexLimitStopRef,
 } from "../../../shared/types/codexLimitContinuation.js";
-import { judgeCodexLimitScreen } from "./codexLimitContinueScreen.js";
-import { stripAnsi } from "./AgentPatternDetector.js";
+import { codexStopContext, judgeCodexLimitScreen } from "./codexLimitContinueScreen.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -133,16 +132,6 @@ interface CodexStopGuard {
   inputSeq: number;
   /** A choice dialog was observed since, whatever the screen shows now. */
   dialogSeen: boolean;
-}
-
-/** History rows above a stop banner that tell a redisplay of it from a new stop with the same text. */
-const CODEX_STOP_CONTEXT_ROWS = 3;
-
-function codexStopContext(lines: readonly string[], bannerStart: number): string {
-  return lines
-    .slice(Math.max(0, bannerStart - CODEX_STOP_CONTEXT_ROWS), bannerStart)
-    .map((line) => stripAnsi(line).trimEnd())
-    .join("\n");
 }
 
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
@@ -344,9 +333,9 @@ export class TerminalProcess {
   /**
    * The guard of the stop last seen, kept for a redisplay of it after it was
    * off screen a while (a transcript or picker closed): the same banner under
-   * the same history is the same stop, so what happened since it first showed
-   * still counts. A stop a new turn ran into sits under other history and
-   * starts afresh.
+   * the same history (as text, so a rewrap after a resize is the same) is the
+   * same stop, so what happened since it first showed still counts. A stop a
+   * new turn ran into sits under other history and starts afresh.
    */
   private codexStopGuard: CodexStopGuard | null = null;
   /** Bumped by every arm and disarm, so a continuation asked for under one is refused after another. */

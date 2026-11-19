@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { judgeCodexLimitScreen } from "../codexLimitContinueScreen.js";
+import { codexStopContext, judgeCodexLimitScreen } from "../codexLimitContinueScreen.js";
 import { scanCodexLimitBanner } from "../CodexUsageLimit.js";
 
 // A Codex 0.170 screen in the serializer's shape: the stop banner as the last
@@ -113,10 +113,39 @@ describe("judgeCodexLimitScreen (#17909)", () => {
     });
   });
 
+  it("needs room for the goal label beside Codex's Vim label before reading its absence", () => {
+    const vim = screen({ footer: "  Vim: Insert · ? for shortcuts" });
+    expect(judgeCodexLimitScreen(vim, 44, KEY)).toEqual({ skip: "unrecognized-footer" });
+    expect(judgeCodexLimitScreen(vim, 80, KEY)).toEqual({ line: "continue" });
+  });
+
+  it("reads a goal label in a narrow pane all the same", () => {
+    const goal = screen({ footer: "  Goal hit usage limits (/goal resume)" });
+    expect(judgeCodexLimitScreen(goal, 38, KEY)).toEqual({ line: "/goal resume" });
+  });
+
   it("reads a banner Codex word-wrapped at a narrow pane", () => {
     const wrapped = screen({
       banner: "■ You’ve hit your usage limit. Try again at\r\n3:40 PM.",
     });
     expect(judgeCodexLimitScreen(wrapped, 44, KEY)).toEqual({ line: "continue" });
+  });
+});
+
+describe("codexStopContext (#17909)", () => {
+  const history = ["• Ran the full test suite and found two", "failures in the parser.", ""];
+
+  it("reads the same history rewrapped at another width as the same", () => {
+    const rewrapped = ["• Ran the full test suite", "and found two failures in", "the parser."];
+    expect(codexStopContext([...rewrapped, BANNER], 3)).toBe(
+      codexStopContext([...history, BANNER], 3)
+    );
+  });
+
+  it("reads other history above the same banner as different", () => {
+    const other = ["› try again", "• Looked at the parser again.", ""];
+    expect(codexStopContext([...other, BANNER], 3)).not.toBe(
+      codexStopContext([...history, BANNER], 3)
+    );
   });
 });
