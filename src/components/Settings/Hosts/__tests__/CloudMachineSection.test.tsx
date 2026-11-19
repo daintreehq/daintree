@@ -51,7 +51,7 @@ vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal } }));
 import { CloudMachineSection } from "../CloudMachineSection";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
-import { clockTime, IDLE_STOP_UNKNOWN } from "@/components/Hosts/cloud/cloudHostLabels";
+import { clockTime, dayTime, IDLE_STOP_UNKNOWN } from "@/components/Hosts/cloud/cloudHostLabels";
 import { ClientAppError } from "@/utils/clientAppError";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
@@ -946,7 +946,7 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
       [agent37]
     );
     expect(idleRow()).toContain(
-      "With no device connected, the host keeps the machine awake while it sees work, with a link from Daintree that works until"
+      `With no device connected, the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(Date.UTC(2026, 10, 26, 15))} (as the host said ${dayTime(Date.UTC(2026, 10, 19, 15))}).`
     );
     expect(idleRow()).not.toContain("is in charge while no device is connected");
     cleanup();

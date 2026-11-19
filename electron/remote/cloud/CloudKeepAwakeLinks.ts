@@ -12,12 +12,24 @@ import {
 } from "./machineKeeperLink.js";
 import type { CloudProvider, ProviderCredentials } from "./provider.js";
 
-/** How often a linked machine's host is asked what it holds: one it dropped, or another device's. */
-const CHECK_EVERY_MS = 10 * 60_000;
+/**
+ * How often a linked machine's host is asked what it holds: one it dropped,
+ * or another device's. Often, since the details are what someone reads before
+ * walking away from a busy machine.
+ */
+const CHECK_EVERY_MS = 60_000;
 /** A link this close to its expiry is replaced while its machine's own link stays up. */
 const RENEW_BEFORE_MS = 24 * 60 * 60_000;
 /** A failure that may pass (a dropped link, an unreachable provider) is tried again after this long. */
 const RETRY_MS = 5 * 60_000;
+/** A link the host refused is offered again after this long, or on the next link. */
+const REFUSED_RETRY_MS = 60 * 60_000;
+/**
+ * A host found holding none on a link that stays up is handed a new one, no
+ * sooner than this after the last: links can't be revoked, so none is minted
+ * in a loop.
+ */
+const REMINT_AFTER_MS = 30 * 60_000;
 const CALL_TIMEOUT_MS = 30_000;
 
 const TOO_OLD =
@@ -44,6 +56,25 @@ function said(error: unknown, fallback: string): string {
     : fallback;
 }
 
+/** `text` with a signed URL, or any token one carried, taken out: it is shown and kept. */
+function withoutLink(text: string, url?: string): string {
+  let out = text;
+  if (url) {
+    const token = new URL(url).searchParams.get("a37_token");
+    out = out.split(url).join("[link]");
+    if (token) out = out.split(token).join("[redacted]");
+  }
+  return out.replace(
+    /(a37_token["']?\s*[=:]\s*["']?)(?!\[redacted\])[^&\s"',}]+/gi,
+    "$1[redacted]"
+  );
+}
+
+/** A view of what the host holds, apart from when it last said so: that alone isn't news. */
+function viewKey(view: CloudKeepAwake | null): string {
+  return JSON.stringify(view?.kind === "held" ? { ...view, confirmedAt: 0 } : view);
+}
+
 export interface CloudKeepAwakeLinksDeps {
   store: Pick<
     CloudHostStore,
@@ -68,8 +99,11 @@ export interface CloudKeepAwakeLinksDeps {
  * What the host says it holds (never the URL) is kept for the host's details.
  */
 export class CloudKeepAwakeLinks {
-  /** The attempt under way for each binding, with the link it runs on. */
-  private readonly running = new Map<string, { session: LinkSession; promise: Promise<void> }>();
+  /** The attempt under way for each binding, with the link it runs on and whether it mints. */
+  private readonly running = new Map<
+    string,
+    { session: LinkSession; mint: boolean; promise: Promise<void> }
+  >();
   /** A link that came up while another's attempt ran: tried once that one settles. */
   private readonly queued = new Map<
     string,
@@ -81,6 +115,8 @@ export class CloudKeepAwakeLinks {
   /** When the host last said it holds the link stored for its machine. */
   private readonly confirmedAt = new Map<string, number>();
   private readonly retryAt = new Map<string, number>();
+  /** When a link was last minted for each binding. */
+  private readonly mintedAt = new Map<string, number>();
   /** The link on which the host said it doesn't know these calls: not asked again on it. */
   private readonly unsupportedOn = new Map<string, LinkSession>();
   /** Stored expiries already seen passing, so the details change once when one runs out. */
@@ -157,6 +193,7 @@ export class CloudKeepAwakeLinks {
       this.checkedAt,
       this.confirmedAt,
       this.retryAt,
+      this.mintedAt,
       this.unsupportedOn,
     ]) {
       for (const id of map.keys()) if (!live.has(id)) map.delete(id);
@@ -179,9 +216,11 @@ export class CloudKeepAwakeLinks {
     const bindingId = binding.id;
     const running = this.running.get(bindingId);
     if (running) {
-      // A link since replaced never takes the place of the current link's queued attempt.
+      // A link since replaced never takes the place of the current link's queued attempt, and
+      // an attempt on the same link that already mints covers this one.
       const current = session.isOpen && this.deps.sessionFor(hostId) === session;
-      if (current && (running.session !== session || mint)) {
+      const covered = running.session === session && (running.mint || !mint);
+      if (current && !covered) {
         const queued = this.queued.get(bindingId);
         const sameLink = queued?.session === session;
         this.queued.set(bindingId, {
@@ -206,7 +245,7 @@ export class CloudKeepAwakeLinks {
           void this.run(next.hostId, next.session, next.mint);
         }
       });
-    this.running.set(bindingId, { session, promise });
+    this.running.set(bindingId, { session, mint, promise });
     return promise;
   }
 
@@ -260,7 +299,12 @@ export class CloudKeepAwakeLinks {
     }
     if (!this.reaches(hostId, bindingId, resourceId, session)) return;
     this.record(bindingId, resourceId, status, status.problem);
-    if (!mint) return;
+    // Found holding none on a link that stays up: handed a new one, now and then.
+    const lastMint = this.mintedAt.get(bindingId);
+    const lost =
+      status.expiresAt === null &&
+      (lastMint === undefined || this.now() - lastMint >= REMINT_AFTER_MS);
+    if (!mint && !lost) return;
     if (status.port === null) {
       // The host couldn't open its port, perhaps for a moment.
       this.retryAt.set(bindingId, this.now() + RETRY_MS);
@@ -269,6 +313,7 @@ export class CloudKeepAwakeLinks {
 
     let credentials: ProviderCredentials;
     let grant: { url: string; expiresAt: number };
+    this.mintedAt.set(bindingId, this.now());
     try {
       credentials = await this.deps.accounts.credentials(account);
       if (!this.reaches(hostId, bindingId, resourceId, session)) return;
@@ -298,8 +343,12 @@ export class CloudKeepAwakeLinks {
         return;
       }
       if (errorCode(error) === "VALIDATION") {
-        // Refused: whatever it held before stays, and says so.
-        this.noteProblem(bindingId, said(error, "The host refused the link Daintree gave it."));
+        // Refused: whatever it held before stays, and says so. Not offered again for a while.
+        this.noteProblem(
+          bindingId,
+          withoutLink(said(error, "The host refused the link Daintree gave it."), grant.url)
+        );
+        this.retryAt.set(bindingId, this.now() + REFUSED_RETRY_MS);
         return;
       }
       throw error;
@@ -310,9 +359,9 @@ export class CloudKeepAwakeLinks {
 
   /** Why the host holds no link, said only while it holds none. */
   private noteProblem(bindingId: string, message: string): void {
-    const before = JSON.stringify(this.statusFor(bindingId));
-    this.problems.set(bindingId, message);
-    if (JSON.stringify(this.statusFor(bindingId)) !== before) this.deps.changed();
+    const before = viewKey(this.statusFor(bindingId));
+    this.problems.set(bindingId, withoutLink(message));
+    if (viewKey(this.statusFor(bindingId)) !== before) this.deps.changed();
   }
 
   /** What the host said it holds, kept for the details; the stored record is written only on a change. */
@@ -323,7 +372,7 @@ export class CloudKeepAwakeLinks {
     problem: string | null
   ): void {
     const now = this.now();
-    const before = JSON.stringify(this.statusFor(bindingId));
+    const before = viewKey(this.statusFor(bindingId));
     this.checkedAt.set(bindingId, now);
     const expiresAt = status?.expiresAt ?? null;
     if (expiresAt !== null && expiresAt > now) {
@@ -339,7 +388,7 @@ export class CloudKeepAwakeLinks {
       }
     } else {
       this.confirmedAt.delete(bindingId);
-      if (problem) this.problems.set(bindingId, problem);
+      if (problem) this.problems.set(bindingId, withoutLink(problem));
       else this.problems.delete(bindingId);
       if (this.deps.store.binding(bindingId)?.keepAwake) {
         this.deps.store.updateBinding(bindingId, (binding) => {
@@ -348,7 +397,7 @@ export class CloudKeepAwakeLinks {
         });
       }
     }
-    if (JSON.stringify(this.statusFor(bindingId)) !== before) this.deps.changed();
+    if (viewKey(this.statusFor(bindingId)) !== before) this.deps.changed();
   }
 
   private async call(

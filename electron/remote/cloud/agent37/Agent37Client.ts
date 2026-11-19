@@ -120,6 +120,8 @@ export function redactAgent37Text(text: string, apiKey?: string): string {
       // Key-shaped runs after the documented prefix; error codes like `ssh_key_exists` don't start with `sk_`.
       .replace(/\bsk_[a-z]+_[A-Za-z0-9]{8,}/g, "[redacted]")
       .replace(/([?&](?:token|_token|a37_token|key|sig|signature)=)[^&\s]+/gi, "$1[redacted]")
+      // A signed URL's token, however an answer quotes it.
+      .replace(/(a37_token["']?\s*[=:]\s*["']?)(?!\[redacted\])[^&\s"',}]+/gi, "$1[redacted]")
       .slice(0, 500)
   );
 }

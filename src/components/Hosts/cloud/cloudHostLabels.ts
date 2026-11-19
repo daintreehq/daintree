@@ -293,7 +293,7 @@ function awaySentence(
   const ownInCharge = `${sentenceCase(ownTimer)} is in charge while no device is connected`;
   if (keepAwake?.kind === "held") {
     const said = machine.connected ? "" : ` (as the host said ${dayTime(keepAwake.confirmedAt)})`;
-    const held = `With no device connected, the host keeps the machine awake while it sees work, with a link from Daintree that works until ${dayTime(keepAwake.expiresAt)}${said}. Once the host is idle, ${ownTimer} puts it to sleep ${afterIdle}.`;
+    const held = `With no device connected, the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(keepAwake.expiresAt)}${said}. Once the host is idle, ${ownTimer} puts it to sleep ${afterIdle}.`;
     return { connected: held, offline: held };
   }
   if (keepAwake?.kind === "expired") {
@@ -305,7 +305,10 @@ function awaySentence(
     const refused = `${ownInCharge}, even while the host sees work: ${problem}`;
     return { connected: refused, offline: refused };
   }
-  return { connected: null, offline: `${ownInCharge}: it puts the machine to sleep ${afterIdle}.` };
+  const own = `${ownInCharge}: it puts the machine to sleep ${afterIdle}.`;
+  // The host said it holds none: said while connected too, where someone decides to leave.
+  if (keepAwake?.kind === "none") return { connected: own, offline: own };
+  return { connected: null, offline: own };
 }
 
 /**

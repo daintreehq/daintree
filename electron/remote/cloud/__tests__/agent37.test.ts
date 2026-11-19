@@ -317,10 +317,15 @@ describe("redactAgent37Text", () => {
     ).toBe("ssh_key_exists: [redacted] and Bearer [redacted]");
   });
 
-  it("removes a signed URL's token (#17918)", () => {
+  it("removes a signed URL's token, however it is quoted (#17918)", () => {
     expect(redactAgent37Text("https://ab12cd34ef-9119.agent37.app/?a37_token=6a2be1f0&x=1")).toBe(
       "https://ab12cd34ef-9119.agent37.app/?a37_token=[redacted]&x=1"
     );
+    expect(redactAgent37Text("https://ab12cd34ef-9119.agent37.app/?x=1&a37_token=6a2be1f0")).toBe(
+      "https://ab12cd34ef-9119.agent37.app/?x=1&a37_token=[redacted]"
+    );
+    expect(redactAgent37Text("bad a37_token=6a2be1f0 here")).toBe("bad a37_token=[redacted] here");
+    expect(redactAgent37Text('{"a37_token":"6a2be1f0"}')).toBe('{"a37_token":"[redacted]"}');
   });
 });
 
@@ -642,6 +647,17 @@ describe("Agent37Provider", () => {
     expect(new URL(grant.url).searchParams.get("a37_token")).toBe(api.signedUrls[0]!.token);
 
     // A link for another port or machine than asked is never handed on.
+    api.fail("POST", /\/signed-url$/, () =>
+      Response.json({
+        url: `https://${instance.id}-41000.agent37.app/?a37_token=t`,
+        domain_urls: [],
+        port: 41_001,
+        expires_at: 1,
+      })
+    );
+    await expect(provider.keepAwakeUrl(credentials, instance.id, 41_000)).rejects.toMatchObject({
+      kind: "bad-response",
+    });
     for (const url of [
       `https://${instance.id}-41001.agent37.app/?a37_token=t`,
       `https://zzzzzzzzzz-41000.agent37.app/?a37_token=t`,
@@ -662,6 +678,10 @@ describe("Agent37Provider", () => {
     await expect(
       client.signedUrl(ctx, instance.id, { port: 22_022, ttlSeconds: 60 })
     ).rejects.toMatchObject({ status: 400 });
+    expect(api.calls("POST", `/instances/${instance.id}/signed-url`)[0]!.body).toEqual({
+      port: 22_022,
+      ttl_seconds: 60,
+    });
   });
 
   it("reaches a machine it created as node through the tunnel's name for it, with no key to pin", async () => {

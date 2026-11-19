@@ -7,7 +7,7 @@ import type { HostIdleActorSource } from "./HostIdleTracker.js";
 /** Something on this machine that Agent 37's edge forwards a port's requests to. */
 export interface KeepAwakeListener {
   readonly port: number;
-  /** The one nonce the next request should carry; any earlier one is forgotten. */
+  /** A nonce a coming request should carry; a few may be outstanding at once. */
   expect(nonce: string): void;
   /** Whether a request carrying `nonce` reached this listener, forgetting it either way. */
   take(nonce: string): boolean;
@@ -19,7 +19,10 @@ export interface KeepAwakeKeeperDeps {
   /** Opens a listener on a port the system picks, reachable from Agent 37's edge. */
   listen(): Promise<KeepAwakeListener>;
   fetch?: typeof fetch;
+  /** Wall-clock time, for expiries and what is reported. */
   now?: () => number;
+  /** A clock no wall-clock step moves, for how often requests go out. */
+  monotonic?: () => number;
   tickMs?: number;
 }
 
@@ -29,11 +32,14 @@ interface HeldUrl {
   expiresAt: number;
   /** A request through it has reached this listener. */
   verified: boolean;
+  /** When a request through it last reached this listener; null before the first. */
+  reachedAt: number | null;
 }
 
 type Outcome = { kind: "reached" } | { kind: "retry" } | { kind: "lost"; problem: string };
 
-const TICK_MS = 30_000;
+/** Often enough that work starting just as Agent 37's timer runs out is still seen in time. */
+const TICK_MS = 10_000;
 /** Agent 37 sleeps an instance after 5 minutes without activity at the least. */
 const PING_EVERY_MS = 60_000;
 /**
@@ -50,10 +56,15 @@ const LISTENER_GRACE_MS = 5 * 60_000;
 const EXPIRED =
   "The link Daintree gave this host to keep Agent 37 from sleeping it expired. Connect to it from Daintree to renew it.";
 const REFUSED = "Agent 37 no longer accepts the link Daintree gave this host to keep it awake.";
-const ELSEWHERE = "The link Daintree gave this host reaches something other than this machine.";
+const NOT_ARRIVED = "A request through the link Daintree gave this host never arrived at it.";
 const UNREACHED = "Agent 37 couldn't reach this host through the link Daintree gave it.";
+const PORT_CLOSED = "This host's port closed while it checked that link. Ask for its port again.";
 /** A URL that never reached this listener is given up on after this many tries that may have passed. */
 const UNVERIFIED_TRIES = 3;
+
+function shuttingDown(): AppError {
+  return new AppError({ code: "UNSUPPORTED", message: "This host is shutting down" });
+}
 
 /**
  * Holds an Agent 37 instance awake while its host sees work, with no Shell
@@ -66,23 +77,31 @@ const UNVERIFIED_TRIES = 3;
  *
  * The URL lives only in this process and is never reported or logged. Each
  * request carries a fresh nonce that must reach the listener, so a URL that
- * answers from anywhere but this machine is dropped.
+ * answers from anywhere but this machine is dropped. One request is out at a
+ * time.
  */
 export class KeepAwakeKeeper {
   private listener: KeepAwakeListener | null = null;
   private opening: Promise<KeepAwakeListener> | null = null;
   private listenerProblem: string | null = null;
   private held: HeldUrl | null = null;
+  /**
+   * A URL that reached this listener and still works, kept while the one that
+   * replaced it hasn't yet: taken back if that one is dropped.
+   */
+  private fallback: HeldUrl | null = null;
   private problem: string | null = null;
-  private reachedAt: number | null = null;
+  /** When the last request that reached this listener went out, by the monotonic clock. */
   private lastSentAt = Number.NEGATIVE_INFINITY;
-  private retryAt = 0;
+  private retryAt = Number.NEGATIVE_INFINITY;
   private failures = 0;
   private generation = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private running: Promise<void> | null = null;
   private controller: AbortController | null = null;
+  /** An arm's own check is out: no pass sends meanwhile. */
+  private verifying: AbortController | null = null;
   /** Arms in the order they came, so a late one from a link since gone can't land over a newer one. */
   private arms: Promise<unknown> = Promise.resolve();
   private disposed = false;
@@ -93,12 +112,16 @@ export class KeepAwakeKeeper {
     return (this.deps.now ?? Date.now)();
   }
 
+  private mono(): number {
+    return (this.deps.monotonic ?? (() => performance.now()))();
+  }
+
   status(): KeepAwakeStatus {
     const held = this.held;
     return {
       port: this.listener?.port ?? null,
       expiresAt: held?.expiresAt ?? null,
-      reachedAt: held ? this.reachedAt : null,
+      reachedAt: held?.reachedAt ?? null,
       problem: held ? null : (this.problem ?? this.listenerProblem),
     };
   }
@@ -106,9 +129,7 @@ export class KeepAwakeKeeper {
   /** Opens the listener if it isn't open, once every URL handed over so far is taken or refused. */
   async open(): Promise<KeepAwakeStatus> {
     await this.arms;
-    if (this.disposed) {
-      throw new AppError({ code: "UNSUPPORTED", message: "This host is shutting down" });
-    }
+    if (this.disposed) throw shuttingDown();
     try {
       await this.ensureListener();
     } catch {
@@ -121,7 +142,9 @@ export class KeepAwakeKeeper {
   /**
    * Holds this URL in place of any other, once it is checked to reach this
    * listener: at once while the host sees work, otherwise on the first request
-   * it sends. Refused, the URL it held stays. Taken one at a time, in order.
+   * it sends. Refused, the URL it held stays; replaced by one not checked yet,
+   * a URL that reached it is taken back if the new one is dropped. Taken one
+   * at a time, in order.
    */
   arm(request: KeepAwakeArmRequest): Promise<KeepAwakeStatus> {
     const taken = this.arms.then(() => this.armNow(request));
@@ -130,37 +153,58 @@ export class KeepAwakeKeeper {
   }
 
   private async armNow(request: KeepAwakeArmRequest): Promise<KeepAwakeStatus> {
-    if (this.disposed) {
-      throw new AppError({ code: "UNSUPPORTED", message: "This host is shutting down" });
-    }
+    if (this.disposed) throw shuttingDown();
     const refuse = (message: string): never => {
+      // A port opened for this URL alone closes again in time.
+      if (!this.held && !this.disposed) this.scheduleClose();
       throw new AppError({ code: "VALIDATION", message, userMessage: message });
     };
     if (request.expiresAt <= this.now()) refuse("That link has already expired.");
     const listener = this.listener;
-    if (!listener) refuse("This host has no port open for that link. Ask for its port first.");
-    const wrong = keepAwakeUrlProblem(request.url, request.resourceId, listener!.port);
+    if (!listener) {
+      return refuse("This host has no port open for that link. Ask for its port first.");
+    }
+    const wrong = keepAwakeUrlProblem(request.url, request.resourceId, listener.port);
     if (wrong) refuse(wrong);
+    // Held open while the URL for it is checked.
+    if (this.graceTimer) clearTimeout(this.graceTimer);
+    this.graceTimer = null;
     const candidate: HeldUrl = {
       url: request.url,
       resourceId: request.resourceId,
       expiresAt: request.expiresAt,
       verified: false,
+      reachedAt: null,
     };
-    let reached = false;
+    let outcome: Outcome | null = null;
     if (this.deps.idle.observation().busy) {
-      const outcome = await this.send(candidate, new AbortController().signal);
-      if (this.disposed) {
-        throw new AppError({ code: "UNSUPPORTED", message: "This host is shutting down" });
+      const check = new AbortController();
+      this.verifying = check;
+      try {
+        // A request a pass already sent goes first: one at a time.
+        while (this.running) await this.running;
+        if (!this.disposed && this.deps.idle.observation().busy) {
+          outcome = await this.send(candidate, check.signal);
+        }
+      } finally {
+        if (this.verifying === check) this.verifying = null;
       }
-      if (outcome.kind === "lost") refuse(outcome.problem);
-      reached = outcome.kind === "reached";
-      // Unreachable for now: taken on trust, and its first request says whether it works.
     }
-    this.replace({ ...candidate, verified: reached });
+    if (this.disposed) throw shuttingDown();
+    if (this.listener !== listener) refuse(PORT_CLOSED);
+    if (outcome?.kind === "lost") refuse(outcome.problem);
+    const previous = this.held;
+    const reached = outcome?.kind === "reached";
+    this.replace(candidate);
+    if (!reached && previous?.verified && previous.expiresAt > this.now()) {
+      this.fallback = previous;
+    }
     if (reached) {
-      this.reachedAt = this.now();
-      this.lastSentAt = this.now();
+      candidate.verified = true;
+      candidate.reachedAt = this.now();
+      this.lastSentAt = this.mono();
+    } else if (outcome?.kind === "retry") {
+      this.noteRetry();
     }
     this.timer ??= setInterval(() => void this.tick(), this.deps.tickMs ?? TICK_MS);
     this.timer.unref?.();
@@ -178,6 +222,8 @@ export class KeepAwakeKeeper {
 
   dispose(): void {
     this.disposed = true;
+    this.verifying?.abort();
+    this.verifying = null;
     this.replace(null);
     if (this.graceTimer) clearTimeout(this.graceTimer);
     this.graceTimer = null;
@@ -191,7 +237,7 @@ export class KeepAwakeKeeper {
       .then((listener) => {
         if (this.disposed) {
           listener.close();
-          throw new AppError({ code: "UNSUPPORTED", message: "This host is shutting down" });
+          throw shuttingDown();
         }
         this.listener = listener;
         this.listenerProblem = null;
@@ -213,7 +259,7 @@ export class KeepAwakeKeeper {
     if (this.graceTimer) clearTimeout(this.graceTimer);
     this.graceTimer = setTimeout(() => {
       this.graceTimer = null;
-      if (!this.held) this.closeListener();
+      if (!this.held && !this.verifying) this.closeListener();
     }, LISTENER_GRACE_MS);
     this.graceTimer.unref?.();
   }
@@ -229,24 +275,36 @@ export class KeepAwakeKeeper {
     this.controller?.abort();
     this.controller = null;
     this.held = next;
-    this.retryAt = 0;
+    this.fallback = null;
+    this.lastSentAt = Number.NEGATIVE_INFINITY;
+    this.retryAt = Number.NEGATIVE_INFINITY;
     this.failures = 0;
     if (next) {
       this.problem = null;
       if (this.graceTimer) clearTimeout(this.graceTimer);
       this.graceTimer = null;
-    } else {
-      this.reachedAt = null;
-      this.lastSentAt = Number.NEGATIVE_INFINITY;
-      if (this.timer) clearInterval(this.timer);
+    } else if (this.timer) {
+      clearInterval(this.timer);
       this.timer = null;
     }
   }
 
+  /** Lets go of the URL held, taking back the one it replaced if that still works. */
   private drop(problem: string): void {
+    const fallback = this.fallback;
+    if (fallback && fallback.expiresAt > this.now()) {
+      this.replace(fallback);
+      return;
+    }
     this.replace(null);
     this.problem = problem;
     if (!this.disposed) this.scheduleClose();
+  }
+
+  private noteRetry(): void {
+    this.failures += 1;
+    const delay = RETRY_BASE_MS * 2 ** (this.failures - 1) * (0.8 + Math.random() * 0.4);
+    this.retryAt = this.mono() + Math.min(delay, RETRY_MAX_MS);
   }
 
   private async step(): Promise<void> {
@@ -256,14 +314,16 @@ export class KeepAwakeKeeper {
       this.drop(EXPIRED);
       return;
     }
+    if (this.fallback && this.now() >= this.fallback.expiresAt) this.fallback = null;
+    if (this.verifying) return;
     // Only while the host sees work: nothing sent then is still out once an idle time can end.
     if (!this.deps.idle.observation().busy) return;
-    if (this.now() < this.retryAt) return;
-    if (held.verified && this.now() - this.lastSentAt < PING_EVERY_MS) return;
+    if (this.mono() < this.retryAt) return;
+    if (held.verified && this.mono() - this.lastSentAt < PING_EVERY_MS) return;
     const generation = this.generation;
     const controller = new AbortController();
     this.controller = controller;
-    const startedAt = this.now();
+    const startedAt = this.mono();
     let outcome: Outcome;
     try {
       outcome = await this.send(held, controller.signal);
@@ -276,31 +336,29 @@ export class KeepAwakeKeeper {
       return;
     }
     if (outcome.kind === "retry") {
-      this.failures += 1;
-      if (!held.verified && this.failures >= UNVERIFIED_TRIES) {
+      if (!held.verified && this.failures + 1 >= UNVERIFIED_TRIES) {
         this.drop(UNREACHED);
         return;
       }
-      const delay = RETRY_BASE_MS * 2 ** (this.failures - 1) * (0.8 + Math.random() * 0.4);
-      this.retryAt = this.now() + Math.min(delay, RETRY_MAX_MS);
+      this.noteRetry();
       return;
     }
     this.failures = 0;
-    this.retryAt = 0;
+    this.retryAt = Number.NEGATIVE_INFINITY;
     held.verified = true;
+    held.reachedAt = this.now();
+    this.fallback = null;
     this.lastSentAt = startedAt;
-    this.reachedAt = this.now();
   }
 
   /** One request through the URL, carrying a nonce only this listener knows to expect. */
   private async send(held: HeldUrl, signal: AbortSignal): Promise<Outcome> {
     const listener = this.listener;
     // Its port gone, the URL reaches nothing here.
-    if (!listener) return { kind: "lost", problem: ELSEWHERE };
+    if (!listener) return { kind: "lost", problem: NOT_ARRIVED };
     if (this.now() >= held.expiresAt) return { kind: "lost", problem: EXPIRED };
     const nonce = crypto.randomBytes(16).toString("hex");
     listener.expect(nonce);
-    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const fetchFn = this.deps.fetch ?? globalThis.fetch.bind(globalThis);
     let status: number;
     try {
@@ -308,7 +366,7 @@ export class KeepAwakeKeeper {
         method: "GET",
         redirect: "error",
         cache: "no-store",
-        signal: AbortSignal.any([signal, timeout]),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
       });
       status = response.status;
       await response.body?.cancel().catch(() => {});
@@ -318,12 +376,12 @@ export class KeepAwakeKeeper {
     }
     const arrived = listener.take(nonce);
     if (status >= 200 && status < 300) {
-      return arrived ? { kind: "reached" } : { kind: "lost", problem: ELSEWHERE };
+      return arrived ? { kind: "reached" } : { kind: "lost", problem: NOT_ARRIVED };
     }
     if (status === 401 || status === 403 || status === 410) {
       return { kind: "lost", problem: this.now() >= held.expiresAt ? EXPIRED : REFUSED };
     }
-    if (status === 404) return { kind: "lost", problem: ELSEWHERE };
+    if (status === 404) return { kind: "lost", problem: NOT_ARRIVED };
     // A 502 is the edge not reaching the port, perhaps for a moment; anything else may pass too.
     return { kind: "retry" };
   }

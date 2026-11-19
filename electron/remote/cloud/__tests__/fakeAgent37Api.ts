@@ -33,8 +33,11 @@ export interface FakeAgent37SignedUrl {
   expiresAt: number;
 }
 
-/** What answers on one port of an instance, behind Agent 37's edge: the path and query as forwarded. */
-export type FakeAgent37PortHandler = (pathAndQuery: string) => Response | Promise<Response>;
+/** What answers on one port of an instance, behind Agent 37's edge: the method, path and query as forwarded. */
+export type FakeAgent37PortHandler = (
+  pathAndQuery: string,
+  method: string
+) => Response | Promise<Response>;
 
 export interface FakeAgent37Request {
   method: string;
@@ -164,7 +167,7 @@ export class FakeAgent37Api {
    * sleeping instance and reaches whatever listens on the port with the token
    * stripped, counting as activity, or answers 502 when nothing does.
    */
-  readonly edge = async (input: URL | string, _init?: RequestInit): Promise<Response> => {
+  readonly edge = async (input: URL | string, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     const host = /^([a-z0-9]{10})-(\d{1,5})\.agent37\.app$/.exec(url.hostname);
     const instance = host ? this.instances.get(host[1]!) : undefined;
@@ -193,7 +196,7 @@ export class FakeAgent37Api {
     this.activityAt.set(instance.id, this.clock);
     this.edgeHits.set(key, (this.edgeHits.get(key) ?? 0) + 1);
     url.searchParams.delete("a37_token");
-    return handler(`${url.pathname}${url.search}`);
+    return handler(`${url.pathname}${url.search}`, init?.method ?? "GET");
   };
 
   private nextId(): string {

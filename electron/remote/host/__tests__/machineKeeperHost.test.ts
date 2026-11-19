@@ -494,6 +494,14 @@ describe("installMachineKeeperHost keep-awake (#17918)", () => {
     await expect(
       call(KeepAwakeLinkMethod.ARM, { resourceId: "ab12cd34ef", url, expiresAt: 1, apiKey: "x" })
     ).rejects.toThrow("VALIDATION");
+    await expect(
+      call(KeepAwakeLinkMethod.ARM, {
+        resourceId: "ab12cd34ef",
+        url: `${url}&pad=${"x".repeat(2048)}`,
+        expiresAt: Date.now() + 86_400_000,
+      })
+    ).rejects.toThrow("VALIDATION");
+    expect(fetch).not.toHaveBeenCalled();
     const status = await call(KeepAwakeLinkMethod.ARM, {
       resourceId: "ab12cd34ef",
       url,

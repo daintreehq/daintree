@@ -6,54 +6,58 @@ import { KeepAwakeKeeper, type KeepAwakeListener } from "../KeepAwakeKeeper.js";
 
 const RESOURCE = "ab12cd34ef";
 const PORT = 40_001;
-const URL_OK = `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=tok_live_0123456789`;
-const URL_NEXT = `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=tok_live_9876543210`;
+const TOKEN_A = "tok_live_0123456789";
+const TOKEN_B = "tok_live_9876543210";
+const URL_A = `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=${TOKEN_A}`;
+const URL_B = `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=${TOKEN_B}`;
+const DAY = 86_400_000;
 
 const keepers: KeepAwakeKeeper[] = [];
 afterEach(() => {
   for (const keeper of keepers.splice(0)) keeper.dispose();
+  vi.useRealTimers();
 });
+
+type Answer = { status: number; reaches: boolean };
 
 /**
  * A keeper over a listener and an edge the test drives: the edge answers each
  * request as the test says, and reaches the listener unless told it doesn't.
+ * The wall clock and the monotonic clock move together unless a test steps
+ * the wall clock alone.
  */
 function setup() {
-  let now = 1_800_000_000_000;
+  let wall = 1_800_000_000_000;
+  let mono = 0;
   let busy = true;
-  let expected: string | null = null;
-  let received: string | null = null;
+  const expected = new Set<string>();
+  const received = new Set<string>();
   const listener: KeepAwakeListener & { closed: number } = {
     port: PORT,
     closed: 0,
     expect: (nonce) => {
-      expected = nonce;
-      received = null;
+      expected.add(nonce);
     },
     take: (nonce) => {
-      const arrived = received === nonce;
-      received = null;
-      expected = null;
-      return arrived;
+      expected.delete(nonce);
+      return received.delete(nonce);
     },
     close: () => {
       listener.closed += 1;
     },
   };
-  /** How the edge answers the next requests: a status, and whether the request reached the listener. */
-  let answer: () =>
-    { status: number; reaches: boolean } | Promise<{ status: number; reaches: boolean }> = () => ({
+  let answer: (token: string | null) => Answer | Promise<Answer> = () => ({
     status: 204,
     reaches: true,
   });
-  const requests: string[] = [];
+  const requests: URL[] = [];
   const fetch = vi.fn(async (input: URL | string) => {
     const url = new URL(String(input));
-    requests.push(url.toString());
-    const said = await answer();
+    requests.push(url);
+    const said = await answer(url.searchParams.get("a37_token"));
     if (said.reaches && url.pathname.startsWith(KEEP_AWAKE_PATH)) {
       const nonce = url.pathname.slice(KEEP_AWAKE_PATH.length);
-      if (nonce === expected) received = nonce;
+      if (expected.delete(nonce)) received.add(nonce);
     }
     return new Response(null, { status: said.status });
   });
@@ -61,23 +65,26 @@ function setup() {
   const idle = {
     observation: (): HostIdleObservation =>
       busy
-        ? { idleAfterMinutes: 30, lastWorkAt: now, busy: true, idleEndsAt: null }
-        : { idleAfterMinutes: 30, lastWorkAt: now, busy: false, idleEndsAt: now + 1_800_000 },
+        ? { idleAfterMinutes: 30, lastWorkAt: wall, busy: true, idleEndsAt: null }
+        : { idleAfterMinutes: 30, lastWorkAt: wall, busy: false, idleEndsAt: wall + 1_800_000 },
   };
   const keeper = new KeepAwakeKeeper({
     idle,
     listen,
     fetch: fetch as unknown as typeof globalThis.fetch,
-    now: () => now,
+    now: () => wall,
+    monotonic: () => mono,
   });
   keepers.push(keeper);
-  const arm = (url = URL_OK, expiresAt = now + 7 * 86_400_000) =>
+  const arm = (url = URL_A, expiresAt = wall + 7 * DAY) =>
     keeper.arm({ resourceId: RESOURCE, url, expiresAt });
+  const tokens = () => requests.map((url) => url.searchParams.get("a37_token"));
   return {
     keeper,
     listener,
     listen,
     requests,
+    tokens,
     arm,
     setBusy: (next: boolean) => {
       busy = next;
@@ -85,10 +92,24 @@ function setup() {
     answer: (next: typeof answer) => {
       answer = next;
     },
+    /** Both clocks move on. */
     advance: (ms: number) => {
-      now += ms;
+      wall += ms;
+      mono += ms;
     },
-    now: () => now,
+    /** Only the wall clock moves: set back or forward by hand, or by NTP. */
+    stepWall: (ms: number) => {
+      wall += ms;
+    },
+    now: () => wall,
+    /** Moves on in steps of `ms`, ticking after each. */
+    passes: async (count: number, ms: number) => {
+      for (let i = 0; i < count; i++) {
+        wall += ms;
+        mono += ms;
+        await keeper.tick();
+      }
+    },
   };
 }
 
@@ -102,10 +123,12 @@ describe("KeepAwakeKeeper (#17918)", () => {
       reachedAt: null,
       problem: null,
     });
+    // Two asks while the first is still opening share it.
+    const [first, second] = await Promise.all([env.keeper.open(), env.keeper.open()]);
     await env.keeper.open();
-    const status = await env.keeper.open();
     expect(env.listen).toHaveBeenCalledTimes(1);
-    expect(status.port).toBe(PORT);
+    expect(first.port).toBe(PORT);
+    expect(second.port).toBe(PORT);
   });
 
   it("says when it couldn't open a port, and opens one when asked again", async () => {
@@ -114,7 +137,7 @@ describe("KeepAwakeKeeper (#17918)", () => {
     const failed = await env.keeper.open();
     expect(failed.port).toBeNull();
     expect(failed.problem).toContain("couldn't open a port");
-    expect((await env.keeper.open()).port).toBe(PORT);
+    expect(await env.keeper.open()).toMatchObject({ port: PORT, problem: null });
   });
 
   it("checks a URL reaches it before holding it, while the host sees work", async () => {
@@ -122,23 +145,29 @@ describe("KeepAwakeKeeper (#17918)", () => {
     await env.keeper.open();
     const status = await env.arm();
     expect(env.requests).toHaveLength(1);
-    const sent = new URL(env.requests[0]!);
+    const sent = env.requests[0]!;
     expect(sent.pathname).toMatch(new RegExp(`^${KEEP_AWAKE_PATH}[0-9a-f]{32}$`));
-    expect(sent.searchParams.get("a37_token")).toBe("tok_live_0123456789");
-    expect(status).toMatchObject({ expiresAt: env.now() + 7 * 86_400_000, reachedAt: env.now() });
+    expect(sent.searchParams.get("a37_token")).toBe(TOKEN_A);
+    expect(status).toMatchObject({ expiresAt: env.now() + 7 * DAY, reachedAt: env.now() });
     expect(JSON.stringify(status)).not.toContain("tok_live");
+    // Every request carries a nonce of its own.
+    await env.passes(2, 30_000);
+    expect(env.requests).toHaveLength(2);
+    expect(env.requests[1]!.pathname).not.toBe(sent.pathname);
   });
 
   it("refuses a URL that answers without reaching it, and keeps the one it held", async () => {
     const env = setup();
     await env.keeper.open();
     const held = await env.arm();
-    env.answer(() => ({ status: 200, reaches: false }));
-    await expect(env.arm(URL_NEXT, env.now() + 86_400_000)).rejects.toMatchObject({
+    env.answer((token) => ({ status: 200, reaches: token !== TOKEN_B }));
+    await expect(env.arm(URL_B, env.now() + DAY)).rejects.toMatchObject({
       code: "VALIDATION",
-      userMessage: expect.stringContaining("something other than this machine"),
+      userMessage: expect.stringContaining("never arrived"),
     });
     expect(env.keeper.status().expiresAt).toBe(held.expiresAt);
+    await env.passes(2, 30_000);
+    expect(env.tokens().at(-1)).toBe(TOKEN_A);
   });
 
   it("refuses a URL for another machine or port, or an expired one, without sending anything", async () => {
@@ -152,10 +181,12 @@ describe("KeepAwakeKeeper (#17918)", () => {
       `https://${RESOURCE}-${PORT}.agent37.app.example.com/?a37_token=t`,
       `https://${RESOURCE}-${PORT}.agent37.app/`,
       `https://user@${RESOURCE}-${PORT}.agent37.app/?a37_token=t`,
+      `https://${RESOURCE}-${PORT}.agent37.app:443/?a37_token=t`,
+      `https://${RESOURCE}-${PORT}.agent37.app:444/?a37_token=t`,
     ]) {
       await expect(env.arm(url)).rejects.toMatchObject({ code: "VALIDATION" });
     }
-    await expect(env.arm(URL_OK, env.now())).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(env.arm(URL_A, env.now())).rejects.toMatchObject({ code: "VALIDATION" });
     expect(env.requests).toHaveLength(0);
     expect(env.keeper.status().expiresAt).toBeNull();
   });
@@ -167,47 +198,75 @@ describe("KeepAwakeKeeper (#17918)", () => {
     const status = await env.arm();
     expect(env.requests).toHaveLength(0);
     expect(status).toMatchObject({ reachedAt: null, problem: null });
-    for (let i = 0; i < 10; i++) {
-      env.advance(30_000);
-      await env.keeper.tick();
-    }
+    await env.passes(10, 30_000);
     expect(env.requests).toHaveLength(0);
     env.setBusy(true);
-    env.advance(30_000);
-    await env.keeper.tick();
+    await env.passes(1, 10_000);
     expect(env.requests).toHaveLength(1);
     expect(env.keeper.status().reachedAt).toBe(env.now());
   });
 
-  it("sends one request a minute while the host sees work", async () => {
+  it("sends one request a minute while the host sees work, by a clock no wall-clock step moves", async () => {
     const env = setup();
     await env.keeper.open();
     await env.arm();
-    for (let i = 0; i < 20; i++) {
-      env.advance(30_000);
-      await env.keeper.tick();
-    }
-    // The check on arm, then one every other 30-second pass for ten minutes.
-    expect(env.requests).toHaveLength(11);
+    await env.passes(1, 59_999);
+    expect(env.requests).toHaveLength(1);
+    await env.passes(1, 1);
+    expect(env.requests).toHaveLength(2);
+
+    // The wall clock set back ten minutes: the next request still goes a minute later.
+    env.stepWall(-10 * 60_000);
+    await env.passes(1, 60_000);
+    expect(env.requests).toHaveLength(3);
   });
 
-  it("drops a URL Agent 37 turns away, and one that expired", async () => {
+  it("checks a URL that replaced one while idle on its first busy pass, however recently the old one went", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    env.setBusy(false);
+    const replaced = await env.arm(URL_B, env.now() + DAY);
+    // What reached it was the old URL, not this one.
+    expect(replaced.reachedAt).toBeNull();
+    env.setBusy(true);
+    await env.passes(1, 10_000);
+    expect(env.tokens()).toEqual([TOKEN_A, TOKEN_B]);
+    expect(env.keeper.status().reachedAt).toBe(env.now());
+  });
+
+  it("takes back the URL that worked when the one that replaced it is turned away", async () => {
+    const env = setup();
+    await env.keeper.open();
+    const first = await env.arm();
+    env.setBusy(false);
+    await env.arm(URL_B, env.now() + 8 * DAY);
+    env.setBusy(true);
+    env.answer((token) =>
+      token === TOKEN_B ? { status: 403, reaches: false } : { status: 204, reaches: true }
+    );
+    await env.passes(1, 10_000);
+    expect(env.keeper.status()).toMatchObject({ expiresAt: first.expiresAt, problem: null });
+    await env.passes(1, 10_000);
+    expect(env.tokens().at(-1)).toBe(TOKEN_A);
+  });
+
+  it("drops a URL Agent 37 turns away, and one that expired, even while idle", async () => {
     const env = setup();
     await env.keeper.open();
     await env.arm();
     env.answer(() => ({ status: 401, reaches: false }));
-    env.advance(60_000);
-    await env.keeper.tick();
+    await env.passes(1, 60_000);
     expect(env.keeper.status()).toMatchObject({
       expiresAt: null,
       problem: expect.stringContaining("no longer accepts"),
     });
 
     env.answer(() => ({ status: 204, reaches: true }));
-    await env.arm(URL_NEXT, env.now() + 120_000);
+    await env.arm(URL_B, env.now() + 120_000);
     const before = env.requests.length;
-    env.advance(120_000);
-    await env.keeper.tick();
+    env.setBusy(false);
+    await env.passes(1, 120_000);
     expect(env.requests).toHaveLength(before);
     expect(env.keeper.status()).toMatchObject({
       expiresAt: null,
@@ -215,32 +274,61 @@ describe("KeepAwakeKeeper (#17918)", () => {
     });
   });
 
-  it("keeps a URL that reached it through a failure that may pass, and gives up on one that never did", async () => {
+  it("keeps a URL that reached it through failures that may pass", async () => {
     const env = setup();
     await env.keeper.open();
     await env.arm();
     env.answer(() => ({ status: 502, reaches: false }));
-    for (let i = 0; i < 10; i++) {
-      env.advance(120_000);
-      await env.keeper.tick();
-    }
+    await env.passes(10, 120_000);
     expect(env.keeper.status().expiresAt).not.toBeNull();
+    env.answer(() => ({ status: 204, reaches: true }));
+    await env.passes(1, 120_000);
+    expect(env.keeper.status().reachedAt).toBe(env.now());
+  });
 
-    // Never reached: given up after a few tries.
-    const fresh = setup();
-    fresh.setBusy(false);
-    await fresh.keeper.open();
-    await fresh.arm();
-    fresh.setBusy(true);
-    fresh.answer(() => ({ status: 502, reaches: false }));
-    for (let i = 0; i < 10; i++) {
-      fresh.advance(120_000);
-      await fresh.keeper.tick();
-    }
-    expect(fresh.keeper.status()).toMatchObject({
+  it("gives up on a URL that never reached it after three tries, its arm's own among them", async () => {
+    const env = setup();
+    await env.keeper.open();
+    env.answer(() => ({ status: 502, reaches: false }));
+    // Taken on trust: the arm's own try may have failed for a moment.
+    await expect(env.arm()).resolves.toMatchObject({ reachedAt: null, problem: null });
+    await env.passes(1, 120_000);
+    expect(env.requests).toHaveLength(2);
+    expect(env.keeper.status().expiresAt).not.toBeNull();
+    await env.passes(1, 120_000);
+    expect(env.requests).toHaveLength(3);
+    expect(env.keeper.status()).toMatchObject({
       expiresAt: null,
       problem: expect.stringContaining("couldn't reach this host"),
     });
+  });
+
+  it("checks a new URL after a request already out, so neither's nonce is lost", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
+    let release!: () => void;
+    env.answer(
+      (token) =>
+        new Promise<Answer>((resolve) => {
+          if (token === TOKEN_A) release = () => resolve({ status: 204, reaches: true });
+          else resolve({ status: 204, reaches: true });
+        })
+    );
+    env.advance(60_000);
+    const pass = env.keeper.tick();
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    // The renewal arrives while that request is out, and waits for it.
+    const renewal = env.arm(URL_B, env.now() + 8 * DAY);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(env.requests).toHaveLength(2);
+    release();
+    await pass;
+    await expect(renewal).resolves.toMatchObject({
+      expiresAt: env.now() + 8 * DAY,
+      reachedAt: env.now(),
+    });
+    expect(env.tokens()).toEqual([TOKEN_A, TOKEN_A, TOKEN_B]);
   });
 
   it("never lets a late answer for a replaced URL drop the newer one", async () => {
@@ -259,20 +347,47 @@ describe("KeepAwakeKeeper (#17918)", () => {
     await vi.waitFor(() => expect(refuse).toBeTypeOf("function"));
     // A new URL arrives, taken while the host is idle, before the old request's answer.
     env.setBusy(false);
-    await env.arm(URL_NEXT, env.now() + 86_400_000);
+    await env.arm(URL_B, env.now() + DAY);
     refuse();
     await pass;
     expect(env.keeper.status()).toMatchObject({
-      expiresAt: env.now() + 86_400_000,
+      expiresAt: env.now() + DAY,
       problem: null,
     });
   });
 
-  it("closes its listener on dispose, and takes no URL after", async () => {
+  it("keeps its port open while it checks a URL for it, past the wait for a URL to come", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const env = setup();
     await env.keeper.open();
+    let release!: () => void;
+    env.answer(
+      () =>
+        new Promise<Answer>((resolve) => {
+          release = () => resolve({ status: 204, reaches: true });
+        })
+    );
+    const armed = env.arm();
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    vi.advanceTimersByTime(6 * 60_000);
+    expect(env.listener.closed).toBe(0);
+    release();
+    await expect(armed).resolves.toMatchObject({ port: PORT, reachedAt: env.now() });
+
+    // With nothing held, the port closes once nobody hands a URL over.
+    const idle = setup();
+    await idle.keeper.open();
+    vi.advanceTimersByTime(6 * 60_000);
+    expect(idle.listener.closed).toBe(1);
+  });
+
+  it("closes its listener and lets go of its URL on dispose, and takes no URL after", async () => {
+    const env = setup();
+    await env.keeper.open();
+    await env.arm();
     env.keeper.dispose();
     expect(env.listener.closed).toBe(1);
+    expect(env.keeper.status()).toMatchObject({ expiresAt: null, reachedAt: null });
     await expect(env.arm()).rejects.toMatchObject({ code: "UNSUPPORTED" });
   });
 });

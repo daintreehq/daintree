@@ -625,6 +625,7 @@ describe("CloudHostStore keep-awake (#17918)", () => {
     for (const keepAwake of [
       { ...held, resourceId: "zz12cd34ef" },
       { ...held, expiresAt: "soon" },
+      { ...held, confirmedAt: "then" },
       "held",
     ]) {
       backend.write({

@@ -16,6 +16,9 @@ export const KEEP_AWAKE_PATH = "/daintree-keep-awake/";
 export function keepAwakeUrlProblem(url: string, resourceId: string, port: number): string | null {
   const wrong = "That isn't a link to this machine on Agent 37.";
   if (!AGENT37_INSTANCE_ID.test(resourceId)) return wrong;
+  // As written, before parsing drops a default port: nothing but the host name itself.
+  const authority = /^https:\/\/([^/?#]*)/.exec(url)?.[1];
+  if (authority !== `${resourceId}-${port}.${PREVIEW_DOMAIN}`) return wrong;
   let parsed: URL;
   try {
     parsed = new URL(url);

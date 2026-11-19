@@ -42,18 +42,25 @@ function unsupported(): Error {
   return Object.assign(new Error("Unknown method"), { code: "UNSUPPORTED" });
 }
 
-/** The host's listener, reached through the fake's edge: it answers only the nonce it expects. */
-function edgeListener(api: FakeAgent37Api, instanceId: string): KeepAwakeListener {
-  let expected: string | null = null;
-  let received: string | null = null;
-  const close = api.listen(instanceId, PORT, (forwarded) => {
+/**
+ * The host's listener, reached through the fake's edge: it answers a GET
+ * carrying a nonce it expects, once, and counts what it accepted.
+ */
+function edgeListener(
+  api: FakeAgent37Api,
+  instanceId: string,
+  accepted: { count: number }
+): KeepAwakeListener {
+  const expected = new Set<string>();
+  const received = new Set<string>();
+  const close = api.listen(instanceId, PORT, (forwarded, method) => {
     const pathname = forwarded.split("?")[0] ?? "";
     const nonce = pathname.startsWith(KEEP_AWAKE_PATH)
       ? pathname.slice(KEEP_AWAKE_PATH.length)
       : "";
-    if (nonce !== "" && nonce === expected) {
-      expected = null;
-      received = nonce;
+    if (method === "GET" && expected.delete(nonce)) {
+      received.add(nonce);
+      accepted.count += 1;
       return new Response(null, { status: 204 });
     }
     return new Response(null, { status: 404 });
@@ -61,14 +68,11 @@ function edgeListener(api: FakeAgent37Api, instanceId: string): KeepAwakeListene
   return {
     port: PORT,
     expect: (nonce) => {
-      expected = nonce;
-      received = null;
+      expected.add(nonce);
     },
     take: (nonce) => {
-      const arrived = received === nonce;
-      received = null;
-      expected = null;
-      return arrived;
+      expected.delete(nonce);
+      return received.delete(nonce);
     },
     close,
   };
@@ -116,14 +120,16 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
   };
   const seeded = api.seed({ auto_sleep: true, idle_timeout_seconds: 1800, ...instance });
   const edgeRequests: Array<{ url: string; headers: unknown }> = [];
+  const accepted = { count: 0 };
   const keeper = new KeepAwakeKeeper({
     idle,
-    listen: async () => edgeListener(api, seeded.id),
+    listen: async () => edgeListener(api, seeded.id, accepted),
     fetch: (async (input: URL | string, init?: RequestInit) => {
       edgeRequests.push({ url: String(input), headers: init?.headers ?? null });
       return api.edge(input, init);
     }) as typeof globalThis.fetch,
     now,
+    monotonic: now,
   });
   disposers.push(() => keeper.dispose());
   const handlers: Record<string, (payload: unknown) => Promise<unknown>> = {
@@ -213,6 +219,12 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
     run,
     status: () => lifecycle.statuses()[0]!,
     changes: () => changes,
+    /** What the store last wrote, as it would land on disk. */
+    raw: () => JSON.stringify(saved),
+    /** Requests that reached the host's listener with a nonce it expected. */
+    accepted: () => accepted.count,
+    /** The link the Shell has to the host now, or null. */
+    current: () => current,
     setBusy: (next: boolean) => {
       busy = next;
     },
@@ -232,6 +244,16 @@ async function agent37(instance: Partial<FakeAgent37Instance> = {}) {
       if (current) current.isOpen = false;
       current = null;
     },
+    /** A link comes up, with nothing run on it yet. */
+    attach: () => {
+      current = link();
+      return current;
+    },
+    /** A new link takes the host's place, the old one not yet closed. */
+    relink: (answers?: Record<string, (payload: unknown) => Promise<unknown>>, label?: string) => {
+      current = link(answers, label);
+      return { session: current, done: links.run("build", current, true) };
+    },
     hits: () => api.edgeHits.get(`${seeded.id}:${PORT}`) ?? 0,
   };
 }
@@ -248,14 +270,25 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
       expiresAt: minted[0]!.expiresAt * 1000,
       confirmedAt: env.api.now,
     });
+    // Connecting again while it holds one still hands over a new one, for seven days from then.
+    env.api.advance(600);
+    await env.connect();
+    expect(env.api.signedUrls).toHaveLength(2);
+    expect(env.api.signedUrls[1]!.expiresAt).toBe(minted[0]!.expiresAt + 600);
+    expect(env.status().keepAwake).toMatchObject({
+      kind: "held",
+      expiresAt: env.api.signedUrls[1]!.expiresAt * 1000,
+    });
     env.disconnect();
 
     // Three of Agent 37's idle timeouts with no device, and the host working all along.
+    const start = env.accepted();
     expect(await env.run(3 * 1800)).toBe(true);
     expect(env.machine.status).toBe("running");
-    // About once a minute, never more often than the host's pass allows.
-    expect(env.hits()).toBeGreaterThanOrEqual(85);
-    expect(env.hits()).toBeLessThanOrEqual(92);
+    // About once a minute, each reaching the host's listener, never more often.
+    expect(env.accepted() - start).toBeGreaterThanOrEqual(88);
+    expect(env.accepted() - start).toBeLessThanOrEqual(91);
+    expect(env.hits()).toBe(env.accepted());
 
     // The host goes idle: nothing more is sent, and Agent 37 sleeps it after its own idle time.
     env.setBusy(false);
@@ -266,17 +299,67 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     expect(env.hits()).toBe(before);
   });
 
-  it("never holds an idle host's instance awake", async () => {
+  it("never holds an idle host's instance awake, and checks its URL once work starts with no Shell", async () => {
     const env = await agent37();
     env.setBusy(false);
     await env.connect();
     // Taken, but not tried: a request now could land after a sleep the idle time allows.
-    expect(env.hits()).toBe(0);
+    expect(env.status().keepAwake).toMatchObject({
+      kind: "held",
+      expiresAt: env.api.signedUrls[0]!.expiresAt * 1000,
+    });
+    expect(env.edgeRequests).toHaveLength(0);
     expect(env.keeper.status()).toMatchObject({ reachedAt: null, problem: null });
     env.disconnect();
-    await env.run(1830);
+    await env.run(600);
+    expect(env.edgeRequests).toHaveLength(0);
+
+    // Work starts with nobody connected: its first pass checks the URL, and it reaches the host.
+    env.setBusy(true);
+    await env.run(30);
+    expect(env.accepted()).toBe(1);
+    expect(env.keeper.status().reachedAt).toBe(env.api.now);
+
+    // Idle again: Agent 37 sleeps it its idle time after that last request, with nothing more sent.
+    env.setBusy(false);
+    expect(await env.run(1770)).toBe(true);
+    await env.run(30);
     expect(env.machine.status).toBe("sleeping");
-    expect(env.hits()).toBe(0);
+    expect(env.edgeRequests).toHaveLength(1);
+  });
+
+  it("hands the host a URL as soon as a link to it opens", async () => {
+    const env = await agent37();
+    const session = env.attach();
+    env.links.sessionOpened("build", session);
+    await vi.waitFor(() => expect(env.status().keepAwake).toMatchObject({ kind: "held" }));
+    expect(env.calls.map((call) => call.method)).toEqual([
+      KeepAwakeLinkMethod.STATUS,
+      KeepAwakeLinkMethod.ARM,
+    ]);
+    expect(env.accepted()).toBe(1);
+  });
+
+  it("hands a host that lost its URL a new one on a link that stays up, no more than twice an hour", async () => {
+    const env = await agent37({ idle_timeout_seconds: 86_400 });
+    await env.connect();
+    // Agent 37 stops taking that URL, and the busy host drops it.
+    env.api.signedUrls.splice(0);
+    await env.run(60);
+    expect(env.keeper.status()).toMatchObject({ expiresAt: null });
+    await env.links.tick();
+    expect(env.status().keepAwake).toEqual({
+      kind: "none",
+      problem: expect.stringContaining("no longer accepts"),
+    });
+    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(1);
+
+    // Still linked, half an hour after the last one: a new URL, and the host holds it awake again.
+    await env.run(1800);
+    await env.links.tick();
+    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(2);
+    expect(env.status().keepAwake).toMatchObject({ kind: "held" });
+    expect(env.keeper.status().reachedAt).toBe(env.api.now);
   });
 
   it("falls back to Agent 37's timer once the URL expires, and a new connection renews it", async () => {
@@ -328,6 +411,8 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     expect(JSON.stringify(env.keeper.status())).not.toContain(token);
     expect(JSON.stringify(env.status())).not.toContain(token);
     expect(JSON.stringify(env.store.bindings())).not.toContain(token);
+    expect(env.raw()).not.toContain(token);
+    expect(env.raw()).toContain('"keepAwake"');
   });
 
   it("says Agent 37's own timer is in charge when the host can't hold the instance", async () => {
@@ -368,6 +453,27 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
       kind: "none",
       problem: "Agent 37 couldn't reach this host through the link Daintree gave it.",
     });
+    // Refused, it isn't minted again on every pass: links can't be revoked.
+    const mints = env.api.calls("POST", /\/signed-url$/).length;
+    for (let i = 0; i < 5; i++) {
+      env.api.advance(60);
+      await env.links.tick();
+    }
+    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(mints);
+  });
+
+  it("says why the host holds none when the Shell can't mint one, and tries again on the same link", async () => {
+    const env = await agent37();
+    env.api.fail("POST", /\/signed-url$/, FakeAgent37Api.error(403, "forbidden", "Not allowed"));
+    await env.connect();
+    expect(env.status().keepAwake).toEqual({
+      kind: "none",
+      problem: expect.stringContaining("Daintree couldn't get a link from Agent 37"),
+    });
+    env.api.advance(300);
+    await env.links.tick();
+    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(2);
+    expect(env.status().keepAwake).toMatchObject({ kind: "held" });
   });
 
   it("keeps the host's URL when the Shell can't mint a new one, and says why only while none is held", async () => {
@@ -376,6 +482,7 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
     const held = env.status().keepAwake;
     env.api.fail("POST", /\/signed-url$/, FakeAgent37Api.error(403, "forbidden", "Not allowed"), 5);
     await env.connect();
+    expect(env.api.calls("POST", /\/signed-url$/)).toHaveLength(2);
     expect(env.status().keepAwake).toEqual(held);
     expect(env.keeper.status().expiresAt).toBe(env.api.signedUrls[0]!.expiresAt * 1000);
   });
@@ -393,9 +500,9 @@ describe("holding a busy Agent 37 instance awake with no Daintree connected (#17
       },
       "first"
     );
-    // The device reconnects before the host answered on the first link.
-    env.disconnect();
-    const second = env.open(undefined, "second");
+    // The device reconnects before the host answered on the first link, which isn't closed yet.
+    const second = env.relink(undefined, "second");
+    expect(first.session.isOpen).toBe(true);
     release();
     await first.done;
     await second.done;

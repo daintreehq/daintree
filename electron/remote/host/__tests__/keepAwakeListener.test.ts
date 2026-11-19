@@ -33,6 +33,21 @@ describe("openKeepAwakeListener (#17918)", () => {
     expect(listener.take(first)).toBe(false);
   });
 
+  it("answers several outstanding nonces, each once, whichever arrives first", async () => {
+    const listener = await openKeepAwakeListener();
+    open.push(listener);
+    const [a, b] = [nonce(), nonce()];
+    listener.expect(a);
+    listener.expect(b);
+    expect(await get(listener, `${KEEP_AWAKE_PATH}${b}`)).toBe(204);
+    // A replay before the keeper looked finds nothing more.
+    expect(await get(listener, `${KEEP_AWAKE_PATH}${b}`)).toBe(404);
+    expect(await get(listener, `${KEEP_AWAKE_PATH}${a}`)).toBe(204);
+    expect(listener.take(a)).toBe(true);
+    expect(listener.take(b)).toBe(true);
+    expect(listener.take(b)).toBe(false);
+  });
+
   it("answers 404 to anything else, and records nothing", async () => {
     const listener = await openKeepAwakeListener();
     open.push(listener);
@@ -42,6 +57,10 @@ describe("openKeepAwakeListener (#17918)", () => {
     expect(await get(listener, `${KEEP_AWAKE_PATH}${nonce()}`)).toBe(404);
     expect(await get(listener, `${KEEP_AWAKE_PATH}${expected}`, "POST")).toBe(404);
     expect(listener.take(expected)).toBe(false);
+    // A nonce of the wrong shape is never answered, even when told to expect it.
+    listener.expect("not-a-nonce");
+    expect(await get(listener, `${KEEP_AWAKE_PATH}not-a-nonce`)).toBe(404);
+    expect(listener.take("not-a-nonce")).toBe(false);
   });
 
   it("stops answering once closed", async () => {

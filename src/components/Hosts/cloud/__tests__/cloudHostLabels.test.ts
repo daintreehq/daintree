@@ -451,11 +451,13 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
       keepAwake,
     });
 
-  it("says the host keeps it awake while it sees work, until the link's expiry, and the timer after", () => {
+  it("says the host keeps it awake while it sees work through a link it holds until its expiry, and the timer after", () => {
     const held = { kind: "held" as const, expiresAt, confirmedAt };
     const offline = sentence(held);
+    // Two different moments, each in its own place.
+    expect(dayTime(expiresAt)).not.toBe(dayTime(confirmedAt));
     expect(offline).toContain(
-      `the host keeps the machine awake while it sees work, with a link from Daintree that works until ${dayTime(expiresAt)}`
+      `the host sends requests through a link from Daintree to keep the machine awake while it sees work, and holds that link until ${dayTime(expiresAt)} (as the host said ${dayTime(confirmedAt)}).`
     );
     // Away, what this device knows is what the host said when it last asked.
     expect(offline).toContain(`(as the host said ${dayTime(confirmedAt)})`);
@@ -466,7 +468,7 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
 
     const linked = sentence(held, true);
     expect(linked).toContain("The host's idle time is in charge while this device is connected");
-    expect(linked).toContain(`works until ${dayTime(expiresAt)}.`);
+    expect(linked).toContain(`holds that link until ${dayTime(expiresAt)}.`);
     expect(linked).not.toContain("as the host said");
   });
 
@@ -484,9 +486,11 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
     expect(refused).toContain(
       "is in charge while no device is connected, even while the host sees work: The host refused the link Daintree gave it."
     );
-    expect(sentence({ kind: "none", problem: "Refused." }, true)).toContain(
+    const refusedLinked = sentence({ kind: "none", problem: "Refused." }, true);
+    expect(refusedLinked).toContain(
       "The host's idle time is in charge while this device is connected"
     );
+    expect(refusedLinked).toContain("even while the host sees work: Refused.");
 
     // Nothing handed over yet, or a status from before it: the timer, as before.
     for (const nothing of [{ kind: "none" as const, problem: null }, null, undefined]) {
@@ -494,8 +498,12 @@ describe("what holds an Agent 37 instance awake with no device connected (#17918
         "Agent 37's own idle timer (30 minutes) is in charge while no device is connected: it puts the machine to sleep after 30 minutes without activity. The host's idle time takes over while this device is connected."
       );
     }
-    // Linked with nothing held yet, nothing is added to the linked sentence.
-    expect(sentence({ kind: "none", problem: null }, true)).not.toContain("no device is connected");
+    // Linked, a host that said it holds none still leaves the machine to Agent 37's timer once
+    // this device goes; a status from before keep-awake adds nothing.
+    expect(sentence({ kind: "none", problem: null }, true)).toContain(
+      "Agent 37's own idle timer (30 minutes) is in charge while no device is connected: it puts the machine to sleep after 30 minutes without activity."
+    );
+    expect(sentence(null, true)).not.toContain("no device is connected");
   });
 });
 
