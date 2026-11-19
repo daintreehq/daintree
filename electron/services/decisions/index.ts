@@ -30,9 +30,18 @@ import {
 import { QuestionNotifier, type QuestionNotifications } from "./questionNotifications.js";
 import { ThreadNotifier } from "./threadNotifications.js";
 import type { MetaStore } from "./attentionList.js";
-import type { HostServedQuestions } from "./DecisionsService.js";
+import type { HostServedQuestions, QuestionInboxFacts } from "./DecisionsService.js";
+import {
+  applyQuestionMarks,
+  markKey,
+  parseQuestionMarks,
+  QUESTION_MARKS_META_KEY,
+  serializeQuestionMarks,
+  withInbox,
+} from "./questionMarks.js";
 import type {
   DecisionsHostQuestionRead,
+  DecisionsHostQuestions,
   DecisionsHostsPort,
   HostCallOutcome,
 } from "../../types/decisionsHosts.js";
@@ -120,6 +129,7 @@ import type {
   DecisionQuestionFollowUpResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionListItem,
+  DecisionQuestionMarkResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
   DecisionQuestionSummary,
@@ -132,6 +142,7 @@ import type {
   GetDecisionAnswerResultPayload,
   GetDecisionDeclineResultPayload,
   GetDecisionFollowUpResultPayload,
+  MarkDecisionQuestionsPayload,
   SendDecisionFollowUpPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import type {
@@ -386,6 +397,8 @@ function publishPaneState(projectId: string, state: PaneDecisionState): void {
 
 /** This computer's own questions as its owner lifetime last listed them, while it lists any. */
 let ownQuestions: readonly DecisionQuestionListItem[] = [];
+/** What its questions in Needs you ask now, and the person's marks (#17895), as read with them. */
+let ownInbox: QuestionInboxFacts | null = null;
 /** The owner lifetime lists questions now: its store is read. */
 let listingQuestions = false;
 /** Follows the Remote Hosts client's port for its Hosts' questions (#17230), while listing. */
@@ -397,8 +410,13 @@ let unfollowHostQuestions: (() => void) | null = null;
  * here: the list is this computer's, so a remote Shell's views never get it.
  * Ids, labels, times and statuses only; never any content.
  */
-function publishQuestions(questions: readonly DecisionQuestionListItem[], listing = true): void {
+function publishQuestions(
+  questions: readonly DecisionQuestionListItem[],
+  listing = true,
+  inbox?: QuestionInboxFacts
+): void {
   ownQuestions = listing ? questions : [];
+  ownInbox = listing ? (inbox ?? null) : null;
   listingQuestions = listing;
   if (listing) followHostQuestions();
   else stopFollowingHostQuestions();
@@ -406,7 +424,7 @@ function publishQuestions(questions: readonly DecisionQuestionListItem[], listin
 }
 
 function refreshQuestionList(): void {
-  const questions = listingQuestions ? withHostQuestions(ownQuestions) : [];
+  const questions = listingQuestions ? listedQuestions() : [];
   // Once quit begins the list only empties, for main's consumers; the windows are going.
   if (shutDown && questions.length > 0) return;
   const changed = setDecisionQuestions(questions);
@@ -442,16 +460,44 @@ function askedAtMs(question: DecisionQuestionListItem): number {
 }
 
 /**
+ * This computer's questions with every enrolled Host's, and what each in
+ * Needs you asks now with the person's mark on it (#17895): this computer's
+ * own read with its rows, a Host's as it reported them, else as its list
+ * shows them.
+ */
+function listedQuestions(): DecisionQuestionListItem[] {
+  const hosts = getDecisionsHostsPort()?.hostQuestions() ?? [];
+  const ownHostId = service?.getSettings()?.hostId ?? null;
+  const asks = new Map<string, string | null>();
+  if (ownHostId !== null) {
+    for (const [questionId, ask] of ownInbox?.asks ?? []) {
+      asks.set(markKey({ hostId: ownHostId, questionId }), ask);
+    }
+  }
+  for (const host of hosts) {
+    if (host.questionHostId === ownHostId) continue;
+    for (const [questionId, ask] of host.asks ?? []) {
+      asks.set(markKey({ hostId: host.questionHostId, questionId }), ask);
+    }
+  }
+  return withInbox(
+    withHostQuestions(ownQuestions, hosts, ownHostId),
+    asks,
+    ownInbox?.marks ?? new Map()
+  );
+}
+
+/**
  * This computer's questions with every enrolled Host's, each named by its
  * Host, oldest first across machines: aliases repeat from one machine to the
  * next, so only the time orders them. A Host whose questions name this
  * computer's own id is never listed.
  */
 function withHostQuestions(
-  own: readonly DecisionQuestionListItem[]
+  own: readonly DecisionQuestionListItem[],
+  hosts: readonly DecisionsHostQuestions[],
+  ownHostId: string | null
 ): readonly DecisionQuestionListItem[] {
-  const hosts = getDecisionsHostsPort()?.hostQuestions() ?? [];
-  const ownHostId = service?.getSettings()?.hostId ?? null;
   const theirs: DecisionQuestionListItem[] = [];
   for (const host of hosts) {
     if (host.questionHostId === ownHostId) continue;
@@ -473,7 +519,9 @@ const hostQuestionListeners = new Set<() => void>();
 
 function publishHostQuestions(list: HostServedQuestions | null): void {
   hostServedQuestions =
-    list === null ? null : { hostId: list.hostId, questions: [...list.questions] };
+    list === null
+      ? null
+      : { hostId: list.hostId, questions: [...list.questions], asks: list.asks };
   for (const listener of [...hostQuestionListeners]) {
     try {
       listener();
@@ -1360,6 +1408,59 @@ export function cancelDecisionQuestion(
  * one (#17230). A link that went before the Host answered says the Host isn't
  * connected, and the cancel isn't sent again. Never makes or starts the service.
  */
+/** The person's marks being recorded, one at a time, so none is written over another's. */
+let marking: Promise<unknown> = Promise.resolve();
+
+/**
+ * The person seeing, clearing or restoring questions on this computer
+ * (#17895): recorded in the owner store, which republishes the list once it
+ * commits. Nothing goes to the relay, a Host or a terminal. Each question is
+ * marked only while the list shows it in Needs you at the ask it was shown
+ * with, checked when its turn comes.
+ */
+export function markDecisionQuestions(
+  payload: MarkDecisionQuestionsPayload
+): Promise<DecisionQuestionMarkResult> {
+  const run = marking.then(() => markQuestionsNow(payload));
+  marking = run.catch(() => {});
+  return run;
+}
+
+async function markQuestionsNow(
+  payload: MarkDecisionQuestionsPayload
+): Promise<DecisionQuestionMarkResult> {
+  const running = service;
+  const localStore = running?.getStore() ?? null;
+  if (shutDown || running === null || running.getRole() !== "owner" || localStore === null) {
+    return { result: "not-running" };
+  }
+  let text: string | null;
+  try {
+    text = await localStore.getMeta(QUESTION_MARKS_META_KEY);
+  } catch {
+    return { result: "failed" };
+  }
+  // The list read now, after the record: a store let go of meanwhile lists nothing to mark.
+  if (!listingQuestions || running.getStore() !== localStore) return { result: "not-running" };
+  const record = parseQuestionMarks(text);
+  const { marks, marked } = applyQuestionMarks(
+    record,
+    getDecisionQuestionList().questions,
+    payload,
+    running.getSettings()?.hostId ?? null
+  );
+  const next = serializeQuestionMarks(marks);
+  // Unchanged writes nothing: a commit would only read the list again.
+  if (next !== serializeQuestionMarks(record)) {
+    try {
+      await localStore.setMeta(QUESTION_MARKS_META_KEY, next);
+    } catch {
+      return { result: "failed" };
+    }
+  }
+  return { result: "marked", marked };
+}
+
 export async function cancelDecisionQuestionByReference(
   payload: CancelDecisionQuestionByReferencePayload
 ): Promise<DecisionQuestionCancelResult> {

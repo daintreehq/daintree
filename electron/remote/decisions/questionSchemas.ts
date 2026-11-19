@@ -80,7 +80,10 @@ const StallSchema = z
   })
   .strict();
 
-/** A list item as a Host sends it: never with `remoteHost`, which only the Shell adds. */
+/**
+ * A list item as a Host sends it: never with `remoteHost` or `inbox`, which
+ * only the Shell adds, so an older owner's strict read still takes it.
+ */
 export const HostQuestionItemSchema = z
   .object({
     reference: QuestionReferenceSchema,
@@ -98,7 +101,7 @@ export const HostQuestionItemSchema = z
     replyRequest: Id.nullable(),
     stall: StallSchema.nullable(),
   })
-  .strict() satisfies z.ZodType<Omit<DecisionQuestionListItem, "remoteHost">>;
+  .strict() satisfies z.ZodType<Omit<DecisionQuestionListItem, "remoteHost" | "inbox">>;
 
 /** The owner a Host served a list to, as that owner's announcement named it. */
 const ListOwnerSchema = z
@@ -130,7 +133,9 @@ export type HostQuestionListPayload = z.infer<typeof HostQuestionListSchema>;
 /** A Host's own questions, as its Decisions lists them: its id, and every one of them. */
 export interface HostQuestionList {
   hostId: string;
-  questions: Omit<DecisionQuestionListItem, "remoteHost">[];
+  questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[];
+  /** What each of them in Needs you asks now (#17895), by question id; absent from a v1 list. */
+  asks?: ReadonlyMap<string, string | null>;
 }
 
 /** A Host's pushed list always names the Host and its owner: one that serves none sends nothing. */

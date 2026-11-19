@@ -13,6 +13,11 @@
   scroll-padding-top: 2.25rem;
 }
 
+/* Clearing Needs you sits under the list, on the list's own colour. */
+.decisions-inbox-list-footer {
+  background-color: var(--theme-surface-sidebar);
+}
+
 /* Each group's bar stays at the top while its rows scroll beneath it. */
 .decisions-inbox-heading {
   position: sticky;

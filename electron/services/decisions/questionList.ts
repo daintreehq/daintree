@@ -152,13 +152,39 @@ function replyRequestOf(row: QuestionRow): string | null {
   if (status !== "human-answered" && status !== "proxy-answered") return null;
   const messages = parseMessages(row.messages_json);
   if (!awaitsReply(row, status, messages)) return null;
+  return latestAgentMessage(messages)?.message_id ?? null;
+}
+
+/** The agent's latest message on the thread, by ledger seq; null before it sent one. */
+function latestAgentMessage(messages: readonly StoredMessage[]): StoredMessage | null {
   let latest: StoredMessage | null = null;
   for (const message of messages) {
     if (message.side === "agent" && (latest === null || message.event_seq > latest.event_seq)) {
       latest = message;
     }
   }
-  return latest?.message_id ?? null;
+  return latest;
+}
+
+/**
+ * What each of the questions `ids` names asks of the person now (#17895), by
+ * question id: the agent's latest follow-up, which a mark the person made
+ * before it doesn't cover, or null for the question alone. For one answered
+ * and waiting again, that is the follow-up asking for a reply. Ids only.
+ */
+export function questionAsks(
+  rows: readonly QuestionRow[],
+  ids: ReadonlySet<string>
+): Map<string, string | null> {
+  const asks = new Map<string, string | null>();
+  for (const row of rows) {
+    if (!ids.has(row.question_id)) continue;
+    asks.set(
+      row.question_id,
+      latestAgentMessage(parseMessages(row.messages_json))?.message_id ?? null
+    );
+  }
+  return asks;
 }
 
 /** What delivery stopped on, as `standingOf` reads it; null while nothing needs a person. */

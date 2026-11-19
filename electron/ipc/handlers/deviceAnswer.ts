@@ -14,6 +14,7 @@ import {
   peekDeviceAnswerService,
 } from "../../services/deviceAnswer/index.js";
 import { sanitizeDeviceAnswerSettings } from "../../services/deviceAnswer/deviceAnswerSettings.js";
+import { DECISION_QUESTION_MARKS_PER_CALL } from "../../../shared/types/decisionsQuestion.js";
 import { DEVICE_ANSWER_METHOD_CHANNELS } from "./deviceAnswer.preload.js";
 import { sshLoginTarget } from "../../utils/machineName.js";
 import { isRemoteView } from "../../window/webviewSrcGate.js";
@@ -96,6 +97,7 @@ import type {
   DecisionQuestionFollowUpResult,
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
+  DecisionQuestionMarkResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionByReferencePayload,
   GetDecisionQuestionImageByReferencePayload,
@@ -107,6 +109,7 @@ import type {
   GetDecisionDeclineResultPayload,
   GetDecisionFollowUpResultPayload,
   SendDecisionFollowUpPayload,
+  MarkDecisionQuestionsPayload,
 } from "../../../shared/types/decisionsQuestion.js";
 import type {
   DecisionsInvolvementRead,
@@ -350,6 +353,21 @@ const getQuestionImageByReferenceSchema = z
     reference: questionReferenceSchema,
     attachmentId: attachmentIdSchema,
     offset: imageOffsetSchema,
+  })
+  .strict();
+
+// What the person did with questions' current asks on this computer (#17895), a page at a time.
+const markQuestionsSchema = z
+  .object({
+    action: z.enum(["seen", "clear", "restore"]),
+    questions: z
+      .array(
+        z
+          .object({ reference: questionReferenceSchema, ask: z.string().min(1).max(256).nullable() })
+          .strict()
+      )
+      .min(1)
+      .max(DECISION_QUESTION_MARKS_PER_CALL),
   })
   .strict();
 
@@ -626,6 +644,20 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.cancelDecisionQuestionByReference(payload);
+      }
+    ),
+    // The person seeing, clearing or restoring questions (#17895): `shell`,
+    // kept on this computer whichever machine asked, and never sent to the
+    // relay, a Host or a terminal. No action, MCP tool or plugin surface
+    // reaches it. Never starts Decisions.
+    markQuestions: opValidated(
+      CHANNELS.DECISIONS_MARK_QUESTIONS,
+      markQuestionsSchema,
+      async (payload: MarkDecisionQuestionsPayload): Promise<DecisionQuestionMarkResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.markDecisionQuestions(payload);
       }
     ),
     // The person's answer to a question (#17101), from Daintree's own view:

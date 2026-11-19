@@ -1024,6 +1024,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsAttention.js").MarkDecisionsAnswerHandledPayload];
     result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
   };
+  "decisions:mark-questions": {
+    args: [payload: import("../decisionsQuestion.js").MarkDecisionQuestionsPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionMarkResult;
+  };
   "decisions:prepare-relay-deploy": {
     args: [];
     result: import("../decisions.js").PreparedDecisionsRelayDeploy;

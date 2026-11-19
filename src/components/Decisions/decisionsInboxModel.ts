@@ -1,8 +1,11 @@
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { basename } from "@shared/utils/path";
 import type { DecisionsStatus } from "@shared/types/decisions";
+import { pluralize } from "@shared/utils/pluralize";
 import type {
+  DecisionQuestionContent,
   DecisionQuestionListItem,
+  DecisionQuestionMarkResult,
   DecisionQuestionReference,
   DecisionQuestionStanding,
 } from "@shared/types/decisionsQuestion";
@@ -14,7 +17,7 @@ import type {
  * the agent is doing.
  */
 
-export type InboxGroupId = "needs-you" | "delivering" | "attention" | "history";
+export type InboxGroupId = "needs-you" | "delivering" | "attention" | "cleared" | "history";
 
 export interface InboxGroup {
   id: InboxGroupId;
@@ -26,10 +29,17 @@ const GROUP_TITLES: Record<InboxGroupId, string> = {
   "needs-you": "Needs you",
   delivering: "Being delivered",
   attention: "Needs attention",
+  cleared: "Cleared",
   history: "History",
 };
 
-const GROUP_ORDER: readonly InboxGroupId[] = ["needs-you", "delivering", "attention", "history"];
+const GROUP_ORDER: readonly InboxGroupId[] = [
+  "needs-you",
+  "delivering",
+  "attention",
+  "cleared",
+  "history",
+];
 
 /**
  * A queued question still waits for the person and can be answered here; one
@@ -48,6 +58,66 @@ export function groupOf(standing: DecisionQuestionStanding): InboxGroupId {
     case "settled":
       return "history";
   }
+}
+
+/**
+ * Where the inbox lists the question: by its standing, except that one the
+ * person cleared from Needs you on this computer (#17895) waits under
+ * Cleared, still answerable, until it asks something new.
+ */
+export function inboxGroupOf(
+  item: Pick<DecisionQuestionListItem, "standing" | "inbox">
+): InboxGroupId {
+  const group = groupOf(item.standing);
+  return group === "needs-you" && item.inbox?.cleared === true ? "cleared" : group;
+}
+
+/**
+ * The listed question's current ask, when `shown` lets the person have seen
+ * it (#17895): a read of that same question that holds, readable, the agent's
+ * follow-up the ask takes in. Null when it doesn't (read before the follow-up
+ * came, or the follow-up couldn't be opened), and once the ask is seen.
+ */
+export function seeableAsk(
+  item: Pick<DecisionQuestionListItem, "reference" | "inbox">,
+  shown: Pick<DecisionQuestionContent, "reference" | "thread">
+): { ask: string | null } | null {
+  const inbox = item.inbox;
+  if (inbox === undefined || inbox.seen) return null;
+  if (
+    shown.reference.hostId !== item.reference.hostId ||
+    shown.reference.questionId !== item.reference.questionId
+  ) {
+    return null;
+  }
+  if (inbox.ask === null) return { ask: null };
+  const held = shown.thread.some(
+    (entry) =>
+      entry.type === "message" &&
+      entry.from === "agent" &&
+      entry.messageId === inbox.ask &&
+      !entry.unreadable
+  );
+  return held ? { ask: inbox.ask } : null;
+}
+
+/** What a cleared question's row says: it still waits for the agent, just not on the person. */
+export const CLEARED_NOTE = "Cleared on this computer";
+
+/**
+ * What clearing or restoring says once it lands, for the ear; null when it
+ * changed nothing, as when each question had asked something new meanwhile.
+ */
+export function markedText(
+  action: "clear" | "restore",
+  result: DecisionQuestionMarkResult
+): string | null {
+  if (result.result !== "marked") {
+    return action === "clear" ? "Couldn't clear on this computer" : "Couldn't restore to Needs you";
+  }
+  if (result.marked === 0) return null;
+  const count = pluralize(result.marked, "question");
+  return action === "clear" ? `${count} cleared on this computer` : `${count} back in Needs you`;
 }
 
 function epoch(iso: string | null): number {
@@ -74,7 +144,7 @@ export function inboxGroups(
 ): InboxGroup[] {
   const byGroup = new Map<InboxGroupId, DecisionQuestionListItem[]>();
   for (const item of questions) {
-    const id = groupOf(item.standing);
+    const id = inboxGroupOf(item);
     const items = byGroup.get(id);
     if (items === undefined) byGroup.set(id, [item]);
     else items.push(item);
@@ -167,6 +237,13 @@ export function rowNote(standing: DecisionQuestionStanding): string | null {
     default:
       return standingText(standing);
   }
+}
+
+/** `rowNote`, for a row that may have been cleared (#17895): that is what sets it apart then. */
+export function inboxRowNote(
+  item: Pick<DecisionQuestionListItem, "standing" | "inbox">
+): string | null {
+  return inboxGroupOf(item) === "cleared" ? CLEARED_NOTE : rowNote(item.standing);
 }
 
 /** How close a deadline has to be before a waiting row names it. */

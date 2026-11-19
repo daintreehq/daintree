@@ -64,7 +64,8 @@ import {
 } from "./paneDecisionState.js";
 import type { PaneSnapshotSources } from "./paneSnapshots.js";
 import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
-import { projectDecisionQuestions } from "./questionList.js";
+import { projectDecisionQuestions, questionAsks } from "./questionList.js";
+import { readQuestionMarks, type QuestionMarks } from "./questionMarks.js";
 import type { QuestionNotifications } from "./questionNotifications.js";
 import type { DesktopPresenceOptions } from "./desktopPresence.js";
 import {
@@ -98,6 +99,18 @@ export type DecisionsRole = "owner" | "host";
 export interface HostServedQuestions {
   hostId: string;
   questions: readonly DecisionQuestionListItem[];
+  /** What each of them in Needs you asks now (#17895), by question id, for an owner that reads it. */
+  asks: ReadonlyMap<string, string | null>;
+}
+
+/**
+ * What an owner's list carries beside its questions (#17895): what each in
+ * Needs you asks now, by question id, and the person's marks, as one read of
+ * the store found them.
+ */
+export interface QuestionInboxFacts {
+  asks: ReadonlyMap<string, string | null>;
+  marks: QuestionMarks;
 }
 
 /** What the service runs a relay connection with; tests hand in their own. */
@@ -185,7 +198,11 @@ export interface DecisionsServiceOptions {
    * `listing` true; an empty list with `listing` false once the lifetime ends
    * or its store closes. Only an owner's lifetime lists any.
    */
-  publishQuestions?: (questions: readonly DecisionQuestionListItem[], listing: boolean) => void;
+  publishQuestions?: (
+    questions: readonly DecisionQuestionListItem[],
+    listing: boolean,
+    inbox?: QuestionInboxFacts
+  ) => void;
   /**
    * A Remote Host lifetime's own questions, after each write (#17230), named
    * by its host id, for its owner's Shell to list; null once the lifetime
@@ -282,7 +299,8 @@ export class DecisionsService {
   private readonly panes: PaneDecisionStates;
   private readonly publishQuestions: (
     questions: readonly DecisionQuestionListItem[],
-    listing: boolean
+    listing: boolean,
+    inbox?: QuestionInboxFacts
   ) => void;
   private readonly publishHostQuestions: (list: HostServedQuestions | null) => void;
   private readonly notifyQuestions: ((store: MetaStore) => QuestionNotifications) | null;
@@ -773,12 +791,22 @@ export class DecisionsService {
    * Host's questions are its owner's to show, so its lifetime hands them to
    * its owner's Shell instead (#17230).
    */
-  private listQuestions(rows: readonly QuestionRow[], handled: HandledAnswers): void {
+  private listQuestions(
+    rows: readonly QuestionRow[],
+    handled: HandledAnswers,
+    marks: QuestionMarks
+  ): void {
     if (this.disposed || this.state === "off") return;
     const hostId = this.settings?.hostId ?? null;
     const questions = projectDecisionQuestions(rows, handled, hostId);
-    if (this.role === "owner") this.sendQuestions(questions, true);
-    else this.sendHostQuestions(hostId === null ? null : { hostId, questions });
+    const waiting = new Set(
+      questions
+        .filter((item) => item.standing.kind === "waiting" || item.standing.kind === "queued")
+        .map((item) => item.reference.questionId)
+    );
+    const asks = questionAsks(rows, waiting);
+    if (this.role === "owner") this.sendQuestions(questions, true, { asks, marks });
+    else this.sendHostQuestions(hostId === null ? null : { hostId, questions, asks });
   }
 
   /** Nothing is listed while no store is read: the lifetime ended, or its store closed. */
@@ -788,9 +816,13 @@ export class DecisionsService {
   }
 
   /** The list is best effort, like pane chrome: a failed push must never unwind the write that caused it. */
-  private sendQuestions(questions: readonly DecisionQuestionListItem[], listing: boolean): void {
+  private sendQuestions(
+    questions: readonly DecisionQuestionListItem[],
+    listing: boolean,
+    inbox?: QuestionInboxFacts
+  ): void {
     try {
-      this.publishQuestions(questions, listing);
+      this.publishQuestions(questions, listing, inbox);
     } catch (err) {
       console.warn("[Decisions] A question list update failed:", err);
     }
@@ -1391,13 +1423,17 @@ export class DecisionsService {
     // attention list. The list of every question keeps it, settled (#17229).
     // Reads run one at a time, so each is fed with the record it was read with.
     let handled: HandledAnswers = new Map();
+    // The person's marks (#17895) are an owner's alone. One that can't be read keeps the last read.
+    let marks: QuestionMarks = new Map();
+    const owner = this.role === "owner";
     const feed = new QuestionRowsFeed(
       async () => {
         handled = await readHandledAnswers(store);
+        if (owner) marks = await readQuestionMarks(store).catch(() => marks);
         return store.listQuestions();
       },
       (rows) => {
-        this.listQuestions(rows, handled);
+        this.listQuestions(rows, handled, marks);
         this.observeQuestions(withoutHandled(rows, handled), handled);
       }
     );
