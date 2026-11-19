@@ -5,6 +5,7 @@ import {
   cloudChoiceFitsLocation,
   cloudLifetimeIsChosen,
   cloudMarkNamesWorktree,
+  cloudProviderNamespace,
   cloudProvisioningArticleNoun,
   cloudProvisioningNoun,
   type CloudCatalog,
@@ -17,6 +18,7 @@ import {
   type CloudHostKeyReview,
   type CloudHostStatus,
   type CloudLifetimeModel,
+  type CloudLinkedIdleStop,
   type CloudMachineState,
   type CloudOperation,
   type CloudOperationKind,
@@ -36,9 +38,12 @@ import {
   type HostId,
   type PendingHostPlacement,
 } from "../../../shared/types/remoteHosts.js";
+import type { HostIdleObservation } from "../../../shared/types/hostIdle.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { withHostIdleClaim, type HostIdleClaimOutcome } from "../client/claimHostIdle.js";
 import { TransportError, UnusableConnectionError } from "../client/transport.js";
+import type { LinkSession } from "../link/session.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
 import {
   CLOUD_BINDING_LABEL,
@@ -100,6 +105,12 @@ const ACCESS_TTL_MS = 10 * 60_000;
 const MAX_NAME_LENGTH = 64;
 /** How often the keeper looks for a lifetime to renew. */
 const KEEPER_INTERVAL_MS = 60_000;
+/** After an idle stop whose answer was lost, how long a machine still read as running is followed. */
+const LOST_STOP_SETTLE_MS = 60_000;
+const IDLE_STOP_SNAPSHOTS_OFF =
+  "This device doesn't stop the machine when the host's idle time ends: snapshots are off on it, so a stop would erase its disk.";
+const IDLE_STOP_HOST_TOO_OLD =
+  "The Daintree on this machine is too old for this device to stop it when the host's idle time ends. Update it to let it.";
 
 /** The provider's own name, for messages: this layer never assumes which provider it is. */
 function nameOf(provider: CloudProvider): string {
@@ -148,6 +159,29 @@ function hostKeyReviewOf(binding: StoredCloudBinding): CloudHostKeyReview | null
 
 function lifetimeModelOf(provider: CloudProvider): CloudLifetimeModel {
   return provider.info(process.platform).capabilities.lifetime;
+}
+
+/**
+ * A plugin's provider whose machines this device may stop once their host's
+ * idle time ends (#17923): none of its machines can stop themselves, and it
+ * declares that a stop ends compute billing and keeps the disk.
+ */
+function stopsOnIdleClaim(provider: CloudProvider): boolean {
+  if (cloudProviderNamespace(provider.id)?.kind !== "plugin") return false;
+  if (provider.machineKeys !== undefined || typeof provider.checkGuestPowerOff === "function") {
+    return false;
+  }
+  const { persistence } = provider.info(process.platform).capabilities;
+  return !persistence.stoppedComputeBilled && persistence.retentionDays !== 0;
+}
+
+/** The provider sleeps this machine on its own timer, as it reported it or declares it. */
+function sleepsOnItsOwn(
+  model: CloudLifetimeModel,
+  idleSleep: { enabled: boolean } | null | undefined
+): boolean {
+  if (idleSleep) return idleSleep.enabled;
+  return model.kind === "idle-sleep";
 }
 
 /**
@@ -232,6 +266,20 @@ export interface CloudHostLifecycleDeps {
   machineKeys?: Pick<CloudMachineKeys, "problemFor" | "tick" | "revokePending">;
   /** EC2 and Compute Engine machines powering themselves off once idle (#17362). */
   guestPowerOff?: Pick<CloudGuestPowerOff, "problemFor" | "tick" | "forgetRemoved">;
+  /**
+   * What this device hears of a host's idle clock, for stopping a plugin
+   * provider's machine once its idle time ends (#17923); absent where nothing
+   * reads hosts' summaries.
+   */
+  idleClaims?: {
+    /** The host's open link, or null while it has none. Never dials. */
+    sessionFor(hostId: HostId): LinkSession | null;
+    /** The host's idle clock from a summary that came lately on `session`, and when it was taken by the host's clock. */
+    idleOn(
+      hostId: HostId,
+      session: LinkSession
+    ): { idle: HostIdleObservation; sampledAt: number } | null;
+  };
   /**
    * Whether a worktree on this device is gone: true once its root reads as
    * missing, false while it is there, null when that couldn't be told (a hung
@@ -437,6 +485,7 @@ function observationOf(resource: ProviderResource, at: number): StoredCloudObser
     idleSleep: resource.idleSleep
       ? { enabled: resource.idleSleep.enabled, idleSeconds: resource.idleSleep.idleSeconds }
       : null,
+    snapshotsDisabled: resource.snapshotsDisabled === true,
     observedAt: at,
   };
 }
@@ -547,6 +596,18 @@ export class CloudHostLifecycle {
   private readonly keptForDelete = new Set<string>();
   private stopWatchingWorktrees: (() => void) | null = null;
   private renewingAll = false;
+  /** Operations admitted per binding this run, so an idle stop can tell one came and went while it asked. */
+  private readonly admitted = new Map<string, number>();
+  /** The idle time each machine's host was last asked about, on which link: asked once, whatever the answer. */
+  private readonly idleAsked = new Map<string, { session: LinkSession; interval: string }>();
+  /** The link on which a host answered that its Daintree can't grant an idle claim. */
+  private readonly idleUnsupported = new Map<string, LinkSession>();
+  /** An idle stop being prepared or carried out, per binding. */
+  private readonly idleAttempts = new Map<string, Promise<void>>();
+  /** The stopping operation each idle stop runs as, so a person's Stop can tell it from their own. */
+  private readonly idleStops = new Map<string, Promise<void>>();
+  /** Some plugin provider's machine is bound to a host, so the keeper looks for an idle one to stop. */
+  private idleCandidates = false;
   /**
    * Every request whose answer becomes an observation takes a ticket when it
    * is sent; an answer is written only if no request sent after it has been
@@ -611,9 +672,16 @@ export class CloudHostLifecycle {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    // Only a plugin's machine is ever stopped on its host's idle time: no other wakes that pass.
+    this.idleCandidates = bindings.some(
+      (binding) =>
+        Boolean(binding.resourceId && binding.hostId) &&
+        cloudProviderNamespace(binding.providerId)?.kind === "plugin"
+    );
     if (keeper && !this.keeperTimer) {
       this.keeperTimer = setInterval(() => {
         void this.renewDue();
+        if (this.idleCandidates) void this.stopIdleDue();
         void this.deps.machineKeys?.tick();
         void this.deps.guestPowerOff?.tick();
       }, KEEPER_INTERVAL_MS);
@@ -757,6 +825,7 @@ export class CloudHostLifecycle {
             this.deps.machineKeys?.problemFor(binding.id) ??
             this.deps.guestPowerOff?.problemFor(binding.id) ??
             null,
+          linkedIdleStop: this.linkedIdleStopOf(binding),
           asleep: machineOf(binding) === "stopped" && observation?.asleep === true,
         };
       });
@@ -1551,6 +1620,16 @@ export class CloudHostLifecycle {
     if (running && (running.kind === "starting" || running.kind === "creating")) {
       running.controller.abort();
       await running.promise.catch(() => {});
+    }
+    // An idle stop under way is joined and sends nothing more; the person's choice is still
+    // recorded, and their link let go, as their own Stop would.
+    if (running?.kind === "stopping" && this.idleStops.get(binding.id) === running.promise) {
+      if (this.deps.store.binding(binding.id)?.intent !== "stop") {
+        this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "stop" }));
+      }
+      const joined = running.promise;
+      await this.deps.hosts.disconnect(binding.hostId).catch(() => {});
+      return joined;
     }
     // The stop holds the machine before it waits on anything, so a Start meanwhile is refused.
     await this.operate(
@@ -2883,6 +2962,7 @@ export class CloudHostLifecycle {
     }
     if (this.disposed)
       return Promise.reject(new AppError({ code: "CANCELLED", message: "Stopping" }));
+    this.admitted.set(bindingId, (this.admitted.get(bindingId) ?? 0) + 1);
     accepted?.();
     const controller = new AbortController();
     const operation = {
@@ -3252,6 +3332,338 @@ export class CloudHostLifecycle {
     await this.renewInFlight.get(bindingId)?.catch(() => {});
   }
 
+  // --- Stopping a plugin provider's machine once idle (#17923) ------------
+
+  /**
+   * What this device does once the host's idle time ends, for the host's
+   * details: only for a plugin provider's machine that can't stop itself and
+   * whose provider declares a stop that ends compute billing and keeps the disk.
+   */
+  private linkedIdleStopOf(binding: StoredCloudBinding): CloudLinkedIdleStop | null {
+    if (!binding.resourceId || !binding.hostId) return null;
+    if (this.deps.accounts.providerUnavailable(binding.providerId)) return null;
+    const provider = this.deps.accounts.provider(binding.providerId);
+    if (!stopsOnIdleClaim(provider)) return null;
+    const observation = binding.observation;
+    // Its own idle sleep is described as its lifetime; this device leaves it to that.
+    if (sleepsOnItsOwn(lifetimeModelOf(provider), observation?.idleSleep)) return null;
+    if (!observation || observation.snapshotsDisabled === null) return { kind: "unknown" };
+    if (observation.snapshotsDisabled) return { kind: "blocked", problem: IDLE_STOP_SNAPSHOTS_OFF };
+    const unsupportedOn = this.idleUnsupported.get(binding.id);
+    if (unsupportedOn && unsupportedOn === this.deps.idleClaims?.sessionFor(binding.hostId)) {
+      return { kind: "blocked", problem: IDLE_STOP_HOST_TOO_OLD };
+    }
+    return { kind: "stops" };
+  }
+
+  /**
+   * The desktop's idle stop. A plugin provider's machine can't stop itself,
+   * so while this device is linked to its host and the host says its idle
+   * time ended, this device reads the machine, asks the host for that idle
+   * time (#17922), and on the grant stops it with the provider's normal stop.
+   * With every device away nothing stops it. Runs on the keeper's timer, which
+   * runs only while some machine is bound to a host; exposed for tests.
+   */
+  async stopIdleDue(): Promise<void> {
+    if (this.disposed || !this.deps.idleClaims) return;
+    const attempts: Promise<void>[] = [];
+    for (const binding of this.deps.store.bindings()) {
+      if (this.idleAttempts.has(binding.id)) continue;
+      let due: ReturnType<typeof this.idleStopDue>;
+      try {
+        due = this.idleStopDue(binding);
+      } catch {
+        // A summary or link that couldn't be read is looked at again on the next pass.
+        continue;
+      }
+      if (!due) continue;
+      const attempt: Promise<void> = this.stopOnIdleClaim(binding.id, due)
+        .catch(() => {
+          // What went wrong is recorded where it matters; the next idle time is asked about afresh.
+        })
+        .finally(() => {
+          if (this.idleAttempts.get(binding.id) === attempt) this.idleAttempts.delete(binding.id);
+        });
+      this.idleAttempts.set(binding.id, attempt);
+      attempts.push(attempt);
+    }
+    await Promise.all(attempts);
+  }
+
+  /**
+   * Whether nothing here stands in the way of the machine being stopped once
+   * idle: no operation, removal, renewal or cleanup, and running with no stop
+   * under way. What the person last asked of it doesn't count: a Stop they
+   * chose long ago says nothing about a machine started again since.
+   */
+  private idleStopFree(binding: StoredCloudBinding): boolean {
+    if (this.operations.has(binding.id) || this.removing.has(binding.id)) return false;
+    if (this.renewInFlight.has(binding.id) || this.cleanupRuns.has(binding.id)) return false;
+    if (binding.worktreeCleanup?.phase === "due") return false;
+    return machineOf(binding) === "running" && !stopUnderWay(binding.observation?.stop);
+  }
+
+  /** Nothing the provider last said of the machine rules a stop out: its disk survives, and it doesn't sleep by itself. */
+  private idleStopSafe(binding: StoredCloudBinding, provider: CloudProvider): boolean {
+    const observation = binding.observation;
+    if (observation?.snapshotsDisabled === true || observation?.dataExpired) return false;
+    return !sleepsOnItsOwn(lifetimeModelOf(provider), observation?.idleSleep);
+  }
+
+  /** The host's link to ask on, when its idle time ended by its last summary there and wasn't asked about yet. */
+  private idleStopDue(
+    binding: StoredCloudBinding
+  ): { hostId: HostId; session: LinkSession; interval: string; provider: CloudProvider } | null {
+    const hostId = binding.hostId;
+    if (!binding.resourceId || !hostId || !this.idleStopFree(binding)) return null;
+    // Cheap checks first: a device with no such machine reads no link or summary for it.
+    if (this.deps.accounts.providerUnavailable(binding.providerId)) return null;
+    const provider = this.deps.accounts.provider(binding.providerId);
+    if (!stopsOnIdleClaim(provider) || !this.idleStopSafe(binding, provider)) return null;
+    const session = this.deps.idleClaims?.sessionFor(hostId) ?? null;
+    if (!session?.isOpen || !this.boundTo(hostId, binding.id)) return null;
+    if (this.idleUnsupported.get(binding.id) === session) return null;
+    const heard = this.deps.idleClaims?.idleOn(hostId, session) ?? null;
+    if (!heard) return null;
+    const { idle, sampledAt } = heard;
+    // The host's own word on its own clock; one that stops its machine itself needs nothing from here.
+    if (idle.busy || idle.stopsWhenIdle || idle.idleEndsAt === null) return null;
+    if (idle.idleEndsAt > sampledAt) return null;
+    // New work moves when it was last seen; a changed setting is another idle time to ask about.
+    const interval = `${idle.lastWorkAt}:${idle.idleAfterMinutes}`;
+    const asked = this.idleAsked.get(binding.id);
+    if (asked?.session === session && asked.interval === interval) return null;
+    return { hostId, session, interval, provider };
+  }
+
+  /** The host is still this binding's: its connection names it, and it names the host. */
+  private boundTo(hostId: HostId, bindingId: string): boolean {
+    const connection = this.deps.hosts.get(hostId)?.connection;
+    return connection?.kind === "cloud" && connection.bindingId === bindingId;
+  }
+
+  /**
+   * One idle time, once: reads the machine, then asks the host for the idle
+   * time, and stops the machine in the same turn the grant arrives. The idle
+   * time is spent here once the machine reads as one to ask about, whatever
+   * the provider or the host says next.
+   */
+  private async stopOnIdleClaim(
+    bindingId: string,
+    due: { hostId: HostId; session: LinkSession; interval: string; provider: CloudProvider }
+  ): Promise<void> {
+    const { hostId, session, interval, provider } = due;
+    const resourceId = this.deps.store.binding(bindingId)?.resourceId;
+    if (!resourceId) return;
+    const admitted = this.admitted.get(bindingId) ?? 0;
+    // Whatever changed while this read or asked wins: an operation, a removal, another link or provider.
+    const holds = () => {
+      if (this.disposed) return false;
+      const binding = this.deps.store.binding(bindingId);
+      if (!binding || binding.hostId !== hostId || binding.resourceId !== resourceId) return false;
+      if ((this.admitted.get(bindingId) ?? 0) !== admitted || !this.idleStopFree(binding)) {
+        return false;
+      }
+      // A newer read while the host decided may have turned snapshots off or sleeping on.
+      if (!this.idleStopSafe(binding, provider)) return false;
+      if (!this.stillRegistered(binding.providerId, provider) || !this.boundTo(hostId, bindingId)) {
+        return false;
+      }
+      return session.isOpen && this.deps.idleClaims?.sessionFor(hostId) === session;
+    };
+    await this.settleRenewal(bindingId);
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding || !holds()) return;
+    const { credentials } = await this.context(binding);
+    if (!holds()) return;
+    // Snapshots aren't kept with what was last seen from before it: the provider's word now decides.
+    const resource = await this.inspectInto(bindingId, provider, credentials);
+    if (!resource || !holds()) return;
+    if (
+      resource.machine !== "running" ||
+      stopUnderWay(resource.stop) ||
+      resource.snapshotsDisabled ||
+      resource.restricted ||
+      resource.dataExpired ||
+      resource.asleep === true ||
+      sleepsOnItsOwn(lifetimeModelOf(provider), resource.idleSleep)
+    ) {
+      return;
+    }
+    // Asked once from here, whatever the host answers or however its answer is lost.
+    const asked = { session, interval };
+    this.idleAsked.set(bindingId, asked);
+    let outcome: HostIdleClaimOutcome<{ stopping: Promise<void> } | null>;
+    try {
+      outcome = await withHostIdleClaim(
+        hostId,
+        session,
+        (id) => this.deps.idleClaims?.sessionFor(id) ?? null,
+        () => {
+          // Granted: nothing may come between this and the stop going out.
+          if (!holds()) return null;
+          const stopping = this.operate(bindingId, "stopping", (signal) =>
+            this.runIdleStop(bindingId, provider, credentials, resourceId, signal)
+          );
+          this.idleStops.set(bindingId, stopping);
+          // Awaited below; its failure is recorded on the machine, never left unheard meanwhile.
+          stopping
+            .catch(() => {})
+            .finally(() => {
+              if (this.idleStops.get(bindingId) === stopping) this.idleStops.delete(bindingId);
+            });
+          this.stage(bindingId, "Saving the disk and stopping");
+          return { stopping };
+        }
+      );
+    } catch (error) {
+      // Refused before it left this device: the host never heard it, so it may be asked again.
+      const code =
+        typeof error === "object" && error !== null ? (error as { code?: unknown }).code : null;
+      if (code === "RATE_LIMITED" && this.idleAsked.get(bindingId) === asked) {
+        this.idleAsked.delete(bindingId);
+      }
+      throw error;
+    }
+    if (outcome.kind === "unsupported") {
+      this.idleUnsupported.set(bindingId, session);
+      this.deps.changed();
+      return;
+    }
+    if (outcome.kind === "claimed" && outcome.result) await outcome.result.stopping;
+  }
+
+  /** The provider's normal stop, sent once, then followed until the machine stops. */
+  private async runIdleStop(
+    bindingId: string,
+    provider: CloudProvider,
+    credentials: ProviderCredentials,
+    resourceId: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    const ticket = this.ticket();
+    let answer: ProviderResource | null;
+    try {
+      answer = await provider.stop({ ...credentials, signal }, resourceId);
+    } catch (error) {
+      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+      this.requireStillRegistered(provider);
+      await this.settleIdleStop(
+        bindingId,
+        provider,
+        credentials,
+        provider.describeError(error),
+        signal
+      );
+      return;
+    }
+    this.requireStillRegistered(provider);
+    if (answer) this.observe(bindingId, answer, ticket);
+    this.deps.store.updateBinding(bindingId, (current) => ({
+      ...current,
+      access: null,
+      lastError: null,
+    }));
+    await this.waitFor(
+      bindingId,
+      "stopped",
+      STOP_DEADLINE_MS,
+      signal,
+      "Saving the disk and stopping"
+    );
+  }
+
+  /**
+   * A provider that left or was replaced while the stop was out no longer
+   * speaks for the machine: never a success, which a Stop joined to it would
+   * take. Nothing is kept on the machine: the host already says its provider
+   * is unavailable, and the first read once it's back says how it is.
+   */
+  private requireStillRegistered(provider: CloudProvider): void {
+    if (this.stillRegistered(provider.id, provider)) return;
+    const message = `${nameOf(provider)} changed while the machine was stopping, so whether it stopped isn't known yet.`;
+    throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
+  }
+
+  /**
+   * An idle stop the provider refused, or whose answer was lost: settled by
+   * what the provider says of the machine, never by sending it again. A
+   * refusal it named did nothing, so one read settles it. A lost answer is
+   * followed while the machine reads as stopping, and for a minute while it
+   * still reads as anything else; the background poll goes on reading after that.
+   */
+  private async settleIdleStop(
+    bindingId: string,
+    provider: CloudProvider,
+    credentials: ProviderCredentials,
+    described: CloudHostError,
+    signal: AbortSignal
+  ): Promise<void> {
+    const refused = DEFINITE_REFUSALS.has(described.code);
+    const givesUpAt = this.now() + (refused ? 0 : LOST_STOP_SETTLE_MS);
+    let answered = false;
+    for (;;) {
+      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+      // Overtaken by a newer read counts as read: the binding holds that newer word.
+      let read = true;
+      try {
+        await this.inspectInto(bindingId, provider, { ...credentials, signal });
+      } catch {
+        if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+        read = false;
+      }
+      answered ||= read;
+      // A read from a provider that left meanwhile settles nothing for whoever joined this stop.
+      this.requireStillRegistered(provider);
+      const binding = this.deps.store.binding(bindingId);
+      if (!binding) return;
+      const machine = machineOf(binding);
+      if (read && machine === "stopped") {
+        this.deps.store.updateBinding(bindingId, (current) => ({ ...current, access: null }));
+        return;
+      }
+      // Stopping, saving, failed or gone after a lost answer: followed, and reported, as any stop
+      // is. A refusal the provider named did nothing, whatever else is under way.
+      if (
+        !refused &&
+        read &&
+        (machine === "stopping" ||
+          machine === "error" ||
+          machine === "deleted" ||
+          stopUnderWay(binding.observation?.stop))
+      ) {
+        await this.waitFor(
+          bindingId,
+          "stopped",
+          STOP_DEADLINE_MS,
+          signal,
+          "Saving the disk and stopping"
+        );
+        return;
+      }
+      if (refused || this.now() >= givesUpAt) {
+        const error: CloudHostError = refused
+          ? {
+              code: described.code,
+              message: `${nameOf(provider)} didn't stop the machine once the host's idle time ended: ${asSentence(described.message)}`,
+              at: this.now(),
+            }
+          : {
+              code: "outcome-unknown",
+              message: `${nameOf(provider)} didn't confirm the stop once the host's idle time ended, and ${answered ? "the machine hadn't read as stopping a minute later" : "the machine couldn't be read for a minute after"}. No second stop was sent.`,
+              at: this.now(),
+            };
+        this.recordError(bindingId, error);
+        throw new AppError({
+          code: "OUTCOME_UNKNOWN",
+          message: error.message,
+          userMessage: error.message,
+        });
+      }
+      await this.sleep(TRANSITION_POLL_MS, signal);
+    }
+  }
+
   /** Background observation: reads only, at a pace set by what was last seen. */
   private async pollDue(): Promise<void> {
     if (this.disposed) return;
@@ -3305,6 +3717,9 @@ export class CloudHostLifecycle {
     this.renewals.delete(bindingId);
     this.observedTicket.delete(bindingId);
     this.heldKeys.delete(bindingId);
+    this.admitted.delete(bindingId);
+    this.idleAsked.delete(bindingId);
+    this.idleUnsupported.delete(bindingId);
     void this.deps.machineKeys?.revokePending();
     await this.deps.files.forget(this.deps.clientDir, bindingId).catch(() => {});
   }

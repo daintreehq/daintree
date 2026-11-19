@@ -367,6 +367,29 @@ describe("idleEndSentence (#17921)", () => {
     expect(billed).toContain("Acme keeps billing a stopped machine for compute");
   });
 
+  it("says a plugin's machine is stopped by this device while it's linked, and keeps running with every device away (#17923)", () => {
+    const acme = provider({ name: "Acme", stoppedComputeBilled: false });
+    const said = idleEndSentence(idle, acme, null, { kind: "stops" })!;
+    expect(said).toContain("While this device is linked to the host, it stops the machine");
+    expect(said).toContain("With every device away, the machine keeps running.");
+    // Known from this device's own findings: the same before any summary, or with no link.
+    expect(idleEndSentence(undefined, acme, null, { kind: "stops" })).toBe(said);
+    // The host's word that it stops the machine itself still settles it.
+    expect(idleEndSentence(armed, acme, null, { kind: "stops" })).toBeNull();
+  });
+
+  it("says why this device doesn't stop a plugin's machine, or that it can't tell yet", () => {
+    const acme = provider({ name: "Acme", stoppedComputeBilled: false });
+    const problem =
+      "This device doesn't stop the machine when the host's idle time ends: snapshots are off on it.";
+    expect(idleEndSentence(idle, acme, null, { kind: "blocked", problem })).toBe(problem);
+    expect(idleEndSentence(idle, acme, null, { kind: "unknown" })).toBe(IDLE_STOP_UNKNOWN);
+    // An unregistered provider promises nothing, whatever was found before it left.
+    expect(idleEndSentence(idle, null, null, { kind: "stops" })).toBe(IDLE_STOP_UNKNOWN);
+    // A refused self-stop's own reason outranks it.
+    expect(idleEndSentence(idle, acme, refused, { kind: "stops" })).toBe(refused);
+  });
+
   it("doesn't imply a stop where it can't be known", () => {
     // A provider whose hosts can stop it, before or without the host's word: an older host, no summary, no link.
     expect(idleEndSentence(idle, BOAT_PROVIDER, null)).toBe(IDLE_STOP_UNKNOWN);

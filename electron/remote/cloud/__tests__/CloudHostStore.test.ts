@@ -151,6 +151,7 @@ describe("CloudHostStore worktree marks", () => {
           dataExpired: false,
           asleep: false,
           idleSleep: null,
+          snapshotsDisabled: false,
           observedAt: 5,
         },
       })
@@ -175,6 +176,7 @@ describe("CloudHostStore worktree marks", () => {
       dataExpired: false,
       asleep: true,
       idleSleep: { enabled: true, idleSeconds: 600 },
+      snapshotsDisabled: false,
       observedAt: 5,
     };
     new CloudHostStore(backend).putBinding(binding({ observation }));
@@ -207,6 +209,43 @@ describe("CloudHostStore worktree marks", () => {
       enabled: false,
       idleSeconds: null,
     });
+  });
+
+  it("keeps whether snapshots are off on the machine, and reads a record from before it as unknown (#17923)", () => {
+    const backend = disk();
+    const observation = {
+      machine: "running",
+      name: "build",
+      rawState: "running",
+      machineType: "2x4",
+      vcpu: 2,
+      memoryGB: 4,
+      autoStopAt: null,
+      lifetimeSeconds: null,
+      stoppedAt: null,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      asleep: false,
+      idleSleep: null,
+      snapshotsDisabled: true,
+      observedAt: 5,
+    };
+    new CloudHostStore(backend).putBinding(binding({ observation }));
+    expect(new CloudHostStore(backend).bindings()[0]?.observation?.snapshotsDisabled).toBe(true);
+    const { snapshotsDisabled: _snapshots, ...older } = observation;
+    for (const [stored, read] of [
+      [older, null],
+      [{ ...older, snapshotsDisabled: "yes" }, null],
+      [{ ...older, snapshotsDisabled: false }, false],
+    ] as const) {
+      backend.write({
+        version: 1,
+        accounts: [],
+        bindings: [binding({ observation: stored as never })],
+      });
+      expect(new CloudHostStore(backend).bindings()[0]?.observation?.snapshotsDisabled).toBe(read);
+    }
   });
 });
 

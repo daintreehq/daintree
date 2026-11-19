@@ -1151,6 +1151,11 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     clientDir,
     machineKeys,
     guestPowerOff,
+    idleClaims: {
+      sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+      idleOn: (hostId, session) =>
+        getRemoteService("hostMetrics")?.idleOn(hostId, session, 60_000) ?? null,
+    },
     hosts: {
       add: (name, connection, pendingPlacement) =>
         client.add({ name, connection, ...(pendingPlacement ? { pendingPlacement } : {}) }),

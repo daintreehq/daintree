@@ -127,6 +127,8 @@ export interface StoredCloudObservation {
   asleep: boolean;
   /** Whether it sleeps when idle, as the provider reported for this machine; null when it didn't say. */
   idleSleep: { enabled: boolean; idleSeconds: number | null } | null;
+  /** Snapshots were turned off at create, so a stop erases its disk; null in a record from before it was kept. */
+  snapshotsDisabled: boolean | null;
   observedAt: number;
 }
 
@@ -484,6 +486,8 @@ function readObservation(raw: unknown): StoredCloudObservation | null {
     dataExpired: value.dataExpired === true,
     asleep: value.asleep === true,
     idleSleep: readIdleSleep(value.idleSleep),
+    snapshotsDisabled:
+      typeof value.snapshotsDisabled === "boolean" ? value.snapshotsDisabled : null,
     observedAt: num(value.observedAt) ?? 0,
   };
 }
