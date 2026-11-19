@@ -885,7 +885,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: AgentSettings;
   };
   "agent-settings:set": {
-    args: [payload: { agentType: AgentId; settings: Record<string, unknown> }];
+    args: [
+      payload: {
+        agentType: AgentId;
+        settings: Record<string, unknown>;
+        /** Keep each preset's stored `continueAtLimitReset` (#17912). */
+        lockContinueAtLimitReset?: boolean;
+      },
+    ];
     result: AgentSettings;
   };
   "agent-settings:reset": {

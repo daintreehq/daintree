@@ -42,6 +42,11 @@ import { decisionsHostServes, loadDecisionsModule } from "../../../window/servic
 import { AppError } from "../../../utils/errorTypes.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import { peekComposerSendHold } from "../../../services/composerHold/composerSendHoldLive.js";
+import {
+  forgetContinuationPane,
+  noteContinuationSpawn,
+} from "../../../services/codexLimitContinuation/forgetPane.js";
+import { canContinueAtLimitReset } from "../../../../shared/types/codexLimitContinuation.js";
 import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
@@ -1457,6 +1462,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       validatedOptions.whenDone !== undefined
         ? await import("../../../services/terminalWhenDone/terminalWhenDoneLive.js")
         : null;
+    // Only an agent a pane can be armed for reads its preset's continuation
+    // switch (#17912); the assistant is never armed.
+    const continuationLive =
+      projectId !== undefined &&
+      typeof launchAgentId === "string" &&
+      canContinueAtLimitReset(launchAgentId) &&
+      !isHelpLaunch &&
+      !isBoundHelpTerminal(id)
+        ? await import("../../../services/codexLimitContinuation/codexLimitContinuationLive.js")
+        : null;
 
     // Main can't see a Windows pane's Claude store (its PowerShell profile may
     // move it), so the lookup above stays unsure there and an untouched pane
@@ -1599,6 +1614,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // the shell, so when the agent exits the shell reclaims the foreground.
       // SIGINT routes to the agent (the foreground process group) via the
       // kernel's TTY line discipline; the shell stays pristine.
+      const generationBeforeSpawn = getLifecycleLedger().currentGeneration(id);
       ptyClient.spawn(id, {
         cwd,
         shell: spawnShell,
@@ -1655,6 +1671,30 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // natural exit left on the pane survives it — once the host confirms the
       // spawn (#12433).
       noteTerminalLaunch(id, { command: safeCommand, agentSessionId: spawnAgentSessionId });
+      // Whether the preset starts the pane armed to continue at its limit's
+      // reset, confirmed with the spawn's own generation (#17912). Unchanged
+      // means PtyClient refused the spawn without sending it, and the
+      // generation still current is an earlier launch's.
+      const launchGeneration = getLifecycleLedger().currentGeneration(id);
+      if (
+        projectId !== undefined &&
+        launchGeneration !== undefined &&
+        launchGeneration !== generationBeforeSpawn
+      ) {
+        if (continuationLive && typeof launchAgentId === "string") {
+          continuationLive.noteContinuationLaunch({
+            terminalId: id,
+            projectId,
+            launchGeneration,
+            agentId: launchAgentId,
+            presetId: validatedOptions.agentPresetId,
+            originalPresetId:
+              validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
+          });
+        } else {
+          noteContinuationSpawn(id, projectId, launchGeneration);
+        }
+      }
       if (whenDone !== undefined && whenDoneLive && validatedOptions.handbackCode !== undefined) {
         // No generation means PtyClient refused the spawn without sending it.
         const launchGeneration = getLifecycleLedger().currentGeneration(id);
@@ -1802,6 +1842,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         throw new Error("Invalid terminal ID: must be a string");
       }
       if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
+      // The pane goes with this kill: its continuation choice goes too (#17912).
+      if (options?.closesPane === true) forgetContinuationPane(id);
       dropHeldComposerSend(id, options);
       // Before any await: a restart's respawn arms a fresh window for this id,
       // and it must not be the one this kill clears.
@@ -1840,6 +1882,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error("Invalid terminal ID: must be a string");
     }
     if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
+    if (options?.closesPane === true) forgetContinuationPane(id);
     dropHeldComposerSend(id, options);
     // An Assistant's lane, frozen before the kill: the id it hands back is the
     // lane's conversation too, which a view keeps by itself otherwise (#17919).
@@ -2085,6 +2128,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
     }
 
+    // The renderer removes the pane once this answers, without a kill (#17912).
+    forgetContinuationPane(terminalId);
     return { record };
   };
 

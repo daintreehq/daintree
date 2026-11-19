@@ -7,6 +7,7 @@ import type {
 import type { CodexLimitStop } from "../../codex/CodexLimitReset.js";
 import {
   CONTINUE_AFTER_RESET_MS,
+  LAUNCH_CONFIRMATION_MS,
   READS_PAUSED_RETRY_MS,
   WAKE_SETTLE_MS,
   CodexLimitContinuation,
@@ -30,6 +31,7 @@ const codexPane = (extra: Partial<ContinuationTerminal> = {}): ContinuationTermi
   fallbackChainIndex: undefined,
   isAssistantTerminal: false,
   spawnedAt: 1_000,
+  launchGeneration: undefined,
   ...extra,
 });
 
@@ -359,5 +361,296 @@ describe("CodexLimitContinuation (#17909)", () => {
       { terminalId: "t1", revision: revisions.at(-1), state: h.state() },
     ]);
     expect(h.service.list("other-project")).toEqual([]);
+  });
+});
+
+describe("CodexLimitContinuation — a preset arms its panes (#17912)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(START);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const launch = (arms: boolean, launchGeneration = 1, projectId = PROJECT) => ({
+    terminalId: "t1",
+    projectId,
+    launchGeneration,
+    arms,
+  });
+  const confirmed = (launchGeneration = 1, spawnedAt = 2_000) => ({
+    success: true,
+    launchGeneration,
+    spawnedAt,
+  });
+
+  it("arms a pane once the host confirms the launch its preset arms, and tells the host once", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    expect(h.state()).toBeUndefined();
+    expect(h.active).toEqual([true]);
+
+    h.service.handleSpawnResult("t1", confirmed());
+    expect(h.state()).toEqual({ status: "armed" });
+    expect(h.hostArmed).toEqual([["t1", true]]);
+  });
+
+  it("arms nothing for a refused spawn or an earlier spawn's answer", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true, 2));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    expect(h.state()).toBeUndefined();
+
+    h.service.handleSpawnResult("t1", { success: false, launchGeneration: 2 });
+    expect(h.state()).toBeUndefined();
+    expect(h.hostArmed).toEqual([]);
+    // The launch is settled either way, so nothing is left listening.
+    expect(h.active).toEqual([true, false]);
+  });
+
+  it("drops a launch its host never confirms, and stops listening", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    vi.advanceTimersByTime(LAUNCH_CONFIRMATION_MS);
+    expect(h.active).toEqual([true, false]);
+    h.service.handleSpawnResult("t1", confirmed());
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("keeps a live pane's wait when a second spawn under its id is refused", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1, 1_000));
+    await h.service.handleStop("t1", STOP);
+    const waiting = h.state();
+    expect(waiting).toMatchObject({ status: "waiting" });
+
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", { success: false, launchGeneration: 2 });
+    expect(h.state()).toEqual(waiting);
+    expect(h.hostArmed).toEqual([["t1", true]]);
+  });
+
+  it("follows the preset at the next launch when nobody chose for the pane", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+
+    // The preset was edited off, then the pane restarted.
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.state()).toBeUndefined();
+    expect(h.hostArmed).toEqual([
+      ["t1", true],
+      ["t1", false],
+    ]);
+  });
+
+  it("keeps the menu's off across later launches the preset arms", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    await h.service.set("t1", false, PROJECT);
+
+    h.service.noteLaunch(launch(true, 2));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("keeps the menu's off when it lands before the launch is confirmed", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    await h.service.set("t1", false, PROJECT);
+    h.service.handleSpawnResult("t1", confirmed(1));
+    expect(h.state()).toBeUndefined();
+    expect(h.hostArmed).toEqual([]);
+  });
+
+  it("keeps the menu's on across later launches the preset doesn't arm", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", confirmed(2, 3_000));
+    expect(h.state()).toEqual({ status: "armed" });
+    // As any respawn of an armed pane: the new process's host is told.
+    expect(h.hostArmed).toEqual([
+      ["t1", true],
+      ["t1", true],
+    ]);
+  });
+
+  it("takes the menu's on for a pane its preset armed as the pane's own choice", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    await h.service.set("t1", true, PROJECT);
+
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.state()).toEqual({ status: "armed" });
+  });
+
+  it("ignores a choice made for the same id in another project", async () => {
+    const h = harness();
+    await h.service.set("t1", false, "elsewhere");
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    expect(h.state()).toEqual({ status: "armed" });
+  });
+
+  it("keeps this project's off when another project asks about the same id", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    await h.service.set("t1", false, PROJECT);
+    await h.service.set("t1", false, "elsewhere");
+
+    h.service.noteLaunch(launch(true, 2));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("arms the running launch when a duplicate spawn queued behind it is refused", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true, 1));
+    h.service.noteLaunch(launch(true, 2));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    h.service.handleSpawnResult("t1", { success: false, launchGeneration: 2 });
+    expect(h.state()).toEqual({ status: "armed" });
+    expect(h.hostArmed).toEqual([["t1", true]]);
+    expect(h.active).toEqual([true]);
+  });
+
+  it("never gives a newer spawn that decides nothing an older launch's default", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true, 1));
+    // A shell queued under the same id after it; only the shell is sent.
+    h.service.noteSpawn("t1", PROJECT, 2);
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.service.isArmed("t1")).toBe(false);
+    expect(h.active).toEqual([true, false]);
+  });
+
+  it("still arms the running launch when a shell queued behind it is refused", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true, 1));
+    h.service.noteSpawn("t1", PROJECT, 2);
+    h.service.handleSpawnResult("t1", confirmed(1));
+    h.service.handleSpawnResult("t1", { success: false, launchGeneration: 2 });
+    expect(h.state()).toEqual({ status: "armed" });
+  });
+
+  it("notes no other spawn for an id no launch awaits", () => {
+    const h = harness();
+    h.service.noteSpawn("t1", PROJECT, 1);
+    expect(h.active).toEqual([]);
+  });
+
+  it("takes a crash replay's answer, under a newer generation, for the launch it resent", () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true, 1));
+    h.service.handleSpawnResult("t1", confirmed(3));
+    expect(h.state()).toEqual({ status: "armed" });
+    expect(h.active).toEqual([true]);
+  });
+
+  it("keeps a later launch's wait when an earlier spawn's answer arrives after it", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true, 2));
+    h.service.handleSpawnResult("t1", confirmed(2, 2_000));
+    h.setTerminal(codexPane({ spawnedAt: 2_000 }));
+    await h.service.handleStop("t1", STOP);
+    const waiting = h.state();
+    expect(waiting).toMatchObject({ status: "waiting" });
+
+    h.service.handleSpawnResult("t1", confirmed(1, 1_000));
+    expect(h.state()).toEqual(waiting);
+    expect(h.hostArmed).toEqual([["t1", true]]);
+    // The wait is still the one the later process's exit ends.
+    h.service.handleProcessChange("t1", 2_000);
+    expect(h.state()).toEqual({ status: "armed" });
+  });
+
+  it("keeps another project's choice for the same id when a project is removed", async () => {
+    const h = harness();
+    await h.service.set("t1", false, "elsewhere");
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    h.service.forgetProject(PROJECT);
+
+    h.service.noteLaunch(launch(true, 2, "elsewhere"));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.service.isArmed("t1")).toBe(false);
+  });
+
+  it("ignores an earlier spawn's late answer for a pane armed from its menu", async () => {
+    const h = harness();
+    h.setTerminal(codexPane({ spawnedAt: 2_000, launchGeneration: 2 }));
+    await h.service.set("t1", true, PROJECT);
+    await h.service.handleStop("t1", STOP);
+    const waiting = h.state();
+    expect(waiting).toMatchObject({ status: "waiting" });
+
+    h.service.handleSpawnResult("t1", confirmed(1, 1_000));
+    expect(h.state()).toEqual(waiting);
+  });
+
+  it("forgets a removed project's panes and choices, and no other project's", async () => {
+    const h = harness();
+    h.service.noteLaunch(launch(true));
+    h.service.handleSpawnResult("t1", confirmed(1));
+    await h.service.set("t2", false, PROJECT);
+    await h.service.set("t2", false, "elsewhere");
+    h.service.noteLaunch({ ...launch(true, 4), terminalId: "t3" });
+
+    h.service.forgetProject(PROJECT);
+    expect(h.service.list(PROJECT)).toEqual([]);
+    expect(h.active).toEqual([true, false]);
+
+    // The other project's off for t2 still stands there.
+    h.service.noteLaunch({ ...launch(true, 5, "elsewhere"), terminalId: "t2" });
+    h.service.handleSpawnResult("t2", confirmed(5));
+    expect(h.service.list("elsewhere")).toEqual([]);
+    // t3's launch went with its project.
+    h.service.handleSpawnResult("t3", confirmed(4));
+    expect(h.service.isArmed("t3")).toBe(false);
+  });
+
+  it("forgets a pane closed for good, so a new pane under its id follows its own preset", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    h.service.forgetPane("t1");
+    expect(h.state()).toBeUndefined();
+    expect(h.active).toEqual([true, false]);
+
+    h.service.noteLaunch(launch(false, 2));
+    h.service.handleSpawnResult("t1", confirmed(2));
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("drops an arm still waiting on its host read when the pane is closed for good", async () => {
+    const h = harness();
+    let answer: (value: ContinuationTerminal | null) => void = () => {};
+    const service = new CodexLimitContinuation({
+      now: () => Date.now(),
+      readTerminal: () => new Promise((resolve) => (answer = resolve)),
+      readStop: async () => known(),
+      decideFallback: async () => "none",
+      continueAt: async () => ({ status: "continued", line: "continue" }),
+      setHostArmed: (id, armed) => h.hostArmed.push([id, armed]),
+      notify: () => {},
+      setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
+      clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+      onActiveChange: () => {},
+    });
+    const arming = service.set("t1", true, PROJECT);
+    service.forgetPane("t1");
+    answer(codexPane());
+    await arming;
+    expect(service.isArmed("t1")).toBe(false);
+    expect(h.hostArmed).toEqual([]);
   });
 });

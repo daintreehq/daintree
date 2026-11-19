@@ -166,6 +166,45 @@ describe("gatePluginPresetLaunch", () => {
     expect(result.approval.content).toBe(presetLaunchContent(zai));
   });
 
+  it("says a pane continues at its limit's reset only for the person's own preset of an agent that can (#17912)", async () => {
+    const work: AgentPreset = { id: "work", name: "Work", continueAtLimitReset: true };
+    const codexLaunch = { agentId: "codex", presetId: "work", prompt: "hello" };
+    const summaryFor = async (sources: Partial<PresetLaunchSources>, agentLaunch = codexLaunch) => {
+      const { deps, ensurePresetLaunchAllowed } = makeDeps(sources);
+      await gatePluginPresetLaunch(caller, "agent.launch", agentLaunch, "p", deps);
+      return ensurePresetLaunchAllowed.mock.calls[0]![2];
+    };
+
+    expect(
+      (await summaryFor({ settings: { agents: { codex: { customPresets: [work] } } } as never }))
+        .continuesAtLimitReset
+    ).toBe(true);
+    // Nor is an off preset described as armed.
+    expect(
+      (
+        await summaryFor({
+          settings: {
+            agents: { codex: { customPresets: [{ id: "work", name: "Work" }] } },
+          } as never,
+        })
+      ).continuesAtLimitReset
+    ).toBeUndefined();
+    // A repository's preset can't turn it on.
+    expect(
+      (await summaryFor({ settings: { agents: {} } as never, projectPresets: [work] }))
+        .continuesAtLimitReset
+    ).toBeUndefined();
+    // Nor can it for an agent that waits for its own reset.
+    expect(
+      (
+        await summaryFor(
+          { settings: { agents: { claude: { customPresets: [work] } } } as never },
+          { agentId: "claude", presetId: "work", prompt: "hello" }
+        )
+      ).continuesAtLimitReset
+    ).toBeUndefined();
+  });
+
   it("passes through, unasked, a plugin that doesn't declare the capability", async () => {
     const { deps, ensurePresetLaunchAllowed, readSources } = makeDeps();
     const result = await gatePluginPresetLaunch(

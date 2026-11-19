@@ -186,3 +186,55 @@ describe("FallbackChainEditor — chain length (#16587)", () => {
     expect(screen.queryByTestId("fallback-chain-cut")).toBeNull();
   });
 });
+
+describe("FallbackChainEditor — continuing when the usage limit resets (#17912)", () => {
+  const label = "Continue when usage limit resets";
+  const describedBy = (toggle: HTMLElement) =>
+    (toggle.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+
+  it("offers it with no fallback chain, and stores only true", () => {
+    const onUpdatePreset = renderEditor({ id: "home", name: "Home" }, "codex");
+    const toggle = screen.getByRole("switch", { name: label });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(toggle);
+    expect(onUpdatePreset).toHaveBeenCalledWith("home", { continueAtLimitReset: true });
+  });
+
+  it("clears it rather than storing false", () => {
+    const onUpdatePreset = renderEditor(
+      { id: "home", name: "Home", continueAtLimitReset: true },
+      "codex"
+    );
+    const toggle = screen.getByRole("switch", { name: label });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+    expect(onUpdatePreset).toHaveBeenCalledWith("home", { continueAtLimitReset: undefined });
+  });
+
+  it.each([
+    ["an agent that waits for its own reset", "claude"],
+    ["no agent", undefined],
+  ])("offers nothing for %s", (_label, agentId) => {
+    renderEditor({ id: "home", name: "Home", fallbacks: ["work"] }, agentId);
+    expect(screen.queryByRole("switch", { name: label })).toBeNull();
+  });
+
+  it("says a fallback comes first only while the preset falls back on usage limits", () => {
+    renderEditor({ id: "home", name: "Home", fallbacks: ["work"] }, "codex");
+    expect(describedBy(screen.getByRole("switch", { name: label }))).not.toContain(
+      "fall back first"
+    );
+    cleanup();
+
+    renderEditor(
+      { id: "home", name: "Home", fallbacks: ["work"], fallbackOnRateLimit: true },
+      "codex"
+    );
+    expect(describedBy(screen.getByRole("switch", { name: label }))).toContain("fall back first");
+  });
+});

@@ -1949,8 +1949,16 @@ function buildElectronApi(): ElectronAPI {
     agentSettings: {
       get: () => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_GET),
 
-      set: (agentId: string, settings: Partial<AgentSettingsEntry>) =>
-        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: agentId, settings }),
+      set: (
+        agentId: string,
+        settings: Partial<AgentSettingsEntry>,
+        options?: { lockContinueAtLimitReset?: boolean }
+      ) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET, {
+          agentType: agentId,
+          settings,
+          ...(options?.lockContinueAtLimitReset === true && { lockContinueAtLimitReset: true }),
+        }),
 
       setGlobal: (value: boolean) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL, value),
 

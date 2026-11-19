@@ -15,6 +15,7 @@ import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { keepStoredLimitResets } from "@shared/utils/agentPresets";
 import { setAgentSettingsEntryAccessor, setGlobalSkipPermissionsAccessor } from "./storeAccessors";
 
 /**
@@ -68,7 +69,15 @@ interface AgentSettingsActions {
   refresh: (read?: () => Promise<AgentSettings | undefined>) => Promise<void>;
   /** Take a saved slice another view (or this one) just wrote (#14700). */
   applySaved: (raw: AgentSettings) => void;
-  updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
+  /**
+   * `lockContinueAtLimitReset` keeps each preset's stored continuation switch,
+   * for a writer that may not arm panes (#17912).
+   */
+  updateAgent: (
+    agentId: string,
+    updates: Partial<AgentSettingsEntry>,
+    options?: { lockContinueAtLimitReset?: boolean }
+  ) => Promise<void>;
   /**
    * Set the global skip-permissions override (#10432). Writes the root-level
    * `globalSkipPermissions` field only — does not mutate any per-agent
@@ -211,6 +220,32 @@ type StoreSet = (partial: Partial<AgentSettingsStore>) => void;
 type StoreGet = () => AgentSettingsStore;
 
 /**
+ * A locked write's patch keeps each preset's continuation switch as the
+ * snapshot it lands on holds it (#17912), so the write's own older copy never
+ * shows here, nor reaches a Settings save made while it is in flight.
+ */
+function keepingLimitResets(agentId: string, patch: Patch): Patch {
+  return (settings) => {
+    const next = patch(settings);
+    const entry = next.agents?.[agentId];
+    if (!entry || !Array.isArray(entry.customPresets)) return next;
+    return {
+      ...next,
+      agents: {
+        ...next.agents,
+        [agentId]: {
+          ...entry,
+          customPresets: keepStoredLimitResets(
+            entry.customPresets,
+            settings.agents?.[agentId]?.customPresets
+          ) as typeof entry.customPresets,
+        },
+      },
+    };
+  };
+}
+
+/**
  * One agent's write. `patch` is what it changes in a snapshot, which may be
  * narrower than `updates`: a preset choice sends the agent's whole preset map
  * but changes one worktree's entry, so another view's choice for a different
@@ -221,17 +256,21 @@ async function writeAgentEntry(
   get: StoreGet,
   agentId: string,
   updates: Partial<AgentSettingsEntry>,
-  patch: Patch
+  patch: Patch,
+  options?: { lockContinueAtLimitReset?: boolean }
 ): Promise<void> {
   ++normalizeEpoch;
   const myWrite = ++writeEpoch;
   const heardAtStart = savedChangesHeard;
   set({ error: null });
   const previous = get().settings;
-  const release = holdPatch(patch);
-  if (previous) set({ settings: patch(previous) });
+  const applied = options?.lockContinueAtLimitReset ? keepingLimitResets(agentId, patch) : patch;
+  const release = holdPatch(applied);
+  if (previous) set({ settings: applied(previous) });
   try {
-    const raw = await agentSettingsClient.set(agentId, updates);
+    const raw = await (options
+      ? agentSettingsClient.set(agentId, updates, options)
+      : agentSettingsClient.set(agentId, updates));
     release();
     // A newer write of this view's own owns the answer.
     const saved = myWrite === writeEpoch ? normalizeSaved(raw) : null;
@@ -344,14 +383,21 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     }
   },
 
-  updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) =>
-    writeAgentEntry(set, get, agentId, updates, (settings) => ({
-      ...settings,
-      agents: {
-        ...settings.agents,
-        [agentId]: { ...settings.agents[agentId], ...updates },
-      },
-    })),
+  updateAgent: (agentId, updates, options) =>
+    writeAgentEntry(
+      set,
+      get,
+      agentId,
+      updates,
+      (settings) => ({
+        ...settings,
+        agents: {
+          ...settings.agents,
+          [agentId]: { ...settings.agents[agentId], ...updates },
+        },
+      }),
+      options
+    ),
 
   setGlobalSkipPermissions: async (value: boolean) => {
     ++normalizeEpoch;

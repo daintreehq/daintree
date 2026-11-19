@@ -154,6 +154,8 @@ export interface AgentSettingsEntry {
     fallbackOnRateLimit?: boolean;
     /** Reopen the same conversation on a usage-limit hop (#16045). */
     keepConversationOnRateLimit?: boolean;
+    /** Launch panes armed to continue once their usage limit resets (#17912). */
+    continueAtLimitReset?: boolean;
     /** The account a launch of this preset signs in as, unless overridden (#16133). */
     accountId?: string;
   }>;

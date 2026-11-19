@@ -51,9 +51,13 @@ export const agentSettingsClient = {
   /** Drop the cached snapshot so the next get() hits main. */
   invalidate,
 
-  set: (agentId: string, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings> => {
+  set: (
+    agentId: string,
+    settings: Partial<AgentSettingsEntry>,
+    options?: { lockContinueAtLimitReset?: boolean }
+  ): Promise<AgentSettings> => {
     invalidate();
-    return window.electron.agentSettings.set(agentId, settings).finally(invalidate);
+    return window.electron.agentSettings.set(agentId, settings, options).finally(invalidate);
   },
 
   setGlobal: (value: boolean): Promise<AgentSettings> => {

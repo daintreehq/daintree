@@ -9,6 +9,7 @@ import {
 } from "../../../shared/types/index.js";
 import { isResumeOnRestart, type ResumeOnRestart } from "../../../shared/types/agentSettings.js";
 import { sanitizeLoginName } from "../../../shared/utils/agentAccounts.js";
+import { keepStoredLimitResets } from "../../../shared/utils/agentPresets.js";
 import { AgentHelpService } from "../../services/AgentHelpService.js";
 import { UserAgentRegistryService } from "../../services/UserAgentRegistryService.js";
 import type { AgentHelpRequest, AgentHelpResult } from "../../../shared/types/ipc/agent.js";
@@ -81,6 +82,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
   const handleAgentSettingsSet = async (payload: {
     agentType: string;
     settings: Record<string, unknown>;
+    lockContinueAtLimitReset?: boolean;
   }) => {
     if (!isPlainRecord(payload)) {
       throw new Error("Invalid payload");
@@ -94,9 +96,24 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
     const currentSettings = normalizeAgentSettings(
       store.get("agentSettings", DEFAULT_AGENT_SETTINGS)
     );
+    const currentEntry = currentSettings.agents?.[safeAgentType] ?? {};
+    // A writer that may not arm panes (#17912), the agent-settings action that
+    // MCP reaches, keeps each preset's stored switch: checked against the
+    // stored presets in this same synchronous merge, so a switch the user
+    // changed a moment ago can't be written back from an older read.
+    const written =
+      payload.lockContinueAtLimitReset === true && Array.isArray(settings.customPresets)
+        ? {
+            ...settings,
+            customPresets: keepStoredLimitResets(
+              settings.customPresets,
+              (currentEntry as Record<string, unknown>).customPresets
+            ),
+          }
+        : settings;
     const merged = {
-      ...(currentSettings.agents?.[safeAgentType] ?? {}),
-      ...settings,
+      ...currentEntry,
+      ...written,
     };
     // Strip retired keys — never persist them back. `pinned` lives in this
     // machine's toolbar pins now (#14702), so a write from an older Shell or an

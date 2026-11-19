@@ -332,6 +332,9 @@ function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) 
   if (preset.accountName !== undefined) {
     rows.push({ label: "Account it pins", value: preset.accountName });
   }
+  if (preset.continuesAtLimitReset === true) {
+    rows.push({ label: "At a usage limit", value: "Continues by itself once the limit resets" });
+  }
   return (
     <div className="space-y-3">
       <DetailList heading={`${preset.agentName} · ${preset.presetName}`} rows={rows} />

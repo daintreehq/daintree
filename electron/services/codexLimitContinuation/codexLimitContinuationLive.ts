@@ -12,7 +12,13 @@ import type { AgentSettings } from "../../../shared/types/agentSettings.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import type { CodexLimitStopRef } from "../../../shared/types/codexLimitContinuation.js";
 import { CodexLimitContinuation, type ContinuationTerminal } from "./CodexLimitContinuation.js";
-import { decideLimitFallback, limitFallbackOptIn, type LimitFallback } from "./limitFallback.js";
+import {
+  decideLimitFallback,
+  limitFallbackOptIn,
+  limitResetOptIn,
+  type LimitFallback,
+} from "./limitFallback.js";
+import { setContinuationForgetter } from "./forgetPane.js";
 
 async function readTerminal(terminalId: string): Promise<ContinuationTerminal | null> {
   const pty = getPtyClient();
@@ -28,6 +34,7 @@ async function readTerminal(terminalId: string): Promise<ContinuationTerminal | 
     fallbackChainIndex: info.fallbackChainIndex,
     isAssistantTerminal: info.isAssistantTerminal === true,
     spawnedAt: info.spawnedAt,
+    launchGeneration: info.launchGeneration,
   };
 }
 
@@ -73,8 +80,57 @@ async function decideFallback(terminal: ContinuationTerminal): Promise<LimitFall
   return decideLimitFallback(run, customPresets, projectPresets);
 }
 
+/** The user's own presets of `agentId` on this machine, or undefined when unread. */
+function readOwnPresets(agentId: string): AgentPreset[] | undefined {
+  try {
+    const settings = store.get("agentSettings") as AgentSettings | undefined;
+    return settings?.agents?.[agentId]?.customPresets;
+  } catch {
+    return undefined;
+  }
+}
+
 let service: CodexLimitContinuation | null = null;
 let stopListening: (() => void) | null = null;
+let stopForgetting: (() => void) | null = null;
+
+/** A launch of an agent a pane can be armed for, as the spawn handler sent it. */
+export interface AgentLaunchForContinuation {
+  terminalId: string;
+  projectId: string;
+  launchGeneration: number;
+  agentId: string;
+  presetId: string | undefined;
+  originalPresetId: string | undefined;
+}
+
+/**
+ * Called by the spawn handler right after it sent a launch (#17912): the pane
+ * starts armed when its user's own original preset says so, unless the user
+ * chose otherwise for it, once the host confirms the spawn. A launch whose
+ * preset doesn't arm it, of a pane nothing has armed or noted, creates nothing.
+ */
+export function noteContinuationLaunch(launch: AgentLaunchForContinuation): void {
+  const arms =
+    launch.presetId !== undefined &&
+    limitResetOptIn(
+      {
+        agentId: launch.agentId,
+        presetId: launch.presetId,
+        originalPresetId: launch.originalPresetId,
+      },
+      readOwnPresets(launch.agentId)
+    );
+  // A launch noted earlier is still awaiting its spawn, so this one, newer,
+  // must be noted too, or that one's default would be taken for it.
+  if (!arms && !service?.followsLaunches(launch.terminalId)) return;
+  getCodexLimitContinuation().noteLaunch({
+    terminalId: launch.terminalId,
+    projectId: launch.projectId,
+    launchGeneration: launch.launchGeneration,
+    arms,
+  });
+}
 
 /**
  * Follows the facts armed panes act on, only while one is armed: with none,
@@ -86,7 +142,7 @@ function startListening(target: CodexLimitContinuation): void {
   const onStop = (fact: { terminalId: string } & CodexLimitStopRef) =>
     void target.handleStop(fact.terminalId, { run: fact.run, seq: fact.seq });
   const onSpawn = (terminalId: string, result: SpawnResult) =>
-    target.handleSpawn(terminalId, result.success ? result.spawnedAt : undefined);
+    target.handleSpawnResult(terminalId, result);
   const onExit = (fact: PtyIncarnationExit) =>
     target.handleProcessChange(fact.terminalId, fact.spawnedAt);
   const onLost = (fact: PtyIncarnationLost) => target.handleProcessChange(fact.terminalId);
@@ -145,6 +201,11 @@ export function getCodexLimitContinuation(): CodexLimitContinuation {
     },
   });
   service = created;
+  setContinuationForgetter(created);
+  // A trashed pane expiring, or emptied from the trash, is closed for good,
+  // whichever process let it go; menu choices outlive arming, so this listens
+  // for as long as the service exists.
+  stopForgetting = events.on("terminal:trash-cleared", ({ id }) => created.forgetPane(id));
   return created;
 }
 
@@ -159,4 +220,7 @@ export function _resetCodexLimitContinuationForTest(): void {
   stopListening?.();
   stopListening = null;
   service = null;
+  stopForgetting?.();
+  stopForgetting = null;
+  setContinuationForgetter(null);
 }

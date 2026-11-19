@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import { FALLBACK_CHAIN_MAX } from "../../../../shared/config/agentRegistry";
 import type { AgentPreset } from "@/config/agents";
 import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
+import { canContinueAtLimitReset } from "@shared/types/codexLimitContinuation";
 import { validFallbackIds } from "@shared/utils/agentPresets";
 import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,11 @@ import { SETTINGS_CONTROL_WIDTH, SettingsDependents, SettingsRow } from "../Sett
 import { SettingsSwitch } from "../SettingsSwitch";
 
 interface FallbackChainEditorProps {
-  /** Gates the conversation-keeping option to agents whose refusal is recognised. */
+  /**
+   * Gates the conversation-keeping option to agents whose refusal is
+   * recognised, and continuing at a limit's reset to agents that don't wait
+   * for it themselves.
+   */
   agentId?: string;
   selectedPreset: AgentPreset;
   /**
@@ -285,6 +290,29 @@ export function FallbackChainEditor({
             />
           </SettingsDependents>
         )}
+      {canContinueAtLimitReset(agentId) && (
+        <SettingsRow
+          label="Continue when usage limit resets"
+          description={
+            chain.length > 0 && selectedPreset.fallbackOnRateLimit === true
+              ? "Panels launched on this preset fall back first, then continue by themselves once no fallback is left and the limit resets, even days away. A panel's own menu turns it off for that panel."
+              : "Panels launched on this preset continue by themselves once their usage limit resets, even days away. A panel's own menu turns it off for that panel."
+          }
+          control={({ labelId, descriptionId, disabled }) => (
+            <SettingsSwitch
+              checked={selectedPreset.continueAtLimitReset === true}
+              onCheckedChange={(checked) =>
+                onUpdatePreset(selectedPreset.id, {
+                  continueAtLimitReset: checked ? true : undefined,
+                })
+              }
+              disabled={disabled}
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+            />
+          )}
+        />
+      )}
     </>
   );
 }

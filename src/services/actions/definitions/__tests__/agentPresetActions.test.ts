@@ -9,7 +9,7 @@ import { agentPresetMutationFingerprint, planAgentPresetMutation } from "../agen
 const store = vi.hoisted(() => ({
   settings: null as AgentSettings | null,
   initialize: vi.fn(async () => {}),
-  updateAgent: vi.fn(async (_agentId: string, _updates: unknown) => {}),
+  updateAgent: vi.fn(async (_agentId: string, _updates: unknown, _options?: unknown) => {}),
 }));
 
 vi.mock("@/store/agentSettingsStore", () => ({
@@ -80,12 +80,18 @@ describe("user-preset write runs (#16047)", () => {
     expect(first.presetId).toMatch(/^user-[0-9a-f-]{36}$/);
     expect(second.presetId).not.toBe(first.presetId);
     expect(first.name).toBe("Personal");
-    expect(store.updateAgent).toHaveBeenNthCalledWith(1, "codex", {
-      customPresets: [
-        { id: "user-work", name: "Work", customFlags: "--search", color: "#abc" },
-        { id: first.presetId, name: "Personal", env: { CODEX_HOME: "/Users/me/.codex" } },
-      ],
-    });
+    // Main keeps every preset's continuation switch as stored (#17912).
+    expect(store.updateAgent).toHaveBeenNthCalledWith(
+      1,
+      "codex",
+      {
+        customPresets: [
+          { id: "user-work", name: "Work", customFlags: "--search", color: "#abc" },
+          { id: first.presetId, name: "Personal", env: { CODEX_HOME: "/Users/me/.codex" } },
+        ],
+      },
+      { lockContinueAtLimitReset: true }
+    );
   });
 
   it("refuses without writing, as a non-retriable target refusal", async () => {
@@ -111,9 +117,13 @@ describe("user-preset write runs (#16047)", () => {
         })
     );
     await run("agent.updatePreset", { agentId: "codex", presetId: "user-work", color: "#def" });
-    expect(store.updateAgent).toHaveBeenCalledWith("codex", {
-      customPresets: [{ id: "user-work", name: "Work", customFlags: "--latest", color: "#def" }],
-    });
+    expect(store.updateAgent).toHaveBeenCalledWith(
+      "codex",
+      {
+        customPresets: [{ id: "user-work", name: "Work", customFlags: "--latest", color: "#def" }],
+      },
+      { lockContinueAtLimitReset: true }
+    );
   });
 
   it("refuses a preset removed while settings loaded, writing nothing", async () => {
@@ -159,9 +169,10 @@ describe("user-preset write runs (#16047)", () => {
   it("removes the default preset and says the default was cleared", async () => {
     const result = await run("agent.deletePreset", { agentId: "codex", presetId: "user-work" });
     expect(result).toEqual({ presetId: "user-work", name: "Work", agentDefaultCleared: true });
-    expect(store.updateAgent).toHaveBeenCalledWith("codex", {
-      customPresets: [],
-      presetId: undefined,
-    });
+    expect(store.updateAgent).toHaveBeenCalledWith(
+      "codex",
+      { customPresets: [], presetId: undefined },
+      { lockContinueAtLimitReset: true }
+    );
   });
 });

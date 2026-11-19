@@ -20,17 +20,39 @@ export interface LimitFallbackRun {
   chainIndex: number | undefined;
 }
 
+/** The user's own original preset of a run, resolved as a launch resolves it. */
+function ownOriginalPreset(
+  run: Pick<LimitFallbackRun, "agentId" | "presetId" | "originalPresetId">,
+  customPresets: AgentPreset[] | undefined
+): AgentPreset | null {
+  if (run.presetId === undefined) return null;
+  const originalId = run.originalPresetId ?? run.presetId;
+  return (
+    getMergedPresets(run.agentId, customPresets, [], []).find(
+      (preset) => preset.id === originalId
+    ) ?? null
+  );
+}
+
 /** The user's own original preset, when it opted in to falling back on usage limits. */
 export function limitFallbackOptIn(
   run: LimitFallbackRun,
   customPresets: AgentPreset[] | undefined
 ): AgentPreset | null {
-  if (run.presetId === undefined) return null;
-  const originalId = run.originalPresetId ?? run.presetId;
-  const own = getMergedPresets(run.agentId, customPresets, [], []).find(
-    (preset) => preset.id === originalId
-  );
+  const own = ownOriginalPreset(run, customPresets);
   return own?.fallbackOnRateLimit === true ? own : null;
+}
+
+/**
+ * Whether a launch's pane starts armed to continue at its limit's reset
+ * (#17912): its user's own original preset says so. A project's or a
+ * plugin's preset can't, as with falling back on usage limits.
+ */
+export function limitResetOptIn(
+  run: Pick<LimitFallbackRun, "agentId" | "presetId" | "originalPresetId">,
+  customPresets: AgentPreset[] | undefined
+): boolean {
+  return ownOriginalPreset(run, customPresets)?.continueAtLimitReset === true;
 }
 
 /**

@@ -282,6 +282,13 @@ export interface AgentPreset {
    */
   keepConversationOnRateLimit?: boolean;
   /**
+   * Launch every pane on this preset armed to continue once its usage limit
+   * resets (#17912), for agents Daintree can wait out (#17909). Read from the
+   * user's own presets alone, like `fallbackOnRateLimit`: arming lets Daintree
+   * type into the agent later, which a shared preset can't agree to for them.
+   */
+  continueAtLimitReset?: boolean;
+  /**
    * One of the agent's accounts (#16133) a launch of this preset signs in as,
    * unless the launch or its worktree chooses another. Kept on the user's own
    * presets alone: accounts are this machine's folders, which a shared preset

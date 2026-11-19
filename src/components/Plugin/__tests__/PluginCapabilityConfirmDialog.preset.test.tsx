@@ -112,6 +112,30 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
     expect(text).toContain("Skipped: the preset turns bypass on");
   });
 
+  it("says when the preset's panes continue by themselves at a usage limit (#17912)", () => {
+    act(() => {
+      void ask("preset-continue", {
+        ...summary,
+        agentId: "codex",
+        agentName: "Codex",
+        source: "custom",
+        continuesAtLimitReset: true,
+      });
+    });
+    render(<PluginCapabilityConfirmDialog />);
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Continues by itself once the limit resets"
+    );
+  });
+
+  it("says nothing about continuing for a preset that doesn't", () => {
+    act(() => {
+      void ask("preset-no-continue");
+    });
+    render(<PluginCapabilityConfirmDialog />);
+    expect(screen.getByRole("dialog").textContent).not.toContain("once the limit resets");
+  });
+
   it("answers approved-and-pin on allow and rejected on deny", async () => {
     vi.useFakeTimers();
     let first!: ReturnType<typeof ask>;

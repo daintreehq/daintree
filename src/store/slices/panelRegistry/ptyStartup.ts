@@ -459,7 +459,7 @@ export function enqueuePtyStartup(
           // no live panel claims it).
           if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true).accepted) {
             if (!get().panelsById[id]) {
-              terminalClient.kill(id).catch((killError) => {
+              terminalClient.kill(id, { closesPane: true }).catch((killError) => {
                 logWarn("[TerminalStore] Compensating kill after stale spawn resolution failed", {
                   id,
                   error: killError,
@@ -492,7 +492,7 @@ export function enqueuePtyStartup(
           });
           if (mountedPanel) persistLaunchPrompt();
           if (orphaned) {
-            terminalClient.kill(id).catch((killError) => {
+            terminalClient.kill(id, { closesPane: true }).catch((killError) => {
               logWarn("[TerminalStore] Compensating kill after orphan spawn failed", {
                 id,
                 error: killError,
@@ -578,7 +578,7 @@ export function enqueuePtyStartup(
                   agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true);
                   for (;;) {
                     try {
-                      await terminalClient.kill(id);
+                      await terminalClient.kill(id, { closesPane: true });
                       break;
                     } catch (killError) {
                       if (!isUnknownOutcomeError(killError)) {
