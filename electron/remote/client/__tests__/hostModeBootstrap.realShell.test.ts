@@ -26,6 +26,7 @@ const FAKE_DAINTREE = `#!/bin/sh
 printf '%s\\n' "$@" > "$HOME/args"
 env > "$HOME/env"
 ps -o sid= -p $$ > "$HOME/sid"
+: > "$HOME/ready"
 exec sleep 600
 `;
 
@@ -121,7 +122,8 @@ describe.skipIf(process.platform !== "linux")("the detached Host start under a r
   it("starts it in a session of its own, with only what a service gets, and logs its start", async () => {
     const first = launch(["--enable-host-mode"]);
     expect(first.fresh).toBe(true);
-    await until(() => fs.existsSync(path.join(home, "env")), "the start to run");
+    // Not the first file it writes: each is created empty before it is filled.
+    await until(() => fs.existsSync(path.join(home, "ready")), "the start to run");
     expect(fs.readFileSync(path.join(home, "args"), "utf8").trim().split("\n")).toEqual([
       "--host-mode",
       "--ozone-platform=headless",
