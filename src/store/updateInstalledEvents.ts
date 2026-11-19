@@ -6,9 +6,18 @@
 let eventCount = 0;
 const lastEventAt = new Map<string, number>();
 
-export function noteUpdateInstalledEvent(terminalId: string): void {
+/** The next event's place in arrival order. */
+export function nextUpdateInstalledSeq(): number {
   eventCount += 1;
-  lastEventAt.set(terminalId, eventCount);
+  return eventCount;
+}
+
+/**
+ * Record that a pane took an event, at the place it arrived: one held for a
+ * pane that came later still dates from its arrival, not from when applied.
+ */
+export function noteUpdateInstalledEvent(terminalId: string, seq = nextUpdateInstalledSeq()): void {
+  if ((lastEventAt.get(terminalId) ?? 0) < seq) lastEventAt.set(terminalId, seq);
 }
 
 /** A mark to take before reading host records. */

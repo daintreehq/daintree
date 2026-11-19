@@ -52,7 +52,7 @@ function isRule(row: string): boolean {
 }
 
 // The composer's first row: its prompt glyph, inside a box edge on older builds.
-const PROMPT_ROW = /^\s*[│┃]?\s*[❯>](?:\s|$)/;
+const PROMPT_ROW = /^\s*(?:[│┃]\s*)?[❯>](?:\s|$)/;
 /** Rows a multi-line draft may take between the composer's edges. */
 const MAX_INPUT_ROWS = 8;
 
@@ -76,8 +76,11 @@ function lastRuleIndex(tail: readonly string[]): number {
 export function hasClaudeComposer(lines: readonly string[]): boolean {
   const tail = tailOf(lines);
   const bottom = lastRuleIndex(tail);
-  for (let i = bottom - 1; i >= 1 && bottom - i <= MAX_INPUT_ROWS; i--) {
-    if (PROMPT_ROW.test(tail[i]!) && isRule(tail[i - 1]!)) return true;
+  // A pane short enough to show whole may have clipped the top edge.
+  const wholeViewport = lines.length <= SCAN_LINES;
+  for (let i = bottom - 1; i >= 0 && bottom - i <= MAX_INPUT_ROWS; i--) {
+    if (!PROMPT_ROW.test(tail[i]!)) continue;
+    if (i === 0 ? wholeViewport : isRule(tail[i - 1]!)) return true;
   }
   return false;
 }

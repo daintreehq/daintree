@@ -139,6 +139,21 @@ describe("update-installed listener (#17905)", () => {
     expect(updateInstalledChangedSince("t1", mark)).toBe(true);
   });
 
+  it("dates an event that beat its pane in from its arrival, so a later read still applies", () => {
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+    emit("agent:update-installed-changed", {
+      terminalId: "t1",
+      updateInstalled: { observedAt: 1_000, namesRestart: true },
+      timestamp: 1_000,
+    });
+    // A host read begins after the event arrived, then the pane commits.
+    const mark = updateInstalledEventMark();
+    usePanelStore.setState({ panelsById: { t1: pane() }, panelIds: ["t1"] });
+
+    expect(observation()).toEqual({ observedAt: 1_000, namesRestart: true });
+    expect(updateInstalledChangedSince("t1", mark)).toBe(false);
+  });
+
   it("applies only the last event that beat its pane in, a clear included", () => {
     usePanelStore.setState({ panelsById: {}, panelIds: [] });
     emit("agent:update-installed-changed", {

@@ -2,6 +2,7 @@ import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import {
+  nextUpdateInstalledSeq,
   noteUpdateInstalledEvent,
   resetUpdateInstalledEvents,
 } from "@/store/updateInstalledEvents";
@@ -35,6 +36,8 @@ const UNCLAIMED_TTL_MS = 2 * 60_000;
 interface Unclaimed {
   payload: AgentUpdateInstalledChangedPayload;
   receivedAt: number;
+  /** Its place in arrival order, for a host read in flight to compare against. */
+  seq: number;
 }
 
 /**
@@ -89,7 +92,11 @@ export function setupUpdateInstalledListeners(): DisposableStore {
         }
         const now = Date.now();
         prune(now);
-        unclaimed.set(payload.terminalId, { payload, receivedAt: now });
+        unclaimed.set(payload.terminalId, {
+          payload,
+          receivedAt: now,
+          seq: nextUpdateInstalledSeq(),
+        });
       })
     )
   );
@@ -98,14 +105,14 @@ export function setupUpdateInstalledListeners(): DisposableStore {
       usePanelStore.subscribe((state, previous) => {
         if (unclaimed.size === 0 || state.panelsById === previous.panelsById) return;
         prune(Date.now());
-        for (const [terminalId, { payload }] of unclaimed) {
+        for (const [terminalId, { payload, seq }] of unclaimed) {
           const panel = state.panelsById[terminalId];
           if (!panel) continue;
           unclaimed.delete(terminalId);
           const current = "updateInstalled" in panel ? panel.updateInstalled : undefined;
           if (!isNewer(payload, current)) continue;
-          // Newer than the record restored, so newer than any read in flight.
-          noteUpdateInstalledEvent(terminalId);
+          // A read begun after it arrived already reflects it; one begun before doesn't.
+          noteUpdateInstalledEvent(terminalId, seq);
           usePanelStore
             .getState()
             .setUpdateInstalled(terminalId, payload.updateInstalled ?? undefined);

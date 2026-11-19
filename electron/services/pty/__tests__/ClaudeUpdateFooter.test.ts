@@ -116,6 +116,26 @@ describe("scanClaudeUpdateFooter", () => {
     expect(hasClaudeComposer(lines)).toBe(expected);
   });
 
+  it("takes a short pane's composer whose top edge is clipped", () => {
+    const short = [
+      "❯ ",
+      "─".repeat(30),
+      "  ? for shortcuts  ✔ Update ins",
+      "talled · /restart to apply",
+    ];
+    expect(hasClaudeComposer(short)).toBe(true);
+    // Only when the whole viewport is in view: in a taller one the row above is just out of the scan.
+    const tall = [...Array(10).fill("output"), ...short];
+    expect(hasClaudeComposer(tall)).toBe(false);
+  });
+
+  it("checks for the composer in linear time on long blank rows", () => {
+    const rows = Array.from({ length: 8 }, () => `${" ".repeat(20_000)}x`);
+    const started = performance.now();
+    expect(hasClaudeComposer([...rows, "─".repeat(40)])).toBe(false);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it("reads a wide pane's long rule-and-text rows in linear time", () => {
     // One pattern with overlapping repeats took seconds on a row like this.
     const wide = 2_000;
