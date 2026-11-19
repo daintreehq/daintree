@@ -41,6 +41,10 @@ import { AppError } from "../../utils/errorTypes.js";
 import { TransportError, UnusableConnectionError } from "../client/transport.js";
 import type { CloudAccountService } from "./CloudAccountService.js";
 import {
+  CLOUD_BINDING_LABEL,
+  cloudMachineClaim,
+  madeInSendWindow,
+  mayHaveMade,
   readCreatedFor,
   type CloudHostStore,
   type StoredCloudBinding,
@@ -112,6 +116,12 @@ function asSentence(text: string): string {
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
+/** A lost create's lookup saw machines with its label but couldn't tell which one it made. */
+function unclearCreateMessage(provider: CloudProvider, afterRestart: boolean): string {
+  const name = nameOf(provider);
+  return `${afterRestart ? "Setup didn't finish: " : ""}Daintree can't tell whether a machine carrying this host's label in ${name} is the one it asked for, so it takes none and asks for no other. Check your ${name} account: Retry looks again, and once this host is removed, Add host can add the right one.`;
+}
+
 /**
  * A machine's host key may come to the person for confirmation: always, or
  * whenever the provider's API didn't vouch for the first one.
@@ -179,7 +189,6 @@ const DEFINITE_REFUSALS = new Set<CloudHostError["code"]>([
   "unsupported",
   "refused",
 ]);
-const LABEL_BINDING = "daintree-binding";
 
 export interface CloudHostLifecycleDeps {
   store: CloudHostStore;
@@ -838,6 +847,7 @@ export class CloudHostLifecycle {
         operationId: crypto.randomUUID(),
         idempotencyKey: crypto.randomUUID(),
         sentAt: null,
+        lastSentAt: null,
         name,
         machineType: size.id,
       },
@@ -892,7 +902,7 @@ export class CloudHostLifecycle {
     // A create already sent may have made the machine: look for it (a read) before asking again.
     if (creation.sentAt !== null) {
       this.stage(bindingId, `Looking for the machine ${nameOf(provider)} may already have made`);
-      let found: ProviderResource | null;
+      let found: ProviderResource | "unclear" | null;
       try {
         found = await this.findCreated(bindingId, provider, { ...credentials, signal });
       } catch (error) {
@@ -900,14 +910,27 @@ export class CloudHostLifecycle {
         if (!signal.aborted) this.recordFailedLookup(bindingId, error);
         throw error;
       }
-      if (found) {
-        this.bindCreated(bindingId, found);
-        await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
+      if (found && found !== "unclear") {
+        const bound = this.bindCreated(bindingId, found);
+        if (bound === "held") throw invalid(this.recordHeldElsewhere(bindingId, provider, found));
+        if (bound === "bound") {
+          await this.waitFor(
+            bindingId,
+            "running",
+            START_DEADLINE_MS,
+            signal,
+            "Starting the machine"
+          );
+        }
         return;
       }
-      // Without an idempotency key a second send could be a second machine: only ever look again.
-      if (provider.createReplay === "lookup-only") {
-        const message = `${nameOf(provider)} didn't confirm the machine, and it isn't in the account. Retry looks for it again; if it doesn't show up in your ${nameOf(provider)} account either, remove the host and add it again.`;
+      // Machines that may be its own are there: a send could only add another, wherever a
+      // provider's key isn't honoured. Without an idempotency key, only ever look again.
+      if (found === "unclear" || provider.createReplay === "lookup-only") {
+        const message =
+          found === "unclear"
+            ? unclearCreateMessage(provider, false)
+            : `${nameOf(provider)} didn't confirm the machine, and it isn't in the account. Retry looks for it again; if it doesn't show up in your ${nameOf(provider)} account either, remove the host and add it again.`;
         this.recordError(bindingId, { code: "outcome-unknown", message, at: this.now() });
         throw invalid(message);
       }
@@ -968,7 +991,7 @@ export class CloudHostLifecycle {
       provisioning,
       labels: {
         [LABEL_MARKER]: "1",
-        [LABEL_BINDING]: bindingId,
+        [CLOUD_BINDING_LABEL]: bindingId,
       },
       idempotencyKey: creation.idempotencyKey,
       publicKey,
@@ -998,10 +1021,15 @@ export class CloudHostLifecycle {
     }
     this.stage(bindingId, `Asking ${nameOf(provider)} for a machine`);
     // Written before the request: a lost answer is then found again, never sent blind.
+    const sendingAt = this.now();
     const marked = this.deps.store.updateBinding(bindingId, (current) => ({
       ...current,
       creation: current.creation
-        ? { ...current.creation, sentAt: current.creation.sentAt ?? this.now() }
+        ? {
+            ...current.creation,
+            sentAt: current.creation.sentAt ?? sendingAt,
+            lastSentAt: sendingAt,
+          }
         : null,
       lastError: null,
     }));
@@ -1029,19 +1057,30 @@ export class CloudHostLifecycle {
       });
       if (refused) {
         const sentAt = earlier ? creation.sentAt : null;
+        const lastSentAt = earlier ? creation.lastSentAt : null;
         // Nothing was made: a retry needs a fresh key, or the provider replays this refusal.
         this.deps.store.updateBinding(bindingId, (current) => ({
           ...current,
           creation: current.creation
-            ? { ...current.creation, idempotencyKey: crypto.randomUUID(), sentAt }
+            ? { ...current.creation, idempotencyKey: crypto.randomUUID(), sentAt, lastSentAt }
             : null,
         }));
       }
       throw error;
     }
+    // A same-key replay answers with the machine the key made, which may since be another host's.
+    const bound = this.bindCreated(bindingId, resource);
+    if (bound === "held") throw invalid(this.recordHeldElsewhere(bindingId, provider, resource));
+    if (bound === "settled") {
+      // The provider made it for this host, which has since settled on another: never dropped unsaid.
+      const message = `${nameOf(provider)} answered with a machine (${resource.name || resource.resourceId}) after this host had settled on another, so Daintree left it alone. Check your ${nameOf(provider)} account for it.`;
+      if (this.deps.store.binding(bindingId)) {
+        this.recordError(bindingId, { code: "failed", message, at: this.now() });
+      }
+      throw invalid(message);
+    }
     // The provider answered the create the key went with: the machine holds it.
     if (publicKey !== null) this.heldKeys.set(bindingId, keyIdentity(publicKey));
-    this.bindCreated(bindingId, resource);
     await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
   }
 
@@ -1129,43 +1168,94 @@ export class CloudHostLifecycle {
     });
   }
 
-  /** The machine a create for this binding made, found by its label; null when there is none. */
+  /**
+   * The machine a create for this binding made, found by its label. A copy of a
+   * machine (a fork) carries its labels too, and only its create time tells
+   * them apart: so it is the one labelled machine made in the first send's
+   * window. "unclear" when more than one was, one can't be dated, or one was
+   * made after it while a later send could have made it (a replay's, or a copy
+   * made then); null when none was, or it was deleted (a copy outliving it is
+   * never promoted).
+   */
   private async findCreated(
     bindingId: string,
     provider: CloudProvider,
     credentials: ProviderCredentials
-  ): Promise<ProviderResource | null> {
+  ): Promise<ProviderResource | "unclear" | null> {
+    const binding = this.deps.store.binding(bindingId);
+    const creation = binding?.creation;
+    if (!binding || !creation || creation.sentAt === null) return null;
     // Where the create was sent: a provider whose machines live per location looks there only.
-    const picks = this.deps.store.binding(bindingId)?.provisioning;
+    const picks = binding.provisioning;
     const location = picks && picks !== "unreadable" ? (picks.location?.id ?? null) : null;
     const found = await provider.list(credentials, {
-      label: `${LABEL_BINDING}=${bindingId}`,
+      label: `${CLOUD_BINDING_LABEL}=${bindingId}`,
       ...(location ? { location } : {}),
     });
-    const matches = found.filter(
-      (candidate) =>
-        candidate.labels[LABEL_BINDING] === bindingId && candidate.machine !== "deleted"
-    );
-    // A copy made from the machine (a fork) can carry its labels; the create came first.
-    const createdAt = (candidate: ProviderResource) => {
-      const at = candidate.createdAt ? Date.parse(candidate.createdAt) : Number.NaN;
-      return Number.isFinite(at) ? at : Number.POSITIVE_INFINITY;
-    };
-    return matches.reduce<ProviderResource | null>(
-      (earliest, candidate) =>
-        earliest === null || createdAt(candidate) < createdAt(earliest) ? candidate : earliest,
-      null
-    );
+    const inWindow = new Map<string, ProviderResource>();
+    let unclear = false;
+    for (const candidate of found) {
+      if (candidate.labels[CLOUD_BINDING_LABEL] !== bindingId) continue;
+      if (madeInSendWindow(creation.sentAt, candidate.createdAt)) {
+        inWindow.set(candidate.resourceId, candidate);
+      } else if (mayHaveMade(creation, candidate.createdAt)) {
+        unclear = true;
+      }
+    }
+    const [resource, ...others] = inWindow.values();
+    if (unclear || others.length > 0) return "unclear";
+    if (!resource || resource.machine === "deleted") return null;
+    return resource;
   }
 
-  private bindCreated(bindingId: string, resource: ProviderResource): void {
-    this.deps.store.updateBinding(bindingId, (current) => ({
-      ...current,
+  /** The other binding of this provider that already holds the machine, if any. */
+  private heldElsewhere(
+    providerId: CloudProviderId,
+    bindingId: string,
+    resourceId: string
+  ): StoredCloudBinding | null {
+    const claim = cloudMachineClaim(
+      this.deps.store.bindings(),
+      providerId,
+      { resourceId },
+      bindingId
+    );
+    return claim && !claim.pending ? claim.binding : null;
+  }
+
+  /**
+   * Binds what a create made, checked as it is written: a machine another
+   * host holds is never this one's ("held"), and a create settled meanwhile
+   * (by a Retry's own answer) is never overwritten by an older look ("settled").
+   */
+  private bindCreated(bindingId: string, resource: ProviderResource): "bound" | "held" | "settled" {
+    const current = this.deps.store.binding(bindingId);
+    if (current?.resourceId === resource.resourceId) return "bound";
+    if (!current || current.resourceId || !current.creation) return "settled";
+    if (this.heldElsewhere(current.providerId, bindingId, resource.resourceId)) return "held";
+    this.deps.store.updateBinding(bindingId, (latest) => ({
+      ...latest,
       resourceId: resource.resourceId,
       creation: null,
       observation: observationOf(resource, this.now()),
       lastError: null,
     }));
+    return "bound";
+  }
+
+  /** Says the machine a create may have made is already another host's, and leaves it to that host. */
+  private recordHeldElsewhere(
+    bindingId: string,
+    provider: CloudProvider,
+    resource: ProviderResource
+  ): string {
+    const holder = this.heldElsewhere(provider.id, bindingId, resource.resourceId);
+    const host = holder?.hostId ? this.deps.hosts.get(holder.hostId) : null;
+    const where = host ? ` as ${host.name}` : "";
+    const message = `The machine ${nameOf(provider)} has for this host is already in your host list${where}, so Daintree leaves it to that host.`;
+    // Still unsettled: if that host lets the machine go, removing this one looks for it again.
+    this.recordError(bindingId, { code: "outcome-unknown", message, at: this.now() });
+    return message;
   }
 
   /**
@@ -1200,8 +1290,16 @@ export class CloudHostLifecycle {
         ) {
           continue;
         }
-        if (resource) {
-          this.bindCreated(binding.id, resource);
+        if (resource === "unclear") {
+          this.recordError(binding.id, {
+            code: "outcome-unknown",
+            message: unclearCreateMessage(provider, true),
+            at: this.now(),
+          });
+        } else if (resource) {
+          if (this.bindCreated(binding.id, resource) === "held") {
+            this.recordHeldElsewhere(binding.id, provider, resource);
+          }
         } else {
           this.recordError(binding.id, {
             code: "outcome-unknown",
@@ -1339,16 +1437,19 @@ export class CloudHostLifecycle {
     binding.resourceId = resource.resourceId;
     binding.lifetimeSeconds = resource.lifetimeSeconds;
     binding.observation = observationOf(resource, this.now());
-    // Another import of the same machine may have finished while it was inspected.
-    if (
-      this.deps.store
-        .bindings()
-        .some(
-          (other) =>
-            other.providerId === account.providerId && other.resourceId === resource.resourceId
-        )
-    ) {
-      throw invalid("That machine is already in your host list.");
+    // Another import, or a lost create's recovery, may have taken it while it was inspected;
+    // and a create still unsettled may have made it, as its label says.
+    const claim = cloudMachineClaim(this.deps.store.bindings(), account.providerId, resource);
+    if (claim) {
+      const host = claim.binding.hostId ? this.deps.hosts.get(claim.binding.hostId) : null;
+      if (!claim.pending) {
+        throw invalid(
+          `That machine is already in your host list${host ? ` as ${host.name}` : ""}.`
+        );
+      }
+      throw invalid(
+        `${host?.name ?? "Another host"} is still being set up and may have made that machine, so it can't be added as a second host. Retry or remove ${host?.name ?? "that host"} first.`
+      );
     }
     this.deps.store.putBinding(binding);
     let descriptor: HostDescriptor;
@@ -1532,14 +1633,17 @@ export class CloudHostLifecycle {
     // of yet: find it (a read) before the host, and its label, are forgotten.
     if (!binding.resourceId && binding.creation?.sentAt) {
       const { provider, credentials } = await this.context(binding);
-      let found: ProviderResource | null;
+      let found: ProviderResource | "unclear" | null;
       try {
         found = await this.findCreated(binding.id, provider, credentials);
       } catch (error) {
         throw this.deps.accounts.asAppError(provider, error);
       }
-      if (found) this.bindCreated(binding.id, found);
-      // A restart's lookup that began first may have bound it while this one looked.
+      // One another host holds stays with it, and one that can't be told apart stays too:
+      // this host is forgotten, deleting nothing.
+      if (found && found !== "unclear") this.bindCreated(binding.id, found);
+      // Read again either way: a Retry, or a restart's lookup that began first, may have bound
+      // the machine while this looked.
       binding = this.deps.store.binding(binding.id) ?? binding;
     }
     const resourceId = binding.resourceId;
@@ -1572,6 +1676,14 @@ export class CloudHostLifecycle {
         throw new AppError({ code: "UNSUPPORTED", message, userMessage: message });
       }
       this.requireDeletion(current.providerId);
+      // Never a machine another host uses, however the two came to share it.
+      const holder = this.heldElsewhere(current.providerId, binding.id, resourceId);
+      if (holder) {
+        const host = holder.hostId ? this.deps.hosts.get(holder.hostId) : null;
+        throw invalid(
+          `That machine is also in your host list${host ? ` as ${host.name}` : ""}, so Daintree won't delete it. Remove this host and keep its machine instead.`
+        );
+      }
       this.stage(binding.id, "Deleting the machine");
       try {
         await provider.delete(credentials, resourceId);

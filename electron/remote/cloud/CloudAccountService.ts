@@ -21,6 +21,7 @@ import {
 import { AppError } from "../../utils/errorTypes.js";
 import type { CloudCredentialVault } from "./CloudCredentialVault.js";
 import {
+  cloudMachineClaim,
   readPluginProviderLabel,
   type CloudHostStore,
   type StoredCloudAccount,
@@ -951,9 +952,7 @@ export class CloudAccountService {
       this.noteFailure(account, provider, error);
       throw this.asAppError(provider, error);
     }
-    const bindings = this.deps.store
-      .bindings()
-      .filter((binding) => binding.providerId === account.providerId);
+    const bindings = this.deps.store.bindings();
     return resources
       .filter((resource) => resource.machine !== "deleted")
       .map((resource) => ({
@@ -967,8 +966,9 @@ export class CloudAccountService {
         createdAt: resource.createdAt,
         stoppedAt: resource.stoppedAt,
         dataExpired: resource.dataExpired,
+        // A machine an unanswered create may have made is that host's until it's settled.
         boundHostId:
-          bindings.find((binding) => binding.resourceId === resource.resourceId)?.hostId ?? null,
+          cloudMachineClaim(bindings, account.providerId, resource)?.binding.hostId ?? null,
         restricted: resource.restricted,
         asleep: resource.machine === "stopped" && resource.asleep === true,
       }));

@@ -59,6 +59,11 @@ export class FakeAgent37Api {
   private counter = 0;
   private clock = 1_781_222_400;
 
+  /** Agent 37's clock, in milliseconds: what it stamps on what it makes. */
+  get now(): number {
+    return this.clock * 1000;
+  }
+
   constructor(readonly baseUrl = "https://api.agent37.test/v1") {}
 
   readonly fetch = async (input: URL | string, init?: RequestInit): Promise<Response> => {
