@@ -919,6 +919,16 @@ describe("CloudAccountService and a plugin's provider", () => {
     expect(vault.sets.size).toBe(0);
   });
 
+  it("says a machine's host can stop it once idle only for a provider that implements a way to (#17921)", () => {
+    const hostIdleStop = (provider: CloudProvider) =>
+      service({ provider }).accounts.providerInfos()[0]!.hostIdleStop;
+    expect(hostIdleStop(fakeProvider())).toBe(false);
+    expect(hostIdleStop(fakeProvider({ machineKeys: {} as CloudProvider["machineKeys"] }))).toBe(
+      true
+    );
+    expect(hostIdleStop(fakeProvider({ checkGuestPowerOff: vi.fn() }))).toBe(true);
+  });
+
   it("asks nothing of a built-in provider", async () => {
     const { accounts } = service();
     expect(accounts.providerInfos()[0]!.plugin).toBeUndefined();

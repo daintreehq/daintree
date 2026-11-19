@@ -10,6 +10,8 @@ import {
   cloudStatusLabel,
   clockTime,
   idleClockSentence,
+  idleEndSentence,
+  IDLE_STOP_UNKNOWN,
   IDLE_TIME_COUNTED,
   isObservationStale,
   formatHourly,
@@ -322,6 +324,60 @@ describe("idleClockSentence (#17357)", () => {
     expect(idleClockSentence({ ...idle, stopsWhenIdle: false }, base + 60_000)).toBe(
       idleClockSentence(idle, base + 60_000)
     );
+  });
+});
+
+describe("idleEndSentence (#17921)", () => {
+  const idle = { idleAfterMinutes: 30, lastWorkAt: 0, busy: false, idleEndsAt: 30 * 60_000 };
+  const armed = { ...idle, stopsWhenIdle: true };
+  const refused = "This machine can't stop itself when idle: the key isn't allowed.";
+  const digitalOcean = provider({
+    name: "DigitalOcean",
+    stoppedBilling: "DigitalOcean bills a stopped Droplet in full until it's deleted.",
+  });
+
+  it("adds nothing once the host says it stops the machine itself, whose clock says so", () => {
+    expect(idleEndSentence(armed, BOAT_PROVIDER, null)).toBeNull();
+    // Its word settles a reason found before it, and outranks what the provider declares.
+    expect(idleEndSentence(armed, BOAT_PROVIDER, refused)).toBeNull();
+    expect(idleEndSentence(armed, digitalOcean, null)).toBeNull();
+  });
+
+  it("keeps a refused self-stop's reason, word for word", () => {
+    expect(idleEndSentence(idle, BOAT_PROVIDER, refused)).toBe(refused);
+    expect(idleEndSentence(undefined, BOAT_PROVIDER, refused)).toBe(refused);
+    expect(idleEndSentence(idle, digitalOcean, refused)).toBe(refused);
+  });
+
+  it("says a DigitalOcean Droplet doesn't stop, and bills stopped anyway, in DigitalOcean's words", () => {
+    const said = idleEndSentence(idle, digitalOcean, null)!;
+    expect(said.startsWith("On DigitalOcean, the machine doesn't stop")).toBe(true);
+    expect(said.endsWith(` ${digitalOcean.capabilities.persistence.stoppedBilling}`)).toBe(true);
+    // Known from the provider alone: the same with no link or no summary.
+    expect(idleEndSentence(undefined, digitalOcean, null)).toBe(said);
+  });
+
+  it("names a plugin's provider, with what a stopped machine costs only where it bills one", () => {
+    const quiet = provider({ name: "Acme", stoppedComputeBilled: false });
+    expect(idleEndSentence(idle, quiet, null)).toBe(
+      "On Acme, the machine doesn't stop when the host's idle time ends."
+    );
+    const billed = idleEndSentence(idle, provider({ name: "Acme" }), null)!;
+    expect(billed).toContain("doesn't stop when the host's idle time ends.");
+    expect(billed).toContain("Acme keeps billing a stopped machine for compute");
+  });
+
+  it("doesn't imply a stop where it can't be known", () => {
+    // A provider whose hosts can stop it, before or without the host's word: an older host, no summary, no link.
+    expect(idleEndSentence(idle, BOAT_PROVIDER, null)).toBe(IDLE_STOP_UNKNOWN);
+    expect(idleEndSentence(undefined, BOAT_PROVIDER, null)).toBe(IDLE_STOP_UNKNOWN);
+    expect(idleEndSentence({ ...idle, stopsWhenIdle: false }, BOAT_PROVIDER, null)).toBe(
+      IDLE_STOP_UNKNOWN
+    );
+    // A provider that isn't registered, or a declaration that doesn't say.
+    expect(idleEndSentence(idle, null, null)).toBe(IDLE_STOP_UNKNOWN);
+    const { hostIdleStop: _said, ...undeclared } = BOAT_PROVIDER;
+    expect(idleEndSentence(idle, undeclared, null)).toBe(IDLE_STOP_UNKNOWN);
   });
 });
 

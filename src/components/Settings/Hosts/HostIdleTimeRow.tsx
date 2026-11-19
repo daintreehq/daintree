@@ -4,6 +4,8 @@ import {
   IDLE_TIME_COUNTED,
   durationLabel,
   idleClockSentence,
+  idleEndSentence,
+  type CloudProviderTerms,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import {
@@ -55,12 +57,17 @@ interface HostIdleTimeRowProps {
   hostId: HostId;
   hostName: string;
   connected: boolean;
-  /** From the host's latest summary on a live link; absent from a host that doesn't report it. */
+  /**
+   * From the host's latest summary on the current link; absent from a host
+   * that doesn't report it, and while no summary has come on this link.
+   */
   idle: HostIdleObservation | undefined;
   /** When that summary was taken, by the host's clock. */
   sampledAt: number | null;
   /** Why the machine can't stop itself once idle, as this device found; null when nothing stands in the way. */
   selfStopProblem?: string | null;
+  /** The machine's provider; null while it isn't registered, which leaves what the idle time does unknown. */
+  provider?: CloudProviderTerms | null;
 }
 
 /**
@@ -75,6 +82,7 @@ export function HostIdleTimeRow({
   idle,
   sampledAt,
   selfStopProblem = null,
+  provider = null,
 }: HostIdleTimeRowProps) {
   const [setting, setSetting] = useState<IdleSetting | null>(null);
   // Read since the link last came up: an older reading is shown, not edited against.
@@ -127,16 +135,20 @@ export function HostIdleTimeRow({
     void load();
   };
 
-  // Said only while the host doesn't say it holds a key: one it holds settles it.
-  const problem = selfStopProblem && !idle?.stopsWhenIdle ? selfStopProblem : null;
-  const withProblem = (text: string) =>
-    problem ? `${/[.!?]$/.test(text) ? text : `${text}.`} ${problem}` : text;
+  // What its idle time ending does to the machine; the host's word that it stops it settles it.
+  const consequence = idleEndSentence(idle, provider, selfStopProblem);
+  const withConsequence = (text: string) =>
+    consequence ? `${/[.!?]$/.test(text) ? text : `${text}.`} ${consequence}` : text;
+
+  // What the host's latest summary says of its clock, whether or not the setting could be read:
+  // a confirmed self-stop shows there too.
+  const clock = connected && idle ? idleClockSentence(idle, sampledAt) : IDLE_TIME_COUNTED;
 
   if (setting?.unavailable) {
     return (
       <SettingsRow
         label={LABEL}
-        description={withProblem(IDLE_TIME_COUNTED)}
+        description={withConsequence(clock)}
         disabled
         disabledReason={`Needs a newer Daintree on ${hostName}`}
       />
@@ -150,8 +162,8 @@ export function HostIdleTimeRow({
     return (
       <SettingsRow
         label={LABEL}
-        description={withProblem(
-          connected ? IDLE_TIME_COUNTED : `Kept on ${hostName}. Connect to see or change it`
+        description={withConsequence(
+          connected ? clock : `Kept on ${hostName}. Connect to see or change it`
         )}
         error={loadError ? <span role="alert">{loadError}</span> : undefined}
         control={
@@ -243,10 +255,8 @@ export function HostIdleTimeRow({
   return (
     <SettingsSelect
       label={LABEL}
-      description={withProblem(
-        connected
-          ? idleClockSentence(idle, sampledAt)
-          : `Kept on ${hostName}, as last read. Connect to change it`
+      description={withConsequence(
+        connected ? clock : `Kept on ${hostName}, as last read. Connect to change it`
       )}
       value={String(leaf.minutes)}
       onValueChange={save}

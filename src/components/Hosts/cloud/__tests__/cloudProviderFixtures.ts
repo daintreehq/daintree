@@ -30,16 +30,23 @@ export const BOAT_PROVIDER: CloudProviderInfo = {
     deletion: true,
   },
   unsupportedReason: null,
+  hostIdleStop: true,
 };
 
-/** A provider shaped like the one the declarations exist for: a stopped machine still bills. */
+/**
+ * A provider shaped like the one the declarations exist for: a plugin's, so
+ * its hosts have no way to stop a machine once idle, and a stopped machine
+ * still bills.
+ */
 export function provider(
   overrides: {
     stoppedComputeBilled?: boolean;
     stoppedStorageBilled?: boolean;
+    stoppedBilling?: string;
     deletion?: boolean;
     name?: string;
     lifetime?: CloudLifetimeModel;
+    hostIdleStop?: boolean;
   } = {}
 ): CloudProviderInfo {
   const name = overrides.name ?? "Acme";
@@ -57,9 +64,13 @@ export function provider(
         saveRetryBilled: false,
         stoppedComputeBilled: overrides.stoppedComputeBilled ?? true,
         stoppedStorageBilled: overrides.stoppedStorageBilled ?? false,
+        ...(overrides.stoppedBilling !== undefined
+          ? { stoppedBilling: overrides.stoppedBilling }
+          : {}),
       },
       lifetime: overrides.lifetime ?? BOAT_PROVIDER.capabilities.lifetime,
       deletion: overrides.deletion ?? true,
     },
+    hostIdleStop: overrides.hostIdleStop ?? false,
   };
 }

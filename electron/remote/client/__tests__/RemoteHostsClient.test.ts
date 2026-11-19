@@ -3500,9 +3500,49 @@ describe("RemoteHostsClient", () => {
     const summary = { agentsObserved: { working: 2 } };
     registerRemoteService("hostMetrics", {
       latest: (hostId: string) => (hostId === "studio-01" ? summary : null),
+      // Came on no link, as this machine's own do: nothing to hold it back for.
+      cameOn: () => null,
     } as unknown as HostMetricsClient);
     try {
       expect(client.list()).toEqual([expect.objectContaining({ summary })]);
+    } finally {
+      _resetRemoteServicesForTest();
+    }
+  });
+
+  it("leaves out a summary from an earlier link after a reconnect, until one comes on the new link (#17921)", () => {
+    const linkA = { isOpen: false };
+    const linkB = { isOpen: true };
+    const fromA = { sampledAt: 1, idle: { stopsWhenIdle: true } };
+    const fromB = { sampledAt: 2, idle: {} };
+    const arrivedOn = new Map<object, object>([
+      [fromA, linkA],
+      [fromB, linkB],
+    ]);
+    let latest: object = fromA;
+    registerRemoteService("hostMetrics", {
+      latest: () => latest,
+      cameOn: (summary: object, session: object | null) =>
+        session !== null && arrivedOn.get(summary) === session,
+    } as unknown as HostMetricsClient);
+    const connection = manager.connect("studio-01") as ReturnType<typeof manager.connect> & {
+      currentSession?: object | null;
+    };
+    try {
+      // Back up on B before B has reported: A's "stops by itself" isn't about the host now.
+      connection.currentSession = linkB;
+      expect(client.list()).toEqual([
+        expect.objectContaining({
+          connection: expect.objectContaining({ status: "connected" }),
+          summary: null,
+        }),
+      ]);
+      // Between links, with A closed and B not yet attached, it's no current host's either.
+      connection.currentSession = null;
+      expect(client.list()[0]!.summary).toBeNull();
+      connection.currentSession = linkB;
+      latest = fromB;
+      expect(client.list()[0]!.summary).toBe(fromB);
     } finally {
       _resetRemoteServicesForTest();
     }

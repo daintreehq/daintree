@@ -370,7 +370,9 @@ function startClient(options: StartRemoteHostsOptions): void {
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
   const observeHosts = () => {
     const metrics = getRemoteService("hostMetrics");
-    return client.client.list().map(({ descriptor, connection, summary }) => {
+    return client.client.list().map(({ descriptor, connection }) => {
+      // From metrics, not the list: the list leaves out an earlier link's, which is reported here as such.
+      const summary = metrics?.latest(descriptor.id) ?? null;
       const onLink =
         summary && metrics ? metrics.cameOn(summary, client.sessionFor(descriptor.id)) : null;
       return {
