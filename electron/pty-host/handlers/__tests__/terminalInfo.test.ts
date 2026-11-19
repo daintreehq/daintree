@@ -332,6 +332,33 @@ describe("mapTerminalInfo", () => {
     ).toBeUndefined();
   });
 
+  it("answers the Codex limit only when asked, judged on paused reads as unobserved (#17906)", () => {
+    const answerCodexLimit = vi.fn(() => ({ reset: { status: "unknown", reason: "no-banner" } }));
+    const ctx = createCtx({
+      ptyManager: {
+        isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
+        getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission: vi.fn(() => false),
+        analysisObservedSince: vi.fn(() => 4_200),
+        answerCodexLimit,
+      } as unknown as HostContext["ptyManager"],
+      getPauseCoordinator: vi.fn((id: string) => ({
+        isReadPaused: id === "paused",
+      })) as unknown as HostContext["getPauseCoordinator"],
+    });
+    expect(mapTerminalInfo(makeTerminal(), ctx).codexLimit).toBeUndefined();
+    expect(answerCodexLimit).not.toHaveBeenCalled();
+
+    const query = { seq: 3, evidence: null };
+    expect(mapTerminalInfo(makeTerminal({ id: "live" }), ctx, undefined, query).codexLimit).toEqual(
+      { reset: { status: "unknown", reason: "no-banner" } }
+    );
+    expect(answerCodexLimit).toHaveBeenLastCalledWith("live", query, 4_200);
+    mapTerminalInfo(makeTerminal({ id: "paused" }), ctx, undefined, {});
+    expect(answerCodexLimit).toHaveBeenLastCalledWith("paused", {}, null);
+  });
+
   it("emits exactly the field set the host response type declares", () => {
     // Compile-time only. Nearly every field on PtyHostTerminalInfo is optional,
     // so dropping one from the mapper still type-checks at all four call sites

@@ -21,12 +21,14 @@ import { CodexAppServerError } from "../CodexAppServerClient.js";
 import { canonicalCodexHomeKey } from "../CodexQuotaProfiles.js";
 import {
   normalizeCodexRateLimits,
+  readCodexHomeLimitEvidence,
   readCodexQuota,
   readCodexQuotaForHomes,
   readCodexQuotaProfiles,
   refreshCodexQuota,
   refreshCodexQuotaProfiles,
   resetCodexQuotaCacheForTests,
+  toCodexLimitEvidence,
 } from "../CodexQuotaService.js";
 
 type Call = (method: string, params?: unknown) => Promise<unknown>;
@@ -828,5 +830,138 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     );
     const profiles = await readCodexQuotaProfiles();
     expect(profiles.map((p) => p.result.status)).toEqual(["unavailable", "ok"]);
+  });
+});
+
+describe("toCodexLimitEvidence (#17906)", () => {
+  it("keeps every bucket of the per-limit map, a window with no duration included", () => {
+    const evidence = toCodexLimitEvidence(
+      {
+        rateLimits: { limitId: "codex", primary: FIVE_HOURS },
+        rateLimitsByLimitId: {
+          codex: { limitId: "codex", limitName: null, primary: FIVE_HOURS, secondary: WEEK },
+          codex_bengalfox: {
+            limitId: "codex_bengalfox",
+            limitName: "GPT-5.5-Codex",
+            primary: { usedPercent: 100, windowDurationMins: null, resetsAt: 1_700_000_100 },
+            secondary: null,
+          },
+        },
+      },
+      7
+    );
+    expect(evidence).toEqual({
+      requestedAt: 7,
+      buckets: [
+        {
+          limitId: "codex",
+          limitName: null,
+          windows: [
+            { usedPercent: 42.4, resetsAt: 1_700_000_000_000 },
+            { usedPercent: 12, resetsAt: 1_700_500_000_000 },
+          ],
+          unreadable: false,
+        },
+        {
+          limitId: "codex_bengalfox",
+          limitName: "GPT-5.5-Codex",
+          windows: [{ usedPercent: 100, resetsAt: 1_700_000_100_000 }],
+          unreadable: false,
+        },
+      ],
+    });
+  });
+
+  it("reads an older CLI's single snapshot, and marks a window it can't read", () => {
+    expect(
+      toCodexLimitEvidence({ rateLimits: { primary: { usedPercent: "full" }, secondary: WEEK } }, 1)
+    ).toEqual({
+      requestedAt: 1,
+      buckets: [
+        {
+          limitId: null,
+          limitName: null,
+          windows: [{ usedPercent: 12, resetsAt: 1_700_500_000_000 }],
+          unreadable: true,
+        },
+      ],
+    });
+    expect(toCodexLimitEvidence(null, 1)).toBeNull();
+  });
+});
+
+describe("readCodexHomeLimitEvidence (#17906)", () => {
+  let root: string;
+  let home: string;
+
+  beforeEach(() => {
+    runSession.mockReset();
+    resetCodexQuotaCacheForTests();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    root = mkdtempSync(path.join(os.tmpdir(), "codex-limit-"));
+    home = path.join(root, "work");
+    mkdirSync(home);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("asks the pane's own home, stamped with when the request went out", async () => {
+    runSession.mockImplementation(
+      async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
+        expect(options.codexHome).toBe(home);
+        // Queued behind other work: the request leaves later than the caller asked.
+        vi.setSystemTime(1_000_500);
+        return run(async () => {
+          const reply = { rateLimits: { primary: FIVE_HOURS } };
+          vi.setSystemTime(1_002_000);
+          return reply;
+        });
+      }
+    );
+    const evidence = await readCodexHomeLimitEvidence(home, 999_000);
+    expect(evidence?.requestedAt).toBe(1_000_500);
+    expect(evidence?.buckets).toHaveLength(1);
+  });
+
+  it("reuses a reading asked for after the banner, and reads past one asked for before", async () => {
+    respondWith(() => ({ rateLimits: { primary: FIVE_HOURS } }));
+    await readCodexHomeLimitEvidence(home, 999_000);
+    expect(runSession).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(1_005_000);
+    await readCodexHomeLimitEvidence(home, 999_500);
+    expect(runSession).toHaveBeenCalledTimes(1);
+    const later = await readCodexHomeLimitEvidence(home, 1_004_000);
+    expect(runSession).toHaveBeenCalledTimes(2);
+    expect(later?.requestedAt).toBe(1_005_000);
+  });
+
+  it("waits out a read that went out before the banner rather than joining it", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) =>
+      run(async () => {
+        if (runSession.mock.calls.length === 1) await gate;
+        return { rateLimits: { primary: FIVE_HOURS } };
+      })
+    );
+    const earlier = readCodexQuotaForHomes(new Map([[await canonicalCodexHomeKey(home), home]]));
+    await vi.waitFor(() => expect(runSession).toHaveBeenCalledTimes(1));
+    vi.setSystemTime(1_010_000);
+    const evidence = readCodexHomeLimitEvidence(home, 1_009_000);
+    release();
+    await earlier;
+    expect((await evidence)?.requestedAt).toBe(1_010_000);
+    expect(runSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("never asks about a home Codex hasn't made", async () => {
+    expect(await readCodexHomeLimitEvidence(path.join(root, "missing"), 0)).toBeNull();
+    expect(runSession).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,7 @@ import { RATE_LIMIT_SETTLE_MS, TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
 import { AgentOutputForwarder } from "../AgentOutputForwarder.js";
+import { codexBannerResetCandidates, codexLaunchZone } from "../CodexUsageLimit.js";
 
 vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
@@ -1556,5 +1557,119 @@ describe("TerminalProcess in-thread bracketed paste (#15629)", () => {
 
     terminal.dispose();
     expect(terminal.isBracketedPasteMode()).toBe(false);
+  });
+});
+
+describe("TerminalProcess Codex limit reset (#17906)", () => {
+  const seenAt = Date.UTC(2026, 10, 19, 15, 0);
+  const env = { TZ: "America/New_York" };
+  const banner = "■ You’ve hit your usage limit. Try again at Nov 21st, 2026 3:40 PM.\r\n";
+  const time = { date: { year: 2026, month: 10, day: 21 }, hour: 15, minute: 40 };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(seenAt);
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  const codexPane = () =>
+    createTerminal({ launchAgentId: "codex" }, undefined, undefined, {
+      ...defaultSpawnContext(),
+      env,
+    });
+
+  it("holds a banner from its first sighting and resolves it against a reading", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const sighted = terminal.answerCodexLimit({}, terminal.analysisObservedSince());
+    expect(sighted).toEqual({ stamp: { seq: expect.any(Number), observedAt: expect.any(Number) } });
+    const { observedAt } = (sighted as { stamp: { observedAt: number } }).stamp;
+    expect(observedAt).toBeGreaterThan(seenAt);
+
+    // More output under it, much later, is still the banner first seen.
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    ptyOnDataCallback!("› \r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    const since = terminal.analysisObservedSince();
+    const first = terminal.answerCodexLimit({}, since);
+    expect(first).toEqual(sighted);
+    const { seq } = (first as { stamp: { seq: number } }).stamp;
+
+    const [candidate] = codexBannerResetCandidates(
+      time,
+      observedAt,
+      observedAt - 1,
+      codexLaunchZone(env)
+    )!;
+    const exact = candidate! + 42_000;
+    const evidence = {
+      requestedAt: Date.now(),
+      buckets: [
+        {
+          limitId: "codex",
+          limitName: null,
+          windows: [{ usedPercent: 100, resetsAt: exact }],
+          unreadable: false,
+        },
+      ],
+    };
+    const answer = terminal.answerCodexLimit({ seq, evidence }, since);
+    expect(answer).toEqual({
+      reset: { status: "known", resetsAt: exact, precision: "second", source: "quota", observedAt },
+    });
+    // Only the answer leaves: no banner text, nothing it named.
+    expect(JSON.stringify(answer)).not.toMatch(/usage limit|Nov/);
+
+    expect(terminal.answerCodexLimit({ seq: seq + 1, evidence }, since)).toEqual({
+      reset: { status: "unknown", reason: "banner-changed" },
+    });
+    terminal.dispose();
+  });
+
+  it("answers a credit stop outright and stops answering once the banner is gone", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!("■ Your workspace is out of credits. Add credits to continue.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    const since = terminal.analysisObservedSince();
+    expect(terminal.answerCodexLimit({}, since)).toMatchObject({
+      reset: { status: "unknown", reason: "no-reset" },
+    });
+
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.answerCodexLimit({}, since)).toEqual({
+      reset: { status: "unknown", reason: "no-banner" },
+    });
+    terminal.dispose();
+  });
+
+  it("won't vouch for a banner the pane's output wasn't read through", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.answerCodexLimit({}, null)).toEqual({
+      reset: { status: "unknown", reason: "not-observed" },
+    });
+    expect(terminal.answerCodexLimit({}, Date.now() + 1)).toEqual({
+      reset: { status: "unknown", reason: "not-observed" },
+    });
+    terminal.dispose();
+  });
+
+  it("reads no Codex banner in another agent's pane", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.answerCodexLimit({}, terminal.analysisObservedSince())).toEqual({
+      reset: { status: "unknown", reason: "no-banner" },
+    });
+    terminal.dispose();
   });
 });
