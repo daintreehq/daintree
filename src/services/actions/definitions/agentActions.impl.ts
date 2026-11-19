@@ -45,6 +45,8 @@ import {
   type AgentPresetMutationActionId,
 } from "./agentPresetMutation";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { accountRowId, planAgentAccountAdd } from "./agentAccountAdd";
 import type { ActionContext } from "@shared/types/actions";
 import { getAgentConfigFolderAccount, type AgentPreset } from "@shared/config/agentRegistry";
 import { describeLaunchAccount, listAgentAccountIdentities } from "@shared/utils/agentAccounts";
@@ -1015,7 +1017,8 @@ export const agentActionRuns = {
   },
   "agent.listAccounts": async (args: unknown, ctx: ActionContext) => {
     const { agentId, worktreeId } = AgentListAccountsArgsSchema.parse(args ?? {});
-    if (!isRegisteredAgent(agentId)) throw new UnactionableTargetError(unknownAgentIdMessage(agentId));
+    if (!isRegisteredAgent(agentId))
+      throw new UnactionableTargetError(unknownAgentIdMessage(agentId));
     if (!getAgentConfigFolderAccount(agentId)) {
       throw new UnactionableTargetError(
         `${getAgentDisplayTitle(agentId)} has no accounts: it signs in one way only.`
@@ -1070,6 +1073,48 @@ export const agentActionRuns = {
           }) === undefined,
       },
     };
+  },
+  "agent.addAccount": async (args: unknown, ctx: ActionContext) => {
+    const plan = planAgentAccountAdd(args);
+    if (!plan.ok) throw new UnactionableTargetError(plan.message);
+    // Only the rows a person kept ticked in this call's own dialog. A grant,
+    // Never ask or a bare `confirmed` names no rows, so it adds none.
+    const approved = ctx.hostApprovedTargets;
+    if (approved === undefined) {
+      throw new Error(
+        "Adding accounts needs the user to tick each one in Daintree's dialog. Nothing was added."
+      );
+    }
+    const kept = new Set(approved.map((target) => target.id));
+    const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
+    const accounts: Array<Record<string, unknown>> = [];
+    // One at a time: each add reads the saved accounts main just wrote, so a
+    // folder an earlier row took is refused rather than registered twice.
+    for (const row of plan.rows) {
+      const base = { index: row.index, agentId: row.agentId };
+      if (!kept.has(accountRowId(row.index))) {
+        accounts.push({ ...base, status: "declined" });
+        continue;
+      }
+      if (ctx.dispatchDeadlineAt !== undefined && Date.now() >= ctx.dispatchDeadlineAt) {
+        accounts.push({ ...base, status: "notAttempted" });
+        continue;
+      }
+      try {
+        const account = await useAgentSettingsStore
+          .getState()
+          .addAccount({ agentId: row.agentId, name: row.name, folder: row.folder });
+        accounts.push({ ...base, status: "added", accountId: account.id, name: account.name });
+      } catch (err) {
+        // Main's messages name a folder by its name only, never its path.
+        accounts.push({
+          ...base,
+          status: "failed",
+          error: formatErrorMessage(err, "Couldn't add the account"),
+        });
+      }
+    }
+    return { accounts };
   },
   "agent.createPreset": (args: unknown, ctx: ActionContext) =>
     runPresetWrite("agent.createPreset", args, ctx),

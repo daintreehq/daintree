@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { FALLBACK_CHAIN_MAX } from "@shared/config/agentRegistry";
+import { ACCOUNT_NAME_MAX_CHARS } from "@shared/utils/agentAccounts";
 import { DANGEROUS_MODES } from "@shared/types/dangerousMode";
 import { withWorktreeLocation } from "./locationArgs";
 import { AgentIdSchema } from "./schemas";
@@ -85,6 +86,41 @@ export const AgentListAccountsArgsSchema = z.object({
       "Also say which account a launch in this worktree uses when it names no account or preset."
     ),
 });
+
+/** Rows one `agent.addAccount` call may carry: the checklist scale a batch kill uses. */
+export const MAX_ADD_ACCOUNT_ROWS = 32;
+
+// Strict, so a misspelt field is refused rather than dropped: the person
+// approves the rows the dialog shows, and a field that never reached main is
+// a change nobody approved. The name is refused past what main keeps rather
+// than cut, so the dialog never shows a name the caller didn't send.
+export const AgentAddAccountArgsSchema = z
+  .object({
+    accounts: z
+      .array(
+        z
+          .object({
+            agentId: z.string().min(1).describe("Agent id from the agent listing."),
+            name: z.string().min(1).max(ACCOUNT_NAME_MAX_CHARS),
+            folder: z
+              .discriminatedUnion("kind", [
+                z.object({ kind: z.literal("create") }).strict(),
+                z
+                  .object({
+                    kind: z.literal("existing"),
+                    path: z.string().min(1).describe("Full path to a folder already on disk."),
+                  })
+                  .strict(),
+              ])
+              .describe("create makes ~/.<cli folder>-<name>; existing uses a folder as it is."),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(MAX_ADD_ACCOUNT_ROWS)
+      .describe("One row per account, any agents, put to the person as one checklist."),
+  })
+  .strict();
 
 // Worktree-scoped so the caller must assert WHERE the session lives, using the
 // shared location vocabulary (#11543) rather than a bespoke `worktreeId` field.

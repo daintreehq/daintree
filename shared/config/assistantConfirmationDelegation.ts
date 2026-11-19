@@ -17,6 +17,9 @@ export interface DelegableAssistantConfirmation {
 
 export const ASSISTANT_HOST_SETTINGS_CONFIRMATION = "host.settings";
 
+/** Never skipped, delegated or granted: the person ticks each account's folder (#17079). */
+export const ASSISTANT_ACCOUNT_ADD_CONFIRMATION = "agent.addAccount";
+
 export const DELEGABLE_ASSISTANT_CONFIRMATIONS: readonly DelegableAssistantConfirmation[] = [
   {
     id: "worktree.deleteOwned",
@@ -69,6 +72,11 @@ export const UNDELEGABLE_ASSISTANT_CONFIRMATIONS: readonly UndelegableAssistantC
     ids: ["host.switch", "project.openOnHost"],
     label: "Move this window to a host",
     reason: "Always asks: it moves the window you're using",
+  },
+  {
+    ids: [ASSISTANT_ACCOUNT_ADD_CONFIRMATION],
+    label: "Add agent accounts",
+    reason: "Always asks, even under Never ask: you tick each folder before it's made",
   },
 ];
 

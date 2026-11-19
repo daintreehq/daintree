@@ -30,6 +30,7 @@ import {
 } from "@shared/utils/launchInNewWorktree";
 import { WorktreeCreationSourceSchema } from "./workflowCreationActionArgs";
 import {
+  AgentAddAccountArgsSchema,
   AgentCreatePresetArgsSchema,
   AgentDeletePresetArgsSchema,
   AgentListAccountsArgsSchema,
@@ -803,6 +804,59 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.listAccounts", args, ctx, callbacks),
+  }));
+
+  // Confirm tier with a row per account (#17079): the dialog names each folder
+  // before anything is made, the person unticks what they don't want, and the
+  // run adds only the ticked rows. No grant or Never ask stands in for that.
+  // Closed to plugins and palette-hidden, like the preset writes.
+  actions.set("agent.addAccount", () => ({
+    id: "agent.addAccount",
+    title: "Add agent accounts",
+    description:
+      "Add accounts to agents that sign in through a folder, after the user ticks each one with its folder shown. Each row creates or uses a folder, then reports its account id or why it failed. Launch with that accountId to sign in; nothing is launched here.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Each account is a folder the agent keeps its login in, and a launch on it signs in as whoever logs in there.",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["account", "login", "add", "folder", "sign in"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentAddAccountArgsSchema,
+    examples: [
+      {
+        args: {
+          accounts: [
+            { agentId: "claude", name: "Work", folder: { kind: "create" } },
+            {
+              agentId: "codex",
+              name: "Team",
+              folder: { kind: "existing", path: "/Users/me/.codex-team" },
+            },
+          ],
+        },
+        description: "A new Claude folder and an existing Codex one, in one approval",
+      },
+    ],
+    resultSchema: z.object({
+      accounts: z.array(
+        z.object({
+          index: z.number().int().describe("The row's position in the request, from 0."),
+          agentId: z.string(),
+          status: z
+            .enum(["added", "declined", "failed", "notAttempted"])
+            .describe("declined: the user unticked it; notAttempted: the call ran out of time."),
+          accountId: z.string().optional().describe("Pass as agent.launch's accountId."),
+          name: z.string().optional(),
+          error: z.string().optional(),
+        })
+      ),
+    }),
+    mcpOutputSchema: true,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.addAccount", args, ctx, callbacks),
   }));
 
   // The user-preset writes (#16047). Confirm tier, so an agent's call raises

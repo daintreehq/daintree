@@ -80,6 +80,12 @@ import {
   type AgentPresetMutationActionId,
 } from "@/services/actions/definitions/agentPresetMutationIds";
 import type { AgentPresetMutation } from "@/services/actions/definitions/agentPresetMutation";
+import {
+  accountRowTarget,
+  planAgentAccountAdd,
+  type PlannedAccountRow,
+} from "@/services/actions/definitions/agentAccountAdd";
+import { pluralize } from "@/lib/pluralize";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 
 /**
@@ -213,8 +219,10 @@ const MCP_SPAWN_TAGGED_ACTIONS = new Set([
 
 function shouldTagMcpSpawn(actionId: string): boolean {
   // The preset writes launch nothing, and their strict schemas would refuse the
-  // spawn fields as unknown (#16047).
+  // spawn fields as unknown (#16047). The account actions launch nothing either
+  // (#17079), and the add's rows are planned from these very arguments.
   if (isAgentPresetMutationAction(actionId)) return false;
+  if (actionId === "agent.addAccount" || actionId === "agent.listAccounts") return false;
   return actionId.startsWith("agent.") || MCP_SPAWN_TAGGED_ACTIONS.has(actionId);
 }
 
@@ -295,7 +303,14 @@ export type McpConfirmPreviewTarget =
    * change, and the env inside them reaches the argument summary only as
    * `<object>`. Planned again at `run()`, which writes what that plan says.
    */
-  | { kind: "agentPreset"; mutation: AgentPresetMutation };
+  | { kind: "agentPreset"; mutation: AgentPresetMutation }
+  /**
+   * The accounts an `agent.addAccount` dispatch asks for (#17079), a row each
+   * naming the folder it makes or uses. The same frozen, synchronous checklist
+   * as a batch kill: the rows come from the arguments, and the run plans the
+   * same arguments again and adds only the rows left ticked.
+   */
+  | { kind: "agentAccountAdd"; rows: readonly PlannedAccountRow[] };
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
@@ -313,6 +328,8 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   terminalStartHeld: "Held panel to be started",
   // Replaced per operation below. Present so the map stays exhaustive.
   agentPreset: "Launch preset",
+  // Unused, like the panel checklists above.
+  agentAccountAdd: "Accounts",
 };
 
 const AGENT_PRESET_PREVIEW_TITLES: Record<AgentPresetMutation["operation"], string> = {
@@ -754,6 +771,10 @@ export function resolveMcpConfirmPreviewTarget(
   args: unknown,
   context: ActionContext | undefined
 ): McpConfirmPreviewTarget | undefined {
+  if (actionId === "agent.addAccount") {
+    const plan = planAgentAccountAdd(args);
+    return plan.ok ? { kind: "agentAccountAdd", rows: plan.rows } : undefined;
+  }
   if (actionId === "terminal.killBatch") {
     const terminalIds = terminalIdsArg(args);
     return terminalIds === undefined ? undefined : { kind: "terminalKillBatch", terminalIds };
@@ -870,6 +891,9 @@ export function resolveMcpConfirmSubject(
       return recipe?.name !== undefined && recipe.name.length > 0 ? recipe.name : undefined;
     }
     if (target.kind === "agentPreset") return agentPresetPreviewSubject(target.mutation);
+    if (target.kind === "agentAccountAdd") {
+      return pluralize(target.rows.length, "account");
+    }
     if (target.kind === "terminalStartHeld") {
       const title = readStartHeldPane(target.terminalId)?.title;
       return title !== undefined && title.length > 0
@@ -1013,7 +1037,13 @@ export async function buildMcpConfirmPreview(
 ): Promise<McpConfirmPreviewResult> {
   // The checklist IS this kind's preview, and it is already on the item before
   // the modal opens. There is nothing to fetch and nothing to patch in later.
-  if (target.kind === "terminalKillBatch" || target.kind === "terminalClose") return { lines: [] };
+  if (
+    target.kind === "terminalKillBatch" ||
+    target.kind === "terminalClose" ||
+    target.kind === "agentAccountAdd"
+  ) {
+    return { lines: [] };
+  }
   if (target.kind === "recipe") {
     const { formatRecipePreviewLines } =
       await import("@/components/TerminalRecipe/recipeConfirmPreview");
@@ -1277,6 +1307,8 @@ function withPreviewedWorktreeCwd(
   if (target.kind === "terminalStartHeld") return args;
   // Names a preset by id; settings aren't worktree-scoped.
   if (target.kind === "agentPreset") return args;
+  // The run plans its rows from these arguments, so they go as they came.
+  if (target.kind === "agentAccountAdd") return args;
   // Named per kind rather than left to a fall-through: every remaining kind
   // happens to carry a path today, and a future one that does not would
   // otherwise silently pin `cwd: undefined` onto a dispatch.
@@ -1520,6 +1552,13 @@ export function useMcpBridge(): void {
             }
           }
 
+          // An account add runs only on the rows a person ticks (#17079). Main
+          // never preconfirms it, but one that arrives confirmed anyway gets
+          // the checklist rather than a run with no rows to add.
+          if (effectiveConfirmed === true && actionId === "agent.addAccount") {
+            effectiveConfirmed = false;
+          }
+
           if (effectiveConfirmed !== true) {
             // Args-aware: a statically-safe composite carrying a recipeId has
             // an EFFECTIVE confirm tier that `ActionService.dispatch` will
@@ -1560,6 +1599,18 @@ export function useMcpBridge(): void {
                 window.electron.mcpBridge.sendDispatchActionResponse({
                   requestId,
                   result: refusal,
+                });
+                return;
+              }
+            }
+            // Rows that can't be planned would raise a dialog with nothing to
+            // tick, so the call is refused before anyone is asked (#17079).
+            if (definition?.danger === "confirm" && actionId === "agent.addAccount") {
+              const plan = planAgentAccountAdd(args);
+              if (!plan.ok) {
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: { ok: false, error: { code: "VALIDATION_ERROR", message: plan.message } },
                 });
                 return;
               }
@@ -1612,7 +1663,8 @@ export function useMcpBridge(): void {
                 hostLines === undefined &&
                 previewTarget !== undefined &&
                 previewTarget.kind !== "terminalKillBatch" &&
-                previewTarget.kind !== "terminalClose";
+                previewTarget.kind !== "terminalClose" &&
+                previewTarget.kind !== "agentAccountAdd";
               const previewPending = hasAsyncPreview;
               // One runner for the open-time fetch and every Retry (#16436).
               // Only the latest fetch may land, and nothing lands once the
@@ -1675,7 +1727,9 @@ export function useMcpBridge(): void {
                 previewTarget?.kind === "terminalKillBatch" ||
                 previewTarget?.kind === "terminalClose"
                   ? buildTerminalKillBatchTargets(previewTarget.terminalIds)
-                  : undefined;
+                  : previewTarget?.kind === "agentAccountAdd"
+                    ? previewTarget.rows.map(accountRowTarget)
+                    : undefined;
               let resolution: McpConfirmResolution;
               try {
                 resolution = await requestMcpConfirmation(
@@ -1749,7 +1803,9 @@ export function useMcpBridge(): void {
                           selectionConfirmLabel:
                             previewTarget?.kind === "terminalClose"
                               ? { verb: "Close", one: "panel", many: "panels" }
-                              : { verb: "Remove", one: "panel", many: "panels" },
+                              : previewTarget?.kind === "agentAccountAdd"
+                                ? { verb: "Add", one: "account", many: "accounts" }
+                                : { verb: "Remove", one: "panel", many: "panels" },
                         }
                       : {}),
                   },
