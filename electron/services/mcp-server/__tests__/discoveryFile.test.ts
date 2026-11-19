@@ -16,6 +16,7 @@ describe("McpDiscoveryFile (#17904)", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    fs.chmodSync(dir, 0o700);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -28,18 +29,56 @@ describe("McpDiscoveryFile (#17904)", () => {
     expect(read()).toEqual({ pid: 4242, port: 45454, startedAt: "t0" });
     published.publish(45460);
     expect(read()).toEqual({ pid: 4242, port: 45460, startedAt: "t0" });
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(file).mode & 0o777).toBe(0o600);
 
     published.publish(null);
     expect(fs.existsSync(file)).toBe(false);
     expect(() => published.publish(null)).not.toThrow();
   });
 
-  it("writes nothing it can't tell from a crash's leftover: no start time, no record", () => {
+  it("writes nothing it can't tell from a crash's leftover, and leaves what is there alone", () => {
+    const leftover = `${JSON.stringify({ pid: 7, port: 45454, startedAt: "old" })}\n`;
+    fs.writeFileSync(file, leftover);
+
     new McpDiscoveryFile({ dir: () => dir, stamp: () => null }).publish(45454);
 
-    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(fs.readFileSync(file, "utf8")).toBe(leftover);
   });
+
+  it("reads its start time again after a read that failed or threw", () => {
+    const answers: Array<() => string | null> = [
+      () => null,
+      () => {
+        throw new Error("ps timed out");
+      },
+      () => "t1",
+    ];
+    const stamp = vi.fn(() => answers.shift()!());
+    const published = new McpDiscoveryFile({ dir: () => dir, pid: 4242, stamp });
+
+    published.publish(45454);
+    expect(() => published.publish(45454)).not.toThrow();
+    expect(fs.existsSync(file)).toBe(false);
+    published.publish(45454);
+    expect(read()).toEqual({ pid: 4242, port: 45454, startedAt: "t1" });
+    published.publish(45460);
+    expect(stamp).toHaveBeenCalledTimes(3);
+  });
+
+  // A record left in place names this live process, so a reader would trust a
+  // port it no longer holds. Root removes it whatever the directory says.
+  it.skipIf(process.platform === "win32")(
+    "empties a record it can't remove, so no reader trusts it",
+    () => {
+      const published = new McpDiscoveryFile({ dir: () => dir, pid: 4242, stamp: () => "t0" });
+      published.publish(45454);
+      fs.chmodSync(dir, 0o500);
+
+      published.publish(null);
+
+      expect(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "").toBe("");
+    }
+  );
 
   it("never fails the server over a userData directory it can't resolve or write", () => {
     const unresolved = new McpDiscoveryFile({

@@ -15,7 +15,10 @@ import {
   McpError,
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { McpDiscoveryFile } from "../electron/services/mcp-server/discoveryFile.js";
+import {
+  McpDiscoveryFile,
+  discoveryProcessStamp,
+} from "../electron/services/mcp-server/discoveryFile.js";
 import {
   daintreeProfileDir,
   startFakeDaintreeApp,
@@ -1145,10 +1148,11 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
   // Outside a pane only the key is exported: the port comes from the runtime
   // file the running app publishes, which a crash can leave behind (#17904).
   describe("finding Daintree outside a pane", () => {
+    const apps: ChildProcess[] = [];
     let app: ChildProcess | null = null;
 
     afterEach(async () => {
-      if (app) await stopProcess(app);
+      for (const started of apps.splice(0)) await stopProcess(started);
       app = null;
     });
 
@@ -1157,6 +1161,7 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     /** Publishes `port` as the app does, from a process the CLI takes for it. */
     async function publishFromApp(port = fixturePort()) {
       app = await startFakeDaintreeApp(home);
+      apps.push(app);
       fs.mkdirSync(daintreeProfileDir(home), { recursive: true });
       new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: app.pid! }).publish(port);
       const file = path.join(daintreeProfileDir(home), "mcp-runtime.json");
@@ -1217,7 +1222,10 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
     });
 
     it.each<[string, (record: { pid: number; port: number; startedAt: string }) => unknown]>([
-      ["names a live process that isn't Daintree", (r) => ({ ...r, pid: process.pid })],
+      [
+        "names a live process that isn't Daintree",
+        (r) => ({ ...r, pid: process.pid, startedAt: discoveryProcessStamp(process.pid) }),
+      ],
       ["names the app with another start time", (r) => ({ ...r, startedAt: "Thu Jan 1 1970" })],
       ["has no start time", (r) => ({ pid: r.pid, port: r.port })],
       ["has the port as a string", (r) => ({ ...r, port: String(r.port) })],
@@ -1238,24 +1246,64 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       expect(fixture.seen).toEqual([]);
     });
 
-    it("drops a session whose runtime file changed under it, without the call or the close", async () => {
-      await fixture.close();
-      let onInitialize = () => {};
-      fixture = await startFixture({
-        onRequest: (method) => {
-          if (method === "initialize") onInitialize();
-        },
-      });
-      const record = await publishFromApp();
-      onInitialize = () => writeRuntimeFile(home, { ...record, port: record.port + 1 });
+    it("sends nothing when the runtime file is a link to a record", async () => {
+      await publishFromApp();
+      const file = path.join(daintreeProfileDir(home), "mcp-runtime.json");
+      const real = path.join(home, "elsewhere.json");
+      fs.renameSync(file, real);
+      fs.symlinkSync(real, file);
 
       const run = await call(["fixture.echo"], outsidePane);
 
-      expect(run.status).toBe(3);
-      expect(run.stderr).toContain("endpoint changed while the session was opening");
-      expect(fixture.seen.map((request) => request.rpc?.method)).toEqual(["initialize"]);
-      expect(fs.readdirSync(tmpDir)).toEqual([]);
+      expect(run.status).toBe(4);
+      expect(fixture.seen).toEqual([]);
     });
+
+    // Each replacement is a record the client would trust on its own: the
+    // session is dropped because it no longer matches, not because it's stale.
+    it.each([
+      {
+        stage: "initialize",
+        how: "moves to another port",
+        message: "while the session was opening",
+        reached: ["initialize"],
+      },
+      {
+        stage: "notifications/initialized",
+        how: "names another live app on the same port",
+        message: "before the call to fixture.echo was sent",
+        reached: ["initialize", "notifications/initialized"],
+      },
+    ])(
+      "drops the session, without the call or the close, when the runtime file $how at $stage",
+      async ({ stage, message, reached }) => {
+        await fixture.close();
+        let onStage = () => {};
+        fixture = await startFixture({
+          onRequest: (method) => {
+            if (method === stage) onStage();
+          },
+        });
+        const record = await publishFromApp();
+        if (stage === "initialize") {
+          onStage = () => writeRuntimeFile(home, { ...record, port: record.port + 1 });
+        } else {
+          const other = await startFakeDaintreeApp(path.join(home, "other"));
+          apps.push(other);
+          onStage = () =>
+            new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: other.pid! }).publish(
+              record.port
+            );
+        }
+
+        const run = await call(["fixture.echo"], outsidePane);
+
+        expect(run.status).toBe(3);
+        expect(run.stderr).toContain(message);
+        expect(fixture.seen.map((request) => request.rpc?.method)).toEqual(reached);
+        expect(fs.readdirSync(tmpDir)).toEqual([]);
+      }
+    );
 
     it("opens and ends a held session at the published endpoint too", async () => {
       await publishFromApp();
@@ -1263,10 +1311,20 @@ describe.skipIf(process.platform === "win32")("daintree call", () => {
       const started = await session(["start"], outsidePane);
       expect(started.status).toBe(0);
       const handle = started.stdout.replace(/\n$/, "");
-      const ended = await session(["end"], { ...outsidePane, DAINTREE_MCP_SESSION: handle });
+      const held = { ...outsidePane, DAINTREE_MCP_SESSION: handle };
+      const called = await call(["fixture.echo", "--arg", "a=b"], held);
+      const ended = await session(["end"], held);
 
+      expect(called.status).toBe(0);
+      expect(JSON.parse(called.stdout)).toEqual({ a: "b" });
       expect(ended.status).toBe(0);
-      expect(fixture.seen.map((request) => request.method)).toEqual(["POST", "POST", "DELETE"]);
+      expect(fixture.seen.map((request) => request.rpc?.method ?? request.method)).toEqual([
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+        "DELETE",
+      ]);
+      expect(new Set(fixture.seen.slice(1).map((request) => request.sessionId)).size).toBe(1);
     });
   });
 });

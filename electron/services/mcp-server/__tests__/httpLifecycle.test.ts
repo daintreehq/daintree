@@ -536,21 +536,37 @@ describe("HttpLifecycle", () => {
       return servers;
     }
 
-    /** What was published, and whether the listener still accepted at that moment. */
+    /**
+     * Each publication, with whether the listener still accepted then (bound,
+     * close() not yet called, sessions not yet drained), and what the status
+     * listeners saw published when they were told.
+     */
     function recordPublications(): {
       deps: HttpLifecycleDeps;
-      seen: Array<{ port: number | null; listening: boolean }>;
+      seen: Array<{ port: number | null; accepting: boolean }>;
+      atStatus: Array<number | null>;
       attach: (lc: HttpLifecycle) => void;
     } {
-      const seen: Array<{ port: number | null; listening: boolean }> = [];
+      const seen: Array<{ port: number | null; accepting: boolean }> = [];
+      const atStatus: Array<number | null> = [];
       let lifecycle: HttpLifecycle | null = null;
-      const deps = fakeDeps({
+      let published: number | null = null;
+      const deps: HttpLifecycleDeps = fakeDeps({
         publishDiscoveryPort: vi.fn((port: number | null) => {
           const server = lifecycle?.httpServerInstance as MockServer | null;
-          seen.push({ port, listening: server?.listening === true });
+          const drained = vi.mocked(deps.sessionStore.drain).mock.calls.length > 0;
+          seen.push({
+            port,
+            accepting:
+              server?.listening === true && server.close.mock.calls.length === 0 && !drained,
+          });
+          published = port;
+        }),
+        emitStatusChange: vi.fn(() => {
+          atStatus.push(published);
         }),
       });
-      return { deps, seen, attach: (lc) => (lifecycle = lc) };
+      return { deps, seen, atStatus, attach: (lc) => (lifecycle = lc) };
     }
 
     beforeEach(() => {
@@ -560,29 +576,59 @@ describe("HttpLifecycle", () => {
 
     it("publishes the port it bound, not the one it asked for, and takes it back before the drain", async () => {
       const servers = serveOn([45456], 2);
-      const { deps, seen, attach } = recordPublications();
+      const { deps, seen, atStatus, attach } = recordPublications();
       const lc = new HttpLifecycle(deps);
       attach(lc);
       lc.isEnabled = () => true;
 
       await lc.start({} as unknown as never);
-      expect(seen).toEqual([{ port: 45456, listening: true }]);
+      expect(servers[0].listen.mock.calls.map((call: unknown[]) => call[0])).toEqual([
+        45454, 45455, 45456,
+      ]);
+      expect(seen).toEqual([{ port: 45456, accepting: true }]);
+      expect(atStatus).toEqual([45456]);
 
       servers[0].close.mockImplementation(() => servers[0]); // the drain hangs
       const stopping = lc.stop();
       await vi.advanceTimersByTimeAsync(0);
       expect(seen).toEqual([
-        { port: 45456, listening: true },
-        { port: null, listening: true },
+        { port: 45456, accepting: true },
+        { port: null, accepting: true },
       ]);
       await vi.advanceTimersByTimeAsync(4_000);
       await stopping;
       expect(seen).toHaveLength(2);
     });
 
+    it("leaves nothing published when a stop comes while the start is still binding", async () => {
+      const s = mockServer(45454);
+      let bind: (() => void) | undefined;
+      s.listen.mockImplementation((_p: number, _h: string, cb?: () => void) => {
+        bind = () => {
+          s.listening = true;
+          cb?.();
+        };
+        return s;
+      });
+      vi.spyOn(http, "createServer").mockReturnValue(s);
+      const { deps, seen, attach } = recordPublications();
+      const lc = new HttpLifecycle(deps);
+      attach(lc);
+      lc.isEnabled = () => true;
+
+      const starting = lc.start({} as unknown as never);
+      const stopping = lc.stop();
+      bind!();
+      await starting;
+      await stopping;
+
+      expect(seen.map((entry) => entry.port)).toEqual([45454, null]);
+      expect(lc.isListening).toBe(false);
+    });
+
     it("takes the port back when the listener closes unexpectedly, and publishes where the restart lands", async () => {
       const servers = serveOn([45454, 45459]);
-      const { deps, seen, attach } = recordPublications();
+      const { deps, seen, atStatus, attach } = recordPublications();
       const lc = new HttpLifecycle(deps);
       attach(lc);
       lc.isEnabled = () => true;
@@ -590,11 +636,13 @@ describe("HttpLifecycle", () => {
 
       servers[0].listening = false;
       servers[0].emit("close");
-      expect(seen.map((s) => s.port)).toEqual([45454, null]);
+      expect(seen.map((entry) => entry.port)).toEqual([45454, null]);
+      // Status listeners are told after the record is gone, never while it stands.
+      expect(atStatus).toEqual([45454, null]);
 
       await vi.advanceTimersByTimeAsync(RESTART_BASE_DELAY_MS + RESTART_JITTER_MS);
       expect(lc.currentPort).toBe(45459);
-      expect(seen.map((s) => s.port)).toEqual([45454, null, 45459]);
+      expect(seen.map((entry) => entry.port)).toEqual([45454, null, 45459]);
     });
 
     it("never publishes a listener held for a feature alone, and takes the port back when a disable keeps it", async () => {
@@ -605,21 +653,23 @@ describe("HttpLifecycle", () => {
       let enabled = false;
       lc.isEnabled = () => enabled;
 
-      await lc.holdListener("feature", {
+      const hold = await lc.holdListener("feature", {
         path: "/mcp/feature",
         handle: vi.fn(async () => {}),
         close: vi.fn(),
       });
-      expect(seen.filter((s) => s.port !== null)).toEqual([]);
+      expect(hold.port).toBe(45454);
+      expect(lc.isListening).toBe(true);
+      expect(seen.filter((entry) => entry.port !== null)).toEqual([]);
 
       enabled = true;
       await lc.start({} as unknown as never);
-      expect(seen.at(-1)).toEqual({ port: 45454, listening: true });
+      expect(seen.at(-1)).toEqual({ port: 45454, accepting: true });
 
       enabled = false;
       await lc.stop();
       expect(lc.isListening).toBe(true);
-      expect(seen.at(-1)).toEqual({ port: null, listening: true });
+      expect(seen.at(-1)).toEqual({ port: null, accepting: true });
     });
   });
 

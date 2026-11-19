@@ -71,7 +71,8 @@ export interface McpDiscoveryFileOptions {
 export class McpDiscoveryFile {
   private readonly pid: number;
   private readonly readStamp: (pid: number) => string | null;
-  private stamp: string | null | undefined;
+  /** Kept once read; a failed read is tried again at the next publication. */
+  private stamp: string | null = null;
   /** What this process last wrote, still on disk as far as it knows. */
   private written: { file: string; text: string; port: number } | null = null;
 
@@ -88,7 +89,13 @@ export class McpDiscoveryFile {
     }
     if (this.written?.port === port) return;
     this.withdraw();
-    if (this.stamp === undefined) this.stamp = this.readStamp(this.pid);
+    if (this.stamp === null) {
+      try {
+        this.stamp = this.readStamp(this.pid);
+      } catch {
+        this.stamp = null;
+      }
+    }
     // Without a start time a reader can't tell this file from a crash's.
     if (this.stamp === null) return;
     let file: string;
@@ -120,7 +127,16 @@ export class McpDiscoveryFile {
         this.written = null;
         return;
       }
-      // Still ours on disk as far as is known: the next withdrawal tries again.
+      // A record left standing names this live process, so a reader would
+      // trust a port it no longer holds. Emptying it needs only the file's own
+      // permission, which a directory that refuses the unlink can't take away.
+      try {
+        fs.truncateSync(written.file, 0);
+        this.written = null;
+        return;
+      } catch {
+        // Still ours on disk as far as is known: the next withdrawal tries again.
+      }
       console.warn("[MCP] Couldn't remove the discovery file:", errorCode(err));
     }
   }

@@ -77,6 +77,10 @@ get_version() {
 # (the AppImage wrapper embeds this block) and limited to bash 3.2, curl and
 # POSIX awk: no jq, python or node.
 
+# Never a value from the environment: it is the program every reply and the
+# config file are read with.
+DTC_AWK=""
+
 daintree_call_usage() {
   cat <<'USAGE'
 Usage: daintree call <tool> [--arg key=value]... [--json]
@@ -315,37 +319,44 @@ daintree_call_fresh_id() {
 daintree_user_data_dir() {
   if [[ $(uname) == Darwin ]]; then
     printf '%s\n' "${HOME:-}/Library/Application Support/Daintree"
+  elif [[ ${XDG_CONFIG_HOME:-} == /* ]]; then
+    printf '%s\n' "$XDG_CONFIG_HOME/Daintree"
   else
-    printf '%s\n' "${XDG_CONFIG_HOME:-${HOME:-}/.config}/Daintree"
+    # A relative XDG_CONFIG_HOME means nothing from another directory.
+    printf '%s\n' "${HOME:-}/.config/Daintree"
   fi
 }
 
 # Sets DTC_STAMP to when `pid` started, in the form Daintree records it
 # (electron/services/mcp-server/discoveryFile.ts), when it is a live Daintree
-# app of this user's; fails for anything else, another user's process included.
+# app running as this user; fails for anything else. Root's kill -0 reaches
+# every process, so the owner is checked as well.
 daintree_process_stamp() {
   local pid=$1 out exe stat boot
   DTC_STAMP=""
   kill -0 "$pid" 2> /dev/null || return 1
   if [[ $(uname) == Darwin ]]; then
-    out=$(LC_ALL=C TZ=UTC0 ps -ww -o lstart= -o comm= -p "$pid" 2> /dev/null) || return 1
-    # Five fields of start time, then the executable's path, spaces and all.
+    out=$(LC_ALL=C TZ=UTC0 ps -ww -o uid= -o lstart= -o comm= -p "$pid" 2> /dev/null) || return 1
+    # The owner, five fields of start time, then the executable's path, spaces
+    # and all: the app's main executable under whatever its bundle is called.
     set -f
     set -- $out
     set +f
-    [[ $# -ge 6 ]] || return 1
-    DTC_STAMP="$1 $2 $3 $4 $5"
-    shift 5
+    [[ $# -ge 7 && $1 == "$EUID" ]] || return 1
+    DTC_STAMP="$2 $3 $4 $5 $6"
+    shift 6
     exe="$*"
-    [[ $exe == */Daintree.app/Contents/MacOS/Daintree ]] || return 1
+    [[ $exe == */*.app/Contents/MacOS/Daintree ]] || return 1
   else
+    [[ -O /proc/$pid ]] || return 1
     exe=$(readlink "/proc/$pid/exe" 2> /dev/null) || return 1
     exe=${exe% (deleted)}
     case "${exe##*/}" in
       daintree|daintree-app) ;;
       *) return 1 ;;
     esac
-    IFS= read -r stat 2> /dev/null < "/proc/$pid/stat" || return 1
+    # The whole record, as Daintree reads it: a command name can hold a newline.
+    stat=$(cat "/proc/$pid/stat" 2> /dev/null) || return 1
     IFS= read -r boot 2> /dev/null < /proc/sys/kernel/random/boot_id || return 1
     # Field 22, counted from after the command name, which may hold spaces or
     # parentheses of its own.
@@ -429,6 +440,7 @@ daintree_status() {
   else
     if daintree_running; then running=true; fi
     enabled=$(daintree_saved_mcp_enabled) || enabled=null
+    [[ $enabled == true || $enabled == false ]] || enabled=null
   fi
   daintree_call_quote "$version"
   printf '{"version":%s,"running":%s,"mcpEnabled":%s,"mcpPort":%s}\n' "$DTC_QUOTED" "$running" "$enabled" "$port"
@@ -455,6 +467,9 @@ daintree_call_setup() {
   if [[ -z $token ]]; then
     daintree_call_fail 4 "DAINTREE_MCP_TOKEN is not set. Run it in an agent pane of a project with Daintree MCP on, or export the key from Settings > MCP server as DAINTREE_MCP_TOKEN (with DAINTREE_MCP_URL too, for a dev build or another profile)."
   fi
+  if [[ $token == *[$'\001'-$'\037'$'\177']* || $token == *" "* ]]; then
+    daintree_call_fail 4 "DAINTREE_MCP_TOKEN is malformed"
+  fi
   if [[ -z $url ]]; then
     daintree_discover || daintree_call_fail 4 "DAINTREE_MCP_URL is not set, and no running Daintree has published its MCP endpoint. Turn on Settings > MCP server, or export DAINTREE_MCP_URL for a dev build or another profile."
     pinned=$DTC_FOUND
@@ -470,9 +485,6 @@ daintree_call_setup() {
     DTC_ENDPOINT="http://127.0.0.1:$((10#${BASH_REMATCH[2]}))/mcp"
   else
     daintree_call_fail 4 "DAINTREE_MCP_URL must be Daintree's local endpoint, like http://127.0.0.1:45454/mcp"
-  fi
-  if [[ $token == *[$'\001'-$'\037'$'\177']* || $token == *" "* ]]; then
-    daintree_call_fail 4 "DAINTREE_MCP_TOKEN is malformed"
   fi
   command -v curl > /dev/null 2>&1 || daintree_call_fail 3 "curl is required"
 

@@ -351,6 +351,9 @@ describe("CliInstallService — following a moved AppImage", () => {
           });
         }
         expect(run("--status").stdout).toBe("Daintree is not running\n");
+        const extra = run("--status", "--json", "now");
+        expect(extra.status).toBe(2);
+        expect(extra.stdout).toBe("");
       }
     }
   );

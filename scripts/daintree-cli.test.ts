@@ -546,8 +546,8 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh --status --json",
     );
   }
 
-  async function publishFromApp(port: number): Promise<void> {
-    app = await startFakeDaintreeApp(home);
+  async function publishFromApp(port: number, bundle?: string): Promise<void> {
+    app = await startFakeDaintreeApp(home, { bundle });
     fs.mkdirSync(daintreeProfileDir(home), { recursive: true });
     new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: app.pid! }).publish(port);
   }
@@ -585,7 +585,12 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh --status --json",
   ])("reads the saved MCP setting while nothing serves (%s)", (_name, config, enabled) => {
     saveConfig(config);
 
-    expect(JSON.parse(run("--status", "--json").stdout)).toMatchObject({
+    const result = run("--status", "--json");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({
+      version: version(),
       running: false,
       mcpEnabled: enabled,
       mcpPort: null,
@@ -606,6 +611,18 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh --status --json",
       mcpPort: 45461,
     });
   });
+
+  it.runIf(process.platform === "darwin")(
+    "knows the app by its executable under a bundle the user renamed",
+    async () => {
+      await publishFromApp(45463, "Daintree Work.app");
+
+      expect(JSON.parse(run("--status", "--json").stdout)).toMatchObject({
+        running: true,
+        mcpPort: 45463,
+      });
+    }
+  );
 
   it("reads past a runtime file whose app has exited", async () => {
     saveConfig({ mcpServer: { enabled: true } });

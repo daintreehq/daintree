@@ -131,13 +131,16 @@ export function generateAppImageWrapper(
     ...(hasStatus
       ? ["    shift", `    daintree_status "${quotedVersion}" "$@" ;;`]
       : [
+          '    if [ "${2:-}" = --json ] && [ "$#" -gt 2 ]; then',
+          `      echo "${CLI_COMMAND_NAME}: --status --json takes no other arguments" >&2; exit 2`,
+          "    fi",
           "    running=false",
           // The pattern also matches this script and any shell whose command
           // line names it; only the app's own binary counts.
-          '    for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)"); do',
+          '    for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)|daintree-app"); do',
           '      exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue',
           '      exe="${exe% (deleted)}"',
-          '      if [ "${exe##*/}" = daintree ]; then running=true; break; fi',
+          '      case "${exe##*/}" in daintree|daintree-app) running=true; break ;; esac',
           "    done",
           `    if [ "\${2:-}" = --json ]; then echo "{\\"version\\":\\"${quotedVersion}\\",\\"running\\":$running,\\"mcpEnabled\\":null,\\"mcpPort\\":null}"`,
           '    elif [ "$running" = true ]; then echo "Daintree is running"; else echo "Daintree is not running"; fi',

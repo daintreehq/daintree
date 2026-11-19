@@ -5,14 +5,18 @@ import { MCP_DISCOVERY_FILE_NAME } from "../../discoveryFile.js";
 
 /**
  * A process `daintree` takes for the running app: this test's own Node under
- * the app's executable name, inside `root`. macOS `ps` reports the path a
- * process was started by, so a link is enough there; Linux reads
- * /proc/<pid>/exe, which resolves links, so it gets a copy.
+ * the app's executable name, inside `root` (in `bundle` on macOS, which a user
+ * may have renamed). macOS `ps` reports the path a process was started by, so
+ * a link is enough there; Linux reads /proc/<pid>/exe, which resolves links,
+ * so it gets a copy.
  */
-export async function startFakeDaintreeApp(root: string): Promise<ChildProcess> {
+export async function startFakeDaintreeApp(
+  root: string,
+  { bundle = "Daintree.app" }: { bundle?: string } = {}
+): Promise<ChildProcess> {
   let binary: string;
   if (process.platform === "darwin") {
-    binary = path.join(root, "Daintree.app", "Contents", "MacOS", "Daintree");
+    binary = path.join(root, bundle, "Contents", "MacOS", "Daintree");
     fs.mkdirSync(path.dirname(binary), { recursive: true });
     fs.symlinkSync(process.execPath, binary);
   } else {
