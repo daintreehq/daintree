@@ -8,7 +8,7 @@ import type {
   HostSettingsUpdateResult,
 } from "@shared/types/hostSettings";
 import type { HostIdleObservation } from "@shared/types/hostIdle";
-import type { CloudProviderInfo } from "@shared/types/cloudHosts";
+import type { CloudLinkedIdleStop, CloudProviderInfo } from "@shared/types/cloudHosts";
 import { clockTime, IDLE_STOP_UNKNOWN } from "@/components/Hosts/cloud/cloudHostLabels";
 import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 import { SettingsGroup } from "../../SettingsGroup";
@@ -53,6 +53,7 @@ interface RowProps {
   idle?: HostIdleObservation;
   sampledAt?: number | null;
   selfStopProblem?: string | null;
+  linkedIdleStop?: CloudLinkedIdleStop | null;
   provider?: CloudProviderInfo | null;
 }
 
@@ -66,6 +67,7 @@ async function renderRow(props: RowProps = {}) {
         idle={current.idle}
         sampledAt={current.sampledAt ?? null}
         selfStopProblem={current.selfStopProblem}
+        linkedIdleStop={current.linkedIdleStop}
         provider={current.provider}
       />
     </SettingsGroup>
@@ -400,6 +402,20 @@ describe("HostIdleTimeRow says what its idle time ending does (#17921)", () => {
 
     expect(description()).toContain(
       `${ended} On Acme Droplets, the machine doesn't stop when the host's idle time ends.`
+    );
+  });
+
+  it("says this device stops a plugin provider's machine while it's linked, from its status (#17923)", async () => {
+    api.read.mockResolvedValue(snapshot(30));
+    await renderRow({
+      idle,
+      sampledAt: endsAt + 60_000,
+      provider: provider({ name: "Acme Droplets", stoppedComputeBilled: false }),
+      linkedIdleStop: { kind: "stops" },
+    });
+
+    expect(description()).toBe(
+      `Idle since ${clockTime(new Date(lastWorkAt).toISOString())}. ${ended} While this device is linked to the host, it stops the machine once the host's idle time ends. With every device away, the machine keeps running.`
     );
   });
 

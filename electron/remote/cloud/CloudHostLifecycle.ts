@@ -275,7 +275,10 @@ export interface CloudHostLifecycleDeps {
     /** The host's open link, or null while it has none. Never dials. */
     sessionFor(hostId: HostId): LinkSession | null;
     /** The host's idle clock from a summary that came lately on `session`, and when it was taken by the host's clock. */
-    idleOn(hostId: HostId, session: LinkSession): { idle: HostIdleObservation; sampledAt: number } | null;
+    idleOn(
+      hostId: HostId,
+      session: LinkSession
+    ): { idle: HostIdleObservation; sampledAt: number } | null;
   };
   /**
    * Whether a worktree on this device is gone: true once its root reads as
@@ -3496,7 +3499,13 @@ export class CloudHostLifecycle {
       if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
       // A provider that left or was replaced meanwhile no longer speaks for the machine.
       if (!this.stillRegistered(provider.id, provider)) return;
-      await this.settleIdleStop(bindingId, provider, credentials, provider.describeError(error), signal);
+      await this.settleIdleStop(
+        bindingId,
+        provider,
+        credentials,
+        provider.describeError(error),
+        signal
+      );
       return;
     }
     if (!this.stillRegistered(provider.id, provider)) return;
@@ -3566,7 +3575,11 @@ export class CloudHostLifecycle {
               at: this.now(),
             };
         this.recordError(bindingId, error);
-        throw new AppError({ code: "OUTCOME_UNKNOWN", message: error.message, userMessage: error.message });
+        throw new AppError({
+          code: "OUTCOME_UNKNOWN",
+          message: error.message,
+          userMessage: error.message,
+        });
       }
       await this.sleep(TRANSITION_POLL_MS, signal);
     }
