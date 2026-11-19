@@ -532,6 +532,32 @@ describe("core reads with no frontend", () => {
       }
     );
 
+    it("names no account while the worktree's repository preset can't be read", async () => {
+      const { deps } = accountDeps();
+      deps.agents.getSettings = async () =>
+        ({
+          agents: {
+            claude: {
+              ...(settings.agents.claude as object),
+              worktreePresets: { "/repo": "repo-team" },
+            },
+          },
+        }) as unknown as AgentSettings;
+      deps.agents.getProjectPresets = async () => {
+        throw new Error("unreadable");
+      };
+
+      const result = await executeViewlessAction(
+        request("agent.listAccounts", { agentId: "claude", worktreeId: "/repo" }),
+        deps
+      );
+
+      if (!result?.ok) throw new Error(JSON.stringify(result));
+      expect((result.result as { worktreeLaunch: unknown }).worktreeLaunch).toEqual({
+        presetsComplete: false,
+      });
+    });
+
     it("refuses a worktree the project doesn't have, without echoing its id", async () => {
       const { deps } = accountDeps();
 

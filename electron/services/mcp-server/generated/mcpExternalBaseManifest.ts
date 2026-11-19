@@ -2584,7 +2584,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               type: "null",
             },
           ],
-          description: "An account of the panel's agent; null is the CLI's default login.",
+          description: "An account of the panel's agent; null is no saved account.",
         },
         keepConversation: {
           description: "Keep the conversation by id.",

@@ -181,6 +181,28 @@ function sameFolders(a: AgentAccount[], b: AgentAccount[]): boolean {
 
 const FOLDER_CHECK_ATTEMPTS = 8;
 
+/**
+ * Runs `write` once no other of the agent's accounts is `folder`. The check
+ * awaits between reading the saved accounts and the write, so another add can
+ * land meanwhile (a batch from an agent and the Settings dialog, say) and both
+ * would pass it for one folder. It runs again until the accounts it checked
+ * are the ones a read now returns, and calls `write` in that same turn: an
+ * await between the two would let another add's last check run in the gap.
+ */
+async function writeIfUnclaimed<T>(agentId: string, folder: string, write: () => T): Promise<T> {
+  const identity = await folderIdentity(folder);
+  for (let attempt = 0; attempt < FOLDER_CHECK_ATTEMPTS; attempt++) {
+    const current = savedFolders(agentId);
+    for (const account of current) {
+      if ((await folderIdentity(account.configDir)) === identity) {
+        throw invalid(`That folder is already the account '${account.name}'.`);
+      }
+    }
+    if (sameFolders(current, savedFolders(agentId))) return write();
+  }
+  throw invalid("The accounts kept changing while this one was checked. Try again.");
+}
+
 export async function addAgentAccount(
   request: AddAgentAccountRequest
 ): Promise<AddAgentAccountResult> {
@@ -192,37 +214,24 @@ export async function addAgentAccount(
   let configDir: string;
   if (request.folder?.kind === "existing") {
     configDir = await checkExistingFolder(request.folder.path);
-    const identity = await folderIdentity(configDir);
-    // The check awaits between reading the saved accounts and writing the new
-    // one, so another add can land meanwhile (a batch from an agent and the
-    // Settings dialog, say) and both would pass it for one folder. It runs
-    // again until the accounts it checked are the ones the write below reads,
-    // with nothing awaited between that read and the write.
-    let checked = false;
-    for (let attempt = 0; attempt < FOLDER_CHECK_ATTEMPTS && !checked; attempt++) {
-      const current = savedFolders(agentId);
-      for (const account of current) {
-        if ((await folderIdentity(account.configDir)) === identity) {
-          throw invalid(`That folder is already the account '${account.name}'.`);
-        }
-      }
-      checked = sameFolders(current, savedFolders(agentId));
-    }
-    if (!checked)
-      throw invalid("The accounts kept changing while this one was checked. Try again.");
   } else if (request.folder?.kind === "create") {
     configDir = await createFolder(declaration.defaultDir, name);
   } else {
     throw invalid("Choose where the account's folder is");
   }
 
-  // Read again after the folder step, in the same turn as the write: another
-  // view may have written meanwhile.
-  const entry = readSettings().agents[agentId] ?? {};
-  const account: AgentAccount = { id: `account-${randomUUID()}`, name, configDir };
-  const accounts = [...sanitizeAgentAccounts(entry.accounts), account];
-  const settings = writeAgentEntry(agentId, { ...entry, accounts });
-  return { account, settings };
+  // A fresh folder too: an add naming it as existing could have landed
+  // between its mkdir and here.
+  const folder = configDir;
+  return writeIfUnclaimed(agentId, folder, () => {
+    // Read again in the same turn as the write: another view may have written
+    // anything else meanwhile.
+    const entry = readSettings().agents[agentId] ?? {};
+    const account: AgentAccount = { id: `account-${randomUUID()}`, name, configDir: folder };
+    const accounts = [...sanitizeAgentAccounts(entry.accounts), account];
+    const settings = writeAgentEntry(agentId, { ...entry, accounts });
+    return { account, settings };
+  });
 }
 
 /**

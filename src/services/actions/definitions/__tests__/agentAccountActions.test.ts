@@ -121,17 +121,30 @@ describe("planAgentAccountAdd (#17079)", () => {
     expect(plan.rows[0]).toMatchObject({ name: "Team Blue", destination: "~/.codex-team-blue" });
   });
 
-  it("treats a trailing separator as the same existing folder", () => {
+  it.each([
+    ["/tmp/team", "/tmp/team//"],
+    ["C:\\team", "C:\\team\\"],
+  ])("treats %s and %s as the same existing folder", (first, second) => {
     const plan = planAgentAccountAdd({
       accounts: [
-        { agentId: "codex", name: "Team", folder: { kind: "existing", path: "/tmp/team" } },
-        { agentId: "codex", name: "Team 2", folder: { kind: "existing", path: "/tmp/team/" } },
+        { agentId: "codex", name: "Team", folder: { kind: "existing", path: first } },
+        { agentId: "codex", name: "Team 2", folder: { kind: "existing", path: second } },
       ],
     });
     expect(plan).toEqual({
       ok: false,
       message: "Accounts 1 and 2 name the same folder. Nothing was added.",
     });
+  });
+
+  it("keeps a trailing backslash as part of a POSIX folder's name", () => {
+    const plan = planAgentAccountAdd({
+      accounts: [
+        { agentId: "codex", name: "Team", folder: { kind: "existing", path: "/tmp/team" } },
+        { agentId: "codex", name: "Odd", folder: { kind: "existing", path: "/tmp/team\\" } },
+      ],
+    });
+    expect(plan.ok).toBe(true);
   });
 
   it.each([
@@ -195,7 +208,7 @@ describe("agent.addAccount run (#17079)", () => {
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     store.addAccount.mockImplementation(async (request: unknown) => {
       const { name } = request as AddAgentAccountRequest;
-      now += 600;
+      now += 500;
       return { id: `id-${name}`, name, configDir: "/Users/me/.x" };
     });
 
@@ -363,9 +376,9 @@ describe("agent.listAccounts run (#17079)", () => {
 
     const loading = await run("agent.listAccounts", { agentId: "claude", worktreeId: "wt-1" });
     expect(loading).toMatchObject({ worktreeLaunch: { presetsComplete: false } });
-    expect(
-      (loading as { worktreeLaunch: Record<string, unknown> }).worktreeLaunch
-    ).not.toHaveProperty("accountId");
+    expect((loading as { worktreeLaunch: Record<string, unknown> }).worktreeLaunch).toEqual({
+      presetsComplete: false,
+    });
 
     const decided = await run("agent.listAccounts", { agentId: "claude", worktreeId: "wt-2" });
     expect(decided).toMatchObject({

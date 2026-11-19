@@ -288,6 +288,11 @@ describe("describeLaunchAccount (#17079)", () => {
     const viaPreset = describeLaunchAccount(entry, "wt-other", pinned);
     expect(launchAnswer(viaPreset, false)).toEqual({ presetsComplete: false });
     expect(launchAnswer(viaPreset, true)).toEqual({ ...viaPreset, presetsComplete: true });
+    // The defaults sit under a preset that hasn't loaded, which may yet pin one.
+    for (const preset of [{ id: "plain" }, undefined]) {
+      const viaDefault = describeLaunchAccount(entry, "wt-other", preset);
+      expect(launchAnswer(viaDefault, false)).toEqual({ presetsComplete: false });
+    }
     const viaWorktree = describeLaunchAccount(entry, "wt-company", pinned);
     expect(launchAnswer(viaWorktree, false)).toEqual({ ...viaWorktree, presetsComplete: false });
   });

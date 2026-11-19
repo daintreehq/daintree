@@ -69,7 +69,11 @@ export function planAgentAccountAdd(args: unknown): AccountAddPlan {
       folder = { kind: "existing", path };
       destination = path;
       // `/team` and `/team/` are one folder; main resolves symlinks besides.
-      key = `existing:${request.agentId}:${path.replace(/(?<=[^\\/])[\\/]+$/, "")}`;
+      // A backslash separates only in a Windows path.
+      const trailing = /^(?:[A-Za-z]:|[\\/]{2})/.test(path)
+        ? /(?<=[^\\/])[\\/]+$/
+        : /(?<=[^/])\/+$/;
+      key = `existing:${request.agentId}:${path.replace(trailing, "")}`;
     }
     const earlier = claimed.get(key);
     if (earlier !== undefined) {

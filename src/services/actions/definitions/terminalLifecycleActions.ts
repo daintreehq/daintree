@@ -543,7 +543,7 @@ export function registerTerminalLifecycleActions(
         .string()
         .min(1)
         .nullable()
-        .describe("An account of the panel's agent; null is the CLI's default login."),
+        .describe("An account of the panel's agent; null is no saved account."),
       keepConversation: KeepConversationArgSchema,
     }),
     resultSchema: RestartOnAccountResultSchema,

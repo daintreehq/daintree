@@ -151,9 +151,12 @@ describe("addAgentAccount (#16040)", () => {
       }),
     ]);
 
-    expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
-    const saved = savedCodex().accounts as Array<{ name: string }>;
-    expect(saved.map((account) => account.name)).toEqual(["Other", "Team"]);
+    // Whichever finishes its checks first is the one saved.
+    expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const saved = (savedCodex().accounts as Array<{ name: string }>).map((a) => a.name);
+    expect(saved).toHaveLength(2);
+    expect(saved[0]).toBe("Other");
+    expect(["Team", "Team again"]).toContain(saved[1]);
   });
 
   it("still adds after an add before it failed", async () => {

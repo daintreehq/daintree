@@ -190,10 +190,17 @@ describe("agent.addAccount through the MCP bridge (#17079)", () => {
     const pending = useMcpConfirmStore.getState().current;
     expect(pending?.selectableTargets).toBeUndefined();
     expect(pending?.previewTitle).toBe("Accounts to be added");
-    expect(pending?.preview).toContain(
-      "google:me@example.com (Claude account): New folder ~/.claude-google-me-example-com"
-    );
-    expect(pending?.preview).toContain("Lab (Codex account): Existing folder /Users/me/.codex-lab");
+    expect(pending?.preview).toEqual([
+      "google:me@example.com (Claude account): New folder ~/.claude-google-me-example-com",
+      "two (Claude account): New folder ~/.claude-two",
+      "three (Claude account): New folder ~/.claude-three",
+      "four (Claude account): New folder ~/.claude-four",
+      "five (Claude account): New folder ~/.claude-five",
+      "Shared (Claude account): Existing folder /Volumes/team/.claude-shared",
+      "Work (Codex account): New folder ~/.codex-work",
+      "Lab (Codex account): Existing folder /Users/me/.codex-lab",
+      "You choose which to add in the next step.",
+    ]);
 
     useMcpConfirmStore.getState().resolveCurrent("approved");
     await dispatched;

@@ -1238,12 +1238,12 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       await callTool(server, {
         name: "terminal.restartOnAccountOwned",
-        arguments: { terminalId: "terminal-1", accountId: "account-1" },
+        arguments: { terminalId: "terminal-1", accountId: "account-1", keepConversation: true },
       });
 
       expect(dispatchAction).toHaveBeenCalledWith(
         "terminal.restartOnAccount",
-        { accountId: "account-1", terminalId: "terminal-1" },
+        { accountId: "account-1", keepConversation: true, terminalId: "terminal-1" },
         false
       );
       expect(store.resourceOwnership.owns("s-account-keeps", "terminal", "terminal-1")).toBe(true);
