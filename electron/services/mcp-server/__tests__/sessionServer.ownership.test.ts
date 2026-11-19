@@ -1203,7 +1203,10 @@ describe("session-scoped resource ownership (#11909)", () => {
       return h;
     }
 
-    const move = { name: "terminal.restartOnPresetOwned", arguments: { terminalId: "terminal-1", presetId: "work" } };
+    const move = {
+      name: "terminal.restartOnPresetOwned",
+      arguments: { terminalId: "terminal-1", presetId: "work" },
+    };
 
     it("offers the pane's view the move, unconfirmed, and audits the run its view reports", async () => {
       const { server, dispatchAction, deps } = tickHarness(

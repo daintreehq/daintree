@@ -978,7 +978,13 @@ export function createSessionServerDeps(
                   }
                 : {}),
               ...(relay.local === true && relay.nextFallback && relayCallId !== undefined
-                ? { nextFallback: bindNextFallback(relay.nextFallback, relay.helpSessionId, relayCallId) }
+                ? {
+                    nextFallback: bindNextFallback(
+                      relay.nextFallback,
+                      relay.helpSessionId,
+                      relayCallId
+                    ),
+                  }
                 : {}),
             },
           }

@@ -376,7 +376,13 @@ describe("createSessionServerDeps", () => {
     const move = { terminalId: "t-1", presetId: "work" };
 
     const local = bound({ ...caller, local: true });
-    await local.sessionDeps.dispatchAction("terminal.restartOnPreset", move, false, undefined, "call-1");
+    await local.sessionDeps.dispatchAction(
+      "terminal.restartOnPreset",
+      move,
+      false,
+      undefined,
+      "call-1"
+    );
     await local.sessionDeps.dispatchAction("terminal.restartOnPreset", move, false);
     const [named, unnamed] = local.matchers();
     expect(named?.offers("proj-1", "terminal.restartOnPreset", move)).toBe(true);
@@ -392,7 +398,13 @@ describe("createSessionServerDeps", () => {
     expect(unnamed).toBeUndefined();
 
     const remote = bound(caller);
-    await remote.sessionDeps.dispatchAction("terminal.restartOnPreset", move, false, undefined, "call-2");
+    await remote.sessionDeps.dispatchAction(
+      "terminal.restartOnPreset",
+      move,
+      false,
+      undefined,
+      "call-2"
+    );
     expect(remote.matchers()).toEqual([undefined]);
   });
 

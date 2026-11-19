@@ -100,7 +100,10 @@ describe("ownFallbackChainRoot (#17917)", () => {
   });
 
   it("asks when a project preset takes over a built-in id the chain names", () => {
-    const builtIn = { customPresets: [preset("a", ["shared-id"])], ccrPresets: [preset("shared-id")] };
+    const builtIn = {
+      customPresets: [preset("a", ["shared-id"])],
+      ccrPresets: [preset("shared-id")],
+    };
     expect(ownFallbackChainRoot("claude", { agentPresetId: "a" }, "shared-id", builtIn)).toBe("a");
     expect(
       ownFallbackChainRoot("claude", { agentPresetId: "a" }, "shared-id", {

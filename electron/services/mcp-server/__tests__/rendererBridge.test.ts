@@ -326,7 +326,10 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
         { ...condition, approvalOnly: true }
       );
 
-      expect(sent[0]).toMatchObject({ confirmed: false, confirmationCondition: "next-own-fallback" });
+      expect(sent[0]).toMatchObject({
+        confirmed: false,
+        confirmationCondition: "next-own-fallback",
+      });
       expect(sent[1]).not.toHaveProperty("confirmationCondition");
       expect(sent[2]).not.toHaveProperty("confirmationCondition");
       expect(ran.authorization).toBe("skip-preference");
