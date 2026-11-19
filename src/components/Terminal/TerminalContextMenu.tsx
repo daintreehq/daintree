@@ -406,9 +406,7 @@ function TerminalContextMenuBody({
   const whenDoneChoice = useTerminalWhenDoneStore((s) =>
     isMenuLive ? s.choices[terminalId] : undefined
   );
-  const armedToContinue = useCodexLimitContinueStore(
-    (s) => isMenuLive && terminalId in s.panes
-  );
+  const armedToContinue = useCodexLimitContinueStore((s) => isMenuLive && terminalId in s.panes);
   const fleetSize = useFleetArmingStore((s) => (isMenuLive ? selectFleetMemberCount(s) : 0));
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);

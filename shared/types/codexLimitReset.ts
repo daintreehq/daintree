@@ -84,8 +84,7 @@ export interface CodexLimitStamp {
  * (#17909).
  */
 export type CodexLimitAnswer =
-  | { stamp: CodexLimitStamp }
-  | { reset: CodexLimitReset; stamp?: CodexLimitStamp };
+  { stamp: CodexLimitStamp } | { reset: CodexLimitReset; stamp?: CodexLimitStamp };
 
 /** The question: a first read, or a resolve of a stamped banner against a reading. */
 export type CodexLimitQuery =

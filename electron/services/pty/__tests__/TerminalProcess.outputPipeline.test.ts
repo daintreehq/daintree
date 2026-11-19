@@ -1839,7 +1839,9 @@ describe("TerminalProcess continuing at a Codex limit's reset (#17909)", () => {
     "\x1b[K\x1b[0m\r\n" +
     footer;
 
-  type Internals = { terminalInfo: { ptyProcess: IPty; agentState?: string; waitingReason?: string } };
+  type Internals = {
+    terminalInfo: { ptyProcess: IPty; agentState?: string; waitingReason?: string };
+  };
   const infoOf = (terminal: TerminalProcess) => (terminal as unknown as Internals).terminalInfo;
 
   async function stoppedPane({ armed = true, footer }: { armed?: boolean; footer?: string } = {}) {

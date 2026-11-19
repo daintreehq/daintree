@@ -36,7 +36,10 @@ describe("judgeCodexLimitScreen (#17909)", () => {
 
   it.each([
     ["alone", "  Goal hit usage limits (/goal resume)"],
-    ["beside the IDE indicator", "  ? for shortcuts   Goal hit usage limits (/goal resume) · IDE context"],
+    [
+      "beside the IDE indicator",
+      "  ? for shortcuts   Goal hit usage limits (/goal resume) · IDE context",
+    ],
   ])("resumes a /goal run whose footer says it hit the limit, %s", (_, footer) => {
     expect(judgeCodexLimitScreen(screen({ footer }), 120)).toEqual({ line: "/goal resume" });
   });

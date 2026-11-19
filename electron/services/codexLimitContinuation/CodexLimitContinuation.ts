@@ -130,7 +130,10 @@ export class CodexLimitContinuation {
     const terminal = await this.deps.readTerminal(terminalId).catch(() => null);
     if (this.requests.get(terminalId) !== request) return;
     if (!terminal || terminal.projectId !== projectId) {
-      throw new CodexLimitContinuationError(`No terminal ${terminalId} in this project`, "NOT_FOUND");
+      throw new CodexLimitContinuationError(
+        `No terminal ${terminalId} in this project`,
+        "NOT_FOUND"
+      );
     }
     const agentId = terminal.detectedAgentId ?? terminal.launchAgentId;
     if (terminal.isAssistantTerminal || !canContinueAtLimitReset(agentId)) {

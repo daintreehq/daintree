@@ -1645,7 +1645,12 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
   });
 
   it("offers Continue when usage limit resets on a Codex pane and arms it straight through main (#17909)", () => {
-    const codexPane = { ...agentPane, title: "Codex", launchAgentId: "codex", detectedAgentId: "codex" };
+    const codexPane = {
+      ...agentPane,
+      title: "Codex",
+      launchAgentId: "codex",
+      detectedAgentId: "codex",
+    };
     renderMenu(codexPane);
     const row = () =>
       screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" });

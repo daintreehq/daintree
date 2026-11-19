@@ -24,12 +24,12 @@ const GOAL_WORD = /\bgoal\b/i;
 const PLAN_MODE = /\bPlan mode\b/;
 
 export type CodexLimitScreenVerdict =
-  | { line: CodexLimitContinueLine }
-  | { skip: CodexLimitContinueSkipReason };
+  { line: CodexLimitContinueLine } | { skip: CodexLimitContinueSkipReason };
 
 function plainRows(serialized: string): string[] {
   const switchAt = serialized.lastIndexOf(ALT_SCREEN_ENTER);
-  const screen = switchAt === -1 ? serialized : serialized.slice(switchAt + ALT_SCREEN_ENTER.length);
+  const screen =
+    switchAt === -1 ? serialized : serialized.slice(switchAt + ALT_SCREEN_ENTER.length);
   return screen.split("\n").map((row) => stripAnsiCodes(expandCursorForward(row)).trimEnd());
 }
 

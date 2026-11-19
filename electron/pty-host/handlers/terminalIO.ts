@@ -120,9 +120,9 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
         send({ status: "skipped", reason: "not-observed" });
         return;
       }
-      void ptyManager.continueAtCodexLimit(msg.id, stop).then(send, () =>
-        send({ status: "skipped", reason: "not-delivered" })
-      );
+      void ptyManager
+        .continueAtCodexLimit(msg.id, stop)
+        .then(send, () => send({ status: "skipped", reason: "not-delivered" }));
     },
 
     "withdraw-submission": (msg) => {
