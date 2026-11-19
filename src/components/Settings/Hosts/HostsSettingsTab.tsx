@@ -553,6 +553,8 @@ export default function HostsSettingsTab() {
       )}
       {cloudSetupHost && (
         <AddHostDialog
+          // Another machine handed over while one's setup is open gets a setup of its own.
+          key={cloudSetupHost.id}
           isOpen
           onClose={() => setCloudSetup(null)}
           existing={{

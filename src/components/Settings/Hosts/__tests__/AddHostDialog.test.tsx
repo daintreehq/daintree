@@ -1419,37 +1419,52 @@ describe("AddHostDialog", () => {
       vi.useRealTimers();
     });
 
-    it.each(["its check answers", "the cloud picture changes"])(
-      "offers to start a machine found asleep however %s first, and dials nothing meanwhile",
-      async (first) => {
-        let answer: (result: HostProbeResult) => void = () => {};
-        remoteHosts.probe!.mockImplementationOnce(
-          () => new Promise<HostProbeResult>((resolve) => (answer = resolve))
-        );
-        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
-        await advance(0);
-        if (first === "its check answers") {
-          answer(refused());
-          await advance(0);
-          await push(asleep());
-        } else {
-          await push(asleep());
-          answer(refused());
-          await advance(0);
-        }
-        const offer = screen.getByTestId("add-host-machine-down");
-        expect(offer.textContent).toContain("a37's machine is asleep");
-        expect(offer.textContent).toContain(
-          "It bills Personal about $0.050 an hour while it runs. Agent 37 bills only for its disk while it's stopped or asleep."
-        );
-        expect(screen.getByRole("button", { name: "Start machine" })).toBeTruthy();
-        expect(screen.queryByTestId("add-host-awaiting-login")).toBeNull();
-        // A check would only be turned away, and waking it is the person's call.
-        await advance(60_000);
-        expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
-        expect(cloudHosts.startHost).not.toHaveBeenCalled();
-      }
-    );
+    it("offers to start a machine found asleep, dropping a recheck already queued", async () => {
+      remoteHosts.probe!.mockResolvedValueOnce(refused());
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      // Turned away like any new machine not answering yet, until the picture says why.
+      expect(screen.getByTestId("add-host-awaiting-login")).toBeTruthy();
+      expect(screen.queryByTestId("add-host-machine-down")).toBeNull();
+      await advance(9_000);
+      await push(asleep());
+      const offer = screen.getByTestId("add-host-machine-down");
+      expect(offer.textContent).toContain("a37's machine is asleep");
+      expect(offer.textContent).toContain(
+        "It bills Personal about $0.050 an hour while it runs. Agent 37 bills only for its disk while it's stopped or asleep."
+      );
+      expect(screen.getByRole("button", { name: "Start machine" })).toBeTruthy();
+      expect(screen.queryByTestId("add-host-awaiting-login")).toBeNull();
+      // A check would only be turned away, and waking it is the person's call.
+      await advance(2_000);
+      await advance(60_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+      expect(cloudHosts.startHost).not.toHaveBeenCalled();
+    });
+
+    it("waits for a check under way when the picture says it's asleep first", async () => {
+      let answer: (result: HostProbeResult) => void = () => {};
+      remoteHosts.probe!.mockImplementationOnce(
+        () => new Promise<HostProbeResult>((resolve) => (answer = resolve))
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      await push(asleep());
+      expect(screen.queryByTestId("add-host-machine-down")).toBeNull();
+      answer(refused());
+      await advance(0);
+      expect(screen.getByTestId("add-host-machine-down")).toBeTruthy();
+    });
+
+    it("offers it after a check that couldn't run at all", async () => {
+      remoteHosts.probe!.mockRejectedValueOnce(
+        new ClientAppError("INTERNAL", "bridge", "Couldn't check a37.")
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      await push(asleep());
+      expect(screen.getByTestId("add-host-machine-down")).toBeTruthy();
+    });
 
     it("starts it when asked, and carries on from one fresh check once it runs", async () => {
       remoteHosts
@@ -1477,11 +1492,13 @@ describe("AddHostDialog", () => {
       await advance(60_000);
       expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
 
-      // Its answer can come before the push that says it runs.
+      // Its answer can come before the push that says it runs: the picture is read again.
+      const reads = cloudHosts.getSnapshot!.mock.calls.length;
       becomes(machine());
       started();
       await advance(0);
       await advance(0);
+      expect(cloudHosts.getSnapshot).toHaveBeenCalledTimes(reads + 1);
       expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
       expect(screen.queryByTestId("add-host-machine-down")).toBeNull();
       expect(screen.queryByTestId("add-host-machine-starting")).toBeNull();
@@ -1490,23 +1507,79 @@ describe("AddHostDialog", () => {
       expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
     });
 
-    it("says why a start was refused, offers it again, and checks nothing", async () => {
+    it("checks again while its SSH comes up after the start, as for a new machine", async () => {
+      const notInstalled = probeResult({
+        connection: HOST.connection,
+        install: null,
+        hostModeListening: false,
+        appRunning: false,
+        matchesClient: false,
+      });
+      const notAnswering = probeResult({
+        connection: HOST.connection,
+        reachable: false,
+        sshError: "Connection closed by UNKNOWN port 65535",
+        platform: null,
+        install: null,
+        hostModeListening: false,
+        matchesClient: null,
+      });
+      // Reached once, so the first-boot rechecks ended; then asleep, started, and not answering yet.
+      remoteHosts
+        .probe!.mockResolvedValueOnce(notInstalled)
+        .mockResolvedValueOnce(notAnswering)
+        .mockResolvedValue(notInstalled);
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      await push(asleep());
+      fireEvent.click(screen.getByRole("button", { name: "Start machine" }));
+      becomes(machine());
+      await advance(0);
+      await advance(0);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("add-host-awaiting-login")).toBeTruthy();
+      await advance(10_000);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(3);
+      expect(screen.getByRole("button", { name: "Review install" })).toBeTruthy();
+    });
+
+    it.each([
+      [new ClientAppError("INTERNAL", "start refused", "Agent 37 has no capacity right now.")],
+      [new Error("Agent 37 has no capacity right now.")],
+    ])("says why a start was refused, and clears it when asked again (%s)", async (refusal) => {
       remoteHosts.probe!.mockResolvedValue(refused());
-      cloudHosts.startHost!.mockRejectedValueOnce(
-        new ClientAppError("INTERNAL", "start refused", "Agent 37 has no capacity right now.")
-      );
+      cloudHosts
+        .startHost!.mockRejectedValueOnce(refusal)
+        .mockImplementationOnce(() => new Promise<void>(() => {}));
       render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
       await advance(0);
       await push(asleep());
       fireEvent.click(screen.getByRole("button", { name: "Start machine" }));
       await advance(0);
-      expect(screen.getByText("Agent 37 has no capacity right now.")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Start machine" })).toBeTruthy();
+      expect(
+        within(screen.getByTestId("add-host-machine-down")).getByRole("alert").textContent
+      ).toBe("Agent 37 has no capacity right now.");
       await advance(60_000);
       expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Start machine" }));
+      await advance(0);
+      expect(cloudHosts.startHost).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Agent 37 has no capacity right now.")).toBeNull();
     });
 
-    it("puts the offer ahead of a reviewed install once the machine stops", async () => {
+    it("checks again from the offer without starting it", async () => {
+      remoteHosts.probe!.mockResolvedValue(refused());
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      await push(asleep());
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      await advance(0);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
+      expect(cloudHosts.startHost).not.toHaveBeenCalled();
+    });
+
+    it("puts the offer ahead of a reviewed install once the machine stops, then checks afresh", async () => {
       remoteHosts.probe!.mockResolvedValue(
         probeResult({
           connection: HOST.connection,
@@ -1522,14 +1595,47 @@ describe("AddHostDialog", () => {
       await advance(0);
       expect(remoteHosts.planInstall).toHaveBeenCalledTimes(1);
       expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+      const install = screen.getByRole("button", { name: "Install on a37" });
 
       await push(machine({ machine: "stopped", rawState: "stopped" }));
       expect(screen.getByTestId("add-host-machine-down").textContent).toContain(
         "a37's machine is stopped"
       );
       expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
-      expect(screen.getByRole("button", { name: "Start machine" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Install on a37" })).toBeNull();
+      // Its own button, not the install's: a press begun on Install never ends on Start.
+      expect(install.isConnected).toBe(false);
+      expect(screen.getByRole("button", { name: "Start machine" })).not.toBe(install);
+
+      becomes(machine());
+      fireEvent.click(screen.getByRole("button", { name: "Start machine" }));
+      await advance(0);
+      await advance(0);
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(2);
       expect(remoteHosts.install).not.toHaveBeenCalled();
+      // Back at the check: what it found decides the next step, from the start.
+      expect(screen.getByRole("button", { name: "Review install" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    });
+
+    it("leaves a screen whose Done only closes as it is", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult({ connection: HOST.connection }));
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+      await push(asleep());
+      expect(screen.queryByTestId("add-host-machine-down")).toBeNull();
+      expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    });
+
+    it("offers it where setup ends by connecting", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult({ connection: HOST.connection }));
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} connectWhenDone />);
+      await advance(0);
+      expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+      await push(asleep());
+      expect(screen.getByTestId("add-host-machine-down")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
     });
 
     it("never follows the cloud for a host that isn't a cloud machine", async () => {
@@ -1547,7 +1653,9 @@ describe("AddHostDialog", () => {
         />
       );
       await advance(0);
-      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+      expect(remoteHosts.probe).toHaveBeenCalledWith({
+        connection: { kind: "ssh", target: "greg@studio" },
+      });
       expect(cloudHosts.getSnapshot).not.toHaveBeenCalled();
     });
   });
