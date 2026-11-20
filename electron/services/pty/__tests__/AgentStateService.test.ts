@@ -569,7 +569,10 @@ describe("AgentStateService", () => {
       expect(terminal.promptUnseen).toBe(true);
       // Answered, the selector gives way to more startup, never to a turn.
       service.updateAgentState(terminal, { type: "input" }, "input", 1);
-      expect(evaluateWakeGate(terminal, DECISION_GATE)).toEqual({ kind: "hold", reason: "working" });
+      expect(evaluateWakeGate(terminal, DECISION_GATE)).toEqual({
+        kind: "hold",
+        reason: "working",
+      });
     });
 
     it("takes a selector re-read as its prompt, without the agent going busy", () => {

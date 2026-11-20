@@ -3150,7 +3150,8 @@ describe("Advice on an enrolled Remote Host, with its owner's computer asleep (#
         })
     );
     const pending = { delivery: "pending", disposition: "fallback-due" };
-    const closure = async () => (await readOnHost(next.service, "pane-2", questionId)).closureNotice;
+    const closure = async () =>
+      (await readOnHost(next.service, "pane-2", questionId)).closureNotice;
     await vi.waitFor(async () => expect(await closure()).toEqual(pending), { timeout: 20_000 });
     // Each look outlasts the line's coalescing, after which the pane's wakes are attempted.
     const untyped = async () => {
