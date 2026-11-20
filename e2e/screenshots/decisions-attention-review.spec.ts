@@ -427,6 +427,14 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       status: "needs-attention",
       reason: "resume_worktree_gone",
       question: "Drop the legacy search index once the reindex finishes?",
+      fullQuestion: "Drop the legacy search index once the reindex finishes?",
+      plan: null,
+      reference: {
+        hostId: "host-local",
+        projectId: "helios",
+        terminalId: "pane-gone-36",
+        questionId: "qid-att-36-search",
+      },
       askedAt: iso(26 * 3_600_000),
       origin: {
         projectId: "helios",
@@ -459,6 +467,15 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       status: "needs-attention",
       reason: "relaunched",
       question: "Should token refresh retry once on a 401 before signing the user out?",
+      fullQuestion:
+        "Should token refresh retry once on a 401 before signing the user out?\n\nThe flaky tests all fail the same way: the access token expires mid-request, the refresh races the retry, and the second request goes out with the old token.",
+      plan: null,
+      reference: {
+        hostId: "host-local",
+        projectId: "helios",
+        terminalId: panes.asker,
+        questionId: "qid-att-38-token",
+      },
       askedAt: iso(2 * 3_600_000 + 12 * 60_000),
       origin: {
         projectId: "helios",
@@ -491,6 +508,14 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       status: "delivery-uncertain",
       reason: "crash_unreconciled",
       question: "Which queue should the billing webhooks move to?",
+      fullQuestion: "Which queue should the billing webhooks move to?",
+      plan: null,
+      reference: {
+        hostId: "host-local",
+        projectId: "helios",
+        terminalId: panes.other,
+        questionId: "qid-att-39-queue",
+      },
       askedAt: iso(55 * 60_000),
       origin: {
         projectId: "helios",
@@ -523,6 +548,9 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       status: "needs-attention",
       reason: "answer_unreadable",
       question: null,
+      fullQuestion: null,
+      plan: null,
+      reference: null,
       askedAt: iso(14 * 60_000),
       origin: {
         projectId: "helios",

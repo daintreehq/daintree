@@ -11,6 +11,7 @@ import type {
 } from "@shared/types/decisionsAttention";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { DecisionsAttentionDialog } from "../DecisionsAttentionDialog";
 
 vi.mock("@/hooks/useWorktrees", () => ({ useWorktrees: () => ({ worktrees: [] }) }));
@@ -34,6 +35,14 @@ function makeItem(
     status: "needs-attention",
     reason: "pane_gone",
     question: `Question ${alias}?`,
+    fullQuestion: `Question ${alias}?`,
+    plan: null,
+    reference: {
+      hostId: "host-1",
+      projectId: "project-1",
+      terminalId: `pane-${alias}`,
+      questionId: `qid-${alias}`,
+    },
     askedAt: "2026-11-01T09:00:00.000Z",
     origin: {
       projectId: "project-1",
@@ -438,7 +447,7 @@ describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
     await listedRows(1);
     const row = screen.getByTestId("decisions-attention-item");
 
-    expect(row.textContent).toContain("Timeout notice needs attention.");
+    expect(row.textContent).toContain("Timeout notice not typed in.");
     expect(row.textContent).toContain("The terminal that asked was closed.");
     expect(row.textContent).toContain("Timeout notice, not typed in");
     expect(row.textContent).toContain("Its deadline passed without an answer.");
@@ -1007,5 +1016,410 @@ describe("DecisionsAttentionDialog: an opening for a pane (#17562)", () => {
     // The last opening's row for the pane is still on show beside the error.
     await listedRows(1);
     await waitFor(() => expect(document.activeElement).toBe(listPlace()));
+  });
+});
+
+describe("DecisionsAttentionDialog: an opening for a pane leads with its items (#18055)", () => {
+  /** The rows in the order they show, by alias. */
+  function shownAliases(): number[] {
+    return screen
+      .getAllByTestId("decisions-attention-item")
+      .map((row) => Number(row.dataset.questionId!.replace("qid-", "")));
+  }
+
+  /** The row that opens the rest of the list, by alias, or null when nothing sets them apart. */
+  function elsewhereRow(): number | null {
+    const heading = screen.queryByRole("heading", { name: "Elsewhere" });
+    const row = heading?.closest<HTMLElement>("[data-question-id]");
+    return row ? Number(row.dataset.questionId!.replace("qid-", "")) : null;
+  }
+
+  function openFor(terminalId: string | null) {
+    act(() => useDecisionsAttentionStore.getState().open(terminalId));
+  }
+
+  /** One that leaves in one click, as nothing else is offered for it. */
+  function plain(alias: number, over: Partial<DecisionsAttentionItem> = {}) {
+    return makeItem(alias, { canResume: false, canReassign: false, ...over });
+  }
+
+  beforeEach(() => {
+    listed = [];
+    listAttention.mockReset();
+    markAnswerHandled.mockReset();
+    listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
+    stubElectron();
+    handlesQuestions();
+    useDecisionsAttentionStore.setState({
+      isOpen: false,
+      request: { terminalId: null, returnFocusTo: null, seq: 0 },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("puts the pane's own items first, in their order, then the rest under Elsewhere", async () => {
+    const onHost = makeItem(5, {
+      origin: { ...makeItem(5).origin, paneId: "pane-4", otherHost: { hostId: "h2", name: null } },
+    });
+    listed = [
+      makeItem(3),
+      makeItem(4),
+      onHost,
+      makeItem(6, { origin: { ...makeItem(6).origin, paneId: "pane-4" } }),
+    ];
+    const { rerender } = render(tree(false));
+    openFor("pane-4");
+    rerender(tree(true));
+    await listedRows(4);
+
+    // A Host's terminal can share the pane's id without being it.
+    expect(shownAliases()).toEqual([4, 6, 3, 5]);
+    expect(elsewhereRow()).toBe(3);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+    // The count is still every question's.
+    expect(screen.getByTestId("decisions-attention-dialog").textContent).toContain(
+      "4 questions need attention"
+    );
+    expect(screen.queryByTestId("decisions-attention-none-for-pane")).toBeNull();
+  });
+
+  it("lands on the new pane's item when reopened while open, though the old pane's focused row moves below it", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
+
+    // Both rows already show, so the new opening's read moves pane 3's focused row below pane 4's.
+    let land = () => {};
+    listAttention.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          land = () => resolve({ result: "listed", items: listed });
+        })
+    );
+    openFor("pane-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    await act(async () => land());
+
+    await waitFor(() => expect(shownAliases()).toEqual([4, 3]));
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("keeps a move the person made as the new opening's read came back, before it showed", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
+
+    let land = () => {};
+    listAttention.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          land = () => resolve({ result: "listed", items: listed });
+        })
+    );
+    openFor("pane-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    const chosen = markButton(3);
+    await act(async () => {
+      land();
+      // The read is back but not yet shown when the person tabs on.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      chosen.focus();
+    });
+
+    await waitFor(() => expect(shownAliases()).toEqual([4, 3]));
+    expect(document.activeElement).toBe(chosen);
+  });
+
+  it("lands on the pane's item though focus is still in a modal under the list", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    // The inbox the list was opened over, whose button can still hold focus as the read lands.
+    const inbox = document.createElement("div");
+    inbox.setAttribute("aria-modal", "true");
+    const resolve = document.createElement("button");
+    inbox.append(resolve);
+    document.body.prepend(inbox);
+    onTestFinished(() => inbox.remove());
+    act(() => resolve.focus());
+
+    openFor("pane-4");
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("lands on the pane's item though a modal under the list took focus while its read was out", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    const inbox = document.createElement("div");
+    inbox.setAttribute("aria-modal", "true");
+    const resolve = document.createElement("button");
+    inbox.append(resolve);
+    document.body.prepend(inbox);
+    onTestFinished(() => inbox.remove());
+
+    let land = () => {};
+    listAttention.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          land = () => done({ result: "listed", items: listed });
+        })
+    );
+    openFor("pane-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    act(() => resolve.focus());
+    await act(async () => land());
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
+  it("leaves focus in a modal over the list when a new opening's read lands behind it", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
+    // What the question view, opened from the list, holds while a notification opens the list for another pane.
+    const reader = document.createElement("div");
+    reader.setAttribute("aria-modal", "true");
+    const close = document.createElement("button");
+    reader.append(close);
+    document.body.append(reader);
+    onTestFinished(() => reader.remove());
+    act(() => close.focus());
+
+    openFor("pane-4");
+    await waitFor(() => expect(shownAliases()).toEqual([4, 3]));
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+
+    expect(document.activeElement).toBe(close);
+  });
+
+  it("names nothing elsewhere while a new opening's read is out, or once it failed", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    expect(elsewhereRow()).toBe(4);
+
+    let fail = () => {};
+    listAttention.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          fail = () => reject(new Error("The relay went away"));
+        })
+    );
+    openFor("pane-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    // Pane 4's own row still shows second, where the last opening put it, but isn't called elsewhere.
+    expect(elsewhereRow()).toBeNull();
+    await act(async () => fail());
+
+    await waitFor(() => expect(screen.getByText("The relay went away")).toBeTruthy());
+    expect(shownAliases()).toEqual([3, 4]);
+    expect(elsewhereRow()).toBeNull();
+    expect(screen.queryByTestId("decisions-attention-none-for-pane")).toBeNull();
+  });
+
+  it("keeps one list in main's order when opened for no pane, or for a pane that holds them all", async () => {
+    listed = [makeItem(4), makeItem(3)];
+    const { rerender } = render(tree(false));
+    openFor(null);
+    rerender(tree(true));
+    await listedRows(2);
+    expect(shownAliases()).toEqual([4, 3]);
+    expect(elsewhereRow()).toBeNull();
+
+    listed = [makeItem(3)];
+    openFor("pane-3");
+    await waitFor(() => expect(shownAliases()).toEqual([3]));
+    expect(elsewhereRow()).toBeNull();
+  });
+
+  it("says nothing of the pane is left, and lands on no other pane's row, when opened for one with none", async () => {
+    listed = [makeItem(3), makeItem(5)];
+    const { rerender } = render(tree(false));
+    openFor("pane-4");
+    rerender(tree(true));
+    await listedRows(2);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-attention-none-for-pane").textContent).toBe(
+        "Nothing from this terminal needs attention now."
+      )
+    );
+    expect(elsewhereRow()).toBe(3);
+    const id = screen.getByTestId("decisions-attention-dialog").getAttribute("aria-describedby");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(document.getElementById(id!)?.parentElement)
+    );
+  });
+
+  it("hands focus to the first row below once the pane's last item leaves, and says so", async () => {
+    // Main lists pane 4's item last; it shows first, so the row after it is 3, not 5.
+    listed = [plain(3), plain(5), plain(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-4");
+    rerender(tree(true));
+    await listedRows(3);
+    expect(shownAliases()).toEqual([4, 3, 5]);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+
+    const mark = markButton(4);
+    act(() => mark.focus());
+    fireEvent.click(mark);
+    await listedRows(2);
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
+    expect(screen.getByTestId("decisions-attention-none-for-pane")).toBeTruthy();
+    expect(elsewhereRow()).toBe(3);
+  });
+});
+
+describe("DecisionsAttentionDialog: the whole question and its plan (#18055)", () => {
+  beforeEach(() => {
+    listed = [];
+    listAttention.mockReset();
+    listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
+    stubElectron();
+    useDecisionsAttentionStore.setState({
+      isOpen: true,
+      request: { terminalId: null, returnFocusTo: null, seq: 1 },
+    });
+    useDecisionsQuestionViewStore.setState({ isOpen: false, request: null });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("reads the rest of the question in place, past the heading's first line", async () => {
+    const whole = "Drop the legacy index?\nThe reindex finished an hour ago.";
+    listed = [
+      makeItem(3, { question: "Drop the legacy index?", fullQuestion: whole }),
+      makeItem(4),
+    ];
+    render(tree(true));
+    await listedRows(2);
+
+    const row = screen.getAllByTestId("decisions-attention-item")[0]!;
+    const text = within(row).getByTestId("decisions-attention-question");
+    expect(text.hidden).toBe(true);
+    const show = within(row).getByRole("button", { name: "Show full question for q-3" });
+    expect(show.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(show);
+    expect(text.hidden).toBe(false);
+    expect(text.textContent).toBe(whole);
+    expect(show.getAttribute("aria-expanded")).toBe("true");
+    expect(show.getAttribute("aria-controls")).toBe(text.id);
+    fireEvent.click(within(row).getByRole("button", { name: "Show less of the question for q-3" }));
+    expect(text.hidden).toBe(true);
+
+    // A question that is all heading has nothing more to show.
+    const other = screen.getAllByTestId("decisions-attention-item")[1]!;
+    expect(within(other).queryByTestId("decisions-attention-question")).toBeNull();
+    expect(within(other).queryByRole("button", { name: /Show full question/ })).toBeNull();
+  });
+
+  it("shows the plan the agent stated beside the notice that refers to it", async () => {
+    listed = [
+      makeItem(3, {
+        answer: null,
+        canReassign: false,
+        plan: "Keep the recorded fixture.",
+        notice: {
+          kind: "expired",
+          revision: 0,
+          deadline: "2026-11-01T09:45:00.000Z",
+          delivery: "needs-attention",
+          disposition: "fallback-due",
+        },
+      }),
+    ];
+    render(tree(true));
+    await listedRows(1);
+
+    const plan = screen.getByTestId("decisions-attention-plan");
+    expect(plan.textContent).toContain("The agent's plan if unanswered");
+    expect(plan.textContent).toContain("Keep the recorded fixture.");
+    // Right after the notice whose words refer to it.
+    expect(plan.previousElementSibling?.textContent).toContain("its stated plan");
+  });
+
+  it("keeps the plan's toggle, and its focus, when it is folded back after coming to fit", async () => {
+    let fits = false;
+    const scroll = vi
+      .spyOn(Element.prototype, "scrollHeight", "get")
+      .mockImplementation(() => (fits ? 40 : 120));
+    const client = vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(() => 40);
+    onTestFinished(() => {
+      scroll.mockRestore();
+      client.mockRestore();
+    });
+    listed = [makeItem(3, { plan: "Keep the recorded fixture." })];
+    render(tree(true));
+    await listedRows(1);
+
+    const toggle = await screen.findByRole("button", { name: "Show full plan for q-3" });
+    fireEvent.click(toggle);
+    // Wider now: the whole plan would fit folded.
+    fits = true;
+    act(() => toggle.focus());
+    fireEvent.click(toggle);
+
+    expect(toggle.isConnected).toBe(true);
+    expect(toggle.getAttribute("aria-label")).toBe("Show full plan for q-3");
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it("shows an advisory question's plan when its answer stalled, with no notice", async () => {
+    listed = [makeItem(3, { plan: "Keep the recorded fixture." }), makeItem(4)];
+    render(tree(true));
+    await listedRows(2);
+
+    const [planned, plain] = screen.getAllByTestId("decisions-attention-item");
+    expect(within(planned!).getByTestId("decisions-attention-plan").textContent).toContain(
+      "Keep the recorded fixture."
+    );
+    expect(within(plain!).queryByTestId("decisions-attention-plan")).toBeNull();
+  });
+
+  it("opens the question in the question view by its reference, and only one it can reach", async () => {
+    const reference = {
+      hostId: "host-1",
+      projectId: "project-1",
+      terminalId: "pane-3",
+      questionId: "0190f0aa11112222333344445555aa03",
+    };
+    listed = [
+      makeItem(3, { reference }),
+      makeItem(4, {
+        origin: { ...makeItem(4).origin, otherHost: { hostId: "h2", name: null } },
+      }),
+      makeItem(5, { reference: null }),
+    ];
+    render(tree(true));
+    await listedRows(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open question q-3" }));
+    const view = useDecisionsQuestionViewStore.getState();
+    expect(view.isOpen).toBe(true);
+    expect(view.request?.questions).toEqual([{ scope: "reference", reference }]);
+    // Another machine's question this computer has no route to, and one with no reference, read only in place.
+    expect(screen.queryByRole("button", { name: "Open question q-4" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open question q-5" })).toBeNull();
   });
 });

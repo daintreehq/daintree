@@ -1,9 +1,11 @@
+import type { DecisionQuestionReference } from "./decisionsQuestion.js";
+
 /**
  * Answers Daintree couldn't type in on its own, as the needs-attention list
  * shows them (#16020): read on demand from the owner's store, never pushed.
- * Unlike the pane chip's state, an item carries the question's first line
- * and the answer itself, since deciding what to do with an answer means
- * seeing it; both stay on this computer.
+ * Unlike the pane chip's state, an item carries the question and the answer
+ * itself, since deciding what to do with an answer means seeing it; both
+ * stay on this computer.
  */
 
 /** Where the question was asked, in the names this computer knows. */
@@ -106,8 +108,28 @@ export interface DecisionsAttentionItem {
    * `unspecified` when none was recorded.
    */
   reason: string;
-  /** The question as asked, its first line; null when it couldn't be opened here. */
+  /**
+   * The question as asked, its first line; null when it couldn't be opened
+   * here, or the question view would refuse it as unreadable.
+   */
   question: string | null;
+  /**
+   * The whole question, controls stripped and uncut, to read in place
+   * (#18055), when it says more than its first line; null otherwise.
+   */
+  fullQuestion: string | null;
+  /**
+   * The plan the agent stated for an advisory round, verified against the
+   * round as the question view verifies it; null for a question that waited
+   * for a reply, or when none can be read. Never an action taken.
+   */
+  plan: string | null;
+  /**
+   * The question by the machine, project and terminal that asked it, for the
+   * question view to open with its notes and images (#18055); null when its
+   * origin can't name it.
+   */
+  reference: DecisionQuestionReference | null;
   /** When the pane asked, ISO 8601. */
   askedAt: string;
   origin: DecisionsAnswerOrigin;

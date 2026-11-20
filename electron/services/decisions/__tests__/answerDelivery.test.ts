@@ -3637,3 +3637,94 @@ describe("AnswerDelivery, choosing where a stopped answer goes (#18056)", () => 
     }
   );
 });
+
+describe("AnswerDelivery, the whole question in the needs-attention list (#18055)", () => {
+  const settledAttempt = () => ({ ledger: { attempt: true, state: null } });
+  /** Past the 240 characters a row's heading keeps, and the 4,000 an answer's typing keeps. */
+  const QUESTION = `Reuse the recorded fixture?\nIt was recorded ${"long ".repeat(900)}ago.`;
+
+  /** An advisory round's content stating a plan, sealed as the relay hands it on. */
+  async function advisoryContent(questionId: string, plan: string): Promise<string> {
+    const envelope = await encryptEnvelope({
+      epochKey: identity.epochs.get(1)!,
+      installationId: identity.config.installationId,
+      questionId,
+      recordId: questionId,
+      recordType: "question",
+      revision: 0,
+      senderDeviceId: identity.config.deviceId,
+      purpose: "question-content",
+      plaintext: {
+        content_version: 1,
+        question: QUESTION,
+        kind: "choice",
+        options: [
+          { id: "keep", label: "Keep it" },
+          { id: "record", label: "Record again" },
+        ],
+        planned_fallback: plan,
+      },
+      replyMode: "advisory",
+    });
+    return JSON.stringify(envelope);
+  }
+
+  it("carries the whole question, the plan its advisory round states, and the reference the question view opens it by", async () => {
+    const h = setup({ advisory: settledAttempt() });
+    await advisoryExpired(h.store, Q1, 1, {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      content_sealed: await advisoryContent(Q1, "Keep the recorded fixture."),
+    });
+    // A notice alone settles once the question is over (#18021); a follow-up stopped with it keeps it listed.
+    await followUpStoppedToo(h.store);
+
+    const [item] = await h.delivery.attentionItems();
+    expect(item).toMatchObject({
+      questionId: Q1,
+      question: "Reuse the recorded fixture?",
+      fullQuestion: QUESTION,
+      plan: "Keep the recorded fixture.",
+      reference: { hostId: HOST, projectId: ORIGIN.project_id, terminalId: PANE, questionId: Q1 },
+      notice: { disposition: "fallback-due" },
+    });
+    await stopped(h.delivery);
+  });
+
+  it("names another machine's question by that machine, and shows nothing of one it can't open", async () => {
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve", {
+      origin: { ...ORIGIN, host_id: "host_elsewhere" },
+      delivery_status: "needs-attention",
+      error_code: "resume_other_host",
+      content_sealed: await sealQuestionContent({ identity }, Q1, {
+        question: "Drop the index?\nIt holds last year's rows.",
+      }),
+    });
+    await answered(h.store, Q2, 2, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
+
+    const [elsewhere, unopened] = await h.delivery.attentionItems();
+    expect(elsewhere).toMatchObject({
+      question: "Drop the index?",
+      fullQuestion: "Drop the index?\nIt holds last year's rows.",
+      plan: null,
+      origin: { otherHost: { hostId: "host_elsewhere" } },
+    });
+    expect(elsewhere!.reference).toEqual({
+      hostId: "host_elsewhere",
+      projectId: ORIGIN.project_id,
+      terminalId: PANE,
+      questionId: Q1,
+    });
+    expect(unopened).toMatchObject({
+      questionId: Q2,
+      question: null,
+      fullQuestion: null,
+      plan: null,
+    });
+    await stopped(h.delivery);
+  });
+});

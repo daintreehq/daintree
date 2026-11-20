@@ -19,7 +19,9 @@ import {
 import type { PhoneImageReference } from "@daintreehq/decisions-protocol";
 import { createHash } from "node:crypto";
 import type { DecisionsAnswerPreview } from "../../../shared/types/decisionsAttention.js";
+import type { DecisionQuestionReference } from "../../../shared/types/decisionsQuestion.js";
 import {
+  displayText,
   parseDecisionNotice,
   renderCopiedAnswer,
   sanitizeAnswerText,
@@ -407,6 +409,46 @@ export function questionLine(question: string): string | null {
     if (!isGenericHeading(text)) return text;
   }
   return first ?? null;
+}
+
+/** The whole question or the agent's plan, to read in place (#18055): controls gone, line breaks kept, nothing cut. */
+export function readableText(text: string | null | undefined): string | null {
+  if (text == null) return null;
+  const readable = displayText(text);
+  return readable === "" ? null : readable;
+}
+
+/**
+ * A row's question as the attention list shows it (#18055), from one
+ * readable text so the two never disagree: its first line for the heading,
+ * and the whole of it only when that says more than the heading does.
+ */
+export function attentionQuestion(question: string | null | undefined): {
+  line: string | null;
+  whole: string | null;
+} {
+  const whole = readableText(question);
+  if (whole === null) return { line: null, whole: null };
+  const more = whole.includes("\n") || whole.length > QUESTION_CHARS;
+  return { line: questionLine(whole), whole: more ? whole : null };
+}
+
+/** IDs as a reference by question carries them over IPC. */
+const REFERENCE_ID_CHARS = 256;
+
+/**
+ * The question as the question view opens it (#18055): by the machine,
+ * project and terminal that asked it. Null when its origin can't name it so.
+ */
+export function questionReference(
+  row: Pick<QuestionRow, "question_id" | "origin">
+): DecisionQuestionReference | null {
+  const { host_id: hostId, project_id: projectId, pane_id: terminalId } = row.origin;
+  const named = [hostId, projectId, terminalId].every(
+    (id) => id !== "" && id.length <= REFERENCE_ID_CHARS
+  );
+  if (!named || !QUESTION_ID.test(row.question_id)) return null;
+  return { hostId, projectId, terminalId, questionId: row.question_id };
 }
 
 /**

@@ -7,13 +7,16 @@ import type {
 import {
   attentionFingerprint,
   canCopy,
+  canOpenQuestion,
   copyLabel,
   destinationGroups,
   destinationRowDetail,
   fromLines,
+  groupForPane,
   handledConfirmBody,
   handledConfirmTitle,
   handledNeedsConfirm,
+  hasFullerQuestion,
   moveConfirmBody,
   noticeDeliveryText,
   noticeOutcomeText,
@@ -85,11 +88,12 @@ describe("follow-ups in the needs-attention list (#16231)", () => {
     expect(subjectOf(item({ followUps: [followUp(), followUp()] }))).toBe("answer and follow-ups");
   });
 
-  it("says what needs attention, or may have been delivered, in agreement with it", () => {
-    expect(statusText(item())).toBe("Answer needs attention");
+  it("says what wasn't typed in, or may have been, without restating the dialog's title (#18055)", () => {
+    expect(statusText(item())).toBe("Answer not typed in");
     expect(statusText(item({ answer: null, followUps: [followUp(), followUp()] }))).toBe(
-      "Follow-ups need attention"
+      "Follow-ups not typed in"
     );
+    expect(statusText(item({ followUps: [followUp()] }))).toBe("Answer and follow-up not typed in");
     expect(
       statusText(
         item({
@@ -199,10 +203,10 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
     expect(subjectOf(notice({ answerUnavailable: "unreadable" }))).toBe("answer");
   });
 
-  it("says whether it needs attention or may already have been typed, apart from how the question ended", () => {
-    expect(statusText(notice())).toBe("Timeout notice needs attention");
+  it("says whether it wasn't typed in or may already have been, apart from how the question ended", () => {
+    expect(statusText(notice())).toBe("Timeout notice not typed in");
     expect(statusText(notice({ followUps: [followUp(), followUp()] }))).toBe(
-      "Timeout notice and follow-ups need attention"
+      "Timeout notice and follow-ups not typed in"
     );
     expect(statusText(notice({ status: "delivery-uncertain" }))).toBe(
       "This timeout notice may or may not have been delivered"
@@ -376,6 +380,9 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
       status: "needs-attention" as const,
       reason: "resume_other_host",
       question: null,
+      fullQuestion: null,
+      plan: null,
+      reference: null,
       askedAt: "2026-11-01T09:00:00.000Z",
       answer: null,
       answerUnavailable: null,
@@ -506,5 +513,47 @@ describe("Choose destination's menu and confirmation (#18056)", () => {
     expect(destinationRowDetail(chosen, "main")).toBe("Claude · main");
     expect(destinationRowDetail(chosen, null)).toBe("Claude");
     expect(toLines(chosen, "main").detail).toBe("Claude · Atlas · main");
+  });
+});
+
+describe("an opening for a pane, and the whole question (#18055)", () => {
+  const origin = (
+    paneId: string,
+    otherHost: { hostId: string; name: string | null } | null = null
+  ) => ({
+    origin: { paneId, otherHost },
+  });
+
+  it("puts this computer's items for the pane first and the rest after, each in the order given", () => {
+    const a = { id: "a", ...origin("pane-2") };
+    const b = { id: "b", ...origin("pane-1") };
+    const c = { id: "c", ...origin("pane-1", { hostId: "host-2", name: "Studio" }) };
+    const d = { id: "d", ...origin("pane-1") };
+    expect(groupForPane([a, b, c, d], "pane-1")).toEqual({ forPane: [b, d], elsewhere: [a, c] });
+    expect(groupForPane([a, b], null)).toBeNull();
+  });
+
+  it("opens a question in the question view only where this computer can reach it", () => {
+    const reference = { hostId: "h", projectId: "p", terminalId: "t", questionId: "qid-00001" };
+    const at = (otherHost: { hostId: string; name: string | null } | null) => ({
+      reference,
+      origin: { otherHost },
+    });
+    expect(canOpenQuestion(at(null))).toBe(true);
+    expect(canOpenQuestion(at({ hostId: "h2", name: "Studio" }))).toBe(true);
+    expect(canOpenQuestion(at({ hostId: "h2", name: null }))).toBe(false);
+    expect(canOpenQuestion({ ...at(null), reference: null })).toBe(false);
+    expect(canOpenQuestion({ ...at({ hostId: "h2", name: "Studio" }), reference: null })).toBe(
+      false
+    );
+  });
+
+  it("offers more of the question only when it says more than its first line", () => {
+    expect(hasFullerQuestion({ question: "Ship it?", fullQuestion: "Ship it?" })).toBe(false);
+    expect(
+      hasFullerQuestion({ question: "Ship it?", fullQuestion: "Ship it?\nIt's Friday." })
+    ).toBe(true);
+    expect(hasFullerQuestion({ question: null, fullQuestion: null })).toBe(false);
+    expect(hasFullerQuestion({ question: "Ship it?", fullQuestion: null })).toBe(false);
   });
 });
