@@ -140,7 +140,7 @@ function useHeldFor(active: boolean, ms: number): boolean {
 
 /**
  * Whether a folded quote's text runs past its clamp, measured again as the
- * text changes, as it folds back, and as the dialog's width changes.
+ * text changes and as it folds back, and offered too once a narrowing makes it.
  */
 function useClamped(text: string | null | undefined, expanded: boolean) {
   const textRef = useRef<HTMLQuoteElement>(null);
@@ -148,10 +148,14 @@ function useClamped(text: string | null | undefined, expanded: boolean) {
   useLayoutEffect(() => {
     const el = textRef.current;
     if (el === null || expanded) return;
-    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
-    measure();
+    const overflows = () => el.scrollHeight > el.clientHeight + 1;
+    setClamped(overflows());
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
+    // Once offered for this text, the toggle stays: a widening that fits it
+    // would otherwise take away the button the person may be on.
+    const observer = new ResizeObserver(() => {
+      if (overflows()) setClamped(true);
+    });
     observer.observe(el);
     return () => observer.disconnect();
   }, [text, expanded]);
@@ -707,11 +711,12 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   const focusAfter = useRef<{ questionId: string; index: number } | null>(null);
   const reading = useRef(0);
   /**
-   * The opening whose read is being committed. Regrouping can move the row
-   * holding focus, and React hands focus back to it after the commit: that
-   * is no one's move.
+   * The opening whose read is being committed, and what held focus as it
+   * came back. Regrouping can move that row, and React hands focus back to
+   * it after the commit: that is no one's move, where focus going anywhere
+   * else meanwhile is.
    */
-  const settling = useRef(0);
+  const settling = useRef<{ seq: number; held: Element | null } | null>(null);
   /** The opening reads are launched for now, and the pane it was opened for. */
   const opening = useRef<{ seq: number; terminalId: string | null }>({ seq: 0, terminalId: null });
   /**
@@ -753,7 +758,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     try {
       const next = await decisionsClient.listAttention();
       if (ticket !== reading.current) return;
-      settling.current = launchedFor.seq;
+      settling.current = { seq: launchedFor.seq, held: document.activeElement };
       setList(next);
       setListedFor(launchedFor);
       setLoadError(null);
@@ -845,8 +850,8 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
         heldAtWindowBlur = document.activeElement;
       };
       const onFocusIn = (event: FocusEvent) => {
-        if (settling.current === seq) return;
         const { target } = event;
+        if (settling.current?.seq === seq && target === settling.current.held) return;
         const replayed = target === heldAtWindowBlur;
         heldAtWindowBlur = null;
         const body = bodyRef.current;
@@ -862,14 +867,22 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       };
     }
     focusedFor.current = seq;
-    settling.current = 0;
+    settling.current = null;
     // A control the refresh took away leaves focus on nothing, which no one chose.
     const active = document.activeElement;
     const kept = active !== null && active !== document.body;
     if (focusMovedFor.current === seq && kept) return undefined;
-    // A modal over this one (the question view, a confirmation) keeps the focus it holds.
-    const over = active?.closest('[aria-modal="true"]') ?? null;
-    if (over !== null && bodyRef.current !== null && !over.contains(bodyRef.current)) {
+    // A modal over this one (the question view, a confirmation) keeps the focus it holds;
+    // one under it (the inbox it was opened from) doesn't. Each modal's portal follows the
+    // ones open before it.
+    const own = bodyRef.current?.closest('[aria-modal="true"]') ?? null;
+    const other = active?.closest('[aria-modal="true"]') ?? null;
+    if (
+      own !== null &&
+      other !== null &&
+      other !== own &&
+      own.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING
+    ) {
       return undefined;
     }
     // This opening's read has landed, so the rows marked for its pane are its pane's own.

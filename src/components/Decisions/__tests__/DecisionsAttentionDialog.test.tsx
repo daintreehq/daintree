@@ -1109,6 +1109,54 @@ describe("DecisionsAttentionDialog: an opening for a pane leads with its items (
     await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
   });
 
+  it("keeps a move the person made as the new opening's read came back, before it showed", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(3)));
+
+    let land = () => {};
+    listAttention.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          land = () => resolve({ result: "listed", items: listed });
+        })
+    );
+    openFor("pane-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    const chosen = markButton(3);
+    await act(async () => {
+      land();
+      // The read is back but not yet shown when the person tabs on.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      chosen.focus();
+    });
+
+    await waitFor(() => expect(shownAliases()).toEqual([4, 3]));
+    expect(document.activeElement).toBe(chosen);
+  });
+
+  it("lands on the pane's item though focus is still in a modal under the list", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    // The inbox the list was opened over, whose button can still hold focus as the read lands.
+    const inbox = document.createElement("div");
+    inbox.setAttribute("aria-modal", "true");
+    const resolve = document.createElement("button");
+    inbox.append(resolve);
+    document.body.prepend(inbox);
+    onTestFinished(() => inbox.remove());
+    act(() => resolve.focus());
+
+    openFor("pane-4");
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
   it("leaves focus in a modal over the list when a new opening's read lands behind it", async () => {
     listed = [makeItem(3), makeItem(4)];
     const { rerender } = render(tree(false));
