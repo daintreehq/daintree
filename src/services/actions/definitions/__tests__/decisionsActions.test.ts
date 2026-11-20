@@ -303,7 +303,7 @@ describe("Decisions actions", () => {
       async (source) => {
         listed(question("q1", { kind: "waiting", reason: "open" }));
         expect((await dispatch(id, source)).ok).toBe(true);
-        expect(opened()).toBe(id === "decisions.openInbox" ? "inbox" : "question");
+        expect(opened()).toBe("inbox");
         for (const [name, write] of Object.entries(writes)) {
           expect(write, name).not.toHaveBeenCalled();
         }
@@ -341,7 +341,7 @@ describe("Decisions actions", () => {
   });
 
   describe("decisions.openNextQuestion", () => {
-    it("opens the oldest question waiting on the person, stepping through the others waiting in order", async () => {
+    it("opens the inbox at the oldest question waiting on the person (#18047)", async () => {
       listed(
         question("settled", { kind: "settled", outcome: "answered", handled: false }),
         question("q1", { kind: "queued" }),
@@ -351,18 +351,29 @@ describe("Decisions actions", () => {
       );
       expect((await dispatch("decisions.openNextQuestion")).ok).toBe(true);
 
-      expect(opened()).toBe("question");
-      const request = useDecisionsQuestionViewStore.getState().request!;
-      expect(request.index).toBe(0);
-      expect(request.threadMessageId).toBeUndefined();
-      expect(
-        request.questions.map((target) =>
-          target.scope === "reference" ? target.reference.questionId : null
-        )
-      ).toEqual(["q1", "q2"]);
+      expect(opened()).toBe("inbox");
+      const { request } = useDecisionsInboxStore.getState();
+      expect(request.terminalId).toBeNull();
+      expect(request.question).toEqual({
+        terminalId: "t-q1",
+        questionId: "q1",
+        reference: { hostId: "local", projectId: "p1", terminalId: "t-q1", questionId: "q1" },
+      });
     });
 
-    it("starts at the oldest question not yet seen, stepping through seen ones too, never cleared ones (#17895)", async () => {
+    it("shows its question in the inbox already open, in the same opening", async () => {
+      useDecisionsInboxStore.getState().open();
+      const opening = useDecisionsInboxStore.getState().request.seq;
+      listed(question("q1", { kind: "waiting", reason: "open" }));
+      await dispatch("decisions.openNextQuestion");
+      expect(opened()).toBe("inbox");
+      expect(useDecisionsInboxStore.getState().request).toMatchObject({
+        seq: opening,
+        question: { questionId: "q1" },
+      });
+    });
+
+    it("starts at the oldest question not yet seen, never a cleared one (#17895)", async () => {
       const open: DecisionQuestionStanding = { kind: "waiting", reason: "open" };
       const marked = (id: string, seen: boolean, cleared: boolean) => ({
         ...question(id, open),
@@ -374,13 +385,7 @@ describe("Decisions actions", () => {
         marked("new", false, false)
       );
       await dispatch("decisions.openNextQuestion");
-      const request = useDecisionsQuestionViewStore.getState().request!;
-      expect(
-        request.questions.map((target) =>
-          target.scope === "reference" ? target.reference.questionId : null
-        )
-      ).toEqual(["seen", "new"]);
-      expect(request.index).toBe(1);
+      expect(useDecisionsInboxStore.getState().request.question?.questionId).toBe("new");
     });
 
     it("opens a question seen and left when nothing new waits (#17895)", async () => {
@@ -389,14 +394,14 @@ describe("Decisions actions", () => {
         inbox: { ask: null, seen: true, cleared: false },
       });
       await dispatch("decisions.openNextQuestion");
-      expect(opened()).toBe("question");
-      expect(useDecisionsQuestionViewStore.getState().request!.index).toBe(0);
+      expect(opened()).toBe("inbox");
+      expect(useDecisionsInboxStore.getState().request.question?.questionId).toBe("seen");
     });
 
     it("opens an answered question at the follow-up asking for a reply", async () => {
       listed(question("q1", { kind: "waiting", reason: "reply" }, "m-7"));
       await dispatch("decisions.openNextQuestion");
-      expect(useDecisionsQuestionViewStore.getState().request!.threadMessageId).toBe("m-7");
+      expect(useDecisionsInboxStore.getState().request.question?.threadMessageId).toBe("m-7");
     });
 
     it("opens nothing when no question waits on the person", async () => {

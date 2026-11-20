@@ -96,6 +96,7 @@ import {
   ELAPSED_NOTE,
   emptyText,
   expiresSoon,
+  findAsked,
   folds,
   GO_TO_TERMINAL_TEXT,
   goneAsks,
@@ -149,6 +150,7 @@ import {
   HostAttentionStatus,
   useHostAttention,
 } from "./HostAttentionActions";
+import { useThreadMessageScroll } from "./useThreadMessageScroll";
 
 /** A pane's Decisions chip, where the close returns when the inbox was opened from it. */
 const PANE_CHIP = '[data-testid="terminal-decisions-chip"]';
@@ -204,6 +206,13 @@ const SCOPE_OPTIONS: SegmentedRadioOption<InboxScope>[] = [
   { value: "all", label: "All projects" },
   { value: "project", label: "This project" },
 ];
+
+/**
+ * How long a question asked for while a layer over the inbox held the keyboard
+ * waits for that layer to hand it back (the palette closing as it runs the
+ * action), before the row it was going to keeps only its place in view.
+ */
+const LAYER_HANDBACK_MS = 1_000;
 
 type ListRead =
   { state: "loading" } | { state: "failed" } | { state: "listed"; list: DecisionQuestionList };
@@ -1227,11 +1236,17 @@ export function DecisionsInboxDialog() {
     };
   };
 
-  // The question shown sticks to the one chosen, by reference, as the list moves around it.
-  const [choice, setChoice] = useState<(InboxChoice & { seq: number; scope: InboxScope }) | null>(
-    null
-  );
-  const chosen = choice !== null && choice.seq === request.seq ? choice : null;
+  // A question asked for (#18047): on opening, or in this opening while it stays open.
+  const asked = request.question ?? null;
+  const ask = request.ask ?? 0;
+  const viewHostId = currentHostId();
+  // The question shown sticks to the one chosen, by reference, as the list moves around it. A
+  // question asked for while open starts the choice afresh.
+  const [choice, setChoice] = useState<
+    (InboxChoice & { seq: number; scope: InboxScope; ask: number }) | null
+  >(null);
+  const chosen =
+    choice !== null && choice.seq === request.seq && choice.ask === ask ? choice : null;
   // A choice made in the other list keeps its question while this one shows it, but its place
   // was in the other list: nothing here takes that place by index.
   const sameScope = chosen !== null && chosen.scope === scope;
@@ -1239,9 +1254,10 @@ export function DecisionsInboxDialog() {
     groups,
     chosen === null || sameScope ? chosen : { ...chosen, picked: false },
     request.terminalId,
-    currentHostId(),
+    viewHostId,
     windowProject,
-    openGroups
+    openGroups,
+    asked
   );
   const selectedKey = selected === null ? null : referenceKey(selected.reference);
   const drawnAt = selectedKey === null ? -1 : drawnIndexOf(selectedKey);
@@ -1258,31 +1274,45 @@ export function DecisionsInboxDialog() {
     setChoice({
       seq: request.seq,
       scope,
+      ask,
       key: selectedKey,
       index: selectedIndex,
       picked:
         chosen?.picked === true &&
         (chosen.key === selectedKey ? sameScope || drawnAt >= 0 : sameScope && drawn.length > 0),
     });
-    // Newly shown under a shut group can only be the opening pane's own question (rows and Next
-    // question pick drawn ones): it is never hidden, so its group opens for this opening, unless the
-    // person opened or shut that group themselves. One that moves into a shut group while shown,
+    // Newly shown under a shut group can only be the opening pane's own question or one asked for
+    // (#18047) (rows and Next question pick drawn ones): it is never hidden, so its group opens for
+    // this opening, unless the person opened or shut that group themselves; one asked for opens it
+    // even then, since its row takes the keyboard. One that moves into a shut group while shown,
     // cleared, closed or listed under the pane its answer was sent to, leaves the group shut.
     const stayed = chosen !== null && questionOfKey(chosen.key) === questionOfKey(selectedKey);
     const into = stayed ? null : hiddenIn(groups, selectedKey, openGroups);
-    if (into !== null && !foldedByPerson.has(into)) fold(into, true, false);
+    const askedFor =
+      asked !== null && selected !== null && findAsked([selected], asked, viewHostId) !== undefined;
+    if (into !== null && (askedFor || !foldedByPerson.has(into))) fold(into, true, false);
   } else if (selectedKey === null && chosen !== null) {
     // Gone with nothing in its place: a later list starts afresh, rather than reviving it in History.
     setChoice(null);
   }
 
-  // One target per question, so a push that only renews the list's objects
-  // doesn't start the reader's reads over.
-  const [target, setTarget] = useState<{ key: string; target: DecisionQuestionTarget } | null>(
-    null
-  );
-  if (selected !== null && selectedKey !== null && target?.key !== selectedKey) {
-    setTarget({ key: selectedKey, target: referencedQuestion(selected.reference) });
+  const askedShown =
+    asked !== null && selected !== null && findAsked([selected], asked, viewHostId) !== undefined;
+  // One target per question, so a push that only renews the list's objects doesn't start the
+  // reader's reads over. A reply's question asked for while shown does start them over, so a read
+  // begun before the ask, which can predate the follow-up it opens at, never paints.
+  const [target, setTarget] = useState<{
+    key: string;
+    ask: number;
+    target: DecisionQuestionTarget;
+  } | null>(null);
+  const renewsReads = asked?.threadMessageId !== undefined && askedShown;
+  if (
+    selected !== null &&
+    selectedKey !== null &&
+    (target?.key !== selectedKey || (renewsReads && target.ask !== ask))
+  ) {
+    setTarget({ key: selectedKey, ask, target: referencedQuestion(selected.reference) });
   }
   const shownTarget = selectedKey !== null && target?.key === selectedKey ? target.target : null;
   const reader = useDecisionQuestionReader(shownTarget, active);
@@ -1399,7 +1429,7 @@ export function DecisionsInboxDialog() {
   const clearGoneHintId = useId();
   const clearHint = clearText(selectedGroup === "cleared");
   const choose = (key: string) => {
-    setChoice({ seq: request.seq, scope, key, index: drawnIndexOf(key), picked: true });
+    setChoice({ seq: request.seq, scope, ask, key, index: drawnIndexOf(key), picked: true });
   };
   // Sends the keyboard into a question. The one already read takes it at once; another is
   // shown, and the keyboard waits in the pane until it's read (the effect below), since
@@ -1431,18 +1461,27 @@ export function DecisionsInboxDialog() {
   };
 
   // Each look before going elsewhere belongs to the question shown when it
-  // started, in this opening: closing, reopening or choosing another drops it.
+  // started, in this opening: closing, reopening, choosing another or a question
+  // asked for (#18047), even the one shown, drops it.
   const navigation = useRef(0);
   // Losing the way to it drops a look too: a terminal seen to end or restart meanwhile isn't it.
   useEffect(() => {
     navigation.current += 1;
-  }, [isOpen, request.seq, selectedKey, reach]);
+  }, [isOpen, request.seq, selectedKey, reach, ask]);
 
   // A hand-off's landing: once the question it asked for is read, its words or answer take the
   // keyboard, unless the keyboard went somewhere else meanwhile or another question was chosen.
   const readResult = reader.current?.result ?? null;
   const shownRead = reader.current?.result === "read" ? reader.current.question : null;
   useDecisionQuestionSeen(selected, shownRead, active, detailRef);
+  // A reply's notification opens at the follow-up asking for it (#17235), once per question asked
+  // for, while that question is shown and the person hasn't picked another.
+  useThreadMessageScroll(
+    active && askedShown && chosen?.picked !== true ? `${request.seq}:${ask}` : null,
+    asked?.threadMessageId,
+    reader.shownRead,
+    detailRef
+  );
   // Clearing waits while the read on screen predates what the list says it asks now; with
   // no read on screen (one that can't be read, its Host away) it goes by the list alone.
   const clearWaits =
@@ -1560,6 +1599,61 @@ export function DecisionsInboxDialog() {
     if (!useDecisionsInboxStore.getState().isOpen) return;
     detailRef.current?.focus({ preventScroll: true });
   });
+
+  // A question asked for while open takes the keyboard to its row, as an opening does, and so
+  // brings it into view: the row the keyboard was on would keep the list's tab stop otherwise. Only
+  // as it's asked for: one listed later is shown without taking the keyboard from where it is. A
+  // layer over the inbox (a confirmation, the palette closing) keeps the keyboard it holds; the row
+  // is brought into view, and takes the keyboard once the layer hands it back into the inbox soon
+  // after (the palette returning it to where it was opened from). Choosing another question, a
+  // close or another ask meanwhile drops that.
+  const focusedAsk = useRef(ask);
+  useEffect(() => {
+    if (focusedAsk.current === ask) return;
+    focusedAsk.current = ask;
+    const list = listRef.current;
+    if (!isOpen || !askedShown || selectedKey === null || list === null) return;
+    const rowSelector = `[data-inbox-key="${encodeURIComponent(selectedKey)}"]`;
+    const row = list.querySelector<HTMLElement>(rowSelector);
+    if (row === null) return;
+    const active = document.activeElement;
+    const surface = list.closest('[role="dialog"]');
+    if (
+      surface === null ||
+      active === null ||
+      active === document.body ||
+      surface.contains(active)
+    ) {
+      row.focus();
+      return;
+    }
+    row.scrollIntoView({ block: "nearest" });
+    let handOn: ReturnType<typeof setTimeout> | undefined;
+    const onFocusIn = (event: FocusEvent) => {
+      const landed = event.target;
+      if (!(landed instanceof Node) || !surface.contains(landed)) return;
+      stop();
+      // After the focus that landed has run its own handlers, so the list records the move, and
+      // only while it's still there.
+      handOn = setTimeout(() => {
+        if (document.activeElement === landed)
+          list.querySelector<HTMLElement>(rowSelector)?.focus();
+      }, 0);
+    };
+    const expiry = setTimeout(() => stop(), LAYER_HANDBACK_MS);
+    function stop() {
+      document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("pointerdown", stop, true);
+      clearTimeout(expiry);
+    }
+    document.addEventListener("focusin", onFocusIn, true);
+    // A press anywhere is the person taking over: the keyboard stays where it lands.
+    document.addEventListener("pointerdown", stop, true);
+    return () => {
+      stop();
+      clearTimeout(handOn);
+    };
+  }, [ask, isOpen, askedShown, selectedKey]);
 
   // Each question is read from its top, wherever the last one was scrolled to.
   useLayoutEffect(() => {
@@ -1836,6 +1930,7 @@ export function DecisionsInboxDialog() {
                       setChoice({
                         seq: request.seq,
                         scope,
+                        ask,
                         key,
                         index: drawnIndexOf(key),
                         picked: true,

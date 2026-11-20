@@ -11,7 +11,7 @@ import { inboxGroupOf } from "@/components/Decisions/decisionsInboxModel";
 import { readDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { isWaitingOnPerson } from "@shared/utils/decisionWaiting";
 import { actionService } from "@/services/ActionService";
-import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 
 const OFF_REASON = "Decisions is off. Turn it on in Settings > Decisions.";
 const UNKNOWN_REASON = "Decisions hasn't said whether it's on yet.";
@@ -49,9 +49,10 @@ function notRunnableReason(): string | undefined {
 }
 
 /**
- * Opens the oldest question in Needs you, from which the others there can be
- * stepped through, once the inbox is known to hold this window's questions:
- * asked after the list is read, so the answer is the latest before it opens.
+ * Opens the inbox at the oldest question in Needs you (#18047), with the
+ * others there listed beside it, once the inbox is known to hold this
+ * window's questions: asked after the list is read, so the answer is the
+ * latest before it opens.
  */
 async function openNextQuestion(): Promise<void> {
   const list = await decisionsClient.listQuestions();
@@ -64,19 +65,23 @@ async function openNextQuestion(): Promise<void> {
   const next = waiting.find((item) => isWaitingOnPerson(item, now)) ?? waiting[0];
   // Switched off while the list was read: nothing it held is still asked.
   if (next === undefined || !runnable()) return;
-  useDecisionsQuestionViewStore.getState().openReference(
-    waiting.map((item) => item.reference),
-    next.reference,
-    // An answered question back in Needs you opens at the follow-up asking for a reply.
-    next.replyRequest ?? undefined
-  );
+  useDecisionsInboxStore.getState().open({
+    question: {
+      terminalId: next.reference.terminalId,
+      questionId: next.reference.questionId,
+      reference: next.reference,
+      // An answered question back in Needs you opens at the follow-up asking for a reply.
+      ...(next.replyRequest === null ? {} : { threadMessageId: next.replyRequest }),
+    },
+  });
 }
 
 /**
- * The Decisions views (#17236). Both only open a view: answering, declining
- * and cancelling stay with the person's own clicks inside it. In a Remote
- * Host's window each first settles that this computer's inbox lists its
- * Host's questions, and says plainly when it doesn't (#18049).
+ * The Decisions views (#17236). Both only open the inbox, the second at a
+ * question (#18047): answering, declining and cancelling stay with the
+ * person's own clicks inside it. In a Remote Host's window each first settles
+ * that this computer's inbox lists its Host's questions, and says plainly
+ * when it doesn't (#18049).
  */
 export function registerDecisionsActions(actions: ActionRegistry): void {
   actions.set("decisions.openInbox", () => ({
@@ -104,7 +109,7 @@ export function registerDecisionsActions(actions: ActionRegistry): void {
     id: "decisions.openNextQuestion",
     title: "Open next Decisions question",
     description:
-      "Open the oldest Decisions question waiting on the user, from which the others waiting can be stepped through in order. Does nothing when none is waiting. Only opens the view",
+      "Open the Decisions inbox at the oldest question waiting on the user, with the others waiting listed beside it. Does nothing when none is waiting. Only opens the view",
     paletteDescription: "Open the oldest question waiting on you",
     category: "navigation",
     kind: "command",

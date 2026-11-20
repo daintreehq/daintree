@@ -1091,14 +1091,49 @@ export function askedOnHost(item: DecisionQuestionListItem, hostId: string): boo
 }
 
 /**
- * The question the inbox shows: the one chosen while it is still listed, under
- * a shut group too, and even under another pane once its answer was sent there
- * (#18027); for one the person picked that went, the drawn row that took its
- * place, never one a shut group hides (#18023); else the first of the pane that
- * opened the inbox, on the view's own machine (`viewHostId`), in any group;
- * else the first of the window's own project that needs the person (#18051);
- * else the first that still needs something (#18022). Null when nothing does:
- * a Cleared or History question opens only when it's picked.
+ * A question the inbox was asked to show (#18047): by its full reference, or
+ * one of a pane's by its terminal and id. A question's id is its own, so the
+ * pane's row names that question whichever project it was asked in.
+ */
+export interface InboxAsked {
+  terminalId: string;
+  questionId: string;
+  reference?: DecisionQuestionReference;
+}
+
+/**
+ * The listed question `asked` names, in any group; undefined while it isn't
+ * listed. One named by its terminal and id is looked for on the view's own
+ * machine (`viewHostId`), as the opener's pane is.
+ */
+export function findAsked(
+  ordered: readonly DecisionQuestionListItem[],
+  asked: InboxAsked,
+  viewHostId: string = LOCAL_HOST_ID
+): DecisionQuestionListItem | undefined {
+  if (asked.reference !== undefined) {
+    const key = referenceKey(asked.reference);
+    return ordered.find((item) => referenceKey(item.reference) === key);
+  }
+  return ordered.find(
+    (item) =>
+      askedOnHost(item, viewHostId) &&
+      item.reference.terminalId === asked.terminalId &&
+      item.reference.questionId === asked.questionId
+  );
+}
+
+/**
+ * The question the inbox shows: the one the person picked while it is still
+ * listed, under a shut group too, and even under another pane once its answer
+ * was sent there (#18027), or for one that went, the drawn row that took its
+ * place, never one a shut group hides (#18023); else the question it was asked
+ * to show (#18047), in any group, once it is listed; else the one it opened on
+ * by itself while that is still listed; else the first of the pane that opened
+ * the inbox, on the view's own machine (`viewHostId`), in any group; else the
+ * first of the window's own project that needs the person (#18051); else the
+ * first that still needs something (#18022). Null when nothing does: a Cleared
+ * or History question opens only when it's picked or asked for.
  */
 export function resolveSelection(
   groups: readonly InboxGroup[],
@@ -1106,20 +1141,28 @@ export function resolveSelection(
   openerTerminalId: string | null,
   viewHostId: string = LOCAL_HOST_ID,
   windowProject: WindowProject | null = null,
-  open: ReadonlySet<InboxGroupId> = NONE_OPEN
+  open: ReadonlySet<InboxGroupId> = NONE_OPEN,
+  asked: InboxAsked | null = null
 ): DecisionQuestionListItem | null {
   const ordered = groups.flatMap((group) => group.items);
+  let kept: DecisionQuestionListItem | undefined;
   if (chosen !== null) {
     const question = questionOfKey(chosen.key);
-    const kept =
+    kept =
       ordered.find((item) => referenceKey(item.reference) === chosen.key) ??
       ordered.find((item) => questionOfKey(referenceKey(item.reference)) === question);
-    if (kept !== undefined) return kept;
-    const shown = shownItems(groups, open);
-    if (chosen.picked && shown.length > 0) {
-      return shown[Math.min(Math.max(chosen.index, 0), shown.length - 1)]!;
+    if (chosen.picked) {
+      if (kept !== undefined) return kept;
+      const shown = shownItems(groups, open);
+      if (shown.length > 0) return shown[Math.min(Math.max(chosen.index, 0), shown.length - 1)]!;
     }
   }
+  // Ahead of what the inbox chose by itself, so one listed after the opening still takes its place.
+  if (asked !== null) {
+    const found = findAsked(ordered, asked, viewHostId);
+    if (found !== undefined) return found;
+  }
+  if (kept !== undefined) return kept;
   if (openerTerminalId !== null) {
     const own = ordered.find(
       (item) => item.reference.terminalId === openerTerminalId && askedOnHost(item, viewHostId)
