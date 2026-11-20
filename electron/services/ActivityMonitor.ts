@@ -69,6 +69,28 @@ const SIMPLE_COMPLETION_MIN_QUIET_MS = 1500;
 const SIMPLE_SNAPSHOT_SETTLE_MS = 1000;
 /** More rows than any pane has: a viewport read asks for this many and gets them all. */
 const WHOLE_VIEWPORT_ROWS = 1000;
+/** The most rows an input row's block runs to: its frame and the footer rows under it. */
+const DRAWN_COMPOSER_BLOCK_ROWS = 8;
+
+/**
+ * Whether the last block drawn, however many blank rows lie under it, is the
+ * agent's empty input row in its frame with its footer (#18014). Only that
+ * block counts, so a frame left higher up, above a selector or later output,
+ * never does.
+ */
+function endsOnEmptyComposer(viewport: string[], patterns: readonly RegExp[]): boolean {
+  let end = viewport.length;
+  while (end > 0 && viewport[end - 1]!.trim() === "") end--;
+  let start = end;
+  while (
+    start > 0 &&
+    end - start < DRAWN_COMPOSER_BLOCK_ROWS &&
+    viewport[start - 1]!.trim() !== ""
+  ) {
+    start--;
+  }
+  return findEmptyComposerRow(viewport.slice(start, end), patterns) !== undefined;
+}
 const SIMPLE_SNAPSHOT_MIN_INTERVAL_MS = 250;
 // Idle-agent polling backoff (#10906). Once a simple-output agent has settled
 // into idle and stayed silent this long, drop the polling cadence to
@@ -1039,20 +1061,39 @@ export class ActivityMonitor {
     composerRow: number | undefined;
     read: string[];
     rows: number;
+    /** Everything drawn ends on a selector, wherever it stops. */
     drawnSelector: boolean;
+    /** Everything drawn ends on the agent's empty input row, wherever it stops. */
+    drawnComposer: boolean;
   } {
     const rows = Math.max(lines.length, WAITING_REASON_SCAN_LINE_COUNT);
     const wanted = rows + WAITING_REASON_CHECKLIST_ROWS;
     const read =
       this.getVisibleLines && lines.length < wanted ? this.getVisibleLines(wanted) : lines;
-    const composerRow = findEmptyComposerRow(read, this.promptDetectorConfig.promptPatterns);
+    const patterns = this.promptDetectorConfig.promptPatterns;
+    const composerRow = findEmptyComposerRow(read, patterns);
     const reason = classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId);
-    const drawnSelector =
+    let drawnSelector = false;
+    let drawnComposer = false;
+    if (
       (reason === "prompt" || reason === "question") &&
       composerRow === undefined &&
-      this.getVisibleLines !== undefined &&
-      endsOnDrawnSelector(this.getVisibleLines(WHOLE_VIEWPORT_ROWS), this.agentId);
-    return { reason: drawnSelector ? "approval" : reason, composerRow, read, rows, drawnSelector };
+      this.getVisibleLines !== undefined
+    ) {
+      // Fewer rows than were asked for: that read was already the whole viewport.
+      const viewport =
+        read !== lines && read.length < wanted ? read : this.getVisibleLines(WHOLE_VIEWPORT_ROWS);
+      drawnSelector = endsOnDrawnSelector(viewport, this.agentId);
+      drawnComposer = !drawnSelector && endsOnEmptyComposer(viewport, patterns);
+    }
+    return {
+      reason: drawnSelector ? "approval" : reason,
+      composerRow,
+      read,
+      rows,
+      drawnSelector,
+      drawnComposer,
+    };
   }
 
   // An idle agent's reason was read once, when it settled (#16093). A screen
@@ -1094,13 +1135,13 @@ export class ActivityMonitor {
       this.getCursorLine?.() ?? null,
       { allowHistoryScan: true }
     );
-    const { reason, composerRow, read, rows, drawnSelector } = this.readWaitingScreen(
-      lines,
-      promptResult.isPrompt
-    );
+    const { reason, composerRow, read, rows, drawnSelector, drawnComposer } =
+      this.readWaitingScreen(lines, promptResult.isPrompt);
     if (reason === this.idleWaitingReason) return;
+    // A fresh pane draws its input row as high as a dialog it replaced, out of the bottom rows.
     if (
       composerRow === undefined &&
+      !drawnComposer &&
       !(reason === "approval" && (drawnSelector || endsOnChoiceSelector(read, rows, this.agentId)))
     ) {
       return;

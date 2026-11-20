@@ -680,7 +680,8 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
         .join("");
     await new Promise((r) => setTimeout(r, 15_000));
     expect(decisionBlockStarts(received(), id)).toBe(0);
-    expect(received()).not.toContain("\r");
+    // A cooked tty can hand the fake an Enter as either.
+    expect(received()).not.toMatch(/[\r\n]/);
 
     // Someone at the Host confirms it, and the agent comes to its prompt: the notice goes into
     // that conversation once.

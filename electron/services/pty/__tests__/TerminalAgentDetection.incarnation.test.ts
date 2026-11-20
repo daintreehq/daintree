@@ -186,8 +186,20 @@ describe("agent incarnation across a same-pty relaunch", () => {
     expect(observed).toEqual([{ launchGeneration: 4, agentIncarnation: 1 }]);
   });
 
-  it("leaves a launched agent's first prompt to be seen, and awaits each new run's (#18014)", () => {
-    const terminal = { ...terminalInfo(), promptUnseen: true as const };
+  it.each([
+    ["not yet seen", true],
+    ["already seen", undefined],
+  ] as const)(
+    "leaves a launched agent's first prompt as it was when detection confirms it: %s (#18014)",
+    (_label, promptUnseen) => {
+      const terminal: TerminalInfo = { ...terminalInfo(), promptUnseen };
+      handleAgentDetection(host(terminal), claudeRunning, SPAWNED_AT);
+      expect(terminal.promptUnseen).toBe(promptUnseen);
+    }
+  );
+
+  it("awaits the first prompt of each new run in the same pty (#18014)", () => {
+    const terminal = terminalInfo();
     const h = host(terminal);
     const codexRunning: DetectionResult = {
       ...claudeRunning,
@@ -195,9 +207,6 @@ describe("agent incarnation across a same-pty relaunch", () => {
       processIconId: "codex",
       processName: "codex",
     };
-
-    // Detection confirming the launch hint keeps whatever its run has shown.
-    delete terminal.promptUnseen;
     handleAgentDetection(h, claudeRunning, SPAWNED_AT);
     expect(terminal.promptUnseen).toBeUndefined();
 
@@ -212,18 +221,25 @@ describe("agent incarnation across a same-pty relaunch", () => {
     expect(terminal.promptUnseen).toBe(true);
   });
 
-  it("awaits the first prompt of an agent started by hand in a plain shell (#18014)", () => {
-    const terminal = {
-      ...terminalInfo(),
-      launchAgentId: undefined,
-      agentState: undefined,
-      analysisEnabled: false,
-    } as unknown as TerminalInfo;
-    const h = { ...host(terminal), hasActivityMonitor: false };
+  it.each([
+    ["no state yet", undefined],
+    // A title report can mark the shell working before detection catches up.
+    ["a state a title report set first", "working"],
+  ] as const)(
+    "awaits the first prompt of an agent started by hand in a plain shell, with %s (#18014)",
+    (_label, agentState) => {
+      const terminal = {
+        ...terminalInfo(),
+        launchAgentId: undefined,
+        agentState,
+        analysisEnabled: false,
+      } as unknown as TerminalInfo;
+      const h = { ...host(terminal), hasActivityMonitor: false };
 
-    handleAgentDetection(h, claudeRunning, SPAWNED_AT);
+      handleAgentDetection(h, claudeRunning, SPAWNED_AT);
 
-    expect(terminal.agentState).toBe("idle");
-    expect(terminal.promptUnseen).toBe(true);
-  });
+      expect(terminal.agentState).toBe(agentState ?? "idle");
+      expect(terminal.promptUnseen).toBe(true);
+    }
+  );
 });

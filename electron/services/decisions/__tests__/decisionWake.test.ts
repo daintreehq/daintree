@@ -212,6 +212,13 @@ describe("createDecisionWake", () => {
       { agentState: "working", promptUnseen: true },
       "working",
     ],
+    ["at a prompt read before its run began", {}, { promptUnseen: true }, "not-at-prompt"],
+    [
+      "at a question read before its run began",
+      {},
+      { waitingReason: "question", promptUnseen: true },
+      "not-at-prompt",
+    ],
   ] as const)("holds while the pane is %s", (_label, opts, patch, reason) => {
     const value = {
       ...sources().value,

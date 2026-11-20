@@ -65,6 +65,7 @@ interface Internals {
     agentIncarnation?: number;
     agentSessionId?: string;
     updateInstalled?: { observedAt: number; namesRestart: boolean };
+    promptUnseen?: true;
   };
 }
 
@@ -331,6 +332,25 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     );
     expect(launched.getPublicState()).toMatchObject({ agentState: "idle", promptUnseen: true });
     expect(createTerminal().getPublicState().promptUnseen).toBeUndefined();
+  });
+
+  it("awaits the prompt again when Claude's process is replaced without a shell between (#18014)", () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    const spawnedAt = terminal.getPublicState().spawnedAt;
+    const observe = (pid: number) =>
+      terminal.handleAgentProcessObservation(
+        { agentType: "claude", command: "claude", pid },
+        spawnedAt
+      );
+
+    observe(4242);
+    observe(4242);
+    expect(info(terminal).promptUnseen).toBeUndefined();
+
+    // `/restart`: the new process opens on its own startup screen.
+    observe(5151);
+    expect(info(terminal).promptUnseen).toBe(true);
   });
 
   it("queues a guarded submission behind the turn of a CLI that queues mid-turn input", async () => {
@@ -616,6 +636,15 @@ describe("TerminalProcess settled-prompt-exact guard, widened for a Decisions an
     ],
     ["at an approval", { waitingReason: "approval" as const }],
     ["at an error", { waitingReason: "error" as const }],
+    // A resumed Claude drawing its trust prompt before any prompt (#18014).
+    [
+      "while its run starts up, its prompt not yet seen",
+      { agentState: "working" as const, promptUnseen: true as const },
+    ],
+    [
+      "at a question read before its run began",
+      { waitingReason: "question" as const, promptUnseen: true as const },
+    ],
   ])("refuses it %s", async (_label, patch) => {
     const { phase } = await answerInto(patch);
     expect(phase).toBe("cancelled");

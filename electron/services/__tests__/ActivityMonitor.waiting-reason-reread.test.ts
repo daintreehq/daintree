@@ -410,4 +410,34 @@ describe("ActivityMonitor and a selector drawn short of the pane's bottom (#1801
     expect(monitor.getState()).toBe("idle");
     expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
   });
+
+  it("re-reads its prompt once the trust prompt gives way to its empty input row, drawn as high", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "fresh-answered-quiet",
+      fresh(TRUST),
+      "approval"
+    );
+
+    // Answered, and redrawn without going busy: the input row is where the dialog was.
+    monitor.onData("composer");
+    show(fresh(["● Resumed.", "", RULE, INPUT_ROW, RULE, FOOTER]));
+    vi.advanceTimersByTime(5000);
+
+    expect(reasonUpdates(onStateChange)).toEqual(["prompt"]);
+  });
+
+  it("never re-reads a prompt off an input row left above a newer dialog", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "fresh-old-composer",
+      fresh(TRUST),
+      "approval"
+    );
+
+    // A layout no selector check knows, under a frame it left behind.
+    monitor.onData("dialog under an old composer");
+    show(fresh([RULE, INPUT_ROW, RULE, "", " Pick one:", "   a) keep", "   b) drop"]));
+    vi.advanceTimersByTime(5000);
+
+    expect(reasonUpdates(onStateChange)).toEqual([]);
+  });
 });

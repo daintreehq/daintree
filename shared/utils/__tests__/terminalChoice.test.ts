@@ -631,9 +631,9 @@ describe("endsOnDrawnChoiceDialog (#18014)", () => {
     expect(endsOnDrawnChoiceDialog(pane(composer))).toBe(false);
     expect(endsOnDrawnChoiceDialog(pane(["› ", "", "  100% context left"]))).toBe(false);
     // An unnumbered highlight needs a hint naming what its keys do.
-    expect(endsOnDrawnChoiceDialog(pane(["> quoted line", "  more prose", "", " esc"]))).toBe(
-      false
-    );
+    const unnumbered = [" ❯ No, exit", "   Yes, I trust this folder", ""];
+    expect(endsOnDrawnChoiceDialog(pane([...unnumbered, " esc · enter"]))).toBe(false);
+    expect(endsOnDrawnChoiceDialog(pane([...unnumbered, " esc to cancel"]))).toBe(true);
     expect(endsOnDrawnChoiceDialog(pane([]))).toBe(false);
   });
 });

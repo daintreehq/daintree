@@ -576,13 +576,14 @@ describe("AgentStateService", () => {
     });
 
     it("takes a selector re-read as its prompt, without the agent going busy", () => {
-      const { service, terminal } = starting();
+      const { service, terminal, gateAtEvent } = starting();
       service.updateAgentState(terminal, { type: "busy" });
       service.updateAgentState(terminal, { type: "prompt" }, "heuristic", 0.9, "approval");
 
       service.updateWaitingReason(terminal, "prompt", Date.now() + 1_000);
 
       expect(terminal.promptUnseen).toBeUndefined();
+      expect(gateAtEvent.at(-1)).toEqual({ kind: "ready" });
     });
 
     it("awaits the prompt again for a run that respawns in the same PTY", () => {

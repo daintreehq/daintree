@@ -120,8 +120,10 @@ export function handleAgentDetection(
         if (terminal.agentState === undefined) {
           terminal.agentState = "idle";
           terminal.lastStateChange = Date.now();
-          terminal.promptUnseen = true;
         }
+        // Whatever the record already says: a title report can mark the shell
+        // working before detection catches up, and none of it is this run's prompt.
+        terminal.promptUnseen = true;
         terminal.analysisEnabled = true;
         host.startActivityMonitor();
       }
