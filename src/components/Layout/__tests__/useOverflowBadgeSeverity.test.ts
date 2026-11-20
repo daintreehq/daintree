@@ -179,6 +179,18 @@ describe("useOverflowBadgeSeverity", () => {
       act(() => useDecisionsInboxStore.setState({ isOpen: false }));
     }
     expect(mounted.result.current).toBe("warning");
+
+    // One mount, the overflow ids held: only the stopped count moves the result.
+    const live = renderHook(
+      ({ stopped }: { stopped: number }) =>
+        useOverflowBadgeSeverity(folded, 0, 0, false, false, 0, stopped),
+      { initialProps: { stopped: 0 } }
+    );
+    expect(live.result.current).toBeNull();
+    live.rerender({ stopped: 1 });
+    expect(live.result.current).toBe("warning");
+    live.rerender({ stopped: 0 });
+    expect(live.result.current).toBeNull();
   });
 
   it("returns critical when problems is overflowed and errorCount > 0", () => {

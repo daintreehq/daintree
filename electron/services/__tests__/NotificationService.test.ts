@@ -119,6 +119,7 @@ import { notificationService, type NotificationState } from "../NotificationServ
 import { setDecisionQuestions } from "../decisionsQuestionList.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
 import { needsPerson } from "../../../shared/utils/decisionWaiting.js";
+import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import type {
   DecisionQuestionListItem,
   DecisionQuestionStanding,
@@ -1380,10 +1381,15 @@ describe("NotificationService", () => {
       notificationService.initialize(createRegistryMock([win]) as never);
       await questionsLoaded();
 
+      // terminal-b's one question holds an answer and two follow-ups delivery stopped on: one pane.
+      const held = {
+        ...question("project-11", "terminal-b", stopped, "q-3"),
+        stall: { answerRevision: 1, followUpIds: ["f-1", "f-2"], reason: "pane_gone" },
+      };
       setDecisionQuestions([
         question("project-11", "terminal-a", open, "q-1"),
         question("project-11", "terminal-a", stopped, "q-2"),
-        question("project-11", "terminal-b", stopped, "q-3"),
+        held,
       ]);
       notificationService.updateNotifications(11, waitingIn("terminal-a"));
       vi.advanceTimersByTime(301);
@@ -1391,9 +1397,77 @@ describe("NotificationService", () => {
       expect(win.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
 
-      // The person settled the stopped deliveries: only the question to answer is left.
-      setDecisionQuestions([question("project-11", "terminal-a", open, "q-1")]);
+      // The person settled the stopped deliveries, the same questions now settled.
+      const handled: DecisionQuestionStanding = {
+        kind: "settled",
+        outcome: "answered",
+        handled: true,
+      };
+      setDecisionQuestions([
+        question("project-11", "terminal-a", open, "q-1"),
+        question("project-11", "terminal-a", handled, "q-2"),
+        { ...held, standing: handled, stall: null },
+      ]);
       expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("counts a delivery that may or may not have been typed in as stopped (#18045)", async () => {
+      const win = windowWithViews(11);
+      notificationService.initialize(createRegistryMock([win]) as never);
+      await questionsLoaded();
+
+      setDecisionQuestions([
+        question("project-11", "terminal-a", {
+          kind: "needs-attention",
+          deliveryStatus: "delivery-uncertain",
+        }),
+      ]);
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("moves a stopped delivery's title count with the views of its project, keeping it in the Dock (#18045)", async () => {
+      electronMock.webContentsById.set(12, { id: 12, isDestroyed: () => false, send: vi.fn() });
+      const win = windowWithViews(11, 12);
+      notificationService.initialize(createRegistryMock([win]) as never);
+      await questionsLoaded();
+
+      setDecisionQuestions([question("project-12", "terminal-a", stopped)]);
+      expect(win.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+
+      // The project's cached view is evicted; the question list doesn't move.
+      win.ownerIds.splice(win.ownerIds.indexOf(12), 1);
+      notifyProjectPresenceChanged();
+      await Promise.resolve();
+
+      expect(win.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("keys an enrolled Host's question by its host, apart from a local project at the same path (#18045)", async () => {
+      const local = windowWithViews(11);
+      const remote = windowWithViews(21);
+      local.viewProjects[11] = "same-path";
+      remote.viewProjects[21] = toHostScopedKey("studio", "same-path");
+      notificationService.initialize(createRegistryMock([local, remote]) as never);
+      await questionsLoaded();
+
+      const remoteHost = { hostId: "studio", name: "Studio", connected: true };
+      setDecisionQuestions([
+        { ...question("same-path", "terminal-a", stopped), remoteHost },
+        question("same-path", "terminal-a", open),
+      ]);
+
+      // The same project and terminal ids on two machines are two panes, each in its own window.
+      expect(local.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(remote.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+      expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(2);
+
+      setDecisionQuestions([{ ...question("same-path", "terminal-a", stopped), remoteHost }]);
+      expect(local.setTitle).toHaveBeenLastCalledWith("Daintree");
+      expect(remote.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
     });
 

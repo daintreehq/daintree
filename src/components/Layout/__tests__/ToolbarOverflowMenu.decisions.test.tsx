@@ -17,16 +17,24 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("../LinksLauncher", () => ({ LinksLauncherOverflowItems: () => null }));
 
 const { OverflowMenu } = await import("../ToolbarOverflowMenu");
+type OverflowBadgeSeverity = import("../useOverflowBadgeSeverity").OverflowBadgeSeverity;
 const { useDecisionsInboxStore } = await import("@/store/decisionsInboxStore");
 
-function renderMenu(decisionsWaitingCount: number, openInbox = vi.fn(), decisionsStoppedCount = 0) {
+function renderMenu(
+  decisionsWaitingCount: number,
+  openInbox = vi.fn(),
+  decisionsStoppedCount = 0,
+  severity: OverflowBadgeSeverity = decisionsWaitingCount > 0
+    ? "waiting"
+    : decisionsStoppedCount > 0
+      ? "warning"
+      : null
+) {
   const utils = render(
     <OverflowMenu
       overflowIds={["decisions-inbox"]}
       side="right"
-      severity={
-        decisionsWaitingCount > 0 ? "waiting" : decisionsStoppedCount > 0 ? "warning" : null
-      }
+      severity={severity}
       errorCount={0}
       notificationUnreadCount={0}
       canopyUrgentCount={0}
@@ -56,6 +64,13 @@ function renderMenu(decisionsWaitingCount: number, openInbox = vi.fn(), decision
   return { ...utils, trigger, openInbox };
 }
 
+/** The trigger's second pip: the stopped deliveries' warning, when a louder mark takes the corner. */
+function warningOnTrigger(utils: ReturnType<typeof renderMenu>) {
+  return utils.trigger
+    .querySelector('[data-testid="toolbar-overflow-decisions-warning"]')!
+    .getAttribute("data-visible");
+}
+
 async function openMenu(utils: ReturnType<typeof renderMenu>) {
   fireEvent.pointerDown(utils.trigger, { button: 0, pointerType: "mouse" });
   return utils.findByRole("menu");
@@ -78,6 +93,10 @@ describe("the Decisions inbox button in the overflow menu", () => {
     });
     // The count trails the row, as the visible button's badge carries it.
     expect(row.lastElementChild?.textContent).toBe("2");
+    // The waiting ring alone, no warning beside it.
+    const pips = [...row.querySelectorAll(".toolbar-menu-pip")];
+    expect(pips.map((pip) => pip.getAttribute("data-pip"))).toEqual(["waiting"]);
+    expect(warningOnTrigger(utils)).toBe("false");
   });
 
   it("says nothing more with no question waiting", async () => {
@@ -112,6 +131,29 @@ describe("the Decisions inbox button in the overflow menu", () => {
     expect(row.textContent).toBe("Decisions inbox — 1 delivery stopped");
   });
 
+  it("names plural stopped deliveries alone", async () => {
+    const utils = renderMenu(0, vi.fn(), 2);
+    expect(utils.trigger.getAttribute("aria-label")).toBe(
+      "More toolbar items — 1 hidden, 2 deliveries stopped"
+    );
+    // The trigger's own mark is the warning, so it needs no second one.
+    expect(warningOnTrigger(utils)).toBe("false");
+    const menu = await openMenu(utils);
+    const row = within(menu).getByRole("menuitem", {
+      name: /^Decisions inbox\s*— 2 deliveries stopped$/,
+    });
+    expect(row.querySelectorAll(".toolbar-menu-pip").length).toBe(1);
+    expect(row.textContent).toBe("Decisions inbox — 2 deliveries stopped");
+  });
+
+  it("keeps the warning on the trigger when a louder folded mark takes its corner", () => {
+    expect(warningOnTrigger(renderMenu(2, vi.fn(), 1))).toBe("true");
+    cleanup();
+    expect(warningOnTrigger(renderMenu(0, vi.fn(), 1, "critical"))).toBe("true");
+    cleanup();
+    expect(warningOnTrigger(renderMenu(0, vi.fn(), 0, "critical"))).toBe("false");
+  });
+
   it("marks both on the row's glyph when questions wait and a delivery stopped", async () => {
     const utils = renderMenu(2, vi.fn(), 3);
     expect(utils.trigger.getAttribute("aria-label")).toBe(
@@ -124,17 +166,22 @@ describe("the Decisions inbox button in the overflow menu", () => {
     const pips = [...row.querySelectorAll(".toolbar-menu-pip")];
     expect(pips.map((pip) => pip.getAttribute("data-pip"))).toEqual(["waiting", null]);
     expect(pips[1]!.getAttribute("data-badge-color")).toBe("warning");
+    // Opposite corners of the glyph: the ring on top, the warning below.
+    expect(pips[0]!.className).toContain("-top-0.5");
+    expect(pips[1]!.className).toContain("-bottom-0.5");
     // The count is the questions' alone.
     expect(row.lastElementChild?.textContent).toBe("2");
   });
 
-  it("stands the warning down while the inbox is open", async () => {
+  it("stands the warning down while the inbox is open, with questions waiting too", async () => {
     useDecisionsInboxStore.setState({ isOpen: true });
-    const utils = renderMenu(0, vi.fn(), 1);
+    const utils = renderMenu(2, vi.fn(), 1, "critical");
     expect(utils.trigger.getAttribute("aria-label")).toBe("More toolbar items — 1 hidden");
+    expect(warningOnTrigger(utils)).toBe("false");
     const menu = await openMenu(utils);
     const row = within(menu).getByRole("menuitem", { name: /^Decisions inbox/ });
     expect(row.querySelector(".toolbar-menu-pip")).toBeNull();
+    expect(row.textContent).toBe("Decisions inbox");
   });
 
   it("opens the inbox from its row", async () => {

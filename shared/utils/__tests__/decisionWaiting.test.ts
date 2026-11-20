@@ -88,7 +88,7 @@ describe("stoppedDeliveries (#18045)", () => {
   it("counts the answer and each follow-up delivery stopped on", () => {
     expect(stoppedDeliveries({ standing: stopped, stall: stall(2, ["f1", "f2"]) })).toBe(3);
     // Revision 0 is an answer like any other.
-    expect(stoppedDeliveries({ standing: stopped, stall: stall(0, []) })).toBe(1);
+    expect(stoppedDeliveries({ standing: stopped, stall: stall(0, ["f1"]) })).toBe(2);
     expect(stoppedDeliveries({ standing: stopped, stall: stall(null, ["f1", "f2"]) })).toBe(2);
   });
 
@@ -99,7 +99,7 @@ describe("stoppedDeliveries (#18045)", () => {
   });
 
   it("counts nothing for a question not waiting on a stopped delivery", () => {
-    for (const standing of STANDINGS.filter((each) => !deliveryNeedsPerson(each))) {
+    for (const standing of STANDINGS.filter((each) => each.kind !== "needs-attention")) {
       expect(stoppedDeliveries({ standing, stall: stall(1, ["f1"]) }), standing.kind).toBe(0);
     }
   });
@@ -114,11 +114,17 @@ describe("needsPerson (#18045)", () => {
       { kind: "needs-attention", deliveryStatus: "needs-attention" },
       { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
     ]);
-    // A question to answer the person has already seen still leaves nothing to do.
+    // A question to answer the person has already seen or cleared leaves nothing to do.
     expect(
       needsPerson({
         standing: { kind: "queued" },
         inbox: { ask: null, seen: true, cleared: false },
+      })
+    ).toBe(false);
+    expect(
+      needsPerson({
+        standing: { kind: "queued" },
+        inbox: { ask: null, seen: false, cleared: true },
       })
     ).toBe(false);
   });
@@ -134,5 +140,9 @@ describe("needsPerson (#18045)", () => {
     expect(needsPerson({ standing: { kind: "waiting", reason: "open" }, expiresAt }, now)).toBe(
       false
     );
+    const ahead = "2026-11-20T12:01:00.000Z";
+    expect(
+      needsPerson({ standing: { kind: "waiting", reason: "open" }, expiresAt: ahead }, now)
+    ).toBe(true);
   });
 });

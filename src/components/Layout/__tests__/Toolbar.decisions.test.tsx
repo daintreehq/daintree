@@ -236,14 +236,17 @@ describe("Toolbar's Decisions inbox button", () => {
     const badge = button.querySelector(".toolbar-count")!;
     expect(badge.getAttribute("data-visible")).toBe("true");
     expect(badge.textContent).toBe("3");
+    const warning = button.querySelector('[data-testid="decisions-stopped-badge"]')!;
+    expect(warning.getAttribute("data-visible")).toBe("true");
 
-    // One answered: it leaves the count.
+    // One answered: it leaves the count, and with no stop left the warning goes.
     await listQuestions(
       2,
       { kind: "settled", outcome: "answered", handled: false },
       { kind: "waiting", reason: "reply" }
     );
     expect(inboxButton()!.getAttribute("aria-label")).toBe("Decisions inbox — 1 question waiting");
+    expect(warning.getAttribute("data-visible")).toBe("false");
 
     await listQuestions(3);
     expect(inboxButton()!.getAttribute("aria-label")).toBe("Decisions inbox");
@@ -282,6 +285,8 @@ describe("Toolbar's Decisions inbox button", () => {
     );
     expect(inboxButton()!.querySelector(".toolbar-count")!.textContent).toBe("1");
     expect(warning.getAttribute("data-visible")).toBe("true");
+    // The count's top corner is the questions'; the warning takes the bottom one.
+    expect(warning.getAttribute("data-pip-corner")).toBe("bottom");
 
     // Open, the inbox shows them itself, and both marks stand down.
     act(() => useDecisionsInboxStore.setState({ isOpen: true }));
@@ -436,5 +441,95 @@ describe("Toolbar's Decisions inbox button", () => {
       for (const id of registry.keys()) actionService.unregister(id);
       useDecisionsInboxStore.setState({ isOpen: inboxBefore.isOpen, request: inboxBefore.request });
     }
+  });
+});
+
+describe("Toolbar's Decisions inbox button folded into `…` (#18045)", () => {
+  /** The right-hand row's trigger, which the inbox button folds into. */
+  const trigger = () =>
+    document.querySelector<HTMLElement>(
+      '[data-toolbar-overflow-trigger][data-toolbar-overflow-side="right"]'
+    )!;
+  const triggerBadge = () => trigger().querySelector('[data-testid="toolbar-overflow-badge"]')!;
+  const triggerWarning = () =>
+    trigger().querySelector('[data-testid="toolbar-overflow-decisions-warning"]')!;
+  const folded = () => slot()?.getAttribute("aria-hidden") === "true";
+
+  /** Every button 40px wide, and the right-hand row `rowWidth` wide. */
+  function squeezeRightRow(rowWidth: number): void {
+    vi.restoreAllMocks();
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element
+    ) {
+      const right =
+        this.classList.contains("toolbar-measured-row") && this.classList.contains("justify-end");
+      const width = this.classList.contains("toolbar-divider") ? 1 : right ? rowWidth : 5000;
+      return {
+        width,
+        height: 40,
+        top: 0,
+        left: 0,
+        right: width,
+        bottom: 40,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      };
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.hasAttribute("data-toolbar-button-id") ? 40 : 0;
+    });
+  }
+
+  afterEach(() => {
+    useDecisionsInboxStore.setState({ isOpen: false });
+  });
+
+  it("carries the warning to the trigger, and keeps it beside a louder waiting mark", async () => {
+    squeezeRightRow(1);
+    await mount();
+    await reportStatus("connected");
+    expect(folded()).toBe(true);
+    expect(trigger().getAttribute("aria-label")).not.toMatch(/question|delivery/);
+
+    await listQuestions(1, { kind: "needs-attention", deliveryStatus: "needs-attention" });
+    expect(trigger().getAttribute("aria-label")).toMatch(/, 1 delivery stopped(,|$)/);
+    expect(triggerBadge().getAttribute("data-severity")).toBe("warning");
+    expect(triggerBadge().getAttribute("data-visible")).toBe("true");
+    expect(triggerWarning().getAttribute("data-visible")).toBe("false");
+
+    await listQuestions(
+      2,
+      { kind: "waiting", reason: "open" },
+      { kind: "needs-attention", deliveryStatus: "needs-attention" }
+    );
+    expect(trigger().getAttribute("aria-label")).toMatch(
+      /, 1 question waiting, 1 delivery stopped(,|$)/
+    );
+    expect(triggerBadge().getAttribute("data-severity")).toBe("waiting");
+    expect(triggerWarning().getAttribute("data-visible")).toBe("true");
+
+    // The inbox open shows them itself: the trigger says nothing of them.
+    act(() => useDecisionsInboxStore.setState({ isOpen: true }));
+    await settle();
+    expect(trigger().getAttribute("aria-label")).not.toMatch(/question|delivery/);
+    expect(triggerWarning().getAttribute("data-visible")).toBe("false");
+  });
+
+  it("holds its place on a squeezed strip while a delivery stopped, as a waiting question does", async () => {
+    // Room for two buttons: the voice slot's, which outranks every signal, and one more.
+    squeezeRightRow(82);
+    await mount();
+    await reportStatus("connected");
+    await listQuestions(1);
+    expect(folded()).toBe(true);
+
+    await listQuestions(2, { kind: "needs-attention", deliveryStatus: "needs-attention" });
+    expect(folded()).toBe(false);
+
+    await listQuestions(3);
+    expect(folded()).toBe(true);
   });
 });

@@ -296,6 +296,14 @@ export function OverflowMenu({
     }
     return null;
   };
+  // A stopped delivery is a persistent warning (#18045): when a louder folded
+  // mark takes the trigger's one corner, it keeps the bottom one, as it does on
+  // the button itself.
+  const decisionsWarningMasked =
+    overflowIds.includes("decisions-inbox") &&
+    decisionsStoppedCount > 0 &&
+    !decisionsInboxOpen &&
+    (severity === "critical" || severity === "waiting");
   // The trigger's own words: counts only. The watcher's wording already
   // arrives with the side's observations, so it is never said twice.
   const observations: string[] = [];
@@ -697,6 +705,14 @@ export function OverflowMenu({
                       data-severity={severity}
                       data-visible={severity !== null && !open}
                       className="toolbar-pip toolbar-overflow-badge toolbar-badge pointer-events-none"
+                    />
+                    <span
+                      aria-hidden="true"
+                      data-testid="toolbar-overflow-decisions-warning"
+                      data-visible={decisionsWarningMasked && !open}
+                      data-badge-color="warning"
+                      data-pip-corner="bottom"
+                      className="toolbar-pip toolbar-badge bg-status-warning pointer-events-none"
                     />
                   </span>
                 </Button>
