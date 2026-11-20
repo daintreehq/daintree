@@ -139,6 +139,7 @@ describe("submit guards (#16015)", () => {
     send({ kind: "settled-prompt-exact", agentId: "acme-agent" });
     send({ kind: "settled-prompt-exact", agentId: "" });
     send({ kind: "settled-prompt-exact", agentId: 7 });
+    send({ kind: "settled-prompt-exact", agentId: null });
 
     const refusing = { kind: "settled-prompt-exact", agentIncarnation: -1 };
     expect(ptyManager.submit.mock.calls.map((call) => call[4])).toEqual([
@@ -159,6 +160,7 @@ describe("submit guards (#16015)", () => {
       refusing,
       { kind: "settled-prompt-exact", agentIncarnation: 2, agentId: "claude" },
       { kind: "settled-prompt-exact", agentId: "acme-agent" },
+      refusing,
       refusing,
       refusing,
     ]);

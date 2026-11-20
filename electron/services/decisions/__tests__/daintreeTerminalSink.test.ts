@@ -735,8 +735,10 @@ describe("DaintreeTerminalSink", () => {
 
       it("never types a batch into a pane another kind took from one of its askers, a plugin asker credited to that agent with it", async () => {
         const h = sessionless();
-        // The plugin's process was detected as the claude that left, so its run is gone too.
-        h.origins.set(Q2, { ...SESSIONLESS, agent_kind: "acme-agent" });
+        // The plugin's process was detected as the claude that left, so its run is gone too. Its
+        // block comes first, so the asker that tells is not the first one read.
+        h.origins.set(Q1, { ...SESSIONLESS, agent_kind: "acme-agent" });
+        h.origins.set(Q2, { ...SESSIONLESS, agent_kind: "claude" });
         const batch = () => notice({}, { questionId: Q2, injectionId: I2 });
 
         h.patch({ detectedAgentId: "codex" });
