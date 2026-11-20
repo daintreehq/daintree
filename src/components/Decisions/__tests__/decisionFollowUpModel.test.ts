@@ -234,13 +234,13 @@ describe("what the composer says", () => {
       )
     ).toMatch(/couldn't be typed in/);
     // Its terminal may be gone: the way out is the inbox, never that terminal's menu.
-    expect(
-      followUpProgressText(
-        sent,
-        { thread: [message({ from: "person", deliveryStatus: "needs-attention" })] },
-        "m1"
-      )
-    ).not.toMatch(/terminal's/);
+    const held = followUpProgressText(
+      sent,
+      { thread: [message({ from: "person", deliveryStatus: "needs-attention" })] },
+      "m1"
+    );
+    expect(held).toMatch(/under Needs attention in the Decisions inbox/);
+    expect(held).not.toMatch(/terminal's/);
     // Withdrawn with its question, or handled: kept in the thread, never typed.
     expect(
       followUpProgressText(

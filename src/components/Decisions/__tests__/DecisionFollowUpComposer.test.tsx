@@ -1168,10 +1168,27 @@ describe("declining an agent's reply request (#18030)", () => {
 
     await pushList(listOf(HANDLED, 3));
     await waitFor(() => expect(declineButton().getAttribute("aria-disabled")).toBeNull());
+    // The confirmation the stall closed is gone for good: only a new press asks again.
+    await act(async () => {});
+    expect(screen.queryByText(TITLE)).toBeNull();
     await confirmOpen();
     fireEvent.click(screen.getByRole("button", { name: "Send decline" }));
     await waitFor(() => expect(sendFollowUp).toHaveBeenCalledTimes(1));
     expect(sendFollowUp.mock.calls[0]![0].text).toBe(DECLINE_REPLY_TEXT);
+  });
+
+  it("sends a lost decline again under the same id while its request still stands", async () => {
+    questions = { q1: asked(agentAsks("m_agent_1")) };
+    sendFollowUp.mockRejectedValueOnce(new Error("link dropped"));
+    await openOn("q1");
+    await confirmOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Send decline" }));
+
+    await waitFor(() => expect(sendFollowUp).toHaveBeenCalledTimes(2));
+    const [first, second] = sendFollowUp.mock.calls.map(([payload]) => payload);
+    expect(second).toEqual(first);
+    expect(second!.text).toBe(DECLINE_REPLY_TEXT);
+    await waitFor(() => expect(status()).toBe("Follow-up sent"));
   });
 
   it("never sends a lost decline again once the request it declined was replaced", async () => {

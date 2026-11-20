@@ -127,6 +127,23 @@ function hold(key: string, generation: number, reason: FollowUpHold): void {
 }
 
 /**
+ * Follow-up ids with a send to main not yet settled, by count. One past its
+ * deadline may still commit, so a decline's id is never given up while one is out.
+ */
+const sendsOut = new Map<string, number>();
+
+function trackSend<T>(messageId: string, sending: Promise<T>): Promise<T> {
+  sendsOut.set(messageId, (sendsOut.get(messageId) ?? 0) + 1);
+  const settled = () => {
+    const left = (sendsOut.get(messageId) ?? 1) - 1;
+    if (left > 0) sendsOut.set(messageId, left);
+    else sendsOut.delete(messageId);
+  };
+  sending.then(settled, settled);
+  return sending;
+}
+
+/**
  * Hands the claimed submission to main to sign, as it was built: same words,
  * same id. Resolves `lost` when the reply never came back, or when main's
  * connection ended under it, which can leave it committed: either way its
@@ -137,7 +154,9 @@ async function submitOnce(key: string, claim: Claim): Promise<"replied" | "lost"
   if (submission === null) return "gone";
   let result: DecisionQuestionFollowUpResult;
   try {
-    result = await withDeadline(() => decisionsClient.sendFollowUp(submission.payload));
+    result = await withDeadline(() =>
+      trackSend(claim.messageId, decisionsClient.sendFollowUp(submission.payload))
+    );
   } catch {
     return "lost";
   }
@@ -231,8 +250,10 @@ async function follow(key: string, claim: Claim, retry: boolean): Promise<void> 
       return;
     }
     // A decline goes again only for the request it was confirmed for, never one that replaced it.
+    // One whose send is still out may yet land: its id stays, and Retry reads it again.
     if (!stillDeclinable(fresh.question, submission.declines)) {
-      drop(key, claim, "request-moved");
+      if (sendsOut.has(claim.messageId)) setPhase(key, claim, { kind: "lost" });
+      else drop(key, claim, "request-moved");
       return;
     }
     updateClaimed(key, claim, (current, record) => ({

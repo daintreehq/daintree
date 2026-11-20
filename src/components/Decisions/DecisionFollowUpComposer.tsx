@@ -126,6 +126,11 @@ export function DecisionFollowUpComposer({
     confirming.key === key &&
     confirming.requestId === declinable.messageId;
   const [declining, setDeclining] = useState(false);
+  // Closed by anything but the person (a stall, the surface closing, the request moving): let go,
+  // so it never reopens by itself.
+  useEffect(() => {
+    if (!confirmOpen && confirming !== null) setConfirming(null);
+  }, [confirmOpen, confirming]);
   const hintId = useId();
   const pausedId = useId();
   const statusRef = useRef<HTMLDivElement>(null);
