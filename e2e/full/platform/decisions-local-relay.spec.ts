@@ -562,7 +562,6 @@ test("the design-review gate needs a person, and its approval is bound to the sc
     await expect(preview).toBeInViewport({ ratio: 0.5 });
     await expect(preview.getByRole("img")).toBeVisible({ timeout: 30_000 });
   }
-  await expect(phone.locator('input[type="radio"]')).toHaveCount(2);
   await expect(phone.getByRole("radiogroup").getByRole("radio")).toHaveCount(2);
   await choosePhoneOption(phone, /Approve/);
   await phone.getByRole("button", { name: "Send decision", exact: true }).click();

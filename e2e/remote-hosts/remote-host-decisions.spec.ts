@@ -43,6 +43,7 @@ import {
   ptyWrite,
   readFakeAgentLaunchLog,
   readFakeAgentStdin,
+  readFakeAgentStdinChunks,
   sendFakeAgentCommand,
 } from "../helpers/fakeAgent";
 import {
@@ -61,6 +62,7 @@ import {
   DECISIONS_CHECKOUT,
   DECISIONS_SETTINGS_DIALOG,
   decisionBlocks,
+  decisionBlockStarts,
   getDecision,
   openDecisionsSettings,
   launchDecisionsAgent,
@@ -179,7 +181,10 @@ async function launchHost(): Promise<AppContext> {
     alongside: true,
   });
   captureLogs(launched.app, "host");
-  await clock.attachApp(launched.app);
+  await clock.attachApp(launched.app).catch(async (error: unknown) => {
+    await closeApp(launched.app);
+    throw error;
+  });
   return launched;
 }
 
@@ -208,7 +213,10 @@ async function launchShell(): Promise<AppContext> {
     alongside: true,
   });
   captureLogs(launched.app, "shell");
-  await clock.attachApp(launched.app);
+  await clock.attachApp(launched.app).catch(async (error: unknown) => {
+    await closeApp(launched.app);
+    throw error;
+  });
   return launched;
 }
 
@@ -330,9 +338,10 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
   });
 
   test.afterAll(async () => {
-    await context?.close();
-    if (shell?.app) await closeApp(shell.app);
-    if (host?.app) await closeApp(host.app);
+    // Each step on its own, so one that fails leaves none of the others running.
+    await context?.close().catch(() => {});
+    if (shell?.app) await closeApp(shell.app).catch(() => {});
+    if (host?.app) await closeApp(host.app).catch(() => {});
     await sshd?.stop();
     await relay?.stop();
     hostProject?.cleanup();
@@ -553,7 +562,10 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
     const agent = await launchDecisionsAgent(remotePage, binDir);
     try {
       await workThenSettle(remotePage, agent.paneId);
-      const from = readFakeAgentStdin(binDir, agent.paneId).length;
+      const panes = [...new Set(readFakeAgentLaunchLog(binDir).map((l) => l.paneId!))];
+      const before = new Map(panes.map((pane) => [pane, readFakeAgentStdin(binDir, pane).length]));
+      const since = (pane: string) => readFakeAgentStdin(binDir, pane).slice(before.get(pane));
+      const from = before.get(agent.paneId)!;
       const question = "Host pane: which fixture should the sync tests use?";
       const { question_id: id, expires_at: expiresAt } = await askAdvice(agent, question);
       await openQuestionOnPhone(phone, question);
@@ -600,6 +612,10 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
       });
       await new Promise((r) => setTimeout(r, 10_000));
       expect(blocks()).toHaveLength(1);
+      expect(decisionBlockStarts(since(agent.paneId), id)).toBe(1);
+      for (const pane of panes.filter((p) => p !== agent.paneId)) {
+        expect(decisionBlockStarts(since(pane), id), pane).toBe(0);
+      }
     } finally {
       await agent.mcp.close().catch(() => {});
     }
@@ -621,32 +637,57 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
     const asked = readFakeAgentLaunchLog(binDir).find((l) => l.paneId === agent.paneId)!;
     const session = asked.argv[asked.argv.indexOf("--session-id") + 1];
     expect(session, asked.argv.join(" ")).toMatch(/^[0-9a-f-]{36}$/);
+    const panes = [...new Set(readFakeAgentLaunchLog(binDir).map((l) => l.paneId!))];
     const launches = readFakeAgentLaunchLog(binDir).length;
-    const typedBefore = new Map(
-      readFakeAgentLaunchLog(binDir).map((l) => [l.paneId!, readFakeAgentStdin(binDir, l.paneId)])
-    );
 
-    // The Host quits, taking every pane with it, and the deadline passes while it's down.
+    // The Host quits, taking every pane with it, before anything for the question was typed.
     clock.detachApp(host.app);
     await closeApp(host.app);
+    for (const pane of panes) {
+      expect(decisionBlockStarts(readFakeAgentStdin(binDir, pane), id), pane).toBe(0);
+    }
+    const typedBefore = new Map(panes.map((pane) => [pane, readFakeAgentStdin(binDir, pane)]));
+    const chunksBefore = readFakeAgentStdinChunks(binDir, agent.paneId).length;
     await clock.advancePast(expiresAt);
 
-    // Back, it restores its panes, the asking one resuming the same conversation, takes the
-    // expiry from the relay, and types the notice into that conversation once.
+    // Back, it restores its panes, the asking one resuming the same conversation.
     host = await launchHost();
-    const blocks = (paneId: string) =>
-      decisionBlocks(readFakeAgentStdin(binDir, paneId).slice(typedBefore.get(paneId)?.length), id);
+    const restored = () => readFakeAgentLaunchLog(binDir).slice(launches);
     await expect
-      .poll(() => blocks(agent.paneId).length, { timeout: 120_000, intervals: [1_000] })
+      .poll(() => restored().filter((l) => l.paneId === agent.paneId).length, { timeout: 120_000 })
       .toBe(1);
-    expect(blocks(agent.paneId)[0]).toContain("status: advisory-unanswered\n");
-    const resumed = readFakeAgentLaunchLog(binDir)
-      .slice(launches)
-      .filter((l) => l.paneId === agent.paneId);
-    expect(resumed).toHaveLength(1);
-    expect(resumed[0].argv.slice(resumed[0].argv.indexOf("--resume"))).toEqual(
-      expect.arrayContaining(["--resume", session])
+    const resumed = restored().find((l) => l.paneId === agent.paneId)!;
+    expect(resumed.argv[resumed.argv.indexOf("--resume") + 1], resumed.argv.join(" ")).toBe(
+      session
     );
+    await expect
+      .poll(() => new Set(restored().map((l) => l.paneId)).size, { timeout: 60_000 })
+      .toBe(panes.length);
+
+    // It opens on its trust prompt, which nothing of the question may answer: the notice waits for
+    // the agent's own prompt. Someone at the Host confirms it, and the notice is typed once.
+    await expect
+      .poll(() => getTerminalTextById(host.window, agent.paneId), { timeout: 60_000 })
+      .toContain("Enter to confirm");
+    await new Promise((r) => setTimeout(r, 10_000));
+    expect(
+      readFakeAgentStdinChunks(binDir, agent.paneId)
+        .slice(chunksBefore)
+        .map((c) => c.data)
+    ).toEqual([]);
+    expect(await ptyWrite(host.window, agent.paneId, "\r")).toBe(true);
+    await expect
+      .poll(() => getTerminalTextById(host.window, agent.paneId), { timeout: 60_000 })
+      .toContain(FAKE_AGENT_READY);
+    const since = (pane: string) =>
+      readFakeAgentStdin(binDir, pane).slice(typedBefore.get(pane)!.length);
+    await expect
+      .poll(() => decisionBlocks(since(agent.paneId), id).length, {
+        timeout: 120_000,
+        intervals: [1_000],
+      })
+      .toBe(1);
+    expect(decisionBlocks(since(agent.paneId), id)[0]).toContain("status: advisory-unanswered\n");
 
     // No other pane the restart brought back hears of it, and the owner's computer, connected
     // again, reads it closed and delivered and counts nothing.
@@ -660,9 +701,9 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
         standing: { kind: "settled", outcome: "expired" },
       });
     await new Promise((r) => setTimeout(r, 10_000));
-    expect(blocks(agent.paneId)).toHaveLength(1);
-    for (const launch of readFakeAgentLaunchLog(binDir).slice(launches)) {
-      if (launch.paneId !== agent.paneId) expect(blocks(launch.paneId!)).toEqual([]);
+    expect(decisionBlockStarts(since(agent.paneId), id)).toBe(1);
+    for (const pane of panes.filter((p) => p !== agent.paneId)) {
+      expect(decisionBlockStarts(since(pane), id), pane).toBe(0);
     }
     await expect(shellInbox()).toHaveAttribute("aria-label", "Decisions inbox", {
       timeout: 30_000,

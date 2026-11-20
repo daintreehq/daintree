@@ -476,11 +476,32 @@ export async function getDecision(client: Client, id: string): Promise<Record<st
 const BLOCK_START = "[DAINTREE DECISION ANSWER]";
 const BLOCK_END = "[END DAINTREE DECISION ANSWER]";
 
-/** Every whole Decisions block for question `id` in what a terminal received. */
-export function decisionBlocks(typed: string, id: string): string[] {
+/** Each block begun in what a terminal received, cut at its end marker, whole or not. */
+function blocksBegun(typed: string): { text: string; whole: boolean }[] {
   return typed
     .split(BLOCK_START)
     .slice(1)
-    .filter((b) => b.includes(BLOCK_END) && b.includes(`question_id: ${id} `))
-    .map((b) => b.slice(0, b.indexOf(BLOCK_END)));
+    .map((b) => {
+      const end = b.indexOf(BLOCK_END);
+      return end < 0 ? { text: b, whole: false } : { text: b.slice(0, end), whole: true };
+    });
+}
+
+/** Whether a block names question `id` in its own `question_id` line, alias or not. */
+function namesQuestion(block: string, id: string): boolean {
+  return block
+    .split("\n")
+    .some((line) => line === `question_id: ${id}` || line.startsWith(`question_id: ${id} (`));
+}
+
+/** Every whole Decisions block for question `id` in what a terminal received. */
+export function decisionBlocks(typed: string, id: string): string[] {
+  return blocksBegun(typed)
+    .filter((b) => b.whole && namesQuestion(b.text, id))
+    .map((b) => b.text);
+}
+
+/** How many Decisions blocks for question `id` a terminal received, those cut short included. */
+export function decisionBlockStarts(typed: string, id: string): number {
+  return blocksBegun(typed).filter((b) => namesQuestion(b.text, id)).length;
 }

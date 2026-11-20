@@ -48,6 +48,7 @@ import {
   closeSettings,
   connectRelay,
   decisionBlocks,
+  decisionBlockStarts,
   DECISIONS_CHECKOUT,
   getDecision,
   launchDecisionsAgent,
@@ -136,6 +137,26 @@ function blocksFor(id: string, from: number, agent = asker): string[] {
   return decisionBlocks(readFakeAgentStdin(binDir, agent.paneId).slice(from), id);
 }
 
+/** How many blocks for question `id`, whole or cut short, `agent`'s terminal received after `from`. */
+function startsFor(id: string, from: number, agent = asker): number {
+  return decisionBlockStarts(readFakeAgentStdin(binDir, agent.paneId).slice(from), id);
+}
+
+/** Where the asking and bystanding terminals' input stood before a case. */
+interface Marks {
+  asker: number;
+  bystander: number;
+}
+
+const mark = (): Marks => ({ asker: stdinLength(asker), bystander: stdinLength(bystander) });
+
+/** Exactly one block for `id` reached the asking pane since `from`, none cut short, and none the other. */
+function expectTypedOnce(id: string, from: Marks): void {
+  expectTypedOnce(id, from);
+  expect(startsFor(id, from.asker)).toBe(1);
+  expect(startsFor(id, from.bystander, bystander)).toBe(0);
+}
+
 const stdinLength = (agent = asker) => readFakeAgentStdin(binDir, agent.paneId).length;
 
 async function agentState(id: string): Promise<string | null> {
@@ -192,6 +213,7 @@ async function expectQuietFor(ms: number, check: () => void): Promise<void> {
 
 test.beforeAll(async () => {
   if (!DECISIONS_CHECKOUT) return;
+  test.setTimeout(240_000);
   relay = localRelay(undefined, { clocked: true });
   await relay.start();
   clock = new DecisionsTestClock(relay);
@@ -228,8 +250,9 @@ test.afterEach(async () => {
 test.afterAll(async () => {
   await asker?.mcp.close().catch(() => {});
   await bystander?.mcp.close().catch(() => {});
-  await context?.close();
-  if (ctx?.app) await closeApp(ctx.app);
+  // Each step on its own, so one that fails leaves none of the others running.
+  await context?.close().catch(() => {});
+  if (ctx?.app) await closeApp(ctx.app).catch(() => {});
   await relay?.stop();
 });
 
@@ -261,8 +284,7 @@ test("two agents start, each with its own daintree-decisions server", async () =
 test("an ignored advisory question closes once, in the pane that asked, with its plan due and nothing decided", async () => {
   test.setTimeout(300_000);
   const question = "Which fixture should the parser tests use?";
-  const fromAsker = stdinLength(asker);
-  const fromBystander = stdinLength(bystander);
+  const from = mark();
   const { question_id: id, expires_at: expiresAt } = await askAdvice(question);
 
   // The agent learns its deadline and plan at once, and reads them back by id; the other pane can't.
@@ -297,17 +319,18 @@ test("an ignored advisory question closes once, in the pane that asked, with its
 
   // A minute short of the deadline, nothing is due and nothing has been typed.
   await clock.advance(Math.ceil(Date.parse(expiresAt) - clock.now()) - MINUTE);
-  await expectQuietFor(5_000, () => expect(blocksFor(id, fromAsker)).toEqual([]));
+  await expectQuietFor(5_000, () => expect(startsFor(id, from.asker)).toBe(0));
   expect(await decision(id)).toMatchObject({ status: "open", fallback_due: false });
 
   // Past it, the notice is typed into the asking pane, once.
   await clock.advancePast(expiresAt);
   await expect
-    .poll(() => blocksFor(id, fromAsker).length, { timeout: 90_000, intervals: [1_000] })
+    .poll(() => blocksFor(id, from.asker).length, { timeout: 90_000, intervals: [1_000] })
     .toBe(1);
-  const [notice] = blocksFor(id, fromAsker);
+  const [notice] = blocksFor(id, from.asker);
   expect(notice).toContain("source: system\nstatus: advisory-unanswered\n");
   expect(notice).toContain(`deadline: ${expiresAt}\ndisposition: fallback-due\nauthorised: no\n`);
+  expect(notice).toMatch(/^note: .*carry out the plan you stated/m);
   expect(notice).not.toMatch(/^choice/m);
   const injection = /^injection_id: (\S+)$/m.exec(notice)?.[1];
   expect(injection).toBeTruthy();
@@ -341,49 +364,47 @@ test("an ignored advisory question closes once, in the pane that asked, with its
   // Time goes on: nothing more for it, and never anything in the other pane.
   await clock.advance(5 * MINUTE);
   await expectQuietFor(10_000, () => {
-    expect(blocksFor(id, fromAsker)).toHaveLength(1);
-    expect(readFakeAgentStdin(binDir, bystander.paneId).slice(fromBystander)).not.toContain(id);
+    expectTypedOnce(id, from);
+    expect(readFakeAgentStdin(binDir, bystander.paneId).slice(from.bystander)).not.toContain(id);
   });
 });
 
 test("a timely phone answer reaches the agent as the person's, and the deadline passing changes nothing", async () => {
   test.setTimeout(300_000);
   const question = "Which fixture should the importer tests use?";
-  const from = stdinLength();
+  const from = mark();
   const { question_id: id, expires_at: expiresAt } = await askAdvice(question);
 
   // Ten minutes in, the person picks the option that isn't the plan.
   await clock.advance(10 * MINUTE);
   await answerOnPhone(phone, question, { option: /A SQLite file per test/ });
   await expect
-    .poll(() => blocksFor(id, from).length, { timeout: 90_000, intervals: [1_000] })
+    .poll(() => blocksFor(id, from.asker).length, { timeout: 90_000, intervals: [1_000] })
     .toBe(1);
-  const [answer] = blocksFor(id, from);
+  const [answer] = blocksFor(id, from.asker);
   expect(answer).toContain("source: human");
   expect(answer).toContain("choice: sqlite");
   expect(answer).not.toContain("status: advisory-unanswered");
-  expect(await decision(id)).toMatchObject({
+  const answered = {
     status: "human-answered",
     provenance: "human",
+    answered_on: "phone",
     choice: "sqlite",
     fallback_due: false,
     advisory_timeout: null,
-  });
+  };
+  expect(await decision(id)).toMatchObject(answered);
 
   await clock.advancePast(expiresAt);
-  await expectQuietFor(15_000, () => expect(blocksFor(id, from)).toHaveLength(1));
-  expect(await decision(id)).toMatchObject({
-    status: "human-answered",
-    choice: "sqlite",
-    fallback_due: false,
-  });
+  await expectQuietFor(15_000, () => expectTypedOnce(id, from));
+  expect(await decision(id)).toMatchObject(answered);
   await expectNoStaleAsk(question);
 });
 
 test("a dismissal on the phone is a decline, never a timeout, and its deadline makes nothing due", async () => {
   test.setTimeout(300_000);
   const question = "Which fixture should the exporter tests use?";
-  const from = stdinLength();
+  const from = mark();
   const { question_id: id, expires_at: expiresAt } = await askAdvice(question);
 
   await openQuestionOnPhone(phone, question);
@@ -393,28 +414,30 @@ test("a dismissal on the phone is a decline, never a timeout, and its deadline m
   await expect(phone.getByText("Declined by you").first()).toBeVisible({ timeout: 30_000 });
 
   await expect
-    .poll(() => blocksFor(id, from).length, { timeout: 90_000, intervals: [1_000] })
+    .poll(() => blocksFor(id, from.asker).length, { timeout: 90_000, intervals: [1_000] })
     .toBe(1);
-  const [declined] = blocksFor(id, from);
+  const [declined] = blocksFor(id, from.asker);
   expect(declined).toContain("source: human\nstatus: declined\nauthorised: no\n");
-  const read = await decision(id);
-  expect(read).toMatchObject({
+  const dismissed = {
     status: "cancelled",
     closed_reason: "declined",
     fallback_due: false,
-  });
-  expectNothingDecided(read);
+    advisory_timeout: null,
+  };
+  expect(await decision(id)).toMatchObject(dismissed);
+  expectNothingDecided(await decision(id));
 
   await clock.advancePast(expiresAt);
-  await expectQuietFor(15_000, () => expect(blocksFor(id, from)).toHaveLength(1));
-  expect(await decision(id)).toMatchObject({ closed_reason: "declined", fallback_due: false });
+  await expectQuietFor(15_000, () => expectTypedOnce(id, from));
+  expect(await decision(id)).toMatchObject(dismissed);
+  expectNothingDecided(await decision(id));
   await expectNoStaleAsk(question);
 });
 
 test("a final design approval can't be asked as advice, and expires unapproved", async () => {
   test.setTimeout(300_000);
   const question = "Approve the redesigned settings page?";
-  const from = stdinLength();
+  const from = mark();
   const gated = {
     question,
     workflow_gate_id: "design-review/final",
@@ -443,9 +466,9 @@ test("a final design approval can't be asked as advice, and expires unapproved",
 
   await clock.advancePast(expiresAt);
   await expect
-    .poll(() => blocksFor(id, from).length, { timeout: 90_000, intervals: [1_000] })
+    .poll(() => blocksFor(id, from.asker).length, { timeout: 90_000, intervals: [1_000] })
     .toBe(1);
-  const [expired] = blocksFor(id, from);
+  const [expired] = blocksFor(id, from.asker);
   expect(expired).toContain("source: system\nstatus: expired\nauthorised: no\n");
   expect(expired).not.toContain("advisory-unanswered");
   const read = await decision(id);
@@ -456,14 +479,16 @@ test("a final design approval can't be asked as advice, and expires unapproved",
     fallback_due: false,
     advisory_timeout: null,
   });
+  expect(read.reviewed_digests_match).not.toBe(true);
   expectNothingDecided(read);
+  await expectQuietFor(10_000, () => expectTypedOnce(id, from));
   await expectNoStaleAsk(question);
 });
 
 test("a draft in the asking pane's composer holds the notice, which is typed once the draft goes", async () => {
   test.setTimeout(300_000);
   const question = "Which fixture should the formatter tests use?";
-  const from = stdinLength();
+  const from = mark();
   const { question_id: id, expires_at: expiresAt } = await askAdvice(question);
 
   const editor = page.locator(`[data-panel-id="${asker.paneId}"] .cm-content`).first();
@@ -476,68 +501,83 @@ test("a draft in the asking pane's composer holds the notice, which is typed onc
   await expect
     .poll(async () => (await decision(id)).advisory_timeout, { timeout: 60_000 })
     .toMatchObject({ disposition: "fallback-due", notice: "pending" });
-  await expectQuietFor(20_000, () => expect(blocksFor(id, from)).toEqual([]));
+  await expectQuietFor(20_000, () => expect(startsFor(id, from.asker)).toBe(0));
 
   await editor.click();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
   await page.keyboard.press("Backspace");
   await expect(editor.locator(".cm-placeholder")).toBeVisible();
   await expect
-    .poll(() => blocksFor(id, from).length, { timeout: 120_000, intervals: [1_000] })
+    .poll(() => blocksFor(id, from.asker).length, { timeout: 120_000, intervals: [1_000] })
     .toBe(1);
-  expect(blocksFor(id, from)[0]).toContain("status: advisory-unanswered");
+  expect(blocksFor(id, from.asker)[0]).toContain("status: advisory-unanswered");
   await expect
     .poll(async () => (await decision(id)).advisory_timeout, { timeout: 30_000 })
     .toMatchObject({ notice: "delivered" });
-  await expectQuietFor(10_000, () => expect(blocksFor(id, from)).toHaveLength(1));
+  expectNothingDecided(await decision(id));
+  await expectQuietFor(10_000, () => expectTypedOnce(id, from));
   await expectNoStaleAsk(question);
 });
 
 interface CreateFault {
+  original: unknown;
   real: (input: string, init?: RequestInit) => Promise<Response>;
   armed: boolean;
   holding: boolean;
   lostStatus: number;
   creates: number;
+  refused: number;
 }
 
 test("a question whose first publish reply is lost reaches the phone once and closes once", async () => {
   test.setTimeout(300_000);
   const question = "Which fixture should the linter tests use?";
-  const from = stdinLength();
-  // The next question create reaches the relay and its reply is lost; retries fail until released.
-  await ctx.app.evaluate(({ net }) => {
-    const g = globalThis as unknown as { __e2eCreateFault?: CreateFault };
-    const real = g.__e2eCreateFault?.real ?? net.fetch.bind(net);
-    const fault: CreateFault = { real, armed: true, holding: false, lostStatus: 0, creates: 0 };
-    g.__e2eCreateFault = fault;
-    net.fetch = (async (input: string, init?: RequestInit) => {
-      const url = new URL(typeof input === "string" ? input : (input as Request).url);
-      if (
-        (init?.method ?? "GET").toUpperCase() === "POST" &&
-        url.pathname === "/api/v1/questions"
-      ) {
-        fault.creates++;
-        if (fault.armed) {
-          fault.armed = false;
-          fault.holding = true;
-          const res = await fault.real(input, init);
-          fault.lostStatus = res.status;
-          await res.arrayBuffer().catch(() => undefined);
-          throw new TypeError("net::ERR_CONNECTION_RESET");
-        }
-        if (fault.holding) throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
-      }
-      return fault.real(input, init);
-    }) as typeof net.fetch;
-  });
+  const from = mark();
   const faultState = () =>
     ctx.app.evaluate(() => {
       const f = (globalThis as unknown as { __e2eCreateFault: CreateFault }).__e2eCreateFault;
-      return { lostStatus: f.lostStatus, creates: f.creates };
+      return { lostStatus: f.lostStatus, creates: f.creates, refused: f.refused };
     });
 
   try {
+    // The next question create reaches the relay and its reply is lost; retries fail until released.
+    await ctx.app.evaluate(({ net }) => {
+      const g = globalThis as unknown as { __e2eCreateFault?: CreateFault };
+      const original = net.fetch;
+      const fault: CreateFault = {
+        original,
+        real: original.bind(net) as CreateFault["real"],
+        armed: true,
+        holding: false,
+        lostStatus: 0,
+        creates: 0,
+        refused: 0,
+      };
+      g.__e2eCreateFault = fault;
+      net.fetch = (async (input: string, init?: RequestInit) => {
+        const url = new URL(typeof input === "string" ? input : (input as Request).url);
+        if (
+          (init?.method ?? "GET").toUpperCase() === "POST" &&
+          url.pathname === "/api/v1/questions"
+        ) {
+          fault.creates++;
+          if (fault.armed) {
+            fault.armed = false;
+            fault.holding = true;
+            const res = await fault.real(input, init);
+            fault.lostStatus = res.status;
+            await res.arrayBuffer().catch(() => undefined);
+            throw new TypeError("net::ERR_CONNECTION_RESET");
+          }
+          if (fault.holding) {
+            fault.refused++;
+            throw new TypeError("net::ERR_INTERNET_DISCONNECTED");
+          }
+        }
+        return fault.real(input, init);
+      }) as typeof net.fetch;
+    });
+
     const receipt = await ask({
       question,
       kind: "choice",
@@ -555,26 +595,30 @@ test("a question whose first publish reply is lost reaches the phone once and cl
     });
     await published(id);
 
-    // One question on the phone, not two.
+    // One question on the phone, not two, however the create's outcome was learned.
     await openInbox(phone);
-    await expect(
-      phone.getByRole("main").getByRole("link").filter({ hasText: question })
-    ).toHaveCount(1, { timeout: 30_000 });
+    const rows = phone.getByRole("main").getByRole("link").filter({ hasText: question });
+    await expect(rows).toHaveCount(1, { timeout: 30_000 });
+    await expectQuietFor(10_000, () => undefined);
+    await expect(rows).toHaveCount(1);
+    expect((await faultState()).creates).toBeGreaterThanOrEqual(1);
 
     await clock.advancePast(receipt.expires_at);
     await expect
-      .poll(() => blocksFor(id, from).length, { timeout: 90_000, intervals: [1_000] })
+      .poll(() => blocksFor(id, from.asker).length, { timeout: 90_000, intervals: [1_000] })
       .toBe(1);
-    expect(blocksFor(id, from)[0]).toContain("status: advisory-unanswered");
+    expect(blocksFor(id, from.asker)[0]).toContain("status: advisory-unanswered");
     const read = await decision(id);
     expect(read).toMatchObject({ status: "expired", fallback_due: true });
     expectNothingDecided(read);
-    await expectQuietFor(10_000, () => expect(blocksFor(id, from)).toHaveLength(1));
+    await expectQuietFor(10_000, () => expectTypedOnce(id, from));
     await expectNoStaleAsk(question);
   } finally {
     await ctx.app.evaluate(({ net }) => {
       const g = globalThis as unknown as { __e2eCreateFault?: CreateFault };
-      if (g.__e2eCreateFault) net.fetch = g.__e2eCreateFault.real as typeof net.fetch;
+      if (!g.__e2eCreateFault) return;
+      net.fetch = g.__e2eCreateFault.original as typeof net.fetch;
+      delete g.__e2eCreateFault;
     });
   }
 });

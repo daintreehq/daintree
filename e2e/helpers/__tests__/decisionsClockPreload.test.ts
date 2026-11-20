@@ -31,8 +31,12 @@ describe("decisionsClockPreload", () => {
     expect(Math.abs(run<number>("new Date().getTime()") - Date.now() - 25 * MINUTE)).toBeLessThan(
       1_000
     );
-    // Date() called bare reads the moved clock too.
+    // Date() called bare reads the moved clock too, wherever it has moved.
     expect(Math.abs(run<number>("Date.parse(Date())") - Date.now() - 25 * MINUTE)).toBeLessThan(
+      2_000
+    );
+    clock.offsetMs = 3 * MINUTE;
+    expect(Math.abs(run<number>("Date.parse(Date())") - Date.now() - 3 * MINUTE)).toBeLessThan(
       2_000
     );
   });
@@ -42,6 +46,9 @@ describe("decisionsClockPreload", () => {
     expect(run<number>("new Date(0).getTime()")).toBe(0);
     expect(run<number>('new Date("2020-01-01T00:00:00Z").getTime()')).toBe(1577836800000);
     expect(run<number>("Date.UTC(2020, 0, 1)")).toBe(1577836800000);
+    expect(run<string>("new Date(2020, 1, 3, 4, 5, 6, 7).toISOString()")).toBe(
+      new Date(2020, 1, 3, 4, 5, 6, 7).toISOString()
+    );
     expect(run<boolean>("new Date() instanceof Date")).toBe(true);
     expect(run<string>("Object.prototype.toString.call(new Date())")).toBe("[object Date]");
     // A subclass declared after the install is on the moved clock as well.
@@ -50,13 +57,14 @@ describe("decisionsClockPreload", () => {
     ).toBeLessThan(1_000);
   });
 
-  it("installs once per realm, so a second install keeps the first clock", () => {
+  it("installs once per realm, so a second install keeps the first clock where it was moved", () => {
     const context = vm.createContext({});
     const g = vm.runInContext("globalThis", context);
     const first = installShiftedClock(g, MINUTE);
+    first.offsetMs = 7 * MINUTE;
     const second = installShiftedClock(g, 5 * MINUTE);
     expect(second).toBe(first);
-    expect(Math.abs(vm.runInContext("Date.now()", context) - Date.now() - MINUTE)).toBeLessThan(
+    expect(Math.abs(vm.runInContext("Date.now()", context) - Date.now() - 7 * MINUTE)).toBeLessThan(
       1_000
     );
   });

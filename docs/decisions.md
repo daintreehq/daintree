@@ -264,9 +264,9 @@ The deadline notice is typed only into the terminal that asked, or into a resume
 ### The deadline passed but the agent is still waiting
 
 1. Ask the agent to call `get_decision` with the question's `question_id`. That reads the outcome whether or not the notice was typed: `fallback_due: true` means the plan it stated may go ahead, and `advisory_timeout.notice` says where the notice is.
-2. If the inbox lists the question under **Awaiting update**, or its reader says **Deadline passed at … · Awaiting an update**, this computer's clock has passed the deadline but the relay's close hasn't reached Daintree yet: nothing is due until it does. Check **Connection** in **Settings → Decisions**. For a Remote Host's question, it's the Host that has to reach the relay; this computer shows the question as the Host last reported it.
-3. `notice: pending` means the terminal can't take it yet. Send or clear a draft in its composer or in the agent's own input line, answer any approval prompt, or let the agent finish its turn; Daintree keeps trying, and types the notice once the agent is at its prompt.
-4. **Timeout notice needs attention** (`notice: needs-attention`) means Daintree couldn't reach the run that asked: its terminal was closed or relaunched, or resuming its session failed. Use **Try resume** in the needs-attention list for Claude or Codex, or tell the agent yourself and **Mark handled**.
+2. If the inbox lists the question under **Awaiting update**, or its reader says **Deadline passed at … · Awaiting an update**, this computer's clock has passed the deadline but Daintree hasn't recorded how the question closed: the relay's close hasn't reached it yet or, for a question that never reached the relay, Daintree hasn't yet settled it as never sent. Nothing is due until it does. Check **Connection** in **Settings → Decisions**. For a Remote Host's question, it's the Host that has to reach the relay; this computer shows the question as the Host last reported it.
+3. `notice: pending` means the notice is waiting to be typed, usually because the terminal can't take it yet. Send or clear a draft in its composer or in the agent's own input line, answer any approval prompt, or let the agent finish its turn; Daintree keeps trying, and types the notice once the agent is at its prompt.
+4. **Timeout notice needs attention** (`notice: needs-attention`) means Daintree couldn't reach the run that asked: its terminal was closed or relaunched, or resuming its session failed. Use **Try resume** in the needs-attention list where it's offered (Claude or Codex, with a recorded session), or tell the agent yourself and **Mark handled**.
 5. **May or may not have been delivered** (`notice: uncertain`) means Daintree lost track of a write it started, and won't type it again. Look at the terminal; if the notice isn't there, have the agent read `get_decision`, then **Mark handled**.
 
 An agent only moves on when something reaches it: one that ended its turn waits for the notice, or for you, and never acts on the clock alone.
@@ -280,8 +280,8 @@ Advice needs every part of the path to know about it. Anything older refuses the
 | Daintree from before advice | `ask_human` takes no `planned_fallback`, so every question waits for your decision |
 | A relay older than 0.9.0 | Refused with `relay-unsupported` |
 | No phone or tablet whose app can show the deadline and the plan | Refused with `no-capable-reader`; open the phone app once after the relay is updated |
-| A Remote Host running an older Daintree | Refused on the Host with `host-unsupported`; its row under **Remote Hosts** says its Daintree is too old for advice |
-| This computer older than a Host that asks for advice | The Host still settles its own questions and types its notices; this computer lists them without their deadline and plan |
+| A Remote Host running an older Daintree | Refused on the Host with `host-unsupported`, or by one older still as a parameter its `ask_human` doesn't take; once it has reported, its row under **Remote Hosts** says its Daintree is too old for advice |
+| This computer older than a Host that asks for advice | The Host still settles its own questions and types its notices; this computer lists them with their deadline but without their advisory mode, plan or notice |
 | A question asked before the Decisions 0.9.0 libraries | Asked again with the same `correlation_id`, it's asked anew once (see [Asking](#asking)) |
 
 ## Remote Hosts

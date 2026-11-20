@@ -135,9 +135,17 @@ export class DecisionsTestClock {
     });
   }
 
-  /** Moves every clock to `byMs` past `deadline` (ISO 8601), or by `byMs` if it has passed. */
-  advancePast(deadline: string, byMs = 30_000): Promise<void> {
-    return this.advance(Math.max(0, Math.ceil(Date.parse(deadline) - this.now())) + byMs);
+  /**
+   * Moves every clock to `byMs` past `deadline` (ISO 8601). The deadline is
+   * crossed by the last step, which is at most a minute, and the clocks then
+   * hold: a notice queued for a pane has a 15-second admission that a further
+   * jump would use up before it could be typed.
+   */
+  async advancePast(deadline: string, byMs = 30_000): Promise<void> {
+    if (byMs <= 0 || byMs > STEP_MS - 5_000) throw new Error(`cannot cross a deadline by ${byMs}`);
+    const left = Math.ceil(Date.parse(deadline) - this.now());
+    await this.advance(Math.max(0, left - 5_000));
+    await this.advance(Math.max(0, Math.ceil(Date.parse(deadline) - this.now())) + byMs);
   }
 
   private serially(task: () => Promise<void>): Promise<void> {
