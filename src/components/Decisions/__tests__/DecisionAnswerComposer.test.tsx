@@ -303,6 +303,45 @@ describe("answering a question from the view (#17102)", () => {
     });
   });
 
+  it("takes a Reject, with a note, when an approval's image can't be shown, but never an Approve (#18043)", async () => {
+    const images = [image("x"), image("y")];
+    decisionsBridge.getQuestionImage = async ({ attachmentId }: { attachmentId: string }) =>
+      attachmentId === "y"
+        ? { result: "unavailable", reason: "digest-mismatch" }
+        : new Promise(() => {});
+    questions.q1 = question("q1", {
+      kind: "approval",
+      options: [
+        { id: "approve", label: "Approve", description: null },
+        { id: "reject", label: "Reject", description: null },
+      ],
+      allowText: true,
+      attachments: images,
+    });
+    await openOn("q1");
+    await screen.findByTestId("decision-question-image-failed");
+    act(() =>
+      useDecisionsImageReviewStore.getState().markShown("t1", "q1", "x", images[0]!.sha256)
+    );
+
+    expect(option("Approve").disabled).toBe(true);
+    expect(option("Reject").disabled).toBe(false);
+    const composer = screen.getByTestId("decision-answer-composer");
+    expect(composer.textContent).toMatch(/After image 2/);
+
+    fireEvent.click(option("Reject"));
+    fireEvent.change(screen.getByLabelText("Note (optional)"), {
+      target: { value: "Image 2 didn't open; send new ones" },
+    });
+    expect(send().getAttribute("aria-disabled")).toBeNull();
+    await act(async () => fireEvent.click(send()));
+    expect(answerQuestion.mock.calls[0]![0]).toMatchObject({
+      selectedOptionIds: ["reject"],
+      text: "Image 2 didn't open; send new ones",
+      reviewedAttachmentDigests: [images[0]!.sha256],
+    });
+  });
+
   it.each([
     ["human-answered", /answered elsewhere/],
     ["cancelled", /cancelled/],
