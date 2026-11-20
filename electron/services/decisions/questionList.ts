@@ -21,6 +21,7 @@ import {
 } from "./attentionList.js";
 import { reasonOf } from "./paneDecisionState.js";
 import { closedReasonOf, declineOf } from "./questionClosed.js";
+import { roundOf } from "./questionRound.js";
 
 type AnsweredStatus = Extract<QuestionRow["local_status"], "human-answered" | "proxy-answered">;
 
@@ -57,6 +58,7 @@ export function projectDecisionQuestions(
     .map((row) => {
       const { origin } = row;
       const standing = standingOf(row, handled);
+      const round = roundOf(row);
       return {
         reference: {
           hostId,
@@ -72,6 +74,9 @@ export function projectDecisionQuestions(
         requirement: row.requirement,
         askedAt: row.origin_created_at,
         expiresAt: row.expires_at ?? null,
+        replyMode: round.replyMode,
+        closedReason: round.closedReason,
+        closureNotice: round.closureNotice,
         settledAt: standing.kind === "settled" ? settledAt(row, standing.outcome) : null,
         standing,
         replyRequest: replyRequestOf(row),

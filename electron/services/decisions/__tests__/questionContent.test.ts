@@ -235,6 +235,9 @@ describe("readQuestionContent", () => {
         expiresAt: "2026-11-02T10:00:00.000Z",
         status: "human-answered",
         closedReason: null,
+        replyMode: "blocking",
+        plannedFallback: null,
+        closureNotice: null,
         deliveryStatus: "terminal-delivered",
         attachments: [
           {
@@ -377,7 +380,7 @@ describe("readQuestionContent", () => {
     expect(thread[6]).toEqual({ type: "expired", entryId: "entry-e", sentAt: expired.created_at });
   });
 
-  it("shows no answer for a question that never reached the relay, only its status (0.9.0, #17939)", async () => {
+  it("shows no answer for a question that never reached the relay, only that it never did (#17939, #17943)", async () => {
     const unpublished: AnswerEntry = {
       entry_id: "unpublished-1",
       kind: "unpublished",
@@ -398,8 +401,64 @@ describe("readQuestionContent", () => {
 
     const read = await readQuestionContent(ctx(), row);
     if (read.result !== "read") throw new Error(read.result);
-    expect(read.question).toMatchObject({ status: "publish-failed", closedReason: null });
+    expect(read.question).toMatchObject({
+      status: "publish-failed",
+      closedReason: "never-published",
+      closureNotice: { delivery: "pending", disposition: null },
+    });
     expect(read.question.thread).toEqual([]);
+  });
+
+  /** A question as the publisher stores an advisory one: its envelope, AAD and all (#17943). */
+  async function advisory(content: object, over: Partial<QuestionRow> = {}): Promise<QuestionRow> {
+    const envelope = await encryptEnvelope({
+      epochKey: identity.epochs.get(1)!,
+      installationId: identity.config.installationId,
+      questionId: QID,
+      recordId: QID,
+      recordType: "question",
+      revision: 0,
+      senderDeviceId: identity.config.deviceId,
+      purpose: "question-content",
+      plaintext: content,
+      replyMode: "advisory",
+    });
+    return question(CONTENT, {
+      question_revision: 0,
+      expires_at: "2026-11-02T10:00:00.000Z",
+      content_sealed: JSON.stringify(envelope),
+      ...over,
+    });
+  }
+
+  it("reads an advisory round's mode and the plan its content states (#17943)", async () => {
+    const row = await advisory({ ...CONTENT, planned_fallback: "Use the existing fixture" });
+
+    const read = await readQuestionContent(ctx(), row);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question).toMatchObject({
+      replyMode: "advisory",
+      plannedFallback: "Use the existing fixture",
+      expiresAt: "2026-11-02T10:00:00.000Z",
+    });
+
+    // A blocking question's stray plan is never shown as one.
+    const blocking = await question({ ...CONTENT, planned_fallback: "Use the existing fixture" });
+    const plain = await readQuestionContent(ctx(), blocking);
+    if (plain.result !== "read") throw new Error(plain.result);
+    expect(plain.question).toMatchObject({ replyMode: "blocking", plannedFallback: null });
+  });
+
+  it("won't show advisory content the protocol refuses (#17943)", async () => {
+    const approval = await advisory({
+      ...CONTENT,
+      kind: "approval",
+      planned_fallback: "Ship it anyway",
+    });
+    expect(await readQuestionContent(ctx(), approval)).toEqual({ result: "unreadable" });
+    // No plan: blank plans are dropped by the content parse, so this is the same as none.
+    const planless = await advisory({ ...CONTENT, planned_fallback: "   " });
+    expect(await readQuestionContent(ctx(), planless)).toEqual({ result: "unreadable" });
   });
 
   it("names the revision it read, and tells a person's answer on the computer from a phone's (#17101)", async () => {

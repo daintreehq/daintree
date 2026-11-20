@@ -24,7 +24,7 @@ import type {
   DecisionThreadMessage,
 } from "../../../shared/types/decisionsQuestion.js";
 import { questionLine } from "./attentionList.js";
-import { closedReasonOf } from "./questionClosed.js";
+import { roundOf, verifiedPlan } from "./questionRound.js";
 import { RetiredAttemptError } from "./relayTransport.js";
 
 /**
@@ -68,6 +68,11 @@ export async function readQuestionContent(
 ): Promise<DecisionQuestionContentResult> {
   const content = await openedQuestion(ctx, row);
   if (content === null) return { result: "unreadable" };
+  const entries = parseAnswers(row.answers_json);
+  const plannedFallback = verifiedPlan(row, entries, content);
+  // Advisory content the protocol refuses is malformed: never shown, as a phone never offers it.
+  if (plannedFallback === "refused") return { result: "unreadable" };
+  const round = roundOf(row, entries);
   const question: DecisionQuestionContent = {
     questionId: row.question_id,
     alias: row.alias,
@@ -92,7 +97,10 @@ export async function readQuestionContent(
     askedAt: row.origin_created_at,
     expiresAt: row.expires_at,
     status: row.local_status,
-    closedReason: closedReasonOf(row),
+    closedReason: round.closedReason,
+    replyMode: round.replyMode,
+    plannedFallback,
+    closureNotice: round.closureNotice,
     deliveryStatus: row.delivery_status,
     attachments: content.attachments.map((attachment) => ({
       attachmentId: attachment.attachment_id,
