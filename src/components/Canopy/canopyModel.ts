@@ -193,7 +193,9 @@ export function itemQuestionAttention(item: CanopyItem): number {
 
 /** How a row names a count of open Decisions questions. */
 export function questionAttentionLabel(count: number): string {
-  return count === 1 ? "Question open in Decisions" : `${pluralize(count, "question")} open in Decisions`;
+  return count === 1
+    ? "Question open in Decisions"
+    : `${pluralize(count, "question")} open in Decisions`;
 }
 
 /**

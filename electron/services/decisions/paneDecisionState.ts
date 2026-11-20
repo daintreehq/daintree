@@ -18,9 +18,7 @@ export type PaneDecisionStatePublisher = (projectId: string, state: PaneDecision
  * Every pane with answers needing a person or questions open for one, and how
  * many of each; an empty map when none has any.
  */
-export type AnswerAttentionPublisher = (
-  counts: ReadonlyMap<string, RunDecisionAttention>
-) => void;
+export type AnswerAttentionPublisher = (counts: ReadonlyMap<string, RunDecisionAttention>) => void;
 
 type PaneContent = Omit<PaneDecisionState, "revision">;
 

@@ -867,7 +867,9 @@ export class DecisionsService {
     if (this.role === "owner") this.sendQuestions(questions, true, { asks, marks });
     else this.sendHostQuestions(hostId === null ? null : { hostId, questions, asks });
     // What raises each run on the fleet: a Host's lifetime has no marks, so none is cleared there.
-    return hostId === null ? new Map() : unclearedQuestionsByTerminal(questions, hostId, asks, marks);
+    return hostId === null
+      ? new Map()
+      : unclearedQuestionsByTerminal(questions, hostId, asks, marks);
   }
 
   /**
