@@ -418,6 +418,13 @@ describe("decisionsInboxModel", () => {
       const both = waitingText([], "unknown", ["Studio"]);
       expect(both).toMatch(/status couldn't be read/);
       expect(both).toMatch(/Studio is away/);
+      // The list's and the rows' Hosts together, and both reasons with rows listed.
+      expect(waitingText(inboxGroups([row]), "connected", ["Lab"])).toMatch(
+        /2 Remote Hosts are away/
+      );
+      const listed = waitingText(inboxGroups([closed]), "unknown", ["Studio"]);
+      expect(listed).toMatch(/^None of the questions here wait on you\. /);
+      expect(listed).toMatch(/status couldn't be read.*Studio is away/);
     });
   });
 
