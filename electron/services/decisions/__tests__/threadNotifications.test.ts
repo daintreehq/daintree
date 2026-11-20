@@ -6,6 +6,9 @@ import type {
   DecisionQuestionStanding,
 } from "../../../../shared/types/decisionsQuestion.js";
 import { NOTIFIED_QUESTIONS_META_KEY } from "../questionNotifications.js";
+import { projectDecisionQuestions } from "../questionList.js";
+import { NO_ADVISORY_HOST } from "../questionRound.js";
+import { answers, row } from "./questionRows.js";
 import {
   NOTIFIED_THREAD_EVENTS_META_KEY,
   ThreadNotifier,
@@ -392,6 +395,53 @@ describe("ThreadNotifier", () => {
     expect(close.mock.calls).toEqual([[replyKey]]);
     list.publish([question("q-1"), question("q-2")]);
     expect(close.mock.calls).toEqual([[replyKey], [stallKey]]);
+  });
+
+  it("raises no stall for a question over without an answer, and closes one withdrawn after its answer stalled (#18021)", async () => {
+    const store = recorded();
+    const list = questionList();
+    const { notifier: made, showStall, close } = notifier(store, list);
+    await made.start();
+    const listed = (rows: Parameters<typeof projectDecisionQuestions>[0]) =>
+      projectDecisionQuestions(rows, new Map(), "host_1", NO_ADVISORY_HOST);
+    const notice = { action: "expire", source: "system", sealed: null } as const;
+    const closed = (["needs-attention", "delivery-uncertain"] as const).flatMap((status, i) => [
+      row(10 + i * 2, {
+        delivery_status: status,
+        error_code: "pane_gone",
+        local_status: "expired",
+        answers_json: answers({ ...notice, kind: "expired" }),
+      }),
+      row(11 + i * 2, {
+        delivery_status: status,
+        error_code: "pane_gone",
+        local_status: "publish-failed",
+        answers_json: answers({ ...notice, kind: "unpublished" }),
+      }),
+    ]);
+    const answer = {
+      delivery_status: "needs-attention" as const,
+      error_code: "pane_gone",
+      local_status: "human-answered" as const,
+      answers_json: answers({}),
+    };
+
+    list.publish(listed([...closed, row(1, answer)]));
+    await settle(made);
+    expect(showStall).toHaveBeenCalledTimes(1);
+    expect(showStall.mock.calls[0]![0].reference.questionId).toBe(row(1).question_id);
+    const key = showStall.mock.calls[0]![1];
+
+    // Withdrawn: the library drops the answer and leaves the stopped status.
+    list.publish(
+      listed([
+        ...closed,
+        row(1, { ...answer, local_status: "cancelled", answers_json: answers({ deliver: false }) }),
+      ])
+    );
+    await settle(made);
+    expect(close.mock.calls).toEqual([[key]]);
+    expect(showStall).toHaveBeenCalledTimes(1);
   });
 
   it("claims an event while notifications are off and never shows it", async () => {

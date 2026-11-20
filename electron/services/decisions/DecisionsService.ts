@@ -831,8 +831,9 @@ export class DecisionsService {
    */
   observeQuestions(rows: readonly QuestionRow[], handled: HandledAnswers = new Map()): void {
     if (this.disposed || this.state === "off") return;
+    // The panes read every row, so a handled one still decides which project its pane is in.
     this.panes.replace(rows, handled);
-    this.connection?.observeQuestions?.(rows);
+    this.connection?.observeQuestions?.(withoutHandled(rows, handled));
   }
 
   /**
@@ -1521,7 +1522,7 @@ export class DecisionsService {
       },
       (rows) => {
         this.listQuestions(rows, handled, marks);
-        this.observeQuestions(withoutHandled(rows, handled), handled);
+        this.observeQuestions(rows, handled);
       }
     );
     this.feed = feed;

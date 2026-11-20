@@ -236,19 +236,88 @@ describe("projectPaneDecisionStates", () => {
     });
   });
 
-  it("still asks a person about a withdrawal's stopped delivery, and a decline a reopen superseded", () => {
-    const stopped = {
-      local_status: "cancelled" as const,
-      delivery_status: "needs-attention" as const,
-      error_code: "pane_gone",
-    };
+  it("drops a question over without an answer, however its notice or withdrawn answer stopped (#18021)", () => {
+    const notice = { action: "expire", source: "system", sealed: null } as const;
+    const rows = (["needs-attention", "delivery-uncertain"] as const).flatMap(
+      (delivery_status, i) => {
+        const stopped = { delivery_status, error_code: "pane_gone" };
+        const n = i * 4;
+        return [
+          row(n + 1, {
+            ...stopped,
+            local_status: "expired",
+            answers_json: answers({ ...notice, kind: "expired" }),
+          }),
+          row(n + 2, {
+            ...stopped,
+            local_status: "publish-failed",
+            answers_json: answers({ ...notice, kind: "unpublished" }),
+          }),
+          // Withdrawn after its answer stalled: the library drops the answer and leaves the status.
+          row(n + 3, {
+            ...stopped,
+            local_status: "cancelled",
+            answers_json: answers({ deliver: false }),
+          }),
+          // Declined at revision 1, reopened, then withdrawn at revision 2.
+          row(n + 4, {
+            ...stopped,
+            local_status: "cancelled",
+            question_revision: 2,
+            answers_json: answers({ ...DECLINE, deliver: false }),
+          }),
+        ];
+      }
+    );
+
+    expect(only([...rows, row(20)])).toEqual({
+      ...empty("pane-a"),
+      openQuestions: [expect.objectContaining({ questionId: qid(20), alias: 20 })],
+    });
+  });
+
+  it("keeps a closed question's stopped notice with the person's follow-up it holds back", () => {
     const state = only([
-      row(1, { ...stopped, answers_json: answers({}) }),
-      // Declined at revision 1, reopened, then withdrawn at revision 2.
-      row(2, { ...stopped, question_revision: 2, answers_json: answers(DECLINE) }),
+      row(1, {
+        local_status: "expired",
+        delivery_status: "needs-attention",
+        error_code: "pane_gone",
+        answers_json: answers({
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          sealed: null,
+          event_seq: 5,
+        }),
+        messages_json: messages({ event_seq: 6 }),
+      }),
     ]);
 
-    expect(state?.needsAttention.map(({ alias }) => alias)).toEqual([1, 2]);
+    expect(state?.needsAttention).toEqual([
+      { questionId: qid(1), alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
+    ]);
+  });
+
+  it("keeps a pane in the project of its newest question once that one closes with its notice stopped", () => {
+    const panes = projectPaneDecisionStates([
+      row(1),
+      row(2, {
+        origin: { project_id: "project-2" },
+        local_status: "expired",
+        delivery_status: "needs-attention",
+        error_code: "pane_gone",
+        answers_json: answers({
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          sealed: null,
+        }),
+      }),
+    ]);
+
+    expect(panes.get("pane-a")?.projectId).toBe("project-2");
+    expect(panes.get("pane-a")?.content.openQuestions.map((q) => q.alias)).toEqual([1]);
+    expect(panes.get("pane-a")?.content.needsAttention).toEqual([]);
   });
 
   it("lists stopped deliveries as needing attention with the recorded reason, not as waiting", () => {
@@ -565,6 +634,41 @@ describe("PaneDecisionStates answer attention", () => {
     states.replace([stopped(1), stopped(2), row(3, { origin: { pane_id: "pane-b" } })]);
 
     expect([...counts.at(-1)!]).toEqual([["pane-a", 2]]);
+  });
+
+  it("stops counting a question once it closes with only its notice stopped, or is withdrawn (#18021)", () => {
+    const counts: Array<Map<string, number>> = [];
+    const pushes: PaneDecisionState[] = [];
+    const states = new PaneDecisionStates(
+      (_projectId, state) => pushes.push(state),
+      () => 0,
+      (next) => counts.push(new Map(next))
+    );
+    const expired = row(1, {
+      local_status: "expired",
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      answers_json: answers({ kind: "expired", action: "expire", source: "system", sealed: null }),
+    });
+    const withdrawn = {
+      ...stopped(2, "pane-b"),
+      local_status: "cancelled" as const,
+      answers_json: answers({ deliver: false }),
+    };
+
+    states.replace([stopped(1), stopped(2, "pane-b")]);
+    expect([...counts.at(-1)!]).toEqual([
+      ["pane-a", 1],
+      ["pane-b", 1],
+    ]);
+    states.replace([expired, withdrawn]);
+    expect(counts.at(-1)?.size).toBe(0);
+    // Each pane's views get one empty state, and are let go.
+    expect(pushes.slice(-2)).toEqual([
+      expect.objectContaining(empty("pane-a")),
+      expect.objectContaining(empty("pane-b")),
+    ]);
+    expect(states.get("pane-a")).toBeNull();
   });
 
   it("clears every count once the panes go, whether or not the views are told", () => {

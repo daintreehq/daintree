@@ -1862,6 +1862,20 @@ async function advisoryExpired(
   });
 }
 
+/** What the person wrote after the deadline, which a notice still to be typed holds back. */
+const LATE_FOLLOW_UP = "Keep the old sidebar for now.";
+
+/**
+ * A follow-up of the person's on `id`, sequenced after its notice and stopped
+ * before it was typed: with it, a stopped notice is the person's to resolve
+ * too, so the two go back together (#18021).
+ */
+const heldBehindNotice = (store: DaintreeLocalStore, id = Q1) =>
+  followedUp(store, id, M1, LATE_FOLLOW_UP, {
+    event_seq: 12,
+    delivery: { status: "needs-attention", error_code: "pane_gone" },
+  });
+
 describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", () => {
   const entryOf = async (h: ReturnType<typeof setup>, id = Q1) =>
     parseAnswers((await h.question(id))!.answers_json)[0]!;
@@ -2078,7 +2092,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     await stopped(h.delivery);
   });
 
-  it("types nothing into a pane whose launch generation changed before its line was due, and needs a person", async () => {
+  it("types nothing into a pane whose launch generation changed before its line was due, and moves it nowhere", async () => {
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
 
@@ -2089,7 +2103,12 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention", 60_000);
     expect(h.client.submitted).toEqual([]);
     expect((await entryOf(h)).write_refused).toBe(true);
+    // The notice alone is over with its question (#18021): no one is asked about it.
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({ result: "resolved" });
 
+    // With the person's follow-up behind it, the two go only to the run that asked.
+    await heldBehindNotice(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({ questionId: Q1, canReassign: false });
     await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
@@ -2101,7 +2120,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     await stopped(h.delivery);
   });
 
-  it("offers Try resume for a notice its run's own session can take, and types it there once tried", async () => {
+  it("offers Try resume for a notice and the follow-up it holds back, and types both there in thread order", async () => {
     // The first resume never sees the agent at its prompt; the one a person asks for does.
     const prompt = { reached: false };
     const h = setup({
@@ -2121,20 +2140,29 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     h.delivery.start();
     await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention", 60_000);
     expect(h.client.submitted).toEqual([]);
+    // Alone, it is no one's to resume (#18021).
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await expect(h.delivery.resumeAnswer(Q1)).resolves.toEqual({ result: "resolved" });
+
+    await heldBehindNotice(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({ questionId: Q1, canResume: true, canReassign: false });
 
     prompt.reached = true;
     const resumed = settledValue(h.delivery.resumeAnswer(Q1));
     await until(() => resumed.done);
-    expect(h.client.submitted).toHaveLength(1);
-    expect(h.client.submitted[0].id).toBe(RESUMED);
-    expect(h.client.submitted[0].text).toContain("status: advisory-unanswered");
+    expect(h.client.submitted.map((typed) => typed.id)).not.toContain(PANE);
+    expect(h.client.submitted.every((typed) => typed.id === RESUMED)).toBe(true);
+    const typed = h.client.submitted.map((each) => each.text).join("\n");
+    expect(typed.indexOf("status: advisory-unanswered")).toBeGreaterThanOrEqual(0);
+    expect(typed.indexOf(LATE_FOLLOW_UP)).toBeGreaterThan(
+      typed.indexOf("status: advisory-unanswered")
+    );
     expect(h.launches.every((launch) => launch.sessionId === "claude-session-9")).toBe(true);
     await stopped(h.delivery);
   });
 
-  it("clears a refused write when a person asks for the notice to be tried again", async () => {
+  it("clears a refused write when a person asks for the notice to be tried again with its follow-up", async () => {
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     h.delivery.start();
@@ -2143,18 +2171,25 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     h.patch({ launchGeneration: 8 });
     await until(async () => (await entryOf(h)).write_refused === true, 60_000);
 
-    // The run is back as it was: the retry types the notice and the refusal no longer stands.
+    // The run is back as it was. Alone, the notice is no one's to retry (#18021), and stays refused.
     h.client.generations.set(PANE, 7);
     h.patch({ launchGeneration: 7 });
+    await expect(h.delivery.resumeAnswer(Q1)).resolves.toEqual({ result: "resolved" });
+    expect((await entryOf(h)).write_refused).toBe(true);
+
+    // With the person's follow-up behind it, the retry types both and the refusal no longer stands.
+    await heldBehindNotice(h.store);
     const retried = settledValue(h.delivery.resumeAnswer(Q1));
     await until(() => retried.done);
     expect(retried.value).toMatchObject({ result: "delivered" });
-    expect(h.client.submitted).toHaveLength(1);
+    const typed = h.client.submitted.map((each) => each.text).join("\n");
+    expect(typed).toContain("status: advisory-unanswered");
+    expect(typed).toContain(LATE_FOLLOW_UP);
     expect((await entryOf(h)).write_refused).toBeUndefined();
     await stopped(h.delivery);
   });
 
-  it("refuses to move a never-published notice whose plan is due to another pane", async () => {
+  it("refuses to move a never-published notice whose plan is due, or its follow-up, to another pane", async () => {
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await answered(h.store, Q1, 1, "approve", {
       local_status: "publish-failed",
@@ -2178,11 +2213,17 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
         },
       ]),
     });
+    // Alone, it is no one's to move (#18021).
+    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({ result: "resolved" });
+    await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
+
+    await heldBehindNotice(h.store);
     await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({
       result: "refused",
       reason: "asker-only",
     });
     await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
+    expect((await h.question(Q1))?.origin).toEqual(ORIGIN);
     await stopped(h.delivery);
   });
 
@@ -2293,10 +2334,29 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention", 60_000);
   }
 
-  it("lists the notice in the answer's place with its round, deadline and plan, and nothing to copy or move", async () => {
+  it("trails a notice alone that stopped and lists it for no one, its question over (#18021)", async () => {
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
+
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await expect(h.delivery.markHandled(Q1)).resolves.toEqual({ result: "resolved" });
+    expect(h.client.submitted).toEqual([]);
+    // How far it got is still recorded, content-free, as before.
+    expect(await trail(h)).toMatchObject([
+      { step: "attempted" },
+      { step: "untyped" },
+      { step: "needs-attention", refused: "admitted-write" },
+    ]);
+    expect((await entryOf(h)).deliver).toBe(true);
+    await stopped(h.delivery);
+  });
+
+  it("lists the notice in the answer's place with the follow-up it holds back, its round, deadline and plan, and copies only the follow-up", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+    await refusedWrite(h);
+    await heldBehindNotice(h.store);
 
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({
@@ -2313,8 +2373,12 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
       },
       canReassign: false,
     });
+    expect(item!.followUps.map((followUp) => followUp.messageId)).toEqual([M1]);
     expect(item!.origin).toMatchObject({ paneId: PANE, otherHost: null });
-    await expect(h.delivery.copiedAnswer(Q1)).resolves.toBeNull();
+    // A notice is Daintree's to type, never a person's to paste: only their own words are copied.
+    const copied = await h.delivery.copiedAnswer(Q1);
+    expect(copied).toContain(LATE_FOLLOW_UP);
+    expect(copied).not.toContain("advisory-unanswered");
     expect(h.client.submitted).toEqual([]);
     // The sink refused the write it had admitted: nothing was typed, and a person decides.
     expect(await trail(h)).toMatchObject([
@@ -2331,6 +2395,8 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
       delivery_status: "needs-attention",
       error_code: "pane_gone",
     });
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await heldBehindNotice(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item?.notice?.disposition).toBe("fallback-withheld");
     await stopped(h.delivery);
@@ -2395,7 +2461,31 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     await stopped(h.delivery);
   });
 
-  it("after a restart that can't tell whether the notice went in, lists it uncertain, never types it again, and lets a person handle it", async () => {
+  it("after a restart that can't tell whether the notice went in, never types it again, and asks no one about it alone", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true, resume: {} });
+    await advisoryExpired(h.store, Q1, 1, { last_injection_id: CRASHED });
+    await h.store.putIntent(intent(CRASHED, Q1, { answer_revision: 0 }));
+    h.client.screens.set(PANE, "❯ \r\n");
+
+    h.delivery.start();
+    await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await expect(h.delivery.resumeAnswer(Q1)).resolves.toEqual({ result: "resolved" });
+    await expect(h.delivery.markHandled(Q1)).resolves.toEqual({ result: "resolved" });
+    h.signal("settled");
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+    expect(h.launches).toEqual([]);
+    // Possibly typed stays exactly that.
+    expect((await h.question(Q1))?.delivery_status).toBe("delivery-uncertain");
+    expect(await trail(h)).toMatchObject([
+      { step: "attempted", attempt: CRASHED },
+      { step: "uncertain", reason: "crash_unreconciled", attempt: CRASHED },
+    ]);
+    await stopped(h.delivery);
+  });
+
+  it("after a restart that can't tell whether the notice went in, lists it uncertain with the follow-up it holds back, never types it again, and lets a person handle it", async () => {
     // The run's own session, so recovery reads its screen for the marker and finds none.
     const h = setup({ advisory: settledAttempt(), listTerminals: true, resume: {} });
     await advisoryExpired(h.store, Q1, 1, { last_injection_id: CRASHED });
@@ -2404,6 +2494,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
 
     h.delivery.start();
     await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
+    await heldBehindNotice(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({
       status: "delivery-uncertain",
@@ -2459,11 +2550,12 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     await stopped(h.delivery);
   });
 
-  it("leaves no stall behind when a reopen replaces a notice that needed a person", async () => {
+  it("leaves no stall of the notice behind when a reopen replaces it, only the follow-up it held back", async () => {
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
-    expect(await h.delivery.attentionItems()).toHaveLength(1);
+    await heldBehindNotice(h.store);
+    expect((await h.delivery.attentionItems())[0]?.notice).not.toBeNull();
 
     // The 0.9.0 inbox withdraws the notice and keeps the row's stopped status.
     await h.delivery.lock.run(async () => {
@@ -2478,8 +2570,9 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
       });
     });
     expect((await h.question(Q1))?.delivery_status).toBe("needs-attention");
-    expect(await h.delivery.attentionItems()).toEqual([]);
-    await expect(h.delivery.markHandled(Q1)).resolves.toEqual({ result: "resolved" });
+    const [item] = await h.delivery.attentionItems();
+    expect(item).toMatchObject({ notice: null, answer: null });
+    expect(item!.followUps.map((followUp) => followUp.messageId)).toEqual([M1]);
     await stopped(h.delivery);
   });
 
@@ -2487,6 +2580,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
+    await heldBehindNotice(h.store);
 
     const results = await Promise.all([h.delivery.markHandled(Q1), h.delivery.markHandled(Q1)]);
     expect(results.map((r) => r.result).sort()).toEqual(["handled", "resolved"]);
@@ -2507,6 +2601,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
+    await heldBehindNotice(h.store);
     const [read] = await h.delivery.attentionItems();
     expect(read!.token).toMatch(/^[0-9a-f]{64}$/);
 
@@ -2534,6 +2629,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
+    await heldBehindNotice(h.store);
     h.client.generations.set(PANE, 7);
     h.patch({ launchGeneration: 7 });
     // The person's phone reopens the question in the same lock turn the retry is written in.
@@ -2550,9 +2646,105 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
       return next;
     };
 
+    const retried = settledValue(h.delivery.resumeAnswer(Q1));
+    await until(() => retried.done);
+    expect(retried.value).toEqual({ result: "resolved" });
+    // The follow-up it held back goes on, on its own.
+    const typed = h.client.submitted.map((each) => each.text).join("\n");
+    expect(typed).not.toContain("advisory-unanswered");
+    expect(typed).toContain(LATE_FOLLOW_UP);
+    expect((await trail(h)).map((t) => t.step)).toContain("superseded");
+    await stopped(h.delivery);
+  });
+});
+
+describe("AnswerDelivery, a question over without an answer (#18021)", () => {
+  const notice = (id: string, kind: "expired" | "unpublished"): AnswerEntry => ({
+    entry_id: `${kind}-${id}`,
+    kind,
+    action: "expire",
+    revision: 1,
+    source: "system",
+    correction: false,
+    created_at: DEADLINE,
+    deliver: true,
+    delivered: false,
+    sealed: null,
+  });
+
+  it("lists nothing for a withdrawn, expired or never-published question whose delivery stopped, and acts on none", async () => {
+    const h = setup({ listTerminals: true });
+    let alias = 0;
+    const ids: string[] = [];
+    for (const [delivery_status, error_code] of [
+      ["needs-attention", "pane_gone"],
+      ["delivery-uncertain", "inject_ambiguous"],
+    ] as const) {
+      const stalled = { delivery_status, error_code };
+      // Withdrawn after its answer stalled: the library drops the answer and keeps the status.
+      const withdrawn = `0190f0aa11112222333344445555a${++alias}01`;
+      await answered(h.store, withdrawn, alias, "approve", {
+        ...stalled,
+        local_status: "cancelled",
+      });
+      const [entry] = parseAnswers((await h.question(withdrawn))!.answers_json);
+      await h.store.updateQuestion(withdrawn, {
+        answers_json: serializeAnswers([{ ...entry!, deliver: false }]),
+      });
+      const expired = `0190f0aa11112222333344445555a${++alias}01`;
+      await answered(h.store, expired, alias, "approve", {
+        ...stalled,
+        local_status: "expired",
+        answers_json: serializeAnswers([notice(expired, "expired")]),
+      });
+      const unsent = `0190f0aa11112222333344445555a${++alias}01`;
+      await answered(h.store, unsent, alias, "approve", {
+        ...stalled,
+        local_status: "publish-failed",
+        answers_json: serializeAnswers([notice(unsent, "unpublished")]),
+      });
+      ids.push(withdrawn, expired, unsent);
+    }
+
+    h.delivery.start();
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    for (const id of ids) {
+      await expect(h.delivery.copiedAnswer(id)).resolves.toBeNull();
+      await expect(h.delivery.resumeAnswer(id)).resolves.toEqual({ result: "resolved" });
+      await expect(h.delivery.markHandled(id)).resolves.toEqual({ result: "resolved" });
+    }
+    expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.handled")).toBe(false);
+    expect(h.client.submitted).toEqual([]);
+    await stopped(h.delivery);
+  });
+
+  it("calls a question withdrawn while its retry ran resolved, never delivered", async () => {
+    const h = setup({ listTerminals: true });
+    await answered(h.store, Q1, 1, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
+    h.delivery.start();
+    expect(await h.delivery.attentionItems()).toHaveLength(1);
+    // The withdrawal lands in the same lock turn the retry is written in, as the library applies one.
+    const update = h.store.updateQuestion.bind(h.store);
+    h.store.updateQuestion = async (id, patch) => {
+      const next = await update(id, patch);
+      if (id === Q1 && patch.delivery_status === "desktop-received") {
+        const row = (await h.question(Q1))!;
+        return update(id, {
+          local_status: "cancelled",
+          answers_json: serializeAnswers(
+            parseAnswers(row.answers_json).map((e) => (e.delivered ? e : { ...e, deliver: false }))
+          ),
+        });
+      }
+      return next;
+    };
+
     await expect(h.delivery.resumeAnswer(Q1)).resolves.toEqual({ result: "resolved" });
     expect(h.client.submitted).toEqual([]);
-    expect((await trail(h)).map((t) => t.step)).toContain("superseded");
+    expect(await h.delivery.attentionItems()).toEqual([]);
     await stopped(h.delivery);
   });
 });
