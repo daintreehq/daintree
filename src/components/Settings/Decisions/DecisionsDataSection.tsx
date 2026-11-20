@@ -220,8 +220,8 @@ export function DecisionsDataSection({
         deleting={data.pending === "delete-local"}
         error={errorFor("delete-local")}
         onCancel={close}
-        onConfirm={() => {
-          data.deleteLocalData().then(finish, () => {});
+        onConfirm={(oneClick) => {
+          data.deleteLocalData(oneClick).then(finish, () => {});
         }}
       />
     </SettingsSection>

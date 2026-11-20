@@ -79,6 +79,8 @@ export function DecisionsEncryptionSection({
         isOpen={confirming}
         relayOrigin={relayOrigin}
         devicesRead={devicesRead}
+        // The switch changing, or a revocation starting, while it's open starts nothing.
+        unavailable={locked || keyActions.pending !== null}
         onCancel={() => setConfirming(false)}
         onConfirm={() => {
           // The busy button and the notice beside it carry the rotation from here.

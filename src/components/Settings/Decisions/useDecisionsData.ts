@@ -24,7 +24,8 @@ export interface UseDecisionsDataResult {
   /** Each resolves true once main answered, whatever it observed; false when it couldn't (see `error`). */
   exportHistory(passphrase: string): Promise<boolean>;
   deleteRelayData(origin: string): Promise<boolean>;
-  deleteLocalData(): Promise<boolean>;
+  /** `oneClick`: no typed gate was asked, so main deletes nothing while uncovered keys are stored (#18064). */
+  deleteLocalData(oneClick: boolean): Promise<boolean>;
   /** Forgets the last outcome; an action already sent still finishes in main. */
   reset(): void;
 }
@@ -104,10 +105,10 @@ export function useDecisionsData(
         .then((result) => ({ action: "delete-relay" as const, result }))
     );
 
-  const deleteLocalData = () =>
+  const deleteLocalData = (oneClick: boolean) =>
     run("delete-local", () =>
       window.electron.decisions
-        .deleteLocalData()
+        .deleteLocalData({ oneClick })
         .then((result) => ({ action: "delete-local" as const, result }))
     );
 

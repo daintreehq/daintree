@@ -10,6 +10,8 @@ interface DecisionsRotateKeysDialogProps {
   relayOrigin: string;
   /** The relay's last list of devices, shared with the Devices and Remote Hosts sections. */
   devicesRead: Pick<UseDecisionsDevicesResult, "devices" | "failure" | "loading">;
+  /** Nothing may start now: the switch is changing or another key change runs. */
+  unavailable?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -24,6 +26,7 @@ export function DecisionsRotateKeysDialog({
   isOpen,
   relayOrigin,
   devicesRead,
+  unavailable = false,
   onCancel,
   onConfirm,
 }: DecisionsRotateKeysDialogProps) {
@@ -38,6 +41,7 @@ export function DecisionsRotateKeysDialog({
       title={`Rotate keys for '${host}'?`}
       description={`Daintree seals a new key to each device the relay lists, and new questions and answers use it; what a device already holds stays readable on it. ${KITS_AFTER_NEW_KEY}`}
       confirmLabel="Rotate keys"
+      confirmDisabled={unavailable}
       onConfirm={onConfirm}
     >
       <RecipientPreview recipients={recipients} devicesRead={devicesRead} />
@@ -52,7 +56,9 @@ function RecipientPreview({
   recipients: DecisionsDevice[] | null;
   devicesRead: DecisionsRotateKeysDialogProps["devicesRead"];
 }) {
-  if (recipients === null) {
+  // An empty list from a read that has since failed, or is being redone, can't promise no devices.
+  const settled = devicesRead.failure === null && !devicesRead.loading;
+  if (recipients === null || (recipients.length === 0 && !settled)) {
     return (
       <p className="text-xs text-text-secondary">
         {devicesRead.failure !== null

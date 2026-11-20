@@ -6,6 +6,7 @@ import {
   KEYS_GATE_TARGET,
   NO_CURRENT_KIT,
   SAVE_KIT_FIRST,
+  keyLossConsequence,
   onlyCopyPreamble,
 } from "./recoveryKitCopy";
 
@@ -13,12 +14,15 @@ interface DecisionsDisconnectDialogProps {
   isOpen: boolean;
   /** The relay set up here; null when the keys are an unfinished setup's. */
   relayOrigin: string | null;
+  /** This computer's key file is there to save a kit of. */
+  keysStored: boolean;
   /** A verified recovery kit holds every key this computer has now (#18064). */
   kitCurrent: boolean;
   disconnecting: boolean;
   error: string | null;
   onCancel: () => void;
-  onConfirm: () => void;
+  /** `oneClick`: no typed gate was asked, which main checks still holds. */
+  onConfirm: (oneClick: boolean) => void;
   /** Where focus goes once a disconnect has taken its own button away. */
   restoreFocusTo?: RestoreFocusTarget;
 }
@@ -29,11 +33,13 @@ interface DecisionsDisconnectDialogProps {
  * goes with them, and that the relay and its data stay as they are. With no
  * current recovery kit they may be the only copy, so typing the relay's
  * address (or, for an unfinished setup's keys, their name) is the gate
- * (#18064); with one, a click is enough.
+ * (#18064); with one, a click is enough, and main removes nothing if the
+ * keys changed before its turn.
  */
 export function DecisionsDisconnectDialog({
   isOpen,
   relayOrigin,
+  keysStored,
   kitCurrent,
   disconnecting,
   error,
@@ -47,7 +53,7 @@ export function DecisionsDisconnectDialog({
   const stays = "The relay and everything on it stay as they are, and paired phones stay paired.";
   const description = host
     ? gated
-      ? `${NO_CURRENT_KIT} Unless another computer holds this identity, disconnecting leaves ${host}'s past questions and answers unreadable, and nobody can reconnect to it as its owner. ${stays} ${SAVE_KIT_FIRST}`
+      ? `${NO_CURRENT_KIT} ${keyLossConsequence(host)} ${stays}${keysStored ? ` ${SAVE_KIT_FIRST}` : ""}`
       : `This removes this computer's Decisions keys for ${host}. To connect it again, this computer needs a recovery kit for the relay; if no kit or other computer holds this identity, the relay's past questions and answers can't be read again and nobody can reconnect to it as its owner. ${stays}`
     : "No relay is recorded for these keys. If they're the only copy of a relay's owner keys (a claim that wasn't confirmed, or a setup whose settings didn't save), that relay can't be reconnected to as its owner without a recovery kit, or claimed again until it's deployed afresh. Nothing on any relay changes.";
   return (
@@ -60,7 +66,7 @@ export function DecisionsDisconnectDialog({
       typedNameTarget={gated ? (host ?? KEYS_GATE_TARGET) : undefined}
       typedNamePreamble={gated ? onlyCopyPreamble(host) : undefined}
       confirmLabel={host ? "Disconnect relay" : "Remove keys"}
-      onConfirm={onConfirm}
+      onConfirm={() => onConfirm(!gated)}
       isConfirmLoading={disconnecting}
       restoreFocusTo={restoreFocusTo}
     >

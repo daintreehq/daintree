@@ -77,6 +77,8 @@ export function DecisionsDevicesAndHosts({
       />
       {status.relayOrigin !== undefined && (
         <DecisionsEncryptionSection
+          // Another relay set up meanwhile closes a confirmation made for this one.
+          key={status.relayOrigin}
           relayOrigin={status.relayOrigin}
           devicesRead={devicesRead}
           keyActions={keyActions}

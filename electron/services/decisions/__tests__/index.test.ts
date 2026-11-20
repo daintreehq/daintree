@@ -62,6 +62,9 @@ vi.mock("electron", () => ({
 // The key file each service uses, in a directory of the test's own.
 const keyFile = vi.hoisted(() => ({ path: "" }));
 
+/** A key erasure confirmed through the typed gate, which main doesn't recheck (#18064). */
+const TYPED = { oneClick: false };
+
 /** The key file version `keyFileVersion` gives for this content. */
 function versionOf(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -3187,7 +3190,7 @@ describe("Decisions entry", () => {
 
     it("records a claimed relay as unverified until a recovery kit is", async () => {
       saved.value = { enabled: true, ...RELAY, recoveryKit: { verifiedAt: 9, ...RELAY } };
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
       setupRuns.claim.mockResolvedValue({ identity: CLAIMED, kitVerified: false });
 
       const result = await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
@@ -3229,8 +3232,12 @@ describe("Decisions entry", () => {
     it("records a restore's kit as current for the keys it saved to an empty file, and not for keys changed under it (#18064)", async () => {
       saved.value = { enabled: true };
       await startDecisionsIfEnabled();
+      // The restore's own save, as the key store records it: sealing needs a keychain these tests lack.
+      const keyStore = peekDecisionsService()!.getKeyStore();
+      const ownWrite = vi.spyOn(keyStore, "lastWrittenVersion");
       setupRuns.restore.mockImplementation(async () => {
         writeFileSync(keyFile.path, "sealed from the kit");
+        ownWrite.mockReturnValue(versionOf("sealed from the kit"));
         return { identity: CLAIMED, kitVerified: true };
       });
       const restore = () =>
@@ -3251,6 +3258,18 @@ describe("Decisions entry", () => {
       const result = await restore();
       expect(result).toMatchObject({ result: "saved" });
       expect(result).not.toHaveProperty("status.recoveryKitCurrent");
+      expect((saved.value as { recoveryKit: object }).recoveryKit).not.toHaveProperty("keys");
+
+      // Nor are keys that appeared in an empty file by another route than its own save,
+      // such as an interrupted deletion putting newer keys back.
+      saved.value = { enabled: true };
+      rmSync(keyFile.path);
+      ownWrite.mockReturnValue(null);
+      setupRuns.restore.mockImplementation(async () => {
+        writeFileSync(keyFile.path, "newer keys put back");
+        return { identity: CLAIMED, kitVerified: true };
+      });
+      await expect(restore()).resolves.not.toHaveProperty("status.recoveryKitCurrent");
       expect((saved.value as { recoveryKit: object }).recoveryKit).not.toHaveProperty("keys");
     });
 
@@ -3294,7 +3313,7 @@ describe("Decisions entry", () => {
       await expect(
         claimRelay({ url: "relay.example.com", claimSecret: SECRET })
       ).rejects.toMatchObject(CANCELLED);
-      await expect(disconnectRelay()).rejects.toMatchObject(CANCELLED);
+      await expect(disconnectRelay(TYPED)).rejects.toMatchObject(CANCELLED);
       expect(setupRuns.claim).not.toHaveBeenCalled();
       expect(peekDecisionsService()).toBeNull();
     });
@@ -3325,7 +3344,7 @@ describe("Decisions entry", () => {
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
 
-      const status = await disconnectRelay();
+      const status = await disconnectRelay(TYPED);
 
       expect(existsSync(keyFile.path)).toBe(false);
       expect(status).toEqual(withRevision({ state: "not-connected", consentedAt: 5 }));
@@ -3336,6 +3355,52 @@ describe("Decisions entry", () => {
         proxyAllowlisted: true,
       });
       expect(peekDecisionsService()?.getSettings()?.relayOrigin).toBeNull();
+    });
+
+    it("removes the keys on a one-click confirm only while a current kit covers them (#18064)", async () => {
+      saved.value = {
+        enabled: true,
+        consentedAt: 5,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await startDecisionsIfEnabled();
+      // A rotation from another window landed after the one-click confirm.
+      writeFileSync(keyFile.path, "sealed with a newer epoch");
+
+      await expect(disconnectRelay({ oneClick: true })).rejects.toMatchObject({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+      });
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed with a newer epoch");
+      expect(saved.value).toMatchObject({ ...RELAY });
+      // Every window hears the kit no longer covers the keys, so the dialog asks for the address.
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ keysStored: true, recoveryKitVerifiedAt: 9 })
+      );
+      expect(pushedStatuses().at(-1)).not.toHaveProperty("recoveryKitCurrent");
+
+      // The typed gate needs no kit.
+      await disconnectRelay(TYPED);
+      expect(existsSync(keyFile.path)).toBe(false);
+    });
+
+    it("removes covered keys on a one-click confirm, and a verification from before the keys' version covers none (#18064)", async () => {
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      await disconnectRelay({ oneClick: true });
+      expect(existsSync(keyFile.path)).toBe(false);
+
+      saved.value = { enabled: true, ...RELAY, recoveryKit: { verifiedAt: 9, ...RELAY } };
+      writeFileSync(keyFile.path, "sealed");
+      await expect(disconnectRelay({ oneClick: true })).rejects.toMatchObject({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+      });
+      expect(existsSync(keyFile.path)).toBe(true);
     });
 
     it("reports keys stored on this computer from the file alone", async () => {
@@ -3767,7 +3832,7 @@ describe("Decisions entry", () => {
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
 
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
 
       expect(connections[0]!.stopped).toBe(1);
       expect(connections[0]!.keyFileAtStop).toBe(true);
@@ -3782,7 +3847,7 @@ describe("Decisions entry", () => {
       expect(connections).toHaveLength(0);
 
       writeFileSync(keyFile.path, "sealed");
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
       setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
       await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
 
@@ -4089,7 +4154,7 @@ describe("Decisions entry", () => {
       ).resolves.toEqual({ result: "cancelled" });
       await expect(
         exportData({ passphrase: PASSPHRASE }, async () => {
-          await deleteLocalData();
+          await deleteLocalData(TYPED);
           return exportTarget();
         })
       ).resolves.toEqual({ result: "cancelled" });
@@ -4106,7 +4171,7 @@ describe("Decisions entry", () => {
 
       const exporting = exportData({ passphrase: PASSPHRASE }, async () => exportTarget());
       await vi.waitFor(() => expect(writes.writing).toBe(true));
-      const deleting = deleteLocalData();
+      const deleting = deleteLocalData(TYPED);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(storedRows.count).toBe(3);
 
@@ -4156,7 +4221,7 @@ describe("Decisions entry", () => {
         CANCELLED
       );
       await expect(deleteRelayData({ origin: RELAY.relayOrigin })).rejects.toMatchObject(CANCELLED);
-      await expect(deleteLocalData()).rejects.toMatchObject(CANCELLED);
+      await expect(deleteLocalData(TYPED)).rejects.toMatchObject(CANCELLED);
       expect(peekDecisionsService()).toBeNull();
     });
 
@@ -4203,7 +4268,7 @@ describe("Decisions entry", () => {
       writeFileSync(keyFile.path, "sealed");
       storedRows.count = 3;
 
-      await expect(deleteLocalData()).resolves.toEqual({
+      await expect(deleteLocalData(TYPED)).resolves.toEqual({
         result: "deleted",
         status: withRevision({ state: "not-connected", consentedAt: 5 }),
       });
@@ -4226,6 +4291,46 @@ describe("Decisions entry", () => {
       );
     });
 
+    it("deletes nothing on a one-click confirm while the key file holds keys no current kit covers (#18064)", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      // Settings hadn't shown these keys, or a kit covering them, when the click came.
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 3;
+
+      await expect(deleteLocalData({ oneClick: true })).resolves.toEqual({
+        result: "failed",
+        reason: "keys-changed",
+      });
+
+      expect(storedRows.count).toBe(3);
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+      expect(saved.value).toMatchObject({ enabled: true, consentedAt: 5, ...RELAY });
+      // The store reopens, so the lifetime carries on as it was.
+      expect(peekDecisionsService()?.getStore()).not.toBeNull();
+
+      saved.value = {
+        ...(saved.value as object),
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await expect(deleteLocalData({ oneClick: true })).resolves.toMatchObject({
+        result: "deleted",
+      });
+      expect(existsSync(keyFile.path)).toBe(false);
+      expect(storedRows.count).toBe(0);
+    });
+
+    it("deletes on a one-click confirm when there are no keys to lose (#18064)", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      storedRows.count = 2;
+
+      await expect(deleteLocalData({ oneClick: true })).resolves.toMatchObject({
+        result: "deleted",
+      });
+      expect(storedRows.count).toBe(0);
+    });
+
     it("leaves everything as it was when the rows can't be deleted", async () => {
       saved.value = { enabled: true, consentedAt: 5, ...RELAY };
       await startDecisionsIfEnabled();
@@ -4233,7 +4338,7 @@ describe("Decisions entry", () => {
       storedRows.count = 3;
       storedRows.failErase = true;
 
-      await expect(deleteLocalData()).resolves.toEqual({ result: "failed", reason: "storage" });
+      await expect(deleteLocalData(TYPED)).resolves.toEqual({ result: "failed", reason: "storage" });
 
       expect(storedRows.count).toBe(3);
       expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
@@ -4571,8 +4676,8 @@ describe("Decisions entry", () => {
 
     it.each([
       ["turning off", () => setDecisionsEnabled(false)],
-      ["disconnecting", () => disconnectRelay()],
-      ["deleting local data", () => deleteLocalData()],
+      ["disconnecting", () => disconnectRelay(TYPED)],
+      ["deleting local data", () => deleteLocalData(TYPED)],
       ["quitting", () => stopDecisions()],
     ])(
       "is cancelled by %s while the dialog is open, and writes nothing after",
@@ -4597,8 +4702,8 @@ describe("Decisions entry", () => {
 
     it.each([
       ["turning off", () => setDecisionsEnabled(false)],
-      ["disconnecting", () => disconnectRelay()],
-      ["deleting local data", () => deleteLocalData()],
+      ["disconnecting", () => disconnectRelay(TYPED)],
+      ["deleting local data", () => deleteLocalData(TYPED)],
       ["quitting", () => stopDecisions()],
     ])("opens no dialog when %s while the kit is being made", async (_name, act) => {
       await setUp();
@@ -5537,7 +5642,7 @@ describe("Decisions entry", () => {
         return suspend();
       });
 
-      const disconnecting = disconnectRelay();
+      const disconnecting = disconnectRelay(TYPED);
       try {
         expect(check.cancelled).toBe(1);
         // The run ends as passed before its cancel lands: still not recorded.
@@ -5602,7 +5707,7 @@ describe("Decisions entry", () => {
         release = resolve;
       });
 
-      const disconnecting = disconnectRelay();
+      const disconnecting = disconnectRelay(TYPED);
       await settle();
       const start = startSetupCheck();
       release();
@@ -5634,7 +5739,7 @@ describe("Decisions entry", () => {
       saved.value = { enabled: true, ...RELAY };
       await startSetupCheck();
 
-      await deleteLocalData();
+      await deleteLocalData(TYPED);
 
       expect(setupChecks.made[0]!.cancelled).toBe(1);
       expect(getSetupCheck()).toBeNull();
@@ -5655,7 +5760,7 @@ describe("Decisions entry", () => {
       writeFileSync(keyFile.path, "sealed");
       await startDecisionsIfEnabled();
 
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
 
       expect((saved.value as { setupCheck: unknown }).setupCheck).toBeNull();
     });

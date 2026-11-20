@@ -119,6 +119,12 @@ export const KEYS_GATE_TARGET = "Decisions keys";
 export const NO_CURRENT_KIT =
   "No recovery kit verified here holds every key this computer has now.";
 
+/** What goes with keys no current kit holds, true whether a stale kit exists or none does. */
+export function keyLossConsequence(host: string | null): string {
+  const relay = host ?? "the relay";
+  return `Questions and answers sealed with a key only this computer holds can't be read again once it's gone, and unless a recovery kit or another computer holds this identity, nobody can reconnect to ${relay} as its owner.`;
+}
+
 /** Only a recorded relay can have a kit saved for it, so only then is there a first step to offer. */
 export const SAVE_KIT_FIRST = "Save and verify a recovery kit first to keep a way back.";
 
@@ -130,4 +136,4 @@ export function onlyCopyPreamble(host: string | null): string {
 
 /** A rotation or revocation adds a key no kit saved before it holds (#18064). */
 export const KITS_AFTER_NEW_KEY =
-  "Recovery kits saved before now won't hold the new key, so save and verify a new one afterwards.";
+  "Recovery kits saved before the new key won't hold it, so save and verify a new one once it's in place.";

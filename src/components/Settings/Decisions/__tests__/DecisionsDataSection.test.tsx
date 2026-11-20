@@ -357,7 +357,7 @@ describe("DecisionsDataSection", () => {
       fireEvent.click(within(confirmDialog).getByRole("button", { name: "Delete local data" }));
     });
 
-    expect(deleteLocalData).toHaveBeenCalledOnce();
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true });
     expect(onChanged).toHaveBeenCalledExactlyOnceWith(status);
     await gone("alertdialog");
     expect(
@@ -402,9 +402,29 @@ describe("DecisionsDataSection", () => {
         fireEvent.click(confirm());
       });
 
-      expect(deleteLocalData).toHaveBeenCalledOnce();
+      expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: false });
     }
   );
+
+  it("says nothing was deleted when main found keys the one-click confirm didn't cover (#18064)", async () => {
+    deleteLocalData.mockResolvedValue({ result: "failed", reason: "keys-changed" });
+    const onChanged = vi.fn();
+    renderSection({ state: "not-connected" }, { onChanged });
+
+    fireEvent.click(button("Delete local data"));
+    await act(async () => {
+      fireEvent.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete local data" })
+      );
+    });
+
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true });
+    // Main's status is read afresh, so the next confirm shows the keys and the gate.
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith(null);
+    const row = document.getElementById("decisions-data-outcome")!;
+    expect(within(row).getByText(/no recovery kit verified here covers/)).toBeTruthy();
+    expect(within(row).getByText(/Nothing was deleted/)).toBeTruthy();
+  });
 
   it("asks for main's status afresh when a local deletion failed", async () => {
     deleteLocalData.mockResolvedValue({ result: "failed", reason: "disk-pressure" });

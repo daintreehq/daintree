@@ -230,6 +230,7 @@ describe("Remove relay", () => {
     expect(dialog.textContent).toMatch(/Worker.*attachments.*R2 bucket/);
     expect(dialog.textContent).toMatch(/Every phone paired with it stops working/);
     expect(dialog.textContent).toMatch(/a relay deployed again starts empty/);
+    expect(dialog.textContent).toMatch(/each phone paired to it afresh/);
     // The specific consequence, never the generic irreversibility ConfirmDialog flags.
     expect(dialog.textContent).not.toMatch(/can['’]t be undone|cannot be undone/);
     expect(dialog.textContent).toMatch(/type the Worker's name before it deletes anything/);

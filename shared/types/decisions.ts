@@ -694,9 +694,24 @@ export type DecisionsRelayDeleteResult =
  *   to tell which. Deleting again finishes or undoes it, and so does the next
  *   start when files were set aside. Decisions holds no store until then.
  */
+/**
+ * How the person confirmed erasing this computer's keys (#18064). `oneClick`:
+ * Settings showed no keys here, or a current recovery kit holding them, so a
+ * click was enough. Main then erases nothing while the key file holds keys no
+ * current kit covers, read once pending key writes have settled, since a
+ * rotation from another window can land between the confirm and the erase.
+ */
+export interface DecisionsKeyErasurePayload {
+  oneClick: boolean;
+}
+
+/**
+ * `keys-changed` (#18064): the confirm was one click, but the key file holds
+ * keys no current recovery kit covers, so nothing was deleted.
+ */
 export type DecisionsLocalDeleteResult =
   | { result: "deleted"; status: DecisionsStatus }
-  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" | "model" }
+  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" | "model" | "keys-changed" }
   | { result: "incomplete"; erased: boolean | null; status: DecisionsStatus };
 
 /**

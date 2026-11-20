@@ -6,6 +6,7 @@ import type {
   DecisionsExportResult,
   DecisionsKitExportResult,
   DecisionsKitVerifyResult,
+  DecisionsKeyErasurePayload,
   DecisionsLocalDeleteResult,
   DecisionsPolicy,
   DecisionsRelayCheck,
@@ -512,8 +513,9 @@ const claimDeployedRelay = decisionsNamespace.ops.claimDeployedRelay.handler as 
 const restoreIdentity = decisionsNamespace.ops.restoreIdentity.handler as unknown as (
   payload: RestoreDecisionsIdentityPayload
 ) => Promise<DecisionsConnectResult>;
-const disconnectRelay = decisionsNamespace.ops.disconnectRelay
-  .handler as unknown as () => Promise<DecisionsStatus>;
+const disconnectRelay = decisionsNamespace.ops.disconnectRelay.handler as unknown as (
+  payload?: DecisionsKeyErasurePayload
+) => Promise<DecisionsStatus>;
 const getPolicy = decisionsNamespace.ops.getPolicy
   .handler as unknown as () => Promise<DecisionsPolicy>;
 const setProxyAllowlisted = decisionsNamespace.ops.setProxyAllowlisted.handler as unknown as (
@@ -551,8 +553,11 @@ const exportData = decisionsNamespace.ops.exportData.handler as unknown as Expor
 const deleteRelayData = decisionsNamespace.ops.deleteRelayData.handler as unknown as (
   payload: DeleteDecisionsRelayDataPayload
 ) => Promise<DecisionsRelayDeleteResult>;
-const deleteLocalData = decisionsNamespace.ops.deleteLocalData
-  .handler as unknown as () => Promise<DecisionsLocalDeleteResult>;
+const deleteLocalData = decisionsNamespace.ops.deleteLocalData.handler as unknown as (
+  payload?: DecisionsKeyErasurePayload
+) => Promise<DecisionsLocalDeleteResult>;
+/** A confirm that asked for the typed gate (#18064). */
+const TYPED: DecisionsKeyErasurePayload = { oneClick: false };
 const EXPORT: ExportDecisionsDataPayload = { passphrase: "a long export passphrase" };
 const RELAY_ORIGIN = "https://relay.example.com";
 const exportRecoveryKit = decisionsNamespace.ops.exportRecoveryKit.handler as unknown as (
@@ -1167,7 +1172,7 @@ describe("decisions IPC", () => {
 
       await expect(claimRelay(CLAIM)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(restoreIdentity(RESTORE)).rejects.toMatchObject({ code: "PERMISSION" });
-      await expect(disconnectRelay()).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(disconnectRelay(TYPED)).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1324,7 +1329,7 @@ describe("decisions IPC", () => {
 
     await expect(claimRelay(CLAIM)).rejects.toMatchObject({ code: "CANCELLED" });
     await expect(restoreIdentity(RESTORE)).rejects.toMatchObject({ code: "CANCELLED" });
-    await expect(disconnectRelay()).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(disconnectRelay(TYPED)).rejects.toMatchObject({ code: "CANCELLED" });
 
     expect(decisionsEntry.evaluated).toBe(0);
   });
@@ -1339,7 +1344,7 @@ describe("decisions IPC", () => {
       await expect(deleteRelayData({ origin: RELAY_ORIGIN })).rejects.toMatchObject({
         code: "PERMISSION",
       });
-      await expect(deleteLocalData()).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(deleteLocalData(TYPED)).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1357,7 +1362,7 @@ describe("decisions IPC", () => {
     await expect(deleteRelayData({ origin: RELAY_ORIGIN })).rejects.toMatchObject({
       code: "CANCELLED",
     });
-    await expect(deleteLocalData()).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(deleteLocalData(TYPED)).rejects.toMatchObject({ code: "CANCELLED" });
 
     expect(decisionsEntry.evaluated).toBe(0);
   });
@@ -1394,6 +1399,17 @@ describe("decisions IPC", () => {
     expect(decisionsEntry.clearDecisionsModelHistory).toHaveBeenCalledOnce();
     // The settings are Decisions' own to write, behind its transitions.
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes how a key erasure was confirmed, and nothing else (#18064)", () => {
+    for (const op of [decisionsNamespace.ops.disconnectRelay, decisionsNamespace.ops.deleteLocalData]) {
+      const schema = op.schema as SafeParse;
+      expect(schema.safeParse({ oneClick: true }).success).toBe(true);
+      expect(schema.safeParse({ oneClick: false }).success).toBe(true);
+      for (const value of [undefined, {}, { oneClick: "yes" }, { oneClick: true, origin: "x" }]) {
+        expect(schema.safeParse(value).success, JSON.stringify(value)).toBe(false);
+      }
+    }
   });
 
   it("takes only the model's own preferences, a confidence for an evaluation, and a run id", () => {
@@ -2104,11 +2120,12 @@ describe("decisions IPC", () => {
 
     await expect(claimRelay(CLAIM)).resolves.toMatchObject({ result: "saved" });
     await expect(restoreIdentity(RESTORE)).resolves.toMatchObject({ result: "saved" });
-    await expect(disconnectRelay()).resolves.toEqual({ state: "not-connected" });
+    await expect(disconnectRelay({ oneClick: true })).resolves.toEqual({ state: "not-connected" });
 
     expect(decisionsEntry.claimRelay).toHaveBeenCalledExactlyOnceWith(CLAIM);
     expect(decisionsEntry.restoreIdentity).toHaveBeenCalledExactlyOnceWith(RESTORE);
-    expect(decisionsEntry.disconnectRelay).toHaveBeenCalledOnce();
+    // How the person confirmed reaches main, which rechecks a one-click confirm (#18064).
+    expect(decisionsEntry.disconnectRelay).toHaveBeenCalledExactlyOnceWith({ oneClick: true });
     expect(store.set).not.toHaveBeenCalled();
   });
 
@@ -2165,12 +2182,12 @@ describe("decisions IPC", () => {
     await expect(deleteRelayData({ origin: RELAY_ORIGIN })).resolves.toMatchObject({
       result: "deleted",
     });
-    await expect(deleteLocalData()).resolves.toMatchObject({ result: "deleted" });
+    await expect(deleteLocalData({ oneClick: true })).resolves.toMatchObject({ result: "deleted" });
 
     expect(decisionsEntry.deleteRelayData).toHaveBeenCalledExactlyOnceWith({
       origin: RELAY_ORIGIN,
     });
-    expect(decisionsEntry.deleteLocalData).toHaveBeenCalledOnce();
+    expect(decisionsEntry.deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true });
     expect(store.set).not.toHaveBeenCalled();
   });
 

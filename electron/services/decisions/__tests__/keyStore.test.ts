@@ -236,11 +236,15 @@ describe("SealedKeyStore", () => {
     await expect(keyFileVersion(file)).resolves.toBeNull();
 
     keyed("v10");
+    expect(store.lastWrittenVersion()).toBeNull();
     await store.save(identity());
     safeStorageMock.decryptStringAsync.mockClear();
     const first = await store.version();
     expect(first).toMatch(/^[0-9a-f]{64}$/);
     await expect(keyFileVersion(file)).resolves.toBe(first);
+    // What this store wrote, and only this store: another on the same file wrote nothing.
+    expect(store.lastWrittenVersion()).toBe(first);
+    expect(new SealedKeyStore(file).lastWrittenVersion()).toBeNull();
 
     const rotated = identity({
       epochs: [...identity().epochs, { epoch: 3, raw: "EPOCH-THREE-SENTINEL" }],

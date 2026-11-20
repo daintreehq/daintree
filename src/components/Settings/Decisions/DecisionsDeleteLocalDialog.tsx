@@ -5,6 +5,7 @@ import {
   KEYS_GATE_TARGET,
   NO_CURRENT_KIT,
   SAVE_KIT_FIRST,
+  keyLossConsequence,
   onlyCopyPreamble,
 } from "./recoveryKitCopy";
 
@@ -19,7 +20,8 @@ interface DecisionsDeleteLocalDialogProps {
   deleting: boolean;
   error: string | null;
   onCancel: () => void;
-  onConfirm: () => void;
+  /** `oneClick`: no typed gate was asked, which main checks still holds. */
+  onConfirm: (oneClick: boolean) => void;
 }
 
 /**
@@ -48,7 +50,7 @@ export function DecisionsDeleteLocalDialog({
   const keys = !keysStored
     ? ""
     : gated
-      ? ` ${NO_CURRENT_KIT} Unless another computer holds them, this computer can't reconnect to ${host ?? "the relay"} as its owner afterwards, and the relay's past questions and answers can't be read again.${host ? ` ${SAVE_KIT_FIRST}` : ""}`
+      ? ` ${NO_CURRENT_KIT} ${keyLossConsequence(host)}${host ? ` ${SAVE_KIT_FIRST}` : ""}`
       : ` Unless a recovery kit or another computer holds these keys, this computer can't reconnect to ${host ?? "the relay"} as its owner, and the relay's past questions and answers can't be read again.`;
   return (
     <ConfirmDialog
@@ -60,7 +62,7 @@ export function DecisionsDeleteLocalDialog({
       typedNameTarget={gated ? (host ?? KEYS_GATE_TARGET) : undefined}
       typedNamePreamble={gated ? onlyCopyPreamble(host) : undefined}
       confirmLabel="Delete local data"
-      onConfirm={onConfirm}
+      onConfirm={() => onConfirm(!gated)}
       isConfirmLoading={deleting}
     >
       {error && <InlineError role="alert">{error}</InlineError>}

@@ -309,6 +309,7 @@ describe("DecisionsSettingsTab", () => {
         state: "not-connected",
         consentedAt: 1,
         relayOrigin: ORIGIN,
+        keysStored: true,
         recoveryKitVerifiedAt: 7,
         recoveryKitCurrent: true,
       },

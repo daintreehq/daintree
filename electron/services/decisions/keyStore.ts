@@ -317,6 +317,10 @@ export async function keyFileVersion(filePath: string): Promise<string | null> {
     if (isMissing(error)) return null;
     throw error;
   }
+  return versionOfBytes(bytes);
+}
+
+function versionOfBytes(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
@@ -376,6 +380,7 @@ function isMissing(error: unknown): boolean {
 export class SealedKeyStore implements KeyStore {
   private weakConfirmed = false;
   private closed = false;
+  private lastWritten: string | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(readonly filePath: string) {}
@@ -417,8 +422,8 @@ export class SealedKeyStore implements KeyStore {
   }
 
   /**
-   * {@link keyFileVersion} in its turn: two equal answers around a `load`
-   * mean the load read that version, since no write on the file ran between.
+   * {@link keyFileVersion} in its turn. Two equal answers around a `load`
+   * mean no store wrote the file between them, so the load read that version.
    */
   version(): Promise<string | null> {
     return this.enqueue(() => keyFileVersion(this.filePath));
@@ -458,11 +463,26 @@ export class SealedKeyStore implements KeyStore {
       const allowWeak = existing ? existing.protection === "basic" : this.weakConfirmed;
       const envelope = await seal(next, allowWeak);
       await ensureOwnerOnlyDir(dirname(this.filePath));
-      await resilientAtomicWriteFile(this.filePath, JSON.stringify(envelope), "utf-8", {
-        mode: OWNER_RW_FILE_MODE,
-      });
-      keyFileWritten(this.filePath);
+      const text = JSON.stringify(envelope);
+      try {
+        await resilientAtomicWriteFile(this.filePath, text, "utf-8", {
+          mode: OWNER_RW_FILE_MODE,
+        });
+        this.lastWritten = versionOfBytes(Buffer.from(text, "utf-8"));
+      } finally {
+        // A write that failed after its rename (the directory sync) still changed the file.
+        keyFileWritten(this.filePath);
+      }
     });
+  }
+
+  /**
+   * The version of the file this store's last write left, or null before one.
+   * A restore that saved to an empty file proves its kit holds the keys only
+   * while the file is still exactly what it wrote (#18064).
+   */
+  lastWrittenVersion(): string | null {
+    return this.lastWritten;
   }
 
   /** Removes the key file. Never asks the keychain, and never runs on its own after a failed read. */
@@ -473,8 +493,9 @@ export class SealedKeyStore implements KeyStore {
         await resilientUnlink(this.filePath);
       } catch (error) {
         if (!isMissing(error)) throw error;
+      } finally {
+        keyFileWritten(this.filePath);
       }
-      keyFileWritten(this.filePath);
     });
   }
 
@@ -491,12 +512,15 @@ export class SealedKeyStore implements KeyStore {
       if (current === null || !removable(current)) return false;
       this.weakConfirmed = false;
       try {
-        await resilientUnlink(this.filePath);
-      } catch (error) {
-        if (!isMissing(error)) throw error;
+        try {
+          await resilientUnlink(this.filePath);
+        } catch (error) {
+          if (!isMissing(error)) throw error;
+        }
+        await syncParentDirectory(this.filePath);
+      } finally {
+        keyFileWritten(this.filePath);
       }
-      await syncParentDirectory(this.filePath);
-      keyFileWritten(this.filePath);
       return true;
     });
   }

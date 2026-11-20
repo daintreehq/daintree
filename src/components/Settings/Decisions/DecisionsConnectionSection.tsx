@@ -361,8 +361,8 @@ export function DecisionsConnectionSection({
     relay.run(draft);
   };
 
-  const confirmDisconnect = () => {
-    identity.disconnect().then(
+  const confirmDisconnect = (oneClick: boolean) => {
+    identity.disconnect(oneClick).then(
       (done) => {
         if (done) setDisconnectOpen(false);
       },
@@ -660,6 +660,7 @@ export function DecisionsConnectionSection({
       <DecisionsDisconnectDialog
         isOpen={disconnectOpen}
         relayOrigin={savedOrigin}
+        keysStored={keysStored}
         kitCurrent={status.recoveryKitCurrent === true}
         disconnecting={identity.pending === "disconnect"}
         error={identity.error?.action === "disconnect" ? identity.error.message : null}

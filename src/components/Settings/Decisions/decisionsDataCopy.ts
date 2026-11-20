@@ -131,6 +131,8 @@ const NOTHING_DELETED: Record<
   storage: "The database refused the deletion.",
   keys: "The Decisions key file couldn't be moved.",
   model: "The decision model's files couldn't be moved.",
+  "keys-changed":
+    "This computer holds Decisions keys no recovery kit verified here covers, which the confirmation you gave didn't account for. Delete again to see what goes with them.",
 };
 
 /** What deleting this computer's Decisions data observed, in words. */

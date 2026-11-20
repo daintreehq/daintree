@@ -1069,9 +1069,11 @@ export class DecisionsService {
    * an empty store opens after, so the lifetime carries on with nothing
    * stored. A deletion that didn't finish leaves the store closed, since a row
    * written now would read as one it never reached; the next start finishes
-   * it first. Only while on.
+   * it first. Only while on. `mayErase`, when given, is asked once nothing can
+   * write the keys any more and before anything is deleted; false deletes
+   * nothing (`keys-changed`, #18064).
    */
-  eraseLocalData(): Promise<LocalEraseOutcome> {
+  eraseLocalData(mayErase?: () => Promise<boolean>): Promise<LocalEraseOutcome> {
     return this.enqueue(async () => {
       if (this.disposed || this.settings === null) {
         throw new Error("Decisions is off, so its data can't be deleted");
@@ -1104,7 +1106,10 @@ export class DecisionsService {
             await rotations?.close();
             await keyStore?.close();
           }
-          outcome = await eraseLocalDecisionsData(this.eraseDeps(keyFilePath));
+          outcome =
+            mayErase && !(await mayErase())
+              ? { result: "failed", reason: "keys-changed" }
+              : await eraseLocalDecisionsData(this.eraseDeps(keyFilePath));
           // Once the rows are gone. One out of reach is deleted by a later sweep, when it's back.
           if (outcome.result === "deleted" || (outcome.result === "incomplete" && outcome.erased)) {
             await erasePhoneImages(phoneImageRootsFile(keyFilePath));

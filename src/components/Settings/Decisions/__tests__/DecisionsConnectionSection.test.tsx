@@ -876,7 +876,8 @@ describe("DecisionsConnectionSection disconnect focus", () => {
         fireEvent.click(confirm);
       });
 
-      expect(disconnectRelay).toHaveBeenCalledOnce();
+      // Main rechecks a one-click confirm against the keys as they are when its turn comes (#18064).
+      expect(disconnectRelay).toHaveBeenCalledExactlyOnceWith({ oneClick: typed === null });
       await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(screen.queryByRole("button", { name: label })).toBeNull();
       await vi.waitFor(() => expect(document.activeElement).toBe(urlField()));
@@ -910,6 +911,7 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
     const view = render(
       <DecisionsDisconnectDialog
         isOpen
+        keysStored
         disconnecting={false}
         error={null}
         onCancel={() => {}}
@@ -937,7 +939,7 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
 
     expect(within(screen.getByRole("alertdialog")).queryByRole("textbox")).toBeNull();
     fireEvent.click(confirmButton());
-    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it("asks for the relay's address with no current kit, naming what can't be got back", () => {
@@ -945,7 +947,8 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
     const body = screen.getByRole("alertdialog").textContent ?? "";
 
     expect(body).toContain(`only copy of ${HOST}'s owner keys`);
-    expect(body).toContain(`${HOST}'s past questions and answers unreadable`);
+    expect(body).toContain("sealed with a key only this computer holds can't be read again");
+    expect(body).toContain(`nobody can reconnect to ${HOST} as its owner`);
     expect(body).toContain("Save and verify a recovery kit first");
     expect(unavailable(confirmButton())).toBe(true);
     fireEvent.click(confirmButton());
@@ -957,7 +960,25 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
     expect(unavailable(confirmButton())).toBe(false);
     fireEvent.click(confirmButton());
 
-    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("offers no kit to save when the key file is gone, still asking for the address", () => {
+    render(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored={false}
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    expect(screen.getByRole("alertdialog").textContent).not.toContain("Save and verify");
+    expect(unavailable(confirmButton())).toBe(true);
   });
 
   it("asks for the keys' name for an unfinished setup's keys, which no kit can cover", () => {
@@ -970,7 +991,7 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
     });
     fireEvent.click(confirmButton("Remove keys"));
 
-    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(false);
   });
 
   it("puts the gate up while open when the kit stops covering the keys, and takes it down when one does", () => {
@@ -980,6 +1001,7 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
         <DecisionsDisconnectDialog
           isOpen
           relayOrigin={ORIGIN}
+          keysStored
           kitCurrent={kitCurrent}
           disconnecting={false}
           error={null}
@@ -996,6 +1018,6 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
     rerender(true);
     expect(within(screen.getByRole("alertdialog")).queryByRole("textbox")).toBeNull();
     fireEvent.click(confirmButton());
-    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(true);
   });
 });
