@@ -92,16 +92,202 @@ describe("needs attention", () => {
       expect(isHandled(r, new Map())).toBe(true);
       expect(withoutHandled([r], new Map())).toEqual([]);
     }
-    const withdrawn = row(2, { local_status: "cancelled", delivery_status: "needs-attention" });
-    expect(answerNeedsAttention(withdrawn, new Map())).toBe(true);
-    expect(isHandled(withdrawn, new Map())).toBe(false);
-    // Declined, reopened, then withdrawn: the decline no longer closed it.
-    const superseded = row(3, {
-      ...declined,
+  });
+});
+
+describe("questions over without an answer (#18021)", () => {
+  const EXPIRY = {
+    entry_id: "expiry-1",
+    kind: "expired" as const,
+    action: "expire" as const,
+    source: "system" as const,
+    sealed: null,
+  };
+  const UNPUBLISHED = { ...EXPIRY, entry_id: "unpublished-1", kind: "unpublished" as const };
+  const STALLS = [
+    { delivery_status: "needs-attention", error_code: "pane_gone" },
+    { delivery_status: "delivery-uncertain", error_code: "inject_ambiguous" },
+  ] as const;
+  const over = (r: QuestionRow) => {
+    expect(answerNeedsAttention(r, new Map())).toBe(false);
+    expect(threadNeedsAttention(r, new Map())).toBe(false);
+    // Handled with nothing marked, as a decline is: it keeps nothing of its question waiting.
+    expect(isHandled(r, new Map())).toBe(true);
+    expect(withoutHandled([r], new Map())).toEqual([]);
+  };
+
+  it("never asks a person about an expiry's or a never-published notice, however it stopped", () => {
+    for (const stall of STALLS) {
+      over(
+        row(1, {
+          ...stall,
+          local_status: "expired",
+          answers_json: serializeAnswers([entry(EXPIRY)]),
+        })
+      );
+      over(
+        row(2, {
+          ...stall,
+          local_status: "publish-failed",
+          answers_json: serializeAnswers([entry(UNPUBLISHED)]),
+        })
+      );
+      // A reopened round that expired again: its earlier round's notice was withdrawn, or,
+      // left marked as a store may hold it, is never typed again either.
+      for (const deliver of [false, true]) {
+        over(
+          row(3, {
+            ...stall,
+            local_status: "expired",
+            question_revision: 2,
+            answers_json: serializeAnswers([
+              entry({ ...EXPIRY, deliver }),
+              entry({ ...EXPIRY, entry_id: "expiry-2", revision: 2 }),
+            ]),
+          })
+        );
+      }
+    }
+  });
+
+  it("never asks a person about a withdrawn question, whatever its answer's delivery was", () => {
+    for (const stall of STALLS) {
+      // The library drops everything not yet typed and leaves the stopped status.
+      over(
+        row(1, {
+          ...stall,
+          local_status: "cancelled",
+          answers_json: serializeAnswers([entry({ deliver: false })]),
+        })
+      );
+      // Declined, reopened, then withdrawn: the decline no longer closed it, the withdrawal did.
+      over(
+        row(2, {
+          ...stall,
+          local_status: "cancelled",
+          question_revision: 2,
+          answers_json: serializeAnswers([entry({ ...DECLINE, deliver: false })]),
+        })
+      );
+      // A follow-up the person wrote is dropped with it, held or not.
+      over(
+        row(3, {
+          ...stall,
+          local_status: "cancelled",
+          answers_json: serializeAnswers([entry({ deliver: false })]),
+          messages_json: messages({
+            delivery: { status: "needs-attention", deliver: false },
+          }),
+        })
+      );
+    }
+  });
+
+  it("still asks about an answer of an earlier round left to type, and keeps the person's own follow-up", () => {
+    const expired = {
+      local_status: "expired" as const,
+      delivery_status: "needs-attention" as const,
+      error_code: "pane_gone",
       question_revision: 2,
-      delivery_status: "needs-attention",
+    };
+    const answerLeft = row(1, {
+      ...expired,
+      answers_json: serializeAnswers([
+        entry(),
+        entry({ ...EXPIRY, entry_id: "expiry-2", revision: 2 }),
+      ]),
     });
-    expect(answerNeedsAttention(superseded, new Map())).toBe(true);
+    expect(answerNeedsAttention(answerLeft, new Map())).toBe(true);
+    expect(isHandled(answerLeft, new Map())).toBe(false);
+    // A stall only an answer can carry is an answer's, whatever entries the row still holds.
+    const refused = row(2, {
+      ...expired,
+      error_code: "answer_unreadable",
+      answers_json: serializeAnswers([entry({ ...EXPIRY, revision: 2 })]),
+    });
+    expect(answerNeedsAttention(refused, new Map())).toBe(true);
+    // An uncertain write could have been an untyped answer's, handled or not.
+    const mixed = row(3, {
+      ...expired,
+      delivery_status: "delivery-uncertain",
+      answers_json: serializeAnswers([
+        entry({ deliver: false }),
+        entry({ ...EXPIRY, entry_id: "expiry-2", revision: 2 }),
+      ]),
+    });
+    expect(answerNeedsAttention(mixed, new Map())).toBe(true);
+    // Without its own untyped notice, what stopped is something else.
+    const typed = row(4, {
+      ...expired,
+      answers_json: serializeAnswers([entry({ ...EXPIRY, revision: 2, delivered: true })]),
+    });
+    expect(answerNeedsAttention(typed, new Map())).toBe(true);
+    // A deadline that closed no round of the question's settles nothing.
+    expect(
+      answerNeedsAttention(row(5, { ...expired, local_status: "publish-failed" }), new Map())
+    ).toBe(true);
+    // Nor does a notice of a round since replaced, of either kind, untyped as it is.
+    for (const [local_status, notice] of [
+      ["expired", EXPIRY],
+      ["publish-failed", UNPUBLISHED],
+    ] as const) {
+      const stale = row(6, {
+        ...expired,
+        local_status,
+        answers_json: serializeAnswers([entry(notice)]),
+      });
+      expect(answerNeedsAttention(stale, new Map()), local_status).toBe(true);
+    }
+    // Only an uncertain write could have been the untyped answer's: stopped, the notice is all.
+    expect(isHandled({ ...mixed, delivery_status: "needs-attention" }, new Map())).toBe(true);
+  });
+
+  it("keeps the notice with the person's follow-up still to be typed, held or waiting, so they go back together", () => {
+    for (const [local_status, notice] of [
+      ["expired", EXPIRY],
+      ["publish-failed", UNPUBLISHED],
+    ] as const) {
+      const closed = {
+        local_status,
+        delivery_status: "needs-attention" as const,
+        error_code: "pane_gone",
+        answers_json: serializeAnswers([entry({ ...notice, event_seq: 5 })]),
+      };
+      // Sent before the deadline, as a closed thread takes none; or after it, as the library
+      // would hold one behind the stopped notice.
+      for (const event_seq of [4, 6]) {
+        for (const stall of STALLS) {
+          const held = row(1, {
+            ...closed,
+            ...stall,
+            messages_json: messages({
+              message_id: "m-1",
+              event_seq,
+              delivery: { status: "needs-attention", error_code: "pane_gone" },
+            }),
+          });
+          expect(answerNeedsAttention(held, new Map())).toBe(true);
+          expect(heldFollowUps(held).map((m) => m.message_id)).toEqual(["m-1"]);
+          expect(withoutHandled([held], new Map())).toEqual([held]);
+        }
+        // Received and never held, it is still the person's words waiting with it.
+        for (const stall of STALLS) {
+          const waiting = row(2, { ...closed, ...stall, messages_json: messages({ event_seq }) });
+          expect(answerNeedsAttention(waiting, new Map())).toBe(true);
+          expect(withoutHandled([waiting], new Map())).toEqual([waiting]);
+        }
+      }
+      // One already typed, or that the person handled, holds nothing.
+      over(
+        row(3, {
+          ...closed,
+          messages_json: messages(
+            { message_id: "m-typed", delivery: { status: "terminal-delivered" } },
+            { message_id: "m-handled", delivery: { status: "needs-attention", deliver: false } }
+          ),
+        })
+      );
+    }
   });
 });
 

@@ -3,6 +3,7 @@ import {
   closureInForce,
   formatAnswerNotice,
   isClosure,
+  isUndeliveredMessage,
   formatFollowupNotice,
   messageSentOn,
   noticeChunk,
@@ -24,7 +25,6 @@ import {
   sanitizeAnswerText,
   type DecisionBlock,
 } from "./answerNotice.js";
-import { declineOf } from "./questionClosed.js";
 
 /**
  * The answers a person has marked handled (#16020), by question, at the
@@ -115,17 +115,65 @@ export function heldFollowUps(row: QuestionRow): StoredMessage[] {
 
 /**
  * The question's answer needs a person, and they haven't marked it handled.
- * A person's own decline (#17234) never does: a cancel drops every answer not
- * yet typed, so its notice is all that could have stopped, and it is news only
- * for an agent still listening. It counts as handled, so it shows nowhere a
- * person acts and keeps nothing of the question waiting.
+ * A question over without an answer never does (`closedUnanswered`).
  */
 export function answerNeedsAttention(row: QuestionRow, handled: HandledAnswers): boolean {
   return (
     needsAttention(row) &&
-    declineOf(row) === undefined &&
+    !closedUnanswered(row) &&
     !stoppedOnReplacedClosure(row) &&
     handled.get(row.question_id) !== answerRevision(row)
+  );
+}
+
+/**
+ * The question is over without an answer, and its closing notice is all that
+ * delivery can have stopped on (#18021), so there is nothing for a person to
+ * decide: the notice is news only for an agent still listening. It counts as
+ * handled, so it shows nowhere a person acts and keeps nothing of the question
+ * waiting, however its notice stopped; how far the notice got is still read
+ * from the row on its own.
+ *
+ * - **Cancelled:** a person's decline (#17234) or a withdrawal. Either drops
+ *   every answer and follow-up not yet typed, and a withdrawal leaves the
+ *   stopped status of an answer nothing will type.
+ * - **Expired, or never published:** only while the round's own notice is
+ *   untyped, nothing else of the answer waits to be typed, the code is no
+ *   answer's, and none of the person's follow-ups waits to be typed. While
+ *   one does, the notice stays theirs to resolve with it, so the two go back
+ *   in thread order (the library would hold one sequenced after it behind a
+ *   stopped notice). A possibly typed write stays the person's while the row
+ *   holds an untyped answer it could have been.
+ */
+export function closedUnanswered(row: QuestionRow): boolean {
+  if (row.local_status === "cancelled") return true;
+  if (row.local_status !== "expired" && row.local_status !== "publish-failed") return false;
+  if (row.error_code !== null && ANSWER_CODES.has(row.error_code)) return false;
+  const entries = parseAnswers(row.answers_json);
+  if (!entries.some((entry) => roundNotice(entry, row) && !entry.delivered)) return false;
+  // As the delivery engine's own test: a notice of a round since replaced is never typed.
+  const live = pendingEntries(row).filter(
+    (entry) => !isClosure(entry) || closureInForce(entry, row)
+  );
+  if (live.some((entry) => !roundNotice(entry, row))) return false;
+  if (
+    row.delivery_status === "delivery-uncertain" &&
+    entries.some((entry) => !NOTICE_KINDS.has(entry.kind) && !entry.delivered)
+  ) {
+    return false;
+  }
+  return !parseMessages(row.messages_json).some(isUndeliveredMessage);
+}
+
+const NOTICE_KINDS: ReadonlySet<string> = new Set(["expired", "declined", "unpublished"]);
+
+/** The notice that closed the row's current round at its deadline: its expiry, or that it never reached the relay. */
+function roundNotice(entry: AnswerEntry, row: QuestionRow): boolean {
+  if (row.local_status === "expired") return entry.kind === "expired" && closureInForce(entry, row);
+  return (
+    row.local_status === "publish-failed" &&
+    entry.kind === "unpublished" &&
+    entry.revision === row.question_revision
   );
 }
 
@@ -173,8 +221,9 @@ export function threadNeedsAttention(row: QuestionRow, handled: HandledAnswers):
 export function isHandled(row: QuestionRow, handled: HandledAnswers): boolean {
   return (
     needsAttention(row) &&
-    // A reopened question whose old notice stopped is open again, not handled: it stays in every feed.
-    !stoppedOnReplacedClosure(row) &&
+    // A reopened question whose old notice stopped is open again, not handled: it stays in every
+    // feed. One closed again since (a withdrawal) is over, whatever notice its earlier round left.
+    (closedUnanswered(row) || !stoppedOnReplacedClosure(row)) &&
     !answerNeedsAttention(row, handled) &&
     heldFollowUps(row).length === 0
   );

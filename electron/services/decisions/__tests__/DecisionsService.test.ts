@@ -642,10 +642,16 @@ describe("DecisionsService question list (#17229)", () => {
     const listing: boolean[] = [];
     const hostLists: Array<HostServedQuestions | null> = [];
     const panes: PaneDecisionState[] = [];
+    const paneProjects: string[] = [];
+    const attention: Array<Map<string, number>> = [];
     const service = new DecisionsService({
       openStore: async () => store,
       keyFilePath: () => ABSENT_KEY_FILE,
-      publishPaneState: (_projectId, state) => panes.push(state),
+      publishPaneState: (projectId, state) => {
+        panes.push(state);
+        paneProjects.push(projectId);
+      },
+      publishAnswerAttention: (counts) => attention.push(new Map(counts)),
       publishQuestions: (questions, nowListing, inbox) => {
         lists.push([...questions]);
         listing.push(nowListing);
@@ -671,6 +677,8 @@ describe("DecisionsService question list (#17229)", () => {
       listing,
       hostLists,
       panes,
+      paneProjects,
+      attention,
       commit,
       setRows: (next: QuestionRow[]) => (rows = next),
       reads: () => reads,
@@ -762,6 +770,53 @@ describe("DecisionsService question list (#17229)", () => {
     // The pane shows nothing for it, as before.
     expect(panes).toEqual([]);
     expect(service.getPaneState("pane-a")).toBeNull();
+    await service.stop();
+  });
+
+  it("lists a question over without an answer in History once its notice stops, and clears its pane and count where the pane is (#18021)", async () => {
+    const { service, lists, panes, paneProjects, attention, commit, setRows } = listed();
+    const later = { origin: { project_id: "project-2" } };
+    const stalled = { delivery_status: "needs-attention" as const, error_code: "pane_gone" };
+    // Still open, with an answer the inbox refused.
+    setRows([
+      row(1),
+      row(2, { ...later, delivery_status: "needs-attention", error_code: "choice_required" }),
+    ]);
+    await service.start(on(HOST));
+    expect(lists.at(-1)?.[1]?.standing).toMatchObject({ kind: "needs-attention" });
+    expect(panes.at(-1)?.needsAttention.map((item) => item.alias)).toEqual([2]);
+    expect([...attention.at(-1)!]).toEqual([["pane-a", 1]]);
+
+    // Then it expired unanswered, and its notice stopped too.
+    await commit([
+      row(1),
+      row(2, {
+        ...later,
+        ...stalled,
+        local_status: "expired",
+        answers_json: answers({
+          entry_id: "expiry-1",
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          sealed: null,
+        }),
+      }),
+    ]);
+
+    expect(lists.at(-1)?.[1]).toMatchObject({
+      standing: { kind: "settled", outcome: "expired" },
+      closedReason: "expired",
+      closureNotice: { delivery: "needs-attention" },
+      stall: null,
+    });
+    // The pane keeps its newest question's project: the open one stays there, nothing needs a person.
+    expect(paneProjects.at(-1)).toBe("project-2");
+    expect(panes.at(-1)).toMatchObject({
+      needsAttention: [],
+      openQuestions: [expect.objectContaining({ alias: 1 })],
+    });
+    expect(attention.at(-1)?.size).toBe(0);
     await service.stop();
   });
 
@@ -2685,6 +2740,21 @@ describe("DecisionsService terminal snapshots (#16230)", () => {
 
     expect(made[0]!.rows).toEqual([[row(1), row(2)]]);
     expect(made[0]!.changed).toBe(1);
+    await service.stop();
+  });
+
+  it("passes the connection nothing of a question over whose notice stopped, as for one handled (#18021)", async () => {
+    const { service, made } = sharing(() => true);
+    await service.start(on(RELAY));
+    const over = row(2, {
+      local_status: "expired",
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      answers_json: answers({ kind: "expired", action: "expire", source: "system", sealed: null }),
+    });
+    service.observeQuestions([row(1), over]);
+
+    expect(made[0]!.rows).toEqual([[row(1)]]);
     await service.stop();
   });
 });

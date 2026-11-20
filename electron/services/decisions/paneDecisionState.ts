@@ -1,5 +1,10 @@
 import { parseAnswers, type QuestionRow } from "@daintreehq/decisions-client";
-import { answerNeedsAttention, heldFollowUps, type HandledAnswers } from "./attentionList.js";
+import {
+  answerNeedsAttention,
+  heldFollowUps,
+  isHandled,
+  type HandledAnswers,
+} from "./attentionList.js";
 import type {
   DecisionDeliveryStatus,
   PaneDecisionAttention,
@@ -55,9 +60,11 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  *   (#17234) isn't one: they chose not to answer, so the pane drops the
  *   question even while its notice waits to be typed.
  *
- * Imported history is never delivered and shows nowhere. Rows are taken in
- * question order, and a pane belongs to the project of its newest question,
- * settled or not, so settling that question never moves the pane back.
+ * Imported history is never delivered and shows nowhere, and what a person
+ * marked handled, or a question over without an answer whose notice stopped
+ * (#18021), adds nothing. Rows are taken in question order, and a pane
+ * belongs to the project of its newest question, settled or not, so settling
+ * that question never moves the pane back.
  */
 export function projectPaneDecisionStates(
   rows: readonly QuestionRow[],
@@ -75,7 +82,7 @@ export function projectPaneDecisionStates(
   for (const row of sorted) {
     const paneId = row.origin.pane_id;
     const projectId = projectOf.get(paneId);
-    if (!paneId || !projectId) continue;
+    if (!paneId || !projectId || isHandled(row, handled)) continue;
 
     const deliveryStatus: DecisionDeliveryStatus = row.delivery_status;
     const open = row.local_status === "queued" || row.local_status === "open";

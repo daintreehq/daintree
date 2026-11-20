@@ -325,7 +325,7 @@ describe("standingOf", () => {
         ...delivered,
         messages_json: messages({ delivery: { status: "delivery-uncertain" } }),
       }),
-      // An expiry notice delivery stopped on needs a person too.
+      // An expiry notice delivery stopped on is over, and needs no one (#18021).
       row(5, {
         local_status: "expired",
         delivery_status: "needs-attention",
@@ -353,6 +353,106 @@ describe("standingOf", () => {
       kind: "needs-attention",
       deliveryStatus: "needs-attention",
     });
+    expect(standing(rows[4]!)).toEqual({ kind: "settled", outcome: "expired" });
+  });
+
+  it("settles a question over without an answer, whatever became of its notice or its answer (#18021)", () => {
+    const expiry = {
+      entry_id: "expiry-1",
+      kind: "expired",
+      action: "expire",
+      source: "system",
+    } as const;
+    const unpublished = { ...expiry, entry_id: "unpublished-1", kind: "unpublished" } as const;
+    const stalls = [
+      { delivery_status: "needs-attention", error_code: "pane_gone" },
+      { delivery_status: "delivery-uncertain", error_code: "inject_ambiguous" },
+    ] as const;
+    let alias = 0;
+    const cases = stalls.flatMap((stall) => [
+      row(++alias, {
+        ...stall,
+        local_status: "expired",
+        expires_at: "2026-11-01T12:00:00.000Z",
+        answers_json: answers({ ...expiry, created_at: "2026-11-01T12:00:02.000Z", sealed: null }),
+      }),
+      row(++alias, {
+        ...stall,
+        local_status: "publish-failed",
+        answers_json: answers({ ...unpublished, sealed: null }),
+      }),
+      // Withdrawn after its answer stalled: the library drops the answer and leaves the status.
+      row(++alias, {
+        ...stall,
+        local_status: "cancelled",
+        answers_json: answers({ deliver: false }),
+      }),
+    ]);
+    const list = projectDecisionQuestions(cases, new Map(), HOST, NO_ADVISORY_HOST);
+
+    const notice = (delivery: string) => ({ delivery, disposition: null });
+    expect(
+      list.map((item) => [
+        item.alias,
+        item.standing,
+        item.closedReason,
+        item.closureNotice,
+        item.settledAt,
+      ])
+    ).toEqual([
+      [
+        1,
+        { kind: "settled", outcome: "expired" },
+        "expired",
+        notice("needs-attention"),
+        "2026-11-01T12:00:02.000Z",
+      ],
+      [2, { kind: "send-failed" }, "never-published", notice("needs-attention"), null],
+      [3, { kind: "settled", outcome: "withdrawn" }, "withdrawn", null, null],
+      // How far each notice got still reads as recorded: possibly typed is never typed or not.
+      [
+        4,
+        { kind: "settled", outcome: "expired" },
+        "expired",
+        notice("uncertain"),
+        "2026-11-01T12:00:02.000Z",
+      ],
+      [5, { kind: "send-failed" }, "never-published", notice("uncertain"), null],
+      [6, { kind: "settled", outcome: "withdrawn" }, "withdrawn", null, null],
+    ]);
+    // Nothing stopped that a person resolves, so no stall is raised for any of them.
+    expect(list.map((item) => item.stall)).toEqual(cases.map(() => null));
+  });
+
+  it("keeps a closed question's notice in Needs attention with the person's follow-up that stopped too", () => {
+    const item = projectDecisionQuestions(
+      [
+        row(1, {
+          local_status: "expired",
+          delivery_status: "needs-attention",
+          error_code: "pane_gone",
+          answers_json: answers({
+            kind: "expired",
+            action: "expire",
+            source: "system",
+            sealed: null,
+            event_seq: 5,
+          }),
+          // Sent before the deadline, as a closed thread takes none.
+          messages_json: messages({
+            message_id: "held-1",
+            event_seq: 4,
+            delivery: { status: "needs-attention", error_code: "pane_gone" },
+          }),
+        }),
+      ],
+      new Map(),
+      HOST,
+      NO_ADVISORY_HOST
+    )[0]!;
+    expect(item.standing).toEqual({ kind: "needs-attention", deliveryStatus: "needs-attention" });
+    expect(item.stall).toEqual({ answerRevision: 1, followUpIds: ["held-1"], reason: "pane_gone" });
+    expect(item.closureNotice).toEqual({ delivery: "needs-attention", disposition: null });
   });
 
   it("settles a handled answer, keeping it listed, until a correction needs the person again", () => {

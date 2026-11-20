@@ -55,6 +55,7 @@ import {
   answerPreviewOf,
   answerRevision,
   attentionToken,
+  closedUnanswered,
   copiedAnswerText,
   heldFollowUps,
   markAnswerHandled,
@@ -84,6 +85,7 @@ import {
 } from "./daintreeResumeAdapter.js";
 import { NO_WORKTREE, identityMismatch, incarnationOf } from "./decisionWake.js";
 import { timeoutNoticeOf, type AdvisoryHost } from "./questionRound.js";
+import { closedReasonOf } from "./questionClosed.js";
 import { reasonOf } from "./paneDecisionState.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
 import { RetiredAttemptError, retireable, type BridgeLock } from "./relayTransport.js";
@@ -1005,6 +1007,11 @@ export class AnswerDelivery {
   ): Promise<DecisionsAnswerOutcome> {
     const row = await this.store.getQuestion(questionId);
     if (row === null) return { result: "resolved" };
+    // Withdrawn meanwhile (#18021): nothing of it is typed any more, and nothing here says what was.
+    if (closedReasonOf(row) === "withdrawn") return { result: "resolved" };
+    // Over with only its notice stopped (#18021): delivery holds that notice and nothing of the
+    // person's waits, so nothing is promised, and nothing here says what was typed.
+    if (needsAttention(row) && closedUnanswered(row)) return { result: "resolved" };
     // As the engine's own test: a closure notice of a round since replaced is never typed.
     const live = pendingEntries(row).filter(
       (entry) => !isClosure(entry) || closureInForce(entry, row)
