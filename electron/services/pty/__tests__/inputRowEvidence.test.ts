@@ -49,6 +49,12 @@ describe("readInputRow (#18018)", () => {
       "empty",
     ],
     [
+      "Claude Code's empty input row under a status line ending on a path to claude",
+      "claude",
+      [RULE, "❯ ", RULE, "  Sonnet · 0% context · ~/src/claude"],
+      "empty",
+    ],
+    [
       "Antigravity's framed input row over a footer its prompt patterns match",
       "antigravity",
       [RULE, ">", RULE, "? for shortcuts                       Gemini 3.7 Flash · high"],
@@ -185,6 +191,27 @@ describe("readInputRow (#18018)", () => {
       "a frame the last agent left, with this run's Bash launch line under it",
       "codex",
       [RULE, "❯ ", RULE, "  ? for shortcuts", "user@host:~/repo$ codex", ""],
+    ],
+    [
+      "a frame the last run left, under a launch of a quoted path with a space in it",
+      "claude",
+      [RULE, "❯ ", RULE, "~/repo $ '/opt/Claude Tools/bin/claude'", ""],
+    ],
+    [
+      "a frame the last run left, under a launch with an escaped space",
+      "claude",
+      [RULE, "❯ ", RULE, "~/repo $ /opt/Claude\\ Tools/bin/claude --resume 0b1c", ""],
+    ],
+    [
+      "a frame the last run left, under a PowerShell launch",
+      "claude",
+      [
+        RULE,
+        "❯ ",
+        RULE,
+        "PS C:\\repo> & 'C:\\Program Files\\claude\\claude.exe' --resume 0b1c",
+        "",
+      ],
     ],
   ])("finds no input row on %s", (_label, agentId, screen) => {
     expect(read(agentId, screen)).toBeNull();

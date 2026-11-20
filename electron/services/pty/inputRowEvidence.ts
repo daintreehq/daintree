@@ -16,10 +16,20 @@ export interface InputRowShape {
   launchLine: RegExp | null;
 }
 
+/**
+ * A shell prompt's glyph (never a percentage) with the agent's own command
+ * after it, in the forms the launcher writes it: a bare word, a path, quoted
+ * or with escaped spaces, PowerShell's `& '…'`, behind variable assignments.
+ */
 function launchLineFor(command: string | undefined): RegExp | null {
   if (command === undefined || command.trim() === "") return null;
   const escaped = command.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`[$%#❯›>]\\s+(?:.*[\\s/=])?${escaped}(?:\\s|$)`);
+  return new RegExp(
+    `(?:^|[^\\d])[$%#❯›>]\\s+(?:&\\s+)?(?:\\w+=\\S*\\s+)*` +
+      `(?:['"][^'"]*[\\\\/]|['"]|(?:\\\\.|[^\\s'"\\\\])*[\\\\/])?` +
+      `${escaped}(?:\\.(?:cmd|exe|bat|com|ps1))?(?:['"\\s]|$)`,
+    "i"
+  );
 }
 
 /** The agent's input row as its registry entry declares it. */
