@@ -261,6 +261,29 @@ The two differ only in what an unanswered deadline means, so advice is never ask
 
 The deadline notice is typed only into the terminal that asked, or into a resume of that agent's own conversation, through the same checks as an answer: never over a draft in its composer or into a selector, and never twice. It isn't offered to another terminal from the needs-attention list: **Try resume** brings back the agent that asked, and **Choose destination** isn't offered while the question is still in its advisory round. The notice waits for the terminal at most 15 seconds: if the terminal can't take it by then (a draft in the composer, an approval prompt, an agent that can't take a line mid-turn), Daintree tries again later and checks afresh, so a question reopened or deleted meanwhile gets no notice. A reopen that arrives just before the notice is handed to the terminal drops it too; one already handed over is left to finish. When Daintree can't tell whether a notice reached the terminal (the terminal's write wasn't confirmed, or Daintree quit mid-write and the notice isn't on screen when it starts again), it isn't typed again: `get_decision` says the notice may or may not have been delivered. A notice that needs you shows in the needs-attention list and its desktop notification as **Timeout notice needs attention** (or as may or may not have been delivered), with the terminal or Host it was for, apart from how the question ended and what typing the notice says of the plan; it has nothing to copy, and **Mark handled** stops Daintree typing it.
 
+### The deadline passed but the agent is still waiting
+
+1. Ask the agent to call `get_decision` with the question's `question_id`. That reads the outcome whether or not the notice was typed: `fallback_due: true` means the plan it stated may go ahead, and `advisory_timeout.notice` says where the notice is.
+2. If the inbox lists the question under **Awaiting update**, or its reader says **Deadline passed at … · Awaiting an update**, this computer's clock has passed the deadline but the relay's close hasn't reached Daintree yet: nothing is due until it does. Check **Connection** in **Settings → Decisions**. For a Remote Host's question, it's the Host that has to reach the relay; this computer shows the question as the Host last reported it.
+3. `notice: pending` means the terminal can't take it yet. Send or clear a draft in its composer or in the agent's own input line, answer any approval prompt, or let the agent finish its turn; Daintree keeps trying, and types the notice once the agent is at its prompt.
+4. **Timeout notice needs attention** (`notice: needs-attention`) means the terminal that asked was closed, relaunched or restarted. Use **Try resume** in the needs-attention list for Claude or Codex, or tell the agent yourself and **Mark handled**.
+5. **May or may not have been delivered** (`notice: uncertain`) means Daintree lost track of a write it started, and won't type it again. Look at the terminal; if the notice isn't there, have the agent read `get_decision`, then **Mark handled**.
+
+An agent only moves on when something reaches it: one that ended its turn waits for the notice, or for you, and never acts on the clock alone.
+
+### Older Daintree, relays and phones
+
+Advice needs every part of the path to know about it. Anything older refuses the ask before saving or sending anything, and the agent can ask again without `planned_fallback` to have you decide; nothing that was asked as a decision is ever turned into advice.
+
+| Older part | What happens |
+| --- | --- |
+| Daintree from before advice | `ask_human` takes no `planned_fallback`, so every question waits for your decision |
+| A relay older than 0.9.0 | Refused with `relay-unsupported` |
+| No phone or tablet whose app can show the deadline and the plan | Refused with `no-capable-reader`; open the phone app once after the relay is updated |
+| A Remote Host running an older Daintree | Refused on the Host with `host-unsupported`; its row under **Remote Hosts** says its Daintree is too old for advice |
+| This computer older than a Host that asks for advice | The Host still settles its own questions and types its notices; this computer lists them without their deadline and plan |
+| A question asked before the Decisions 0.9.0 libraries | Asked again with the same `correlation_id`, it's asked anew once (see [Asking](#asking)) |
+
 ## Remote Hosts
 
 An agent running on a Remote Host asks and gets its answers on that Host, so it keeps working while this computer sleeps. Setup still happens once, here: while Decisions is connected, Daintree enrolls each Remote Host you connect to as a device of yours, with keys the Host makes itself and seals with its own keychain. A Host with a Decisions setup of its own, or one enrolled with another relay, is left as it is. Hosts have their own **Remote Hosts** section, apart from the phones and tablets under **Devices**: each Host you've connected to or enrolled is listed once, with whether it's enrolled, an enrollment that failed, **Enroll** when that would do something, and **Revoke** while it holds a device. A Remote Host the relay lists with no record of it on this computer still gets a row, so it can be revoked. A Host with no keychain, as a WSL distribution or a headless Linux machine usually is, isn't enrolled automatically: its row says so and offers **Enroll with weaker storage…**, which asks **Use the weaker key storage on <Host>?** before it keeps that Host's keys under a fixed key. That protects them only from someone who can't read the Host's files, and it applies to that Host alone. Turn off **Enroll Remote Hosts automatically** to enroll them one at a time with **Enroll**, for example when you connect to machines you don't own.
