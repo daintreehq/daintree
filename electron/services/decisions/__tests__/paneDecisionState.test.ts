@@ -276,7 +276,7 @@ describe("projectPaneDecisionStates", () => {
     });
   });
 
-  it("keeps a closed question's stopped notice with the person's follow-up it holds back", () => {
+  it("keeps a closed question's stopped notice with the person's follow-up still to be typed", () => {
     const state = only([
       row(1, {
         local_status: "expired",
@@ -289,7 +289,8 @@ describe("projectPaneDecisionStates", () => {
           sealed: null,
           event_seq: 5,
         }),
-        messages_json: messages({ event_seq: 6 }),
+        // Sent before the deadline, as a closed thread takes none.
+        messages_json: messages({ event_seq: 4 }),
       }),
     ]);
 

@@ -1009,12 +1009,13 @@ export class AnswerDelivery {
     if (row === null) return { result: "resolved" };
     // Withdrawn meanwhile (#18021): nothing of it is typed any more, and nothing here says what was.
     if (closedReasonOf(row) === "withdrawn") return { result: "resolved" };
-    // Over with only its notice stopped (#18021): delivery holds that notice, so nothing waits on it.
-    const over = needsAttention(row) && closedUnanswered(row);
+    // Over with only its notice stopped (#18021): delivery holds that notice and nothing of the
+    // person's waits, so nothing is promised, and nothing here says what was typed.
+    if (needsAttention(row) && closedUnanswered(row)) return { result: "resolved" };
     // As the engine's own test: a closure notice of a round since replaced is never typed.
-    const live = over
-      ? []
-      : pendingEntries(row).filter((entry) => !isClosure(entry) || closureInForce(entry, row));
+    const live = pendingEntries(row).filter(
+      (entry) => !isClosure(entry) || closureInForce(entry, row)
+    );
     const left = new Set(live.map((entry) => entry.entry_id));
     for (const entry of parseAnswers(row.answers_json)) {
       if (entry.delivered) left.add(entry.entry_id);

@@ -1862,7 +1862,6 @@ async function advisoryExpired(
   });
 }
 
-/** What the person wrote after the deadline, which a notice still to be typed holds back. */
 /** What the person wrote before the deadline, stopped before it was typed. */
 const HELD_FOLLOW_UP = "Keep the old sidebar for now.";
 
@@ -1875,7 +1874,7 @@ const typedTimes = (text: string, needle: string) => text.split(needle).length -
  * notice is the person's to resolve too, and the two go back together in
  * thread order (#18021).
  */
-const heldBehindNotice = (store: DaintreeLocalStore, id = Q1) =>
+const followUpStoppedToo = (store: DaintreeLocalStore, id = Q1) =>
   followedUp(store, id, M1, HELD_FOLLOW_UP, {
     event_seq: 8,
     delivery: { status: "needs-attention", error_code: "pane_gone" },
@@ -2113,7 +2112,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({ result: "resolved" });
 
     // With the person's follow-up that stopped too, the two go only to the run that asked.
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({ questionId: Q1, canReassign: false });
     await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
@@ -2149,7 +2148,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     expect(await h.delivery.attentionItems()).toEqual([]);
     await expect(h.delivery.resumeAnswer(Q1)).resolves.toEqual({ result: "resolved" });
 
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({ questionId: Q1, canResume: true, canReassign: false });
 
@@ -2185,7 +2184,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     expect((await entryOf(h)).write_refused).toBe(true);
 
     // With the person's follow-up that stopped too, the retry types both and the refusal no longer stands.
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
     const retried = settledValue(h.delivery.resumeAnswer(Q1));
     await until(() => retried.done);
     expect(retried.value).toMatchObject({ result: "delivered" });
@@ -2357,7 +2356,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
 
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({
@@ -2398,7 +2397,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
       error_code: "pane_gone",
     });
     expect(await h.delivery.attentionItems()).toEqual([]);
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item?.notice?.disposition).toBe("fallback-withheld");
     await stopped(h.delivery);
@@ -2496,7 +2495,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
 
     h.delivery.start();
     await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({
       status: "delivery-uncertain",
@@ -2557,7 +2556,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
     const [before] = await h.delivery.attentionItems();
     expect(before?.notice).toMatchObject({ kind: "expired", delivery: "needs-attention" });
 
@@ -2585,7 +2584,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
 
     const results = await Promise.all([h.delivery.markHandled(Q1), h.delivery.markHandled(Q1)]);
     expect(results.map((r) => r.result).sort()).toEqual(["handled", "resolved"]);
@@ -2609,7 +2608,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
     const [read] = await h.delivery.attentionItems();
     expect(read!.token).toMatch(/^[0-9a-f]{64}$/);
 
@@ -2637,7 +2636,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);
     await refusedWrite(h);
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
     h.client.generations.set(PANE, 7);
     h.patch({ launchGeneration: 7 });
     // The person's phone reopens the question in the same lock turn the retry is written in.
@@ -2765,7 +2764,7 @@ describe("AnswerDelivery, a question over without an answer (#18021)", () => {
       error_code: "pane_gone",
       answers_json: serializeAnswers([{ ...notice(Q1, "expired"), event_seq: 9 }]),
     });
-    await heldBehindNotice(h.store);
+    await followUpStoppedToo(h.store);
     h.delivery.start();
     expect(await h.delivery.attentionItems()).toHaveLength(1);
     // The follow-up is typed and the notice after it stops again, as separate writes can end.
@@ -2794,6 +2793,65 @@ describe("AnswerDelivery, a question over without an answer (#18021)", () => {
     expect(retried.value).toEqual({ result: "resolved" });
     expect(h.client.submitted).toEqual([]);
     expect(await h.delivery.attentionItems()).toEqual([]);
+    await stopped(h.delivery);
+  });
+
+  it("never calls a follow-up typed that a decline dropped while its retry ran", async () => {
+    const h = setup({ listTerminals: true });
+    await answered(h.store, Q1, 1, "approve", {
+      local_status: "open",
+      delivery_status: "not-sent",
+      answers_json: "[]",
+    });
+    await followUpStoppedToo(h.store);
+    h.delivery.start();
+    expect(await h.delivery.attentionItems()).toHaveLength(1);
+    // The person declines from their phone in the turn the retry is written in: the library drops
+    // the follow-up, and its decline notice's write is left uncertain.
+    const update = h.store.updateQuestion.bind(h.store);
+    let declined = false;
+    h.store.updateQuestion = async (id, patch) => {
+      const next = await update(id, patch);
+      const retry =
+        patch.messages_json !== undefined &&
+        parseMessages(patch.messages_json).some((m) => m.delivery?.retries === 1);
+      if (id === Q1 && retry && !declined) {
+        declined = true;
+        const row = (await h.question(Q1))!;
+        return update(id, {
+          local_status: "cancelled",
+          delivery_status: "delivery-uncertain",
+          error_code: "inject_ambiguous",
+          answers_json: serializeAnswers([
+            {
+              entry_id: `${Q1}-d1`,
+              kind: "declined",
+              action: "cancel",
+              revision: row.question_revision,
+              source: "human",
+              correction: false,
+              created_at: DEADLINE,
+              event_seq: 9,
+              deliver: true,
+              delivered: false,
+              sealed: null,
+            },
+          ]),
+          messages_json: serializeMessages(
+            parseMessages(row.messages_json).map((m) => ({
+              ...m,
+              delivery: { ...m.delivery!, deliver: false },
+            }))
+          ),
+        });
+      }
+      return next;
+    };
+
+    const retried = settledValue(h.delivery.resumeAnswer(Q1));
+    await until(() => retried.done);
+    expect(retried.value).toEqual({ result: "resolved" });
+    expect(h.client.submitted).toEqual([]);
     await stopped(h.delivery);
   });
 });

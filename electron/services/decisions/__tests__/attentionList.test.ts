@@ -271,9 +271,11 @@ describe("questions over without an answer (#18021)", () => {
           expect(withoutHandled([held], new Map())).toEqual([held]);
         }
         // Received and never held, it is still the person's words waiting with it.
-        const waiting = row(2, { ...closed, messages_json: messages({ event_seq }) });
-        expect(answerNeedsAttention(waiting, new Map())).toBe(true);
-        expect(withoutHandled([waiting], new Map())).toEqual([waiting]);
+        for (const stall of STALLS) {
+          const waiting = row(2, { ...closed, ...stall, messages_json: messages({ event_seq }) });
+          expect(answerNeedsAttention(waiting, new Map())).toBe(true);
+          expect(withoutHandled([waiting], new Map())).toEqual([waiting]);
+        }
       }
       // One already typed, or that the person handled, holds nothing.
       over(
