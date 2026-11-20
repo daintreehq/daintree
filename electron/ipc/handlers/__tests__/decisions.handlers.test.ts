@@ -557,7 +557,7 @@ const deleteLocalData = decisionsNamespace.ops.deleteLocalData.handler as unknow
   payload?: DecisionsKeyErasurePayload
 ) => Promise<DecisionsLocalDeleteResult>;
 /** A confirm that asked for the typed gate (#18064). */
-const TYPED: DecisionsKeyErasurePayload = { oneClick: false, relayOrigin: null };
+const TYPED: DecisionsKeyErasurePayload = { oneClick: false, relayOrigin: null, keys: null };
 const EXPORT: ExportDecisionsDataPayload = { passphrase: "a long export passphrase" };
 const RELAY_ORIGIN = "https://relay.example.com";
 const exportRecoveryKit = decisionsNamespace.ops.exportRecoveryKit.handler as unknown as (
@@ -1407,15 +1407,21 @@ describe("decisions IPC", () => {
       decisionsNamespace.ops.deleteLocalData,
     ]) {
       const schema = op.schema as SafeParse;
-      expect(schema.safeParse({ oneClick: true, relayOrigin: RELAY_ORIGIN }).success).toBe(true);
-      expect(schema.safeParse({ oneClick: false, relayOrigin: null }).success).toBe(true);
+      expect(
+        schema.safeParse({ oneClick: true, relayOrigin: RELAY_ORIGIN, keys: "a.none" }).success
+      ).toBe(true);
+      expect(schema.safeParse({ oneClick: false, relayOrigin: null, keys: null }).success).toBe(
+        true
+      );
       for (const value of [
         undefined,
         {},
         { oneClick: true },
-        { oneClick: "yes", relayOrigin: null },
-        { oneClick: true, relayOrigin: 42 },
-        { oneClick: true, relayOrigin: null, origin: "x" },
+        { oneClick: true, relayOrigin: null },
+        { oneClick: "yes", relayOrigin: null, keys: null },
+        { oneClick: true, relayOrigin: 42, keys: null },
+        { oneClick: true, relayOrigin: null, keys: 7 },
+        { oneClick: true, relayOrigin: null, keys: null, origin: "x" },
       ]) {
         expect(schema.safeParse(value).success, JSON.stringify(value)).toBe(false);
       }
@@ -2130,7 +2136,7 @@ describe("decisions IPC", () => {
 
     await expect(claimRelay(CLAIM)).resolves.toMatchObject({ result: "saved" });
     await expect(restoreIdentity(RESTORE)).resolves.toMatchObject({ result: "saved" });
-    const confirmed = { oneClick: true, relayOrigin: RELAY_ORIGIN };
+    const confirmed = { oneClick: true, relayOrigin: RELAY_ORIGIN, keys: "a.none" };
     await expect(disconnectRelay(confirmed)).resolves.toEqual({ state: "not-connected" });
 
     expect(decisionsEntry.claimRelay).toHaveBeenCalledExactlyOnceWith(CLAIM);
@@ -2193,7 +2199,7 @@ describe("decisions IPC", () => {
     await expect(deleteRelayData({ origin: RELAY_ORIGIN })).resolves.toMatchObject({
       result: "deleted",
     });
-    const confirmed = { oneClick: true, relayOrigin: null };
+    const confirmed = { oneClick: true, relayOrigin: null, keys: null };
     await expect(deleteLocalData(confirmed)).resolves.toMatchObject({ result: "deleted" });
 
     expect(decisionsEntry.deleteRelayData).toHaveBeenCalledExactlyOnceWith({

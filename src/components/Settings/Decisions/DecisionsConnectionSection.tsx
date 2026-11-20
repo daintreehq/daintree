@@ -362,12 +362,14 @@ export function DecisionsConnectionSection({
   };
 
   const confirmDisconnect = (oneClick: boolean) => {
-    identity.disconnect({ oneClick, relayOrigin: savedOrigin }).then(
-      (done) => {
-        if (done) setDisconnectOpen(false);
-      },
-      () => {}
-    );
+    identity
+      .disconnect({ oneClick, relayOrigin: savedOrigin, keys: status.keysVersion ?? null })
+      .then(
+        (done) => {
+          if (done) setDisconnectOpen(false);
+        },
+        () => {}
+      );
   };
 
   return (
@@ -661,6 +663,7 @@ export function DecisionsConnectionSection({
         isOpen={disconnectOpen}
         relayOrigin={savedOrigin}
         keysStored={keysStored}
+        keysVersion={status.keysVersion}
         kitCurrent={status.recoveryKitCurrent === true}
         disconnecting={identity.pending === "disconnect"}
         error={identity.error?.action === "disconnect" ? identity.error.message : null}

@@ -381,6 +381,12 @@ describe("DecisionsDataSection", () => {
       "Decisions keys",
       "only copy of a relay's owner keys",
     ],
+    [
+      "only keys an interrupted deletion set aside",
+      { state: "not-connected", relayOrigin: ORIGIN, keysVersion: "none.set-aside" },
+      HOST,
+      `only copy of ${HOST}'s owner keys`,
+    ],
   ])(
     "deletes local data holding %s only once the gate is typed (#18064)",
     async (_, status, typed, preamble) => {
@@ -408,6 +414,7 @@ describe("DecisionsDataSection", () => {
       expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
         oneClick: false,
         relayOrigin: status.relayOrigin ?? null,
+        keys: status.keysVersion ?? null,
       });
     }
   );
@@ -424,7 +431,11 @@ describe("DecisionsDataSection", () => {
       );
     });
 
-    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true, relayOrigin: null });
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
+      oneClick: true,
+      relayOrigin: null,
+      keys: null,
+    });
     // Main's status is read afresh, so the next confirm shows the keys and the gate.
     expect(onChanged).toHaveBeenCalledExactlyOnceWith(null);
     const row = document.getElementById("decisions-data-outcome")!;

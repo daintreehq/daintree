@@ -15,6 +15,8 @@ interface DecisionsDeleteLocalDialogProps {
   relayOrigin: string | null;
   /** This computer holds Decisions keys. */
   keysStored: boolean;
+  /** What the keys hold now; a change takes back what was typed for the keys before it. */
+  keysVersion?: string;
   /** A verified recovery kit holds every key this computer has now (#18064). */
   kitCurrent: boolean;
   deleting: boolean;
@@ -36,6 +38,7 @@ export function DecisionsDeleteLocalDialog({
   isOpen,
   relayOrigin,
   keysStored,
+  keysVersion,
   kitCurrent,
   deleting,
   error,
@@ -61,6 +64,8 @@ export function DecisionsDeleteLocalDialog({
       description={`${what} Nothing on ${host ?? "any relay"} changes, and paired devices stay paired.${keys}`}
       typedNameTarget={gated ? (host ?? KEYS_GATE_TARGET) : undefined}
       typedNamePreamble={gated ? onlyCopyPreamble(host) : undefined}
+      // An attestation typed for other keys never confirms these.
+      cooldownKey={keysVersion}
       confirmLabel="Delete local data"
       onConfirm={() => onConfirm(!gated)}
       isConfirmLoading={deleting}

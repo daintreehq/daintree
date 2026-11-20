@@ -16,6 +16,8 @@ interface DecisionsDisconnectDialogProps {
   relayOrigin: string | null;
   /** This computer's key file is there to save a kit of. */
   keysStored: boolean;
+  /** What the keys hold now; a change takes back what was typed for the keys before it. */
+  keysVersion?: string;
   /** A verified recovery kit holds every key this computer has now (#18064). */
   kitCurrent: boolean;
   disconnecting: boolean;
@@ -40,6 +42,7 @@ export function DecisionsDisconnectDialog({
   isOpen,
   relayOrigin,
   keysStored,
+  keysVersion,
   kitCurrent,
   disconnecting,
   error,
@@ -65,6 +68,8 @@ export function DecisionsDisconnectDialog({
       description={description}
       typedNameTarget={gated ? (host ?? KEYS_GATE_TARGET) : undefined}
       typedNamePreamble={gated ? onlyCopyPreamble(host) : undefined}
+      // An attestation typed for other keys never confirms these.
+      cooldownKey={keysVersion}
       confirmLabel={host ? "Disconnect relay" : "Remove keys"}
       onConfirm={() => onConfirm(!gated)}
       isConfirmLoading={disconnecting}

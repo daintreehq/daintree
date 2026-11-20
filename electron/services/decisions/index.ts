@@ -1145,14 +1145,11 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
   // A verification for keys known to be gone protects nothing.
   const kitVerifiedAt =
     settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit.verifiedAt : null;
-  // Only a verification of the keys as the file holds them now covers them (#18064).
-  const kitKeys = settings.recoveryKit?.keys;
+  // Only a verification of the keys as the files hold them now covers them (#18064).
+  const files = owned !== null && keyFile !== null ? await readKeyFiles(owned) : undefined;
   const kitCurrent =
-    kitVerifiedAt !== null &&
-    owned !== null &&
-    keyFile === true &&
-    kitKeys !== undefined &&
-    (await keyFileVersion(owned.getKeyFilePath()).catch(() => null)) === kitKeys;
+    kitVerifiedAt !== null && keyFile === true && files !== undefined && filesCovered(files);
+  const keysVersion = files !== undefined ? versionOfKeyFiles(files) : null;
   // Nor does a check of them.
   const checked = settings.setupCheck !== null && keyFile !== false ? settings.setupCheck : null;
   const deploy = relayDeploys.snapshot();
@@ -1166,6 +1163,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(keyFile === true ? { keysStored: true } : {}),
     ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
     ...(kitCurrent ? { recoveryKitCurrent: true } : {}),
+    ...(keysVersion !== null ? { keysVersion } : {}),
     ...(checked !== null
       ? { setupCheck: { checkedAt: checked.checkedAt, failedStep: checked.failedStep } }
       : {}),
@@ -2048,10 +2046,10 @@ function stillRecords(record: RemovedRelayRecord): boolean {
  * the relay it showed; with none named, the erasure isn't bound to one.
  */
 type KeyErasure = Pick<DecisionsKeyErasurePayload, "oneClick"> &
-  Partial<Pick<DecisionsKeyErasurePayload, "relayOrigin">>;
+  Partial<Pick<DecisionsKeyErasurePayload, "relayOrigin" | "keys">>;
 
 export async function disconnectRelay(payload: KeyErasure): Promise<DecisionsStatus> {
-  return (await disconnectRecorded(null, payload.oneClick, payload.relayOrigin))!;
+  return (await disconnectRecorded(null, payload))!;
 }
 
 /**
@@ -2060,14 +2058,55 @@ export async function disconnectRelay(payload: KeyErasure): Promise<DecisionsSta
  * version (#18064).
  */
 async function keysCoveredOrAbsent(running: DecisionsService): Promise<boolean> {
+  const files = await readKeyFiles(running);
+  return files !== undefined && filesCovered(files);
+}
+
+/**
+ * The key file's version and that of keys an interrupted deletion set aside,
+ * which come back before that deletion finishes; undefined when either
+ * couldn't be read (#18064).
+ */
+async function readKeyFiles(
+  running: DecisionsService
+): Promise<{ held: string | null; setAside: string | null } | undefined> {
   const path = running.getKeyFilePath();
-  const read = (at: string) => keyFileVersion(at).catch(() => undefined);
-  // Keys an interrupted deletion set aside come back before that deletion finishes.
-  let version = await read(path);
-  if (version === null) version = await read(erasingKeyFilePath(path));
-  if (version === null) return true;
+  try {
+    const [held, setAside] = await Promise.all([
+      keyFileVersion(path),
+      keyFileVersion(erasingKeyFilePath(path)),
+    ]);
+    return { held, setAside };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Each key file there is is exactly what the recorded verification checked. */
+function filesCovered(files: { held: string | null; setAside: string | null }): boolean {
   const verified = readDecisionsSettings(store).recoveryKit?.keys;
-  return version !== undefined && verified !== undefined && version === verified;
+  const covered = (version: string | null) =>
+    version === null || (verified !== undefined && version === verified);
+  return covered(files.held) && covered(files.setAside);
+}
+
+/** Both files as one opaque version for Settings to name back; null when neither exists. */
+function versionOfKeyFiles(files: { held: string | null; setAside: string | null }): string | null {
+  if (files.held === null && files.setAside === null) return null;
+  return `${files.held ?? "none"}.${files.setAside ?? "none"}`;
+}
+
+/**
+ * The key files no longer hold what the person confirmed erasing; undefined
+ * `confirmed` binds nothing (#18064).
+ */
+async function keysDifferFromConfirm(
+  running: DecisionsService,
+  confirmed: string | null | undefined
+): Promise<boolean> {
+  if (confirmed === undefined) return false;
+  const files = await readKeyFiles(running);
+  return files === undefined || versionOfKeyFiles(files) !== confirmed;
 }
 
 /** Another relay is recorded than the one the person confirmed for (#18064). */
@@ -2084,7 +2123,7 @@ function keysChangedSinceConfirm(): AppError {
   return new AppError({
     code: "FILE_CHANGED_SINCE_REVIEW",
     message:
-      "This computer's keys changed after you confirmed, and no recovery kit verified here holds them now, so nothing was removed.",
+      "This computer's keys aren't what you confirmed removing: they changed, or no recovery kit verified here holds them now. Nothing was removed.",
   });
 }
 
@@ -2096,15 +2135,17 @@ function keysChangedSinceConfirm(): AppError {
  */
 function disconnectRecorded(
   only: RemovedRelayRecord | null,
-  oneClick: boolean,
-  confirmedFor?: string | null
+  confirmed: KeyErasure
 ): Promise<DecisionsStatus | null> {
   if (only !== null && !stillRecords(only)) return Promise.resolve(null);
+  // Refused before anything for the relay recorded now is cancelled.
+  const early = relayChangedSinceConfirm(confirmed.relayOrigin);
+  if (early) return Promise.reject(early);
   cancelKitExports();
   const checkStopped = endSetupCheck();
   return serialize(async () => {
     if (only !== null && !stillRecords(only)) return null;
-    const changed = relayChangedSinceConfirm(confirmedFor);
+    const changed = relayChangedSinceConfirm(confirmed.relayOrigin);
     if (changed) throw changed;
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
@@ -2117,8 +2158,13 @@ function disconnectRecorded(
     await running.suspendConnection();
     try {
       await running.getKeyRotations().exclusive(async () => {
-        // A rotation from another window may have landed while this waited its turn.
-        if (oneClick && !(await keysCoveredOrAbsent(running))) throw keysChangedSinceConfirm();
+        // A rotation or another setup from another window may have landed while this waited its turn.
+        if (
+          (await keysDifferFromConfirm(running, confirmed.keys)) ||
+          (confirmed.oneClick && !(await keysCoveredOrAbsent(running)))
+        ) {
+          throw keysChangedSinceConfirm();
+        }
         await keys.clear();
       });
     } catch (error) {
@@ -2247,22 +2293,23 @@ export function deleteRelayData(
  * kit covers (#18064).
  */
 export async function deleteLocalData(payload: KeyErasure): Promise<DecisionsLocalDeleteResult> {
-  return (await deleteLocalDataOf(null, payload.oneClick, payload.relayOrigin))!;
+  return (await deleteLocalDataOf(null, payload))!;
 }
 
 /** Deletes local data, or with `only` set, only while the setting still records that identity (null otherwise). */
 function deleteLocalDataOf(
   only: RemovedRelayRecord | null,
-  oneClick: boolean,
-  confirmedFor?: string | null
+  confirmed: KeyErasure
 ): Promise<DecisionsLocalDeleteResult | null> {
   if (only !== null && !stillRecords(only)) return Promise.resolve(null);
+  const early = relayChangedSinceConfirm(confirmed.relayOrigin);
+  if (early) return Promise.reject(early);
   // Before the queue, as a disconnect does: a kit of keys being erased is never written.
   cancelKitExports();
   const checkStopped = endSetupCheck();
   return serialize(async () => {
     if (only !== null && !stillRecords(only)) return null;
-    const changed = relayChangedSinceConfirm(confirmedFor);
+    const changed = relayChangedSinceConfirm(confirmed.relayOrigin);
     if (changed) throw changed;
     let outcome: LocalEraseOutcome;
     // Its terminal closes and its question is cancelled in the store before the rows go.
@@ -2274,7 +2321,9 @@ function deleteLocalDataOf(
     try {
       const running = await runningService();
       outcome = await running.eraseLocalData(
-        oneClick ? () => keysCoveredOrAbsent(running) : undefined
+        async () =>
+          !(await keysDifferFromConfirm(running, confirmed.keys)) &&
+          (!confirmed.oneClick || (await keysCoveredOrAbsent(running)))
       );
     } finally {
       // A device read while it ran may hold the key store it closed; the next one makes its own.
@@ -2304,9 +2353,11 @@ async function forgetRemovedRelay(
   try {
     if (!deleteLocalHistory) {
       // The guided removal had its own typed confirmation of the Worker's name.
-      return (await disconnectRecorded(record, false)) === null ? "changed" : "forgotten";
+      return (await disconnectRecorded(record, { oneClick: false })) === null
+        ? "changed"
+        : "forgotten";
     }
-    const deleted = await deleteLocalDataOf(record, false);
+    const deleted = await deleteLocalDataOf(record, { oneClick: false });
     if (deleted === null) return "changed";
     return deleted.result === "failed" ? "failed" : deleted.result;
   } catch (error) {

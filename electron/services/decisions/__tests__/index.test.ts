@@ -3168,6 +3168,7 @@ describe("Decisions entry", () => {
           relayOrigin: CLAIMED.relayOrigin,
           consentedAt: 5,
           keysStored: true,
+          keysVersion: `${versionOf("sealed")}.none`,
         }),
       });
       expect(setupRuns.claim).toHaveBeenCalledExactlyOnceWith(
@@ -3406,6 +3407,29 @@ describe("Decisions entry", () => {
       expect(existsSync(keyFile.path)).toBe(true);
     });
 
+    it("removes nothing for a typed confirmation made for other keys than the file holds now (#18064)", async () => {
+      // Remove keys was confirmed for one unfinished claim; another window then claimed again.
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "another claim's staged keys");
+
+      await expect(
+        disconnectRelay({
+          oneClick: false,
+          relayOrigin: null,
+          keys: `${versionOf("the first claim's keys")}.none`,
+        })
+      ).rejects.toMatchObject({ code: "FILE_CHANGED_SINCE_REVIEW" });
+      await expect(
+        deleteLocalData({ oneClick: false, relayOrigin: null, keys: null })
+      ).resolves.toEqual({ result: "failed", reason: "keys-changed" });
+      expect(readFileSync(keyFile.path, "utf8")).toBe("another claim's staged keys");
+
+      const shown = (await getDecisionsStatus()).keysVersion ?? null;
+      await disconnectRelay({ oneClick: false, relayOrigin: null, keys: shown });
+      expect(existsSync(keyFile.path)).toBe(false);
+    });
+
     it("removes nothing for a confirmation that named another relay than the one recorded now (#18064)", async () => {
       saved.value = { enabled: true, ...RELAY };
       await startDecisionsIfEnabled();
@@ -3433,7 +3457,12 @@ describe("Decisions entry", () => {
       writeFileSync(keyFile.path, "sealed");
 
       expect(await getDecisionsStatus()).toEqual(
-        withRevision({ state: "not-connected", keysStored: true })
+        withRevision({
+          state: "not-connected",
+          keysStored: true,
+          // What an erasure's confirmation names back (#18064).
+          keysVersion: `${versionOf("sealed")}.none`,
+        })
       );
     });
 
@@ -4342,6 +4371,31 @@ describe("Decisions entry", () => {
       expect(storedRows.count).toBe(0);
     });
 
+    it("counts set-aside keys beside covered ones, and Settings sees them as uncovered (#18064)", async () => {
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      // An older identity's keys an interrupted deletion couldn't put back.
+      writeFileSync(`${keyFile.path}.erasing`, "an older identity");
+      storedRows.count = 1;
+
+      const status = await getDecisionsStatus();
+      expect(status).not.toHaveProperty("recoveryKitCurrent");
+      expect(status.keysVersion).toBe(`${versionOf("sealed")}.${versionOf("an older identity")}`);
+      await expect(
+        deleteLocalData({
+          oneClick: true,
+          relayOrigin: RELAY.relayOrigin,
+          keys: status.keysVersion!,
+        })
+      ).resolves.toEqual({ result: "failed", reason: "keys-changed" });
+      expect(readFileSync(`${keyFile.path}.erasing`, "utf8")).toBe("an older identity");
+    });
+
     it("counts keys an interrupted deletion set aside, which it would put back first (#18064)", async () => {
       saved.value = { enabled: true, consentedAt: 5, ...RELAY };
       await startDecisionsIfEnabled();
@@ -4835,6 +4889,7 @@ describe("Decisions entry", () => {
           keysStored: true,
           recoveryKitVerifiedAt: record.verifiedAt,
           recoveryKitCurrent: true,
+          keysVersion: `${versionOf("sealed")}.none`,
           revision: expect.any(Number),
         },
       });

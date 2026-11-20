@@ -835,6 +835,7 @@ describe("DecisionsConnectionSection disconnect focus", () => {
         state: "not-connected",
         relayOrigin: ORIGIN,
         keysStored: true,
+        keysVersion: "current.none",
         recoveryKitVerifiedAt: 1,
         recoveryKitCurrent: true,
       },
@@ -849,7 +850,7 @@ describe("DecisionsConnectionSection disconnect focus", () => {
     ],
     [
       "an unfinished setup's keys",
-      { state: "not-connected", keysStored: true },
+      { state: "not-connected", keysStored: true, keysVersion: "staged.none" },
       "Remove keys",
       "Decisions keys",
     ],
@@ -880,6 +881,7 @@ describe("DecisionsConnectionSection disconnect focus", () => {
       expect(disconnectRelay).toHaveBeenCalledExactlyOnceWith({
         oneClick: typed === null,
         relayOrigin: initial.relayOrigin ?? null,
+        keys: initial.keysVersion ?? null,
       });
       await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(screen.queryByRole("button", { name: label })).toBeNull();
@@ -965,6 +967,42 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
     fireEvent.click(confirmButton());
 
     expect(onConfirm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("takes back an address typed for other keys once the keys change while open", () => {
+    const view = render(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored
+        keysVersion="first.none"
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+    fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+      target: { value: HOST },
+    });
+    expect(unavailable(confirmButton())).toBe(false);
+
+    view.rerender(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored
+        keysVersion="second.none"
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    expect(unavailable(confirmButton())).toBe(true);
   });
 
   it("offers no kit to save when the key file is gone, still asking for the address", () => {

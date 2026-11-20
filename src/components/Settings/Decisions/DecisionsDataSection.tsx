@@ -58,7 +58,8 @@ export function DecisionsDataSection({
   onKitFocused?: () => void;
 }) {
   const relayOrigin = status.relayOrigin ?? null;
-  const keysStored = status.keysStored === true;
+  // Keys an interrupted deletion set aside are keys too: deleting puts them back, then deletes them.
+  const keysStored = status.keysStored === true || status.keysVersion !== undefined;
   const data = useDecisionsData((next) => onChanged?.(next));
   const [open, setOpen] = useState<OpenDialog>(null);
   const busy = locked || data.pending !== null;
@@ -216,12 +217,15 @@ export function DecisionsDataSection({
         isOpen={open === "delete-local"}
         relayOrigin={relayOrigin}
         keysStored={keysStored}
+        keysVersion={status.keysVersion}
         kitCurrent={status.recoveryKitCurrent === true}
         deleting={data.pending === "delete-local"}
         error={errorFor("delete-local")}
         onCancel={close}
         onConfirm={(oneClick) => {
-          data.deleteLocalData({ oneClick, relayOrigin }).then(finish, () => {});
+          data
+            .deleteLocalData({ oneClick, relayOrigin, keys: status.keysVersion ?? null })
+            .then(finish, () => {});
         }}
       />
     </SettingsSection>

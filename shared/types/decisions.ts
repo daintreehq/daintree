@@ -257,6 +257,13 @@ export interface DecisionsStatus {
    */
   recoveryKitCurrent?: true;
   /**
+   * What this computer's key file, and any keys an interrupted deletion set
+   * aside, hold now, as an opaque version; absent when neither exists or they
+   * weren't read (#18064). An erasure names the version its confirmation
+   * showed, and main erases nothing once it differs.
+   */
+  keysVersion?: string;
+  /**
    * The latest setup check that ran to the end for the relay set up here
    * (#16024). Absent until one has, or while its key file is known to be gone.
    */
@@ -709,6 +716,8 @@ export interface DecisionsKeyErasurePayload {
    * while this one's dialog was open.
    */
   relayOrigin: string | null;
+  /** The `keysVersion` the confirmation showed, null for none. */
+  keys: string | null;
 }
 
 /**
