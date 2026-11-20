@@ -295,7 +295,6 @@ export class ClaudeUpdateApply {
       this.now() + CLAUDE_UPDATE_WAIT_MS,
       request.deadline ?? Number.POSITIVE_INFINITY
     );
-    let waitingOn = "its first read";
     for (;;) {
       if (aborted(request.signal)) {
         return this.notSent(pin, "cancelled", "The call ended before the pane was ready.");
@@ -328,14 +327,13 @@ export class ClaudeUpdateApply {
         }
         if (check.kind === "ready") break;
       }
-      waitingOn = check.on;
       if (this.now() + POLL_MS >= deadline) {
         return this.notSent(
           pin,
           "expired",
           `The pane didn't wait at its own empty prompt within ${Math.round(
             CLAUDE_UPDATE_WAIT_MS / 1000
-          )}s (last seen: ${waitingOn}).`
+          )}s (last seen: ${check.on}).`
         );
       }
       await this.sleep(POLL_MS);
