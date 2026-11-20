@@ -26,6 +26,7 @@ import type {
   SendDecisionFollowUpPayload,
 } from "@shared/types/decisionsQuestion";
 import { DECISION_QUESTION_MARKS_PER_CALL } from "@shared/types/decisionsQuestion";
+import type { DecisionsHostsResult } from "@shared/types/decisionsHosts";
 import type {
   DecisionsInvolvementRead,
   DecisionsInvolvementSaveResult,
@@ -231,6 +232,12 @@ export const decisionsClient = {
    * stands, never its words.
    */
   listQuestions: (): Promise<DecisionQuestionList> => window.electron.decisions.listQuestions(),
+
+  /**
+   * The Remote Hosts this computer enrolls (#16021), with those whose
+   * questions its inbox lists now (#18049). Asks no Host and no relay.
+   */
+  listHosts: (): Promise<DecisionsHostsResult> => window.electron.decisions.listHosts(),
 
   /**
    * The person seeing, clearing or restoring questions on this computer

@@ -500,6 +500,19 @@ function listedQuestions(hosts: readonly DecisionsHostQuestions[]): DecisionQues
 }
 
 /**
+ * The Hosts whose questions the list holds now (#18049), by host-list id,
+ * so a Remote Host's window can tell whether its Host's are among them: none
+ * while it lists none.
+ */
+function inboxHostIds(): string[] {
+  if (!listingQuestions) return [];
+  const ownHostId = service?.getSettings()?.hostId ?? null;
+  return (getDecisionsHostsPort()?.hostQuestions() ?? [])
+    .filter((host) => host.questionHostId !== ownHostId)
+    .map((host) => host.hostId);
+}
+
+/**
  * Each enrolled Host this computer heard from but can't reach now, by name,
  * whether or not it listed a question (#18022): the inbox can't call itself
  * clear while one is away. Never this computer's own.
@@ -2296,7 +2309,7 @@ export async function listDevices(): Promise<DecisionsDevicesResult> {
 /** The Remote Hosts this computer enrolls, or could (#16021). Asks no Host and no relay. */
 export async function listHosts(): Promise<DecisionsHostsResult> {
   await runningService();
-  return hostEnroller.list();
+  return { ...(await hostEnroller.list()), inboxHostIds: inboxHostIds() };
 }
 
 /** Enroll, from Settings: enrolls one connected Host now, whatever automatic enrollment says. */

@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
-import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import { usePanelStore } from "@/store/panelStore";
@@ -34,6 +33,7 @@ import {
 } from "@/components/ui/popoverHeader";
 import { pluralize } from "@/lib/pluralize";
 import { DecisionCancelDialog } from "@/components/Decisions/DecisionCancelDialog";
+import { openDecisionsInbox } from "@/components/Decisions/decisionsHostInbox";
 import { dismissingQuestionIds } from "@/components/Decisions/decisionDeclineSend";
 import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
 import { paneQuestion, questionOf } from "@/components/Decisions/decisionQuestionTarget";
@@ -311,7 +311,6 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const sharedStatusId = useId();
   const [open, setOpen] = useState(false);
   const openAttention = useDecisionsAttentionStore((s) => s.open);
-  const openInbox = useDecisionsInboxStore((s) => s.open);
   // A question steps down as its deadline passes, popover open or not (#18053);
   // closed, only a deadline passing is waited for, never the minutes ticking down.
   const deadlines = state?.openQuestions.map((question) => question.expiresAt) ?? [];
@@ -527,28 +526,29 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                 ))}
               </div>
             )}
-            {/* Both lists read this computer's questions; a Remote Host keeps its own panes'. */}
-            {!isRemoteWindow() && (
-              <div className="flex justify-end gap-2 border-t border-divider px-3 py-2">
-                {/* Every question on this computer, this pane's first (#17231). */}
-                <OpenInboxButton
-                  onOpen={() => {
+            <div className="flex justify-end gap-2 border-t border-divider px-3 py-2">
+              {/* Every question on this computer and its enrolled Hosts, this pane's first
+              (#17231). From a Host's pane, only once the inbox is known to list that
+              Host's, else it says why (#18049). */}
+              <OpenInboxButton
+                onOpen={() => {
+                  setOpen(false);
+                  // A refusal was shown to the person; nothing is left to do with it here.
+                  openDecisionsInbox({ terminalId }, { quiet: false }).catch(() => {});
+                }}
+              />
+              {/* The answers that need a person are acted on in the list, which
+              also holds those whose pane is gone. It reads this computer's deliveries
+              only; a Remote Host keeps its own panes'. */}
+              {attention && !isRemoteWindow() && (
+                <ReviewAnswersButton
+                  onReview={() => {
                     setOpen(false);
-                    openInbox({ terminalId });
+                    openAttention(terminalId);
                   }}
                 />
-                {/* The answers that need a person are acted on in the list, which
-                also holds those whose pane is gone. */}
-                {attention && (
-                  <ReviewAnswersButton
-                    onReview={() => {
-                      setOpen(false);
-                      openAttention(terminalId);
-                    }}
-                  />
-                )}
-              </div>
-            )}
+              )}
+            </div>
           </PopoverContent>
         </Popover>
       )}

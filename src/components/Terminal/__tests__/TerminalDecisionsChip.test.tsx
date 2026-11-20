@@ -59,6 +59,8 @@ import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useDecisionsWaitingCount } from "@/hooks/useDecisionsWaitingCount";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import type { DecisionsHostsResult } from "@shared/types/decisionsHosts";
 import type {
   DecisionDeclineResultRead,
   DecisionQuestionCancelResult,
@@ -502,18 +504,112 @@ describe("TerminalDecisionsChip", () => {
     }
   });
 
-  it("offers no inbox in a Remote Host's window, whose questions this computer doesn't list", async () => {
-    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
-    getPaneState.mockResolvedValue(paneState());
-    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
-    try {
+  describe("in a Remote Host's window (#18049)", () => {
+    const listHosts = vi.fn<() => Promise<DecisionsHostsResult>>();
+
+    beforeEach(() => {
+      window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      Reflect.set(window.electron.decisions, "listHosts", listHosts);
+      useNotificationHistoryStore.setState({ entries: [] });
+    });
+
+    afterEach(() => {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+      useNotificationHistoryStore.setState({ entries: [] });
+    });
+
+    async function openFromFooter(calls: string[]): Promise<void> {
+      const original = useDecisionsInboxStore.getState().open;
+      useDecisionsInboxStore.setState({
+        open: (options) => calls.push(`open ${options?.terminalId ?? "none"}`),
+      });
+      try {
+        render(
+          <OverlayFocusRestoreContext.Provider value={makePolicy(() => calls.push("handoff"))}>
+            <TerminalDecisionsChip terminalId="t1" />
+          </OverlayFocusRestoreContext.Provider>
+        );
+        fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+        fireEvent.click(await screen.findByTestId("terminal-decisions-inbox"));
+        expect(screen.queryByTestId("popover-content")).toBeNull();
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      } finally {
+        useDecisionsInboxStore.setState({ open: original });
+      }
+    }
+
+    it("opens the inbox at this pane once main says it lists the Host's questions", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(paneState());
+      let answer!: (read: DecisionsHostsResult) => void;
+      listHosts.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+      const calls: string[] = [];
+      await openFromFooter(calls);
+      expect(listHosts).toHaveBeenCalledTimes(1);
+      expect(calls).toEqual(["handoff"]);
+
+      const original = useDecisionsInboxStore.getState().open;
+      useDecisionsInboxStore.setState({
+        open: (options) => calls.push(`open ${options?.terminalId ?? "none"}`),
+      });
+      try {
+        await act(async () => {
+          answer({ result: "listed", autoEnroll: true, hosts: [], inboxHostIds: ["build-box"] });
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      } finally {
+        useDecisionsInboxStore.setState({ open: original });
+      }
+      expect(calls).toEqual(["handoff", "open t1"]);
+      expect(useNotificationHistoryStore.getState().entries).toEqual([]);
+    });
+
+    it("says why, opening nothing, when the inbox doesn't list the Host's questions", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(paneState());
+      listHosts.mockResolvedValue({
+        result: "listed",
+        autoEnroll: true,
+        hosts: [
+          {
+            hostId: "build-box",
+            name: "Build box",
+            connected: true,
+            enrollment: { state: "own-setup" },
+            canEnroll: false,
+          },
+        ],
+        inboxHostIds: ["studio"],
+      });
+      const calls: string[] = [];
+      await openFromFooter(calls);
+      expect(calls).toEqual(["handoff"]);
+      const shown = useNotificationHistoryStore.getState().entries;
+      expect(shown).toHaveLength(1);
+      expect(shown[0]!.message).toMatch(/Build box has its own Decisions setup/);
+    });
+
+    it("offers no review of answers, which reads this computer's deliveries only", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(
+        paneState({
+          needsAttention: [
+            {
+              questionId: "q43",
+              alias: 43,
+              deliveryStatus: "needs-attention",
+              reason: "pane_gone",
+            },
+          ],
+        })
+      );
       render(<TerminalDecisionsChip terminalId="t1" />);
       fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
-      await screen.findByTestId("popover-content");
-      expect(screen.queryByTestId("terminal-decisions-inbox")).toBeNull();
-    } finally {
-      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
-    }
+      await screen.findByTestId("terminal-decisions-inbox");
+      expect(screen.queryByTestId("terminal-decisions-review")).toBeNull();
+    });
   });
 
   it("stays out of the way when the bridge is missing", () => {

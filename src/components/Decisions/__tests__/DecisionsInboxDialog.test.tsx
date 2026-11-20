@@ -41,7 +41,10 @@ vi.mock("@/hooks/useDecisionsOn", async () => {
 });
 
 let remote = false;
-vi.mock("@/hooks/useHostPlatform", () => ({ isRemoteWindow: () => remote }));
+vi.mock("@/hooks/useHostPlatform", () => ({
+  isRemoteWindow: () => remote,
+  currentHostId: () => (remote ? "studio" : "local"),
+}));
 vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => "project-a" }));
 
 /** The panels of this view (project A). */
@@ -1168,7 +1171,7 @@ describe("DecisionsInboxDialog", () => {
       expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
     });
 
-    it("offers nothing from a Remote Host's window, and names questions as they were asked", async () => {
+    it("offers nothing in a Remote Host's window for this computer's own question, and names questions as they were asked", async () => {
       remote = true;
       panels = { t1: { location: "grid" } };
       open();
@@ -1177,6 +1180,113 @@ describe("DecisionsInboxDialog", () => {
       expect(getAllTerminals).not.toHaveBeenCalled();
       // Its projects are another computer's, whatever their ids.
       expect(rowNamed("q-2").textContent).toContain("Alpha (as asked)");
+    });
+
+    describe("across machines whose ids repeat (#18049)", () => {
+      const STUDIO = { hostId: "studio", name: "Studio", connected: true };
+      const BUILD_BOX = { hostId: "build-box", name: "Build box", connected: true };
+
+      /** One open question per machine (this computer's for undefined), each in project A's terminal t1. */
+      function onMachines(...hosts: Array<typeof STUDIO | undefined>): DecisionQuestionList {
+        return {
+          revision: 1,
+          questions: hosts.map((remoteHost, index) =>
+            item(`question-${index + 1}`, index + 1, OPEN, {
+              reference: reference(`question-${index + 1}`, {
+                hostId: remoteHost === undefined ? "host_1" : `host_${remoteHost.hostId}`,
+              }),
+              askedAt: `2026-11-02T0${index + 1}:00:00.000Z`,
+              ...(remoteHost === undefined ? {} : { remoteHost }),
+            })
+          ),
+        };
+      }
+
+      beforeEach(() => {
+        panels = { t1: { location: "grid" } };
+        getQuestionContentByReference.mockImplementation(async ({ reference: asked }) => ({
+          result: "read",
+          question: content(asked.questionId, Number(asked.questionId.slice(-1)), {
+            reference: asked,
+          }),
+        }));
+      });
+
+      it("opens a Host's window at its own pane's question, and goes to that pane", async () => {
+        remote = true;
+        listQuestions.mockResolvedValue(onMachines(undefined, STUDIO, BUILD_BOX));
+        open({ terminalId: "t1" });
+        await waitFor(() => expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true"));
+        fireEvent.click(await screen.findByTestId("decisions-inbox-go-to-terminal"));
+        await waitFor(() =>
+          expect(dispatch).toHaveBeenCalledWith("panel.focus", { panelId: "t1" })
+        );
+        expect(getAllTerminals).not.toHaveBeenCalled();
+      });
+
+      it("offers no way from a Host's window to its own question in another project, or to a pane gone or trashed", async () => {
+        remote = true;
+        const elsewhere = onMachines(STUDIO);
+        elsewhere.questions[0] = {
+          ...elsewhere.questions[0]!,
+          reference: reference("question-1", { hostId: "host_studio", projectId: "project-b" }),
+        };
+        listQuestions.mockResolvedValue(elsewhere);
+        getAllTerminals.mockResolvedValue([
+          terminal({ id: "t1", projectId: "project-b", hasPty: true }),
+        ]);
+        open({ terminalId: "t1" });
+        await screen.findByTestId("decision-question-content");
+        expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
+        act(() => useDecisionsInboxStore.getState().close());
+        await waitFor(() => expect(screen.queryByTestId("decisions-inbox-dialog")).toBeNull());
+
+        listQuestions.mockResolvedValue(onMachines(STUDIO));
+        const trashedOrGone: Array<Record<string, { location: string }>> = [
+          { t1: { location: "trash" } },
+          {},
+        ];
+        for (const shown of trashedOrGone) {
+          panels = shown;
+          open({ terminalId: "t1" });
+          await screen.findByTestId("decision-question-content");
+          expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
+          act(() => useDecisionsInboxStore.getState().close());
+          await waitFor(() => expect(screen.queryByTestId("decisions-inbox-dialog")).toBeNull());
+        }
+        expect(getAllTerminals).not.toHaveBeenCalled();
+      });
+
+      it("offers no way from a Host's window to another machine's terminal with the same ids", async () => {
+        remote = true;
+        listQuestions.mockResolvedValue(onMachines(undefined, STUDIO, BUILD_BOX));
+        open();
+        await waitFor(() => expect(rows()).toHaveLength(3));
+        for (const other of ["q-1", "q-3"]) {
+          fireEvent.click(rowNamed(other));
+          await waitFor(() => expect(rowNamed(other).getAttribute("aria-current")).toBe("true"));
+          await screen.findByTestId("decision-question-content");
+          expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
+        }
+        expect(getAllTerminals).not.toHaveBeenCalled();
+      });
+
+      it("takes no Host's question for this computer's in its own window, by pane or by name", async () => {
+        listQuestions.mockResolvedValue(onMachines(STUDIO, undefined));
+        open({ terminalId: "t1" });
+        // The opener's pane is this computer's t1, so its own question, not Studio's.
+        await waitFor(() => expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true"));
+        expect(await screen.findByTestId("decisions-inbox-go-to-terminal")).toBeTruthy();
+        expect(rowNamed("q-2").textContent).toContain("Alpha");
+        expect(rowNamed("q-2").textContent).not.toContain("Alpha (as asked)");
+
+        fireEvent.click(rowNamed("q-1"));
+        await waitFor(() => expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true"));
+        await screen.findByTestId("decision-question-content");
+        expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
+        expect(getAllTerminals).not.toHaveBeenCalled();
+        expect(rowNamed("q-1").textContent).toContain("Alpha (as asked)");
+      });
     });
   });
 
