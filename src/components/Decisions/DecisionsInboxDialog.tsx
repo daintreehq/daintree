@@ -75,6 +75,7 @@ import {
   agentName,
   askShownIn,
   askedOnHost,
+  attentionNotice,
   attentionText,
   CLEARED_ELAPSED_NOTE,
   CLEARED_NOTE,
@@ -1765,7 +1766,7 @@ export function DecisionsInboxDialog() {
                         }
                         data-testid="decisions-inbox-attention"
                       >
-                        {attentionText(selected.standing, selected)}
+                        {attentionText(selected)}
                       </Callout>
                     )}
                     <DecisionQuestionReadView
@@ -1777,6 +1778,8 @@ export function DecisionsInboxDialog() {
                       followUps
                       // So the follow-up waits on the same stall the warning above names.
                       listed={selected}
+                      // The warning says how far the closing notice got; the facts needn't again.
+                      noticeShown={attentionNotice(selected)}
                       eyebrow={
                         <p className="flex items-center gap-1.5 text-xs">
                           <span

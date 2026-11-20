@@ -155,13 +155,46 @@ const HERE: Record<string, string> = {
 };
 
 /**
+ * Codes for an answer the question can't take: never a closure notice's, so a
+ * stall with one is an answer's, whatever else the question holds.
+ */
+const ANSWER_CODES: ReadonlySet<string> = new Set([
+  "answer_unreadable",
+  "answer_unknown_kind",
+  "answer_unknown_source",
+  "choice_required",
+  "text_not_allowed",
+  "too_many_choices",
+  "unknown_option",
+  "proxy_forbidden",
+]);
+
+/** Whether `code` is only ever an answer's, never a closure notice's. */
+export function isAnswerOnlyCode(code: string | null): boolean {
+  return code !== null && ANSWER_CODES.has(code);
+}
+
+/**
  * A code's words for `subject`, or null for a code with none. A follow-up's
  * own code says what stopped the follow-up, so with no answer needing a
- * person its words name the follow-up.
+ * person its words name the follow-up. `perspective`: read away from the
+ * terminal that asked or in it. `host`: the Remote Host that reported it,
+ * which its words name where they would say this computer.
  */
 export function deliveryReasonText(
   code: string,
   subject: DeliverySubject = "answer",
+  perspective: DeliveryPerspective = "away",
+  host: string | null = null
+): string | null {
+  const words = deliveryReasonWords(code, subject, perspective);
+  return words === null ? null : reasonOnHost(words, host);
+}
+
+/** `deliveryReasonText` before any Host is named in it. */
+export function deliveryReasonWords(
+  code: string,
+  subject: DeliverySubject,
   perspective: DeliveryPerspective = "away"
 ): string | null {
   // Codes are only shaped like identifiers, so `constructor` must not reach Object's.
@@ -176,4 +209,16 @@ export function deliveryReasonText(
       .replace("the answer", "the follow-ups");
   }
   return text;
+}
+
+/**
+ * A reason's words as `host` reported them, naming it where they would say
+ * this computer. Last, in one pass, and literally: the name is never read as
+ * words to replace or as a `$` pattern.
+ */
+export function reasonOnHost(words: string, host: string | null): string {
+  if (host === null) return words;
+  return words.replace(/on this computer|isn't open here/, (phrase) =>
+    phrase === "on this computer" ? `on ${host}` : `isn't open on ${host}`
+  );
 }

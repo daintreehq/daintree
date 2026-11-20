@@ -1576,6 +1576,64 @@ describe("DecisionsInboxDialog", () => {
     }
   });
 
+  it("says once what stopped and why, and sends a Remote Host's question to its Host (#18026)", async () => {
+    const closed = {
+      closedReason: "expired",
+      closureNotice: { delivery: "needs-attention", disposition: "fallback-due" },
+    } as const;
+    const stalled = item(
+      "question-3",
+      3,
+      { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      {
+        reference: reference("question-3", { projectId: "project-b", terminalId: "t9" }),
+        ...closed,
+        stall: { answerRevision: 0, followUpIds: [], reason: "pane_gone" },
+      }
+    );
+    listQuestions.mockResolvedValue({ revision: 1, questions: [LIST.questions[1]!, stalled] });
+    const shown = CONTENT["question-3"]!;
+    CONTENT["question-3"] = { ...shown, terminalId: "t9", status: "expired", ...closed };
+    const callout = () => screen.getByTestId("decisions-inbox-attention").textContent ?? "";
+    try {
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(rowNamed("q-3").textContent).toContain("Timeout notice not typed in");
+      fireEvent.click(rowNamed("q-3"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+      expect(callout()).toContain(
+        "The timeout notice wasn't typed in. The terminal that asked was closed. Choose what happens to it."
+      );
+      expect(screen.getByTestId("decisions-inbox-review-attention")).not.toBeNull();
+      // The warning states the notice's delivery, so the facts keep only what it says of the plan.
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-question-notice").textContent).toBe(
+          "The timeout notice says the agent may go ahead with its plan."
+        )
+      );
+      expect(screen.getByTestId("decision-question-content").textContent).not.toMatch(
+        /stopped before it was typed/
+      );
+      // Only the notice's delivery goes: the rest of the facts stay.
+      expect(screen.getByTestId("decision-question-status").textContent).toBe("Expired unanswered");
+
+      push({
+        revision: 2,
+        questions: [
+          LIST.questions[1]!,
+          { ...stalled, remoteHost: { hostId: "atlas", name: "Atlas", connected: true } },
+        ],
+      });
+      await waitFor(() =>
+        expect(callout()).toMatch(/Atlas keeps it, so it can't be resolved from this computer\./)
+      );
+      expect(callout()).not.toMatch(/Choose/);
+      expect(screen.queryByTestId("decisions-inbox-review-attention")).toBeNull();
+    } finally {
+      CONTENT["question-3"] = shown;
+    }
+  });
+
   describe("a Remote Host's question while its Host is away (#17946)", () => {
     const AWAY_REFERENCE = reference("question-9", { hostId: "qhost_studio_0001" });
     const AWAY = {

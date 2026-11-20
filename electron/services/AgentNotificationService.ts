@@ -1465,12 +1465,12 @@ class AgentNotificationService {
    */
   notifyDecisionStall(question: DecisionQuestionListItem, key: string): void {
     const { reference, stall, standing, remoteHost } = question;
-    if (stall === null) return;
+    const subject = stallSubject(question);
+    if (stall === null || subject === null) return;
     const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
     if (settings.enabled === false) return;
     this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
     const { agent, project } = decisionQuestionSource(question);
-    const subject = stallSubject(question) ?? "answer";
     const notice = subject.startsWith("timeout notice");
     const plural = deliverySubjectPlural(subject);
     const uncertain =
@@ -1484,7 +1484,7 @@ class AgentNotificationService {
       uncertain
         ? `${what} may or may not have been delivered`
         : `${what} ${plural ? "need" : "needs"} attention`,
-      deliveryReasonText(stall.reason, subject) ??
+      deliveryReasonText(stall.reason, subject, "away", remoteHost?.name ?? null) ??
         `Daintree won't type ${plural ? "them" : "it"} in on its own.`,
       {
         silent: true,

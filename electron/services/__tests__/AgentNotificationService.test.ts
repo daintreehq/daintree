@@ -4992,6 +4992,31 @@ describe("Decisions questions (#17232)", () => {
       expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledWith(remote.reference);
     });
 
+    it("plays and shows nothing without a stall, and names the Remote Host where the reason would say this computer (#18026)", () => {
+      mockStore({ soundEnabled: true });
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: null,
+        }),
+        "k-0"
+      );
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+
+      agentNotificationService.notifyDecisionStall(
+        question("term-2", Date.now(), {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: 1, followUpIds: [], reason: "answer_unreadable" },
+          remoteHost: { hostId: "host-2", name: "Atlas", connected: true },
+        }),
+        "k-1"
+      );
+      expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
+      const [[, body]] = notificationServiceMock.showNativeNotification.mock.calls;
+      expect(body).toBe("The answer couldn't be decrypted on Atlas.");
+    });
+
     it("names only the follow-up when a follow-up alone stopped beside a notice that may have been typed", () => {
       agentNotificationService.notifyDecisionStall(
         question("term-1", Date.now(), {

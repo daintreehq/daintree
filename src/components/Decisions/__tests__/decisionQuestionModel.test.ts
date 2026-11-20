@@ -282,5 +282,51 @@ describe("decisionQuestionModel", () => {
         })
       ).toBe("The timeout notice is waiting to be typed into the terminal.");
     });
+
+    it("leaves out how far the notice got when the surface already says so, keeping what it says of the plan (#18026)", () => {
+      const due = {
+        closedReason: "expired",
+        closureNotice: { delivery: "needs-attention", disposition: "fallback-due" },
+      } as const;
+      expect(closureNoticeText(due, { closedReason: "expired", delivery: "needs-attention" })).toBe(
+        "The timeout notice says the agent may go ahead with its plan."
+      );
+      expect(
+        closureNoticeText(
+          { closedReason: "expired", closureNotice: { delivery: "uncertain", disposition: null } },
+          { closedReason: "expired", delivery: "uncertain" }
+        )
+      ).toBeNull();
+      expect(
+        closureNoticeText(
+          {
+            closedReason: "never-published",
+            closureNotice: { delivery: "uncertain", disposition: "fallback-withheld" },
+          },
+          { closedReason: "never-published", delivery: "uncertain" }
+        )
+      ).toBe("The timeout notice says the agent isn't cleared to go ahead with its plan.");
+      // Another delivery, or another notice, than the surface states is still said here: the reads can differ.
+      expect(closureNoticeText(due, { closedReason: "expired", delivery: "uncertain" })).toBe(
+        closureNoticeText(due)
+      );
+      expect(
+        closureNoticeText(
+          { closedReason: "declined", closureNotice: { delivery: "uncertain", disposition: null } },
+          { closedReason: "expired", delivery: "uncertain" }
+        )
+      ).toBe("Your decline may or may not have been typed into the terminal.");
+      expect(
+        closureNoticeText(
+          {
+            closedReason: "expired",
+            closureNotice: { delivery: "delivered", disposition: "fallback-withheld" },
+          },
+          { closedReason: "expired", delivery: "needs-attention" }
+        )
+      ).toBe(
+        "The timeout notice was typed into the terminal. It says the agent isn't cleared to go ahead with its plan."
+      );
+    });
   });
 });
