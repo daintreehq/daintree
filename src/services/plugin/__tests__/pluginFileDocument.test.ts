@@ -462,7 +462,9 @@ describe("pluginFileDocument (#13809)", () => {
       let finishOlder: (value: unknown) => void = () => {};
       let failNewer: (reason: unknown) => void = () => {};
       bridge.read.mockImplementationOnce(() => new Promise((resolve) => (finishOlder = resolve)));
-      bridge.read.mockImplementationOnce(() => new Promise((_resolve, reject) => (failNewer = reject)));
+      bridge.read.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => (failNewer = reject))
+      );
       const older = handle.document.read().then(apply);
       const newer = handle.document.read().then(apply);
       if (newerFirst) {
