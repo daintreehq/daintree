@@ -294,12 +294,119 @@ export function pendingEntries(row: QuestionRow): AnswerEntry[] {
 const PREVIEW_TEXT_CHARS = 4_000;
 const QUESTION_CHARS = 240;
 
-/** One line of a question, as data: controls gone, cut to fit a row. */
+const GENERIC_HEADINGS = new Set([
+  "context",
+  "question",
+  "questions",
+  "summary",
+  "background",
+  "overview",
+  "details",
+  "decision",
+  "decision needed",
+  "problem",
+  "issue",
+  "situation",
+  "options",
+  "tl;dr",
+  "tldr",
+]);
+
+const LINE_SCAN_CHARS = 4_000;
+
+/** Emphasis and links outside code spans; the line was already cut to a bounded length. */
+function stripInline(text: string): string {
+  return text
+    .replace(/!?\[([^\]]*)\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)/g, "$1")
+    .replace(/<(https?:\/\/[^>\s]+)>/g, "$1")
+    .replace(/(^|[^\w*_])(\*\*|__|~~)(?=\S)(.+?)(?<=\S)\2(?![\w*_])/g, "$1$3")
+    .replace(/(^|[^\w*_])([*_])(?=\S)(.+?)(?<=\S)\2(?![\w*_])/g, "$1$3");
+}
+
+/** A line's text without Markdown syntax: marks, emphasis, ticks and link syntax, keeping link labels. */
+function stripMarkdown(raw: string): string {
+  let line = sanitizeAnswerText(
+    raw.trim().replace(/\t/g, " ").slice(0, LINE_SCAN_CHARS),
+    LINE_SCAN_CHARS
+  );
+  line = unquote(line);
+  if (/^(?:=+|(?:[-*_]\s*){3,})$/.test(line)) return "";
+  line = line.replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+/, "");
+  const heading = /^\s*#{1,6}(?:\s+|$)/.test(line);
+  line = line.replace(/^\s*#{1,6}(?:\s+|$)/, "");
+  if (heading) line = line.replace(/\s+#+\s*$/, "");
+  let out = "";
+  let last = 0;
+  for (const span of line.matchAll(/(`+)(?!`)(.+?)(?<!`)\1(?!`)/g)) {
+    out += stripInline(line.slice(last, span.index)) + span[2];
+    last = span.index + span[0].length;
+  }
+  return (out + stripInline(line.slice(last))).trim();
+}
+
+function unquote(line: string): string {
+  return line.replace(/^\s{0,3}(?:>\s*)+/, "");
+}
+
+/** The fence a line opens or closes, when it is one: a fence closed on its own line is inline code. */
+function fenceOf(
+  raw: string
+): { char: string; length: number; bare: boolean; quoted: boolean } | null {
+  const line = unquote(raw.slice(0, LINE_SCAN_CHARS)).trim();
+  const marker = /^(?:`{3,}|~{3,})/.exec(line)?.[0];
+  if (marker === undefined) return null;
+  const rest = line.slice(marker.length);
+  if (marker[0] === "`" && rest.includes(marker)) return null;
+  return {
+    char: marker[0]!,
+    length: marker.length,
+    bare: rest.trim() === "",
+    quoted: unquote(raw) !== raw,
+  };
+}
+
+function isGenericHeading(text: string): boolean {
+  return GENERIC_HEADINGS.has(text.replace(/[\s:：.\-–—]+$/, "").toLowerCase());
+}
+
+/** One line of a question, as data: Markdown syntax and controls gone, cut to fit a row. */
 export function questionLine(question: string): string | null {
-  const first = question.split(/\r\n?|\n|\u2028|\u2029/).find((line) => line.trim() !== "");
-  if (first === undefined) return null;
-  const line = sanitizeAnswerText(first, QUESTION_CHARS);
-  return line === "" ? null : line;
+  const lines = question.split(/\r\n?|\n|\u2028|\u2029/);
+  // A fence that never closes is not a block: its text counts as the question's.
+  const inside: boolean[] = [];
+  let open: { char: string; length: number; quoted: boolean } | null = null;
+  let opened = 0;
+  for (const raw of lines) {
+    const fence = fenceOf(raw);
+    if (open === null) {
+      inside.push(fence !== null);
+      if (fence !== null) {
+        open = fence;
+        opened = inside.length - 1;
+      }
+    } else {
+      inside.push(true);
+      if (
+        fence !== null &&
+        fence.bare &&
+        fence.char === open.char &&
+        fence.quoted === open.quoted &&
+        fence.length >= open.length
+      ) {
+        open = null;
+      }
+    }
+  }
+  if (open !== null) inside.fill(false, opened + 1);
+  let first: string | undefined;
+  for (const [index, raw] of lines.entries()) {
+    if (inside[index] || raw.trim() === "" || fenceOf(raw) !== null) continue;
+    const text = sanitizeAnswerText(stripMarkdown(raw), QUESTION_CHARS);
+    if (text === "") continue;
+    first ??= text;
+    if (!isGenericHeading(text)) return text;
+  }
+  return first ?? null;
 }
 
 /**

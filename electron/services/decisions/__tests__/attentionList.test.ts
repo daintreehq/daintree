@@ -529,6 +529,70 @@ describe("questionLine", () => {
     expect(questionLine("Use \u001b[31mred\u001b[0m?")).toBe("Use red?");
     expect(questionLine("   \n  ")).toBeNull();
   });
+
+  it("drops Markdown syntax and keeps the text", () => {
+    expect(questionLine("**Decision needed:** drop the index?")).toBe(
+      "Decision needed: drop the index?"
+    );
+    expect(questionLine("## Drop `idx_users`?")).toBe("Drop idx_users?");
+    expect(questionLine("- [the plan](https://x.test/p) is _ready_?")).toBe("the plan is ready?");
+    expect(questionLine("snake_case_name stays")).toBe("snake_case_name stays");
+  });
+
+  it("keeps literal identifiers, expressions and trailing marks", () => {
+    expect(questionLine("Keep foo__bar__baz?")).toBe("Keep foo__bar__baz?");
+    expect(questionLine("Use `2**3**4`?")).toBe("Use 2**3**4?");
+    expect(questionLine("Keep the trailing `#`")).toBe("Keep the trailing #");
+    expect(questionLine("\u001b[31m[the plan](https://x.test)\u001b[0m?")).toBe("the plan?");
+    expect(questionLine("Use [the plan](https://e.com/a_(b))?")).toBe("Use the plan?");
+  });
+
+  it("skips rules and fence openers and stays fast on long lines", () => {
+    expect(questionLine("Context\n===\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine('## Context\n```bash title="m"\nWhich?')).toBe("Which?");
+    expect(questionLine("- ## Context\nShould we deploy?")).toBe("Should we deploy?");
+    const start = Date.now();
+    questionLine(`Go?\n${" ".repeat(8000)}`);
+    questionLine(`${"[".repeat(4000)}`);
+    expect(Date.now() - start).toBeLessThan(200);
+  });
+
+  it("skips fenced blocks, bare rules and keeps code spans whole", () => {
+    expect(questionLine("## Context\n```bash\nnpm run migrate\n```\nShould we deploy?")).toBe(
+      "Should we deploy?"
+    );
+    expect(questionLine("Context\n=\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("## Context\n* * *\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("```foo``` failed. Retry?")).toBe("foo failed. Retry?");
+    expect(questionLine("Use ``a `**b**``?")).toBe("Use a `**b**?");
+    expect(questionLine(`${" ".repeat(1500)}Should we deploy?`)).toBe("Should we deploy?");
+    expect(questionLine("##\tContext\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("<https://x.test/a> or not?")).toBe("https://x.test/a or not?");
+    expect(questionLine("Context\nSummary\nBackground")).toBe("Context");
+  });
+
+  it("handles mismatched fences, quoted rules and long fence runs", () => {
+    expect(questionLine("```\nShould we deploy?\n~~~")).toBe("Should we deploy?");
+    expect(questionLine("> ---\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("> ```bash\n> npm i\n> ```\nShould we deploy?")).toBe("Should we deploy?");
+    const start = Date.now();
+    questionLine(`Go?\n${"`".repeat(8000)}`);
+    expect(Date.now() - start).toBeLessThan(100);
+  });
+
+  it("does not close a fence with a quoted fence line", () => {
+    expect(questionLine("Summary\n```md\n> ```\nnot this\n```\nShould we deploy?")).toBe(
+      "Should we deploy?"
+    );
+  });
+
+  it("gives way from a generic heading to the first substantive line", () => {
+    expect(questionLine("## Context\n\nShould the cache be cleared?")).toBe(
+      "Should the cache be cleared?"
+    );
+    expect(questionLine("**Summary:**\n```\nWhich branch?")).toBe("Which branch?");
+    expect(questionLine("## Context\n---")).toBe("Context");
+  });
 });
 
 describe("answerPreviewOf", () => {
