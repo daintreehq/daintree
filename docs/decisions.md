@@ -118,7 +118,7 @@ Screenshots are given as paths relative to the folder the agent's terminal was l
 
 `get_decision` reads back a question this terminal asked, with its answers and follow-ups in order, and `cancel_question` withdraws one that's no longer needed. An agent sees only the questions its own terminal asked. Each of your follow-ups in it says where you sent it from, `sent_from: phone` (or `computer`, for one you wrote in the question view on this computer); the agent's own say none.
 
-An agent that repeats an `ask_human` call with the same `correlation_id`, when it isn't sure the first went through, gets back the question it already asked, as long as nothing in the request changed. A question asked before Daintree moved to the Decisions 0.9.0 libraries is the exception: the first such repeat after the update asks it again, so it can reach your phone twice. **Dismiss question** in the question view, or a decline on your phone, closes the one you don't need.
+An agent that repeats an `ask_human` call with the same `correlation_id`, when it isn't sure the first went through, gets back the question it already asked, as long as nothing in the request changed. A question asked before Daintree moved to the Decisions 0.9.0 libraries is the exception: the first such repeat after the update asks it as a new question, so it can reach your phone twice. If both are still waiting, dismiss the one you don't need, with **Dismiss question** in the question view on this computer or by declining it on your phone.
 
 ### Follow-ups
 
