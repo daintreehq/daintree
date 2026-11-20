@@ -11,7 +11,7 @@ import {
   type McpCallPayload,
   type RelayNoticeStatusAnswer,
 } from "./linkMethods.js";
-import { RelayCallLedger } from "./relayCallLedger.js";
+import { RelayCallLedger, type RelayCancelResult } from "./relayCallLedger.js";
 import {
   relayCallArmsNotice,
   type RelayedNotice,
@@ -86,7 +86,7 @@ export interface RelayMcpSession {
   callTool(
     tool: string,
     args: Record<string, unknown>,
-    options: { timeoutMs: number; callId: string }
+    options: { timeoutMs: number; callId: string; signal?: AbortSignal }
   ): Promise<CallToolResult>;
   close(): void;
 }
@@ -150,6 +150,11 @@ export interface McpRelayExecutor {
     spec: RelayMcpSessionSpec,
     read: { tool: string; args: Record<string, unknown>; runMs: number }
   ): Promise<McpCallAnswer>;
+  /**
+   * Its sender's cancel of one call from one of its help sessions (#17985):
+   * see RelayCallLedger.cancel. `full` refuses a cancel for a call not yet here.
+   */
+  cancel(senderId: string, helpSessionId: string, callId: string): RelayCancelResult;
   /** Whether this host holds anything more for each of a sender's calls (#13930). */
   noticeStatus(
     senderId: string,
@@ -303,6 +308,12 @@ export function projectRelayResult(
 }
 
 /** A failure the host's MCP server raised rather than answered, as the tool error it reads like. */
+const CANCELLED_BEFORE = {
+  status: "cancelled",
+  dispatch: "before",
+} as const satisfies McpCallAnswer;
+const CANCELLED_AFTER = { status: "cancelled", dispatch: "after" } as const satisfies McpCallAnswer;
+
 function errorResult(error: unknown): Extract<McpCallAnswer, { status: "done" }>["result"] {
   const data = error instanceof McpError ? (error.data as { code?: unknown } | undefined) : null;
   const payload =
@@ -663,40 +674,52 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
 
   const execute = async (
     spec: RelayMcpSessionSpec,
-    payload: McpCallPayload
+    payload: McpCallPayload,
+    signal: AbortSignal
   ): Promise<McpCallAnswer> => {
+    // Cancelled before it came (#17985): nothing is held or opened for it.
+    if (signal.aborted) return CANCELLED_BEFORE;
     const release = holdPrincipal(spec.senderId, spec.helpSessionId, spec.conversationId);
     const endNoticeCall = relayCallArmsNotice(payload.tool, payload.args)
       ? startNoticeCall(spec.senderId, spec.helpSessionId, payload.callId)
       : null;
     let answer: McpCallAnswer | undefined;
     try {
-      answer = await executeHeld(spec, payload);
+      answer = await executeHeld(spec, payload, signal);
       return answer;
     } finally {
-      // Refused before it ran: it armed nothing, and its Shell forgets it too.
-      endNoticeCall?.(answer?.status === "refused");
+      // Refused or cancelled before it ran: it armed nothing, and its Shell forgets it too.
+      endNoticeCall?.(
+        answer?.status === "refused" ||
+          (answer?.status === "cancelled" && answer.dispatch === "before")
+      );
       release();
     }
   };
 
   const executeHeld = async (
     spec: RelayMcpSessionSpec,
-    payload: McpCallPayload
+    payload: McpCallPayload,
+    signal?: AbortSignal
   ): Promise<McpCallAnswer> => {
     // The Shell times the call from when it sent it, so admitting it here
     // comes out of its run rather than on top of it (#15699).
     const deadline = now() + payload.runMs;
     if (!deps.acceptsRemoteControl()) return { status: "refused", reason: "control-off" };
-    if (!(await deps.hasProject(payload.projectId))) {
-      return { status: "refused", reason: "no-project" };
-    }
+    const hasProject = await deps.hasProject(payload.projectId);
+    // A cancel taken meanwhile is the answer: nothing ran either way, and its resend reads that.
+    if (signal?.aborted) return CANCELLED_BEFORE;
+    if (!hasProject) return { status: "refused", reason: "no-project" };
     const found = await sessionFor(spec);
-    if (found === null) return { status: "refused", reason: "server-off" };
+    if (found === null) {
+      return signal?.aborted ? CANCELLED_BEFORE : { status: "refused", reason: "server-off" };
+    }
     const { cached, session } = found;
     cached.inFlight += 1;
     cached.usedAt = now();
     try {
+      // Inside the hold, so a session retired while it opened still closes below.
+      if (signal?.aborted) return CANCELLED_BEFORE;
       const timeoutMs = deadline - now();
       if (timeoutMs <= 0) {
         return {
@@ -707,9 +730,12 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       const result = await session.callTool(payload.tool, payload.args, {
         timeoutMs,
         callId: payload.callId,
+        ...(signal ? { signal } : {}),
       });
       return { status: "done", result: projectRelayResult(result) };
     } catch (error) {
+      // The SDK's wait ended on the cancel: the tool heard it, and its own answer never comes.
+      if (signal?.aborted) return CANCELLED_AFTER;
       return { status: "done", result: errorResult(error) };
     } finally {
       cached.inFlight -= 1;
@@ -808,8 +834,13 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
         tier: payload.tier,
         args: payload.args,
       });
-      const answer = await ledger.run(spec.senderId, payload.callId, digest, payload.resend, () =>
-        execute(spec, payload)
+      const answer = await ledger.run(
+        spec.senderId,
+        payload.callId,
+        digest,
+        payload.resend,
+        (signal) => execute(spec, payload, signal),
+        spec.helpSessionId
       );
       if (answer.status === "unknown") return { status: "unknown" } satisfies McpCallAnswer;
       if (answer.status === "conflict") return { status: "conflict" } satisfies McpCallAnswer;
@@ -835,6 +866,9 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
         release();
       }
     },
+    // Disposed, it runs nothing more and holds nothing for a later call.
+    cancel: (senderId, helpSessionId, callId) =>
+      disposed ? "ignored" : ledger.cancel(senderId, helpSessionId, callId),
     noticeStatus,
     noticesDropped: (senderId, callIds) => {
       for (const callId of callIds) {

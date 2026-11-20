@@ -821,7 +821,36 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     expect(run).toHaveBeenCalledWith("host.call", args, {
       tier: "full",
       noteSkipPreference: expect.any(Function),
+      // The request's own abort, so a cancelled host.call is cancelled on its host (#17985).
+      signal: expect.any(AbortSignal),
     });
+
+    // Cancelling the request aborts that very signal, while the call is still out.
+    let heard: AbortSignal | undefined;
+    // Widened: this answer isn't the plain `ok` the mock was first given.
+    (run as ReturnType<typeof vi.fn>).mockImplementationOnce(async (_toolId, _args, context) => {
+      heard = (context as { signal: AbortSignal }).signal;
+      await new Promise((resolve) => heard!.addEventListener("abort", resolve, { once: true }));
+      return {
+        ok: true as const,
+        value: {
+          outcome: "ambiguous" as const,
+          detail: "cancelled",
+          retryAfterMs: null,
+          callId: "c2",
+          result: null,
+        },
+      };
+    });
+    const controller = new AbortController();
+    const cancelled = client.callTool({ name: "host.call", arguments: args }, undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(heard).toBeDefined());
+    expect(heard!.aborted).toBe(false);
+    controller.abort();
+    await expect(cancelled).rejects.toThrow();
+    await vi.waitFor(() => expect(heard!.aborted).toBe(true));
   });
 
   it("records a host.call whose call ran there under this machine's own Never ask (#15698)", async () => {

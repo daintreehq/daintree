@@ -618,6 +618,132 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
       session.close();
     });
 
+    it("runs nothing more of a call its Shell cancelled, and lets a sibling call on (#17985)", async () => {
+      let manifestRead: (manifest: ActionManifestEntry[]) => void = () => {};
+      const reads: Array<() => void> = [];
+      const { lc, store, dispatchActionForWorkspace } = await startedLifecycle({
+        getCachedManifestForWorkspace: vi.fn(() => null),
+        requestManifestForWorkspace: vi.fn(
+          () =>
+            new Promise<ActionManifestEntry[]>((resolve) => {
+              reads.push(() => resolve(MANIFEST));
+              manifestRead = resolve;
+            })
+        ),
+      } as never);
+      dispatchActionForWorkspace.mockResolvedValue({ result: { ok: true, result: {} } });
+      const session = (await lc.openRelaySession({
+        tier: "full",
+        workspaceId: "project-1",
+        caller: CALLER,
+      }))!;
+      const controller = new AbortController();
+
+      // Still reading what the tool is when its Shell cancels it.
+      const cancelled = session.callTool(
+        "agent.launch",
+        { agentId: "claude" },
+        { timeoutMs: 60_000, callId: "c14", signal: controller.signal }
+      );
+      const sibling = session.callTool(
+        "agent.launch",
+        { agentId: "codex" },
+        { timeoutMs: 60_000, callId: "c15" }
+      );
+      await vi.waitFor(() => expect(reads.length).toBeGreaterThan(0));
+      controller.abort();
+      await expect(cancelled).rejects.toThrow();
+      expect(store.getRelayCaller(session.sessionId)?.callDeadline?.("c14")).toBeUndefined();
+      for (const read of reads) read();
+      manifestRead(MANIFEST);
+      await sibling;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(dispatchActionForWorkspace).toHaveBeenCalledTimes(1);
+      expect(dispatchActionForWorkspace.mock.calls[0]?.[2]).toMatchObject({ agentId: "codex" });
+      session.close();
+    });
+
+    it("types no /restart once its Shell cancels an approved update before the pane is ready (#17985)", async () => {
+      const manifest: ActionManifestEntry[] = [
+        ...MANIFEST,
+        { ...entry("terminal.applyClaudeUpdateOwned", "command"), danger: "confirm" },
+      ];
+      const PIN = { terminalId: "terminal-1", generation: 4, observedAt: 900 };
+      let paneReady!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        paneReady = resolve;
+      });
+      let applying!: (signal: AbortSignal | undefined) => void;
+      const applied = new Promise<AbortSignal | undefined>((resolve) => {
+        applying = resolve;
+      });
+      const typed: string[] = [];
+      // As ClaudeUpdateApply.apply does (#17966): wait for the pane's empty
+      // prompt, then type the line only if the call it serves hasn't ended.
+      const claudeUpdate = {
+        exclusive: async (_terminalId: string, run: () => Promise<unknown>) => run(),
+        preflight: async () => PIN,
+        apply: async (_pin: unknown, options: { signal?: AbortSignal }) => {
+          applying(options.signal);
+          await ready;
+          if (options.signal?.aborted) {
+            return {
+              terminalId: "terminal-1",
+              status: "not-sent" as const,
+              reason: "cancelled" as const,
+              message: "The call ended before the pane was ready.",
+            };
+          }
+          typed.push("/restart");
+          return { terminalId: "terminal-1", status: "sent" as const, message: "typed" };
+        },
+      };
+      const { lc, store, dispatchActionForWorkspace } = await startedLifecycle({
+        getCachedManifestForWorkspace: vi.fn(() => manifest),
+        requestManifestForWorkspace: vi.fn().mockResolvedValue(manifest),
+        claudeUpdate,
+      } as never);
+      const session = (await lc.openRelaySession({
+        tier: "full",
+        workspaceId: "project-1",
+        caller: CALLER,
+      }))!;
+      const ownership = store.resourceOwnership;
+      ownership.record(
+        ownership.ownerOf(session.sessionId),
+        [{ kind: "terminal", id: "terminal-1" }],
+        "project-1"
+      );
+      const controller = new AbortController();
+
+      const call = session.callTool(
+        "terminal.applyClaudeUpdateOwned",
+        { terminalId: "terminal-1" },
+        { timeoutMs: 600_000, callId: "c20", signal: controller.signal }
+      );
+      const signal = await applied;
+      // Approved: the person's answer came back before the line could go in.
+      expect(dispatchActionForWorkspace).toHaveBeenCalledWith(
+        "project-1",
+        "terminal.applyClaudeUpdate",
+        { terminalId: "terminal-1" },
+        expect.anything(),
+        expect.anything(),
+        expect.anything()
+      );
+      expect(signal?.aborted).toBe(false);
+      controller.abort();
+      await expect(call).rejects.toThrow();
+      // The tool's own call heard the cancel, not just this side's wait.
+      await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+      paneReady();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(typed).toEqual([]);
+      session.close();
+    });
+
     it("knows no deadline for a call the session isn't running", async () => {
       const { lc, store } = await startedLifecycle();
       const session = (await lc.openRelaySession({

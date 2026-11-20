@@ -170,8 +170,10 @@ async function readProject(
       return failed(projectId, answer.reason);
     case "refused":
       return { status: "refused", projectId, reason: answer.reason };
+    // A status read carries no cancel (#17985), so `cancelled` never answers one.
     case "unknown":
     case "conflict":
+    case "cancelled":
       return failed(projectId, "unreadable");
     case "done": {
       // An error, or a status cut to text to fit, is nothing to show as one.

@@ -9,6 +9,7 @@ import {
   MAX_STATUS_RUN_MS,
   McpCallAnswerSchema,
   RelayApprovePayloadSchema,
+  RelayCancelUnconfirmedError,
   RelayApproveTimedPayloadSchema,
   RelayNoticeStatusAnswerSchema,
   RelayNoticesPayloadSchema,
@@ -78,6 +79,15 @@ export interface HostControlLinkClientDeps {
 }
 
 const CALL_TIMEOUT_MS = 15_000;
+/** How long a cancel waits for the host to take it; past it the call's outcome is unknown. */
+const CANCEL_TIMEOUT_MS = 10_000;
+
+/** A relayed call's cancel (#17985): the caller's abort, and who hears that it went to the host. */
+export interface RelayCallCancel {
+  signal: AbortSignal;
+  /** Told once, when the cancel goes to the host for a call already out. */
+  onCancel?: () => void;
+}
 /** Long enough for the host to have taken this Shell's answer to the notices it sent. */
 const NOTICE_STATUS_DELAY_MS = 5_000;
 
@@ -104,6 +114,13 @@ function unsupported(hostId: HostId, cause: unknown): AppError {
     message: `Host ${hostId} can't run tools for this Shell's assistants`,
     userMessage: "This host needs a newer Daintree.",
     cause: cause instanceof Error ? cause : undefined,
+  });
+}
+
+function cancelledUnsent(): AppError {
+  return new AppError({
+    code: "CANCELLED",
+    message: "The call was cancelled before it was sent",
   });
 }
 
@@ -289,13 +306,23 @@ export class HostControlLinkClient {
    * Run one of the host's own MCP tools for one of this Shell's assistants
    * (#13493), once this Shell's sender is proven on the session. The host
    * records the call by its callId, so a resend after a lost answer is safe.
+   *
+   * `cancel` is the caller's (#17985): aborted before the call goes out, it
+   * goes nowhere (CANCELLED); once it has, the host is asked to stop it and
+   * the call's own answer, which comes once the host has, says what came of
+   * it. A host that doesn't take the cancel lets the call run on, so neither
+   * its answer nor a lost one can say the cancel held: CANCEL_UNCONFIRMED,
+   * carrying the answer when there is one.
    */
   async relayCall(
     hostId: HostId,
     request: RelayCallRequest,
-    timeoutMs: number
+    timeoutMs: number,
+    cancel?: RelayCallCancel
   ): Promise<McpCallAnswer> {
     const { global, conversationId, ...payload } = request;
+    const signal = cancel?.signal;
+    if (signal?.aborted) throw cancelledUnsent();
     const session = await this.open(hostId);
     try {
       await this.authenticate(hostId, session);
@@ -304,17 +331,50 @@ export class HostControlLinkClient {
       if (isUnknownOutcome(error)) throw unreachable(hostId);
       throw error;
     }
+    // Whether the host took the cancel, once one is sent: asked once, however many sends.
+    const sent: { taken: Promise<boolean> | null } = { taken: null };
+    const onAbort = () => {
+      if (sent.taken !== null) return;
+      cancel?.onCancel?.();
+      sent.taken = this.call(
+        hostId,
+        session,
+        AssistantLinkMethod.MCP_CANCEL,
+        { helpSessionId: payload.helpSessionId, callId: payload.callId },
+        CANCEL_TIMEOUT_MS
+      ).then(
+        () => true,
+        (error: unknown) => {
+          logger.debug("A host didn't take a relayed call's cancel", { error });
+          return false;
+        }
+      );
+    };
+    const send = async (method: string, body: unknown): Promise<unknown> => {
+      // An answered UNSUPPORTED ran nothing, so a cancel meanwhile stops the next send.
+      if (signal?.aborted) throw cancelledUnsent();
+      signal?.addEventListener("abort", onAbort, { once: true });
+      try {
+        return await this.call(hostId, session, method, body, timeoutMs);
+      } catch (error) {
+        // No answer, after a cancel the host didn't take: it ran on, for all this Shell knows.
+        if (codeOf(error) === "OUTCOME_UNKNOWN" && sent.taken !== null && !(await sent.taken)) {
+          throw new RelayCancelUnconfirmedError();
+        }
+        throw error;
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    };
     let answer: unknown;
     let answered = false;
     if (conversationId !== undefined && !this.noConversationCalls.has(session)) {
       try {
-        answer = await this.call(
-          hostId,
-          session,
-          AssistantLinkMethod.CONVERSATION_MCP_CALL,
-          { ...payload, conversationId, ...(global === true ? { global } : {}) },
-          timeoutMs
-        );
+        answer = await send(AssistantLinkMethod.CONVERSATION_MCP_CALL, {
+          ...payload,
+          conversationId,
+          ...(global === true ? { global } : {}),
+        });
         answered = true;
       } catch (error) {
         // Refused before anything ran, as GLOBAL_MCP_CALL's is: the same call
@@ -325,13 +385,7 @@ export class HostControlLinkClient {
     }
     if (!answered && global === true && !this.noGlobalCalls.has(session)) {
       try {
-        answer = await this.call(
-          hostId,
-          session,
-          AssistantLinkMethod.GLOBAL_MCP_CALL,
-          payload,
-          timeoutMs
-        );
+        answer = await send(AssistantLinkMethod.GLOBAL_MCP_CALL, payload);
         answered = true;
       } catch (error) {
         // An unknown method is refused before anything runs, so the same call,
@@ -341,13 +395,16 @@ export class HostControlLinkClient {
       }
     }
     if (!answered) {
-      answer = await this.call(hostId, session, AssistantLinkMethod.MCP_CALL, payload, timeoutMs);
+      answer = await send(AssistantLinkMethod.MCP_CALL, payload);
     }
     const parsed = McpCallAnswerSchema.safeParse(answer);
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.MCP_CALL);
+    const taken = sent.taken === null || (await sent.taken);
     // A call can arm nothing, or have its notice answered by its own reply
     // wait, without a notice ever coming: ask, so its link need not wait on it.
+    // Asked once the call is no longer out, cancel answered or not.
     if (relayCallArmsNotice(payload.tool, payload.args)) this.followNoticesLater(hostId, session);
+    if (!taken) throw new RelayCancelUnconfirmedError(parsed.data);
     return parsed.data;
   }
 

@@ -92,6 +92,11 @@ export interface HostCallContext {
    * preference (#15698), never anything the host said: for its audit record.
    */
   noteSkipPreference?: () => void;
+  /**
+   * The calling request's own abort (#17985): a `host.call` cancelled by its
+   * MCP client is cancelled on the host too.
+   */
+  signal?: AbortSignal;
 }
 
 /** What a `host.settings` call carries from the calling session beyond its arguments. */

@@ -7,7 +7,12 @@ import {
   type ObservedHost,
   type OpenRun,
 } from "../HostCallRuntime.js";
-import { MAX_RELAY_ARGS_BYTES, MAX_RELAY_RUN_MS, type McpCallAnswer } from "../linkMethods.js";
+import {
+  MAX_RELAY_ARGS_BYTES,
+  MAX_RELAY_RUN_MS,
+  RelayCancelUnconfirmedError,
+  type McpCallAnswer,
+} from "../linkMethods.js";
 import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../../shared/types/terminalExitWait.js";
 import { CLAUDE_UPDATE_AFTER_APPROVAL_MS } from "../../../../shared/types/claudeUpdateApply.js";
 import {
@@ -164,7 +169,9 @@ describe("HostCallRuntime host.call (#13493)", () => {
         args: { owned: true },
         runMs: relayRunMs("terminal.list", { owned: true }),
       },
-      expect.any(Number)
+      expect.any(Number),
+      // No cancel to carry: the caller's context had no signal.
+      undefined
     );
     const [, payload, timeoutMs] = relayCall.mock.calls[0] as [string, { runMs: number }, number];
     expect(timeoutMs).toBeGreaterThan(payload.runMs);
@@ -274,6 +281,202 @@ describe("HostCallRuntime host.call (#13493)", () => {
           callId: "00000000-0000-4000-8000-000000000001",
           result: null,
         },
+      });
+    });
+
+    describe("a call its caller cancelled (#17985)", () => {
+      const ID = "00000000-0000-4000-8000-000000000001";
+
+      it("sends nothing and says nothing ran when cancelled before it went out", async () => {
+        const controller = new AbortController();
+        controller.abort();
+        const settled = await runtime.call("a", CALL, { tier: "core", signal: controller.signal });
+
+        expect(relayCall).not.toHaveBeenCalled();
+        if (!settled.ok) throw new Error("refused");
+        expect(HostCallResultSchema.safeParse(settled.value).success).toBe(true);
+        expect(settled.value).toMatchObject({
+          outcome: "ok",
+          callId: null,
+          result: { isError: true, structured: { code: "CANCELLED", dispatched: false } },
+        });
+        // A resend learns nothing of the call it resends, which may have run.
+        const resent = await runtime.call(
+          "a",
+          { ...CALL, callId: "earlier" },
+          { tier: "core", signal: controller.signal }
+        );
+        expect(resent).toMatchObject({
+          ok: true,
+          value: { outcome: "ambiguous", callId: "earlier", result: null },
+        });
+        expect(relayCall).not.toHaveBeenCalled();
+      });
+
+      it("says a resend the link stopped short learned nothing, keeping its callId", async () => {
+        failWith("CANCELLED");
+        await expect(
+          runtime.call(
+            "a",
+            { ...CALL, callId: "earlier" },
+            { tier: "core", signal: new AbortController().signal }
+          )
+        ).resolves.toMatchObject({
+          ok: true,
+          value: { outcome: "ambiguous", callId: "earlier", result: null },
+        });
+      });
+
+      it("hands the caller's signal to the link, and reads a cancel the link stopped short as unsent", async () => {
+        const controller = new AbortController();
+        failWith("CANCELLED");
+        await expect(
+          runtime.call("a", CALL, { tier: "core", signal: controller.signal })
+        ).resolves.toMatchObject({
+          ok: true,
+          value: { outcome: "ok", callId: null, result: { structured: { dispatched: false } } },
+        });
+        const cancel = relayCall.mock.calls[0]![3] as { signal: AbortSignal; onCancel: unknown };
+        expect(cancel.signal).toBe(controller.signal);
+        expect(cancel.onCancel).toEqual(expect.any(Function));
+      });
+
+      it("remembers a call whose cancel went out past its answer, for that host and session only", async () => {
+        const controller = new AbortController();
+        // As the link client does once the call is out: the cancel goes, and says so.
+        relayCall.mockImplementationOnce(
+          async (
+            _hostId: string,
+            _payload: unknown,
+            _timeoutMs: number,
+            cancel?: { signal: AbortSignal; onCancel?: () => void }
+          ) => {
+            controller.abort();
+            cancel?.onCancel?.();
+            return { status: "cancelled", dispatch: "after" } satisfies McpCallAnswer;
+          }
+        );
+
+        await runtime.call("a", CALL, { tier: "core", signal: controller.signal });
+        await runtime.call("a", { ...CALL, args: { owned: false } }, { tier: "core" });
+
+        expect(runtime.cancelledRelayedCall("studio", { callId: ID, helpSessionId: "a" })).toBe(
+          true
+        );
+        expect(runtime.cancelledRelayedCall("studio", { callId: ID, helpSessionId: "other" })).toBe(
+          false
+        );
+        expect(runtime.cancelledRelayedCall("laptop", { callId: ID, helpSessionId: "a" })).toBe(
+          false
+        );
+        // A call nobody cancelled is nothing to refuse.
+        expect(
+          runtime.cancelledRelayedCall("studio", {
+            callId: "00000000-0000-4000-8000-000000000002",
+            helpSessionId: "a",
+          })
+        ).toBe(false);
+      });
+
+      it("forgets a first send's cancel when the send never went out", async () => {
+        const controller = new AbortController();
+        // Cancelled while an older host refused the first method: the cancel went, the call never did.
+        relayCall.mockImplementationOnce(
+          async (
+            _hostId: string,
+            _payload: unknown,
+            _timeoutMs: number,
+            cancel?: { signal: AbortSignal; onCancel?: () => void }
+          ) => {
+            controller.abort();
+            cancel?.onCancel?.();
+            throw new AppError({ code: "CANCELLED", message: "not sent" });
+          }
+        );
+
+        await runtime.call("a", CALL, { tier: "core", signal: controller.signal });
+
+        expect(runtime.cancelledRelayedCall("studio", { callId: ID, helpSessionId: "a" })).toBe(
+          false
+        );
+      });
+
+      it("says nothing ran when the host stopped it before its tool, keeping the callId", async () => {
+        relayCall.mockResolvedValueOnce({ status: "cancelled", dispatch: "before" });
+        await expect(runtime.call("a", CALL, { tier: "core" })).resolves.toMatchObject({
+          ok: true,
+          value: {
+            outcome: "ok",
+            callId: ID,
+            result: { isError: true, structured: { code: "CANCELLED", dispatched: false } },
+          },
+        });
+      });
+
+      it("is ambiguous when the host stopped it after its tool had it", async () => {
+        relayCall.mockResolvedValueOnce({ status: "cancelled", dispatch: "after" });
+        const settled = await runtime.call("a", CALL, { tier: "core" });
+        expect(settled).toMatchObject({
+          ok: true,
+          value: { outcome: "ambiguous", callId: ID, result: null },
+        });
+        if (!settled.ok) throw new Error("refused");
+        expect(settled.value.detail).toMatch(/may have acted/);
+      });
+
+      it("keeps what a call that ran past an unconfirmed cancel answered, and says it as unknown", async () => {
+        const noteAnswered = vi.fn();
+        runtime = new HostCallRuntime({
+          getSessionLane: (id) => lanes.get(id) ?? null,
+          callerRun: (id) => runs.get(id) ?? null,
+          client: () => ({ relayCall }) as never,
+          hosts: () => hosts,
+          inLocalView: (id) => localViews.has(id),
+          controlEnabled: (hostId) => control.has(hostId),
+          noteAnswered,
+          newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
+        });
+        relayCall.mockRejectedValueOnce(new RelayCancelUnconfirmedError(DONE));
+
+        const settled = await runtime.call("a", CALL, { tier: "core" });
+
+        expect(settled).toMatchObject({
+          ok: true,
+          value: { outcome: "ambiguous", callId: ID, result: null },
+        });
+        if (!settled.ok) throw new Error("refused");
+        expect(settled.value.detail).toMatch(/didn't confirm/);
+        expect(noteAnswered).toHaveBeenCalledWith(
+          expect.objectContaining({ tool: "terminal.list", structured: { terminals: [] } })
+        );
+      });
+
+      it("trusts a host's own cancelled answer even when its cancel's answer was lost", async () => {
+        relayCall.mockRejectedValueOnce(
+          new RelayCancelUnconfirmedError({ status: "cancelled", dispatch: "before" })
+        );
+        await expect(runtime.call("a", CALL, { tier: "core" })).resolves.toMatchObject({
+          ok: true,
+          value: { outcome: "ok", callId: ID, result: { structured: { dispatched: false } } },
+        });
+        relayCall.mockRejectedValueOnce(
+          new RelayCancelUnconfirmedError({ status: "cancelled", dispatch: "after" })
+        );
+        const after = await runtime.call("a", CALL, { tier: "core" });
+        if (!after.ok) throw new Error("refused");
+        expect(after.value).toMatchObject({ outcome: "ambiguous", result: null });
+        expect(after.value.detail).toMatch(/told the tool to stop/);
+      });
+
+      it("is ambiguous, saying the host didn't confirm it stopped, when the cancel wasn't taken", async () => {
+        relayCall.mockRejectedValueOnce(new RelayCancelUnconfirmedError());
+        const settled = await runtime.call("a", CALL, { tier: "core" });
+        expect(settled).toMatchObject({
+          ok: true,
+          value: { outcome: "ambiguous", callId: ID, result: null },
+        });
+        if (!settled.ok) throw new Error("refused");
+        expect(settled.value.detail).toMatch(/didn't confirm/);
       });
     });
 

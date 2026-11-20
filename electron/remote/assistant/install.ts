@@ -57,6 +57,7 @@ declare module "../runtime.js" {
       HostCallRuntime,
       | "hasCallInFlight"
       | "skipsRelayedDispatch"
+      | "cancelledRelayedCall"
       | "relayedDelegation"
       | "offersNextFallback"
       | "awaitsNotices"
@@ -438,6 +439,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       latestSummary: () => (process.platform === "win32" ? null : getLocalSummaryLoop().latest()),
       summaryReceipt: (summary) => getLocalSummaryLoop().receiptOf(summary),
       relayCall: (payload) => local.relayCall(payload),
+      cancelCall: (helpSessionId, callId) => local.cancelCall(helpSessionId, callId),
       throwawayCall: (payload) => local.throwawayCall(payload),
       agents: (options) => getLocalAgentDirectory().read(options),
       status: (payload) => local.status(payload),
