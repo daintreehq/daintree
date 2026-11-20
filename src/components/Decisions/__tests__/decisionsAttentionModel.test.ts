@@ -378,6 +378,7 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
       followUps: [],
       canResume: false,
       canReassign: false,
+      token: "token",
     };
     const origin = {
       projectId: "p",
