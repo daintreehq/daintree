@@ -605,7 +605,7 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
     }
   });
 
-  test("a Host restarted across the deadline records the closure once and types it into no other pane", async () => {
+  test("a Host restarted across the deadline brings the asking conversation back, and types its notice there once", async () => {
     test.setTimeout(480_000);
     // Asked from the Host's own screen this time, which takes the project back to drive it.
     await host.window.evaluate(async () => {
@@ -617,34 +617,53 @@ test.describe.serial("Decisions on an SSH Remote Host", () => {
     const question = "Host pane: should the sync retries back off?";
     const { question_id: id, expires_at: expiresAt } = await askAdvice(agent, question);
     await agent.mcp.close().catch(() => {});
+    // Daintree starts Claude on a session id of its own choosing, and resumes that session.
+    const asked = readFakeAgentLaunchLog(binDir).find((l) => l.paneId === agent.paneId)!;
+    const session = asked.argv[asked.argv.indexOf("--session-id") + 1];
+    expect(session, asked.argv.join(" ")).toMatch(/^[0-9a-f-]{36}$/);
     const launches = readFakeAgentLaunchLog(binDir).length;
-    const from = readFakeAgentStdin(binDir, agent.paneId).length;
+    const typedBefore = new Map(
+      readFakeAgentLaunchLog(binDir).map((l) => [l.paneId!, readFakeAgentStdin(binDir, l.paneId)])
+    );
 
-    // The Host quits, taking the asking pane with it, and the deadline passes while it's down.
+    // The Host quits, taking every pane with it, and the deadline passes while it's down.
     clock.detachApp(host.app);
     await closeApp(host.app);
     await clock.advancePast(expiresAt);
 
-    // Back, it takes the expiry from the relay and records it once against the run that asked,
-    // which is gone: a fake Claude has no session to resume, so the notice needs a person. The
-    // Host's own list reaches the owner through the Shell's link.
+    // Back, it restores its panes, the asking one resuming the same conversation, takes the
+    // expiry from the relay, and types the notice into that conversation once.
     host = await launchHost();
+    const blocks = (paneId: string) =>
+      decisionBlocks(readFakeAgentStdin(binDir, paneId).slice(typedBefore.get(paneId)?.length), id);
+    await expect
+      .poll(() => blocks(agent.paneId).length, { timeout: 120_000, intervals: [1_000] })
+      .toBe(1);
+    expect(blocks(agent.paneId)[0]).toContain("status: advisory-unanswered\n");
+    const resumed = readFakeAgentLaunchLog(binDir)
+      .slice(launches)
+      .filter((l) => l.paneId === agent.paneId);
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0].argv.slice(resumed[0].argv.indexOf("--resume"))).toEqual(
+      expect.arrayContaining(["--resume", session])
+    );
+
+    // No other pane the restart brought back hears of it, and the owner's computer, connected
+    // again, reads it closed and delivered and counts nothing.
     await listenAsHost();
     await reconnectShell();
     await expect
       .poll(() => listedQuestion(shell.window, id), { timeout: 120_000 })
       .toMatchObject({
         closedReason: "expired",
-        closureNotice: { delivery: "needs-attention", disposition: "fallback-due" },
+        closureNotice: { delivery: "delivered", disposition: "fallback-due" },
+        standing: { kind: "settled", outcome: "expired" },
       });
-    await new Promise((r) => setTimeout(r, 15_000));
-    expect(decisionBlocks(readFakeAgentStdin(binDir, agent.paneId).slice(from), id)).toEqual([]);
+    await new Promise((r) => setTimeout(r, 10_000));
+    expect(blocks(agent.paneId)).toHaveLength(1);
     for (const launch of readFakeAgentLaunchLog(binDir).slice(launches)) {
-      expect(readFakeAgentStdin(binDir, launch.paneId)).not.toContain(id);
+      if (launch.paneId !== agent.paneId) expect(blocks(launch.paneId!)).toEqual([]);
     }
-    expect(await listedQuestion(shell.window, id)).toMatchObject({ closedReason: "expired" });
-
-    // It needs a person on the Host, and asks the owner for no answer.
     await expect(shellInbox()).toHaveAttribute("aria-label", "Decisions inbox", {
       timeout: 30_000,
     });
