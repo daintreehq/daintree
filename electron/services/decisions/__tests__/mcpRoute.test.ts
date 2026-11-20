@@ -6,6 +6,7 @@ import {
   MemoryLocalStore,
   SERVER_INSTRUCTIONS,
   TOOLS,
+  adjustmentText,
   askedInstruction,
   followupInstruction,
   loadIdentity,
@@ -326,7 +327,13 @@ async function fakeRelay(
     const method = init.method ?? "GET";
     requests.push(`${method} ${pathname}`);
     if (pathname === "/api/v1/info") {
-      await infoHeld;
+      // A stopped connection aborts the read it was holding.
+      await new Promise<void>((resolve, reject) => {
+        const signal = init.signal;
+        if (signal?.aborted) return reject(signal.reason as Error);
+        signal?.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
+        void infoHeld.then(resolve);
+      });
       return json({
         name: "daintree-decisions",
         protocol_min: 1,
@@ -368,19 +375,21 @@ async function fakeRelay(
   };
 }
 
-/** Once the attempt has read what the relay and the phones support for advice. */
-async function adviceSupportRead(live: DecisionsBridge): Promise<void> {
+/** Once the attempt has read what the relay and the phones support for advice, and it is `expected`. */
+async function adviceSupportRead(
+  live: DecisionsBridge,
+  expected: { relay: boolean; reader: boolean | null }
+): Promise<void> {
   // The library keeps the facts on the bridge it reads them for; nothing public says they are in.
   const advisory = (
     live as unknown as {
       advisory: { known(): Promise<{ relay: boolean | null; reader: boolean | null }> };
     }
   ).advisory;
-  await vi.waitFor(async () => {
-    const known = await advisory.known();
-    expect(known.relay === null || (known.relay && known.reader === null)).toBe(false);
-  });
+  await vi.waitFor(async () => expect(await advisory.known()).toEqual(expected));
 }
+
+const CAPABLE = { relay: true, reader: true };
 
 let identity: StoredIdentity;
 
@@ -420,6 +429,7 @@ describe("/mcp/decisions (#16011)", () => {
       advisoryDeadlines?: boolean;
       role?: DecisionsRole;
       defaultQuestionExpiryMs?: number | null;
+      proxyAllowlisted?: boolean;
     } = {}
   ): Promise<number> {
     return mountRoute({
@@ -430,7 +440,7 @@ describe("/mcp/decisions (#16011)", () => {
       policy: createTrustedPolicy(
         {
           ...defaultDecisionsSettings(),
-          proxyAllowlisted: false,
+          proxyAllowlisted: options.proxyAllowlisted ?? false,
           ...(options.defaultQuestionExpiryMs !== undefined
             ? { defaultQuestionExpiryMs: options.defaultQuestionExpiryMs }
             : {}),
@@ -476,7 +486,8 @@ describe("/mcp/decisions (#16011)", () => {
    * out, once its first attempt has started.
    */
   async function connectOwner(
-    relay: Awaited<ReturnType<typeof fakeRelay>>
+    relay: Awaited<ReturnType<typeof fakeRelay>>,
+    settings: { defaultQuestionExpiryMs?: number | null } = {}
   ): Promise<{ port: number; live: DecisionsBridge }> {
     const keys = new MemoryKeyStore();
     await keys.save(identity);
@@ -490,7 +501,7 @@ describe("/mcp/decisions (#16011)", () => {
       store,
       keys,
       policy: createTrustedPolicy(
-        { ...defaultDecisionsSettings(), proxyAllowlisted: false },
+        { ...defaultDecisionsSettings(), proxyAllowlisted: false, ...settings },
         "owner"
       ),
       onStatus: () => {},
@@ -708,7 +719,7 @@ describe("/mcp/decisions (#16011)", () => {
       workerVersion: "0.9.0",
     });
     const { port, live } = await connectOwner(relay);
-    await adviceSupportRead(live);
+    await adviceSupportRead(live, CAPABLE);
 
     const before = Date.now();
     const asked = await call(port, "pane-token-pane-a", "ask_human", {
@@ -741,7 +752,10 @@ describe("/mcp/decisions (#16011)", () => {
     expect(question.envelope.aad.reply_mode).toBe("advisory");
     // The desktop still declares nothing of it until its sink types the advisory notice (#17941).
     await vi.waitFor(() => expect(relay.tickets.length).toBeGreaterThan(0));
-    expect(relay.tickets.flat()).not.toContain("advisory-deadlines-v1");
+    for (const features of relay.tickets) {
+      expect(features).toContain("involvement-v1");
+      expect(features).not.toContain("advisory-deadlines-v1");
+    }
 
     const questionId = receipt.question_id as string;
     const read = await call(port, "pane-token-pane-a", "get_decision", { question_id: questionId });
@@ -755,18 +769,24 @@ describe("/mcp/decisions (#16011)", () => {
     });
 
     // Another pane reads it as an id that names nothing, and learns nothing of the plan.
+    const own = await call(port, "pane-token-pane-b", "ask_human", { question: "Which name?" });
+    const ownId = own.structuredContent.question_id as string;
+    expect(
+      (await call(port, "pane-token-pane-b", "get_decision", { question_id: ownId })).isError
+    ).toBeUndefined();
     const other = await call(port, "pane-token-pane-b", "get_decision", {
       question_id: questionId,
     });
-    const unknownId = `${questionId.slice(0, -4)}zzzz`;
+    const unknownId = `${ownId.slice(0, -4)}zzzz`;
+    expect(await store.getQuestion(unknownId)).toBeNull();
     const unknown = await call(port, "pane-token-pane-b", "get_decision", {
       question_id: unknownId,
     });
-    expect(other.isError).toBe(true);
-    expect(other.content[0].text.replace(questionId, "<id>")).toBe(
-      unknown.content[0].text.replace(unknownId, "<id>")
-    );
-    expect(other.structuredContent).toEqual(unknown.structuredContent);
+    for (const result of [other, unknown]) {
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toEqual({ error: "not_found" });
+      expect(result.content[0].text).toBe("not_found: unknown question");
+    }
     expect(JSON.stringify(other)).not.toContain("in-memory fixture");
   });
 
@@ -779,7 +799,7 @@ describe("/mcp/decisions (#16011)", () => {
       workerVersion: "0.9.0",
     });
     const { port, live } = await connectOwner(relay);
-    await adviceSupportRead(live);
+    await adviceSupportRead(live, CAPABLE);
 
     const before = Date.now();
     const asked = await call(port, "pane-token-pane-a", "ask_human", {
@@ -792,41 +812,98 @@ describe("/mcp/decisions (#16011)", () => {
     const requested = receipt.requested_expires_at as string;
     const effective = receipt.expires_at as string;
     const day = 24 * 60 * 60_000;
-    expect(Date.parse(requested) - before).toBeGreaterThanOrEqual(45 * day);
     // An agent may ask a question without a gate to wait up to 30 days under the 7-day default.
+    expect(Date.parse(requested) - Date.parse(effective)).toBe(15 * day);
     expect(Date.parse(effective) - before).toBeGreaterThanOrEqual(30 * day);
     expect(Date.parse(effective) - Date.now()).toBeLessThanOrEqual(30 * day);
-    expect(receipt).toMatchObject({
-      reply_mode: "advisory",
-      policy_adjustments: [
-        { field: "expires_at", requested, effective, source: "host", gate_id: null },
-      ],
-    });
-    expect(asked.content[0].text).toContain("Policy: ");
+    const adjustment = {
+      field: "expires_at",
+      requested,
+      effective,
+      source: "host",
+      gate_id: null,
+    } as const;
+    expect(receipt).toMatchObject({ reply_mode: "advisory", policy_adjustments: [adjustment] });
+    expect(asked.content[0].text).toContain(
+      `Policy: ${adjustmentText({ ...adjustment, gateId: null })}.`
+    );
     expect(asked.content[0].text).toContain(`Asked for advice, due ${effective} (UTC).`);
     await vi.waitFor(() => expect(relay.creates).toHaveLength(1));
-    expect(relay.creates[0].question.record.expires_at).toBe(effective);
+    const { question } = relay.creates[0];
+    expect(question.record.question_id).toBe(receipt.question_id);
+    expect(question.record.expires_at).toBe(effective);
+    expect(question.envelope.aad.reply_mode).toBe("advisory");
+  });
+
+  it("asks advice given no time with the saved default, which it says, and keeps a plain question's (#17940)", async () => {
+    await boot(false);
+    add(pane("pane-a"));
+    const relay = await fakeRelay(loaded, {
+      relayFeatures: RELAY_090_FEATURES,
+      phoneFeatures: ["advisory-deadlines-v1"],
+      workerVersion: "0.9.0",
+    });
+    const hour = 60 * 60_000;
+    const { port, live } = await connectOwner(relay, { defaultQuestionExpiryMs: hour });
+    await adviceSupportRead(live, CAPABLE);
+
+    for (const planned of ["Use the in-memory fixture.", null]) {
+      const before = Date.now();
+      const asked = await call(port, "pane-token-pane-a", "ask_human", {
+        question: "Which fixture should I use for the parser tests?",
+        ...(planned ? { planned_fallback: planned } : {}),
+      });
+      expect(asked.isError, String(planned)).toBeUndefined();
+      const expiresAt = asked.structuredContent.expires_at as string;
+      expect(asked.structuredContent).toMatchObject({
+        reply_mode: planned ? "advisory" : "blocking",
+        requested_expires_at: null,
+        planned_fallback: planned,
+      });
+      expect(Date.parse(expiresAt) - before).toBeGreaterThanOrEqual(hour);
+      expect(Date.parse(expiresAt) - Date.now()).toBeLessThanOrEqual(hour);
+      expect(asked.content[0].text).toContain("Policy: the deadline is the host's default.");
+      expect(
+        (await store.getQuestion(asked.structuredContent.question_id as string))?.expires_at
+      ).toBe(expiresAt);
+    }
   });
 
   it.each([
     [
       "a 0.8.0 relay",
-      { relayFeatures: RELAY_080_FEATURES, phoneFeatures: [], workerVersion: "0.8.0" },
+      {
+        relayFeatures: RELAY_080_FEATURES,
+        phoneFeatures: ["advisory-deadlines-v1"],
+        workerVersion: "0.8.0",
+      },
+      { relay: false, reader: null },
+      "not_supported: relay-unsupported: ",
+    ],
+    [
+      "a 0.9.0 relay that doesn't list advice",
+      {
+        relayFeatures: RELAY_080_FEATURES,
+        phoneFeatures: ["advisory-deadlines-v1"],
+        workerVersion: "0.9.0",
+      },
+      { relay: false, reader: null },
       "not_supported: relay-unsupported: ",
     ],
     [
       "no phone that shows advice",
       { relayFeatures: RELAY_090_FEATURES, phoneFeatures: [], workerVersion: "0.9.0" },
+      { relay: true, reader: false },
       "not_supported: no-capable-reader: ",
     ],
   ])(
     "refuses advice with %s, storing and publishing nothing, and the same question asked for a decision goes ahead (#17940)",
-    async (_label, relayOptions, refusal) => {
+    async (_label, relayOptions, support, refusal) => {
       await boot(false);
       add(pane("pane-a"));
       const relay = await fakeRelay(loaded, relayOptions);
       const { port, live } = await connectOwner(relay);
-      await adviceSupportRead(live);
+      await adviceSupportRead(live, support);
 
       const refused = await call(port, "pane-token-pane-a", "ask_human", {
         question: "Which fixture should I use for the parser tests?",
@@ -839,6 +916,7 @@ describe("/mcp/decisions (#16011)", () => {
         "Nothing was asked. To have the person decide instead, ask again without planned_fallback."
       );
       expect(await store.listQuestions()).toEqual([]);
+      expect(relay.requests).not.toContain("POST /api/v1/questions");
 
       const asked = await call(port, "pane-token-pane-a", "ask_human", {
         question: "Which fixture should I use for the parser tests?",
@@ -850,8 +928,10 @@ describe("/mcp/decisions (#16011)", () => {
         planned_fallback: null,
       });
       await vi.waitFor(() => expect(relay.creates).toHaveLength(1));
+      expect(relay.creates[0].question.record.question_id).toBe(
+        asked.structuredContent.question_id
+      );
       expect(relay.creates[0].question.envelope.aad.reply_mode).toBeUndefined();
-      expect(relay.requests.filter((r) => r === "POST /api/v1/questions")).toHaveLength(1);
     }
   );
 
@@ -864,111 +944,139 @@ describe("/mcp/decisions (#16011)", () => {
       workerVersion: "0.9.0",
     });
     const release = relay.holdInfo();
-    const { port, live } = await connectOwner(relay);
-    const ask = {
-      question: "Which fixture should I use for the parser tests?",
-      expires_in: "15m",
-      planned_fallback: "Use the in-memory fixture.",
-      correlation_id: "fixture-choice",
-    };
+    try {
+      const { port, live } = await connectOwner(relay);
+      const ask = {
+        question: "Which fixture should I use for the parser tests?",
+        expires_in: "15m",
+        planned_fallback: "Use the in-memory fixture.",
+        correlation_id: "fixture-choice",
+      };
 
-    const cold = await call(port, "pane-token-pane-a", "ask_human", ask);
-    expect(cold.isError).toBe(true);
-    expect(cold.content[0].text.startsWith("invalid_state: support-unknown: ")).toBe(true);
-    expect(cold.content[0].text).toContain("try again in a minute");
-    expect(await store.listQuestions()).toEqual([]);
+      // Asked while the attempt's read of the relay is still out.
+      await vi.waitFor(() => expect(relay.requests).toContain("GET /api/v1/info"));
+      const cold = await call(port, "pane-token-pane-a", "ask_human", ask);
+      expect(cold.isError).toBe(true);
+      expect(cold.content[0].text.startsWith("invalid_state: support-unknown: ")).toBe(true);
+      expect(cold.content[0].text).toContain("try again in a minute");
+      expect(await store.listQuestions()).toEqual([]);
 
-    release();
-    await adviceSupportRead(live);
-    const asked = await call(port, "pane-token-pane-a", "ask_human", ask);
-    expect(asked.structuredContent).toMatchObject({ reply_mode: "advisory", duplicate: false });
-    const again = await call(port, "pane-token-pane-a", "ask_human", ask);
-    expect(again.structuredContent).toMatchObject({
-      question_id: asked.structuredContent.question_id,
-      duplicate: true,
-      reply_mode: "advisory",
-      expires_at: asked.structuredContent.expires_at,
-      planned_fallback: "Use the in-memory fixture.",
-    });
+      release();
+      await adviceSupportRead(live, CAPABLE);
+      const asked = await call(port, "pane-token-pane-a", "ask_human", ask);
+      const first = asked.structuredContent;
+      expect(first).toMatchObject({ reply_mode: "advisory", duplicate: false });
+      const questionId = first.question_id as string;
+      await vi.waitFor(async () =>
+        expect(
+          (await call(port, "pane-token-pane-a", "get_decision", { question_id: questionId }))
+            .structuredContent.publication
+        ).toBe("accepted")
+      );
+      // Later by the clock, so a deadline counted again from now would differ.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const asFirstAsked = {
+        question_id: questionId,
+        duplicate: true,
+        reply_mode: "advisory",
+        expires_at: first.expires_at,
+        requested_expires_at: first.requested_expires_at,
+        planned_fallback: "Use the in-memory fixture.",
+      };
+      const again = await call(port, "pane-token-pane-a", "ask_human", ask);
+      expect(again.structuredContent).toMatchObject(asFirstAsked);
+      expect(again.content[0].text).toContain(`Already asked as q-`);
 
-    // Between attempts a fresh ask for advice can't be decided, but the retry is the question it asked.
-    await questions!.close();
-    const between = await openRoute({ advisoryDeadlines: true, defaultQuestionExpiryMs: null });
-    const retried = await call(between, "pane-token-pane-a", "ask_human", ask);
-    expect(retried.structuredContent).toMatchObject({
-      question_id: asked.structuredContent.question_id,
-      duplicate: true,
-      reply_mode: "advisory",
-      expires_at: asked.structuredContent.expires_at,
-    });
-    const fresh = await call(between, "pane-token-pane-a", "ask_human", {
-      ...ask,
-      correlation_id: "another-choice",
-    });
-    expect(fresh.content[0].text.startsWith("invalid_state: support-unknown: ")).toBe(true);
-    expect(await store.listQuestions()).toHaveLength(1);
-    await vi.waitFor(() => expect(relay.creates).toHaveLength(1));
+      // Between attempts a fresh ask for advice can't be decided, but the retry is the question it asked.
+      await questions!.close();
+      const between = await openRoute({ advisoryDeadlines: true, defaultQuestionExpiryMs: null });
+      const retried = await call(between, "pane-token-pane-a", "ask_human", ask);
+      expect(retried.structuredContent).toMatchObject(asFirstAsked);
+      const fresh = await call(between, "pane-token-pane-a", "ask_human", {
+        ...ask,
+        correlation_id: "another-choice",
+      });
+      expect(fresh.content[0].text.startsWith("invalid_state: support-unknown: ")).toBe(true);
+      expect(await store.listQuestions()).toHaveLength(1);
+      expect(relay.creates.map((create) => create.question.record.question_id)).toEqual([
+        questionId,
+      ]);
+    } finally {
+      release();
+    }
   });
 
-  it("keeps the final design review and other protected work blocking, and tells the agent before reading the relay (#17940)", async () => {
+  it("refuses advice for the final design review, other gates and approvals, and asks each again as a blocking question (#17940)", async () => {
     const root = await fs.mkdtemp(`${testHomeDir}/advice-`);
+    const attachments = new DecisionsAttachments({
+      dir: `${root}/spool`,
+      referenced: async () => new Set(),
+    });
     try {
       const worktree = `${root}/worktree`;
       await fs.mkdir(`${worktree}/shots`, { recursive: true });
       const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
       await fs.writeFile(`${worktree}/shots/final.png`, png);
-      const attachments = new DecisionsAttachments({
-        dir: `${root}/spool`,
-        referenced: async () => new Set(),
-      });
       await boot(false);
       add(pane("pane-a", { cwd: worktree }));
       const port = await openRoute({ attachments, advisoryDeadlines: true });
-      const plan = { expires_in: "15m", planned_fallback: "Ship the current screenshots." };
+      const plan = { planned_fallback: "Ship the current screenshots." };
       const finalReview = {
         question: "Approve the final design?",
         workflow_gate_id: DESIGN_REVIEW_FINAL_GATE_ID,
+        // The gate's own choices replace these.
         options: [
           { id: "approve", label: "Approve" },
           { id: "reject", label: "Reject" },
         ],
         attachments: [{ local_resource_id: "shots/final.png", role: "after" }],
+        expires_in: "15m",
       };
-      const refusals: Array<[Record<string, unknown>, string]> = [
-        [{ ...finalReview, ...plan }, "validation_error: gated: "],
+      const cases: Array<[Record<string, unknown>, string]> = [
+        [finalReview, "validation_error: gated: "],
         [
-          { question: "Deploy it?", workflow_gate_id: "agent-invented/gate", ...plan },
+          { question: "Deploy it?", workflow_gate_id: "agent-invented/gate", expires_in: "15m" },
           "validation_error: gated: ",
         ],
         [
-          { question: "May I delete the branch?", kind: "approval", ...plan },
+          { question: "May I delete the branch?", kind: "approval", expires_in: "15m" },
           "validation_error: approval: ",
         ],
       ];
-      for (const [args, refusal] of refusals) {
-        const refused = await call(port, "pane-token-pane-a", "ask_human", args);
+      for (const [args, refusal] of cases) {
+        const refused = await call(port, "pane-token-pane-a", "ask_human", { ...args, ...plan });
         expect(refused.isError, refusal).toBe(true);
         expect(refused.content[0].text.startsWith(refusal), refused.content[0].text).toBe(true);
         expect(refused.content[0].text).toContain("ask again without planned_fallback");
       }
       expect(await store.listQuestions()).toEqual([]);
 
-      // Asked again for a decision, the final review waits for the person's own answer on its screenshots.
-      const asked = await call(port, "pane-token-pane-a", "ask_human", {
-        ...finalReview,
-        expires_in: "15m",
+      // Asked again for a decision, each waits for one, and expiry authorises nothing.
+      for (const [args] of cases) {
+        const asked = await call(port, "pane-token-pane-a", "ask_human", args);
+        expect(asked.isError, String(args.question)).toBeUndefined();
+        expect(asked.structuredContent).toMatchObject({
+          reply_mode: "blocking",
+          enforced_requirement: "human-required",
+          planned_fallback: null,
+        });
+        expect(asked.content[0].text).toContain(
+          `It waits for a decision until ${asked.structuredContent.expires_at as string} (UTC)`
+        );
+      }
+      const review = (await store.listQuestions()).find(
+        (row) => row.attachment_digests.length > 0
+      )!;
+      const read = await call(port, "pane-token-pane-a", "get_decision", {
+        question_id: review.question_id,
       });
-      expect(asked.isError).toBeUndefined();
-      expect(asked.structuredContent).toMatchObject({
+      expect(read.structuredContent).toMatchObject({
+        workflow_gate_id: DESIGN_REVIEW_FINAL_GATE_ID,
         reply_mode: "blocking",
-        enforced_requirement: "human-required",
-        planned_fallback: null,
       });
-      const [row] = await store.listQuestions();
-      expect(row.attachment_digests).toHaveLength(1);
       expect(fetches).toBe(0);
-      await attachments.close();
     } finally {
+      await attachments.close();
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -992,22 +1100,37 @@ describe("/mcp/decisions (#16011)", () => {
     expect(advice.isError).toBe(true);
     expect(advice.content[0].text.startsWith("validation_error: no-deadline: ")).toBe(true);
     expect(advice.content[0].text).toContain("give expires_in or expires_at");
-    expect(await store.listQuestions()).toHaveLength(1);
+    const rows = await store.listQuestions();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].expires_at).toBeNull();
   });
 
-  it("keeps a Remote Host's questions blocking: its policy allows no advice (#17942)", async () => {
+  it("refuses advice on a Remote Host's policy, proxy answers allowed or not, and asks the question for a decision (#17942)", async () => {
     await boot(false);
     add(pane("pane-a"));
-    const port = await openRoute({ advisoryDeadlines: true, role: "host" });
+    for (const proxyAllowlisted of [false, true]) {
+      const port = await openRoute({ advisoryDeadlines: true, role: "host", proxyAllowlisted });
 
-    const refused = await call(port, "pane-token-pane-a", "ask_human", {
-      question: "Which fixture?",
-      expires_in: "15m",
-      planned_fallback: "Use the in-memory fixture.",
-    });
-    expect(refused.isError).toBe(true);
-    expect(refused.content[0].text.startsWith("forbidden: policy-disallowed: ")).toBe(true);
-    expect(await store.listQuestions()).toEqual([]);
+      const refused = await call(port, "pane-token-pane-a", "ask_human", {
+        question: "Which fixture?",
+        expires_in: "15m",
+        planned_fallback: "Use the in-memory fixture.",
+        requested_requirement: "proxy-ok",
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0].text.startsWith("forbidden: policy-disallowed: ")).toBe(true);
+      const asked = await call(port, "pane-token-pane-a", "ask_human", {
+        question: "Which fixture?",
+        expires_in: "15m",
+        requested_requirement: "proxy-ok",
+      });
+      expect(asked.structuredContent).toMatchObject({
+        reply_mode: "blocking",
+        enforced_requirement: proxyAllowlisted ? "proxy-ok" : "human-required",
+      });
+      await questions!.close();
+    }
+    expect(await store.listQuestions()).toHaveLength(2);
   });
 
   it("commits a follow-up on the pane's own question at once, alone or in a batch, before any network I/O", async () => {

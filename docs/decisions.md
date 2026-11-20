@@ -243,6 +243,8 @@ A workflow uses the gate from your own skill, command or runbook. Daintree insta
 
 ### Advice instead of a decision
 
+Daintree doesn't take advisory questions yet: until it types the deadline notice into the agent's terminal, an ask with `planned_fallback` is refused with `host-unsupported` before anything else is checked (see [Asking](#asking)). This is how they will work.
+
 The final review is a decision: the workflow waits for your answer, and an expired question authorises nothing. A step the agent could take on its own can ask for advice instead, with a deadline and the plan it follows if you don't answer by then:
 
 ```markdown
@@ -256,7 +258,7 @@ The final review is a decision: the workflow waits for your answer, and an expir
 3. An answer given before the deadline is typed into this terminal as usual: follow it. If none is, a notice arrives saying the deadline passed unanswered: nothing was decided or approved, and the plan is yours to carry out at your discretion. Act on that notice, or on `get_decision`'s `fallback_due: true`, never on the time alone.
 ```
 
-The two differ only in what an unanswered deadline means, so advice is never asked for an approval. It's refused with `gated` under `design-review/final` or any other gate, whether the agent names it or not; with `approval` for a question of kind `approval`; and with `no-deadline` when it gives no time under a **Default expiry** of Never (given no time otherwise, it takes your default, under the same limits as any question). It's also refused when your relay (`relay-unsupported`) or none of your phones (`no-capable-reader`) can show the deadline and the plan, and with `support-unknown` until Daintree has checked, shortly after it connects. Each refusal saves and sends nothing, and tells the agent to ask again without `planned_fallback` to have you decide. Neither **Allow proxy answers** nor how involved you want to be turns a question into advice or lets its deadline answer it: who may answer is decided as for any other question. Agents on a Remote Host can't ask for advice. Until Daintree types the deadline notice into the agent's terminal, every advisory ask is refused with `host-unsupported` (see [Asking](#asking)).
+The two differ only in what an unanswered deadline means, so advice is never asked for an approval. It's refused with `gated` for a question that names `design-review/final` or any other gate, registered or not; with `approval` for a question of kind `approval`; and with `no-deadline` when it gives no time under a **Default expiry** of Never (given no time otherwise, it takes your default, under the same limits as any question). Daintree ties no gate to a terminal, so a workflow step that needs your decision has to name its gate, or leave out `planned_fallback`. Advice is then refused when your relay (`relay-unsupported`) or none of your phones (`no-capable-reader`) can show the deadline and the plan, and with `support-unknown` while Daintree hasn't checked, such as just after it connects or while the relay is out of reach; asked again a moment later, it's decided. Each refusal saves and sends nothing, and tells the agent to ask again without `planned_fallback` to have you decide. Neither **Allow proxy answers** nor how involved you want to be turns a question into advice or lets its deadline answer it: who may answer is decided as for any other question. Agents on a Remote Host can't ask for advice.
 
 ## Remote Hosts
 

@@ -28,7 +28,6 @@ import type {
 import { answers, messages, outstandingRows, qid, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
-import { DAINTREE_DELIVERS_ADVISORY_OUTCOMES } from "../relayFeatures.js";
 import type { QuestionReadScope } from "../questionContent.js";
 import type {
   AnswerDecisionQuestionPayload,
@@ -1123,23 +1122,45 @@ describe("DecisionsService relay connection", () => {
     expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
   });
 
-  it("lets an owner lifetime's agents ask for advice once its delivery types the outcome, and keeps a Remote Host's blocking (#17940)", async () => {
-    const { service, made } = connected();
-    await service.start(on(RELAY));
-    const owner = service.getPolicy();
-    expect(owner?.advisoryQuestions).toBe(true);
-    expect(made[0]!.options.policy).toBe(owner);
-    expect(made[0]!.options.advisoryDeadlines).toBe(DAINTREE_DELIVERS_ADVISORY_OUTCOMES);
+  it.each([true, false])(
+    "lets an owner lifetime's agents ask for advice, signed only when Daintree delivers its outcome (%s), and keeps a Remote Host's blocking (#17940)",
+    async (outcomes) => {
+      const made: Array<{ options: RelayConnectionOptions; stopped: boolean }> = [];
+      const service = new DecisionsService({
+        openStore: async () => fakeStore(),
+        keyFilePath: () => "/nonexistent/keys.bin",
+        advisoryOutcomes: outcomes,
+        connect: (options) => {
+          const record = { options, stopped: false };
+          made.push(record);
+          return {
+            start: () => {},
+            stop: () => {
+              record.stopped = true;
+            },
+          };
+        },
+      });
+      await service.start(on(RELAY));
+      const owner = service.getPolicy();
+      expect(owner?.advisoryQuestions).toBe(true);
+      expect(made).toHaveLength(1);
+      expect(made[0]!.options.policy).toBe(owner);
+      expect(made[0]!.options.advisoryDeadlines).toBe(outcomes);
 
-    // The other role ends the lifetime first, and the next one starts from its own policy.
-    await service.start(on(RELAY), "host");
-    const host = service.getPolicy();
-    expect(host).not.toBe(owner);
-    expect(host?.advisoryQuestions).toBe(false);
-    expect(made.at(-1)!.options.role).toBe("desktop-host");
-    expect(made.at(-1)!.options.policy).toBe(host);
-    expect(made.at(-1)!.options.advisoryDeadlines).toBe(false);
-  });
+      // The other role ends the lifetime first, and the next one starts from its own policy.
+      await service.start(on(RELAY), "host");
+      const host = service.getPolicy();
+      expect(made).toHaveLength(2);
+      expect(made[0]!.stopped).toBe(true);
+      expect(host).not.toBe(owner);
+      expect(host?.advisoryQuestions).toBe(false);
+      expect(made[1]!.options.role).toBe("desktop-host");
+      expect(made[1]!.options.policy).toBe(host);
+      expect(made[1]!.options.advisoryDeadlines).toBe(false);
+      await service.stop();
+    }
+  );
 
   it("changes the default expiry on the running policy, never included, without a reconnect", async () => {
     const { service, made } = connected();

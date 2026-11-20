@@ -504,15 +504,15 @@ describe("advisory questions (#17940)", () => {
       expect(owner.advisoryQuestions).toBe(true);
       expect(host.advisoryQuestions).toBe(false);
       // Advice changes no requirement: proxy consent alone decides who may answer.
-      expect(owner.resolve({ requested: "proxy-ok" }).requirement).toBe(
-        host.resolve({ requested: "proxy-ok" }).requirement
-      );
+      const level = proxyAllowlisted ? "proxy-ok" : "human-required";
+      expect(owner.resolve({ requested: "proxy-ok" }).requirement).toBe(level);
+      expect(host.resolve({ requested: "proxy-ok" }).requirement).toBe(level);
     }
   );
 
-  it("refuses advice from a pane its host bound to the final design review, on a bridge that delivers advisory outcomes", async () => {
+  it("refuses advice from a pane its host bound to the final design review, with advisory support on", async () => {
     const h = await harness();
-    // The bridge an owner lifetime would ask on once its sink types the advisory notice.
+    // Asked as an owner lifetime would once its sink types the advisory notice, offline as the harness is.
     const bridge = new DecisionsBridge({
       identity: h.identity,
       store: h.store,
@@ -520,10 +520,12 @@ describe("advisory questions (#17940)", () => {
       policy: h.policy,
       advisoryDeadlines: true,
       resolver: { resolve: async (_origin, id) => (IMAGES[id] ? { bytes: IMAGES[id] } : null) },
+      client: h.bridge.ctx.client,
       pumpIntervalMs: 0,
     });
+    bridges.push(bridge);
     const ask = (input: Record<string, unknown>) =>
-      bridge.registerQuestion({ origin: origin(DESIGN_REVIEW_FINAL_GATE_ID), input });
+      bridge.registerQuestion({ origin: origin(DESIGN_REVIEW_FINAL_GATE_ID), input, pump: false });
     const advice = { expires_in: "15m", planned_fallback: "Ship the current screenshots." };
 
     // The origin's gate governs a question that doesn't name it, and needs no gate id from the agent.
@@ -541,6 +543,8 @@ describe("advisory questions (#17940)", () => {
 
     const asked = await ask({ ...REVIEW_INPUT, expires_in: "15m" });
     expect(asked).toMatchObject({ replyMode: "blocking", requirement: "human-required" });
+    const [row] = await h.store.listQuestions();
+    expect(row.origin.workflow_gate_id).toBe(DESIGN_REVIEW_FINAL_GATE_ID);
   });
 });
 

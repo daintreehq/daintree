@@ -193,6 +193,12 @@ export type DecisionsStoreOpener = (
 
 export interface DecisionsServiceOptions {
   openStore?: DecisionsStoreOpener;
+  /**
+   * Whether this Daintree delivers advisory outcomes, given to the owner's
+   * connections as `advisoryDeadlines`: `DAINTREE_DELIVERS_ADVISORY_OUTCOMES`
+   * unless a test says otherwise.
+   */
+  advisoryOutcomes?: boolean;
   /** Where the sealed keys live: `userData/decisions/keys.bin` unless a test says otherwise. */
   keyFilePath?: () => string;
   /**
@@ -302,6 +308,7 @@ export class DecisionsService {
   private store: DaintreeLocalStore | null = null;
   private disposed = false;
   private readonly openStore: DecisionsStoreOpener;
+  private readonly advisoryOutcomes: boolean;
   private transitions: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<DecisionsStatusListener>();
   private readonly keyFilePath: () => string;
@@ -402,6 +409,7 @@ export class DecisionsService {
 
   constructor(options: DecisionsServiceOptions = {}) {
     this.openStore = options.openStore ?? openDecisionsLocalStore;
+    this.advisoryOutcomes = options.advisoryOutcomes ?? DAINTREE_DELIVERS_ADVISORY_OUTCOMES;
     this.keyFilePath = options.keyFilePath ?? decisionsKeyFilePath;
     this.attachmentSpoolDir =
       options.attachmentSpoolDir ?? ((keyFilePath) => join(dirname(keyFilePath), "spool"));
@@ -1258,7 +1266,7 @@ export class DecisionsService {
         ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }
         : {}),
       // A Host's panes stay blocking until it settles its own deadlines (#17942).
-      advisoryDeadlines: role === "owner" && DAINTREE_DELIVERS_ADVISORY_OUTCOMES,
+      advisoryDeadlines: role === "owner" && this.advisoryOutcomes,
       ...(snapshots
         ? {
             snapshots: {

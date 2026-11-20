@@ -170,8 +170,9 @@ export interface RelayConnectionOptions {
    * that asked (protocol section 21), so every bridge over its store, each
    * attempt's, the one between attempts and delivery's own, is given
    * `advisoryDeadlines`: it then signs advice the trusted policy allows, and
-   * reads and types its outcome alike. Only with `delivery`: without it no
-   * outcome is typed, so none is signed either. Off unless said.
+   * reads and types its outcome alike. Only with `delivery`: without it, or
+   * once it couldn't start, no outcome is typed, so no attempt signs one
+   * either. Off unless said.
    */
   advisoryDeadlines?: boolean;
   /**
@@ -632,7 +633,8 @@ export class RelayConnection {
         // Its inbox stores the person's follow-ups; the lifetime's delivery types them.
         followUps: true,
         policy: this.o.policy,
-        advisoryDeadlines: this.advisoryDeadlines,
+        // Only beside a delivery that started: one that couldn't would type no outcome.
+        advisoryDeadlines: this.advisoryDeadlines && this.delivery !== null,
         ...(this.o.attachments
           ? { resolver: this.o.attachments.resolver, spool: this.o.attachments.spool }
           : {}),

@@ -60,6 +60,23 @@ vi.mock("electron", () => ({
 }));
 
 const logWarn = vi.hoisted(() => vi.fn());
+/** How many of the next requests for a way to reach the relay fail, as one that can't be made. */
+const relayRequestFailures = vi.hoisted(() => ({ left: 0 }));
+
+vi.mock("../relayIdentity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../relayIdentity.js")>();
+  return {
+    ...actual,
+    relayRequests: (...args: Parameters<typeof actual.relayRequests>) => {
+      if (relayRequestFailures.left > 0) {
+        relayRequestFailures.left -= 1;
+        return Promise.reject(new Error("network"));
+      }
+      return actual.relayRequests(...args);
+    },
+  };
+});
+
 vi.mock("../../../utils/logger.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/logger.js")>();
   return {
@@ -301,6 +318,7 @@ let identity: StoredIdentity;
 
 beforeEach(async () => {
   identity ??= await ownerIdentity();
+  relayRequestFailures.left = 0;
   vi.useFakeTimers({
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
   });
@@ -379,6 +397,11 @@ async function harness(
     },
     next: (state) => new Promise((resolve) => waiters.push({ state, resolve })),
   };
+}
+
+/** Whether `bridge` was given `advisoryDeadlines`: the library keeps it on its advice support, unexported. */
+function hostSupport(bridge: DecisionsBridge): boolean {
+  return (bridge as unknown as { advisory: { hostSupport: boolean } }).advisory.hostSupport;
 }
 
 /** Opens the first socket and brings it live with nothing to replay. */
@@ -1286,11 +1309,13 @@ describe("RelayConnection", () => {
   });
 
   it.each([
-    ["with delivery", true],
-    ["without delivery", false],
+    ["asked for, with delivery", { advisoryDeadlines: true, delivery: true }, true],
+    ["asked for, without delivery", { advisoryDeadlines: true, delivery: false }, false],
+    ["not asked for, with delivery", { advisoryDeadlines: false, delivery: true }, false],
+    ["left out, with delivery", { delivery: true }, false],
   ])(
     "gives every bridge over the store advisoryDeadlines only when the lifetime delivers outcomes: %s (#17940)",
-    async (_label, withDelivery) => {
+    async (_label, options, expected) => {
       const bridges: DecisionsBridge[] = [];
       const start = DecisionsBridge.prototype.start;
       vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(function (
@@ -1303,37 +1328,71 @@ describe("RelayConnection", () => {
       let source: QuestionSource | null = null;
       const h = await harness({
         overrides: {
-          advisoryDeadlines: true,
-          ...(withDelivery ? { delivery: deliveryDeps().deps } : {}),
+          ...("advisoryDeadlines" in options
+            ? { advisoryDeadlines: options.advisoryDeadlines }
+            : {}),
+          ...(options.delivery ? { delivery: deliveryDeps().deps } : {}),
           onQuestionsReady: (ready) => (source = ready),
         },
       });
+      try {
+        h.connection.start();
+        const first = await connectLive(h);
+        // A reconnect's attempt is given it as the first was.
+        first.drop(1006);
+        await h.status("reconnecting");
+        await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS);
+        await connectLive(h, 1);
 
-      h.connection.start();
-      await connectLive(h);
-
-      const hostSupport = (bridge: DecisionsBridge) =>
-        (bridge as unknown as { advisory: { hostSupport: boolean } }).advisory.hostSupport;
-      const ready = source as unknown as QuestionSource;
-      expect(ready.advisoryDeadlines).toBe(withDelivery);
-      expect(bridges.map(hostSupport)).toEqual([withDelivery]);
-      // The bridge agents ask on between attempts reads a question as the attempts do.
-      expect(hostSupport(new QuestionBridge({ source: ready, isCurrent: () => true }))).toBe(
-        withDelivery
-      );
-      const delivery = h.connection.getDelivery() as unknown as {
-        owner: DecisionsBridge;
-      } | null;
-      if (withDelivery) {
-        expect(hostSupport(delivery!.owner)).toBe(true);
-        // Delivery decides whether a plan may go ahead under the policy agents ask under.
-        expect(delivery!.owner.ctx.policy).toBe(bridges[0].ctx.policy);
-      } else {
-        expect(delivery).toBeNull();
+        const ready = source as unknown as QuestionSource;
+        expect(ready.advisoryDeadlines).toBe(expected);
+        expect(bridges).toHaveLength(2);
+        expect(bridges.map(hostSupport)).toEqual([expected, expected]);
+        // The bridge agents ask on between attempts reads a question as the attempts do.
+        expect(hostSupport(new QuestionBridge({ source: ready, isCurrent: () => true }))).toBe(
+          expected
+        );
+        const delivery = h.connection.getDelivery() as unknown as {
+          owner: DecisionsBridge;
+        } | null;
+        if (options.delivery) {
+          expect(hostSupport(delivery!.owner)).toBe(expected);
+          // Delivery decides whether a plan may go ahead under the policy agents ask under.
+          expect(delivery!.owner.ctx.policy).toBe(bridges[0].ctx.policy);
+        } else {
+          expect(delivery).toBeNull();
+        }
+      } finally {
+        await h.connection.stop();
       }
-      await h.connection.stop();
     }
   );
+
+  it("signs no advice on an attempt when the lifetime's delivery couldn't start (#17940)", async () => {
+    const bridges: DecisionsBridge[] = [];
+    const start = DecisionsBridge.prototype.start;
+    vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(function (
+      this: DecisionsBridge,
+      ...args: Parameters<DecisionsBridge["start"]>
+    ) {
+      bridges.push(this);
+      return start.apply(this, args);
+    });
+    // Delivery asks for its way to the relay first; the attempt's own request gets through.
+    relayRequestFailures.left = 1;
+    const h = await harness({
+      overrides: { advisoryDeadlines: true, delivery: deliveryDeps().deps },
+    });
+    try {
+      h.connection.start();
+      await connectLive(h);
+      expect(relayRequestFailures.left).toBe(0);
+      expect(h.connection.getDelivery()).toBeNull();
+      expect(bridges.map(hostSupport)).toEqual([false]);
+    } finally {
+      await h.connection.stop();
+    }
+  });
 
   it("picks up from the cursor the app database kept, after the app starts again", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-connection-"));
