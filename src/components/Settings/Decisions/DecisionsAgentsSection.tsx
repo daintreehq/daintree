@@ -17,6 +17,7 @@ import type { CliAvailability } from "@shared/types";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
+import { AGENTS_SECTION_ID } from "./agentsLanding";
 
 export interface DecisionsAgentSupport {
   /** Installed agents with launch-time MCP, the only way a launch can hand them `ask_human`. */
@@ -74,6 +75,22 @@ export function switchedOnAgents(
   supported: readonly string[]
 ): string[] {
   return supported.filter((id) => askHumanAgents.includes(id));
+}
+
+/**
+ * How many agents Agents shows switched on, or null until that can be told:
+ * a policy that lists none is none at once, while one that lists some needs
+ * the installed agents read first (#18057). The facts line and Connection's
+ * setup warning both count this way, so they never disagree.
+ */
+export function switchedOnCount(
+  askHumanAgents: readonly string[],
+  supported: readonly string[],
+  installedRead: boolean
+): number | null {
+  if (askHumanAgents.length === 0) return 0;
+  if (!installedRead) return null;
+  return switchedOnAgents(askHumanAgents, supported).length;
 }
 
 /**
@@ -211,7 +228,7 @@ export function DecisionsAgentsSection({
   return (
     <SettingsSection
       title="Agents"
-      id="decisions-agents"
+      id={AGENTS_SECTION_ID}
       description={
         launchesGetAsk
           ? "Agents you switch on can ask you with ask_human. Each is off until you switch it on, and a change applies from its next launch."

@@ -482,8 +482,19 @@ describe("Decisions relay deploy offer", () => {
         expect(row.textContent).toMatch(/Relay deployed and claimed/);
         expect(row.textContent).not.toMatch(/launched from now on get ask_human/);
         expect(row.textContent).toMatch(/Under Agents, switch on the agents you want to ask you/);
-        expect(row.textContent).toMatch(/each is off until you do/);
+        expect(row.textContent).toMatch(
+          /each is off until you do, and gets ask_human from its next launch/
+        );
+        expect(row.querySelector("[data-settings-row-actions]")).not.toBeNull();
         expect(screen.queryByRole("group", { name: "Don't have a relay yet?" })).toBeNull();
+        // Heard as the claim ends, with the same next steps the row shows.
+        expect(
+          screen
+            .getAllByRole("status")
+            .some((status) =>
+              /Relay deployed and claimed.*Under Agents, switch on/.test(status.textContent ?? "")
+            )
+        ).toBe(true);
 
         fireEvent.click(within(row).getByRole("button", { name: "Pair a phone" }));
         expect(document.activeElement).toBe(pair);
@@ -505,6 +516,11 @@ describe("Decisions relay deploy offer", () => {
       expect(row.textContent).not.toMatch(/Agents/);
       expect(within(row).getByRole("button", { name: "Pair a phone" })).toBeTruthy();
       expect(within(row).queryByRole("button", { name: "Choose agents" })).toBeNull();
+      const heard = screen
+        .getAllByRole("status")
+        .find((status) => /Relay deployed and claimed/.test(status.textContent ?? ""));
+      expect(heard).toBeDefined();
+      expect(heard?.textContent).not.toMatch(/Agents/);
     });
 
     it("shows no claimed outcome for a relay other than the one set up here", () => {

@@ -819,7 +819,7 @@ describe("DecisionsConnectionSection setup unfinished", () => {
     }
   });
 
-  it("offers Agents beside the kit or the check while both are left", () => {
+  it("offers Agents beside the kit or the check while both are left", async () => {
     const onFinishSetup = vi.fn();
     checkRelay.mockReturnValue(new Promise(() => {}));
     render(
@@ -838,15 +838,34 @@ describe("DecisionsConnectionSection setup unfinished", () => {
     expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
     cleanup();
 
+    startSetupCheck.mockReset().mockReturnValue(new Promise(() => {}));
     renderWithAgentsOff({ state: "connected", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
     expect(screen.getByText(/Run the setup check/)).toBeTruthy();
     expect(screen.getByText(/No agents are switched on/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
-    expect(
-      screen
-        .getAllByRole("button", { name: "Check setup" })
-        .some((button) => !button.hasAttribute("data-decisions-setup-check-start"))
-    ).toBe(true);
+    const fromWarning = screen
+      .getAllByRole("button", { name: "Check setup" })
+      .find((button) => !button.hasAttribute("data-decisions-setup-check-start"))!;
+    await act(async () => {
+      fireEvent.click(fromWarning);
+    });
+    expect(startSetupCheck).toHaveBeenCalledOnce();
+  });
+
+  it("asks for agents for a relay set up but not connected, which launches still reach once it is", () => {
+    const finished: DecisionsStatus = {
+      state: "not-connected",
+      relayOrigin: ORIGIN,
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: null },
+    };
+    renderWithAgentsOff(finished);
+    expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
+    cleanup();
+
+    renderWithAgentsOff(finished, false);
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
   });
 
   it("says nothing about agents with no relay set up, or for a relay revoked or unusable", () => {

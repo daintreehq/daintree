@@ -56,9 +56,12 @@ describe("Decisions → Agents in search (#18057)", () => {
     window.__DAINTREE_HOST_ID__ = { id: "studio" };
     _resetHostPlatformForTests();
 
-    const ids = availableSearchEntries(SETTINGS_SEARCH_INDEX).map((entry) => entry.id);
-    expect(SETTINGS_SEARCH_INDEX.some((entry) => entry.id === "decisions-agents")).toBe(true);
-    expect(ids).not.toContain("decisions-agents");
-    expect(ids).toContain("decisions-connection");
+    const decisionsIds = (entries: readonly { tab: string; id: string }[]) =>
+      entries.filter((entry) => entry.tab === "decisions").map((entry) => entry.id);
+    const all = decisionsIds(SETTINGS_SEARCH_INDEX);
+    expect(all).toContain("decisions-agents");
+    expect(decisionsIds(availableSearchEntries(SETTINGS_SEARCH_INDEX))).toEqual(
+      all.filter((id) => id !== "decisions-agents")
+    );
   });
 });

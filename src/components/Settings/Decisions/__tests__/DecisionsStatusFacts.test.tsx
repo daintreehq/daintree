@@ -220,6 +220,11 @@ describe("DecisionsStatusFacts (#18059)", () => {
     useCliAvailabilityStore.setState({ hasRealData: false, error: "The probe failed." });
     await renderFacts();
     expect(facts()).toContain(" · Agents couldn't be read · ");
+    cleanup();
+
+    // A policy that lists no agent needs no probe to say none is switched on (#18057).
+    await renderFacts(undefined, policyRead([]));
+    expect(facts()).toContain(" · No agents switched on · ");
   });
 
   it("names no agents in a remote window, whose agents are the Host's", async () => {

@@ -509,18 +509,26 @@ describe("DecisionsSettingsTab", () => {
       expect(agentsOffWarning()).toBeTruthy();
     });
 
-    it("stops saying so once a read fails, since what it showed may be stale", async () => {
+    it("keeps saying what the last read answered when a refresh fails, as the switches and facts line do", async () => {
       await renderTab();
       await act(async () => reads.at(-1)!.resolve(policy([], 1)));
       expect(agentsOffWarning()).toBeTruthy();
 
       act(() => pushStatus({ ...FINISHED, revision: 2 }));
       await act(async () => reads.at(-1)!.reject(new Error("bridge closed")));
-      expect(agentsOffWarning()).toBeNull();
+      expect(agentsOffWarning()).toBeTruthy();
+      expect(screen.getByTestId("decisions-status-facts").textContent).toContain(
+        "No agents switched on"
+      );
     });
 
-    it("waits for the CLI probe, and counts the switches as Agents and the facts line do (#18059)", async () => {
+    it("tells none at once from an empty policy, and waits for the CLI probe to count a listed one (#18059)", async () => {
       useCliAvailabilityStore.setState({ hasRealData: false });
+      await renderTab();
+      await act(async () => reads.at(-1)!.resolve(policy([], 1)));
+      expect(agentsOffWarning()).toBeTruthy();
+      cleanup();
+
       await renderTab();
       // Codex is switched on but not installed: no launch of it can ask.
       await act(async () => reads.at(-1)!.resolve(policy(["codex"], 1)));

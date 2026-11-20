@@ -15,7 +15,7 @@ import { DecisionsStatusFacts } from "./DecisionsStatusFacts";
 import { useDecisionsDevices } from "./useDecisionsDevices";
 import {
   DecisionsAgentsSection,
-  switchedOnAgents,
+  switchedOnCount,
   useDecisionsAgentSupport,
 } from "./DecisionsAgentsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
@@ -82,16 +82,13 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   const devicesRead = useDecisionsDevices(on ? (status.relayOrigin ?? null) : null);
   const { supported } = useDecisionsAgentSupport();
   const installedRead = useCliAvailabilityStore((state) => state.hasRealData);
-  // Counted as the facts line and Agents count them (#18059), from what main
-  // and the CLI probe last answered: unread, or a read that failed, may hide a
-  // switch another window turned on. A remote window's agents are the Host's,
-  // which its Agents section doesn't show.
+  // Counted as the facts line counts them (#18059), from the policy as last
+  // read, which the Agents switches show too; never before the first read. A
+  // remote window's agents are the Host's, which its Agents section doesn't show.
   const agentsOff =
     !isRemoteWindow() &&
     policy.policy !== null &&
-    policy.loadError === null &&
-    installedRead &&
-    switchedOnAgents(policy.policy.askHumanAgents, supported).length === 0;
+    switchedOnCount(policy.policy.askHumanAgents, supported, installedRead) === 0;
   const enabled = pending?.enabled ?? on;
   const locked = status === null || pending !== null;
 
