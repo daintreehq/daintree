@@ -17,7 +17,9 @@ import {
   itemSentence,
   paneWaitOf,
   needsAttention,
+  questionCount,
   readsPaneWait,
+  setAsideOf,
 } from "../decisionsChipModel";
 
 function pane(
@@ -169,19 +171,176 @@ describe("chipLabel", () => {
     expect(chipLabel(decisionItems(pane({ waiting: [waiting(41)] }))).text).toMatch(/^q-41 /);
   });
 
-  it("counts several, and says how many Daintree is about to type in", () => {
+  it("counts several as questions, never a bare number, and says how many Daintree is about to type in (#18053)", () => {
     const some = chipLabel(
       decisionItems(pane({ open: [open(1), open(2)], waiting: [waiting(3)] }))
     );
-    expect(some.text).toBe("3");
-    expect(some.detail).toContain("1");
+    expect(some).toEqual({ text: "3 questions", detail: "· 1 delivering" });
 
-    expect(chipLabel(decisionItems(pane({ open: [open(1), open(2)] }))).detail).toBeNull();
+    expect(chipLabel(decisionItems(pane({ open: [open(1), open(2)] })))).toEqual({
+      text: "2 questions",
+      detail: null,
+    });
 
     const all = chipLabel(decisionItems(pane({ waiting: [waiting(1), waiting(2, "expired")] })));
-    expect(all.text).toBe("2");
-    expect(all.detail).not.toBeNull();
-    expect(all.detail).not.toContain("·");
+    expect(all).toEqual({ text: "2 questions", detail: "delivering" });
+  });
+
+  it("counts a question once when a held follow-up lists it under attention as well", () => {
+    const items = decisionItems(pane({ open: [open(7), open(8)], attention: [stopped(7)] }));
+    expect(items).toHaveLength(3);
+    expect(chipLabel(items).text).toBe("2 questions");
+    expect(questionCount(items)).toBe(2);
+    expect(chipSummary(items)).toMatch(/^2 Decisions questions: /);
+  });
+});
+
+describe("questions set aside (#18053)", () => {
+  const NOW = Date.parse("2026-11-20T14:00:00.000Z");
+  const before = new Date(NOW - 1).toISOString();
+  const at = new Date(NOW).toISOString();
+  const after = new Date(NOW + 60_000).toISOString();
+
+  function timed(alias: number, expiresAt: string | null, status: "open" | "queued" = "open") {
+    return { ...open(alias, status), expiresAt };
+  }
+
+  function read(
+    state: PaneDecisionState,
+    cleared: string[] = [],
+    nowMs: number | null = NOW
+  ): ReturnType<typeof decisionItems> {
+    return decisionItems(state, "composer", undefined, undefined, {
+      nowMs,
+      cleared: new Set(cleared),
+    });
+  }
+
+  it("sets aside an open or queued question at its deadline, not a moment before", () => {
+    const items = read(
+      pane({
+        open: [timed(1, before), timed(2, at, "queued"), timed(3, new Date(NOW + 1).toISOString())],
+      })
+    );
+    expect(items.map((item) => [item.label, item.kind, setAsideOf(item)])).toEqual([
+      ["q-3", "open", null],
+      ["q-1", "open", "awaiting"],
+      ["q-2", "queued", "awaiting"],
+    ]);
+  });
+
+  it("sets nothing aside without a clock, for a question that never expires, or one whose deadline can't be read", () => {
+    expect(read(pane({ open: [timed(1, before)] }), [], null)[0]!.elapsed).toBe(false);
+    expect(read(pane({ open: [timed(1, null), timed(2, "soon")] })).some((i) => i.elapsed)).toBe(
+      false
+    );
+  });
+
+  it("sets aside a question the person cleared, still answerable, and names it cleared over its deadline", () => {
+    const items = read(pane({ open: [timed(1, after), timed(2, before), timed(3, null)] }), [
+      "q1",
+      "q2",
+    ]);
+    expect(items.map((item) => [item.label, setAsideOf(item)])).toEqual([
+      ["q-3", null],
+      ["q-1", "cleared"],
+      ["q-2", "cleared"],
+    ]);
+    expect(items.every(isCancellable)).toBe(true);
+    expect(answerNote(items.slice(1, 2))).not.toBeNull();
+  });
+
+  it("keeps a dismissal or withdrawal under way saying so, whatever the clock or a clear says", () => {
+    const items = decisionItems(
+      pane({ open: [timed(1, before), timed(2, before)] }),
+      "composer",
+      new Set(["q1"]),
+      new Set(["q2"]),
+      { nowMs: NOW, cleared: new Set(["q1", "q2"]) }
+    );
+    expect(items.map((item) => [item.kind, setAsideOf(item)])).toEqual([
+      ["dismissing", null],
+      ["cancelling", null],
+    ]);
+  });
+
+  it("lists what is set aside after everything still waiting, as the inbox does", () => {
+    const items = read(
+      pane({
+        open: [timed(5, before), timed(2, null), timed(3, null)],
+        attention: [stopped(4)],
+      }),
+      ["q2"]
+    );
+    // Past its deadline before cleared, whatever their aliases.
+    expect(items.map((item) => item.label)).toEqual(["q-4", "q-3", "q-5", "q-2"]);
+  });
+
+  it("never presents the pane as waiting on the person for a question set aside", () => {
+    const one = read(pane({ open: [timed(1, before)] }));
+    expect(chipLabel(one)).toEqual({ text: "q-1 awaiting update", detail: null });
+    expect(itemSentence(one[0]!)).toBe("Question q-1's deadline passed, awaiting an update");
+    expect(chipSummary(one)).not.toMatch(/waiting for an answer/);
+
+    const cleared = read(pane({ open: [timed(1, after)] }), ["q1"]);
+    expect(chipLabel(cleared)).toEqual({ text: "q-1 cleared", detail: null });
+    expect(itemSentence(cleared[0]!)).toBe("Question q-1 was cleared on this computer");
+
+    const both = read(pane({ open: [timed(1, before)] }), ["q1"]);
+    expect(chipLabel(both).text).toBe("q-1 cleared");
+    expect(itemSentence(both[0]!)).toMatch(/cleared on this computer; its deadline passed$/);
+  });
+
+  it("counts only what still waits while anything does, and names the rest by what set them aside", () => {
+    const mixed = read(
+      pane({ open: [timed(1, before, "queued"), timed(2, null), timed(3, null, "queued")] }),
+      ["q3"]
+    );
+    expect(chipLabel(mixed)).toEqual({ text: "q-2", detail: null });
+    const summary = chipSummary(mixed);
+    expect(summary).toMatch(/^3 Decisions questions: /);
+    expect(summary).not.toMatch(/queued to send/);
+    expect(summary).toMatch(/1\u00a0waiting for an answer/);
+    expect(summary).toMatch(/1\u00a0past its deadline, awaiting an update/);
+    expect(summary).toMatch(/1\u00a0cleared on this computer$/);
+
+    expect(
+      chipLabel(read(pane({ open: [timed(1, null), timed(2, null), timed(3, before)] })))
+    ).toEqual({ text: "2 questions", detail: null });
+
+    expect(chipLabel(read(pane({ open: [timed(1, before), timed(2, at)] })))).toEqual({
+      text: "2 awaiting update",
+      detail: null,
+    });
+    expect(chipLabel(read(pane({ open: [timed(1, null), timed(2, null)] }), ["q1", "q2"]))).toEqual(
+      { text: "2 cleared", detail: null }
+    );
+    expect(
+      chipLabel(
+        read(pane({ open: [timed(1, before), timed(2, null), timed(3, null)] }), ["q2", "q3"])
+      )
+    ).toEqual({ text: "1 awaiting update", detail: "· 2 cleared" });
+  });
+
+  it("says a row's passed deadline once, and stops inviting an answer or promising to type one in", () => {
+    const [item] = read(pane({ open: [timed(1, before)] }));
+    expect(item!.status).toMatch(/^Deadline passed/);
+    expect(deadlineNote(item!, NOW)).toBeNull();
+    expect(answerNote([item!])).toBeNull();
+    expect(deliveryNotes([item!])).toEqual([]);
+
+    const [cleared] = read(pane({ open: [timed(1, before)] }), ["q1"]);
+    expect(cleared!.status).toBe("Cleared on this computer");
+    expect(deadlineNote(cleared!, NOW)).toMatch(/^Deadline passed/);
+  });
+
+  it("reads no drafts for a pane whose only questions are past their deadlines", () => {
+    expect(readsPaneWait(pane({ open: [timed(1, before)] }), NOW)).toBe(false);
+    expect(readsPaneWait(pane({ open: [timed(1, before)] }))).toBe(true);
+    expect(readsPaneWait(pane({ open: [timed(1, before), timed(2, after)] }), NOW)).toBe(true);
+    expect(readsPaneWait(pane({ open: [timed(1, before)], waiting: [waiting(2)] }), NOW)).toBe(
+      true
+    );
   });
 });
 

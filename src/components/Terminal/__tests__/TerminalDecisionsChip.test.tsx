@@ -58,6 +58,7 @@ import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useDecisionsWaitingCount } from "@/hooks/useDecisionsWaitingCount";
 import type {
   DecisionDeclineResultRead,
   DecisionQuestionCancelResult,
@@ -66,10 +67,14 @@ import type {
   DecisionQuestionDeclineResult,
   DecisionQuestionSummariesResult,
   DeclineDecisionQuestionPayload,
+  DecisionQuestionList,
+  DecisionQuestionListItem,
 } from "@shared/types/decisionsQuestion";
 
 let statusListeners: Array<(status: DecisionsStatus) => void> = [];
 let paneListeners: Array<(state: PaneDecisionState) => void> = [];
+let listListeners: Array<(list: DecisionQuestionList) => void> = [];
+const listQuestions = vi.fn<() => Promise<DecisionQuestionList>>();
 const getStatus = vi.fn<() => Promise<DecisionsStatus>>();
 const getPaneState = vi.fn<(id: string) => Promise<PaneDecisionState | null>>();
 const getQuestionSummaries =
@@ -195,6 +200,8 @@ function typeInAComposer(entries: Array<[string, string]>): CountingDrafts {
 beforeEach(() => {
   statusListeners = [];
   paneListeners = [];
+  listListeners = [];
+  listQuestions.mockReset().mockResolvedValue({ revision: 1, questions: [] });
   getStatus.mockReset().mockResolvedValue({ state: "off" });
   getPaneState.mockReset().mockResolvedValue(paneState());
   getQuestionSummaries.mockReset().mockImplementation(async ({ questionIds }) => ({
@@ -219,15 +226,24 @@ beforeEach(() => {
   onDecisionState.mockClear();
   Reflect.set(window, "electron", {
     events: {
-      on: (name: string, callback: (status: DecisionsStatus) => void) => {
+      on: (name: string, callback: (payload: never) => void) => {
+        if (name === "decisions:questions-changed") {
+          const onList = callback as (list: DecisionQuestionList) => void;
+          listListeners.push(onList);
+          return () => {
+            listListeners = listListeners.filter((listener) => listener !== onList);
+          };
+        }
         if (name !== "decisions:status-changed") return () => {};
-        statusListeners.push(callback);
+        const onStatus = callback as (status: DecisionsStatus) => void;
+        statusListeners.push(onStatus);
         return () => {
-          statusListeners = statusListeners.filter((listener) => listener !== callback);
+          statusListeners = statusListeners.filter((listener) => listener !== onStatus);
         };
       },
     },
     decisions: {
+      listQuestions,
       getStatus,
       getPaneState,
       getQuestionSummaries,
@@ -1148,5 +1164,241 @@ describe("TerminalDecisionsChip", () => {
       expect(screen.getByRole("alertdialog").textContent).toContain("Merge the release branch?");
       expect(dialogButton("Dismiss question").hasAttribute("aria-disabled")).toBe(false);
     });
+  });
+});
+
+describe("TerminalDecisionsChip, as its questions step down (#18053)", () => {
+  const START = Date.parse("2026-11-20T14:00:00.000Z");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(START);
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+  });
+
+  afterEach(() => {
+    // Unmounted under the clock that armed its timers.
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  async function settle(): Promise<void> {
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+  }
+
+  function chip(): HTMLElement {
+    return screen.getByTestId("terminal-decisions-chip");
+  }
+
+  function question(
+    alias: number,
+    expiresAt: string | null = null
+  ): PaneDecisionState["openQuestions"][number] {
+    return {
+      questionId: `q${alias}`,
+      alias,
+      status: "open",
+      askedAt: new Date(START - 60_000).toISOString(),
+      expiresAt,
+    };
+  }
+
+  function listed(
+    alias: number,
+    inbox: DecisionQuestionListItem["inbox"]
+  ): DecisionQuestionListItem {
+    const questionId = `q${alias}`;
+    return {
+      reference: { hostId: "host_studio", projectId: "project-1", terminalId: "t1", questionId },
+      alias,
+      agentKind: "claude",
+      projectLabel: "Project",
+      worktreeId: "wt",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-20T13:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+      inbox,
+    };
+  }
+
+  const CLEARED = { ask: null, seen: true, cleared: true };
+  const SEEN = { ask: null, seen: true, cleared: false };
+  const UNSEEN = { ask: null, seen: false, cleared: false };
+
+  function pushList(list: DecisionQuestionList): void {
+    act(() => {
+      for (const listener of listListeners) listener(list);
+    });
+  }
+
+  it("steps down as a question's deadline passes, with the popover never opened", async () => {
+    getPaneState.mockResolvedValue(
+      paneState({ openQuestions: [question(42, new Date(START + 60_000).toISOString())] })
+    );
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await settle();
+    expect(chip().getAttribute("aria-label")).toContain("waiting for an answer");
+    expect(chip().textContent).toBe("q-42");
+
+    act(() => {
+      vi.advanceTimersByTime(59_999);
+    });
+    expect(chip().textContent).toBe("q-42");
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(chip().textContent).toBe("q-42 awaiting update");
+    expect(chip().getAttribute("aria-label")).toBe(
+      "Question q-42's deadline passed, awaiting an update"
+    );
+    // Nothing it says turns on a draft any more.
+    expect(typeInAComposer([["other", "draft"]]).reads).toBe(0);
+    // Opened, its row says the same, once, and offers no answer.
+    fireEvent.click(chip());
+    const popover = screen.getByTestId("popover-content");
+    expect(popover.textContent).toContain("Deadline passed, awaiting an update");
+    expect(screen.queryByTestId("terminal-decisions-deadline")).toBeNull();
+    expect(popover.textContent).not.toContain("Open a question to answer it here");
+  });
+
+  it("reads the clock afresh as the popover opens, so the chip and its row agree on a deadline passed while closed", async () => {
+    getPaneState.mockResolvedValue(
+      paneState({ openQuestions: [question(42, new Date(START + 60_000).toISOString())] })
+    );
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await settle();
+    fireEvent.click(chip());
+    expect(screen.getByTestId("terminal-decisions-deadline").textContent).toMatch(/^Reply by /);
+    fireEvent.click(chip());
+    expect(screen.queryByTestId("popover-content")).toBeNull();
+
+    // The wall clock moves past the deadline without any timer having fired.
+    vi.setSystemTime(START + 120_000);
+    fireEvent.click(chip());
+    expect(chip().textContent).toBe("q-42 awaiting update");
+    expect(screen.getByTestId("popover-content").textContent).toContain(
+      "Deadline passed, awaiting an update"
+    );
+  });
+
+  it("reads no drafts for a pane whose only question is past its deadline", async () => {
+    getPaneState.mockResolvedValue(
+      paneState({ openQuestions: [question(42, new Date(START - 1).toISOString())] })
+    );
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await settle();
+    expect(chip().textContent).toBe("q-42 awaiting update");
+    expect(typeInAComposer([["other", "draft"]]).reads).toBe(0);
+  });
+
+  it("steps a question the person cleared out of the count, listing it quieter, still answerable", async () => {
+    getPaneState.mockResolvedValue(paneState({ openQuestions: [question(42), question(43)] }));
+    // Seen, so clearing it moves no count: the chip has to be told on its own.
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [listed(42, SEEN), listed(43, UNSEEN)],
+    });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await settle();
+    expect(chip().textContent).toBe("2 questions");
+    expect(listQuestions).toHaveBeenCalledTimes(1);
+    fireEvent.click(chip());
+    await settle();
+    expect(getQuestionSummaries).toHaveBeenCalledTimes(1);
+
+    pushList({ revision: 2, questions: [listed(42, CLEARED), listed(43, UNSEEN)] });
+    expect(chip().textContent).toBe("q-43");
+    expect(chip().getAttribute("aria-label")).toMatch(/1\u00a0cleared on this computer$/);
+    const rows = screen.getAllByTestId("terminal-decisions-row");
+    expect(rows.map((row) => row.getAttribute("data-question-id"))).toEqual(["q43", "q42"]);
+    expect(rows[1]!.textContent).toContain("Cleared on this computer");
+    // Moving down the list reads no line again, and loses none.
+    expect(getQuestionSummaries).toHaveBeenCalledTimes(1);
+    expect(rows[1]!.textContent).toContain("Opening line of q42");
+    // A step quieter than the row still waiting.
+    const ink = (row: HTMLElement) => row.querySelector("span")!.className;
+    expect(ink(rows[1]!)).toContain("text-text-secondary");
+    expect(ink(rows[0]!)).toContain("text-text-primary");
+
+    // Dismissing it says nothing of taking it out of Needs you, where it no longer is.
+    expect(screen.getAllByRole("button", { name: /^Dismiss question/ })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss question q-42…" }));
+    expect(screen.getByRole("alertdialog").textContent).not.toContain("Needs you");
+  });
+
+  it("opens a cleared question to answer it", async () => {
+    getPaneState.mockResolvedValue(paneState({ openQuestions: [question(42)] }));
+    listQuestions.mockResolvedValue({ revision: 1, questions: [listed(42, CLEARED)] });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await settle();
+    expect(chip().textContent).toBe("q-42 cleared");
+    fireEvent.click(chip());
+    expect(screen.getByTestId("popover-content").textContent).toContain(
+      "Open a question to answer it here"
+    );
+    fireEvent.click(screen.getByTestId("terminal-decisions-row"));
+    expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
+      isOpen: true,
+      request: { questions: [{ scope: "pane", terminalId: "t1", questionId: "q42" }], index: 0 },
+    });
+  });
+
+  it("shows a clear the view's list already held as the pane's state arrives, reading the list once", async () => {
+    function Toolbar() {
+      useDecisionsWaitingCount(true);
+      return null;
+    }
+    let answerPane!: (state: PaneDecisionState) => void;
+    getPaneState.mockImplementation(
+      () =>
+        new Promise((done) => {
+          answerPane = done;
+        })
+    );
+    listQuestions.mockResolvedValue({ revision: 1, questions: [listed(42, CLEARED)] });
+    render(
+      <>
+        <Toolbar />
+        <TerminalDecisionsChip terminalId="t1" />
+      </>
+    );
+    await settle();
+    expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
+
+    await act(async () => {
+      answerPane(paneState({ openQuestions: [question(42)] }));
+    });
+    expect(chip().textContent).toBe("q-42 cleared");
+    expect(listQuestions).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads no question list for a pane with nothing still out", async () => {
+    getPaneState.mockResolvedValue(
+      paneState({
+        openQuestions: [],
+        waitingAnswers: [
+          { questionId: "q41", alias: 41, kind: "answer", deliveryStatus: "desktop-received" },
+        ],
+      })
+    );
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await settle();
+    expect(chip().textContent).toMatch(/^q-41 /);
+    expect(listQuestions).not.toHaveBeenCalled();
+    expect(listListeners).toHaveLength(0);
+  });
+
+  it("names several questions as questions, never a bare number", async () => {
+    getPaneState.mockResolvedValue(paneState({ openQuestions: [question(42), question(43)] }));
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await settle();
+    expect(chip().textContent).toBe("2 questions");
   });
 });

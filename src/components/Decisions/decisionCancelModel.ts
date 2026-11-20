@@ -35,6 +35,11 @@ export interface DecisionCancelTarget {
    * read didn't say, and never taken from a read of another revision.
    */
   replyMode?: DecisionReplyMode | null;
+  /**
+   * Already out of Needs you on this computer (#18053): cleared there, or past
+   * its deadline. Absent when the confirmation doesn't know.
+   */
+  setAside?: boolean;
 }
 
 /** A Remote Host's question dismissed from what was last read of it: there's no withdrawing it. */
@@ -106,7 +111,9 @@ export function dismissBody(target?: DecisionCancelTarget | null): string {
   if (target != null && isAway(target)) {
     return `The Remote Host that asked it isn't connected, so it's dismissed as this computer last read it. If it hasn't changed since, it's declined for you, as Dismiss on your phone does: your phones show it declined on this computer, and once the Host is back, an agent still listening is told you chose not to answer. Nothing is decided or approved.${planConsequence(target)}`;
   }
-  return `It's declined for you, as Dismiss on your phone does: if the agent that asked is still listening, it's told you chose not to answer, and nothing is decided or approved. Your phones show it declined on this computer, and it leaves Needs you.${planConsequence(target)}${CLEAR_INSTEAD}`;
+  // Out of Needs you already: neither leaving it nor clearing it instead says anything.
+  const aside = target?.setAside === true;
+  return `It's declined for you, as Dismiss on your phone does: if the agent that asked is still listening, it's told you chose not to answer, and nothing is decided or approved. Your phones show it declined on this computer${aside ? "." : ", and it leaves Needs you."}${planConsequence(target)}${aside ? "" : CLEAR_INSTEAD}`;
 }
 
 export function cancelTitle(target: DecisionCancelTarget): string {
