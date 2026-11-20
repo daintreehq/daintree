@@ -1,3 +1,5 @@
+import type { DeliverySubject } from "../utils/decisionsDeliveryReasons.js";
+
 /**
  * Daintree Decisions, as kept in settings (#15998): one global switch on the
  * owner's machine, and the non-secret record of which relay this machine talks
@@ -759,6 +761,8 @@ export interface PaneDecisionQuestion {
   askedAt: string;
   /** ISO 8601 as recorded; null when the question never expires. */
   expiresAt: string | null;
+  /** Advisory while its round only offers advice; absent from a Host from before it (#18054). */
+  replyMode?: "advisory" | "blocking";
 }
 
 /** Something received for the pane that has not been typed into it yet. */
@@ -782,6 +786,12 @@ export interface PaneDecisionAttention {
   deliveryStatus: "needs-attention" | "delivery-uncertain";
   /** The library's code for why (`pane_gone`, `inject_ambiguous`, …); `unspecified` when none was recorded. */
   reason: string;
+  /**
+   * What of the question needs a person, as the list of answers needing
+   * attention and its notification name it (#18054); absent from a Host from
+   * before it, which reads as the answer.
+   */
+  subject?: DeliverySubject;
 }
 
 /**

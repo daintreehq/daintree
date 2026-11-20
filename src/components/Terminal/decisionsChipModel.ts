@@ -1,6 +1,14 @@
-import { deadlineMs, replyByText } from "@/components/Decisions/decisionDeadline";
+import { deadlineMs, expiryText, withinAday } from "@/components/Decisions/decisionDeadline";
 import { CLEARED_NOTE, ELAPSED_NOTE } from "@/components/Decisions/decisionsInboxModel";
 import type { PaneDecisionState } from "@shared/types/decisions";
+import {
+  deliveryAttentionText,
+  deliveryReasonText,
+  deliverySubjectOf,
+  deliverySubjectPlural,
+  deliveryUncertainText,
+  type DeliverySubject,
+} from "@shared/utils/decisionsDeliveryReasons";
 import { pluralize } from "@/lib/pluralize";
 
 /**
@@ -75,6 +83,8 @@ export interface DecisionItem {
   kind: DecisionItemKind;
   /** One sentence, sentence case, no period. */
   status: string;
+  /** What of the question needs a person, for an item that does; null otherwise. */
+  subject: DeliverySubject | null;
   /** Why delivery stopped, when the library recorded a code Daintree knows. */
   reason: string | null;
   /** For an answer or expiry notice: what it waits for before it's typed in. */
@@ -94,6 +104,8 @@ export interface DecisionItem {
    * stays answerable, just not on the person.
    */
   cleared: boolean;
+  /** An open or queued question whose round only offers advice. */
+  advisory: boolean;
 }
 
 /**
@@ -126,53 +138,6 @@ function orderOf(item: DecisionItem): number {
   const setAside = setAsideOf(item);
   return setAside === null ? KIND_ORDER[item.kind] : SET_ASIDE_ORDER[setAside];
 }
-
-/**
- * The library's codes for a delivery that stopped, in words. A code not here
- * still shows the item; only the explanation is left out.
- */
-const REASONS: Record<string, string> = {
-  relaunched: "This terminal was relaunched after the question was asked.",
-  pane_gone: "The terminal that asked is gone.",
-  generation_mismatch: "This terminal was restarted after the question was asked.",
-  session_mismatch: "A different agent session is running here now.",
-  resume_wrong_worktree: "The resumed agent opened in a different worktree.",
-  inject_rejected: "This terminal refused the answer.",
-  unavailable_unknown_reason: "This terminal refused the answer.",
-  answer_unreadable: "The answer couldn't be decrypted on this computer.",
-  no_target: "Nothing matches the terminal that asked.",
-  target_mismatch: "Nothing matches the terminal that asked.",
-  choice_required: "The answer doesn't fit what the question allows.",
-  text_not_allowed: "The answer doesn't fit what the question allows.",
-  too_many_choices: "The answer doesn't fit what the question allows.",
-  unknown_option: "The answer doesn't fit what the question allows.",
-  proxy_forbidden: "The question needs a person's answer, not a proxy's.",
-  inject_ambiguous: "Typing it in was interrupted, so it isn't typed again on its own.",
-  inject_threw: "Typing it in was interrupted, so it isn't typed again on its own.",
-  crash_unreconciled: "Daintree stopped while typing it in, so it isn't typed again on its own.",
-  delivered_without_proof: "Typing it in wasn't confirmed, so it isn't typed again on its own.",
-  invalid_inject_result: "Typing it in wasn't confirmed, so it isn't typed again on its own.",
-  // Why resuming the agent to type it in didn't happen (`daintreeResumeAdapter.ts`).
-  resume_unsupported_agent: "This agent can't be resumed to type it in.",
-  resume_other_host: "The terminal that asked is on another host.",
-  resume_host_unreachable: "The terminal's host couldn't be reached to resume the agent.",
-  resume_host_unreadable: "The terminal's host couldn't be read to resume the agent.",
-  resume_no_session: "No agent session was recorded to resume.",
-  resume_no_worktree: "No worktree was recorded to resume the agent in.",
-  resume_worktree_gone: "The worktree that asked is gone.",
-  resume_other_worktree: "The agent's session is open in another worktree.",
-  resume_unknown_project: "The project that asked isn't open here.",
-  resume_panel_limit: "There was no room for another terminal to resume the agent.",
-  resume_missing_cli: "The agent's command isn't installed, so it couldn't be resumed.",
-  resume_spawn_failed: "The resumed agent didn't start.",
-  resume_timeout: "The resumed agent didn't reach its prompt in time.",
-  resume_exited: "The resumed agent exited before the answer was typed in.",
-  resume_closed: "The resumed terminal was closed before the answer was typed in.",
-  resume_no_bearer: "The resumed terminal couldn't be matched to the question.",
-  resume_target_changed: "The terminal changed while the agent was resuming.",
-  resume_ended: "Resuming stopped before the answer was typed in.",
-  resume_failed: "Resuming the agent failed.",
-};
 
 const NO_IDS: ReadonlySet<string> = new Set();
 
@@ -217,17 +182,22 @@ export function decisionItems(
   const items: DecisionItem[] = [];
   for (const entry of state.needsAttention) {
     const uncertain = entry.deliveryStatus === "delivery-uncertain";
+    // A Host from before the subject named it simply reads it as the answer.
+    const subject = entry.subject ?? "answer";
     items.push({
       questionId: entry.questionId,
       label: aliasLabel(entry.alias),
       kind: uncertain ? "uncertain" : "attention",
-      status: uncertain ? "Answer may or may not have been delivered" : "Answer needs attention",
-      reason: REASONS[entry.reason] ?? null,
+      status: uncertain ? deliveryUncertainText(subject) : deliveryAttentionText(subject),
+      subject,
+      // Read in the terminal that asked, so it is "this terminal" here.
+      reason: deliveryReasonText(entry.reason, subject, "here"),
       waitsFor: null,
       askedAt: null,
       expiresAt: null,
       elapsed: false,
       cleared: false,
+      advisory: false,
     });
   }
   for (const entry of state.waitingAnswers) {
@@ -248,12 +218,14 @@ export function decisionItems(
           : hostAway
             ? "Answer received, delivering when this terminal's host is back"
             : `Answer received, typing it in ${WAIT_PHRASES[wait]}`,
+      subject: null,
       reason: null,
       waitsFor: hostAway ? "host" : wait,
       askedAt: null,
       expiresAt: null,
       elapsed: false,
       cleared: false,
+      advisory: false,
     });
   }
   for (const question of state.openQuestions) {
@@ -280,12 +252,14 @@ export function decisionItems(
               : queued
                 ? "Queued to send; you can answer it here"
                 : "Waiting for an answer, here or on your phone",
+      subject: null,
       reason: null,
       waitsFor: null,
       askedAt: epoch(question.askedAt),
       expiresAt: epoch(question.expiresAt),
       elapsed,
       cleared,
+      advisory: question.replyMode === "advisory",
     });
   }
   const aliasOf = (item: DecisionItem) => Number(item.label.slice(2));
@@ -315,11 +289,21 @@ export function cancelNote(items: readonly DecisionItem[]): string | null {
       )
       .map((item) => item.questionId)
   );
+  // A stopped timeout notice is an expired question's, not an answered one's (#18054).
+  const noticeStopped = (item: DecisionItem) =>
+    isAttention(item) && item.subject?.startsWith("timeout notice") === true;
   const answered = items.some(
-    (item) => (item.kind === "answer" || isAttention(item)) && !waiting.has(item.questionId)
+    (item) =>
+      (item.kind === "answer" || (isAttention(item) && !noticeStopped(item))) &&
+      !waiting.has(item.questionId)
   );
   // Past its deadline either way: one that never reached the relay is over too.
-  const expired = items.some((item) => item.kind === "expired" || item.kind === "never-published");
+  const expired = items.some(
+    (item) =>
+      item.kind === "expired" ||
+      item.kind === "never-published" ||
+      (noticeStopped(item) && !waiting.has(item.questionId))
+  );
   if (answered && expired) return "Answered and expired questions can't be dismissed";
   if (answered) return "Answered questions can't be dismissed";
   if (expired) return "Expired questions can't be dismissed";
@@ -405,6 +389,19 @@ function itemLabel(item: DecisionItem): ChipLabel {
   }
 }
 
+/** What the items needing attention are, as plurals: "Answers", "Answers and follow-ups". */
+function attentionNouns(items: readonly DecisionItem[]): string {
+  const held = items.filter(isAttention).map((item) => item.subject ?? "answer");
+  const nouns = [
+    held.some((subject) => subject.includes("answer")) ? "answers" : null,
+    held.some((subject) => subject.includes("follow-up")) ? "follow-ups" : null,
+    held.some((subject) => subject.startsWith("timeout notice")) ? "timeout notices" : null,
+  ].filter((noun) => noun !== null);
+  const list =
+    nouns.length > 1 ? `${nouns.slice(0, -1).join(", ")} and ${nouns.at(-1)}` : nouns[0]!;
+  return list.charAt(0).toUpperCase() + list.slice(1);
+}
+
 /**
  * What the popover's closing lines promise, in the order they apply: answers
  * that will be typed in on their own, and answers that won't.
@@ -427,31 +424,60 @@ export function deliveryNotes(
   if (items.some((item) => item.waitsFor === "host")) {
     notes.push("Answers for a host that's away are typed in once it's back");
   }
-  if (needsAttention(items)) notes.push("Answers that need attention aren't typed in on their own");
+  if (needsAttention(items)) {
+    notes.push(`${attentionNouns(items)} that need attention aren't typed in on their own`);
+  }
   return notes;
 }
 
 /**
  * How to answer, while any question still waits for one: its row opens the
- * composer. One the person cleared still can be; one past its deadline can't.
+ * composer. One the person cleared still can be; one past its deadline can't,
+ * and nothing invites an answer once every such deadline has passed.
  */
-export function answerNote(items: readonly DecisionItem[]): string | null {
-  return items.some((item) => isCancellable(item) && !item.elapsed)
+export function answerNote(items: readonly DecisionItem[], nowMs = 0): string | null {
+  return items.some((item) => isCancellable(item) && !item.elapsed && !deadlinePassed(item, nowMs))
     ? "Open a question to answer it here"
     : null;
 }
 
+/** An open or queued question whose deadline passed by this computer's clock. */
+export function deadlinePassed(item: DecisionItem, nowMs: number): boolean {
+  return isCancellable(item) && item.expiresAt !== null && item.expiresAt <= nowMs;
+}
+
 /**
  * What an open or queued question's popover row adds about its deadline
- * (#17943): when to reply by in this computer's time, or that it passed with
- * nothing confirming how it closed yet. Null for one that never expires, and
- * for every other row. Only the expanded popover says it: the chip stays compact.
+ * (#17943, #18054), as the inbox's row says it: nothing until the deadline is
+ * within a day, then that it is advice only (when it is), when to reply by in
+ * this computer's time, and how long is left; or that it passed with nothing
+ * confirming how it closed yet. Null for one that never expires, and for every
+ * other row. Only the expanded popover says it: the chip stays compact.
  */
 export function deadlineNote(item: DecisionItem, nowMs: number): string | null {
   if ((item.kind !== "open" && item.kind !== "queued") || item.expiresAt === null) return null;
   // Its status already says so when that is what set it aside.
   if (setAsideOf(item) === "awaiting") return null;
-  return item.expiresAt <= nowMs ? ELAPSED_NOTE : replyByText(item.expiresAt, nowMs);
+  if (deadlinePassed(item, nowMs)) return ELAPSED_NOTE;
+  return withinAday(item.expiresAt, nowMs)
+    ? expiryText(item.expiresAt, nowMs, item.advisory ? "advisory" : "blocking")
+    : null;
+}
+
+/**
+ * The one status line a list of questions all share, said once above it
+ * rather than on every row: several open questions, or several queued ones.
+ * Null for a single question, a mixed list, every other kind, a list with a
+ * question set aside (#18053), which keeps its own quieter status, and a list
+ * in which a deadline has passed, whose row then says so rather than that it
+ * can still be answered.
+ */
+export function sharedWaitingStatus(items: readonly DecisionItem[], nowMs: number): string | null {
+  if (items.length < 2) return null;
+  const first = items[0]!;
+  if (first.kind !== "open" && first.kind !== "queued") return null;
+  if (items.some((item) => item.kind !== first.kind || setAsideOf(item) !== null)) return null;
+  return items.some((item) => deadlinePassed(item, nowMs)) ? null : first.status;
 }
 
 /** One item's whole sentence, naming the question: what the tooltip and the button's name say. */
@@ -477,10 +503,13 @@ export function itemSentence(item: DecisionItem): string {
     case "expired":
     case "never-published":
       return `${item.status} (${item.label})`;
-    case "attention":
-      return `Answer to ${item.label} needs attention`;
+    case "attention": {
+      const subject = item.subject ?? "answer";
+      const needs = deliverySubjectPlural(subject) ? "need" : "needs";
+      return `${deliverySubjectOf(subject, item.label)} ${needs} attention`;
+    }
     case "uncertain":
-      return `Answer to ${item.label} may or may not have been delivered`;
+      return `${deliverySubjectOf(item.subject ?? "answer", item.label)} may or may not have been delivered`;
   }
 }
 

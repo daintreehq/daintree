@@ -1,8 +1,15 @@
+import type {
+  DecisionClosureNotice,
+  DecisionQuestionClosedReason,
+  DecisionQuestionStall,
+} from "../types/decisionsQuestion.js";
+
 /**
  * Why Daintree stopped typing in an answer or a follow-up, in plain words:
  * the list of answers needing attention (#16020) and a stalled answer's
- * desktop notification (#17235) say the same. Both are read away from the
- * terminal that asked, so it is named rather than "this terminal".
+ * desktop notification (#17235) say the same. Those are read away from the
+ * terminal that asked, so it is named rather than "this terminal"; the pane's
+ * own chip, read in it, says "here" and "this terminal" (`perspective`).
  */
 
 /**
@@ -30,6 +37,57 @@ export function deliverySubject(
   if (followUps === 0) return lead;
   const held = followUps === 1 ? "follow-up" : "follow-ups";
   return answer ? `${lead} and ${held}` : held;
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** `subject` as a sentence's opening, naming the question it belongs to: "Answer to q-3", "Timeout notice for q-3". */
+export function deliverySubjectOf(subject: DeliverySubject, question: string): string {
+  return `${capitalized(subject)} ${subject.startsWith("timeout notice") ? "for" : "to"} ${question}`;
+}
+
+/** What stopped, as a status line: "Answer needs attention", "Follow-ups need attention". */
+export function deliveryAttentionText(subject: DeliverySubject): string {
+  return `${capitalized(subject)} ${deliverySubjectPlural(subject) ? "need" : "needs"} attention`;
+}
+
+/**
+ * What may have been typed, as a status line. `demonstrative` reads it as one
+ * item among several on a list ("This answer…") rather than on its own.
+ */
+export function deliveryUncertainText(subject: DeliverySubject, demonstrative = false): string {
+  // Either of two things may have been delivered, not both.
+  const either = subject.replace(" and ", " or its ");
+  const head = demonstrative
+    ? `${deliverySubjectPlural(subject) && !either.includes(" or its ") ? "These" : "This"} ${either}`
+    : capitalized(either);
+  return `${head} may or may not have been delivered`;
+}
+
+/**
+ * What of a listed question a person has to decide about, from what its
+ * round and stall report (#18054): the timeout notice when it is what
+ * delivery stopped on in the answer's place (#17944), as its round reports:
+ * expired, or never published, with that notice stopped or possibly typed. A
+ * Host from before #17943 reports neither, and its stall reads as an
+ * answer's. Null while nothing needs a person.
+ */
+export function stallSubject(question: {
+  stall?: DecisionQuestionStall | null;
+  closedReason?: DecisionQuestionClosedReason | null;
+  closureNotice?: DecisionClosureNotice | null;
+}): DeliverySubject | null {
+  const stall = question.stall ?? null;
+  if (stall === null) return null;
+  const reason = question.closedReason;
+  const delivery = question.closureNotice?.delivery;
+  const notice =
+    stall.answerRevision !== null &&
+    (reason === "expired" || reason === "never-published") &&
+    (delivery === "needs-attention" || delivery === "uncertain");
+  return deliverySubject(stall.answerRevision !== null, stall.followUpIds.length, notice);
 }
 
 /** Whether `subject` names one thing or several. */
@@ -84,6 +142,18 @@ const REASONS: Record<string, string> = {
   resume_failed: "Resuming the agent failed.",
 };
 
+/** Where the words are read: away from the terminal that asked, or in it. */
+export type DeliveryPerspective = "away" | "here";
+
+/** The codes whose words name the terminal that asked, as that terminal's own chip says them. */
+const HERE: Record<string, string> = {
+  relaunched: "This terminal was relaunched after the question was asked.",
+  generation_mismatch: "This terminal was restarted after the question was asked.",
+  session_mismatch: "A different agent session is running here now.",
+  inject_rejected: "This terminal refused the answer.",
+  unavailable_unknown_reason: "This terminal refused the answer.",
+};
+
 /**
  * A code's words for `subject`, or null for a code with none. A follow-up's
  * own code says what stopped the follow-up, so with no answer needing a
@@ -91,11 +161,12 @@ const REASONS: Record<string, string> = {
  */
 export function deliveryReasonText(
   code: string,
-  subject: DeliverySubject = "answer"
+  subject: DeliverySubject = "answer",
+  perspective: DeliveryPerspective = "away"
 ): string | null {
   // Codes are only shaped like identifiers, so `constructor` must not reach Object's.
   if (!Object.hasOwn(REASONS, code)) return null;
-  const text = REASONS[code]!;
+  const text = perspective === "here" && Object.hasOwn(HERE, code) ? HERE[code]! : REASONS[code]!;
   // The code is the notice's own when it leads, as an answer's is.
   if (subject.startsWith("timeout notice")) return text.replace("the answer", "the timeout notice");
   if (subject === "follow-up") return text.replace("the answer", "the follow-up");

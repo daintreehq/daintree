@@ -20,6 +20,7 @@ import {
   questionCount,
   readsPaneWait,
   setAsideOf,
+  sharedWaitingStatus,
 } from "../decisionsChipModel";
 
 function pane(
@@ -94,6 +95,68 @@ describe("decisionItems", () => {
     );
     expect(known?.reason).not.toBeNull();
     expect(unknown?.reason).toBeNull();
+  });
+
+  it("names what stopped, in the words of the inbox and the notification (#18054)", () => {
+    const attention = (
+      alias: number,
+      subject: PaneDecisionAttention["subject"],
+      uncertain = false
+    ) => ({
+      ...stopped(alias, uncertain ? "delivery-uncertain" : "needs-attention", "message_unreadable"),
+      subject,
+    });
+    const items = decisionItems(
+      pane({
+        attention: [
+          attention(1, "answer"),
+          attention(2, "follow-ups"),
+          attention(3, "timeout notice"),
+          attention(4, "timeout notice and follow-up", true),
+        ],
+      })
+    );
+    expect(items.map((item) => item.status)).toEqual([
+      "Answer needs attention",
+      "Follow-ups need attention",
+      "Timeout notice needs attention",
+      "Timeout notice or its follow-up may or may not have been delivered",
+    ]);
+    expect(items.map(itemSentence)).toEqual([
+      "Answer to q-1 needs attention",
+      "Follow-ups to q-2 need attention",
+      "Timeout notice for q-3 needs attention",
+      "Timeout notice and follow-up for q-4 may or may not have been delivered",
+    ]);
+    // `message_unreadable` is the first held follow-up's code, and the shared words say so.
+    expect(items[1]?.reason).toBe("The follow-up couldn't be decrypted on this computer.");
+    // The subject reaches the wording of a code that speaks of the answer.
+    const [notice] = decisionItems(
+      pane({
+        attention: [
+          {
+            ...stopped(5, "needs-attention", "inject_rejected"),
+            subject: "timeout notice and follow-ups",
+          },
+        ],
+      })
+    );
+    expect(notice?.reason).toBe("This terminal refused the timeout notice.");
+  });
+
+  it("reads a Host's state from before the subject as the answer, and says it from inside the terminal", () => {
+    const [item] = decisionItems(
+      pane({ attention: [stopped(1, "needs-attention", "relaunched")] })
+    );
+    expect(item?.status).toBe("Answer needs attention");
+    expect(item?.reason).toBe("This terminal was relaunched after the question was asked.");
+  });
+
+  it("says what resuming stopped the way the inbox does", () => {
+    const [item] = decisionItems(
+      pane({ attention: [stopped(1, "needs-attention", "resume_ended")] })
+    );
+    expect(item?.reason).toBe("The terminal resumed for it was closed again.");
   });
 
   it("says when an answer waits for its terminal's host rather than for the pane", () => {
@@ -551,10 +614,97 @@ describe("deadlineNote (#17943)", () => {
     expect(deadlineNote(timed(1, NOW), NOW)).toMatch(/Deadline passed/);
   });
 
+  it("says nothing until the deadline is within a day, then as the inbox's row does (#18054)", () => {
+    expect(deadlineNote(timed(1, NOW + 25 * 3_600_000), NOW)).toBeNull();
+    const soon = deadlineNote(timed(1, NOW + 3 * 3_600_000), NOW);
+    expect(soon).toMatch(/^Reply by .* · 3 hours left$/);
+    expect(soon).not.toMatch(/Advisory/);
+    expect(deadlineNote(timed(1, NOW + 30_000), NOW)).toMatch(/· Less than a minute left$/);
+  });
+
+  it("tags an advisory round's deadline, as the inbox's row does", () => {
+    const [item] = decisionItems(
+      pane({
+        open: [
+          {
+            ...open(1),
+            expiresAt: new Date(NOW + 3_600_000).toISOString(),
+            replyMode: "advisory",
+          },
+        ],
+      })
+    );
+    expect(deadlineNote(item!, NOW)).toMatch(/^Advisory · Reply by .* · 1 hour left$/);
+  });
+
   it("says nothing for a question that never expires, or a row that isn't waiting", () => {
     expect(deadlineNote(timed(1, null), NOW)).toBeNull();
     const [answer] = decisionItems(pane({ waiting: [waiting(2)] }));
     expect(deadlineNote(answer!, NOW)).toBeNull();
+  });
+});
+
+const NOW = Date.parse("2026-11-20T14:00:00.000Z");
+
+describe("the footer for what stopped (#18054)", () => {
+  const held = (subject: PaneDecisionAttention["subject"]) =>
+    decisionItems(pane({ attention: [{ ...stopped(1), subject }] }));
+
+  it("calls a stopped timeout notice expired, not answered, and names what isn't typed in", () => {
+    expect(cancelNote(held("timeout notice"))).toBe("Expired questions can't be dismissed");
+    expect(cancelNote(held("answer"))).toBe("Answered questions can't be dismissed");
+    expect(deliveryNotes(held("timeout notice"))).toEqual([
+      "Timeout notices that need attention aren't typed in on their own",
+    ]);
+    expect(deliveryNotes(held("answer and follow-up"))).toEqual([
+      "Answers and follow-ups that need attention aren't typed in on their own",
+    ]);
+    expect(deliveryNotes(held(undefined))).toEqual([
+      "Answers that need attention aren't typed in on their own",
+    ]);
+  });
+});
+
+describe("sharedWaitingStatus (#18054)", () => {
+  it("says a uniform list's status once", () => {
+    const three = decisionItems(pane({ open: [open(1), open(2), open(3)] }));
+    expect(sharedWaitingStatus(three, NOW)).toBe("Waiting for an answer, here or on your phone");
+    const queued = decisionItems(
+      pane({ open: [open(1, "queued"), open(2, "queued"), open(3, "queued")] })
+    );
+    expect(sharedWaitingStatus(queued, NOW)).toBe("Queued to send; you can answer it here");
+  });
+
+  it("keeps the instruction to answer only while a row can still be answered", () => {
+    const items = decisionItems(
+      pane({ open: [{ ...open(1), expiresAt: new Date(NOW - 1000).toISOString() }, open(2)] })
+    );
+    expect(answerNote(items, NOW)).not.toBeNull();
+    const lapsed = decisionItems(
+      pane({ open: [{ ...open(1), expiresAt: new Date(NOW - 1000).toISOString() }] })
+    );
+    expect(answerNote(lapsed, NOW)).toBeNull();
+    expect(answerNote(lapsed, NOW - 60_000)).not.toBeNull();
+  });
+
+  it("leaves a single question, a mixed list and other states to their rows", () => {
+    const [one] = decisionItems(pane({ open: [open(1)] }));
+    expect(sharedWaitingStatus([one!], NOW)).toBeNull();
+    // A third row that differs keeps every row's own status.
+    expect(
+      sharedWaitingStatus(decisionItems(pane({ open: [open(1), open(2), open(3, "queued")] })), NOW)
+    ).toBeNull();
+    expect(
+      sharedWaitingStatus(decisionItems(pane({ waiting: [waiting(1), waiting(2)] })), NOW)
+    ).toBeNull();
+  });
+
+  it("gives the list back to its rows once a deadline has passed, since that row no longer invites an answer", () => {
+    const items = decisionItems(
+      pane({ open: [open(1), { ...open(2), expiresAt: new Date(NOW - 1000).toISOString() }] })
+    );
+    expect(sharedWaitingStatus(items, NOW - 60_000)).not.toBeNull();
+    expect(sharedWaitingStatus(items, NOW)).toBeNull();
   });
 });
 

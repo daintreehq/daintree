@@ -563,6 +563,78 @@ describe("TerminalDecisionsChip", () => {
       }
     });
 
+    it("says a uniform waiting list's status once, above its rows, and keeps a lone question's on its row (#18054)", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(twoQuestions);
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const shared = await screen.findByTestId("terminal-decisions-shared-status");
+      expect(shared.textContent).toBe("Waiting for an answer, here or on your phone");
+      for (const row of screen.getAllByTestId("terminal-decisions-row")) {
+        expect(row.textContent).not.toContain("Waiting for an answer");
+      }
+      // The instruction the status already gave isn't repeated in a footer.
+      expect(screen.queryByText("Open a question to answer it here")).toBeNull();
+      // A focused row still says it: it is described by the one line.
+      for (const row of screen.getAllByTestId("terminal-decisions-row")) {
+        expect(row.getAttribute("aria-describedby")).toBe(shared.id);
+      }
+    });
+
+    it("lets a row past its deadline say so instead of inviting an answer (#18054)", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue({
+        ...twoQuestions,
+        openQuestions: [
+          {
+            ...twoQuestions.openQuestions[0]!,
+            expiresAt: new Date(Date.now() - 60_000).toISOString(),
+          },
+        ],
+      });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const row = await screen.findByTestId("terminal-decisions-row");
+      expect(row.textContent).toContain("Deadline passed, awaiting an update");
+      expect(row.textContent).not.toContain("Waiting for an answer");
+      expect(screen.queryByText("Open a question to answer it here")).toBeNull();
+    });
+
+    it("keeps a lone question's status on its row, and the footer's instruction (#18054)", async () => {
+      // No shared line to describe it: the row's name carries the status.
+
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue({
+        ...twoQuestions,
+        openQuestions: [twoQuestions.openQuestions[0]!],
+      });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const row = await screen.findByTestId("terminal-decisions-row");
+      expect(row.textContent).toContain("Waiting for an answer, here or on your phone");
+      expect(row.getAttribute("aria-describedby")).toBeNull();
+      expect(screen.queryByTestId("terminal-decisions-shared-status")).toBeNull();
+      expect(screen.getByText("Open a question to answer it here")).toBeTruthy();
+    });
+
+    it("says a uniform queued list's status once too (#18054)", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue({
+        ...twoQuestions,
+        openQuestions: twoQuestions.openQuestions.map((question) => ({
+          ...question,
+          status: "queued" as const,
+        })),
+      });
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const shared = await screen.findByTestId("terminal-decisions-shared-status");
+      expect(shared.textContent).toBe("Queued to send; you can answer it here");
+      for (const row of screen.getAllByTestId("terminal-decisions-row")) {
+        expect(row.textContent).not.toContain("Queued to send");
+      }
+    });
+
     it("keeps a row named by alias when its line can't be read", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       getQuestionSummaries.mockResolvedValue({

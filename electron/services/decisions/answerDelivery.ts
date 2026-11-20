@@ -58,6 +58,7 @@ import {
   closedUnanswered,
   copiedAnswerText,
   heldFollowUps,
+  heldTimeoutNotice,
   markAnswerHandled,
   needsAttention,
   pendingEntries,
@@ -84,7 +85,7 @@ import {
   type SessionResumeDeps,
 } from "./daintreeResumeAdapter.js";
 import { NO_WORKTREE, identityMismatch, incarnationOf } from "./decisionWake.js";
-import { timeoutNoticeOf, type AdvisoryHost } from "./questionRound.js";
+import type { AdvisoryHost } from "./questionRound.js";
 import { closedReasonOf } from "./questionClosed.js";
 import { reasonOf } from "./paneDecisionState.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
@@ -568,11 +569,8 @@ export class AnswerDelivery {
    * Null for a notice of a round since replaced, which is never typed again.
    */
   private heldNotice(row: QuestionRow): DecisionsTimeoutNotice | null {
-    const entries = parseAnswers(row.answers_json);
-    const notice = timeoutNoticeOf(row, entries, this.advisoryHost);
+    const notice = heldTimeoutNotice(row, this.advisoryHost);
     if (notice === null) return null;
-    if (notice.delivery !== "needs-attention" && notice.delivery !== "uncertain") return null;
-    if (!pendingEntries(row).some((entry) => entry.entry_id === notice.entryId)) return null;
     return {
       kind: notice.kind,
       revision: notice.revision,

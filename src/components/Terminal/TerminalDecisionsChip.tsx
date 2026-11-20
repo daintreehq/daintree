@@ -38,6 +38,7 @@ import { dismissingQuestionIds } from "@/components/Decisions/decisionDeclineSen
 import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
 import { paneQuestion, questionOf } from "@/components/Decisions/decisionQuestionTarget";
 import { useDecisionsClock } from "@/components/Decisions/useDecisionsClock";
+import { REVIEW_ATTENTION_LABEL } from "@/components/Decisions/decisionsAttentionModel";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import {
   answerNote,
@@ -45,6 +46,7 @@ import {
   chipLabel,
   chipSummary,
   deadlineNote,
+  deadlinePassed,
   decisionItems,
   deliveryNotes,
   isCancellable,
@@ -54,6 +56,7 @@ import {
   questionCount,
   readsPaneWait,
   setAsideOf,
+  sharedWaitingStatus,
   type DecisionItem,
 } from "./decisionsChipModel";
 
@@ -151,7 +154,7 @@ function ReviewAnswersButton({ onReview }: { onReview: () => void }) {
       }}
       data-testid="terminal-decisions-review"
     >
-      Review answers
+      {REVIEW_ATTENTION_LABEL}
     </Button>
   );
 }
@@ -179,12 +182,18 @@ function DecisionRow({
   item,
   line,
   nowMs,
+  showStatus,
+  sharedStatusId,
   onOpen,
   onDismiss,
 }: {
   item: DecisionItem;
   line: string | null;
   nowMs: number;
+  /** False when the list says it once above every row. */
+  showStatus: boolean;
+  /** The line that says it once, when the row doesn't. */
+  sharedStatusId: string;
   onOpen: () => void;
   /** Null for a question that can't be dismissed now. */
   onDismiss: (() => void) | null;
@@ -194,6 +203,9 @@ function DecisionRow({
   // No longer waiting on the person (#18053): listed, a step quieter.
   const quiet = setAsideOf(item) !== null;
   const ink = quiet ? "text-text-secondary" : "text-text-primary";
+  // Past its deadline the row says that, not that it can still be answered: a
+  // row set aside for it already says so in its status.
+  const statusShown = showStatus && !(deadlinePassed(item, nowMs) && !quiet);
   const focusRestore = useOverlayFocusRestore();
   return (
     // Two sibling controls, never one inside the other: the row opens the
@@ -207,6 +219,8 @@ function DecisionRow({
           focusRestore?.expectHandoff();
           onOpen();
         }}
+        // The status isn't in the row's name when the list says it once, so a focused row says it.
+        aria-describedby={showStatus ? undefined : sharedStatusId}
         data-question-id={item.questionId}
         data-testid="terminal-decisions-row"
       >
@@ -223,25 +237,27 @@ function DecisionRow({
             </span>
           )}
           {/* The glyph marks the status's first line, however many it wraps to. */}
-          <span
-            className={cn(
-              "flex items-start gap-1 [text-wrap:pretty]",
-              line !== null
-                ? "text-2xs leading-4 text-text-secondary"
-                : cn("text-xs leading-5", ink)
-            )}
-          >
-            {attention && (
-              <TriangleAlert
-                className={cn(
-                  "size-3 shrink-0 text-status-warning",
-                  line !== null ? "mt-0.5" : "mt-1"
-                )}
-                aria-hidden="true"
-              />
-            )}
-            {item.status}
-          </span>
+          {statusShown && (
+            <span
+              className={cn(
+                "flex items-start gap-1 [text-wrap:pretty]",
+                line !== null
+                  ? "text-2xs leading-4 text-text-secondary"
+                  : cn("text-xs leading-5", ink)
+              )}
+            >
+              {attention && (
+                <TriangleAlert
+                  className={cn(
+                    "size-3 shrink-0 text-status-warning",
+                    line !== null ? "mt-0.5" : "mt-1"
+                  )}
+                  aria-hidden="true"
+                />
+              )}
+              {item.status}
+            </span>
+          )}
           {item.reason !== null && (
             <span className="text-2xs text-text-secondary [text-wrap:balance]">{item.reason}</span>
           )}
@@ -292,6 +308,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const on = useDecisionsOn();
   const state = usePaneDecisionState(terminalId, on);
   const headingId = useId();
+  const sharedStatusId = useId();
   const [open, setOpen] = useState(false);
   const openAttention = useDecisionsAttentionStore((s) => s.open);
   const openInbox = useDecisionsInboxStore((s) => s.open);
@@ -379,7 +396,9 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const attention = needsAttention(items);
   const summary = chipSummary(items);
   const label = chipLabel(items);
-  const answerable = answerNote(items);
+  // Several questions in the same state say it once, above the list.
+  const sharedStatus = sharedWaitingStatus(items, nowMs);
+  const answerable = sharedStatus === null ? answerNote(items, nowMs) : null;
   const notes = [...(answerable !== null ? [answerable] : []), ...deliveryNotes(items, wait)];
   const unavailable = cancelNote(items);
   if (unavailable !== null) notes.push(unavailable);
@@ -455,6 +474,15 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                 {pluralize(questionCount(items), "question")}
               </span>
             </div>
+            {sharedStatus !== null && (
+              <p
+                id={sharedStatusId}
+                className="border-b border-divider px-3 py-2 text-xs text-text-primary [text-wrap:pretty]"
+                data-testid="terminal-decisions-shared-status"
+              >
+                {sharedStatus}
+              </p>
+            )}
             <ul
               className="flex max-h-80 flex-col divide-y divide-divider overflow-y-auto"
               aria-label="Questions"
@@ -465,6 +493,8 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                   item={item}
                   line={lines.get(item.questionId) ?? null}
                   nowMs={nowMs}
+                  showStatus={sharedStatus === null}
+                  sharedStatusId={sharedStatusId}
                   onOpen={() => {
                     setOpen(false);
                     openQuestion(terminalId, questionIds, item.questionId);

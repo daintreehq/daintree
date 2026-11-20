@@ -40,8 +40,8 @@ import type {
 } from "../../shared/types/decisionsQuestion.js";
 import {
   deliveryReasonText,
-  deliverySubject,
   deliverySubjectPlural,
+  stallSubject,
 } from "../../shared/utils/decisionsDeliveryReasons.js";
 
 /** A view on a remote Shell owns it: that Shell presents it, sound included. */
@@ -70,22 +70,6 @@ function decisionQuestionSource(question: DecisionQuestionListItem): {
       question.projectLabel ??
       projectStore.getProjectById(question.reference.projectId)?.name?.trim(),
   };
-}
-
-/**
- * Whether what delivery stopped on in a question's answer slot is the notice
- * that its deadline closed it (#17944), as its round reports: expired, or
- * never published, with that notice stopped or possibly typed. A Host from
- * before #17943 reports neither, and its stall reads as an answer's.
- */
-function stalledOnTimeoutNotice(question: DecisionQuestionListItem): boolean {
-  const reason = question.closedReason;
-  const delivery = question.closureNotice?.delivery;
-  return (
-    question.stall?.answerRevision != null &&
-    (reason === "expired" || reason === "never-published") &&
-    (delivery === "needs-attention" || delivery === "uncertain")
-  );
 }
 
 const COMPLETION_DEBOUNCE_MS = 2000;
@@ -1486,12 +1470,8 @@ class AgentNotificationService {
     if (settings.enabled === false) return;
     this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
     const { agent, project } = decisionQuestionSource(question);
-    const notice = stalledOnTimeoutNotice(question);
-    const subject = deliverySubject(
-      stall.answerRevision !== null,
-      stall.followUpIds.length,
-      notice
-    );
+    const subject = stallSubject(question) ?? "answer";
+    const notice = subject.startsWith("timeout notice");
     const plural = deliverySubjectPlural(subject);
     const uncertain =
       standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";
