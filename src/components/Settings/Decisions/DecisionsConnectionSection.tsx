@@ -28,7 +28,8 @@ import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { onRelayUrlRequest, takePendingRelayUrlRequest } from "./relayUrlRequest";
 import { DecisionsSetupCheck } from "./DecisionsSetupCheck";
-import { SETUP_STEP_LABEL, unfinishedReason } from "./setupCheckCopy";
+import { describeUnfinished, unfinishedReason } from "./setupCheckCopy";
+import { landOnAgents } from "./agentsLanding";
 import { useSetupCheck } from "./useSetupCheck";
 
 function relayHost(origin: string | undefined): string | null {
@@ -128,6 +129,48 @@ function describeConnection(status: DecisionsStatus): {
   }
 }
 
+/** The warning's next steps, in the order its words give them; none while a check it would start runs. */
+function UnfinishedActions({
+  reason,
+  agentsLeft,
+  checking,
+  busy,
+  starting,
+  onFinishSetup,
+  onCheck,
+}: {
+  reason: ReturnType<typeof unfinishedReason>;
+  agentsLeft: boolean;
+  checking: boolean;
+  busy: boolean;
+  starting: boolean;
+  onFinishSetup: () => void;
+  onCheck: () => void;
+}) {
+  const setupAction =
+    reason === "kit" ? (
+      <Button variant="outline" size="sm" onClick={onFinishSetup}>
+        Save recovery kit
+      </Button>
+    ) : reason !== null && !checking ? (
+      <Button variant="outline" size="sm" disabled={busy} loading={starting} onClick={onCheck}>
+        {reason === "check" ? "Check setup" : "Check again"}
+      </Button>
+    ) : null;
+  const agentsAction = agentsLeft ? (
+    <Button variant="outline" size="sm" onClick={landOnAgents}>
+      Choose agents
+    </Button>
+  ) : null;
+  if (setupAction === null && agentsAction === null) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {setupAction}
+      {agentsAction}
+    </div>
+  );
+}
+
 /**
  * Connection: the service state (#16001), and the relay's address with its
  * unsigned check (#16005), which main makes. Without a relay set up it takes
@@ -147,6 +190,7 @@ export function DecisionsConnectionSection({
   onFinishSetup,
   onPairPhone,
   facts,
+  agentsOff = false,
 }: {
   status: DecisionsStatus;
   /** The switch is changing, so nothing here should start. */
@@ -164,11 +208,18 @@ export function DecisionsConnectionSection({
   onPairPhone?: () => void;
   /** What was observed about the rest of Decisions, shown under the status while connected. */
   facts?: ReactNode;
+  /**
+   * Main's saved policy, as last read, switches on none of the agents Agents
+   * shows for this computer's launches (#18057). False before the first read.
+   */
+  agentsOff?: boolean;
 }) {
   const { label, detail, severity } = describeConnection(status);
-  // A revoked relay, or one that can't be used, says so on its own row: no kit or check changes that.
-  const reason =
-    status.state !== "revoked" && status.problem === undefined ? unfinishedReason(status) : null;
+  // A revoked relay, or one that can't be used, says so on its own row: no kit, check or agent changes that.
+  const usable = status.state !== "revoked" && status.problem === undefined;
+  const reason = usable ? unfinishedReason(status) : null;
+  const agentsLeft = usable && status.relayOrigin !== undefined && agentsOff;
+  const unfinished = describeUnfinished(reason, agentsLeft);
   const savedOrigin = status.relayOrigin ?? null;
   const connected = status.state === "connected";
   const keysStored = status.keysStored === true;
@@ -196,7 +247,7 @@ export function DecisionsConnectionSection({
   // How main's claim ended, heard as it ends: the outcome row itself isn't a live region.
   const deployOutcome =
     deploy?.claim && deploy.claim.state !== "claiming" && (deployClaimedHere || !deployClaimed)
-      ? describeRelayDeploy(deploy)
+      ? describeRelayDeploy(deploy, { agentsHere: !isRemoteWindow() })
       : null;
   const deployAnnouncement = deployOutcome ? `${deployOutcome.label}. ${deployOutcome.detail}` : "";
   const busy = locked || identity.pending !== null || deployClaiming;
@@ -388,42 +439,23 @@ export function DecisionsConnectionSection({
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {deployAnnouncement}
       </span>
-      {reason === "kit" && (
+      {unfinished !== null && (
         <Callout
           severity="warning"
           title="Setup isn't finished"
           action={
-            <Button variant="outline" size="sm" onClick={() => onFinishSetup?.()}>
-              Save recovery kit
-            </Button>
+            <UnfinishedActions
+              reason={reason}
+              agentsLeft={agentsLeft}
+              checking={checking}
+              busy={busy}
+              starting={setup.starting}
+              onFinishSetup={() => onFinishSetup?.()}
+              onCheck={() => setup.start()}
+            />
           }
         >
-          Save a recovery kit and verify it, then run the setup check to finish. Everything on the
-          relay is encrypted with keys only this computer holds: without a kit or these keys, none
-          of it can be recovered, by anyone.
-        </Callout>
-      )}
-      {reason !== null && reason !== "kit" && (
-        <Callout
-          severity="warning"
-          title="Setup isn't finished"
-          action={
-            checking ? undefined : (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                loading={setup.starting}
-                onClick={() => setup.start()}
-              >
-                {reason === "check" ? "Check setup" : "Check again"}
-              </Button>
-            )
-          }
-        >
-          {reason === "check"
-            ? "Run the setup check to finish. It sends a test question to your paired phones and types your answer into a diagnostic terminal that runs no agent."
-            : `The last setup check stopped at ${SETUP_STEP_LABEL[reason.failedStep].toLowerCase()}. Setup finishes once every step passes.`}
+          {unfinished}
         </Callout>
       )}
       <SettingsGroup>

@@ -3,6 +3,8 @@ import type { DecisionsStatus } from "@shared/types/decisions";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useDecisions } from "./useDecisions";
 import { useDecisionsPolicy } from "./useDecisionsPolicy";
 import { useDecisionsModel } from "./useDecisionsModel";
@@ -11,7 +13,11 @@ import { DecisionsConnectionSection, kitUnverified } from "./DecisionsConnection
 import { DecisionsDevicesAndHosts } from "./DecisionsDevicesAndHosts";
 import { DecisionsStatusFacts } from "./DecisionsStatusFacts";
 import { useDecisionsDevices } from "./useDecisionsDevices";
-import { DecisionsAgentsSection } from "./DecisionsAgentsSection";
+import {
+  DecisionsAgentsSection,
+  switchedOnCount,
+  useDecisionsAgentSupport,
+} from "./DecisionsAgentsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
 import { DecisionsModelSection } from "./DecisionsModelSection";
@@ -74,6 +80,15 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   const model = useDecisionsModel(on);
   // One read of the relay's devices, for Devices and Remote Hosts and for Connection's facts.
   const devicesRead = useDecisionsDevices(on ? (status.relayOrigin ?? null) : null);
+  const { supported } = useDecisionsAgentSupport();
+  const installedRead = useCliAvailabilityStore((state) => state.hasRealData);
+  // Counted as the facts line counts them (#18059), from the policy as last
+  // read, which the Agents switches show too; never before the first read. A
+  // remote window's agents are the Host's, which its Agents section doesn't show.
+  const agentsOff =
+    !isRemoteWindow() &&
+    policy.policy !== null &&
+    switchedOnCount(policy.policy.askHumanAgents, supported, installedRead) === 0;
   const enabled = pending?.enabled ?? on;
   const locked = status === null || pending !== null;
 
@@ -133,6 +148,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onFinishSetup={askForKit}
             onPairPhone={askForPairing}
             facts={<DecisionsStatusFacts devices={devicesRead} policy={policy} />}
+            agentsOff={agentsOff}
           />
           <DecisionsDevicesAndHosts
             status={status}

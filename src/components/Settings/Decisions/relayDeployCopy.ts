@@ -19,9 +19,17 @@ export interface RelayDeployDescription {
   next?: RelayDeployNext;
 }
 
-/** What agents get once the relay is claimed, true of launches only (#16012). */
-export const AGENTS_AFTER_CLAIM =
-  "Supported agents launched from now on get ask_human. Agents already running get it at their next launch.";
+/**
+ * What agents get once the relay is claimed: nothing until each is switched
+ * on (#16223), and then from its next launch (#16012).
+ */
+const AGENTS_AFTER_CLAIM =
+  "Under Agents, switch on the agents you want to ask you: each is off until you do, and gets ask_human from its next launch.";
+
+export interface RelayDeployCopyOptions {
+  /** This window shows Agents, where the switches are; a remote window's agents are the Host's. */
+  agentsHere?: boolean;
+}
 
 /** A reason from the CLI or main as one sentence, however it ended. */
 function sentence(text: string): string {
@@ -43,7 +51,8 @@ function claimNote(deploy: DecisionsRelayDeploy): string {
 function describeClaim(
   deploy: DecisionsRelayDeploy,
   url: string,
-  claim: DecisionsRelayDeployClaim
+  claim: DecisionsRelayDeployClaim,
+  { agentsHere = false }: RelayDeployCopyOptions
 ): RelayDeployDescription {
   const host = hostOf(url);
   switch (claim.state) {
@@ -55,7 +64,7 @@ function describeClaim(
     case "claimed":
       return {
         label: "Relay deployed and claimed",
-        detail: `${hostOf(claim.origin)} is this computer's relay now. ${AGENTS_AFTER_CLAIM} Pair a phone to answer their questions.`,
+        detail: `${hostOf(claim.origin)} is this computer's relay now. Pair a phone to answer agents' questions.${agentsHere ? ` ${AGENTS_AFTER_CLAIM}` : ""}`,
         next: "pair",
       };
     case "failed": {
@@ -93,12 +102,15 @@ function describeClaim(
  * here is offered for checking whatever the outcome, since a deploy that
  * stopped late may still have created the Worker.
  */
-export function describeRelayDeploy(deploy: DecisionsRelayDeploy): RelayDeployDescription {
+export function describeRelayDeploy(
+  deploy: DecisionsRelayDeploy,
+  options: RelayDeployCopyOptions = {}
+): RelayDeployDescription {
   const url = deploy.url !== undefined ? { url: deploy.url, next: "use" as const } : {};
   // A claim of the deployed relay is the latest thing that happened to it,
   // whether main started it or the person did for a deploy that stopped late.
   if (deploy.claim && deploy.url !== undefined)
-    return describeClaim(deploy, deploy.url, deploy.claim);
+    return describeClaim(deploy, deploy.url, deploy.claim, options);
   switch (deploy.state) {
     case "waiting":
       return {

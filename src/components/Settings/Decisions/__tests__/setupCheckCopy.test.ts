@@ -4,7 +4,12 @@ import {
   type DecisionsSetupCheckObservations,
   type DecisionsSetupCheckStep,
 } from "@shared/types/decisions";
-import { SETUP_STEP_LABEL, describeSetupStep, unfinishedReason } from "../setupCheckCopy";
+import {
+  SETUP_STEP_LABEL,
+  describeSetupStep,
+  describeUnfinished,
+  unfinishedReason,
+} from "../setupCheckCopy";
 
 const ORIGIN = "https://decisions.example.workers.dev";
 
@@ -183,5 +188,36 @@ describe("unfinishedReason", () => {
         setupCheck: { checkedAt: 2, failedStep: null },
       })
     ).toBeNull();
+  });
+});
+
+describe("describeUnfinished (#18057)", () => {
+  it("says nothing once the kit, the check and an agent are all done", () => {
+    expect(describeUnfinished(null, false)).toBeNull();
+  });
+
+  it("names agents as what's left once every step passed and none is switched on", () => {
+    const words = describeUnfinished(null, true);
+    expect(words).toMatch(/No agents are switched on for new launches on this computer/);
+    expect(words).toMatch(/under Agents/);
+  });
+
+  it("asks for the agents after the kit or the check, and no longer says either one finishes setup", () => {
+    for (const reason of ["kit", "check", { failedStep: "push" as const }] as const) {
+      const alone = describeUnfinished(reason, false)!;
+      const withAgents = describeUnfinished(reason, true)!;
+      expect(alone).not.toMatch(/Agents/);
+      expect(withAgents).toMatch(/No agents are switched on/);
+      // What's left is said in order: the kit or the check first, the agents last.
+      expect(withAgents.indexOf("No agents")).toBeGreaterThan(0);
+      expect(withAgents).not.toMatch(/to finish|Setup finishes/);
+      expect(alone).toMatch(/to finish|Setup finishes/);
+    }
+  });
+
+  it("keeps naming the step the last check stopped at", () => {
+    expect(describeUnfinished({ failedStep: "push" }, true)).toMatch(
+      /stopped at push configuration/
+    );
   });
 });

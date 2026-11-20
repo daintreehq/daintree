@@ -297,9 +297,11 @@ export function decisionsHostServes(record: unknown): boolean {
 }
 
 /**
- * Agents launched here get `ask_human` (#16012, #16022): the owner's switch
+ * Agents launched here can get `ask_human` (#16012, #16022): the owner's switch
  * (`decisions`) is on, or this machine is an enrolled Host that serves its
- * panes. Read before anything of Decisions is imported.
+ * panes. The owner's launches get it only for the agents switched on
+ * (#16223), which `decisionsServesAgent` in `lifecycle.ts` checks. Read
+ * before anything of Decisions is imported.
  */
 export function decisionsServesPanes(settings: unknown, hostRecord: unknown): boolean {
   return fieldOf(settings, "enabled") === true || decisionsHostServes(hostRecord);

@@ -7,7 +7,7 @@ import { pluralize } from "@/lib/pluralize";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { DecisionQuestionListItem } from "@shared/types/decisionsQuestion";
-import { useDecisionsAgentSupport } from "./DecisionsAgentsSection";
+import { switchedOnCount, useDecisionsAgentSupport } from "./DecisionsAgentsSection";
 import { deviceKind } from "./devicesCopy";
 import type { UseDecisionsDevicesResult } from "./useDecisionsDevices";
 import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
@@ -66,10 +66,8 @@ function agentsFact(
   installedError: string | null
 ): string {
   if (policy === null) return loadError === null ? "Reading agents…" : "Agents couldn't be read";
-  if (!installedRead)
-    return installedError === null ? "Reading agents…" : "Agents couldn't be read";
-  // The switches the Agents section shows: one left on for an agent since removed isn't counted.
-  const on = supported.filter((id) => policy.askHumanAgents.includes(id)).length;
+  const on = switchedOnCount(policy.askHumanAgents, supported, installedRead);
+  if (on === null) return installedError === null ? "Reading agents…" : "Agents couldn't be read";
   return on === 0 ? "No agents switched on" : `${pluralize(on, "agent")} switched on`;
 }
 
