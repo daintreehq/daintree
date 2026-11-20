@@ -81,7 +81,9 @@ export function localRelay(
     throw new Error(`${DECISIONS_CHECKOUT} has no app/dist: run pnpm build there first`);
   }
   if (options.clocked && !existsSync(path.join(DECISIONS_CHECKOUT, CLOCKED_RELAY_ENTRY))) {
-    throw new Error(`${DECISIONS_CHECKOUT} has no ${CLOCKED_RELAY_ENTRY}: check out 0.9.0 or later`);
+    throw new Error(
+      `${DECISIONS_CHECKOUT} has no ${CLOCKED_RELAY_ENTRY}: check out 0.9.0 or later`
+    );
   }
   const persist = mkdtempSync(path.join(tmpdir(), "daintree-e2e-decisions-relay-"));
   const claimSecret = randomBytes(24).toString("hex");
@@ -200,7 +202,8 @@ export function localRelay(
       body: JSON.stringify({ offset_ms: offsetMs }),
       signal: AbortSignal.timeout(30_000),
     });
-    if (!res.ok) throw new Error(`The relay didn't move its clock (${res.status}): ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`The relay didn't move its clock (${res.status}): ${await res.text()}`);
   };
 
   return { origin, host: `127.0.0.1:${port}`, claimSecret, start, stop, setClock };
@@ -429,4 +432,56 @@ export async function launchDecisionsAgent(page: Page, binDir: string): Promise<
     })
   );
   return { paneId, mcp };
+}
+
+/** An MCP tool result's text. */
+export function toolText(result: Awaited<ReturnType<Client["callTool"]>>): string {
+  return (result.content as { type: string; text?: string }[]).map((c) => c.text ?? "").join("\n");
+}
+
+/** What `ask_human` returns for a question it took. */
+export interface AskReceipt {
+  question_id: string;
+  expires_at: string;
+  reply_mode: string;
+  planned_fallback: string | null;
+  enforced_requirement: string;
+}
+
+/**
+ * Calls `ask_human` as an agent would. Daintree decides advice only once it
+ * has read that a phone of the person's can show the plan, and that read ages
+ * (a moved clock ages it at once), so a `support-unknown` refusal, or a
+ * `no-capable-reader` one before a just-paired phone's declaration is read,
+ * is asked again a moment later, as the refusal itself says to.
+ */
+export async function askHuman(client: Client, args: Record<string, unknown>): Promise<AskReceipt> {
+  let refusal = "";
+  for (const end = Date.now() + 90_000; Date.now() < end;) {
+    const asked = await client.callTool({ name: "ask_human", arguments: args });
+    if (!asked.isError) return asked.structuredContent as unknown as AskReceipt;
+    refusal = toolText(asked);
+    if (!/^[a-z_]+: (support-unknown|no-capable-reader): /.test(refusal)) break;
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  throw new Error(`ask_human was refused: ${refusal}`);
+}
+
+/** `get_decision` for `id`, as the agent that asked reads it. */
+export async function getDecision(client: Client, id: string): Promise<Record<string, unknown>> {
+  const read = await client.callTool({ name: "get_decision", arguments: { question_id: id } });
+  expect(read.isError, toolText(read)).toBeFalsy();
+  return read.structuredContent as Record<string, unknown>;
+}
+
+const BLOCK_START = "[DAINTREE DECISION ANSWER]";
+const BLOCK_END = "[END DAINTREE DECISION ANSWER]";
+
+/** Every whole Decisions block for question `id` in what a terminal received. */
+export function decisionBlocks(typed: string, id: string): string[] {
+  return typed
+    .split(BLOCK_START)
+    .slice(1)
+    .filter((b) => b.includes(BLOCK_END) && b.includes(`question_id: ${id} `))
+    .map((b) => b.slice(0, b.indexOf(BLOCK_END)));
 }

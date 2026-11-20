@@ -120,7 +120,7 @@ export class DecisionsTestClock {
     if (!Number.isSafeInteger(ms) || ms < 0) throw new Error(`cannot advance the clock by ${ms}`);
     return this.serially(async () => {
       try {
-        for (let left = ms; left > 0; ) {
+        for (let left = ms; left > 0;) {
           const step = Math.min(left, STEP_MS);
           this.offsetMs += step;
           for (const app of this.apps) await setMainOffset(app, this.offsetMs);
@@ -133,6 +133,11 @@ export class DecisionsTestClock {
         throw error;
       }
     });
+  }
+
+  /** Moves every clock to `byMs` past `deadline` (ISO 8601), or by `byMs` if it has passed. */
+  advancePast(deadline: string, byMs = 30_000): Promise<void> {
+    return this.advance(Math.max(0, Math.ceil(Date.parse(deadline) - this.now())) + byMs);
   }
 
   private serially(task: () => Promise<void>): Promise<void> {

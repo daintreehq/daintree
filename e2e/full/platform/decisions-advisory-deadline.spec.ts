@@ -32,7 +32,6 @@ import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -44,9 +43,12 @@ import {
 } from "../../helpers/fakeAgent";
 import { dispatchAction } from "../../helpers/actions";
 import {
+  askHuman,
   closeSettings,
   connectRelay,
+  decisionBlocks,
   DECISIONS_CHECKOUT,
+  getDecision,
   launchDecisionsAgent,
   launchPhone,
   localRelay,
@@ -54,6 +56,8 @@ import {
   openQuestionOnPhone,
   pairPhone,
   saveAndVerifyKit,
+  toolText,
+  type AskReceipt,
   type DecisionsAgent,
   type LocalRelay,
 } from "../../helpers/decisionsRelay";
@@ -92,39 +96,11 @@ let asker: DecisionsAgent;
 let bystander: DecisionsAgent;
 const phoneProblems: string[] = [];
 
-interface Receipt {
-  question_id: string;
-  expires_at: string;
-  reply_mode: string;
-  planned_fallback: string | null;
-  enforced_requirement: string;
-}
-
-function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
-  return (result.content as { type: string; text?: string }[]).map((c) => c.text ?? "").join("\n");
-}
-
-/**
- * Asks from the asking pane, as an agent would. Daintree decides advice only
- * once it has read that a phone of the person's can show the plan, and a move
- * of the clock ages that read, so a `support-unknown` (or, before the paired
- * phone's declaration is read, `no-capable-reader`) refusal is asked again,
- * as the refusal itself tells the agent to.
- */
-async function ask(args: Record<string, unknown>, client = asker.mcp): Promise<Receipt> {
-  let refusal = "";
-  for (const end = Date.now() + 90_000; Date.now() < end; ) {
-    const asked = await client.callTool({ name: "ask_human", arguments: args });
-    if (!asked.isError) return asked.structuredContent as unknown as Receipt;
-    refusal = textOf(asked);
-    if (!/^[a-z_]+: (support-unknown|no-capable-reader): /.test(refusal)) break;
-    await new Promise((r) => setTimeout(r, 2_000));
-  }
-  throw new Error(`ask_human was refused: ${refusal}`);
-}
+/** Asks from the asking pane, as an agent would. */
+const ask = (args: Record<string, unknown>, client = asker.mcp) => askHuman(client, args);
 
 /** A choice between two fixtures, with the plan the agent follows if no one answers in 15 minutes. */
-async function askAdvice(question: string): Promise<Receipt> {
+async function askAdvice(question: string): Promise<AskReceipt> {
   const receipt = await ask({
     question,
     kind: "choice",
@@ -145,11 +121,7 @@ async function askAdvice(question: string): Promise<Receipt> {
   return receipt;
 }
 
-async function decision(id: string, client = asker.mcp): Promise<Record<string, unknown>> {
-  const read = await client.callTool({ name: "get_decision", arguments: { question_id: id } });
-  expect(read.isError, textOf(read)).toBeFalsy();
-  return read.structuredContent as Record<string, unknown>;
-}
+const decision = (id: string, client = asker.mcp) => getDecision(client, id);
 
 /** Waits for the relay to confirm it holds the question: moving time before that would test the publish queue. */
 async function published(id: string): Promise<void> {
@@ -158,21 +130,9 @@ async function published(id: string): Promise<void> {
     .toBe("open");
 }
 
-/** Moves every clock to `ms` past a deadline. */
-function pastDeadline(expiresAt: string, ms = 30_000): Promise<void> {
-  return clock.advance(Math.max(0, Math.ceil(Date.parse(expiresAt) - clock.now())) + ms);
-}
-
-const BLOCK_END = "[END DAINTREE DECISION ANSWER]";
-
 /** Every whole Decisions block for question `id` in what `agent`'s terminal received after `from`. */
 function blocksFor(id: string, from: number, agent = asker): string[] {
-  const typed = readFakeAgentStdin(binDir, agent.paneId).slice(from);
-  return typed
-    .split("[DAINTREE DECISION ANSWER]")
-    .slice(1)
-    .filter((b) => b.includes(BLOCK_END) && b.includes(`question_id: ${id} `))
-    .map((b) => b.slice(0, b.indexOf(BLOCK_END)));
+  return decisionBlocks(readFakeAgentStdin(binDir, agent.paneId).slice(from), id);
 }
 
 const stdinLength = (agent = asker) => readFakeAgentStdin(binDir, agent.paneId).length;
@@ -197,7 +157,8 @@ function expectNothingDecided(read: Record<string, unknown>): void {
   expect(read).toMatchObject({ choice: null, provenance: null, answers: [] });
 }
 
-const inboxButton = () => page.locator('button[aria-haspopup="dialog"][aria-label^="Decisions inbox"]');
+const inboxButton = () =>
+  page.locator('button[aria-haspopup="dialog"][aria-label^="Decisions inbox"]');
 
 /**
  * Nothing on this computer still asks the person about it: the toolbar count
@@ -319,9 +280,13 @@ test("an ignored advisory question closes once, in the pane that asked, with its
   expect(foreign.isError).toBe(true);
 
   // The person sees it waiting: on the phone with its deadline and plan, and in the toolbar count.
-  await expect(inboxButton()).toHaveAttribute("aria-label", "Decisions inbox — 1 question waiting", {
-    timeout: 30_000,
-  });
+  await expect(inboxButton()).toHaveAttribute(
+    "aria-label",
+    "Decisions inbox — 1 question waiting",
+    {
+      timeout: 30_000,
+    }
+  );
   await openQuestionOnPhone(phone, question);
   const due = phone.locator(".msg-meta .due");
   await expect(due).toContainText("Reply by", { timeout: 20_000 });
@@ -335,7 +300,7 @@ test("an ignored advisory question closes once, in the pane that asked, with its
   expect(await decision(id)).toMatchObject({ status: "open", fallback_due: false });
 
   // Past it, the notice is typed into the asking pane, once.
-  await pastDeadline(expiresAt);
+  await clock.advancePast(expiresAt);
   await expect
     .poll(() => blocksFor(id, fromAsker).length, { timeout: 90_000, intervals: [1_000] })
     .toBe(1);
@@ -390,7 +355,10 @@ test("a timely phone answer reaches the agent as the person's, and the deadline 
   await clock.advance(10 * MINUTE);
   // An advisory question offers its choices as chips beside the composer.
   await openQuestionOnPhone(phone, question);
-  await phone.getByRole("radio", { name: /A SQLite file per test/ }).first().check();
+  await phone
+    .getByRole("radio", { name: /A SQLite file per test/ })
+    .first()
+    .check();
   await phone.getByRole("button", { name: /^Send (decision|answer)$/ }).click();
   await expect(phone.getByText("Your answer", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect
@@ -408,7 +376,7 @@ test("a timely phone answer reaches the agent as the person's, and the deadline 
     advisory_timeout: null,
   });
 
-  await pastDeadline(expiresAt);
+  await clock.advancePast(expiresAt);
   await expectQuietFor(15_000, () => expect(blocksFor(id, from)).toHaveLength(1));
   expect(await decision(id)).toMatchObject({
     status: "human-answered",
@@ -436,10 +404,14 @@ test("a dismissal on the phone is a decline, never a timeout, and its deadline m
   const [declined] = blocksFor(id, from);
   expect(declined).toContain("source: human\nstatus: declined\nauthorised: no\n");
   const read = await decision(id);
-  expect(read).toMatchObject({ status: "cancelled", closed_reason: "declined", fallback_due: false });
+  expect(read).toMatchObject({
+    status: "cancelled",
+    closed_reason: "declined",
+    fallback_due: false,
+  });
   expectNothingDecided(read);
 
-  await pastDeadline(expiresAt);
+  await clock.advancePast(expiresAt);
   await expectQuietFor(15_000, () => expect(blocksFor(id, from)).toHaveLength(1));
   expect(await decision(id)).toMatchObject({ closed_reason: "declined", fallback_due: false });
   await expectNoStaleAsk(question);
@@ -463,7 +435,7 @@ test("a final design approval can't be asked as advice, and expires unapproved",
     arguments: { ...gated, planned_fallback: "Ship it as it is." },
   });
   expect(refused.isError).toBe(true);
-  expect(textOf(refused)).toMatch(/^validation_error: gated: /);
+  expect(toolText(refused)).toMatch(/^validation_error: gated: /);
 
   const { question_id: id, expires_at: expiresAt, reply_mode } = await ask(gated);
   expect(reply_mode).toBe("blocking");
@@ -475,7 +447,7 @@ test("a final design approval can't be asked as advice, and expires unapproved",
     fallback_due: false,
   });
 
-  await pastDeadline(expiresAt);
+  await clock.advancePast(expiresAt);
   await expect
     .poll(() => blocksFor(id, from).length, { timeout: 90_000, intervals: [1_000] })
     .toBe(1);
@@ -505,7 +477,7 @@ test("a draft in the asking pane's composer holds the notice, which is typed onc
   await page.keyboard.type("Half a reply to the agent");
   await expect(editor).toContainText("Half a reply to the agent");
 
-  await pastDeadline(expiresAt);
+  await clock.advancePast(expiresAt);
   // Expired and its plan due by id, but nothing typed over the draft, past the closure's 15-second wait too.
   await expect
     .poll(async () => (await decision(id)).advisory_timeout, { timeout: 60_000 })
@@ -547,7 +519,10 @@ test("a question whose first publish reply is lost reaches the phone once and cl
     g.__e2eCreateFault = fault;
     net.fetch = (async (input: string, init?: RequestInit) => {
       const url = new URL(typeof input === "string" ? input : (input as Request).url);
-      if ((init?.method ?? "GET").toUpperCase() === "POST" && url.pathname === "/api/v1/questions") {
+      if (
+        (init?.method ?? "GET").toUpperCase() === "POST" &&
+        url.pathname === "/api/v1/questions"
+      ) {
         fault.creates++;
         if (fault.armed) {
           fault.armed = false;
@@ -592,7 +567,7 @@ test("a question whose first publish reply is lost reaches the phone once and cl
       phone.getByRole("main").getByRole("link").filter({ hasText: question })
     ).toHaveCount(1, { timeout: 30_000 });
 
-    await pastDeadline(receipt.expires_at);
+    await clock.advancePast(receipt.expires_at);
     await expect
       .poll(() => blocksFor(id, from).length, { timeout: 90_000, intervals: [1_000] })
       .toBe(1);
