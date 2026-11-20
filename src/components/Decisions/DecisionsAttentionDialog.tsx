@@ -106,6 +106,19 @@ const STILL_WORKING_MS = 5_000;
 
 type WorktreeName = (id: string, fallback: string | null) => string | null;
 
+/**
+ * Whether `element` is in a modal over the list whose body is `body` (the
+ * question view, a confirmation), not in the list's own or in one under it
+ * (the inbox it was opened from). Each modal's portal follows the ones open
+ * before it.
+ */
+function inModalOver(body: HTMLElement | null, element: Element): boolean {
+  const own = body?.closest('[aria-modal="true"]') ?? null;
+  const modal = element.closest('[aria-modal="true"]');
+  if (own === null || modal === null || modal === own) return false;
+  return Boolean(own.compareDocumentPosition(modal) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
 const NO_WORKTREES = new Map<string, WorktreeSnapshot>();
 
 /**
@@ -139,27 +152,27 @@ function useHeldFor(active: boolean, ms: number): boolean {
 }
 
 /**
- * Whether a folded quote's text runs past its clamp, measured again as the
- * text changes and as it folds back, and offered too once a narrowing makes it.
+ * Whether a folded quote's text runs past its clamp, measured as it shows,
+ * as it folds back, and as a narrowing clamps it. Once offered for a text,
+ * the toggle stays until the text changes: a widening, or folding it back
+ * once it fits, would otherwise take away the button the person is on.
  */
 function useClamped(text: string | null | undefined, expanded: boolean) {
   const textRef = useRef<HTMLQuoteElement>(null);
-  const [clamped, setClamped] = useState(false);
+  const [offered, setOffered] = useState<{ text: string } | null>(null);
   useLayoutEffect(() => {
     const el = textRef.current;
-    if (el === null || expanded) return;
-    const overflows = () => el.scrollHeight > el.clientHeight + 1;
-    setClamped(overflows());
+    if (el === null || expanded || text == null) return;
+    const offer = () => {
+      if (el.scrollHeight > el.clientHeight + 1) setOffered({ text });
+    };
+    offer();
     if (typeof ResizeObserver === "undefined") return;
-    // Once offered for this text, the toggle stays: a widening that fits it
-    // would otherwise take away the button the person may be on.
-    const observer = new ResizeObserver(() => {
-      if (overflows()) setClamped(true);
-    });
+    const observer = new ResizeObserver(offer);
     observer.observe(el);
     return () => observer.disconnect();
   }, [text, expanded]);
-  return { textRef, clamped };
+  return { textRef, clamped: offered !== null && offered.text === text };
 }
 
 /** The answer as the phone sent it; a long one opens in place rather than being cut for good. */
@@ -831,6 +844,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   const focusedFor = useRef(0);
   /** The opening during whose read the person moved focus, which then stays theirs. */
   const focusMovedFor = useRef(0);
+
   useEffect(() => {
     if (!isOpen || request.terminalId === null || focusedFor.current === request.seq) {
       return undefined;
@@ -856,7 +870,11 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
         heldAtWindowBlur = null;
         const body = bodyRef.current;
         if (replayed || !(target instanceof Element) || body === null) return;
-        if (target.contains(body) || target.closest('[aria-modal="true"]') === null) return;
+        if (target.contains(body)) return;
+        // A control in this list, or in a modal over it, is the person's; one under it isn't.
+        if (!body.closest('[aria-modal="true"]')?.contains(target) && !inModalOver(body, target)) {
+          return;
+        }
         focusMovedFor.current = seq;
       };
       window.addEventListener("blur", onWindowBlur);
@@ -872,19 +890,8 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     const active = document.activeElement;
     const kept = active !== null && active !== document.body;
     if (focusMovedFor.current === seq && kept) return undefined;
-    // A modal over this one (the question view, a confirmation) keeps the focus it holds;
-    // one under it (the inbox it was opened from) doesn't. Each modal's portal follows the
-    // ones open before it.
-    const own = bodyRef.current?.closest('[aria-modal="true"]') ?? null;
-    const other = active?.closest('[aria-modal="true"]') ?? null;
-    if (
-      own !== null &&
-      other !== null &&
-      other !== own &&
-      own.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING
-    ) {
-      return undefined;
-    }
+    // A modal over this one keeps the focus it holds; one under it doesn't.
+    if (active !== null && inModalOver(bodyRef.current, active)) return undefined;
     // This opening's read has landed, so the rows marked for its pane are its pane's own.
     const target =
       loadError === null

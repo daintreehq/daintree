@@ -1157,6 +1157,34 @@ describe("DecisionsAttentionDialog: an opening for a pane leads with its items (
     await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
   });
 
+  it("lands on the pane's item though a modal under the list took focus while its read was out", async () => {
+    listed = [makeItem(3), makeItem(4)];
+    const { rerender } = render(tree(false));
+    openFor("pane-3");
+    rerender(tree(true));
+    await listedRows(2);
+    const inbox = document.createElement("div");
+    inbox.setAttribute("aria-modal", "true");
+    const resolve = document.createElement("button");
+    inbox.append(resolve);
+    document.body.prepend(inbox);
+    onTestFinished(() => inbox.remove());
+
+    let land = () => {};
+    listAttention.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          land = () => done({ result: "listed", items: listed });
+        })
+    );
+    openFor("pane-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    act(() => resolve.focus());
+    await act(async () => land());
+
+    await waitFor(() => expect(document.activeElement).toBe(firstAction(4)));
+  });
+
   it("leaves focus in a modal over the list when a new opening's read lands behind it", async () => {
     listed = [makeItem(3), makeItem(4)];
     const { rerender } = render(tree(false));
@@ -1329,6 +1357,32 @@ describe("DecisionsAttentionDialog: the whole question and its plan (#18055)", (
     expect(plan.textContent).toContain("Keep the recorded fixture.");
     // Right after the notice whose words refer to it.
     expect(plan.previousElementSibling?.textContent).toContain("its stated plan");
+  });
+
+  it("keeps the plan's toggle, and its focus, when it is folded back after coming to fit", async () => {
+    let fits = false;
+    const scroll = vi
+      .spyOn(Element.prototype, "scrollHeight", "get")
+      .mockImplementation(() => (fits ? 40 : 120));
+    const client = vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(() => 40);
+    onTestFinished(() => {
+      scroll.mockRestore();
+      client.mockRestore();
+    });
+    listed = [makeItem(3, { plan: "Keep the recorded fixture." })];
+    render(tree(true));
+    await listedRows(1);
+
+    const toggle = await screen.findByRole("button", { name: "Show full plan for q-3" });
+    fireEvent.click(toggle);
+    // Wider now: the whole plan would fit folded.
+    fits = true;
+    act(() => toggle.focus());
+    fireEvent.click(toggle);
+
+    expect(toggle.isConnected).toBe(true);
+    expect(toggle.getAttribute("aria-label")).toBe("Show full plan for q-3");
+    expect(document.activeElement).toBe(toggle);
   });
 
   it("shows an advisory question's plan when its answer stalled, with no notice", async () => {

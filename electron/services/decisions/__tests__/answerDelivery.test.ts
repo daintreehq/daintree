@@ -3676,6 +3676,8 @@ describe("AnswerDelivery, the whole question in the needs-attention list (#18055
       error_code: "pane_gone",
       content_sealed: await advisoryContent(Q1, "Keep the recorded fixture."),
     });
+    // A notice alone settles once the question is over (#18021); a follow-up stopped with it keeps it listed.
+    await followUpStoppedToo(h.store);
 
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({
