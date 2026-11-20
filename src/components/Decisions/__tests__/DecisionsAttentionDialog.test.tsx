@@ -508,7 +508,8 @@ describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
     await ask(3);
 
     // Reopened and timed out again: the same question, a later round's notice.
-    listed = [noticeItem(3, { notice: { ...NOTICE, revision: 1 } })];
+    // Main mints a new token for what the question asks now.
+    listed = [noticeItem(3, { notice: { ...NOTICE, revision: 1 }, token: "token-3-round-1" })];
     questionsChanged("qid-3", "round-1");
     await confirmGone();
     expect(markAnswerHandled).not.toHaveBeenCalled();
