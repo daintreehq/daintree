@@ -1173,6 +1173,21 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
     expect(info(terminal).lastTypedInputAt ?? 0).toBeLessThan(info(terminal).lastStateChange!);
   });
 
+  it("leaves the prompt settled for a strict line after a held bare Enter", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    vi.spyOn(analysisOf(terminal), "serializeScreen").mockResolvedValueOnce(null);
+    terminal.submit("", "tok-1", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+
+    terminal.submit("wake", "tok-2", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(written()).toEqual(["wake", "\r"]);
+    expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "pty_written" });
+  });
+
   it("still writes a guarded bare Enter at a prompt", async () => {
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);

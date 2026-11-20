@@ -687,6 +687,7 @@ export class TerminalInputController {
       return;
     }
     terminal.lastInputTime = Date.now();
+    const laneSubmittedBefore = this.laneSubmittedAt;
     this.laneSubmittedAt = terminal.lastInputTime;
     // Since when the mirror has read every byte, as the line takes the lane: a
     // loss after this is output the screen read before the Enter can't
@@ -727,6 +728,9 @@ export class TerminalInputController {
           ctx.isWithdrawn?.() === true ||
           !screen.unchanged()
         ) {
+          // Nothing reached the prompt, so a strict line after this one still
+          // finds it settled.
+          this.laneSubmittedAt = laneSubmittedBefore;
           return;
         }
       }
