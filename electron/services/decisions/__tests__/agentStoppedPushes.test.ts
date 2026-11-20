@@ -9,6 +9,7 @@ import {
   AGENT_STOPPED_BATCH_MS,
   AGENT_STOPPED_COOLDOWN_MS,
   AGENT_STOPPED_SETTLE_MS,
+  AGENT_STOPPED_WAKE_GRACE_MS,
   AgentStoppedPushes,
   type AgentTransition,
 } from "../agentStoppedPushes.js";
@@ -20,6 +21,7 @@ function harness(initial: UserPresence = "away") {
   let live = true;
   const putAside = new Set<string>();
   const transitions = new Set<(t: AgentTransition) => void>();
+  const parks = new Set<(terminalId: string) => void>();
   const suspend = new Set<() => void>();
   const resume = new Set<() => void>();
   const change = new Set<() => void>();
@@ -29,8 +31,11 @@ function harness(initial: UserPresence = "away") {
     onChange: (l) => (change.add(l), () => change.delete(l)),
   };
   const outcomes: Array<AgentStoppedPushResult["outcome"]> = [];
-  const send = vi.fn((): Promise<AgentStoppedPushResult> | null => {
+  /** The last request's own check, as the library reads it just before sending. */
+  let stillDue: () => boolean = () => false;
+  const send = vi.fn((due: () => boolean): Promise<AgentStoppedPushResult> | null => {
     if (!live) return null;
+    stillDue = due;
     return Promise.resolve({ outcome: outcomes.shift() ?? "sent" });
   });
   const pushes = new AgentStoppedPushes({
@@ -39,6 +44,7 @@ function harness(initial: UserPresence = "away") {
     quiet: () => quiet,
     putAside: (id) => putAside.has(id),
     watchTransitions: (l) => (transitions.add(l), () => transitions.delete(l)),
+    watchPutAside: (l) => (parks.add(l), () => parks.delete(l)),
     send,
     watch,
     now: () => Date.now(),
@@ -53,15 +59,22 @@ function harness(initial: UserPresence = "away") {
     outcomes,
     emit,
     stop: (id: string, from = "working") => emit(id, "completed", from),
-    resume: (id: string) => emit(id, "working", "completed"),
+    work: (id: string) => emit(id, "working", "completed"),
     setPresence: (next: UserPresence) => (presence = next),
     allow: (next: boolean) => (allowed = next),
     setQuiet: (next: boolean) => (quiet = next),
     setLive: (next: boolean) => (live = next),
     putAside,
+    /** Parks or snoozes a run, as the bus says it. */
+    park: (id: string) => {
+      putAside.add(id);
+      parks.forEach((l) => l(id));
+    },
+    stillDue: () => stillDue(),
     suspend: () => suspend.forEach((l) => l()),
+    resume: () => resume.forEach((l) => l()),
     change: () => change.forEach((l) => l()),
-    listeners: () => transitions.size + suspend.size + resume.size + change.size,
+    listeners: () => transitions.size + parks.size + suspend.size + resume.size + change.size,
   };
 }
 
@@ -88,16 +101,38 @@ describe("AgentStoppedPushes", () => {
     expect(h.listeners()).toBe(0);
   });
 
-  it("asks once for stops that land close together, after the batch window", async () => {
+  it("asks once for stops that land close together, after the batch window, once one has settled", async () => {
     const h = harness();
     h.pushes.update();
     h.stop("a");
-    vi.advanceTimersByTime(1_000);
+    // Still settling when the window ends: the one that has settled is enough.
+    vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS - AGENT_STOPPED_SETTLE_MS + 500);
     h.emit("b", "exited", "working");
-    vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS - 1_001);
+    vi.advanceTimersByTime(AGENT_STOPPED_SETTLE_MS - 501);
     expect(h.send).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(h.send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS * 2);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    h.pushes.stop();
+  });
+
+  it("counts an exit on its own as a stop", () => {
+    const h = harness();
+    h.pushes.update();
+    h.emit("a", "exited", "working");
+    vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    h.pushes.stop();
+  });
+
+  it("pages once for a stop that exits after its push went", async () => {
+    const h = harness();
+    h.pushes.update();
+    h.stop("a");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    h.emit("a", "exited", "completed");
     await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS * 2);
     expect(h.send).toHaveBeenCalledTimes(1);
     h.pushes.stop();
@@ -119,12 +154,25 @@ describe("AgentStoppedPushes", () => {
     h.pushes.update();
     h.stop("a");
     vi.advanceTimersByTime(1_000);
-    h.resume("a");
+    h.work("a");
     h.stop("b");
     vi.advanceTimersByTime(500);
     h.emit("b", "waiting", "completed");
     vi.advanceTimersByTime(AGENT_STOPPED_COOLDOWN_MS);
     expect(h.send).not.toHaveBeenCalled();
+    h.pushes.stop();
+  });
+
+  it("drops only the panel that went back to work, or that Daintree closed", () => {
+    const h = harness();
+    h.pushes.update();
+    h.stop("a");
+    h.stop("b");
+    h.stop("c");
+    h.work("a");
+    h.emit("c", "exited", "completed", true);
+    vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+    expect(h.send).toHaveBeenCalledTimes(1);
     h.pushes.stop();
   });
 
@@ -135,7 +183,7 @@ describe("AgentStoppedPushes", () => {
     vi.advanceTimersByTime(2_900);
     h.stop("b");
     vi.advanceTimersByTime(50);
-    h.resume("a");
+    h.work("a");
     vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS - 2_950);
     expect(h.send).not.toHaveBeenCalled();
     vi.advanceTimersByTime(2_900 + AGENT_STOPPED_SETTLE_MS - AGENT_STOPPED_BATCH_MS - 1);
@@ -151,7 +199,7 @@ describe("AgentStoppedPushes", () => {
     h.stop("a");
     await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
     expect(h.send).toHaveBeenCalledTimes(1);
-    h.resume("a");
+    h.work("a");
     await vi.advanceTimersByTimeAsync(10_000);
     h.stop("a");
     await vi.advanceTimersByTimeAsync(5_000);
@@ -192,17 +240,45 @@ describe("AgentStoppedPushes", () => {
     }
   );
 
-  it("drops the batch when the person is seen back, even if they've gone again by the time it would go", () => {
+  it.each(["present", "unknown"] as const)(
+    "drops the batch when the person reads %s on a change, even if they've gone again by the time it would go",
+    (presence) => {
+      const h = harness();
+      h.pushes.update();
+      h.stop("a");
+      vi.advanceTimersByTime(1_000);
+      h.setPresence(presence);
+      h.change();
+      h.setPresence("away");
+      vi.advanceTimersByTime(AGENT_STOPPED_COOLDOWN_MS);
+      expect(h.send).not.toHaveBeenCalled();
+      h.pushes.stop();
+    }
+  );
+
+  it("checks the switch, presence and quiet hours once more as the request is about to be sent", async () => {
     const h = harness();
     h.pushes.update();
     h.stop("a");
-    vi.advanceTimersByTime(1_000);
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(h.stillDue()).toBe(true);
     h.setPresence("present");
-    h.change();
+    expect(h.stillDue()).toBe(false);
     h.setPresence("away");
-    vi.advanceTimersByTime(AGENT_STOPPED_COOLDOWN_MS);
-    expect(h.send).not.toHaveBeenCalled();
+    h.setQuiet(true);
+    expect(h.stillDue()).toBe(false);
+    h.setQuiet(false);
+    h.allow(false);
+    expect(h.stillDue()).toBe(false);
+    h.allow(true);
+    expect(h.stillDue()).toBe(true);
+    h.suspend();
+    expect(h.stillDue()).toBe(false);
+    h.resume();
+    expect(h.stillDue()).toBe(true);
     h.pushes.stop();
+    expect(h.stillDue()).toBe(false);
   });
 
   it("keeps the batch through a change that still reads away", () => {
@@ -222,6 +298,22 @@ describe("AgentStoppedPushes", () => {
     h.suspend();
     vi.advanceTimersByTime(AGENT_STOPPED_COOLDOWN_MS);
     expect(h.send).not.toHaveBeenCalled();
+    h.pushes.stop();
+  });
+
+  it("admits nothing while asleep, nor in the moments after waking, when a stop from before may still arrive", () => {
+    const h = harness();
+    h.pushes.update();
+    h.suspend();
+    h.stop("a");
+    h.resume();
+    h.stop("b");
+    vi.advanceTimersByTime(AGENT_STOPPED_WAKE_GRACE_MS);
+    vi.advanceTimersByTime(AGENT_STOPPED_COOLDOWN_MS);
+    expect(h.send).not.toHaveBeenCalled();
+    h.stop("c");
+    vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
+    expect(h.send).toHaveBeenCalledTimes(1);
     h.pushes.stop();
   });
 
@@ -246,11 +338,24 @@ describe("AgentStoppedPushes", () => {
     h.pushes.update();
     h.putAside.add("a");
     h.stop("a");
+    // Taken back before the batch would go: its stop was never admitted.
+    h.putAside.delete("a");
     vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
     expect(h.send).not.toHaveBeenCalled();
     h.stop("b");
     vi.advanceTimersByTime(1_000);
     h.putAside.add("b");
+    vi.advanceTimersByTime(AGENT_STOPPED_COOLDOWN_MS);
+    expect(h.send).not.toHaveBeenCalled();
+    h.pushes.stop();
+  });
+
+  it("forgets a stop whose run is put aside, so taking it back brings nothing back", () => {
+    const h = harness();
+    h.pushes.update();
+    h.stop("a");
+    h.park("a");
+    h.putAside.delete("a");
     vi.advanceTimersByTime(AGENT_STOPPED_COOLDOWN_MS);
     expect(h.send).not.toHaveBeenCalled();
     h.pushes.stop();
@@ -298,9 +403,10 @@ describe("AgentStoppedPushes", () => {
     await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
     expect(h.send).toHaveBeenCalledTimes(1);
     h.setLive(true);
-    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS);
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
     expect(h.send).toHaveBeenCalledTimes(1);
-    h.resume("a");
+    // Nothing was asked, so the relay's minute didn't start.
+    h.work("a");
     h.stop("a");
     await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
     expect(h.send).toHaveBeenCalledTimes(2);
@@ -330,6 +436,44 @@ describe("AgentStoppedPushes", () => {
     expect(h.send).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(h.send).toHaveBeenCalledTimes(2);
+    h.pushes.stop();
+  });
+
+  it("counts the relay's minute from when a slow request settled, not only from when it was made", async () => {
+    const h = harness();
+    let settle!: (result: AgentStoppedPushResult) => void;
+    h.send.mockImplementationOnce(
+      () => new Promise<AgentStoppedPushResult>((resolve) => (settle = resolve))
+    );
+    h.pushes.update();
+    h.stop("a");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    settle({ outcome: "sent" });
+    h.stop("b");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS - 1);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.send).toHaveBeenCalledTimes(2);
+    h.pushes.stop();
+  });
+
+  it("logs a failed request without its error, and counts the minute from it", async () => {
+    const h = harness();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    h.send.mockImplementationOnce(() => Promise.reject(new Error("relay said /secret/path")));
+    h.pushes.update();
+    h.stop("a");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]!.join(" ")).not.toContain("secret");
+    h.stop("b");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS - 1);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.send).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
     h.pushes.stop();
   });
 

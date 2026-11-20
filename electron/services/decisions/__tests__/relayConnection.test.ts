@@ -2552,12 +2552,15 @@ describe("agent-stopped pushes over a connection (#17319)", () => {
   function stoppedRelay(features: string[]) {
     const bodies: unknown[] = [];
     const requests: string[] = [];
+    /** While set, `/info` answers only once it resolves. */
+    let infoHeld: Promise<void> | null = null;
     const wrapFetch =
       (fetchImpl: RelayFetch): RelayFetch =>
       async (url, init) => {
         const { pathname } = new URL(url);
         requests.push(`${init.method ?? "GET"} ${pathname}`);
         if (pathname === "/api/v1/info") {
+          if (infoHeld) await infoHeld;
           return json({
             name: "daintree-decisions",
             protocol_min: 1,
@@ -2579,6 +2582,16 @@ describe("agent-stopped pushes over a connection (#17319)", () => {
       wrapFetch,
       bodies,
       posts: () => requests.filter((r) => r === "POST /api/v1/push/agent-stopped").length,
+      infoReads: () => requests.filter((r) => r === "GET /api/v1/info").length,
+      /** Holds every `/info` from now until the returned function is called. */
+      holdInfo: () => {
+        let release!: () => void;
+        infoHeld = new Promise<void>((resolve) => (release = resolve));
+        return () => {
+          infoHeld = null;
+          release();
+        };
+      },
     };
   }
 
@@ -2595,6 +2608,7 @@ describe("agent-stopped pushes over a connection (#17319)", () => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      watchPutAside: () => () => {},
       watch: { onSuspend: () => () => {}, onResume: () => () => {}, onChange: () => () => {} },
       now: () => Date.now(),
     };
@@ -2629,13 +2643,58 @@ describe("agent-stopped pushes over a connection (#17319)", () => {
     expect(relay.posts()).toBe(1);
   });
 
+  it("sends nothing when the switch is turned off while the relay's features are being read", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { state, agentStopped, stop } = stoppedState();
+    const h = await connected(relay, agentStopped);
+    const before = relay.infoReads();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const release = relay.holdInfo();
+    stop("pane-a");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    await vi.waitFor(() => expect(relay.infoReads()).toBe(before + 1));
+    state.allowed = false;
+    h.connection.agentStoppedPushesChanged();
+    release();
+    // The request settles as dropped, never having been sent.
+    await vi.waitFor(() => expect(info.mock.calls.flat().join(" ")).toContain("dropped"));
+    expect(relay.posts()).toBe(0);
+  });
+
+  it("sends nothing when the person is back while the relay's features are being read", async () => {
+    const relay = stoppedRelay(["agent-stopped-push-v1"]);
+    const { state, agentStopped, stop } = stoppedState();
+    await connected(relay, agentStopped);
+    const before = relay.infoReads();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const release = relay.holdInfo();
+    stop("pane-a");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    await vi.waitFor(() => expect(relay.infoReads()).toBe(before + 1));
+    state.presence = "present";
+    release();
+    await vi.waitFor(() => expect(info.mock.calls.flat().join(" ")).toContain("dropped"));
+    expect(relay.posts()).toBe(0);
+
+    // Away again, a fresh stop is asked for as before.
+    state.presence = "away";
+    stop("pane-b");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_COOLDOWN_MS);
+    await vi.waitFor(() => expect(relay.posts()).toBe(1));
+  });
+
   it("sends a relay that doesn't serve them nothing", async () => {
     const relay = stoppedRelay(["presence-v1"]);
     const { agentStopped, stop } = stoppedState();
     await connected(relay, agentStopped);
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
 
     stop("pane-a");
-    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS * 2);
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    // Asked, and found the relay without the feature.
+    await vi.waitFor(() => expect(info.mock.calls.flat().join(" ")).toContain("unsupported"));
     expect(relay.posts()).toBe(0);
   });
 

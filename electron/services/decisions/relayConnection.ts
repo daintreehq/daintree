@@ -333,7 +333,7 @@ export class RelayConnection {
         ? new AgentStoppedPushes({
             ...agentStopped,
             allowed: () => !this.o.store.isFaulted?.() && agentStopped.allowed(),
-            send: () => this.requestAgentStoppedPush(),
+            send: (stillDue) => this.requestAgentStoppedPush(stillDue),
           })
         : null;
   }
@@ -878,13 +878,23 @@ export class RelayConnection {
   /**
    * Asks the bridge live now for an agent-stopped push; null when none is
    * (between attempts, or one still starting), so a batch is dropped rather
-   * than held for a later one.
+   * than held for a later one. The library's own pusher is asked rather than
+   * `requestAgentStoppedPush`, which checks only that the bridge still runs
+   * once the relay's features are read: `stillDue` is checked there too, so a
+   * switch turned off, or a person back at the desk, while `/info` answers
+   * sends nothing. A request already being sent can't be recalled.
    */
-  private requestAgentStoppedPush(): Promise<AgentStoppedPushResult> | null {
+  private requestAgentStoppedPush(stillDue: () => boolean): Promise<AgentStoppedPushResult> | null {
     const current = this.current;
-    const bridge = current?.started && !current.retired ? current.bridge : null;
-    if (this.ended || !bridge || bridge.state !== "running") return null;
-    return bridge.requestAgentStoppedPush();
+    if (this.ended || !current?.started || current.retired) return null;
+    const bridge = current.bridge;
+    // The guards `requestAgentStoppedPush` keeps: an owner's bridge, started and not revoked.
+    if (!bridge || bridge.state !== "running" || bridge.ctx.identity.role !== "owner-desktop") {
+      return null;
+    }
+    return bridge.agentStopped.request(
+      () => !this.ended && !current.retired && bridge.state === "running" && stillDue()
+    );
   }
 
   private retire(attempt: Attempt): void {

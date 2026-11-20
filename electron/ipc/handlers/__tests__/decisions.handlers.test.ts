@@ -1219,6 +1219,7 @@ describe("decisions IPC", () => {
       });
       await expect(setHoldPhonePushes(false)).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setAgentStoppedPushes(true)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(setAgentStoppedPushes(false)).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);

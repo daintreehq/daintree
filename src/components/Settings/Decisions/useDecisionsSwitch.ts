@@ -40,7 +40,8 @@ export function useDecisionsSwitch(
     savingRef.current = true;
     setPending(enabled);
     setFailure(null);
-    return save(enabled)
+    // Called at once; a save that throws before it returns a promise settles like one that rejects.
+    return new Promise<DecisionsStatus>((resolve) => resolve(save(enabled)))
       .then(
         (next) => onChanged(next),
         (error: unknown) => {

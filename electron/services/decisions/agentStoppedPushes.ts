@@ -2,7 +2,6 @@ import type { AgentStoppedPushResult } from "@daintreehq/decisions-client";
 import { LIMITS } from "@daintreehq/decisions-protocol";
 import type { UserPresence } from "../userPresence.js";
 import { electronPresenceWatchers, type PresenceWatchers } from "./desktopPresence.js";
-import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 /**
  * How long a batch gathers stops from its first: agents finishing together
@@ -20,6 +19,12 @@ export const AGENT_STOPPED_SETTLE_MS = 2_000;
  * to be dropped; the second covers the two clocks disagreeing a little.
  */
 export const AGENT_STOPPED_COOLDOWN_MS = LIMITS.agentStoppedPushWindowMs + 1_000;
+/**
+ * How long after waking stops aren't admitted: a stop from before the sleep
+ * can still be on its way from the PTY host, and would reach the phone as
+ * late as the sleep was long.
+ */
+export const AGENT_STOPPED_WAKE_GRACE_MS = 2_000;
 
 const STOPPED_STATES = new Set(["completed", "exited"]);
 
@@ -43,11 +48,14 @@ export interface AgentStoppedPushesOptions {
   putAside(terminalId: string): boolean;
   /** Hears this computer's agent transitions until the returned function is called. */
   watchTransitions(listener: (transition: AgentTransition) => void): () => void;
+  /** Hears each run being parked or snoozed until the returned function is called. */
+  watchPutAside(listener: (terminalId: string) => void): () => void;
   /**
    * Asks the bridge live now for one push; null when none is, so nothing was
-   * asked. Supplied by the connection.
+   * asked. `stillDue` is read once more just before the request is sent, after
+   * the relay's features have been read. Supplied by the connection.
    */
-  send(): Promise<AgentStoppedPushResult> | null;
+  send(stillDue: () => boolean): Promise<AgentStoppedPushResult> | null;
   watch?: PresenceWatchers;
   /** A clock that never runs backwards; `performance.now` by default. */
   now?: () => number;
@@ -60,11 +68,12 @@ export interface AgentStoppedPushesOptions {
  * request, and nothing about which agent, where or how many leaves this
  * computer: the request carries none of it.
  *
- * Presence, quiet hours and the switch are read again as a batch goes out,
- * and a batch is dropped, never held, when any of them says no, when the
- * person is seen back (an unlock or a Daintree window focused) or the
- * computer sleeps, and when no bridge is live to ask. Every request is final,
- * whatever comes of it. Nothing listens while `allowed` says no.
+ * The switch, presence and quiet hours are read again as a batch goes out and
+ * once more just before its request is sent, and a batch is dropped, never
+ * held, when any of them says no, when the person is seen back (an unlock or a
+ * Daintree window focused) or the computer sleeps, and when no bridge is live
+ * to ask. Every request is final, whatever comes of it. Nothing listens while
+ * `allowed` says no.
  */
 export class AgentStoppedPushes {
   private offs: Array<() => void> = [];
@@ -72,8 +81,15 @@ export class AgentStoppedPushes {
   private readonly pending = new Map<string, number>();
   private batchStartedAt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  /** When the last request was made; kept across a stop and start, since the relay's minute is too. */
+  /**
+   * When the last request was made, and again when it settled, since the relay
+   * may have taken it as late as that. Kept across a stop and start, since the
+   * relay's minute is too.
+   */
   private lastSentAt = -Infinity;
+  private asleep = false;
+  /** Nothing is admitted before this, after waking. */
+  private admitFrom = -Infinity;
   private readonly now: () => number;
 
   constructor(private readonly o: AgentStoppedPushesOptions) {
@@ -94,8 +110,16 @@ export class AgentStoppedPushes {
     const watch = this.o.watch ?? electronPresenceWatchers;
     this.offs = [
       this.o.watchTransitions((transition) => this.observe(transition)),
+      this.o.watchPutAside((terminalId) => this.forget(terminalId)),
       // Asleep, a batch would go out on waking, however late.
-      watch.onSuspend(() => this.drop()),
+      watch.onSuspend(() => {
+        this.asleep = true;
+        this.drop();
+      }),
+      watch.onResume(() => {
+        this.asleep = false;
+        this.admitFrom = this.now() + AGENT_STOPPED_WAKE_GRACE_MS;
+      }),
       watch.onChange(() => {
         if (this.pending.size > 0 && this.o.presence() !== "away") this.drop();
       }),
@@ -104,6 +128,7 @@ export class AgentStoppedPushes {
 
   stop(): void {
     for (const off of this.offs.splice(0)) off();
+    this.asleep = false;
     this.drop();
   }
 
@@ -112,11 +137,11 @@ export class AgentStoppedPushes {
     if (!terminalId || state === previousState) return;
     if (!STOPPED_STATES.has(state) || transition.terminalClosing === true) {
       // Back at work, waiting, or being closed by Daintree: whatever stop it had isn't one now.
-      if (this.pending.delete(terminalId) && this.pending.size === 0) this.drop();
+      this.forget(terminalId);
       return;
     }
-    // Completed then exited is still the one stop, from when it was first seen.
-    if (this.pending.has(terminalId)) return;
+    // Completed then exited is still the one stop, sent or not.
+    if (STOPPED_STATES.has(previousState) || this.pending.has(terminalId)) return;
     if (!this.admits(terminalId)) return;
     const now = this.now();
     if (this.pending.size === 0) this.batchStartedAt = now;
@@ -124,13 +149,19 @@ export class AgentStoppedPushes {
     this.schedule();
   }
 
+  private forget(terminalId: string): void {
+    if (this.pending.delete(terminalId) && this.pending.size === 0) this.drop();
+  }
+
   private admits(terminalId: string): boolean {
     return (
-      this.o.allowed() &&
-      this.o.presence() === "away" &&
-      !this.o.quiet() &&
-      !this.o.putAside(terminalId)
+      !this.asleep && this.now() >= this.admitFrom && this.due() && !this.o.putAside(terminalId)
     );
+  }
+
+  /** The switch on, the person away and no quiet hours: a stop may reach the phone now. */
+  private due(): boolean {
+    return this.o.allowed() && this.o.presence() === "away" && !this.o.quiet();
   }
 
   /**
@@ -154,7 +185,7 @@ export class AgentStoppedPushes {
 
   private flush(): void {
     this.timer = null;
-    if (!this.o.allowed() || this.o.presence() !== "away" || this.o.quiet()) {
+    if (this.asleep || !this.due()) {
       this.drop();
       return;
     }
@@ -172,14 +203,13 @@ export class AgentStoppedPushes {
     }
     const count = this.pending.size;
     this.drop();
+    // Turned off, back at the desk or in quiet hours while the relay's features are read: nothing is sent.
+    const stillDue = () => this.offs.length > 0 && !this.asleep && this.due();
     let request: Promise<AgentStoppedPushResult> | null;
     try {
-      request = this.o.send();
-    } catch (error) {
-      console.warn(
-        "[Decisions] Agent-stopped push couldn't be asked for:",
-        formatErrorMessage(error, "error")
-      );
+      request = this.o.send(stillDue);
+    } catch {
+      console.warn("[Decisions] Agent-stopped push couldn't be asked for");
       return;
     }
     // No bridge to ask: the batch goes, so nothing reaches the phone late.
@@ -187,12 +217,16 @@ export class AgentStoppedPushes {
     this.lastSentAt = now;
     request.then(
       (result) => {
+        if (result.outcome !== "unsupported") {
+          this.lastSentAt = Math.max(this.lastSentAt, this.now());
+        }
         if (result.outcome !== "sent") {
           console.info(`[Decisions] Agent-stopped push for ${count} stop(s): ${result.outcome}`);
         }
       },
-      (error: unknown) => {
-        console.warn("[Decisions] Agent-stopped push failed:", formatErrorMessage(error, "error"));
+      () => {
+        this.lastSentAt = Math.max(this.lastSentAt, this.now());
+        console.warn("[Decisions] Agent-stopped push failed");
       }
     );
   }

@@ -955,6 +955,18 @@ const agentStoppedDeps: DecisionsAgentStoppedDeps = {
         terminalClosing: payload.terminalClosing === true,
       })
     ),
+  // Put aside after its stop was seen: lifting it later brings back no alert for that stop.
+  watchPutAside: (listener) => {
+    const offs = [
+      events.on("terminal:park-changed", (payload) => {
+        if (payload.parked) listener(payload.id);
+      }),
+      events.on("terminal:snooze-changed", (payload) => {
+        if (payload.snoozed) listener(payload.id);
+      }),
+    ];
+    return () => offs.forEach((off) => off());
+  },
 };
 
 // Turning desktop notifications off ends presence at once, and on starts it.
@@ -3378,7 +3390,8 @@ export function setDecisionsEnabled(
   });
   if (enabled) return run;
   return run.finally(() => {
-    decisionsOffsPending -= 1;
+    // Never below none, even across a test's reset with one still waiting.
+    decisionsOffsPending = Math.max(0, decisionsOffsPending - 1);
     service?.agentStoppedPushesChanged();
   });
 }

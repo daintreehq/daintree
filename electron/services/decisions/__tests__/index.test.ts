@@ -494,6 +494,7 @@ import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { RelayCheckCancelledError } from "../relayCheck.js";
 import { setDecisionsHostsPort, setRunAttentionServiceRef } from "../../../window/serviceRefs.js";
 import { events } from "../../events.js";
+import { readUserPresence } from "../../userPresence.js";
 import { noteRelayRemovalLaunch } from "../../pty/relayRemovalLaunches.js";
 import type {
   DecisionsHostLink,
@@ -2491,7 +2492,6 @@ describe("Decisions entry", () => {
         terminalClosing: true,
         timestamp: Date.now(),
       });
-      off();
       events.emit("agent:state-changed", {
         terminalId: "t-2",
         state: "completed",
@@ -2500,9 +2500,33 @@ describe("Decisions entry", () => {
         confidence: 1,
         timestamp: Date.now(),
       });
+      off();
+      events.emit("agent:state-changed", {
+        terminalId: "t-3",
+        state: "completed",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+      });
       expect(heard).toEqual([
         { terminalId: "t-1", state: "exited", previousState: "working", terminalClosing: true },
+        { terminalId: "t-2", state: "completed", previousState: "working", terminalClosing: false },
       ]);
+
+      // Parking or snoozing a run is heard; taking it back isn't.
+      const putAside: string[] = [];
+      const offPutAside = stopped.watchPutAside((terminalId) => putAside.push(terminalId));
+      events.emit("terminal:park-changed", { id: "t-p", parked: true, timestamp: Date.now() });
+      events.emit("terminal:park-changed", { id: "t-p", parked: false, timestamp: Date.now() });
+      events.emit("terminal:snooze-changed", { id: "t-s", snoozed: true, timestamp: Date.now() });
+      events.emit("terminal:snooze-changed", { id: "t-s", snoozed: false, timestamp: Date.now() });
+      offPutAside();
+      events.emit("terminal:park-changed", { id: "t-late", parked: true, timestamp: Date.now() });
+      expect(putAside).toEqual(["t-p", "t-s"]);
+
+      // Only away counts as away, as the shared reading says it.
+      expect(stopped.presence).toBe(readUserPresence);
     });
   });
 
