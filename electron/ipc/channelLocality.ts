@@ -296,6 +296,8 @@ export const CHANNEL_LOCALITY = {
   // This computer's own questions, read by reference from any of its windows (#17229).
   "decisions:list-questions": "shell",
   "decisions:get-question-content-by-reference": "shell",
+  // The asking pane, read on the machine that owns it, this computer or its Remote Host (#18037).
+  "decisions:get-question-pane-by-reference": "shell",
   "decisions:get-question-image-by-reference": "shell",
   "decisions:get-question-summaries-by-reference": "shell",
   "decisions:cancel-question-by-reference": "shell",

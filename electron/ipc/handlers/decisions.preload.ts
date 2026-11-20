@@ -9,6 +9,7 @@ export const DECISIONS_METHOD_CHANNELS = {
   getQuestionImage: "decisions:get-question-image",
   listQuestions: "decisions:list-questions",
   getQuestionContentByReference: "decisions:get-question-content-by-reference",
+  getQuestionPaneByReference: "decisions:get-question-pane-by-reference",
   getQuestionImageByReference: "decisions:get-question-image-by-reference",
   getQuestionSummariesByReference: "decisions:get-question-summaries-by-reference",
   cancelQuestionByReference: "decisions:cancel-question-by-reference",

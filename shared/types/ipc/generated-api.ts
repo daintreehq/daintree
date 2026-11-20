@@ -587,6 +587,9 @@ export interface GeneratedElectronAPI {
     getQuestionImageByReference(
       ...args: IpcInvokeMap["decisions:get-question-image-by-reference"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-image-by-reference"]["result"]>;
+    getQuestionPaneByReference(
+      ...args: IpcInvokeMap["decisions:get-question-pane-by-reference"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-question-pane-by-reference"]["result"]>;
     getQuestionSummaries(
       ...args: IpcInvokeMap["decisions:get-question-summaries"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-question-summaries"]["result"]>;

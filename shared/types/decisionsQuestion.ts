@@ -315,6 +315,39 @@ export type DecisionQuestionContentResult =
   | DecisionQuestionHostAway;
 
 /**
+ * The asking pane as the machine that owns it observed it (#18037): its agent
+ * state, the title its header shows and its screen's newest lines, redacted
+ * and bounded as a phone's terminal snapshot is. `observedAt` is when that
+ * machine read it, as an ISO time.
+ */
+export interface DecisionQuestionPane {
+  agentState: string;
+  waitingReason: string | null;
+  paneTitle: string;
+  lines: string[];
+  observedAt: string;
+}
+
+/**
+ * Reading a question's asking pane (#18037), never shared off the machine
+ * that owns it but to this computer. `closed`: the pane no longer holds the
+ * run that asked. `moved`: the answer was moved to another terminal, by a
+ * person or a resume, so the run that asked isn't known any more. `unreadable`: nothing could say
+ * what the pane holds now. `needs-update`: the Remote Host that asked is too
+ * old to read it. The rest as a content read's.
+ */
+export type DecisionQuestionPaneResult =
+  | { result: "read"; reference: DecisionQuestionReference; pane: DecisionQuestionPane }
+  | { result: "closed" }
+  | { result: "moved" }
+  | { result: "unreadable" }
+  | { result: "not-found" }
+  | { result: "off" }
+  | { result: "not-running" }
+  | { result: "needs-update" }
+  | DecisionQuestionHostNotConnected;
+
+/**
  * One question's opening line, or why there is none: `host-not-connected`
  * for a Remote Host's question while this computer has no link to the Host.
  */

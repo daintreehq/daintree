@@ -70,6 +70,7 @@ import {
   ResumePending,
   useWorktreeNames,
 } from "./AttentionActions";
+import { DecisionAskingPane } from "./DecisionAskingPane";
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
 import { DecisionsInvolvementSection } from "./DecisionsInvolvementSection";
 import { DecisionQuestionReadView } from "./DecisionQuestionReader";
@@ -2253,6 +2254,11 @@ export function DecisionsInboxDialog() {
                       </Callout>
                     )}
                     <HostAttentionStatus attention={hostAttention} fallbackFocus={detailRef} />
+                    {/* Collapsed and unread until asked for (#18037); each question and opening starts afresh. */}
+                    <DecisionAskingPane
+                      key={`${request.seq}:${selectedKey}`}
+                      reference={selected.reference}
+                    />
                     <DecisionQuestionReadView
                       reader={reader}
                       target={shownTarget}

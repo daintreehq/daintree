@@ -138,6 +138,7 @@ import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionListItem,
   DecisionQuestionMarkResult,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
   DecisionQuestionSummary,
@@ -1518,6 +1519,29 @@ export async function getDecisionQuestionContentByReference(
   return readOwnQuestionContent(reference);
 }
 
+/**
+ * The pane that asked a question, as it shows now (#18037), by its reference,
+ * for any window on this computer: read on the Remote Host that asked it when
+ * the reference names one, and only ever on the machine that owns the pane.
+ * The terminal snapshot switch doesn't apply, since none of it reaches the
+ * relay. A Host too old to read it says so. Never makes or starts the service.
+ */
+export async function getDecisionQuestionPaneByReference(
+  payload: GetDecisionQuestionByReferencePayload
+): Promise<DecisionQuestionPaneResult> {
+  const { reference } = payload;
+  const onHost = hostRouteFor(reference)?.readHostQuestion(reference.hostId, {
+    read: "pane",
+    reference,
+  });
+  if (onHost) {
+    const answered = await onHost;
+    if (!answered.ok && answered.failure === "needs-update") return { result: "needs-update" };
+    return answeredByHost(answered);
+  }
+  return readOwnQuestionPane(reference);
+}
+
 /** Part of one image of a question, by its reference (#17229), on its Host when a Host asked it. Never makes or starts the service. */
 export async function getDecisionQuestionImageByReference(
   payload: GetDecisionQuestionImageByReferencePayload
@@ -1653,6 +1677,20 @@ function readOwnQuestionContent(
   );
 }
 
+function readOwnQuestionPane(
+  reference: DecisionQuestionReference
+): Promise<DecisionQuestionPaneResult> {
+  return whileReading<DecisionQuestionPaneResult>(
+    (delivery) =>
+      delivery.questionPane(
+        referenceScope(reference),
+        reference.questionId,
+        snapshotDeps.getPtyClient
+      ),
+    { result: "not-running" }
+  );
+}
+
 function readOwnQuestionImage(
   payload: GetDecisionQuestionImageByReferencePayload
 ): Promise<DecisionQuestionImagePartResult> {
@@ -1702,7 +1740,10 @@ function servingAsHost(): boolean {
 export async function readHostServedQuestion(
   read: DecisionsHostQuestionRead
 ): Promise<
-  DecisionQuestionContentResult | DecisionQuestionImagePartResult | DecisionQuestionSummariesResult
+  | DecisionQuestionContentResult
+  | DecisionQuestionImagePartResult
+  | DecisionQuestionSummariesResult
+  | DecisionQuestionPaneResult
 > {
   if (!servingAsHost()) return { result: "off" };
   switch (read.read) {
@@ -1710,6 +1751,8 @@ export async function readHostServedQuestion(
       return readOwnQuestionContent(read.reference);
     case "image":
       return readOwnQuestionImage(read);
+    case "pane":
+      return readOwnQuestionPane(read.reference);
     case "summaries": {
       const seen = new Set<string>();
       return readOwnQuestionSummaries(

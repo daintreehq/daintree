@@ -48,6 +48,7 @@ import {
   HostQuestionContentV2ResultSchema,
   HostQuestionContentV3ResultSchema,
   HostQuestionImagePartResultSchema,
+  HostQuestionPaneResultSchema,
   HostQuestionAskSchema,
   HostQuestionItemSchema,
   HostQuestionItemV3Schema,
@@ -215,12 +216,17 @@ function answersRead(read: DecisionsHostQuestionRead, answer: unknown): boolean 
         answered.size === result.summaries.length && [...answered].every((id) => asked.has(id))
       );
     }
+    case "pane": {
+      const result = answer as PaneResultLike;
+      return result.result !== "read" || sameReference(result.reference, read.reference);
+    }
   }
 }
 
 type DecisionQuestionContentResultLike = z.infer<typeof HostQuestionContentResultSchema>;
 type ImagePartResultLike = z.infer<typeof HostQuestionImagePartResultSchema>;
 type SummariesResultLike = z.infer<typeof HostQuestionSummariesResultSchema>;
+type PaneResultLike = z.infer<typeof HostQuestionPaneResultSchema>;
 
 function answerSchemaOf(read: DecisionsHostQuestionRead): z.ZodType {
   switch (read.read) {
@@ -230,6 +236,8 @@ function answerSchemaOf(read: DecisionsHostQuestionRead): z.ZodType {
       return HostQuestionImagePartResultSchema;
     case "summaries":
       return HostQuestionSummariesResultSchema;
+    case "pane":
+      return HostQuestionPaneResultSchema;
   }
 }
 
@@ -560,6 +568,15 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     hostId: string,
     read: DecisionsHostQuestionRead
   ): Promise<HostCallOutcome<unknown>> {
+    // Only its own method reads a pane: a Host from before it is told it needs updating.
+    if (read.read === "pane") {
+      return this.callHost(
+        hostId,
+        DecisionsLinkMethod.QUESTION_PANE,
+        { reference: read.reference },
+        HostQuestionPaneResultSchema
+      );
+    }
     const session = this.deps.sessionFor(hostId);
     if (read.read === "content" && session !== null && !this.beforePreparation.has(session)) {
       let unsupported = false;

@@ -100,6 +100,7 @@ import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionList,
   DecisionQuestionMarkResult,
+  DecisionQuestionPaneResult,
   DecisionQuestionSummariesResult,
   GetDecisionQuestionByReferencePayload,
   GetDecisionQuestionImageByReferencePayload,
@@ -659,6 +660,23 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
         return decisions.getDecisionQuestionContentByReference(payload);
+      }
+    ),
+    // The pane that asked a question, as it shows now (#18037): `shell`, read on the machine that
+    // owns it, this computer or the Remote Host that asked, for this computer's person only. Never
+    // the relay: it doesn't wait on terminal snapshots being on. Never starts Decisions.
+    getQuestionPaneByReference: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_PANE_BY_REFERENCE,
+      questionByReferenceSchema,
+      async (
+        payload: GetDecisionQuestionByReferencePayload
+      ): Promise<DecisionQuestionPaneResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        const read = await decisions.getDecisionQuestionPaneByReference(payload);
+        // Turned off while it was out, here or on a Host: none of the terminal reaches the window.
+        return decisionsOn() ? read : { result: "off" };
       }
     ),
     getQuestionImageByReference: opValidated(

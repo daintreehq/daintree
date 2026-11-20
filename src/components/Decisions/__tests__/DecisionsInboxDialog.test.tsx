@@ -14,6 +14,7 @@ import type {
   DecisionQuestionList,
   DecisionQuestionListItem,
   DecisionQuestionMarkResult,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionStanding,
   DecisionQuestionSummariesResult,
@@ -98,6 +99,8 @@ const listQuestions = vi.fn<() => Promise<DecisionQuestionList>>();
 const getStatus = vi.fn<() => Promise<DecisionsStatus>>();
 const getQuestionContentByReference =
   vi.fn<(payload: ByReference) => Promise<DecisionQuestionContentResult>>();
+const getQuestionPaneByReference =
+  vi.fn<(payload: ByReference) => Promise<DecisionQuestionPaneResult>>();
 const getQuestionSummariesByReference =
   vi.fn<
     (payload: {
@@ -350,6 +353,17 @@ beforeEach(() => {
     const question = CONTENT[reference.questionId];
     return question ? { result: "read", question } : { result: "not-found" };
   });
+  getQuestionPaneByReference.mockReset().mockImplementation(async ({ reference }) => ({
+    result: "read",
+    reference,
+    pane: {
+      agentState: "waiting",
+      waitingReason: "approval",
+      paneTitle: `Pane of ${reference.questionId}`,
+      lines: [`Screen of ${reference.questionId}`, "Apply the change? [y/N]"],
+      observedAt: "2026-11-20T10:00:00.000Z",
+    },
+  }));
   getQuestionSummariesByReference.mockReset().mockImplementation(async ({ references }) => ({
     result: "read",
     summaries: references.map((ref) => ({
@@ -405,6 +419,7 @@ beforeEach(() => {
       listQuestions,
       getStatus,
       getQuestionContentByReference,
+      getQuestionPaneByReference,
       getQuestionSummariesByReference,
       cancelQuestionByReference,
       declineQuestion,
@@ -454,6 +469,171 @@ afterEach(() => {
 });
 
 describe("DecisionsInboxDialog", () => {
+  describe("the asking pane (#18037)", () => {
+    const toggle = () => screen.getByTestId("decision-asking-pane-toggle");
+    const paneReads = () => getQuestionPaneByReference.mock.calls.map(([p]) => p.reference);
+
+    it("starts collapsed and reads nothing until opened, however the list moves", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      expect(toggle().getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByTestId("decision-asking-pane-lines")).toBeNull();
+
+      // History starts folded (#18023).
+      unfold("history");
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      fireEvent.click(rowNamed("q-1"));
+      await waitFor(() => expect(readsOf("question-1")).toBe(1));
+      act(() => {
+        for (const listener of listListeners) listener({ ...LIST, revision: 2 });
+      });
+      fireEvent.click(rows()[1]!);
+      await waitFor(() => expect(readsOf("question-2")).toBeGreaterThan(0));
+
+      expect(getQuestionPaneByReference).not.toHaveBeenCalled();
+    });
+
+    it("reads the asking pane by the question's reference when opened, and again on Refresh", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+
+      fireEvent.click(toggle());
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-asking-pane-lines").textContent).toBe(
+          "Screen of question-2\nApply the change? [y/N]"
+        )
+      );
+      expect(toggle().getAttribute("aria-expanded")).toBe("true");
+      expect(paneReads()).toEqual([reference("question-2")]);
+      expect(screen.getByTestId("decision-asking-pane-state").textContent).toBe(
+        "Agent waiting for approval"
+      );
+      expect(screen.getByTestId("decision-asking-pane-title").textContent).toBe(
+        "Pane of question-2"
+      );
+
+      getQuestionPaneByReference.mockImplementationOnce(async ({ reference }) => ({
+        result: "read",
+        reference,
+        pane: {
+          agentState: "working",
+          waitingReason: null,
+          paneTitle: "Pane, later",
+          lines: ["Applying the change"],
+          observedAt: "2026-11-20T10:01:00.000Z",
+        },
+      }));
+      fireEvent.click(screen.getByTestId("decision-asking-pane-refresh"));
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-asking-pane-lines").textContent).toBe(
+          "Applying the change"
+        )
+      );
+      expect(screen.getByTestId("decision-asking-pane-state").textContent).toBe("Agent working");
+      expect(paneReads()).toEqual([reference("question-2"), reference("question-2")]);
+
+      // Collapsing drops what was read; opening again reads afresh.
+      fireEvent.click(toggle());
+      expect(screen.queryByTestId("decision-asking-pane-lines")).toBeNull();
+      fireEvent.click(toggle());
+      await waitFor(() => expect(paneReads()).toHaveLength(3));
+    });
+
+    it("says the terminal closed, and why else it can't show it", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      getQuestionPaneByReference.mockResolvedValueOnce({ result: "closed" });
+      fireEvent.click(toggle());
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-asking-pane-closed").textContent).toBe(
+          "Terminal closed"
+        )
+      );
+
+      getQuestionPaneByReference.mockResolvedValueOnce({ result: "host-not-connected" });
+      fireEvent.click(screen.getByTestId("decision-asking-pane-refresh"));
+      await waitFor(() => screen.getByTestId("decision-asking-pane-host-away"));
+
+      getQuestionPaneByReference.mockResolvedValueOnce({ result: "needs-update" });
+      fireEvent.click(screen.getByTestId("decision-asking-pane-refresh"));
+      await waitFor(() => screen.getByTestId("decision-asking-pane-needs-update"));
+
+      getQuestionPaneByReference.mockResolvedValueOnce({ result: "moved" });
+      fireEvent.click(screen.getByTestId("decision-asking-pane-refresh"));
+      await waitFor(() => screen.getByTestId("decision-asking-pane-moved"));
+
+      getQuestionPaneByReference.mockRejectedValueOnce(new Error("link went"));
+      fireEvent.click(screen.getByTestId("decision-asking-pane-refresh"));
+      const failed = await vi.waitFor(() => screen.getByTestId("decision-asking-pane-unreadable"));
+      const retry = within(failed).getByRole("button", { name: "Retry" });
+      act(() => retry.focus());
+      fireEvent.click(retry);
+      // The Retry goes with the failure; the keyboard waits on Refresh.
+      expect(document.activeElement).toBe(screen.getByTestId("decision-asking-pane-refresh"));
+      await waitFor(() => screen.getByTestId("decision-asking-pane-lines"));
+      expect(paneReads()).toHaveLength(6);
+    });
+
+    it("starts collapsed for each question chosen, and never shows a read of the one before", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      let resolveFirst!: (result: DecisionQuestionPaneResult) => void;
+      getQuestionPaneByReference.mockImplementationOnce(
+        () => new Promise((resolve) => (resolveFirst = resolve))
+      );
+      fireEvent.click(toggle());
+
+      // History starts folded (#18023).
+      unfold("history");
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      fireEvent.click(rowNamed("q-1"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      expect(toggle().getAttribute("aria-expanded")).toBe("false");
+      expect(paneReads()).toEqual([reference("question-2")]);
+      await act(async () =>
+        resolveFirst({
+          result: "read",
+          reference: reference("question-2"),
+          pane: {
+            agentState: "working",
+            waitingReason: null,
+            paneTitle: "Late",
+            lines: ["the earlier question's screen"],
+            observedAt: "2026-11-20T10:00:00.000Z",
+          },
+        })
+      );
+      expect(screen.queryByTestId("decision-asking-pane-lines")).toBeNull();
+
+      fireEvent.click(toggle());
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-asking-pane-lines").textContent).toContain(
+          "Screen of question-1"
+        )
+      );
+      expect(paneReads().at(-1)).toEqual(reference("question-1"));
+    });
+
+    it("drops a read still out when collapsed and opened again, showing only the newest", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      let resolveFirst!: (result: DecisionQuestionPaneResult) => void;
+      getQuestionPaneByReference.mockImplementationOnce(
+        () => new Promise((resolve) => (resolveFirst = resolve))
+      );
+      fireEvent.click(toggle());
+      fireEvent.click(toggle());
+      fireEvent.click(toggle());
+      await waitFor(() => screen.getByTestId("decision-asking-pane-lines"));
+      await act(async () => resolveFirst({ result: "closed" }));
+
+      expect(screen.queryByTestId("decision-asking-pane-closed")).toBeNull();
+      expect(screen.getByTestId("decision-asking-pane-lines").textContent).toContain(
+        "Screen of question-2"
+      );
+    });
+  });
+
   it("lists every question in its group, each named by its line, agent, place, age and state", async () => {
     open();
     await waitFor(() => expect(rows()).toHaveLength(2));

@@ -113,6 +113,14 @@ export const DecisionsLinkMethod = {
    * UNSUPPORTED, and its stalls are resolved on the Host.
    */
   ATTENTION: "decisions.attention",
+  /**
+   * Shell → Host (#18037): the pane that asked one of the Host's questions,
+   * as it shows now, redacted as a terminal snapshot is. Answered only to the
+   * owner that enrolled the Host, while that owner's Decisions is on, and
+   * whatever the snapshot switch says. A Host from before it answers
+   * UNSUPPORTED, and the owner is told the Host needs updating.
+   */
+  QUESTION_PANE: "decisions.questionPane",
 } as const;
 
 /**
@@ -137,6 +145,7 @@ export const DECISIONS_LINK_METHOD_LOCALITY = {
   [DecisionsLinkMethod.QUESTION_CONTENT_V2]: "host",
   [DecisionsLinkMethod.QUESTION_CONTENT_V3]: "host",
   [DecisionsLinkMethod.ATTENTION]: "host",
+  [DecisionsLinkMethod.QUESTION_PANE]: "host",
 } as const satisfies Record<
   (typeof DecisionsLinkMethod)[keyof typeof DecisionsLinkMethod],
   "host" | "shell"

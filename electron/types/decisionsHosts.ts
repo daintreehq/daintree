@@ -17,6 +17,7 @@ import type {
   DecisionQuestionImagePartResult,
   DecisionQuestionLastRead,
   DecisionQuestionListItem,
+  DecisionQuestionPaneResult,
   DecisionQuestionReference,
   DecisionQuestionSummariesResult,
 } from "../../shared/types/decisionsQuestion.js";
@@ -241,7 +242,9 @@ export type DecisionsHostQuestionRead =
       attachmentId: string;
       offset: number;
     }
-  | { read: "summaries"; references: DecisionQuestionReference[] };
+  | { read: "summaries"; references: DecisionQuestionReference[] }
+  /** The pane that asked it, as it shows now (#18037). */
+  | { read: "pane"; reference: DecisionQuestionReference };
 
 export type DecisionsHostQuestionAnswer<R extends DecisionsHostQuestionRead> = R extends {
   read: "content";
@@ -249,4 +252,6 @@ export type DecisionsHostQuestionAnswer<R extends DecisionsHostQuestionRead> = R
   ? DecisionQuestionContentResult
   : R extends { read: "image" }
     ? DecisionQuestionImagePartResult
-    : DecisionQuestionSummariesResult;
+    : R extends { read: "pane" }
+      ? DecisionQuestionPaneResult
+      : DecisionQuestionSummariesResult;

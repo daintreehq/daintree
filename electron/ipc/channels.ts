@@ -1632,6 +1632,7 @@ export const CHANNELS = {
   // reference from any of its windows (#17229). This computer's own.
   DECISIONS_LIST_QUESTIONS: "decisions:list-questions",
   DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE: "decisions:get-question-content-by-reference",
+  DECISIONS_GET_QUESTION_PANE_BY_REFERENCE: "decisions:get-question-pane-by-reference",
   DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE: "decisions:get-question-image-by-reference",
   DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE: "decisions:get-question-summaries-by-reference",
   DECISIONS_CANCEL_QUESTION_BY_REFERENCE: "decisions:cancel-question-by-reference",
