@@ -663,9 +663,9 @@ describe("decisionsInboxModel", () => {
     const here = item("q1", { kind: "settled", outcome: "expired" });
     const hereWaiting = item("q2", OPEN, { reference: at("q2", "p1", "t2") });
     const there = item("q3", OPEN, { reference: at("q3", "p2", "t3"), projectLabel: "Other" });
-    // The same bare project id, reported by a Remote Host that is away.
+    // The same bare project id, reported by a Remote Host that is away under its own question host.
     const studio = item("q4", OPEN, {
-      reference: at("q4", "p1", "t4"),
+      reference: { ...at("q4", "p1", "t4"), hostId: "qhost_studio" },
       remoteHost: { hostId: "studio", name: "Studio", connected: false },
     });
 
@@ -691,9 +691,9 @@ describe("decisionsInboxModel", () => {
     });
 
     it("lists the window's project's questions, in the list's order, once narrowed", () => {
-      const all = [there, here, studio, hereWaiting];
-      expect(scopedQuestions(all, "all", LOCAL_P1)).toBe(all);
-      expect(scopedQuestions(all, "project", LOCAL_P1)).toEqual([here, hereWaiting]);
+      const all = [there, hereWaiting, studio, here];
+      expect(scopedQuestions(all, "all", LOCAL_P1)).toEqual(all);
+      expect(scopedQuestions(all, "project", LOCAL_P1)).toEqual([hereWaiting, here]);
       expect(scopedQuestions(all, "project", STUDIO_P1)).toEqual([studio]);
     });
 
@@ -704,7 +704,7 @@ describe("decisionsInboxModel", () => {
       expect(resolveSelection(groups, null, null, "studio", STUDIO_P1)).toBe(studio);
       // The pane that opened the inbox still leads, in History too.
       expect(resolveSelection(groups, null, "t1", "local", LOCAL_P1)).toBe(here);
-      // Only one that needs the person: a delivery keeps the list's order.
+      // None needs the person: a delivery keeps the list's order.
       const delivering = item("q5", { kind: "to-type" }, { reference: at("q5", "p1", "t5") });
       const thereDelivering = { ...there, standing: { kind: "to-type" as const } };
       const quiet = inboxGroups([here, thereDelivering, delivering]);
@@ -714,11 +714,28 @@ describe("decisionsInboxModel", () => {
       expect(resolveSelection(inboxGroups([there, cleared]), null, null, "local", LOCAL_P1)).toBe(
         there
       );
+      expect(resolveSelection(inboxGroups([cleared]), null, null, "local", LOCAL_P1)).toBeNull();
       const nowMs = Date.parse("2026-11-02T12:00:00.000Z");
       const elapsed = { ...hereWaiting, expiresAt: "2026-11-02T11:00:00.000Z" };
       expect(
         resolveSelection(inboxGroups([there, elapsed], nowMs), null, null, "local", LOCAL_P1)
       ).toBe(there);
+      // With nothing waiting, Awaiting update keeps its own order.
+      const thereElapsed = { ...there, expiresAt: "2026-11-02T11:00:00.000Z" };
+      expect(
+        resolveSelection(inboxGroups([thereElapsed, elapsed], nowMs), null, null, "local", LOCAL_P1)
+      ).toBe(thereElapsed);
+      // Of this project's, the first that waits.
+      const hereLater = item("q6", OPEN, { reference: at("q6", "p1", "t6") });
+      expect(
+        resolveSelection(
+          inboxGroups([there, hereWaiting, hereLater]),
+          null,
+          null,
+          "local",
+          LOCAL_P1
+        )
+      ).toBe(hereWaiting);
     });
 
     it("names what Clear Needs you reaches when it could be more than the window's project", () => {
@@ -743,6 +760,11 @@ describe("decisionsInboxModel", () => {
       // A Host whose rows aren't shown says nothing here; one whose rows are still names itself.
       expect(waitingText(closed, "connected", ["Lab"], "project")).toBe(quiet);
       expect(waitingText(closed, "unknown", ["Lab"], "project")).not.toMatch(/Lab/);
+      // Its status unknown, an empty narrowed list still speaks for the project alone.
+      const unknownNone = waitingText([], "unknown", ["Lab"], "project");
+      expect(unknownNone).toMatch(/^No questions in this project\. /);
+      expect(unknownNone).toMatch(/status couldn't be read/);
+      expect(unknownNone).not.toMatch(/Lab/);
       const studioClosed = {
         ...studio,
         standing: { kind: "settled" as const, outcome: "expired" as const },

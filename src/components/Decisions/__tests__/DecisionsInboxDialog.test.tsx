@@ -2306,9 +2306,11 @@ describe("DecisionsInboxDialog", () => {
         expect(screen.queryByTestId("decisions-inbox-group-needs-you")).toBeNull()
       );
       expect(screen.queryByTestId("decisions-inbox-clear-all")).toBeNull();
-      // Beta's question keeps the switch between projects, the one thing left beneath the list (#18051).
+      // Beta's question keeps the switch between projects beneath the list (#18051).
       expect(footer.isConnected).toBe(true);
-      expect([...footer.children]).toEqual([screen.getByTestId("decisions-inbox-scope")]);
+      expect(footer.contains(screen.getByRole("radiogroup", { name: "Questions shown" }))).toBe(
+        true
+      );
       await waitFor(() =>
         expect(document.activeElement).toBe(rows().find((row) => row.tabIndex === 0))
       );
@@ -2726,8 +2728,21 @@ describe("DecisionsInboxDialog", () => {
         STUDIO_WAITING,
       ],
     };
+    /** Alpha's question set aside on this computer, and one whose deadline passed: neither in Needs you. */
+    const ALPHA_CLEARED = item("question-8", 8, OPEN, {
+      reference: reference("question-8", { terminalId: "t8" }),
+      inbox: { ask: "note-c", seen: true, cleared: true },
+    });
+    const ALPHA_ELAPSED = item("question-9", 9, OPEN, {
+      reference: reference("question-9", { terminalId: "t9a" }),
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      inbox: waitingFor("note-e"),
+    });
+    const scopeGroup = () => screen.getByRole("radiogroup", { name: "Questions shown" });
     const scopeSegment = (scope: "all" | "project") =>
-      screen.getByTestId(`decisions-inbox-scope-${scope}`);
+      within(scopeGroup()).getByRole("radio", {
+        name: scope === "all" ? "All projects" : "This project",
+      });
     const clearCalls = () =>
       markQuestions.mock.calls.filter(([payload]) => payload.action === "clear");
 
@@ -2779,9 +2794,19 @@ describe("DecisionsInboxDialog", () => {
         "Clear Needs you in this project"
       );
 
+      // The inbox chose it, not the person: once it goes, History's row doesn't take its place.
+      push({
+        ...MIXED,
+        revision: 2,
+        questions: MIXED.questions.filter((q) => q !== ALPHA_WAITING),
+      });
+      await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-1"]));
+      expect(rowNamed("q-1").getAttribute("aria-current")).toBeNull();
+      expect(screen.getByTestId("decisions-inbox-detail-empty")).toBeTruthy();
+
       // This project's questions go: the list says so, and the switch stays under the keyboard.
       push({
-        revision: 2,
+        revision: 3,
         questions: [BETA_WAITING, LIST.questions[2]!, STUDIO_WAITING],
       });
       await waitFor(() => expect(rows()).toHaveLength(0));
@@ -2794,14 +2819,16 @@ describe("DecisionsInboxDialog", () => {
       expect(document.activeElement).toBe(scopeSegment("project"));
 
       // Back, and still narrowed.
-      push({ ...MIXED, revision: 3 });
+      push({ ...MIXED, revision: 4 });
       await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-2", "q-1"]));
       expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
 
-      // All again, on the same question.
+      // One the person picks stays theirs across the switch.
+      fireEvent.click(rowNamed("q-1"));
+      await waitFor(() => expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true"));
       fireEvent.click(scopeSegment("all"));
       await waitFor(() => expect(rows()).toHaveLength(5));
-      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+      expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true");
 
       // A later opening starts on every project again.
       fireEvent.click(scopeSegment("project"));
@@ -2812,9 +2839,36 @@ describe("DecisionsInboxDialog", () => {
       expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
     });
 
-    it("clears what the list shows, each question at the ask shown", async () => {
+    it("keeps the switch for the opening once offered, and offers it afresh each opening", async () => {
+      const alphaOnly = { revision: 2, questions: [LIST.questions[0]!, ALPHA_WAITING] };
       open();
       await waitFor(() => expect(rows()).toHaveLength(5));
+      expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
+      // Only this project's questions left, never narrowed: the switch stays, on All projects.
+      push(alphaOnly);
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(scopeSegment("all").getAttribute("aria-checked")).toBe("true");
+      expect(screen.getByTestId("decisions-inbox-clear-all").textContent).toBe(
+        "Clear Needs you in all projects"
+      );
+
+      act(() => useDecisionsInboxStore.getState().close());
+      listQuestions.mockResolvedValue(alphaOnly);
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(screen.queryByRole("radiogroup", { name: "Questions shown" })).toBeNull();
+      expect(screen.getByTestId("decisions-inbox-clear-all").textContent).toBe("Clear Needs you");
+    });
+
+    it("clears what the list shows, each question at the ask shown", async () => {
+      listQuestions.mockResolvedValue({
+        ...MIXED,
+        questions: [...MIXED.questions, ALPHA_CLEARED, ALPHA_ELAPSED],
+      });
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(7));
+      expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-8");
+      expect(screen.getByTestId("decisions-inbox-group-awaiting").textContent).toContain("q-9");
       fireEvent.click(screen.getByTestId("decisions-inbox-clear-all"));
       await waitFor(() => expect(clearCalls()).toHaveLength(1));
       expect(clearCalls()[0]![0].questions).toEqual([
@@ -2824,7 +2878,7 @@ describe("DecisionsInboxDialog", () => {
       ]);
 
       fireEvent.click(scopeSegment("project"));
-      await waitFor(() => expect(rows()).toHaveLength(2));
+      await waitFor(() => expect(rows()).toHaveLength(4));
       const clearHere = screen.getByTestId("decisions-inbox-clear-all");
       expect(clearHere.textContent).toBe("Clear Needs you in this project");
       act(() => clearHere.focus());
@@ -2833,23 +2887,25 @@ describe("DecisionsInboxDialog", () => {
       expect(clearCalls()[1]![0].questions).toEqual([
         { reference: ALPHA_WAITING.reference, ask: "note-a" },
       ]);
+      expect(document.activeElement).toBe(clearHere);
 
       // Alpha's is cleared while Beta's and Studio's still wait: the button goes with this
       // project's Needs you, the switch stays, and the keyboard on the button moves to the list.
       push({
-        ...MIXED,
         revision: 2,
-        questions: MIXED.questions.map((question) =>
-          question === ALPHA_WAITING
-            ? { ...question, inbox: { ...waitingFor("note-a"), cleared: true } }
-            : question
-        ),
+        questions: [
+          ...MIXED.questions.map((question) =>
+            question === ALPHA_WAITING
+              ? { ...question, inbox: { ...waitingFor("note-a"), cleared: true } }
+              : question
+          ),
+          ALPHA_CLEARED,
+          ALPHA_ELAPSED,
+        ],
       });
       await waitFor(() => expect(screen.queryByTestId("decisions-inbox-clear-all")).toBeNull());
       expect(scopeSegment("project").getAttribute("aria-checked")).toBe("true");
-      await waitFor(() =>
-        expect(document.activeElement).toBe(rows().find((row) => row.tabIndex === 0))
-      );
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
     });
 
     it("keeps the plain list while this project alone has questions, and names the reach when it has none", async () => {
@@ -2859,13 +2915,20 @@ describe("DecisionsInboxDialog", () => {
       });
       open();
       await waitFor(() => expect(rows()).toHaveLength(2));
-      expect(screen.queryByTestId("decisions-inbox-scope")).toBeNull();
-      expect(screen.getByTestId("decisions-inbox-clear-all").textContent).toBe("Clear Needs you");
+      expect(screen.queryByRole("radiogroup", { name: "Questions shown" })).toBeNull();
+      const clearAll = screen.getByTestId("decisions-inbox-clear-all");
+      expect(clearAll.textContent).toBe("Clear Needs you");
+      const footer = clearAll.parentElement!;
+
+      // Nothing waits and nothing to narrow to: no strip is left beneath the list.
+      push({ revision: 2, questions: [LIST.questions[0]!] });
+      await waitFor(() => expect(screen.queryByTestId("decisions-inbox-clear-all")).toBeNull());
+      expect(footer.isConnected).toBe(false);
 
       // Only Beta's: nothing to narrow to, and Clear says it reaches past this project.
-      push({ revision: 2, questions: [BETA_WAITING] });
+      push({ revision: 3, questions: [BETA_WAITING] });
       await waitFor(() => expect(rows().map(aliasOf)).toEqual(["q-6"]));
-      expect(screen.queryByTestId("decisions-inbox-scope")).toBeNull();
+      expect(screen.queryByRole("radiogroup", { name: "Questions shown" })).toBeNull();
       expect(screen.getByTestId("decisions-inbox-clear-all").textContent).toBe(
         "Clear Needs you in all projects"
       );

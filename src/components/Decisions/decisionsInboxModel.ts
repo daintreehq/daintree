@@ -696,13 +696,13 @@ export function scopedQuestions(
 
 /**
  * What Clear Needs you is called (#18051): it clears what the list shows, so
- * it says so whenever that is more than the window's own project, or the list
- * is narrowed to it. `reachesOthers` is whether the list shown holds another
- * project's question.
+ * it names that list whenever it is narrowed or `namesReach`, as beside the
+ * switch or once the list holds another project's question; plain while the
+ * window's project is all there is.
  */
-export function clearAllText(scope: InboxScope, reachesOthers: boolean): string {
+export function clearAllText(scope: InboxScope, namesReach: boolean): string {
   if (scope === "project") return "Clear Needs you in this project";
-  return reachesOthers ? "Clear Needs you in all projects" : "Clear Needs you";
+  return namesReach ? "Clear Needs you in all projects" : "Clear Needs you";
 }
 
 /**

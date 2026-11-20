@@ -970,8 +970,10 @@ export function DecisionsInboxDialog() {
     questions ?? NO_QUESTIONS,
     active
   );
-  // Whether Clear Needs you could reach past the window's project, and so says how far it goes.
-  const reachesOthers = (shown ?? []).some((item) => !inWindowProject(item, windowProject));
+  // Whether Clear Needs you says how far it goes: always beside the switch, which names the list
+  // shown, and otherwise once the list holds a question from outside the window's project.
+  const clearNamesReach =
+    showScope || (shown ?? []).some((item) => !inWindowProject(item, windowProject));
 
   const remote = isRemoteWindow();
   const projects = useProjectStore((state) => state.projects);
@@ -1572,7 +1574,7 @@ export function DecisionsInboxDialog() {
                     className="ml-auto"
                     data-testid="decisions-inbox-clear-all"
                   >
-                    {clearAllText(scope, reachesOthers)}
+                    {clearAllText(scope, clearNamesReach)}
                   </Button>
                 )}
               </div>
