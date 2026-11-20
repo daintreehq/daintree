@@ -325,6 +325,7 @@ export const SETTING_CATALOG = {
       "daintree_cmd_history_*": devicePerProject,
       "daintree_quickrun_autorestart_*": devicePerProject,
       "daintree_quickrun_expanded_*": devicePerProject,
+      daintree_agent_usage_expanded: device,
       daintree_project_hosts_expanded: device,
       daintree_project_hosts_all_shown: device,
       daintree_project_hosts_handoff: device,

@@ -21,9 +21,10 @@ import { SidebarAgentUsage } from "./SidebarAgentUsage";
  * reads agent activity directly instead; the hold is passed only so the popover
  * can explain itself.
  *
- * Agent usage sits on its own lines right above it (#17318), one per agent
- * with a reading and none otherwise: beside the readout in a 200px row it
- * would cut both down to a few characters.
+ * Agent usage sits in its own foldable "Usage" section right above it
+ * (#17318): a dense row per agent with a reading, and no section otherwise.
+ * Beside the readout in a 200px row it would cut both down to a few
+ * characters.
  */
 export function SidebarStatusBar({ trailing }: { trailing?: ReactNode } = {}) {
   const holdingWakeLock = useKeepAwakeStore((state) => state.visible);

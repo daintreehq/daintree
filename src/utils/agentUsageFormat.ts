@@ -6,20 +6,21 @@ import { windowLabel } from "./codexQuotaFormat";
 import { formatTimeAgo } from "./timeAgo";
 
 export interface AgentUsageLine {
-  /** The row: "Codex 82% · Work · resets 14:05". */
+  /** The whole reading, for the row's accessible name: "Codex 82% · Work · resets 14:05". */
   text: string;
+  /**
+   * What the sidebar row shows beside the agent's own icon: the figure and
+   * the reset, "82% · resets 14:05". The agent, login and machine are the
+   * icon's, the tooltip's and the accessible name's to say, and a Codex
+   * reading that missed its read says "stale" after its figure.
+   */
+  row: string;
   /** What the row leaves out or shortens: the limit, the login and machine, the age. */
   detail: string[];
   /** Past the threshold, or a message that says the limit is near or reached. */
   attention: boolean;
-  /** A Codex reading that missed its read; already spoken in `text`. */
+  /** A Codex reading that missed its read; already spoken in `text` and `row`. */
   stale: boolean;
-  /**
-   * How long ago Claude Code printed it, for a slot of its own that the row
-   * never cuts: a message's age is part of what it says. Null for Codex,
-   * whose cadence `stale` already speaks for.
-   */
-  age: string | null;
 }
 
 // Floored, so a figure shown as 80% always carries the tone 80% does.
@@ -38,6 +39,24 @@ function figure(readout: AgentUsageReadout): string {
     return `over ${percent(reading.usedPercent)}`;
   }
   return `approaching ${reading.window}`;
+}
+
+/**
+ * The figure alone for the sidebar row, short enough to sit beside a reset
+ * in ~150px: the window ("weekly limit") is the detail's to name, and an
+ * unquantified "approaching" message reads as "Near limit".
+ */
+function denseFigure(readout: AgentUsageReadout): string {
+  const { reading } = readout;
+  if (reading.agentId === "codex") return percent(reading.usedPercent);
+  if (reading.statement === "reached") return "Limit reached";
+  if (reading.usedPercent !== null && reading.statement === "used") {
+    return percent(reading.usedPercent);
+  }
+  if (reading.usedPercent !== null && reading.statement === "over") {
+    return `Over ${percent(reading.usedPercent)}`;
+  }
+  return "Near limit";
 }
 
 function limitLine(readout: AgentUsageReadout): string {
@@ -74,9 +93,10 @@ function accountLabel(readout: AgentUsageReadout): string {
 }
 
 /**
- * One sidebar row for a readout (#17318): what was read or printed, the
- * login it is for and the host it came from, and how old it is. Never a
- * verdict about the account beyond the fixed threshold's tone.
+ * One sidebar row for a readout (#17318): what was read or printed and when
+ * it resets for the row, and the login it is for, the host it came from and
+ * how old it is for the detail. Never a verdict about the account beyond the
+ * fixed threshold's tone.
  */
 export function describeAgentUsage(
   readout: AgentUsageReadout,
@@ -97,10 +117,14 @@ export function describeAgentUsage(
     reset,
   ].filter((part): part is string => Boolean(part));
   const text = parts.join(" · ");
+  const row = [denseFigure(readout), stale ? "stale" : undefined, reset]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
   const account = accountLabel(readout);
   const age = formatTimeAgo(reading.observedAt, now);
   return {
     text: stale ? `Stale · ${text}` : text,
+    row,
     detail: [
       [limitLine(readout), reset].filter(Boolean).join(" · "),
       machine ? `${account} on ${machine}` : account,
@@ -108,6 +132,5 @@ export function describeAgentUsage(
     ],
     attention: isAgentUsagePastAttention(reading),
     stale,
-    age: reading.agentId === "claude" ? age : null,
   };
 }
