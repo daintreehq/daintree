@@ -124,11 +124,15 @@ describe("ActivityMonitor waiting-reason re-read (#16093)", () => {
 
     expect(monitor.getState()).toBe("idle");
     expect(onStateChange).toHaveBeenCalledTimes(1);
-    expect(onStateChange).toHaveBeenCalledWith("reread", 1000, "idle", {
+    const [, , , metadata] = onStateChange.mock.calls[0]!;
+    expect(metadata).toEqual({
       trigger: "pattern",
       waitingReason: "prompt",
       rereadAt: expect.any(Number),
+      promptDrawnAt: expect.any(Number),
     });
+    // Read off the screen it re-read: the empty input row in its frame (#18018).
+    expect(metadata.promptDrawnAt).toBe(metadata.rereadAt);
   });
 
   it("keeps the error after Escape while the limit banner is still in view", () => {

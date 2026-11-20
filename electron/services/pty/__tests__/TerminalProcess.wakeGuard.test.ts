@@ -6,6 +6,8 @@ import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { getSubmitEnterDelay, isTerminalReportOnly } from "../terminalInput.js";
 import type { AnalysisBackend } from "../analysis/AnalysisBackend.js";
+import { AgentStateService } from "../AgentStateService.js";
+import type { ActivityStateMetadata } from "../../ActivityMonitor.js";
 import type { ExactPromptGuard, TerminalSubmitGuard } from "../../../../shared/types/pty-host.js";
 import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 import {
@@ -66,6 +68,7 @@ interface Internals {
     agentSessionId?: string;
     updateInstalled?: { observedAt: number; namesRestart: boolean };
     promptUnseen?: true;
+    promptUnseenAt?: number;
   };
 }
 
@@ -1410,5 +1413,216 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
     expect(read).not.toHaveBeenCalled();
     expect(written()).toEqual(["ls", "\r"]);
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+});
+
+describe("TerminalProcess guarded lines before a run is seen at its prompt (#18018)", () => {
+  /** A Decisions answer: mid-turn for a CLI that queues input, and at a question. */
+  const DECISION: TerminalSubmitGuard = {
+    kind: "settled-prompt-exact",
+    acceptWorking: true,
+    acceptQuestion: true,
+  };
+
+  beforeEach(() => {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-20T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /** A terminal whose state is the real state service's, driven by the settles its monitor reports. */
+  function createObserved(): TerminalProcess {
+    return new TerminalProcess(
+      "t-run",
+      { cwd: process.cwd(), cols: 80, rows: 24, kind: "terminal" },
+      { emitData: () => {}, onExit: () => {} },
+      { agentStateService: new AgentStateService(), ptyPool: null, processTreeCache: null },
+      SPAWN_CONTEXT,
+      createMockPty()
+    );
+  }
+
+  /** What the activity monitor reports, as the pty-host receives it from the analysis worker. */
+  function report(
+    terminal: TerminalProcess,
+    state: "busy" | "idle",
+    metadata: ActivityStateMetadata
+  ): void {
+    (
+      terminal as unknown as {
+        handleAnalysisActivityState(
+          spawnedAt: number,
+          state: "busy" | "idle",
+          metadata: ActivityStateMetadata
+        ): void;
+      }
+    ).handleAnalysisActivityState(terminal.getInfo().spawnedAt, state, metadata);
+  }
+
+  /** A run seen at its prompt reads its own input row, read now. */
+  function settleAtInputRow(terminal: TerminalProcess): void {
+    report(terminal, "idle", {
+      trigger: "timeout",
+      waitingReason: "prompt",
+      promptDrawnAt: Date.now(),
+    });
+  }
+
+  async function send(terminal: TerminalProcess, token: string, guard = DECISION) {
+    ptyWriteMock.mockClear();
+    terminal.submit("wake", token, undefined, guard);
+    await vi.advanceTimersByTimeAsync(3_000);
+    return {
+      written: ptyWriteMock.mock.calls.map((c) => c[0]),
+      phase: terminal.getSubmission(token)?.phase,
+    };
+  }
+
+  function analysisOf(terminal: TerminalProcess): AnalysisBackend {
+    return (terminal as unknown as { analysis: AnalysisBackend }).analysis;
+  }
+
+  it.each<[string, ActivityStateMetadata]>([
+    // A CLI still silent at the boot timeout, or a shell line whose glyph reads
+    // as a prompt before the CLI draws anything: the classifier's prompt, with
+    // no input row of the agent's on screen.
+    ["silent through its boot timeout", { trigger: "timeout", waitingReason: "prompt" }],
+    [
+      "behind a shell line with a prompt glyph",
+      { trigger: "pattern", patternConfidence: 0.9, waitingReason: "prompt" },
+    ],
+  ])(
+    "holds the line for a launched run %s, and types it once its input row is read",
+    async (_label, settle) => {
+      const terminal = createObserved();
+      Object.assign(info(terminal), {
+        detectedAgentId: "claude",
+        agentState: "working",
+        lastStateChange: Date.now() - 20_000,
+        promptUnseen: true,
+        promptUnseenAt: Date.now() - 20_000,
+      });
+
+      report(terminal, "idle", settle);
+      expect(info(terminal)).toMatchObject({
+        agentState: "waiting",
+        waitingReason: "prompt",
+        promptUnseen: true,
+      });
+      expect(await send(terminal, "tok-1")).toEqual({ written: [], phase: "cancelled" });
+
+      // The CLI draws its prompt without going busy: the re-read is its first sight.
+      const rereadAt = Date.now();
+      report(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "prompt",
+        rereadAt,
+        promptDrawnAt: rereadAt,
+      });
+      expect(info(terminal).promptUnseen).toBeUndefined();
+      expect(await send(terminal, "tok-2")).toEqual({
+        written: ["wake", "\r"],
+        phase: "pty_written",
+      });
+    }
+  );
+
+  it("holds the line when the last agent's settle lands after another agent took the pane", async () => {
+    const terminal = createObserved();
+    Object.assign(info(terminal), {
+      detectedAgentId: "claude",
+      agentState: "working",
+      lastStateChange: Date.now() - 20_000,
+    });
+    vi.spyOn(analysisOf(terminal), "hasMonitor").mockReturnValue(true);
+    vi.spyOn(analysisOf(terminal), "reconfigureMonitor").mockImplementation(() => {});
+
+    // The worker reads Claude settled at its input row and posts it...
+    const readForClaude = Date.now();
+    await vi.advanceTimersByTimeAsync(50);
+    // ...while Codex takes over the same PTY, under the same spawnedAt.
+    terminal.handleAgentDetection(
+      { detectionState: "agent", detected: true, agentType: "codex" },
+      terminal.getInfo().spawnedAt
+    );
+    expect(info(terminal).promptUnseen).toBe(true);
+    report(terminal, "idle", {
+      trigger: "timeout",
+      waitingReason: "prompt",
+      promptDrawnAt: readForClaude,
+    });
+
+    expect(info(terminal)).toMatchObject({
+      agentState: "waiting",
+      waitingReason: "prompt",
+      promptUnseen: true,
+    });
+    expect(await send(terminal, "tok-1")).toEqual({ written: [], phase: "cancelled" });
+
+    // Codex's own input row, read after it took over.
+    report(terminal, "busy", { trigger: "output" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    settleAtInputRow(terminal);
+    expect(info(terminal).promptUnseen).toBeUndefined();
+    expect(await send(terminal, "tok-2")).toEqual({
+      written: ["wake", "\r"],
+      phase: "pty_written",
+    });
+  });
+
+  it("holds lines after a Claude /restart until the new process is seen at its prompt", async () => {
+    const terminal = createObserved();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    const readBeforeEnter = Date.now();
+
+    terminal.submit("/restart", "tok-restart", undefined, { kind: "settled-prompt-exact" });
+    // A notice queued right behind it, and a second restart.
+    terminal.submit("wake", "tok-queued", undefined, "settled-prompt");
+    terminal.submit("/restart", "tok-again", undefined, { kind: "settled-prompt-exact" });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart", "\r"]);
+    expect(terminal.getSubmission("tok-restart")?.phase).toBe("pty_written");
+    expect(terminal.getSubmission("tok-queued")?.phase).toBe("cancelled");
+    expect(terminal.getSubmission("tok-again")?.phase).toBe("cancelled");
+    expect(info(terminal).promptUnseen).toBe(true);
+
+    // The old process's settle, read before the Enter, lands after it.
+    report(terminal, "busy", { trigger: "input" });
+    report(terminal, "idle", {
+      trigger: "timeout",
+      waitingReason: "prompt",
+      promptDrawnAt: readBeforeEnter,
+    });
+    expect(info(terminal).promptUnseen).toBe(true);
+    expect(await send(terminal, "tok-1")).toEqual({ written: [], phase: "cancelled" });
+
+    report(terminal, "busy", { trigger: "output" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    settleAtInputRow(terminal);
+    expect(await send(terminal, "tok-2")).toEqual({
+      written: ["wake", "\r"],
+      phase: "pty_written",
+    });
+  });
+
+  it.each([
+    ["sent to another agent", "codex", "/restart"],
+    ["carrying more than the command", "claude", "/restart now"],
+  ])("leaves the run seen at its prompt for a /restart %s", async (_label, agentId, text) => {
+    const terminal = createObserved();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    info(terminal).detectedAgentId = agentId;
+
+    terminal.submit(text, "tok-restart", undefined, { kind: "settled-prompt-exact" });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual([text, "\r"]);
+    expect(info(terminal).promptUnseen).toBeUndefined();
   });
 });
