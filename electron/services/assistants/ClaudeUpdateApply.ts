@@ -12,6 +12,10 @@ import {
 import type { UpdateInstalledObservation } from "../../../shared/types/ipc/agent.js";
 import type { ExactPromptGuard } from "../../../shared/types/pty-host.js";
 import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSubmission.js";
+import {
+  inputSuggestionRuleFor,
+  observeInputLine,
+} from "../../../shared/utils/terminalInputLine.js";
 import { typedSinceSettle } from "../../../shared/utils/terminalInputProvenance.js";
 import { EXACT_PROMPT_GATE, evaluateWakeGate } from "../../../shared/utils/terminalWakeGate.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -56,6 +60,11 @@ export interface ClaudeUpdateApplyDeps {
   /** The record, with the named submission's when a token is given; null when it can't be read. */
   getTerminal(terminalId: string, submissionToken?: string): Promise<ClaudeUpdateRecord | null>;
   getLiveGeneration(terminalId: string): number | null;
+  /** The screen as the terminal's mirror has parsed it; null when it can't be read. */
+  serializedState(
+    terminalId: string,
+    options: { tailRows: number }
+  ): Promise<{ data: string } | null>;
   /** Under the exact guard, so the host admits the line only while it still holds. */
   submit(
     terminalId: string,
@@ -129,6 +138,13 @@ function goneWhy(terminalId: string, record: ClaudeUpdateRecord): string | null 
   if (record.isTrashed === true) return `Terminal '${terminalId}' is in the trash.`;
   if (record.isClosing === true) return `Terminal '${terminalId}' is closing.`;
   return null;
+}
+
+/** What Claude Code's input box showed, as the global close reads it (#16750). */
+type InputBox = "clear" | "draft" | "unread";
+
+function boxDraftWhy(terminalId: string): string {
+  return `Claude Code's input box in terminal '${terminalId}' shows typed text, which /restart would join.`;
 }
 
 /**
@@ -235,6 +251,18 @@ export class ClaudeUpdateApply {
             : `Someone has typed into terminal '${terminalId}' since its agent last settled, so their input stays as it is. ${NOTHING_SENT}`
       );
     }
+    // A settle clears the record's typing, not the box: a draft typed while
+    // the agent worked is still there at its prompt.
+    const box = await this.inputBox(terminalId);
+    if (box !== "clear") {
+      refuse(
+        WORKER_STEER_REFUSALS.typing,
+        box === "draft"
+          ? `${boxDraftWhy(terminalId)} ${NOTHING_SENT}`
+          : `Claude Code's input box in terminal '${terminalId}' couldn't be read, so a draft in it can't be ruled out. ${NOTHING_SENT}`
+      );
+    }
+    if (this.deps.getLiveGeneration(terminalId) !== live) restarted();
     return {
       terminalId,
       generation: live,
@@ -268,10 +296,20 @@ export class ClaudeUpdateApply {
       if (aborted(request.signal)) {
         return this.notSent(pin, "cancelled", "The call ended before the pane was ready.");
       }
-      const record = await this.deps.getTerminal(terminalId).catch(() => null);
-      const check = this.check(pin, record);
+      let check = this.check(pin, await this.deps.getTerminal(terminalId).catch(() => null));
       if (check.kind === "drop") return this.notSent(pin, check.reason, check.why);
-      if (check.kind === "ready") break;
+      if (check.kind === "ready") {
+        // The record can't show a draft from before the pane settled; the box
+        // can. Read first, so the record read after it covers keys typed since.
+        const box = await this.inputBox(terminalId);
+        if (box === "draft") return this.notSent(pin, "typed", boxDraftWhy(terminalId));
+        check =
+          box === "clear"
+            ? this.check(pin, await this.deps.getTerminal(terminalId).catch(() => null))
+            : { kind: "wait", on: "an input box that couldn't be read" };
+        if (check.kind === "drop") return this.notSent(pin, check.reason, check.why);
+        if (check.kind === "ready") break;
+      }
       waitingOn = check.on;
       if (this.now() + POLL_MS >= deadline) {
         return this.notSent(
@@ -330,6 +368,14 @@ export class ClaudeUpdateApply {
     } finally {
       request.signal?.removeEventListener("abort", withdraw);
     }
+  }
+
+  private async inputBox(terminalId: string): Promise<InputBox> {
+    const snapshot = await this.deps.serializedState(terminalId, { tailRows: 0 }).catch(() => null);
+    if (snapshot === null) return "unread";
+    const { state } = observeInputLine(snapshot.data, inputSuggestionRuleFor("claude")).inputLine;
+    if (state === "empty" || state === "suggestion") return "clear";
+    return state === "typed" ? "draft" : "unread";
   }
 
   /** What the pane looks like to the request now. */
@@ -534,6 +580,8 @@ export function liveClaudeUpdateApply(pty: () => PtyClient | null): ClaudeUpdate
     getTerminal: async (terminalId, submissionToken) =>
       (await pty()?.getTerminalAsync(terminalId, submissionToken)) ?? null,
     getLiveGeneration: (terminalId) => pty()?.getLiveGeneration(terminalId) ?? null,
+    serializedState: (terminalId, options) =>
+      pty()?.getSerializedStateAsync(terminalId, options) ?? Promise.resolve(null),
     submit: (terminalId, text, submissionToken, guard, inputOwner) =>
       pty()?.submit(
         terminalId,

@@ -19,6 +19,12 @@ import type { PtyClient } from "../../PtyClient.js";
 const TERMINAL = "term-worker";
 const OWNER = "principal-a";
 
+const EDGE = "────────";
+/** Claude Code's screen in the serializer's shape, its input box holding `box`. */
+function claudeScreen(box = "❯ "): string {
+  return `⏺ Done.\r\n${EDGE}\r\n${box}\r\n${EDGE}\r\n  ? for shortcuts`;
+}
+
 interface Submit {
   terminalId: string;
   text: string;
@@ -31,6 +37,11 @@ interface Fake {
   now: number;
   generation: number | null;
   record: ClaudeUpdateRecord | null;
+  /** The parsed screen; null when it can't be read. */
+  screen: string | null;
+  /** Runs inside each screen read, before it answers. */
+  beforeScreen?: (fake: Fake) => void;
+  screenReads: number;
   submits: Submit[];
   withdrawn: string[];
   submissions: Map<string, TerminalSubmissionRecord>;
@@ -73,6 +84,8 @@ function harness(overrides: Partial<Fake> = {}) {
     now: 10_000,
     generation: 4,
     record: atPrompt(),
+    screen: claudeScreen(),
+    screenReads: 0,
     submits: [],
     withdrawn: [],
     submissions: new Map(),
@@ -89,6 +102,11 @@ function harness(overrides: Partial<Fake> = {}) {
       return { ...fake.record, ...(submission ? { submission } : {}) };
     },
     getLiveGeneration: () => fake.generation,
+    serializedState: async () => {
+      fake.screenReads++;
+      fake.beforeScreen?.(fake);
+      return fake.screen === null ? null : { data: fake.screen };
+    },
     submit: (terminalId, text, token, guard, owner) => {
       const submit = { terminalId, text, token, guard, owner };
       fake.submits.push(submit);
@@ -215,6 +233,44 @@ describe("ClaudeUpdateApply.preflight", () => {
     const error = await refusal(service.preflight(TERMINAL, undefined, OWNER));
     expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
     expect(error.message).toMatch(why);
+  });
+
+  // The record's typing ends at a settle; Claude's box keeps a draft typed
+  // while the agent worked.
+  it("refuses a draft typed before the pane settled, which the record no longer shows", async () => {
+    const { fake, service } = harness({
+      record: atPrompt({ lastTypedInputAt: 800, lastForeignInputAt: 800 }),
+      screen: claudeScreen("❯ half a thought"),
+    });
+    const error = await refusal(service.preflight(TERMINAL, undefined, OWNER));
+    expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
+    expect(error.message).toMatch(/shows typed text, which \/restart would join/);
+    expect(fake.submits).toEqual([]);
+  });
+
+  it.each<[string, string | null]>([
+    ["no screen", null],
+    ["an older build's boxed composer", "╭──────╮\r\n│ >    │\r\n╰──────╯\r\n  ? for shortcuts"],
+  ])("refuses when the input box can't be read: %s", async (_name, screen) => {
+    const { service } = harness({ screen });
+    const error = await refusal(service.preflight(TERMINAL, undefined, OWNER));
+    expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
+    expect(error.message).toMatch(/couldn't be read, so a draft in it can't be ruled out/);
+  });
+
+  it("takes Claude's own suggestion in the box as an empty box", async () => {
+    const { pin } = await pinned({ screen: claudeScreen("❯ \x1b[2mopen the PR\x1b[22m") });
+    expect(pin.observedAt).toBe(900);
+  });
+
+  it("refuses a run replaced while its input box was being read", async () => {
+    const { service } = harness({
+      beforeScreen: (f) => {
+        f.generation = 5;
+      },
+    });
+    const error = await refusal(service.preflight(TERMINAL, undefined, OWNER));
+    expect(error.code).toBe(WORKER_STEER_REFUSALS.restarted);
   });
 });
 
@@ -540,6 +596,50 @@ describe("ClaudeUpdateApply.apply, at its edges", () => {
     expect(fake.submits).toEqual([]);
   });
 
+  it("drops it unsent when the box shows text once the pane reads ready", async () => {
+    const { fake, service, pin } = await pinned();
+    // An earlier attempt's line left in the box without its Enter.
+    fake.screen = claudeScreen("❯ /restart");
+    const result = await service.apply(pin, allow);
+    expect(result).toMatchObject({ status: "not-sent", reason: "typed" });
+    expect(result.message).toMatch(/shows typed text/);
+    expect(fake.submits).toEqual([]);
+  });
+
+  it("waits while the box can't be read, and sends once it can", async () => {
+    const { fake, service, pin } = await pinned();
+    fake.screen = null;
+    let polls = 0;
+    fake.onSleep = (f) => {
+      if (++polls === 2) f.screen = claudeScreen();
+    };
+    const result = await service.apply(pin, allow);
+    expect(result.status).toBe("sent");
+    expect(fake.submits).toHaveLength(1);
+  });
+
+  it("expires naming the unread box when it never becomes readable", async () => {
+    const { fake, service, pin } = await pinned();
+    fake.screen = null;
+    const result = await service.apply(pin, allow);
+    expect(result).toMatchObject({ status: "not-sent", reason: "expired" });
+    expect(result.message).toMatch(/an input box that couldn't be read/);
+    expect(fake.submits).toEqual([]);
+  });
+
+  it("reads the record again after the box, so keys typed during the read hold the line", async () => {
+    const { fake, service, pin } = await pinned();
+    const reads = fake.screenReads;
+    fake.beforeScreen = (f) => {
+      if (f.screenReads === reads + 1) {
+        f.record = atPrompt({ lastTypedInputAt: 2_000, lastForeignInputAt: 2_000 });
+      }
+    };
+    const result = await service.apply(pin, allow);
+    expect(result).toMatchObject({ status: "not-sent", reason: "expired" });
+    expect(fake.submits).toEqual([]);
+  });
+
   it("types nothing when the ready read answers after the time ran out", async () => {
     const { fake, service, pin } = await pinned();
     const started = fake.now;
@@ -764,6 +864,7 @@ describe("liveClaudeUpdateApply", () => {
             }
       ),
       getLiveGeneration: vi.fn(() => 4),
+      getSerializedStateAsync: vi.fn(async () => ({ data: claudeScreen(), cols: 80, rows: 24 })),
       submit,
       withdrawGuardedSubmission: vi.fn(),
       write: vi.fn(),

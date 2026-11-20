@@ -988,30 +988,31 @@ describe("TerminalProcess settled-prompt-exact guard pinned to an update observa
   });
 
   it.each([
-    ["the observation seen anew", { updateInstalled: { observedAt: 1_234, namesRestart: true } }],
     [
-      "the observation no longer naming /restart",
+      "the observation is seen anew",
+      { updateInstalled: { observedAt: 1_234, namesRestart: true } },
+    ],
+    [
+      "the observation no longer names /restart",
       { updateInstalled: { observedAt: 900, namesRestart: false } },
     ],
-    ["a choice dialog reported", { agentState: "waiting", waitingReason: "approval" }],
-  ])(
-    "holds back the Enter when the terminal publishes %s between the line and its Enter",
-    async (_label, patch) => {
-      const terminal = createTerminal();
-      settleAtPrompt(terminal, Date.now() - 5_000);
-      Object.assign(info(terminal), {
-        agentIncarnation: 0,
-        updateInstalled: { observedAt: 900, namesRestart: true },
-      });
-      terminal.submit("/restart", "tok-1", undefined, UPDATE);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
-      Object.assign(info(terminal), patch);
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
-      expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
-    }
-  );
+    ["a choice dialog is reported", { agentState: "waiting", waitingReason: "approval" }],
+    ["the pane is put in the trash", { isTrashed: true }],
+  ])("holds back the Enter when %s between the line and its Enter", async (_label, patch) => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      updateInstalled: { observedAt: 900, namesRestart: true },
+    });
+    terminal.submit("/restart", "tok-1", undefined, UPDATE);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+    Object.assign(info(terminal), patch);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["/restart"]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+  });
 
   it("leaves no draft on a run that replaced the one the line went to", async () => {
     const terminal = createTerminal();
