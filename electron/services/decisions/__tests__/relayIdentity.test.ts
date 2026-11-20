@@ -192,6 +192,14 @@ function kitFor(identity: unknown, passphrase = PASSPHRASE): Promise<string> {
   ).then((file) => JSON.stringify(file));
 }
 
+/** The epoch numbers an identity holds, as a verified kit's are recorded. */
+function epochsOf(identity: StoredIdentity) {
+  return {
+    currentEpoch: identity.currentEpoch,
+    epochs: identity.epochs.map((entry) => entry.epoch).sort((a, b) => a - b),
+  };
+}
+
 function networkError(message: string): never {
   throw new TypeError(message);
 }
@@ -330,7 +338,7 @@ describe("claimDecisionsRelay", () => {
         installationId: relay.state.owner!.installationId,
         label: "Daintree",
       }),
-      kitVerified: false,
+      verifiedKit: null,
     });
     expect(memory.stored).not.toBeNull();
     expect(memory.stored!.claimed).toBeUndefined();
@@ -485,7 +493,7 @@ describe("claimDecisionsRelay", () => {
 
     expect(finished).toEqual({
       identity: expect.objectContaining({ relayOrigin: ORIGIN, deviceId: stagedDevice }),
-      kitVerified: false,
+      verifiedKit: null,
     });
     expect(memory.stored?.claimed).toBeUndefined();
   });
@@ -691,7 +699,7 @@ describe("claimDecisionsRelay", () => {
     expect(memory.keys.confirmWeakStorage).toHaveBeenCalledOnce();
     expect(accepted).toEqual({
       identity: expect.objectContaining({ relayOrigin: ORIGIN }),
-      kitVerified: false,
+      verifiedKit: null,
     });
   });
 
@@ -706,7 +714,7 @@ describe("claimDecisionsRelay", () => {
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
     );
 
-    expect(outcome).toEqual({ identity: memory.stored!.config, kitVerified: false });
+    expect(outcome).toEqual({ identity: memory.stored!.config, verifiedKit: null });
     expect(relay.fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -771,8 +779,8 @@ describe("restoreDecisionsIdentity", () => {
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
     );
 
-    // The kit holds exactly what was sealed, so it counts as verified.
-    expect(outcome).toEqual({ identity: identity.config, kitVerified: true });
+    // The kit holds exactly what was sealed, so it counts as verified, for the epochs it holds.
+    expect(outcome).toEqual({ identity: identity.config, verifiedKit: epochsOf(identity) });
     expect(memory.stored).toEqual(identity);
     expect(relay.calls.map((call) => call.path)).toEqual([
       "/health",
@@ -964,7 +972,7 @@ describe("restoreDecisionsIdentity", () => {
     );
 
     // The kit lacks the epoch kept here, so it can't count as this computer's kit.
-    expect(outcome).toEqual({ identity: identity.config, kitVerified: false });
+    expect(outcome).toEqual({ identity: identity.config, verifiedKit: null });
     expect(memory.keys.save).not.toHaveBeenCalled();
     expect(memory.stored).toEqual(newer);
   });
@@ -979,8 +987,30 @@ describe("restoreDecisionsIdentity", () => {
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
     );
 
-    expect(outcome).toEqual({ identity: identity.config, kitVerified: true });
+    expect(outcome).toEqual({ identity: identity.config, verifiedKit: epochsOf(identity) });
     expect(memory.keys.save).not.toHaveBeenCalled();
+  });
+
+  it("counts a kit holding more than the keys sealed here as verified only for what they hold", async () => {
+    const { relay, identity } = await setup();
+    const memory = memoryKeys();
+    memory.stored = structuredClone(identity);
+    // A key staged when the kit was saved, which the keys restored here never held (#18063).
+    const staged = identity.currentEpoch + 1;
+    const kit = await kitFor({
+      ...identity,
+      epochs: [
+        ...identity.epochs,
+        { epoch: staged, raw: bytesToBase64Url(generateEpochKeyBytes()) },
+      ],
+    });
+
+    const outcome = await restoreDecisionsIdentity(
+      { url: ORIGIN, kit, passphrase: PASSPHRASE },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({ identity: identity.config, verifiedKit: epochsOf(identity) });
   });
 
   it("leaves a sealed copy of the same identity whose keys don't work as it is", async () => {

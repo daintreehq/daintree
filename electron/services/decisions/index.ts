@@ -1898,7 +1898,7 @@ function recordIdentity(
       revokedAt: null,
       setupCheck: null,
       recoveryKit:
-        verifiedKit !== null && relayOrigin !== null
+        verifiedKit && relayOrigin !== null
           ? reconciledKit(
               {
                 verifiedAt: Date.now(),

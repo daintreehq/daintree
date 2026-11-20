@@ -459,6 +459,47 @@ describe("sanitizeDecisionsSettings", () => {
     expect(extra.recoveryKit).toEqual(recoveryKit);
   });
 
+  it("keeps the epochs a verified kit held and that it went out of date (#18063)", () => {
+    const recoveryKit = {
+      ...verified.recoveryKit!,
+      coverage: { currentEpoch: 2, epochs: [1, 2] },
+      outOfDate: true as const,
+    };
+    expect(sanitizeDecisionsSettings({ ...verified, recoveryKit }).recoveryKit).toEqual(
+      recoveryKit
+    );
+    // One recorded before kits' epochs were is still a verification, only without them.
+    expect(sanitizeDecisionsSettings(verified).recoveryKit).toEqual(verified.recoveryKit);
+  });
+
+  it("drops damaged epochs, or an out-of-date mark that isn't one, keeping the verification", () => {
+    const recoveryKit = verified.recoveryKit!;
+    for (const coverage of [
+      "1,2",
+      [1, 2],
+      { currentEpoch: 3, epochs: [1, 2] },
+      { currentEpoch: 2, epochs: [2, 1] },
+      { currentEpoch: 2, epochs: [1, 2, 2] },
+      { currentEpoch: 2, epochs: [1, 2.5, 2] },
+      { currentEpoch: -1, epochs: [-1] },
+      { currentEpoch: 2, epochs: "1,2" },
+      { epochs: [1, 2] },
+    ]) {
+      const settings = sanitizeDecisionsSettings({
+        ...verified,
+        recoveryKit: { ...recoveryKit, coverage },
+      });
+      expect(settings.recoveryKit, JSON.stringify(coverage)).toEqual(recoveryKit);
+    }
+    for (const outOfDate of ["true", 1, false, {}]) {
+      const settings = sanitizeDecisionsSettings({
+        ...verified,
+        recoveryKit: { ...recoveryKit, outOfDate },
+      });
+      expect(settings.recoveryKit, JSON.stringify(outOfDate)).toEqual(recoveryKit);
+    }
+  });
+
   it("keeps a setup check result only for the identity the setting records", () => {
     const passed = {
       checkedAt: 1_761_955_400_000,

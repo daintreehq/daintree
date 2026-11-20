@@ -19,7 +19,16 @@ vi.mock("electron", () => ({ app: {}, safeStorage: {}, net: {} }));
 import type { DecisionsSettings } from "../../../../shared/types/decisions.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { DecisionsKeyStoreError } from "../keyStore.js";
-import { checkRecoveryKit, makeRecoveryKit, recordedIdentity } from "../recoveryKit.js";
+import {
+  checkRecoveryKit,
+  kitStanding,
+  makeRecoveryKit,
+  observedOwnerKeys,
+  reconciledKit,
+  recordedIdentity,
+  sameOwnerKeys,
+  type ObservedOwnerKeys,
+} from "../recoveryKit.js";
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const PASSPHRASE = "correct horse battery staple";
@@ -210,6 +219,7 @@ describe("checkRecoveryKit", () => {
         installationId: identity.config.installationId,
         deviceId: identity.config.deviceId,
       },
+      coverage: { currentEpoch: identity.currentEpoch, epochs: [identity.currentEpoch] },
     });
   });
 
@@ -304,7 +314,22 @@ describe("checkRecoveryKit", () => {
 
     await expect(
       checkRecoveryKit(keysHolding(newer), settingsFor(identity), await kitFor(newer), PASSPHRASE)
-    ).resolves.toHaveProperty("verified");
+    ).resolves.toHaveProperty("coverage", { currentEpoch: 2, epochs: [1, 2] });
+  });
+
+  it("records only the epochs held here for a kit holding one they don't (#18063)", async () => {
+    const identity = await claimedIdentity();
+    // Saved while a rotation had staged epoch 2, which these keys never held.
+    const staged = { ...withEpoch(identity, 2), currentEpoch: identity.currentEpoch };
+
+    await expect(
+      checkRecoveryKit(
+        keysHolding(identity),
+        settingsFor(identity),
+        await kitFor(staged),
+        PASSPHRASE
+      )
+    ).resolves.toHaveProperty("coverage", { currentEpoch: 1, epochs: [1] });
   });
 
   it("says why there is nothing to check against", async () => {
@@ -317,5 +342,82 @@ describe("checkRecoveryKit", () => {
     await expect(
       checkRecoveryKit(keysHolding(identity), defaultDecisionsSettings(), kit, PASSPHRASE)
     ).resolves.toEqual({ failure: { result: "no-identity", reason: "not-set-up" } });
+  });
+});
+
+describe("a verified kit against the keys seen since (#18063)", () => {
+  const RELAY = {
+    relayOrigin: ORIGIN,
+    installationId: "inst_0123456789",
+    deviceId: "dev_0123456789",
+  };
+  const record = (extra: object = {}) => ({ verifiedAt: 42, ...RELAY, ...extra });
+  const seen = (currentEpoch: number, epochs: number[]): ObservedOwnerKeys => ({
+    ...RELAY,
+    coverage: { currentEpoch, epochs },
+  });
+  const AT_ONE = { coverage: { currentEpoch: 1, epochs: [1] } };
+
+  it("keeps a kit that holds the keys, and marks one they've moved past as out of date", () => {
+    const kit = record(AT_ONE);
+    expect(reconciledKit(kit, seen(1, [1]))).toBe(kit);
+    // A rotation staged epoch 2 and its answer hasn't come back yet.
+    expect(reconciledKit(kit, seen(1, [1, 2]))).toEqual({ ...kit, outOfDate: true });
+    // The relay took it: epoch 2 is current.
+    expect(reconciledKit(kit, seen(2, [1, 2]))).toEqual({ ...kit, outOfDate: true });
+    // A kit that held a newer epoch still holds keys that caught up with it.
+    const ahead = record({ coverage: { currentEpoch: 2, epochs: [1, 2] } });
+    expect(reconciledKit(ahead, seen(2, [1, 2]))).toBe(ahead);
+  });
+
+  it("leaves a kit as it is for other keys, none seen, or once out of date", () => {
+    const kit = record(AT_ONE);
+    expect(reconciledKit(kit, null)).toBe(kit);
+    expect(reconciledKit(kit, { ...seen(3, [3]), deviceId: "dev_another_one" })).toBe(kit);
+    const stale = record({ ...AT_ONE, outOfDate: true });
+    expect(reconciledKit(stale, seen(1, [1]))).toBe(stale);
+    expect(reconciledKit(null, seen(1, [1]))).toBeNull();
+  });
+
+  it("gives an earlier verification the epochs only of keys still on their one epoch", () => {
+    const earlier = record();
+    expect(reconciledKit(earlier, seen(1, [1]))).toEqual({ ...earlier, ...AT_ONE });
+    // Rotated at some point: whether before or after the verification can't be told.
+    expect(reconciledKit(earlier, seen(2, [1, 2]))).toBe(earlier);
+  });
+
+  it("calls a kit current only once keys read this run are ones it holds", () => {
+    expect(kitStanding(record(AT_ONE), seen(1, [1]))).toBe("current");
+    expect(kitStanding(record(AT_ONE), null)).toBe("unknown");
+    expect(kitStanding(record(AT_ONE), seen(2, [1, 2]))).toBe("out-of-date");
+    expect(kitStanding(record({ ...AT_ONE, outOfDate: true }), null)).toBe("out-of-date");
+    expect(kitStanding(record(), seen(1, [1]))).toBe("current");
+    expect(kitStanding(record(), seen(2, [1, 2]))).toBe("unknown");
+  });
+
+  it("reads an owner's relay, ids and epochs from its keys, and nothing from anything else", async () => {
+    const identity = await claimedIdentity();
+    const newer = { ...withEpoch(identity, 3), currentEpoch: identity.currentEpoch };
+
+    expect(observedOwnerKeys(newer)).toEqual({
+      relayOrigin: ORIGIN,
+      installationId: identity.config.installationId,
+      deviceId: identity.config.deviceId,
+      coverage: { currentEpoch: 1, epochs: [1, 3] },
+    });
+    expect(observedOwnerKeys(null)).toBeNull();
+    expect(observedOwnerKeys({ ...identity, claimed: false })).toBeNull();
+    expect(observedOwnerKeys({ ...identity, role: "desktop-host" } as StoredIdentity)).toBeNull();
+  });
+
+  it("tells two observations apart by identity and epochs", () => {
+    expect(sameOwnerKeys(seen(1, [1]), seen(1, [1]))).toBe(true);
+    expect(sameOwnerKeys(null, null)).toBe(true);
+    expect(sameOwnerKeys(seen(1, [1]), null)).toBe(false);
+    expect(sameOwnerKeys(seen(1, [1]), seen(1, [1, 2]))).toBe(false);
+    expect(sameOwnerKeys(seen(1, [1, 2]), seen(2, [1, 2]))).toBe(false);
+    expect(sameOwnerKeys(seen(1, [1]), { ...seen(1, [1]), deviceId: "dev_another_one" })).toBe(
+      false
+    );
   });
 });

@@ -47,7 +47,7 @@ import {
   parseQuestionMarks,
   serializeQuestionMarks,
 } from "../questionMarks.js";
-import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
+import type { LearnedDecision, QuestionRow, StoredIdentity } from "@daintreehq/decisions-client";
 import {
   FakeAdapter,
   MemoryHistoryStore,
@@ -274,6 +274,63 @@ describe("DecisionsService", () => {
     await service.dispose();
     expect(() => service.getKeyStore()).toThrow(/off/);
     await expect(second.load()).rejects.toMatchObject({ kind: "closed" });
+  });
+
+  it("keeps what its key store last read of an owner's keys, telling of each change (#18063)", async () => {
+    const onOwnerKeys = vi.fn();
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/tmp/decisions-test/keys.bin",
+      onOwnerKeys,
+    });
+    const owner = (currentEpoch: number, epochs: number[]): StoredIdentity => ({
+      v: 1,
+      config: {
+        relayOrigin: "https://relay.example.com",
+        installationId: "inst_12345678",
+        deviceId: "dev_12345678",
+        label: "Daintree",
+      },
+      keys: {
+        signing_private_pkcs8: "signing-private",
+        signing_public: "signing-public",
+        exchange_private_pkcs8: "exchange-private",
+        exchange_public: "exchange-public",
+      },
+      epochs: epochs.map((epoch) => ({ epoch, raw: `epoch-${epoch}` })),
+      currentEpoch,
+    });
+    // What the store tells its observer once it has read or written keys.
+    const heard = (store: object, stored: StoredIdentity | null) =>
+      (store as { heard(stored: StoredIdentity | null): void }).heard(stored);
+    await service.start(on());
+    const first = service.getKeyStore();
+    expect(service.getOwnerKeys()).toBeNull();
+
+    heard(first, owner(1, [1]));
+    heard(first, owner(1, [1]));
+    expect(onOwnerKeys).toHaveBeenCalledTimes(1);
+    expect(service.getOwnerKeys()).toEqual({
+      relayOrigin: "https://relay.example.com",
+      installationId: "inst_12345678",
+      deviceId: "dev_12345678",
+      coverage: { currentEpoch: 1, epochs: [1] },
+    });
+    heard(first, owner(1, [1, 2]));
+    expect(onOwnerKeys).toHaveBeenCalledTimes(2);
+    expect(service.getOwnerKeys()?.coverage).toEqual({ currentEpoch: 1, epochs: [1, 2] });
+    heard(first, null);
+    expect(service.getOwnerKeys()).toBeNull();
+    expect(onOwnerKeys).toHaveBeenCalledTimes(3);
+
+    // What a store let go of still finishes belongs to no lifetime.
+    await service.stop();
+    heard(first, owner(3, [1, 2, 3]));
+    expect(onOwnerKeys).toHaveBeenCalledTimes(3);
+    await service.start(on());
+    service.getKeyStore();
+    expect(service.getOwnerKeys()).toBeNull();
+    await service.dispose();
   });
 
   it("waits for the key store to close before a stop settles", async () => {

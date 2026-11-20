@@ -110,11 +110,42 @@ describe("DecisionsRecoveryKit", () => {
     expect(screen.getByText("No recovery kit verified")).toBeTruthy();
     cleanup();
 
-    renderKit({ status: { ...UNFINISHED, recoveryKitVerifiedAt: VERIFIED_AT } });
+    renderKit({
+      status: { ...UNFINISHED, recoveryKitVerifiedAt: VERIFIED_AT, recoveryKitCoverage: "current" },
+    });
     expect(screen.getByText("Recovery kit verified")).toBeTruthy();
     expect(document.querySelector("#decisions-recovery-kit-status")?.textContent ?? "").toContain(
       new Date(VERIFIED_AT).getFullYear().toString()
     );
+  });
+
+  it("says a kit the keys rotated past is out of date, with saving a new one still open (#18063)", async () => {
+    exportRecoveryKit.mockResolvedValue({ result: "saved", fileName: "kit.json" });
+    renderKit({
+      status: {
+        ...UNFINISHED,
+        recoveryKitVerifiedAt: VERIFIED_AT,
+        recoveryKitCoverage: "out-of-date",
+      },
+    });
+    const row = document.querySelector("#decisions-recovery-kit-status")?.textContent ?? "";
+    expect(row).toContain("Recovery kit out of date");
+    expect(row).toContain(new Date(VERIFIED_AT).getFullYear().toString());
+    expect(screen.queryByText("Recovery kit verified")).toBeNull();
+
+    fireEvent.change(saveField(), { target: { value: PASSPHRASE } });
+    await submit(saveField());
+    expect(exportRecoveryKit).toHaveBeenCalledExactlyOnceWith({ passphrase: PASSPHRASE });
+  });
+
+  it("calls a verification it can't compare with the keys here only last verified", () => {
+    renderKit({
+      status: { ...UNFINISHED, recoveryKitVerifiedAt: VERIFIED_AT, recoveryKitCoverage: "unknown" },
+    });
+    const row = document.querySelector("#decisions-recovery-kit-status")?.textContent ?? "";
+    expect(row).toContain("Recovery kit last verified");
+    expect(screen.queryByText("Recovery kit verified")).toBeNull();
+    expect(screen.queryByText("Recovery kit out of date")).toBeNull();
   });
 
   it("saves only with a passphrase of at least 12 characters, clearing it as the save starts", async () => {

@@ -8,6 +8,22 @@ import {
 const ORIGIN = "https://decisions.example.workers.dev";
 
 describe("revoke and rotate copy (#16010)", () => {
+  it("asks for a new recovery kit once a revocation or rotation put a new key in force (#18063)", () => {
+    const revoked = describeRevokeResult({ result: "revoked", keyEpoch: 2 }, "Pixel");
+    const rotated = describeRotateResult({ result: "rotated", keyEpoch: 2 });
+    for (const { message } of [revoked, rotated]) {
+      expect(message).toMatch(/recovery kit saved before now doesn't hold it/);
+    }
+    // No new key is in force for these yet, or at all.
+    for (const { message } of [
+      describeRevokeResult({ result: "not-found" }, "Pixel"),
+      describeRevokeResult({ result: "unconfirmed", origin: ORIGIN }, "Pixel"),
+      describeRotateResult({ result: "unsaved", reason: "The keychain is locked" }),
+    ]) {
+      expect(message).not.toMatch(/recovery kit/);
+    }
+  });
+
   it("finishes a revocation the relay took, or one for a device it no longer lists", () => {
     expect(describeRevokeResult({ result: "revoked", keyEpoch: 2 }, "Pixel").finished).toBe(true);
     expect(describeRevokeResult({ result: "not-found" }, "Pixel")).toEqual({

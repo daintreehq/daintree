@@ -10,7 +10,7 @@ import {
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LearnedDecision } from "@daintreehq/decisions-client";
+import type { LearnedDecision, StoredIdentity } from "@daintreehq/decisions-client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
@@ -62,7 +62,8 @@ vi.mock("electron", () => ({
 const keyFile = vi.hoisted(() => ({ path: "" }));
 // Claim and restore are relayIdentity's; here only how the entry runs them.
 const setupRuns = vi.hoisted(() => ({ claim: vi.fn(), restore: vi.fn() }));
-vi.mock("../relayIdentity.js", () => ({
+vi.mock("../relayIdentity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../relayIdentity.js")>()),
   claimDecisionsRelay: setupRuns.claim,
   restoreDecisionsIdentity: setupRuns.restore,
 }));
@@ -3182,7 +3183,7 @@ describe("Decisions entry", () => {
     it("records a claimed relay as unverified until a recovery kit is", async () => {
       saved.value = { enabled: true, ...RELAY, recoveryKit: { verifiedAt: 9, ...RELAY } };
       await disconnectRelay();
-      setupRuns.claim.mockResolvedValue({ identity: CLAIMED, kitVerified: false });
+      setupRuns.claim.mockResolvedValue({ identity: CLAIMED, verifiedKit: null });
 
       const result = await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
 
@@ -3195,7 +3196,8 @@ describe("Decisions entry", () => {
       saved.value = { enabled: true };
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
-      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, kitVerified: true });
+      const proven = { currentEpoch: 3, epochs: [1, 2, 3] };
+      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, verifiedKit: proven });
 
       const result = await restoreIdentity({
         url: "https://relay.example.com",
@@ -3211,6 +3213,7 @@ describe("Decisions entry", () => {
           relayOrigin: CLAIMED.relayOrigin,
           installationId: CLAIMED.installationId,
           deviceId: CLAIMED.deviceId,
+          coverage: proven,
         },
       });
       expect(result).toMatchObject({ status: { recoveryKitVerifiedAt: verifiedAt } });
@@ -3218,7 +3221,7 @@ describe("Decisions entry", () => {
 
     it("records a restored identity the same way", async () => {
       saved.value = { enabled: true };
-      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, kitVerified: false });
+      setupRuns.restore.mockResolvedValue({ identity: CLAIMED, verifiedKit: null });
 
       const result = await restoreIdentity({
         url: "https://relay.example.com",
@@ -4425,7 +4428,32 @@ describe("Decisions entry", () => {
       deviceId: RELAY.deviceId,
     };
     const KIT_TEXT = '{"v":1,"kdf":"PBKDF2-SHA256"}\n';
+    const AT_ONE = { currentEpoch: 1, epochs: [1] };
     let outDir = "";
+
+    /** Owner keys for the recorded relay at `currentEpoch`, holding `epochs`. */
+    function ownerKeys(currentEpoch: number, epochs: number[]): StoredIdentity {
+      return {
+        v: 1,
+        config: { ...RECORDED, label: "Daintree" },
+        keys: {
+          signing_private_pkcs8: "signing-private",
+          signing_public: "signing-public",
+          exchange_private_pkcs8: "exchange-private",
+          exchange_public: "exchange-public",
+        },
+        epochs: epochs.map((epoch) => ({ epoch, raw: `epoch-${epoch}` })),
+        currentEpoch,
+      };
+    }
+
+    /** What the lifetime's key store tells its observer once it has read or written `stored`. */
+    function keysRead(stored: StoredIdentity | null): void {
+      const keys = peekDecisionsService()!.getKeyStore() as unknown as {
+        heard(stored: StoredIdentity | null): void;
+      };
+      keys.heard(stored);
+    }
 
     beforeAll(() => {
       outDir = mkdtempSync(join(tmpdir(), "decisions-kit-out-"));
@@ -4627,7 +4655,11 @@ describe("Decisions entry", () => {
 
     it("records a verified kit for the identity it checked, finishing setup", async () => {
       await setUp({ consentedAt: 5 });
-      kitRuns.check.mockResolvedValue({ verified: RECORDED });
+      kitRuns.check.mockImplementation(async () => {
+        // The check reads the keys it compares the kit with.
+        keysRead(ownerKeys(1, [1]));
+        return { verified: RECORDED, coverage: AT_ONE };
+      });
 
       const result = await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
 
@@ -4638,7 +4670,7 @@ describe("Decisions entry", () => {
         PASSPHRASE
       );
       const record = (saved.value as { recoveryKit: { verifiedAt: number } }).recoveryKit;
-      expect(record).toEqual({ verifiedAt: expect.any(Number), ...RECORDED });
+      expect(record).toEqual({ verifiedAt: expect.any(Number), ...RECORDED, coverage: AT_ONE });
       expect(result).toEqual({
         result: "verified",
         status: {
@@ -4647,6 +4679,7 @@ describe("Decisions entry", () => {
           consentedAt: 5,
           keysStored: true,
           recoveryKitVerifiedAt: record.verifiedAt,
+          recoveryKitCoverage: "current",
           revision: expect.any(Number),
         },
       });
@@ -4656,6 +4689,83 @@ describe("Decisions entry", () => {
         expect(pushedStatuses().at(-1)).toMatchObject({ recoveryKitVerifiedAt: record.verifiedAt })
       );
       expect(JSON.stringify(saved.value)).not.toContain(PASSPHRASE);
+    });
+
+    it("marks a verified kit out of date once the keys move past it, holding nothing back (#18063)", async () => {
+      const passed = { checkedAt: 77, ...RECORDED, failedStep: null };
+      await setUp({
+        recoveryKit: { verifiedAt: 42, ...RECORDED, coverage: AT_ONE },
+        setupCheck: passed,
+      });
+      const load = vi.spyOn(peekDecisionsService()!.getKeyStore(), "load");
+      // No keys read yet this run: a stale kit whose recording failed would look the same.
+      expect(await getDecisionsStatus()).toMatchObject({
+        recoveryKitVerifiedAt: 42,
+        recoveryKitCoverage: "unknown",
+      });
+      keysRead(ownerKeys(1, [1]));
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "current" });
+
+      // A rotation staged epoch 2, and the relay hasn't answered yet.
+      keysRead(ownerKeys(1, [1, 2]));
+
+      expect(saved.value).toMatchObject({
+        recoveryKit: { verifiedAt: 42, ...RECORDED, coverage: AT_ONE, outOfDate: true },
+        setupCheck: passed,
+      });
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({
+          recoveryKitVerifiedAt: 42,
+          recoveryKitCoverage: "out-of-date",
+          setupCheck: { checkedAt: 77, failedStep: null },
+        })
+      );
+      // Remembered with no keys seen, as on the next start.
+      keysRead(null);
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
+      expect(load).not.toHaveBeenCalled();
+    });
+
+    it("records a kit verified while a rotation saved new keys as out of date", async () => {
+      await setUp();
+      kitRuns.check.mockImplementation(async () => {
+        keysRead(ownerKeys(1, [1]));
+        // A rotation stages epoch 2 after the check read the keys, before its pass is recorded.
+        keysRead(ownerKeys(1, [1, 2]));
+        return { verified: RECORDED, coverage: AT_ONE };
+      });
+
+      const result = await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+
+      expect(saved.value).toMatchObject({ recoveryKit: { coverage: AT_ONE, outOfDate: true } });
+      expect(result).toMatchObject({
+        result: "verified",
+        status: { recoveryKitCoverage: "out-of-date" },
+      });
+    });
+
+    it("takes an earlier build's verification as current for keys still on their one epoch", async () => {
+      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
+
+      keysRead(ownerKeys(1, [1]));
+      expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, coverage: AT_ONE } });
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "current" });
+
+      keysRead(ownerKeys(2, [1, 2]));
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
+    });
+
+    it("can't tell whether an earlier build's verification holds keys that have rotated", async () => {
+      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
+
+      keysRead(ownerKeys(2, [1, 2]));
+
+      expect(await getDecisionsStatus()).toMatchObject({
+        recoveryKitVerifiedAt: 42,
+        recoveryKitCoverage: "unknown",
+      });
+      expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
+      expect(saved.value).not.toHaveProperty("recoveryKit.coverage");
     });
 
     it("keeps an earlier verification when a later kit is refused", async () => {

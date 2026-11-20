@@ -185,6 +185,46 @@ describe("SealedKeyStore", () => {
     await expect(stat(file)).resolves.toBeDefined();
   });
 
+  it("tells its observer the keys it read, wrote or removed, and nothing a refusal or failure didn't land (#18063)", async () => {
+    keyed("v10");
+    const heard: Array<StoredIdentity | null> = [];
+    const observed = new SealedKeyStore(file, (stored) => heard.push(stored));
+
+    await observed.load();
+    const owner = identity();
+    await observed.save(owner);
+    await observed.load();
+    await expect(observed.saveIf(() => "Something else holds it", identity())).rejects.toThrow();
+    await observed.clear();
+    expect(heard).toEqual([null, owner, owner, null]);
+
+    // Another store's write reaches this observer only once this store reads it.
+    heard.length = 0;
+    await new SealedKeyStore(file).save(owner);
+    expect(heard).toEqual([]);
+    await expect(observed.clearIf(() => true)).resolves.toBe(true);
+    expect(heard).toEqual([null]);
+
+    // A keychain that won't open the keys tells the observer nothing.
+    heard.length = 0;
+    await new SealedKeyStore(file).save(owner);
+    noKey();
+    await expect(observed.load()).rejects.toBeDefined();
+    expect(heard).toEqual([]);
+  });
+
+  it("never fails a read or write for an observer that throws", async () => {
+    keyed("v10");
+    const store = new SealedKeyStore(file, () => {
+      throw new Error("observer broke");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(store.save(identity())).resolves.toBeUndefined();
+    await expect(store.load()).resolves.toEqual(identity());
+    expect(warn).toHaveBeenCalled();
+  });
+
   it("runs every store's steps on one file in turn, so one's read never lands inside another's write", async () => {
     keyed("v10");
     await new SealedKeyStore(file).save(identity());

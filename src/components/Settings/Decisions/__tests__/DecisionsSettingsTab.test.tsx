@@ -310,6 +310,7 @@ describe("DecisionsSettingsTab", () => {
         consentedAt: 1,
         relayOrigin: ORIGIN,
         recoveryKitVerifiedAt: 7,
+        recoveryKitCoverage: "current",
       },
     });
     await renderTab();

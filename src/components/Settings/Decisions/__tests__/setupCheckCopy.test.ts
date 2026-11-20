@@ -184,4 +184,15 @@ describe("unfinishedReason", () => {
       })
     ).toBeNull();
   });
+
+  it("leaves setup finished when the verified kit goes out of date (#18063)", () => {
+    expect(
+      unfinishedReason({
+        relayOrigin: ORIGIN,
+        recoveryKitVerifiedAt: 1,
+        recoveryKitCoverage: "out-of-date",
+        setupCheck: { checkedAt: 2, failedStep: null },
+      } as Parameters<typeof unfinishedReason>[0])
+    ).toBeNull();
+  });
 });
