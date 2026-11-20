@@ -400,6 +400,9 @@ describe("DecisionsInboxDialog", () => {
     // The close time is named for the ear; the others stay "asked".
     expect(nameOf(rowNamed("q-1"))).toMatch(/Closed,/);
     expect(nameOf(rowNamed("q-2"))).toMatch(/Asked,/);
+    // One read of the lines, by reference, for every row.
+    expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
+    expect(getQuestionSummariesByReference.mock.calls[0]![0].references).toHaveLength(3);
   });
 
   it("shows a History row with no close time by when it was asked, and says so (#18025)", async () => {
@@ -427,9 +430,6 @@ describe("DecisionsInboxDialog", () => {
     expect(nameOf(rowNamed("q-1"))).not.toMatch(/Closed,/);
     // Outside History the asked time stays, whatever a stray settled time says.
     expect(time("q-2")).toBe("2026-11-02T09:00:00.000Z");
-    // One read of the lines, by reference, for every row.
-    expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
-    expect(getQuestionSummariesByReference.mock.calls[0]![0].references).toHaveLength(3);
   });
 
   it("shows the first question beside the list, read by reference", async () => {
