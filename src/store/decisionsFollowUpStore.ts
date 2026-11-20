@@ -32,13 +32,20 @@ export interface FollowUpSubmission {
   phase: FollowUpPhase;
   /** It was sent again on its own once already; after that only Retry sends it again, under the same id. */
   resubmitted: boolean;
+  /**
+   * The agent's request for a reply this declines (#18030), by its message
+   * id: sent only while the question still has that request outstanding.
+   * Null for the person's own words.
+   */
+  declines: string | null;
 }
 
 /**
  * Why the last Send ended with nothing sent: the question's last read found
- * it closed, or it couldn't be read.
+ * it closed, or it couldn't be read, or the reply request a decline was for
+ * had been answered or replaced (#18030).
  */
-export type FollowUpHold = "closed" | "unreadable" | "not-running" | "failed";
+export type FollowUpHold = "closed" | "unreadable" | "not-running" | "failed" | "request-moved";
 
 export interface FollowUpRecord {
   /** What the person is writing; emptied once a message is taken. */

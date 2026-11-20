@@ -9,9 +9,17 @@ import {
   type FollowUpRecord,
   type FollowUpSubmission,
 } from "@/store/decisionsFollowUpStore";
-import type { DecisionQuestionFollowUpResult } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionQuestionContent,
+  DecisionQuestionFollowUpResult,
+} from "@shared/types/decisionsQuestion";
 import { withDeadline } from "./decisionAnswerSend";
-import { followUpVerdict, takesFollowUp } from "./decisionFollowUpModel";
+import {
+  DECLINE_REPLY_TEXT,
+  declinableReplyRequest,
+  followUpVerdict,
+  takesFollowUp,
+} from "./decisionFollowUpModel";
 import { readTargetContent, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 
 /**
@@ -86,13 +94,17 @@ function updateClaimed(
 /**
  * Moves the claimed follow-up on. Once the relay has taken it its words
  * leave the draft, unless the person has written something else since; a
- * queued one keeps them, as the relay may still turn it away.
+ * queued one keeps them, as the relay may still turn it away. A decline
+ * (#18030) never came from the draft, so it leaves the draft alone.
  */
 function setPhase(key: string, claim: Claim, phase: FollowUpPhase): void {
   const taken = phase.kind === "settled" && phase.outcome.status === "sent";
   updateClaimed(key, claim, (submission, record) => ({
     ...record,
-    draft: taken && record.draft === submission.payload.text ? "" : record.draft,
+    draft:
+      taken && submission.declines === null && record.draft === submission.payload.text
+        ? ""
+        : record.draft,
     submission: { ...submission, phase },
   }));
 }
@@ -218,6 +230,11 @@ async function follow(key: string, claim: Claim, retry: boolean): Promise<void> 
       drop(key, claim, "closed");
       return;
     }
+    // A decline goes again only for the request it was confirmed for, never one that replaced it.
+    if (!stillDeclinable(fresh.question, submission.declines)) {
+      drop(key, claim, "request-moved");
+      return;
+    }
     updateClaimed(key, claim, (current, record) => ({
       ...record,
       submission: { ...current, resubmitted: true, phase: { kind: "sending" } },
@@ -260,6 +277,11 @@ export function followFollowUp(key: string, retry = false): Promise<void> {
   return follow(key, { generation: store.generation, messageId: submission.messageId }, retry);
 }
 
+/** Whether a decline of `declines` may still go: always for the person's own words. */
+function stillDeclinable(question: DecisionQuestionContent, declines: string | null): boolean {
+  return declines === null || declinableReplyRequest(question)?.messageId === declines;
+}
+
 /**
  * Sends the person's draft for `key`: reads the question again first, and
  * signs nothing unless it still takes a follow-up. The words are the store's
@@ -270,10 +292,37 @@ export async function sendFollowUp(
   target: DecisionQuestionTarget,
   now: () => number = Date.now
 ): Promise<void> {
-  const generation = useDecisionsFollowUpStore.getState().generation;
   const start = readFollowUpRecord(key);
   if (!canStartFollowUp(start)) return;
-  const text = start.draft;
+  await submitNew(key, target, start.draft, null, now);
+}
+
+/**
+ * Declines the agent's request for a reply `requestId` on `key` (#18030) by
+ * sending the person's fixed follow-up, `DECLINE_REPLY_TEXT`: the protocol
+ * has no other record that ends the wait on phones while the answer stands.
+ * Signed only while a fresh read still has that very request outstanding on
+ * the answered question; the draft stays as it is.
+ */
+export async function declineReply(
+  key: string,
+  target: DecisionQuestionTarget,
+  requestId: string,
+  now: () => number = Date.now
+): Promise<void> {
+  if (isFollowUpInFlight(readFollowUpRecord(key))) return;
+  await submitNew(key, target, DECLINE_REPLY_TEXT, requestId, now);
+}
+
+/** Reads the question again, then signs and sends `text` under a new id, unless something holds it. */
+async function submitNew(
+  key: string,
+  target: DecisionQuestionTarget,
+  text: string,
+  declines: string | null,
+  now: () => number
+): Promise<void> {
+  const generation = useDecisionsFollowUpStore.getState().generation;
   // The last attempt's failure goes as this one starts; one the relay took stays shown until this one moves.
   change(key, generation, (record) => ({
     ...record,
@@ -305,6 +354,10 @@ export async function sendFollowUp(
     hold(key, generation, "closed");
     return;
   }
+  if (!stillDeclinable(read.question, declines)) {
+    hold(key, generation, "request-moved");
+    return;
+  }
   const claim: Claim = { generation, messageId: crypto.randomUUID() };
   const placed = change(key, generation, (record) => ({
     ...record,
@@ -315,6 +368,7 @@ export async function sendFollowUp(
       target,
       phase: { kind: "sending" },
       resubmitted: false,
+      declines,
     },
   }));
   if (!placed) return;

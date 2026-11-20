@@ -9,9 +9,12 @@ import type {
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
 import {
+  DECLINE_REPLY_TEXT,
   deliveryStalled,
   FOLLOW_UP_TEXT_BYTES,
+  declinableReplyRequest,
   followUpAttemptText,
+  followUpHoldText,
   followUpProgressText,
   followUpVerdict,
   replyRequest,
@@ -141,6 +144,44 @@ describe("replyRequest", () => {
   });
 });
 
+describe("declinableReplyRequest (#18030)", () => {
+  const asking = message({ messageId: "m2", expectsReply: true });
+
+  it.each<[DecisionQuestionStatus, boolean]>([
+    ["human-answered", true],
+    ["proxy-answered", true],
+    // An open question's request goes with the question, which the person dismisses instead.
+    ["open", false],
+    ["queued", false],
+    ["publish-failed", false],
+    ["cancelled", false],
+    ["expired", false],
+  ])("offers declining a request on a question %s: %s", (status, offered) => {
+    expect(declinableReplyRequest({ status, thread: [answer(), asking] })).toBe(
+      offered ? asking : null
+    );
+  });
+
+  it("reads the request as the protocol does: answered, replaced, or never made", () => {
+    const declinable = (...thread: DecisionThreadEntry[]) =>
+      declinableReplyRequest({ status: "human-answered", thread });
+    expect(declinable(answer(), asking, message({ messageId: "m3", from: "person" }))).toBeNull();
+    expect(declinable(answer(), asking, answer({ entryId: "a2", correction: true }))).toBeNull();
+    // The model's answer answers nothing; the agent's next message replaces the request.
+    expect(declinable(answer(), asking, answer({ entryId: "a2", from: "model" }))).toBe(asking);
+    expect(declinable(answer(), asking, message({ messageId: "m3" }))).toBeNull();
+    expect(declinable(answer(), message())).toBeNull();
+  });
+
+  it("sends words a message can carry", () => {
+    expect(followUpVerdict(DECLINE_REPLY_TEXT).canSend).toBe(true);
+  });
+
+  it("says nothing was sent when the request moved before the decline went", () => {
+    expect(followUpHoldText("request-moved")).toMatch(/answered or replaced.*nothing was sent/);
+  });
+});
+
 describe("followUpVerdict", () => {
   it("mirrors the protocol's bound on a message's words", () => {
     // Mirrored rather than imported, so the renderer doesn't take in the protocol's schemas.
@@ -192,6 +233,14 @@ describe("what the composer says", () => {
         "m1"
       )
     ).toMatch(/couldn't be typed in/);
+    // Its terminal may be gone: the way out is the inbox, never that terminal's menu.
+    expect(
+      followUpProgressText(
+        sent,
+        { thread: [message({ from: "person", deliveryStatus: "needs-attention" })] },
+        "m1"
+      )
+    ).not.toMatch(/terminal's/);
     // Withdrawn with its question, or handled: kept in the thread, never typed.
     expect(
       followUpProgressText(
