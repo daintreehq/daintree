@@ -422,7 +422,9 @@ describe("DecisionQuestionDialog images (#17100)", () => {
     await screen.findByRole("button", { name: "Open Reference image 2" });
     expect(revokeObjectURL.mock.calls.map(([url]) => url).sort()).toEqual(made.sort());
     expect(
-      getQuestionImage.mock.calls.filter(([payload]) => payload.attachmentId === BEFORE.attachmentId)
+      getQuestionImage.mock.calls.filter(
+        ([payload]) => payload.attachmentId === BEFORE.attachmentId
+      )
     ).toHaveLength(2);
   });
 

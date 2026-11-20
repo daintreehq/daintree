@@ -166,9 +166,7 @@ export function composeVerdict(input: ComposeInput): ComposeVerdict {
   const chosen = chosenOption(question, draft);
   const waiting = chosen !== null ? blockedOptions.includes(chosen) : remainingImages > 0;
   const unshownHint =
-    unshown.length > 0
-      ? unshownText(question, unshown, question.options.some(isRejection))
-      : null;
+    unshown.length > 0 ? unshownText(question, unshown, question.options.some(isRejection)) : null;
 
   let hint: string | null = null;
   if (input.closed) hint = null;

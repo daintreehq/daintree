@@ -165,12 +165,21 @@ describe("composeVerdict", () => {
 
     it("takes Reject, with or without a note, and holds Approve, naming the image", () => {
       const none = composeVerdict(input(content, { reviewed: seenX, unshown: failedY }));
-      expect(none).toMatchObject({ canSend: false, remainingImages: 1, blockedOptions: ["approve"] });
+      expect(none).toMatchObject({
+        canSend: false,
+        remainingImages: 1,
+        blockedOptions: ["approve"],
+      });
       expect(none.hint).toMatch(/^After image 2 couldn't be shown/);
       expect(none.hint).toMatch(/approved/);
 
       const reject = composeVerdict(
-        input(content, { selected: "reject", text: "send new ones", reviewed: seenX, unshown: failedY })
+        input(content, {
+          selected: "reject",
+          text: "send new ones",
+          reviewed: seenX,
+          unshown: failedY,
+        })
       );
       expect(reject.canSend).toBe(true);
       // Still says why Approve isn't on offer.
