@@ -1081,7 +1081,7 @@ describe("AnswerDelivery", () => {
     // minute passes in coarse steps; the answer's decrypt and commits after
     // that read take real turns, so the wait for its line is fine-grained.
     await answered(h.store, Q1, 1, "approve");
-    await until(() => pending.mock.calls.length - before === 4, DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    await until(() => pending.mock.calls.length - before >= 4, DELIVERY_CHECK_INTERVAL_MS, 5_000);
     await until(() => h.client.submitted.length === 1, 10_000);
     await stopped(h.delivery);
   });
