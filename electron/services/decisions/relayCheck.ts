@@ -177,7 +177,9 @@ export async function checkDecisionsRelay(
         relay.protocolMin !== daintree.protocolMin ||
         relay.protocolMax !== daintree.protocolMax,
     },
-    advertisesAgentStoppedPushes: relayInfo.features?.includes(AGENT_STOPPED_PUSH_FEATURE) === true,
+    ...(relayInfo.features?.includes(AGENT_STOPPED_PUSH_FEATURE) === true
+      ? {}
+      : { advertisesAgentStoppedPushes: false as const }),
   };
 }
 

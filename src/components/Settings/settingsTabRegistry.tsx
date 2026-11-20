@@ -2423,15 +2423,6 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
-        id: "decisions-desktop-notifications",
-        section: "Notifications",
-        title: "Desktop notifications",
-        description:
-          "Questions, follow-ups that want a reply and answers that couldn't be typed in show on this computer while Settings → Notifications has notifications on",
-        keywords: ["desktop", "notification", "alert", "question", "banner", "os"],
-        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
-      },
-      {
         id: "decisions-hold-phone-pushes",
         section: "Notifications",
         title: "Hold phone notifications while I'm at this computer",

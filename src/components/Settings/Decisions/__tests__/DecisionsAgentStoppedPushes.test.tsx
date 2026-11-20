@@ -53,7 +53,7 @@ function checked(advertisesAgentStoppedPushes: boolean, origin = ORIGIN): Decisi
     result: "claimed",
     origin,
     compatibility: { relay: versions, daintree: versions, diverges: false },
-    advertisesAgentStoppedPushes,
+    ...(advertisesAgentStoppedPushes ? {} : { advertisesAgentStoppedPushes: false as const }),
   };
 }
 
@@ -105,8 +105,8 @@ function described(): string {
     .join(" ");
 }
 
-const NO_PHONE = "No paired phone or tablet has notifications turned on";
-const NO_SUPPORT = "Your relay doesn't advertise support for them";
+const NO_PHONE = "Your relay lists no paired phone or tablet with notifications turned on";
+const NO_SUPPORT = "Your relay didn't advertise support for them";
 
 function stoppedSwitch(): HTMLButtonElement {
   return screen.getByRole("switch", {
@@ -239,6 +239,10 @@ describe("Decisions agent-stopped pushes switch (#17319)", () => {
         fireEvent.click(stoppedSwitch());
       });
       expect(setAgentStoppedPushes).toHaveBeenCalledExactlyOnceWith(false);
+      // Off, both still hold: the note is about the relay and its phones, not the switch.
+      expect(on()).toBe("false");
+      expect(described()).toContain(NO_PHONE);
+      expect(described()).toContain(NO_SUPPORT);
     });
   });
 

@@ -608,8 +608,10 @@ describe("DecisionsSettingsTab", () => {
       .split(" ")
       .map((id) => document.getElementById(id)?.textContent ?? "")
       .join(" ");
-    expect(described).toContain("No paired phone or tablet has notifications turned on");
-    expect(described).toContain("Your relay doesn't advertise support for them");
+    expect(described).toContain(
+      "Your relay lists no paired phone or tablet with notifications turned on"
+    );
+    expect(described).toContain("Your relay didn't advertise support for them");
 
     act(() =>
       pushStatus({

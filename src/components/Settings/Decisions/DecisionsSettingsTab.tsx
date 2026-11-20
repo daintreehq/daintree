@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
@@ -123,6 +123,12 @@ export function DecisionsSettingsTab({
   // devices, for Devices and Remote Hosts and for Connection's facts; both
   // shared with Notifications.
   const relay = useRelayCheck();
+  // Off unmounts Connection: what it checked, or is checking, goes with it, as
+  // its own check did before the tab held it.
+  const forgetRelayCheck = useEffectEvent(() => relay.reset());
+  useEffect(() => {
+    if (!on) forgetRelayCheck();
+  }, [on]);
   const devicesRead = useDecisionsDevices(on ? (status.relayOrigin ?? null) : null);
   const { supported } = useDecisionsAgentSupport();
   const installedRead = useCliAvailabilityStore((state) => state.hasRealData);

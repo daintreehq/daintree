@@ -529,8 +529,11 @@ export type DecisionsRelayCheck =
       result: "incompatible" | "claim-not-configured" | "unclaimed" | "claimed";
       origin: string;
       compatibility: DecisionsRelayCompatibility;
-      /** Its `/info` lists `agent-stopped-push-v1`, so it can tell a phone an agent stopped (#18061). */
-      advertisesAgentStoppedPushes: boolean;
+      /**
+       * Its `/info` doesn't list `agent-stopped-push-v1`, so it won't tell a
+       * phone an agent stopped (#18061); absent when it does.
+       */
+      advertisesAgentStoppedPushes?: false;
     };
 
 /**

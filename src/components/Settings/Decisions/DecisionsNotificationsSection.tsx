@@ -13,13 +13,14 @@ import { deviceKind } from "./devicesCopy";
 import type { UseDecisionsDevicesResult } from "./useDecisionsDevices";
 import { useDecisionsSwitch } from "./useDecisionsSwitch";
 
-const WHAT_SHOWS = "questions, follow-ups that want a reply and answers that couldn't be typed in";
+const WHAT_ALERTS = "questions, follow-ups that want a reply and answers that need attention";
 
 /**
  * What keeps agent-stopped pushes from reaching a phone, as last observed:
  * the relay's latest list of devices has no phone or tablet with
  * notifications on, or the latest check of the relay set up here found it
- * doesn't advertise them. Unread, failed or another relay's reads say nothing.
+ * doesn't advertise them. Unread, failed or another relay's reads say nothing,
+ * and so does the switch: the note holds whichever way it is set.
  */
 export function agentStoppedPushesNote(
   status: DecisionsStatus,
@@ -32,15 +33,15 @@ export function agentStoppedPushesNote(
     devices.failure === null &&
     !devices.devices.some((device) => deviceKind(device.role) === "answers" && device.pushEnabled)
   ) {
-    notes.push("No paired phone or tablet has notifications turned on, so none can reach one.");
+    notes.push("Your relay lists no paired phone or tablet with notifications turned on.");
   }
   if (
     relayCheck !== null &&
-    "advertisesAgentStoppedPushes" in relayCheck &&
+    "compatibility" in relayCheck &&
     relayCheck.origin === status.relayOrigin &&
-    !relayCheck.advertisesAgentStoppedPushes
+    relayCheck.advertisesAgentStoppedPushes === false
   ) {
-    notes.push("Your relay doesn't advertise support for them, so it can't send them.");
+    notes.push("Your relay didn't advertise support for them when it was last checked.");
   }
   return notes.length > 0 ? notes.join(" ") : undefined;
 }
@@ -101,8 +102,8 @@ export function DecisionsNotificationsSection({
           label="Desktop notifications"
           description={
             desktopOff
-              ? `Off in Settings → Notifications: ${WHAT_SHOWS} don't show on this computer`
-              : `On in Settings → Notifications: ${WHAT_SHOWS} show on this computer, unless a project turns its own off`
+              ? `Off in Settings → Notifications, so ${WHAT_ALERTS} raise no desktop alerts here`
+              : `On in Settings → Notifications, which lets ${WHAT_ALERTS} raise desktop alerts here`
           }
           control={({ descriptionId }) => (
             <Button
@@ -118,7 +119,7 @@ export function DecisionsNotificationsSection({
         />
         <SettingsDependents
           disabled={desktopOff}
-          reason="Nothing is held while desktop notifications are off: your relay notifies your phone of a new question at once"
+          reason="Desktop notifications are off, so Daintree isn't telling your relay you're here to hold your phone's notifications"
         >
           <SettingsSwitchCard
             id="decisions-hold-phone-pushes"

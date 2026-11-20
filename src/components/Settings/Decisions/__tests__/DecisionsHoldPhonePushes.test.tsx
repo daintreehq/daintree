@@ -196,7 +196,7 @@ describe("Decisions hold phone pushes switch (#17240)", () => {
     expect(on()).toBe("true");
     expect(holdSwitch().disabled).toBe(true);
     expect(describedBy(holdSwitch())).toContain(
-      "Nothing is held while desktop notifications are off: your relay notifies your phone of a new question at once"
+      "Desktop notifications are off, so Daintree isn't telling your relay you're here to hold your phone's notifications"
     );
     fireEvent.click(holdSwitch());
     expect(setHoldPhonePushes).not.toHaveBeenCalled();
@@ -206,9 +206,18 @@ describe("Decisions hold phone pushes switch (#17240)", () => {
   });
 
   it("takes changes, with no reason beside it, while desktop notifications are on (#18061)", async () => {
+    setHoldPhonePushes.mockResolvedValueOnce({
+      state: "connected",
+      holdPhonePushes: false,
+      revision: 1,
+    });
     await renderSection({ state: "connected" });
     expect(holdSwitch().disabled).toBe(false);
-    expect(describedBy(holdSwitch())).not.toContain("Nothing is held");
+    expect(describedBy(holdSwitch())).not.toContain("Desktop notifications are off");
+    await act(async () => {
+      fireEvent.click(holdSwitch());
+    });
+    expect(setHoldPhonePushes).toHaveBeenCalledExactlyOnceWith(false);
     expect(document.getElementById("decisions-desktop-notifications")?.textContent).toContain(
       "On in Settings → Notifications"
     );
