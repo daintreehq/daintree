@@ -10,6 +10,7 @@ import {
   cancelNote,
   chipLabel,
   chipSummary,
+  deadlineNote,
   decisionItems,
   deliveryNotes,
   isCancellable,
@@ -371,5 +372,29 @@ describe("a person's dismissal or withdrawal", () => {
       new Set(["q1"])
     );
     expect(cancelNote(withdrawn)).toBeNull();
+  });
+});
+
+describe("deadlineNote (#17943)", () => {
+  const NOW = Date.parse("2026-11-20T14:00:00.000Z");
+  const timed = (alias: number, ms: number | null, status: "open" | "queued" = "open") =>
+    decisionItems(
+      pane({
+        open: [
+          { ...open(alias, status), expiresAt: ms === null ? null : new Date(ms).toISOString() },
+        ],
+      })
+    )[0]!;
+
+  it("says when to reply by while it's ahead, and that it passed once it has", () => {
+    expect(deadlineNote(timed(1, NOW + 60_000), NOW)).toMatch(/^Reply by /);
+    expect(deadlineNote(timed(1, NOW + 60_000, "queued"), NOW)).toMatch(/^Reply by /);
+    expect(deadlineNote(timed(1, NOW), NOW)).toMatch(/Deadline passed/);
+  });
+
+  it("says nothing for a question that never expires, or a row that isn't waiting", () => {
+    expect(deadlineNote(timed(1, null), NOW)).toBeNull();
+    const [answer] = decisionItems(pane({ waiting: [waiting(2)] }));
+    expect(deadlineNote(answer!, NOW)).toBeNull();
   });
 });

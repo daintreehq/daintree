@@ -75,13 +75,16 @@ export function groupOf(standing: DecisionQuestionStanding): InboxGroupId {
  * person. Without a clock, as before.
  */
 export function inboxGroupOf(
-  item: Pick<DecisionQuestionListItem, "standing" | "inbox" | "expiresAt">,
+  item: Pick<DecisionQuestionListItem, "standing" | "inbox"> & { expiresAt?: string | null },
   nowMs: number | null = null
 ): InboxGroupId {
   const group = groupOf(item.standing);
   if (group !== "needs-you") return group;
   if (item.inbox?.cleared === true) return "cleared";
-  return nowMs !== null && deadlineElapsed(item, nowMs) ? "awaiting" : group;
+  const elapsed =
+    nowMs !== null &&
+    deadlineElapsed({ expiresAt: item.expiresAt ?? null, standing: item.standing }, nowMs);
+  return elapsed ? "awaiting" : group;
 }
 
 /** What an ask whose deadline passed says until the store records how it closed (#17943). */

@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { DecisionThreadAnswer, DecisionThreadMessage } from "@shared/types/decisionsQuestion";
 import {
   choiceLabels,
+  closureNoticeText,
   emptyEntryText,
+  planHeading,
   positionText,
   questionStatusText,
+  replyModeText,
   threadEntryHeading,
 } from "../decisionQuestionModel";
 
@@ -155,5 +158,64 @@ describe("decisionQuestionModel", () => {
   it("gives a position only when there is more than one question", () => {
     expect(positionText(0, 1)).toBeNull();
     expect(positionText(1, 3)).toBe("2 of 3");
+  });
+
+  describe("rounds and closing notices (#17943)", () => {
+    it("tells an advisory expiry, a withdrawal and a never-published question apart", () => {
+      const texts = [
+        questionStatusText({ status: "expired", closedReason: "expired", replyMode: "blocking" }),
+        questionStatusText({ status: "expired", closedReason: "expired", replyMode: "advisory" }),
+        questionStatusText({ status: "cancelled", closedReason: "withdrawn" }),
+        questionStatusText({ status: "cancelled", closedReason: "declined" }),
+        questionStatusText({ status: "publish-failed", closedReason: "never-published" }),
+        questionStatusText({ status: "publish-failed", closedReason: null }),
+      ];
+      expect(new Set(texts).size).toBe(texts.length);
+    });
+
+    it("names the mode only where its machine said", () => {
+      expect(replyModeText(undefined)).toBeNull();
+      expect(replyModeText("advisory")).not.toBe(replyModeText("blocking"));
+    });
+
+    it("heads the plan by whether it can still come", () => {
+      expect(planHeading("open")).toBe(planHeading("queued"));
+      expect(planHeading("open")).not.toBe(planHeading("expired"));
+    });
+
+    it("says how far the closing notice got, and what an advisory one says of the plan", () => {
+      expect(closureNoticeText({ closedReason: null, closureNotice: null })).toBeNull();
+      // A withdrawal types nothing.
+      expect(
+        closureNoticeText({
+          closedReason: "withdrawn",
+          closureNotice: { delivery: "pending", disposition: null },
+        })
+      ).toBeNull();
+      const delivered = closureNoticeText({
+        closedReason: "expired",
+        closureNotice: { delivery: "delivered", disposition: null },
+      });
+      expect(delivered).toMatch(/was typed into the terminal\.$/);
+      const deliveries = (
+        ["pending", "delivered", "uncertain", "needs-attention", "stopped"] as const
+      ).map((delivery) =>
+        closureNoticeText({
+          closedReason: "declined",
+          closureNotice: { delivery, disposition: null },
+        })
+      );
+      expect(new Set(deliveries).size).toBe(deliveries.length);
+      const due = closureNoticeText({
+        closedReason: "expired",
+        closureNotice: { delivery: "delivered", disposition: "fallback-due" },
+      });
+      const withheld = closureNoticeText({
+        closedReason: "expired",
+        closureNotice: { delivery: "pending", disposition: "fallback-withheld" },
+      });
+      expect(due).toMatch(/may go ahead/);
+      expect(withheld).toMatch(/doesn't clear the agent/);
+    });
   });
 });

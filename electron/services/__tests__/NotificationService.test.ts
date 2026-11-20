@@ -117,6 +117,7 @@ vi.mock("../../window/projectPresenceChanges.js", async (importOriginal) => {
 import { sendToRenderer } from "../../ipc/utils.js";
 import { notificationService, type NotificationState } from "../NotificationService.js";
 import { setDecisionQuestions } from "../decisionsQuestionList.js";
+import { getSystemSleepService } from "../SystemSleepService.js";
 import type {
   DecisionQuestionListItem,
   DecisionQuestionStanding,
@@ -1388,6 +1389,60 @@ describe("NotificationService", () => {
       expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
       expect(win2.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
       expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+    });
+
+    it("takes an ask out of both windows' titles and the Dock as its deadline passes, and on a wake (#17943)", async () => {
+      const start = Date.parse("2026-11-20T14:00:00.000Z");
+      vi.setSystemTime(start);
+      let wake: ((sleptMs: number) => void) | null = null;
+      const onWake = vi.spyOn(getSystemSleepService(), "onWake").mockImplementation((listener) => {
+        wake = listener;
+        return () => {
+          wake = null;
+        };
+      });
+      try {
+        const win1 = windowWithViews(11);
+        const win2 = windowWithViews(21);
+        win1.viewProjects[11] = "shared";
+        win2.viewProjects[21] = "shared";
+        notificationService.initialize(createRegistryMock([win1, win2]) as never);
+        await questionsLoaded();
+
+        const at = (ms: number) => new Date(start + ms).toISOString();
+        setDecisionQuestions([
+          { ...question("shared", "terminal-a"), expiresAt: at(60_000) },
+          { ...question("shared", "terminal-b", { kind: "queued" }), expiresAt: at(120_000) },
+          // A reply asked for isn't bound by the question's deadline.
+          {
+            ...question("shared", "terminal-c", { kind: "waiting", reason: "reply" }),
+            expiresAt: at(60_000),
+          },
+        ]);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+        expect(win2.setTitle).toHaveBeenLastCalledWith("(2) Daintree");
+
+        vi.advanceTimersByTime(60_000);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        expect(win2.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(1);
+
+        // A sleep: the wall clock moves on while no timer runs, and the wake counts again.
+        setDecisionQuestions([
+          { ...question("shared", "terminal-c", open), expiresAt: at(30 * 60_000) },
+        ]);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("(1) Daintree");
+        vi.setSystemTime(start + 60 * 60_000);
+        wake!(60 * 60_000);
+        expect(win1.setTitle).toHaveBeenLastCalledWith("Daintree");
+        expect(win2.setTitle).toHaveBeenLastCalledWith("Daintree");
+        expect(electronMock.app.setBadgeCount).toHaveBeenLastCalledWith(0);
+
+        notificationService.dispose();
+        expect(wake).toBeNull();
+      } finally {
+        onWake.mockRestore();
+      }
     });
 
     it("moves a question's count to a window when a view of its project opens there", async () => {

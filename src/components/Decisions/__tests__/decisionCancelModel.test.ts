@@ -46,6 +46,19 @@ describe("decisionCancelModel", () => {
     expect(body).toMatch(/declined on this computer/);
   });
 
+  it("says a decline doesn't let an advisory round's plan go ahead, and points to Clear for local (#17943)", () => {
+    const advisory = dismissBody({ ...TARGET, replyMode: "advisory" });
+    const blocking = dismissBody({ ...TARGET, replyMode: "blocking" });
+    expect(advisory).toMatch(/doesn't let the agent go ahead with the plan/);
+    expect(blocking).not.toMatch(/plan/);
+    // A mode not known for the revision being signed says nothing of a plan.
+    expect(dismissBody({ ...TARGET, replyMode: null })).toBe(blocking);
+    for (const body of [advisory, blocking]) {
+      expect(body).toMatch(/nothing is decided or approved/);
+      expect(body).toMatch(/this computer only, and tells no one/);
+    }
+  });
+
   it("never promises typing into the terminal for a withdrawal, and waits on the relay only for a question it has", () => {
     for (const queued of [false, true]) {
       const body = cancelBody(queued);

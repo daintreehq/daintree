@@ -16,14 +16,15 @@ import type {
  * clock (#17943), which can't be answered any more.
  */
 export function isWaitingOnPerson(
-  item: Pick<DecisionQuestionListItem, "standing" | "inbox" | "expiresAt">,
+  item: Pick<DecisionQuestionListItem, "standing" | "inbox"> & { expiresAt?: string | null },
   nowMs: number | null = null
 ): boolean {
   return (
     groupOf(item.standing) === "needs-you" &&
     item.inbox?.seen !== true &&
     item.inbox?.cleared !== true &&
-    (nowMs === null || !deadlineElapsed(item, nowMs))
+    (nowMs === null ||
+      !deadlineElapsed({ expiresAt: item.expiresAt ?? null, standing: item.standing }, nowMs))
   );
 }
 

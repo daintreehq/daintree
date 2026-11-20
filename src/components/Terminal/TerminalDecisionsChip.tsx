@@ -36,12 +36,14 @@ import { DecisionCancelDialog } from "@/components/Decisions/DecisionCancelDialo
 import { dismissingQuestionIds } from "@/components/Decisions/decisionDeclineSend";
 import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
 import { paneQuestion, questionOf } from "@/components/Decisions/decisionQuestionTarget";
+import { useDecisionsClock } from "@/components/Decisions/useDecisionsClock";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import {
   answerNote,
   cancelNote,
   chipLabel,
   chipSummary,
+  deadlineNote,
   decisionItems,
   deliveryNotes,
   isCancellable,
@@ -172,16 +174,19 @@ function OpenInboxButton({ onOpen }: { onOpen: () => void }) {
 function DecisionRow({
   item,
   line,
+  nowMs,
   onOpen,
   onDismiss,
 }: {
   item: DecisionItem;
   line: string | null;
+  nowMs: number;
   onOpen: () => void;
   /** Null for a question that can't be dismissed now. */
   onDismiss: (() => void) | null;
 }) {
   const attention = ATTENTION_KINDS.has(item.kind);
+  const deadline = deadlineNote(item, nowMs);
   const focusRestore = useOverlayFocusRestore();
   return (
     // Two sibling controls, never one inside the other: the row opens the
@@ -232,6 +237,14 @@ function DecisionRow({
           </span>
           {item.reason !== null && (
             <span className="text-2xs text-text-secondary [text-wrap:balance]">{item.reason}</span>
+          )}
+          {deadline !== null && (
+            <span
+              className="text-2xs text-text-secondary tabular-nums"
+              data-testid="terminal-decisions-deadline"
+            >
+              {deadline}
+            </span>
           )}
         </span>
         {item.askedAt !== null && (
@@ -308,6 +321,11 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const items = state === null ? [] : decisionItems(state, wait, cancelling, dismissing);
   const questionIds = items.map((item) => item.questionId);
   const lines = useQuestionLines(terminalId, questionIds, open);
+  // Only while the popover is open: the chip itself names no deadline (#17943).
+  const nowMs = useDecisionsClock(
+    items.map((item) => (item.expiresAt === null ? null : new Date(item.expiresAt).toISOString())),
+    open
+  );
 
   // Outside the popover and the chip, so neither closing nor the last row going takes it away.
   const askedId = cancel === null ? null : questionOf(cancel.target.question).questionId;
@@ -433,6 +451,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                   key={item.questionId}
                   item={item}
                   line={lines.get(item.questionId) ?? null}
+                  nowMs={nowMs}
                   onOpen={() => {
                     setOpen(false);
                     openQuestion(terminalId, questionIds, item.questionId);

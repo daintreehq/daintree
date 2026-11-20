@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import type {
@@ -11,6 +11,7 @@ import type {
   DecisionQuestionContentResult,
 } from "@shared/types/decisionsQuestion";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
 import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
@@ -715,5 +716,113 @@ describe("answering a question from the view (#17102)", () => {
     await act(async () => fireEvent.click(send()));
     await waitFor(() => expect(screen.queryByTestId("decision-question-dismiss")).toBeNull());
     expect(status()).toMatch(/Sending/);
+  });
+});
+
+describe("a timed question in the view (#17943)", () => {
+  const PHONE_ANSWER = {
+    type: "answer" as const,
+    entryId: "a-phone",
+    revision: 1,
+    from: "person" as const,
+    onComputer: false,
+    correction: false,
+    confirmsModel: false,
+    choices: [{ id: "no", label: "Hold" }],
+    text: null,
+    reason: null,
+    images: [],
+    sentAt: "2026-11-02T10:04:00.000Z",
+    unreadable: false,
+  };
+
+  it("names the mode, when to reply by, the time left and the agent's plan, and what declining means", async () => {
+    questions.q1 = question("q1", {
+      expiresAt: new Date(Date.now() + 8 * 60_000 + 30_000).toISOString(),
+      replyMode: "advisory",
+      plannedFallback: "use the existing fixture",
+    });
+    await openOn("q1");
+    const deadline = screen.getByTestId("decision-question-deadline").textContent ?? "";
+    expect(deadline).toMatch(/^Advisory/);
+    expect(deadline).toMatch(/Reply by .+/);
+    expect(deadline).toMatch(/8 minutes left/);
+    const plan = screen.getByTestId("decision-question-plan").textContent ?? "";
+    expect(plan).toMatch(/If unanswered, the agent plans to/);
+    expect(plan).toMatch(/use the existing fixture/);
+
+    // The consequence is said before anything is signed.
+    fireEvent.click(screen.getByTestId("decision-question-dismiss"));
+    const confirm = await screen.findByRole("alertdialog");
+    expect(confirm.textContent).toMatch(/doesn't let the agent go ahead with the plan/);
+  });
+
+  it("names no mode or plan for a question that never expires", async () => {
+    questions.q1 = question("q1", { replyMode: "blocking", plannedFallback: null });
+    await openOn("q1");
+    expect(screen.queryByTestId("decision-question-deadline")).toBeNull();
+    expect(screen.queryByTestId("decision-question-plan")).toBeNull();
+  });
+
+  it("keeps the focused draft and says so once as the deadline passes with the view open", async () => {
+    const announce = vi.fn();
+    const original = useAnnouncerStore.getState().announce;
+    useAnnouncerStore.setState({ announce });
+    onTestFinished(() => useAnnouncerStore.setState({ announce: original }));
+    questions.q1 = question("q1", {
+      kind: "text",
+      options: [],
+      allowText: true,
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() + 600).toISOString(),
+    });
+    await openOn("q1");
+    const text = screen.getByTestId("decision-answer-text") as HTMLTextAreaElement;
+    text.focus();
+    fireEvent.change(text, { target: { value: "Use the fixture" } });
+
+    await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    expect(document.activeElement).toBe(text);
+    expect(text.value).toBe("Use the fixture");
+    expect(text.readOnly).toBe(true);
+    const deadline = screen.getByTestId("decision-question-deadline").textContent ?? "";
+    expect(deadline).toMatch(/Deadline passed/);
+    expect(deadline).toMatch(/Awaiting an update/);
+    // Said once as it changes, never again while nothing does.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+    const said = announce.mock.calls.filter(([words]) => /deadline has passed/.test(String(words)));
+    expect(said).toHaveLength(1);
+  });
+
+  it("shows a phone's answer that came in time once it's read, in place of the passed deadline", async () => {
+    questions.q1 = question("q1", {
+      replyMode: "blocking",
+      expiresAt: new Date(Date.now() + 300).toISOString(),
+    });
+    await openOn("q1");
+    fireEvent.click(option("Ship it"));
+    await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    expect(screen.getByTestId("decision-question-deadline").textContent).toMatch(
+      /Deadline passed/
+    );
+
+    // Reconnected: the phone's answer committed before the deadline, so it never expired.
+    await move(
+      question("q1", {
+        status: "human-answered",
+        replyMode: "blocking",
+        expiresAt: questions.q1!.expiresAt,
+        thread: [PHONE_ANSWER],
+      })
+    );
+    await waitFor(() => expect(screen.queryByTestId("decision-answer-composer")).toBeNull());
+    expect(status()).toMatch(/answered elsewhere/);
+    expect(screen.queryByTestId("decision-question-deadline")).toBeNull();
+    expect(screen.getByTestId("decision-question-thread").textContent).toMatch(
+      /Answer from your phone/
+    );
+    expect(answerQuestion).not.toHaveBeenCalled();
   });
 });

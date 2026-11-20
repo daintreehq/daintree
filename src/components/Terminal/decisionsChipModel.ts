@@ -1,3 +1,5 @@
+import { replyByText } from "@/components/Decisions/decisionDeadline";
+import { ELAPSED_NOTE } from "@/components/Decisions/decisionsInboxModel";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import { pluralize } from "@/lib/pluralize";
 
@@ -319,6 +321,17 @@ export function deliveryNotes(
 /** How to answer, while any question still waits for one: its row opens the composer. */
 export function answerNote(items: readonly DecisionItem[]): string | null {
   return items.some(isCancellable) ? "Open a question to answer it here" : null;
+}
+
+/**
+ * What an open or queued question's popover row adds about its deadline
+ * (#17943): when to reply by in this computer's time, or that it passed with
+ * nothing confirming how it closed yet. Null for one that never expires, and
+ * for every other row. Only the expanded popover says it: the chip stays compact.
+ */
+export function deadlineNote(item: DecisionItem, nowMs: number): string | null {
+  if ((item.kind !== "open" && item.kind !== "queued") || item.expiresAt === null) return null;
+  return item.expiresAt <= nowMs ? ELAPSED_NOTE : replyByText(item.expiresAt, nowMs);
 }
 
 /** One item's whole sentence, naming the question: what the tooltip and the button's name say. */
