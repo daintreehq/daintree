@@ -61,7 +61,10 @@ export interface StoredCloudAccount {
 export interface StoredCreationIntent {
   operationId: string;
   idempotencyKey: string;
+  /** The first send; null until one went out. */
   sentAt: number | null;
+  /** The latest send, which with a same-key replay may be the one that made the machine. */
+  lastSentAt: number | null;
   name: string;
   machineType: string;
 }
@@ -124,6 +127,8 @@ export interface StoredCloudObservation {
   asleep: boolean;
   /** Whether it sleeps when idle, as the provider reported for this machine; null when it didn't say. */
   idleSleep: { enabled: boolean; idleSeconds: number | null } | null;
+  /** Snapshots were turned off at create, so a stop erases its disk; null in a record from before it was kept. */
+  snapshotsDisabled: boolean | null;
   observedAt: number;
 }
 
@@ -162,6 +167,104 @@ export interface StoredCloudBinding {
   offeredHostKey: StoredHostKey | null;
   lastError: CloudHostError | null;
   createdAt: number;
+  /**
+   * The person picked the host's idle time here for an imported machine whose
+   * provider sleeps idle machines, so its own idle timeout follows the host's
+   * from then on (#17916). A machine Daintree created always follows it.
+   */
+  idleTimeChosen?: true;
+  /**
+   * What the machine's host last told this device it holds to keep the
+   * machine awake while it sees work (#17918): when that stops working, and
+   * when the host said so. Never the URL itself. Absent while it holds none,
+   * or for a machine other than `resourceId`.
+   */
+  keepAwake?: StoredKeepAwake;
+}
+
+export interface StoredKeepAwake {
+  resourceId: string;
+  expiresAt: number;
+  confirmedAt: number;
+  /** The host said a request through it had reached it. */
+  reached?: true;
+}
+
+/** Put on every machine a create asks for, naming its binding, so a lost answer is found again. */
+export const CLOUD_BINDING_LABEL = "daintree-binding";
+
+/**
+ * Where a create's machine may have been made, by the provider's clock against
+ * this one: from shortly before its send (a clock behind), to the slowest
+ * create request (Agent 37's five minutes) plus a machine minted after it and
+ * a clock ahead.
+ */
+const CREATED_BEFORE_SEND_MS = 5 * 60_000;
+const CREATED_AFTER_SEND_MS = 15 * 60_000;
+
+/**
+ * Whether a machine was made while a send at `sentAt` could have made it;
+ * null when its create time is unknown, false when nothing was sent. A copy of
+ * a machine (a fork) carries its labels, but never its create time.
+ */
+export function madeInSendWindow(sentAt: number | null, createdAt: string | null): boolean | null {
+  if (sentAt === null) return false;
+  const at = createdAt ? Date.parse(createdAt) : Number.NaN;
+  if (!Number.isFinite(at)) return null;
+  return at >= sentAt - CREATED_BEFORE_SEND_MS && at <= sentAt + CREATED_AFTER_SEND_MS;
+}
+
+/**
+ * Whether any of a create's sends could have made a machine: its create time
+ * is unknown, or falls from the first send's window to the latest's.
+ */
+export function mayHaveMade(
+  creation: Pick<StoredCreationIntent, "sentAt" | "lastSentAt">,
+  createdAt: string | null
+): boolean {
+  if (creation.sentAt === null) return false;
+  const at = createdAt ? Date.parse(createdAt) : Number.NaN;
+  if (!Number.isFinite(at)) return true;
+  // Either send may read earlier: a clock set back between them.
+  const sends = [creation.sentAt, creation.lastSentAt ?? creation.sentAt];
+  return (
+    at >= Math.min(...sends) - CREATED_BEFORE_SEND_MS &&
+    at <= Math.max(...sends) + CREATED_AFTER_SEND_MS
+  );
+}
+
+/**
+ * Which binding has a claim on a machine: the one that holds it or, failing
+ * that, one whose unanswered create may have made it (it carries the create's
+ * label, and `mayHaveMade`). A pending claim is a "may", never proof.
+ * Bindings of other providers, and `except`, don't count.
+ */
+export function cloudMachineClaim(
+  bindings: readonly StoredCloudBinding[],
+  providerId: CloudProviderId,
+  machine: {
+    resourceId: string;
+    labels?: Readonly<Record<string, string>>;
+    createdAt?: string | null;
+  },
+  except?: string
+): { binding: StoredCloudBinding; pending: boolean } | null {
+  const others = bindings.filter(
+    (binding) => binding.providerId === providerId && binding.id !== except
+  );
+  const holder = others.find((binding) => binding.resourceId === machine.resourceId);
+  if (holder) return { binding: holder, pending: false };
+  const named = machine.labels?.[CLOUD_BINDING_LABEL];
+  const creating = named
+    ? others.find(
+        (binding) =>
+          binding.id === named &&
+          !binding.resourceId &&
+          binding.creation !== null &&
+          mayHaveMade(binding.creation, machine.createdAt ?? null)
+      )
+    : undefined;
+  return creating ? { binding: creating, pending: true } : null;
 }
 
 /**
@@ -404,6 +507,8 @@ function readObservation(raw: unknown): StoredCloudObservation | null {
     dataExpired: value.dataExpired === true,
     asleep: value.asleep === true,
     idleSleep: readIdleSleep(value.idleSleep),
+    snapshotsDisabled:
+      typeof value.snapshotsDisabled === "boolean" ? value.snapshotsDisabled : null,
     observedAt: num(value.observedAt) ?? 0,
   };
 }
@@ -425,6 +530,8 @@ function readCreation(raw: unknown): StoredCreationIntent | null {
     operationId,
     idempotencyKey,
     sentAt: num(value.sentAt),
+    // Written before it existed: the first send is the only one known.
+    lastSentAt: num(value.lastSentAt) ?? num(value.sentAt),
     name: str(value.name) ?? "",
     machineType: str(value.machineType) ?? "default",
   };
@@ -546,6 +653,27 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
     offeredHostKey: readHostKey(value.offeredHostKey),
     lastError: readError(value.lastError),
     createdAt: num(value.createdAt) ?? 0,
+    ...(value.idleTimeChosen === true ? { idleTimeChosen: true as const } : {}),
+    ...readKeepAwake(value.keepAwake, resourceId),
+  };
+}
+
+function readKeepAwake(
+  raw: unknown,
+  resourceId: string | null
+): { keepAwake: StoredKeepAwake } | Record<string, never> {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object" || resourceId === null) return {};
+  const expiresAt = num(value.expiresAt);
+  const confirmedAt = num(value.confirmedAt);
+  if (value.resourceId !== resourceId || expiresAt === null || confirmedAt === null) return {};
+  return {
+    keepAwake: {
+      resourceId,
+      expiresAt,
+      confirmedAt,
+      ...(value.reached === true ? { reached: true as const } : {}),
+    },
   };
 }
 

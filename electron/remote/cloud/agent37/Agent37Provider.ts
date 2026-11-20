@@ -14,7 +14,9 @@ import type {
   ProviderSshAccess,
 } from "../provider.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { raceAbort } from "../../../utils/raceAbort.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { DEFAULT_HOST_IDLE_MINUTES } from "../../../../shared/types/hostIdle.js";
 import {
   Agent37ApiError,
   Agent37Client,
@@ -22,10 +24,17 @@ import {
   type Agent37RequestContext,
 } from "./Agent37Client.js";
 import type { Agent37Instance } from "./agent37Schemas.js";
+import { keepAwakeUrlProblem } from "./agent37KeepAwake.js";
 import { agent37MachineState } from "./agent37State.js";
 
-/** How long an instance Daintree creates may idle before Agent 37 sleeps it. */
-export const AGENT37_IDLE_SECONDS = 900;
+/**
+ * How long an instance Daintree creates may idle before Agent 37 sleeps it:
+ * the host's own idle time until the person picks another (#17916).
+ */
+export const AGENT37_IDLE_SECONDS = DEFAULT_HOST_IDLE_MINUTES * 60;
+
+/** The idle timeouts Agent 37 takes, in seconds. */
+export const AGENT37_IDLE_SECONDS_RANGE = { min: 300, max: 86_400 } as const;
 
 /**
  * The login whose home is the instance's mounted disk on every system
@@ -33,6 +42,13 @@ export const AGENT37_IDLE_SECONDS = 900;
  * installed in it survives stops, starts and updates alike.
  */
 export const AGENT37_SSH_USER = "node";
+
+/**
+ * How long a signed URL a host keeps its instance awake with lasts: the most
+ * Agent 37 allows, since one can't be revoked, and Daintree mints a new one
+ * every time it connects (#17918).
+ */
+export const AGENT37_KEEP_AWAKE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /** How long Agent 37 says a newly registered key takes to reach instances already running. */
 export const AGENT37_KEY_DELIVERY_MS = 2 * 60_000;
@@ -191,6 +207,16 @@ class Agent37CreateRefused extends Error {
   }
 }
 
+const CANCELLED = Symbol("cancelled");
+
+/** Agent 37 was mid-operation on the instance (`try_again`) when asked to sleep it, and the one request went unheeded. */
+class Agent37SleepBusy extends Error {
+  constructor() {
+    super("Agent 37 was busy with the instance");
+    this.name = "Agent37SleepBusy";
+  }
+}
+
 /** A machine that was running before Daintree's key was registered, which it may not have yet. */
 class Agent37KeyInDelivery extends Error {
   constructor(readonly waitMs: number) {
@@ -215,6 +241,8 @@ export class Agent37Provider implements CloudProvider {
   private readonly registered = new Map<string, { localAt: number; serverAt: number | null }>();
   /** Each key with an instance this process created after registering it, which booted with it. */
   private readonly bootedWithKey = new Set<string>();
+  /** Registrations sent and not answered yet, by key: every caller waits on the one answer. */
+  private readonly registering = new Map<string, Promise<void>>();
 
   constructor(
     private readonly clientFor: (apiUrl: string) => Agent37Client,
@@ -345,6 +373,15 @@ export class Agent37Provider implements CloudProvider {
     credentials: ProviderCredentials,
     request: ProviderCreateRequest
   ): Promise<ProviderResource> {
+    const send = await this.prepareCreate(credentials, request);
+    return send();
+  }
+
+  /** Registers the key, which asks for no instance; the send that follows asks for one. */
+  async prepareCreate(
+    credentials: ProviderCredentials,
+    request: ProviderCreateRequest
+  ): Promise<() => Promise<ProviderResource>> {
     const shape = SHAPES.find((entry) => entry.id === request.machineType);
     if (!shape) {
       throw new Agent37ApiError("invalid-request", "Not an Agent 37 machine size", null, null);
@@ -356,31 +393,34 @@ export class Agent37Provider implements CloudProvider {
         at: this.now(),
       });
     }
+    const publicKey = request.publicKey;
     const client = this.clientFor(credentials.apiUrl);
     // First: an instance boots with every key its workspace has, while one already running
     // takes minutes to see a new one.
-    await this.register(credentials, request.publicKey, true);
-    let instance: Agent37Instance;
-    try {
-      instance = await client.createInstance(ctx(credentials), {
-        template: TEMPLATE,
-        type: INSTANCE_TYPE,
-        resources: { cpu: shape.vcpu, memory: shape.memoryGB, disk: shape.diskGB },
-        name: request.name.slice(0, MAX_NAME_LENGTH),
-        metadata: request.labels,
-        auto_sleep: true,
-        idle_timeout_seconds: AGENT37_IDLE_SECONDS,
-      });
-    } catch (error) {
-      // A request Agent 37 rejected as invalid provisioned nothing; say so, with its reason.
-      // Only a 400: other statuses the client calls invalid (a 408 from a proxy) prove nothing.
-      if (error instanceof Agent37ApiError && error.status === 400) {
-        throw new Agent37CreateRefused(error.message);
+    await this.register(credentials, publicKey, true);
+    return async () => {
+      let instance: Agent37Instance;
+      try {
+        instance = await client.createInstance(ctx(credentials), {
+          template: TEMPLATE,
+          type: INSTANCE_TYPE,
+          resources: { cpu: shape.vcpu, memory: shape.memoryGB, disk: shape.diskGB },
+          name: request.name.slice(0, MAX_NAME_LENGTH),
+          metadata: request.labels,
+          auto_sleep: true,
+          idle_timeout_seconds: AGENT37_IDLE_SECONDS,
+        });
+      } catch (error) {
+        // A request Agent 37 rejected as invalid provisioned nothing; say so, with its reason.
+        // Only a 400: other statuses the client calls invalid (a 408 from a proxy) prove nothing.
+        if (error instanceof Agent37ApiError && error.status === 400) {
+          throw new Agent37CreateRefused(error.message);
+        }
+        throw error;
       }
-      throw error;
-    }
-    this.bootedWithKey.add(`${this.keyId(credentials, request.publicKey)}\n${instance.id}`);
-    return agent37Resource(instance);
+      this.bootedWithKey.add(`${this.keyId(credentials, publicKey)}\n${instance.id}`);
+      return agent37Resource(instance);
+    };
   }
 
   async start(
@@ -399,6 +439,75 @@ export class Agent37Provider implements CloudProvider {
   ): Promise<ProviderResource | null> {
     await this.clientFor(credentials.apiUrl).stopInstance(ctx(credentials), resourceId);
     return null;
+  }
+
+  async sleepIdle(credentials: ProviderCredentials, resourceId: string): Promise<void> {
+    let answer;
+    try {
+      answer = await this.clientFor(credentials.apiUrl).sleepInstance(ctx(credentials), resourceId);
+    } catch (error) {
+      // Its own checkpoint already under way reads the same: the caller looks at the instance.
+      if (error instanceof Agent37ApiError && error.busy) throw new Agent37SleepBusy();
+      throw error;
+    }
+    if (answer.id !== resourceId) {
+      throw new Agent37ApiError(
+        "bad-response",
+        "Agent 37 answered for another instance than the one asked to sleep",
+        null,
+        null
+      );
+    }
+  }
+
+  async setIdleSleep(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    idleSeconds: number,
+    enable: boolean
+  ): Promise<ProviderResource> {
+    if (
+      !Number.isInteger(idleSeconds) ||
+      idleSeconds < AGENT37_IDLE_SECONDS_RANGE.min ||
+      idleSeconds > AGENT37_IDLE_SECONDS_RANGE.max
+    ) {
+      throw new Agent37ApiError(
+        "invalid-request",
+        "Agent 37 takes an idle time from 5 minutes to a day",
+        null,
+        null
+      );
+    }
+    return agent37Resource(
+      await this.clientFor(credentials.apiUrl).updateInstance(ctx(credentials), resourceId, {
+        idle_timeout_seconds: idleSeconds,
+        ...(enable ? { auto_sleep: true } : {}),
+      })
+    );
+  }
+
+  async keepAwakeUrl(
+    credentials: ProviderCredentials,
+    resourceId: string,
+    port: number
+  ): Promise<{ url: string; expiresAt: number }> {
+    const signed = await this.clientFor(credentials.apiUrl).signedUrl(
+      ctx(credentials),
+      resourceId,
+      {
+        port,
+        ttlSeconds: AGENT37_KEEP_AWAKE_TTL_SECONDS,
+      }
+    );
+    if (signed.port !== port || keepAwakeUrlProblem(signed.url, resourceId, port) !== null) {
+      throw new Agent37ApiError(
+        "bad-response",
+        "Agent 37 answered with a link to another machine or port than the one asked for",
+        null,
+        null
+      );
+    }
+    return { url: signed.url, expiresAt: signed.expires_at * 1000 };
   }
 
   async rename(credentials: ProviderCredentials, resourceId: string, name: string): Promise<void> {
@@ -485,13 +594,23 @@ export class Agent37Provider implements CloudProvider {
     publicKey: string,
     beforeCreate: boolean
   ): Promise<void> {
-    let answer: { created: boolean; at: number | null };
+    // A key is this device's for one account, so the key alone names the workspace it goes to.
+    const keyId = this.keyId(credentials, publicKey);
+    const cancelled = () => new Agent37ApiError("cancelled", "Cancelled", null, null);
     try {
-      answer = await this.clientFor(credentials.apiUrl).registerSshKey(
-        ctx(credentials),
-        publicKey,
-        SSH_KEY_NAME
-      );
+      if (credentials.signal?.aborted) throw cancelled();
+      // A caller sending its own would hear "already registered" before the first answer said
+      // when, and hand out a machine still waiting for the key (#17929).
+      let pending = this.registering.get(keyId);
+      if (!pending) {
+        // Tied to no one caller's signal: one that gives up mustn't fail the others waiting.
+        pending = this.sendKey({ ...credentials, signal: undefined }, publicKey, keyId).finally(
+          () => this.registering.delete(keyId)
+        );
+        this.registering.set(keyId, pending);
+      }
+      if ((await raceAbort(pending, credentials.signal, CANCELLED)) === CANCELLED)
+        throw cancelled();
     } catch (error) {
       if (!beforeCreate) throw error;
       const described = this.describeError(error);
@@ -509,11 +628,21 @@ export class Agent37Provider implements CloudProvider {
         at: described.at,
       });
     }
+  }
+
+  /** Sends the key, and notes when a new one was registered before anyone hears the answer. */
+  private async sendKey(
+    credentials: ProviderCredentials,
+    publicKey: string,
+    keyId: string
+  ): Promise<void> {
+    const answer = await this.clientFor(credentials.apiUrl).registerSshKey(
+      ctx(credentials),
+      publicKey,
+      SSH_KEY_NAME
+    );
     if (answer.created) {
-      this.registered.set(this.keyId(credentials, publicKey), {
-        localAt: this.now(),
-        serverAt: answer.at,
-      });
+      this.registered.set(keyId, { localAt: this.now(), serverAt: answer.at });
     }
   }
 
@@ -532,6 +661,13 @@ export class Agent37Provider implements CloudProvider {
             message: `Agent 37 says the machine is ${error.status} now. Start it to connect.`,
             at,
           };
+    }
+    if (error instanceof Agent37SleepBusy) {
+      return {
+        code: "failed",
+        message: "Agent 37 was busy with another change to the machine.",
+        at,
+      };
     }
     if (error instanceof Agent37KeyInDelivery) {
       const seconds = Math.max(1, Math.ceil(error.waitMs / 1000));

@@ -32,7 +32,9 @@ const COMMAND_ALTERNATION = COMMAND_MAP.map(([phrase]) => phrase.replace(/\s+/g,
 // the model's punctuation. \b anchors at a word boundary; $ anchors at end of
 // string so commands embedded mid-sentence stay literal. Trailing punctuation the
 // model added after the command ("new paragraph.") is consumed with it.
-const TRAILING_PUNCT = "[\\s.,;:!?]";
+// Full-width marks too: on Auto-detect an English command can close a Chinese
+// or Japanese passage, and the model punctuates it in that passage's script.
+const TRAILING_PUNCT = "[\\s.,;:!?。．、，！？；：]";
 const TRAILING_CHAIN_RE = new RegExp(
   `\\s*\\b((?:${COMMAND_ALTERNATION})(?:${TRAILING_PUNCT}+(?:${COMMAND_ALTERNATION}))*)${TRAILING_PUNCT}*$`,
   "i"
@@ -121,8 +123,10 @@ export function pendingCommandStart(text: string): number {
   return -1;
 }
 
-const SEND_COMMAND_RE = /(?:^|[\s.,;:!?]+)\bsend\s+it[\s.,;:!?]*$/i;
+const SEND_COMMAND_RE = /(?:^|[\s.,;:!?。．、，！？；：]+)\bsend\s+it[\s.,;:!?。．、，！？；：]*$/i;
 
+// ASCII only: the guards below read English, and a full-width mark inside an
+// English clause ("don't， send it") mustn't cut its negation away.
 const CLAUSE_BREAK_RE = /[.,;:!?\u2014\u2013]/;
 
 // Negation anywhere in the clause ("don't actually send it", "do not ever send
@@ -146,7 +150,7 @@ const QUESTION_OPENER_RE =
  * statement about sending.
  */
 function isSentenceSendIt(text: string, index: number, tail: string): boolean {
-  if (tail.includes("?")) return true;
+  if (tail.includes("?") || tail.includes("？")) return true;
   const before = text.slice(0, index);
   let clauseStart = 0;
   for (let i = before.length - 1; i >= 0; i--) {

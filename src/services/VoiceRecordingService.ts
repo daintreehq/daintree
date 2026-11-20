@@ -6,7 +6,14 @@ import {
   cleanupKeyIssuer,
   hasCleanupKey,
   hasTranscriptionKey,
+  transcribesOnDevice,
 } from "@shared/config/voiceProviders";
+import {
+  getLocalModelStatus,
+  isLocalModelReady,
+  readLocalModelStatus,
+  subscribeLocalModelStatus,
+} from "@/clients/localSpeechModelClient";
 import {
   carrySpansThroughEdits,
   shiftSpans,
@@ -1035,6 +1042,9 @@ class VoiceRecordingService {
   // When the dictation shortcut was pressed, for a start in the same dispatch.
   private pendingPressAt: number | null = null;
   private transcriptionProvider: VoiceTranscriptionProvider | null = null;
+  /** Moves on with every settings read: one overtaken while it waited applies nothing. */
+  private configurationRefreshes = 0;
+  private latestRefresh: Promise<boolean> | null = null;
   // What the session panel reads about the running session (#14920): the
   // provider it started on, whether its clock runs, and when each auto-stop
   // would land.
@@ -1756,12 +1766,40 @@ class VoiceRecordingService {
     window.addEventListener("blur", handlePttBlur);
     this.unsubscribers.push(() => window.removeEventListener("blur", handlePttBlur));
 
+    // On-device transcription is configured once its model is ready, which a
+    // download or a deletion in any view can change. The provider is read
+    // afresh: another view may have chosen on-device since this one last read.
+    let localModelReady = isLocalModelReady();
+    this.unsubscribers.push(
+      subscribeLocalModelStatus((status) => {
+        const ready = status.state === "ready";
+        if (ready === localModelReady) return;
+        localModelReady = ready;
+        void this.refreshConfiguration().catch(() => false);
+      })
+    );
+
     if (settings) this.applySettings(settings);
     else void this.refreshConfiguration();
   }
 
-  async refreshConfiguration(): Promise<boolean> {
-    return this.applySettings(await window.electron.voiceInput.getSettings());
+  refreshConfiguration(): Promise<boolean> {
+    const refresh = this.readConfiguration(++this.configurationRefreshes);
+    this.latestRefresh = refresh;
+    return refresh;
+  }
+
+  private async readConfiguration(refresh: number): Promise<boolean> {
+    const settings = await window.electron.voiceInput.getSettings();
+    // A start in a fresh view, or during the launch's check of the model's
+    // files, waits for main's answer rather than taking "not yet" for "no".
+    if (settings.enabled && transcribesOnDevice(settings.transcriptionProvider)) {
+      const known = getLocalModelStatus();
+      if (!known || known.state === "checking") await readLocalModelStatus().catch(() => null);
+    }
+    // A newer read began while this one waited: its answer is the one that holds.
+    if (refresh !== this.configurationRefreshes && this.latestRefresh) return this.latestRefresh;
+    return this.applySettings(settings);
   }
 
   private applySettings(settings: VoiceInputSettings): boolean {
@@ -1769,6 +1807,10 @@ class VoiceRecordingService {
     // provider's key is a separate matter: it only gates cleanup and rewrite.
     const hasProviderKey = hasTranscriptionKey(settings);
     const isConfigured = isVoiceInputConfigured(settings);
+    // Not heard yet in this view: the answer arrives through the subscription.
+    if (transcribesOnDevice(settings.transcriptionProvider) && getLocalModelStatus() === null) {
+      void readLocalModelStatus();
+    }
     this.configured = isConfigured;
     this.selectedDeviceId = settings.deviceId ?? "";
     this.selectedDeviceLabel = settings.deviceLabel ?? "";
@@ -1785,6 +1827,7 @@ class VoiceRecordingService {
       enabled: settings.enabled,
       provider: settings.transcriptionProvider,
       hasProviderKey,
+      localModelReady: isLocalModelReady(),
       isConfigured,
       correctionEnabled: settings.correctionEnabled,
       recordingMode: this.recordingMode,

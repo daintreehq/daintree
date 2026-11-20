@@ -21,6 +21,7 @@ const baseConfig: KnipConfig = {
     "electron/services/persistence/dbMaintenanceWorker.ts",
     "electron/services/pluginAgentMcp/databaseQueryWorker.ts",
     "electron/services/voice/openaiVadWorker.ts",
+    "electron/services/voice/localSpeechWorker.ts",
     "electron/services/canopy/canopyReaderWorker.ts",
     "electron/workspace-host/copytreeWorker.ts",
     // Picker utility-process and browser bundles are loaded by emitted path.
@@ -197,6 +198,7 @@ const baseConfig: KnipConfig = {
     // why: Host OS commands invoked directly by platform-specific runtime,
     // installer, and E2E paths. They are not npm-provided binaries and must
     // not be declared as package dependencies.
+    "afconvert",
     "attrib",
     // The native supervisor tests compile their fixture with the host C compiler.
     "cc",

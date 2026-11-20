@@ -153,6 +153,7 @@ let mockAgentSettings: {
       accounts?: Array<{ id: string; name: string; configDir: string }>;
       accountId?: string;
       worktreeAccounts?: Record<string, string | null>;
+      defaultLoginName?: string;
     }
   >;
 } | null = { agents: {} };
@@ -3279,6 +3280,16 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       for (const row of accountRows(container)) {
         expect(row.getAttribute("aria-label")).toMatch(/^[^,]+, Claude account/);
       }
+    });
+
+    it("names the default login as the user named it (#17080)", () => {
+      mockAgentSettings = {
+        agents: { claude: { accounts: [COMPANY, PERSONAL], defaultLoginName: "Home" } },
+      };
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      expect(accountRows(container)[0]?.textContent).toContain("Home · default login");
     });
 
     describe("quota headroom (#16407)", () => {

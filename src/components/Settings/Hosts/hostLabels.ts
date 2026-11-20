@@ -267,7 +267,9 @@ export function verdictCopy(
     case "host-mode-temporary":
       return {
         title: `Host mode on ${host} stops when Daintree quits there`,
-        detail: `It runs the same build as this machine. Switch Host mode on for good so it starts at login.`,
+        detail: probe.startsOnConnect
+          ? `It runs the same build as this machine. Switch Host mode on for good so connecting from Daintree starts it again.`
+          : `It runs the same build as this machine. Switch Host mode on for good so it starts at login.`,
       };
     case "up-to-date":
       return {
@@ -325,11 +327,24 @@ export function isLoginRefused(connection: HostConnectionState): boolean {
 }
 
 /**
+ * How a host started on connect is kept running, and what that doesn't
+ * cover: said wherever setup or the host's details describe it.
+ */
+export const STARTS_ON_CONNECT_COVERAGE =
+  "It keeps running after you disconnect, but doesn't come back by itself after the machine reboots, stops or is rebuilt. Connecting from Daintree starts it again.";
+
+/**
  * Host mode is on for good there: listening, saved as on and set to start at
- * login, as the host's own Daintree recorded it and the probe saw it.
+ * login, as the host's own Daintree recorded it and the probe saw it. Where
+ * nothing can start it at login, recorded as started on connect instead.
  */
 export function hostModeSwitchedOn(probe: HostProbeResult | null): boolean {
   const state = probe?.hostModeState;
+  if (probe?.startsOnConnect === true) {
+    return (
+      probe.hostModeListening && !!state && state.enabled && state.startMethod === "on-connect"
+    );
+  }
   return (
     probe?.hostModeListening === true &&
     !!state &&
@@ -416,15 +431,23 @@ export function canWaitForIdle(impact: HostRestartImpact): boolean {
 /**
  * What removing a host from this device does to it. A remote machine runs on;
  * a WSL distro is only kept running by this app, so its terminals and agents
- * end once WSL stops it.
+ * end once WSL stops it; and Daintree on a machine where it was started on
+ * connect is stopped, since nothing else ever would.
  */
 export function removeHostOutcome(
   connection: HostConnection | undefined,
-  hostName: string
+  hostName: string,
+  startsOnConnect = false
 ): {
   label: string;
   sentence: string;
 } {
+  if (startsOnConnect && connection?.kind !== "wsl") {
+    return {
+      label: `Daintree on ${hostName} stops, with its terminals and agents`,
+      sentence: `Daintree on ${hostName} is stopped if it can be reached there, ending its terminals and agents. Its projects and the Daintree install stay there.`,
+    };
+  }
   if (connection?.kind === "wsl") {
     return {
       label: `Terminals and agents in ${hostName} end once WSL stops it`,

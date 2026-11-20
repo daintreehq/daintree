@@ -4,7 +4,7 @@ import { z } from "zod";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useMoveTerminalsDialogStore } from "@/store/moveTerminalsDialogStore";
-import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { defaultLoginLabel, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 
 const MoveTerminalsToAccountArgsSchema = z
   .object({
@@ -55,7 +55,10 @@ export function registerAgentAccountMoveActions(actions: ActionRegistry): void {
           return;
         }
         if (accountId === null) {
-          useMoveTerminalsDialogStore.getState().open(agentId, { id: null, name: "Default login" });
+          const name = defaultLoginLabel(
+            useAgentSettingsStore.getState().settings?.agents?.[agentId]?.defaultLoginName
+          );
+          useMoveTerminalsDialogStore.getState().open(agentId, { id: null, name });
           return;
         }
         const account = savedAccounts(agentId).find((candidate) => candidate.id === accountId);

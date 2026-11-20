@@ -233,6 +233,13 @@ export interface CloudProviderInfo {
   unsupportedReason: string | null;
   /** Present for a plugin's provider: the plugin behind it, and whether the person has agreed to it. */
   plugin?: CloudProviderPluginConsent;
+  /**
+   * A machine's host can stop it once the host's idle time ends: Boat's
+   * machine keys (#17361), EC2's and Compute Engine's guest power-off
+   * (#17362). Set by this device for every registered provider, from what the
+   * provider implements, never from a declaration, so a plugin's is false.
+   */
+  hostIdleStop?: boolean;
 }
 
 /**
@@ -691,11 +698,56 @@ export interface CloudHostStatus {
    */
   selfStopProblem?: string | null;
   /**
+   * What this device does once the host's idle time ends, while it is linked
+   * to the host, for a plugin provider's machine that can't stop itself
+   * (#17923). Absent or null for a machine this device never stops.
+   */
+  linkedIdleStop?: CloudLinkedIdleStop | null;
+  /**
    * The provider put the stopped machine to sleep on idle rather than being
    * asked to stop it: a request to it would wake it, and it bills as stopped.
    */
   asleep: boolean;
+  /**
+   * The machine's own idle timeout follows its host's idle time: Daintree
+   * created it, or the person picked an idle time for it here (#17916). An
+   * imported machine keeps its own until then. Optional for snapshots from before it.
+   */
+  idleTimeFollowsHost?: boolean;
+  /**
+   * Whether the host holds the machine awake while it sees work with no
+   * device connected, as this device last heard from it (#17918). Absent or
+   * null for a provider with no such hold.
+   */
+  keepAwake?: CloudKeepAwake | null;
 }
+
+/**
+ * `held`: the host said it holds a link that keeps the machine awake while
+ * it sees work until `expiresAt`, when this device last asked at
+ * `confirmedAt`; `reached` once it said a request through that link reached
+ * it. `expired`: the last one it said it held has run out. `none`: it holds
+ * none, with why when the host or this device found out; a null problem is
+ * nothing handed over yet.
+ */
+export type CloudKeepAwake =
+  | { kind: "held"; expiresAt: number; confirmedAt: number; reached: boolean }
+  | { kind: "expired"; expiredAt: number }
+  | { kind: "none"; problem: string | null };
+
+/**
+ * `stops`: this device stops the machine with the provider's normal stop once
+ * the host grants it the ended idle time. `sleeps`: it puts the machine to
+ * sleep the same way, for a provider whose own idle timer a link keeps from
+ * running, which is in charge with no device linked (#17916). `unknown`: the
+ * provider hasn't said yet whether a stop would keep this machine's disk.
+ * `blocked`: why it doesn't.
+ */
+export type CloudLinkedIdleStop =
+  | { kind: "stops" }
+  | { kind: "sleeps" }
+  | { kind: "unknown" }
+  | { kind: "blocked"; problem: string };
 
 /** The machine as it would be created. */
 export interface CloudHostCreateRequest {

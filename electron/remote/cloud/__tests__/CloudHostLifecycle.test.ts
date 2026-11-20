@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   HostConnection,
   HostDescriptor,
@@ -358,6 +358,33 @@ describe("CloudHostLifecycle.create", () => {
       expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
     );
     expect(hostId).toBe("build");
+  });
+
+  it("sends the lifetime saved while a Retry was looking, not the one it began with (#17928)", async () => {
+    const { lifecycle, provider, store } = await setup();
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    let answer: (found: ProviderResource[]) => void = () => {};
+    vi.mocked(provider.list).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    const retry = lifecycle.retryCreate("build");
+    await vi.waitFor(() => expect(provider.list).toHaveBeenCalled());
+    await lifecycle.setLifetime("build", 8);
+    answer([]);
+    await retry;
+    expect(vi.mocked(provider.create).mock.calls[1]![1].lifetimeSeconds).toBe(8 * 3600);
   });
 
   it("retries a lost create with the same key, and a refused one with a fresh key", async () => {
@@ -1458,7 +1485,11 @@ describe("CloudHostLifecycle review fixes", () => {
     const bindingId = store.bindings()[0]!.id;
     // Boat had made it after all: the retry finds it by label and creates nothing.
     vi.mocked(provider.list).mockResolvedValueOnce([
-      resource({ resourceId: "bx_found0000", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0000",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await lifecycle.retryCreate("build");
     expect(provider.create).toHaveBeenCalledTimes(1);
@@ -1480,7 +1511,11 @@ describe("CloudHostLifecycle review fixes", () => {
     await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
     const bindingId = store.bindings()[0]!.id;
     vi.mocked(provider.list).mockResolvedValueOnce([
-      resource({ resourceId: "bx_found0000", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0000",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await lifecycle.deleteMachine("build", null);
     expect(vi.mocked(provider.delete).mock.calls[0]![1]).toBe("bx_found0000");
@@ -1669,6 +1704,31 @@ describe("CloudHostLifecycle review fixes", () => {
     });
     await expect(files.publicKey(account.id)).rejects.toThrow("ENOENT");
     await expect(fs.access(pub.slice(0, -".pub".length))).resolves.toBeUndefined();
+  });
+
+  it("replaces a public half whose private key is gone with a new pair (#17929)", async () => {
+    const { files, run, account } = await setup();
+    const key = await files.publicKey(account.id);
+    const keyPath = path.join(root, "cloud", "keys", `${account.id}_ed25519`);
+    await fs.rm(keyPath);
+    expect(await files.hasKey(account.id)).toBe(false);
+    const make = run.getMockImplementation()!;
+    let staleAtGenerate: boolean | null = null;
+    run.mockImplementationOnce(async (...args) => {
+      // A cut-short ssh-keygen must not leave the old public half beside a new private key.
+      staleAtGenerate = await fs.access(`${keyPath}.pub`).then(
+        () => true,
+        () => false
+      );
+      return make(...args);
+    });
+    const made = await files.publicKey(account.id);
+    expect(staleAtGenerate).toBe(false);
+    expect(made).not.toBe(key);
+    expect((await fs.readFile(`${keyPath}.pub`, "utf8")).trim()).toBe(made);
+    // The fake's private half holds its public one: the pair on disk belongs together.
+    expect((await fs.readFile(keyPath, "utf8")).trim()).toBe(made);
+    expect(await files.hasKey(account.id)).toBe(true);
   });
 
   it("removes an account's key only once the key being made for it is written", async () => {
@@ -2484,6 +2544,8 @@ describe("CloudHostLifecycle guest power-off (#17362)", () => {
         problemFor: vi.fn((bindingId: string): string | null =>
           bindingId === env?.store.bindings()[0]?.id ? problem : null
         ),
+        standsInFor: vi.fn(() => false),
+        arm: vi.fn(async () => {}),
         tick: vi.fn(async () => {}),
         forgetRemoved: vi.fn(),
       };
@@ -2511,8 +2573,10 @@ describe("CloudHostLifecycle machine keys (#17361)", () => {
   it("revokes the keys a removed host's machine was given, and shows why one can't stop itself", async () => {
     const machineKeys = {
       problemFor: vi.fn((): string | null => "This machine can't stop itself when idle."),
+      standsInFor: vi.fn(() => false),
       tick: vi.fn(async () => {}),
       revokePending: vi.fn(async () => {}),
+      forgetRemoved: vi.fn(),
     };
     const env = await setup({ machine: "running" }, { machineKeys });
     env.lifecycle.start();
@@ -2562,11 +2626,15 @@ describe("CloudHostLifecycle background timers (#17795)", () => {
   async function quiet() {
     const machineKeys = {
       problemFor: vi.fn((): string | null => null),
+      standsInFor: vi.fn(() => false),
       tick: vi.fn(async () => {}),
       revokePending: vi.fn(async () => {}),
+      forgetRemoved: vi.fn(),
     };
     const guestPowerOff = {
       problemFor: vi.fn((): string | null => null),
+      standsInFor: vi.fn(() => false),
+      arm: vi.fn(async () => {}),
       tick: vi.fn(async () => {}),
       forgetRemoved: vi.fn(),
     };
@@ -2806,7 +2874,13 @@ describe("CloudHostLifecycle worktree marks", () => {
     made: boolean
   ) =>
     vi.mocked(provider.create).mockImplementationOnce(async (_c, sent) => {
-      if (made) state.machine = resource({ name: "build-box", labels: sent.labels });
+      if (made) {
+        state.machine = resource({
+          name: "build-box",
+          labels: sent.labels,
+          createdAt: new Date().toISOString(),
+        });
+      }
       throw new BoatApiError("network", "lost", null, null, null);
     });
 
@@ -3073,7 +3147,11 @@ describe("CloudHostLifecycle provisioning", () => {
     await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
     const bindingId = store.bindings()[0]!.id;
     vi.mocked(provider.list).mockResolvedValueOnce([
-      resource({ resourceId: "bx_found0000", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0000",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await lifecycle.retryCreate("build");
     expect(provider.list).toHaveBeenCalledWith(expect.anything(), {
@@ -3160,6 +3238,10 @@ describe("CloudHostLifecycle provisioning", () => {
     });
 
     const next = restart(lifecycle);
+    // Every machine this fake makes has one id; the replay answers with this host's own.
+    vi.mocked(provider.create).mockResolvedValueOnce(
+      resource({ resourceId: "bx_build0001", machine: "starting", rawState: "provisioning" })
+    );
     await next.lifecycle.retryCreate("build");
     const calls = vi.mocked(provider.create).mock.calls;
     const first = calls[0]![1];
@@ -3170,6 +3252,9 @@ describe("CloudHostLifecycle provisioning", () => {
       next.lifecycle.statuses().find((s) => s.hostId === "build")?.provisioning?.location
     ).toEqual({ label: "Region", id: "eu-west-1", value: "Europe (Ireland)" });
     expect(next.store.account(account.id)?.lastProvisioning).toEqual(VIRGINIA);
+    expect(next.store.bindings().find((b) => b.hostId === "build")?.resourceId).toBe(
+      "bx_build0001"
+    );
   });
 
   it("won't send a retry whose saved choice can't be read back, even where nothing is required", async () => {
@@ -3376,25 +3461,254 @@ describe("CloudHostLifecycle SSH key at create", () => {
     expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
   });
 
+  /** The commands the fake runner was asked to run, by name. */
+  const ran = (run: { mock: { calls: unknown[][] } }) => run.mock.calls.map(([cmd]) => cmd);
+
   it("reaches a machine that took its key at create without authorizing a key", async () => {
-    const { lifecycle, provider, store, files, account } = await setup({}, { sshKey: "at-create" });
+    const { lifecycle, provider, store, run, account } = await setup({}, { sshKey: "at-create" });
     await lifecycle.create(request(account.id));
     await vi.waitFor(() =>
       expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
     );
     const bindingId = store.bindings()[0]!.id;
-    const readKey = vi.spyOn(files, "publicKey");
+    run.mockClear();
     const route = await lifecycle.ensureAccess(bindingId);
     const config = await fs.readFile(route.configPath, "utf8");
     expect(config).toContain("HostName 203.0.113.10");
     expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
     expect(provider.authorizeSsh).not.toHaveBeenCalled();
-    expect(readKey).not.toHaveBeenCalled();
+    // The key on disk is only read, to see it is still the one the machine took.
+    expect(ran(run)).not.toContain("ssh-keygen");
     // The identity the route dials with is the key the create handed over.
     const identity = /IdentityFile "(.+)"/.exec(config)![1]!;
     expect((await fs.readFile(`${identity}.pub`, "utf8")).trim()).toBe(
       vi.mocked(provider.create).mock.calls[0]![1].publicKey
     );
+  });
+
+  /** A created, running machine reached once, so a route to it is on disk and cached. */
+  const createdAndReached = async (options: Parameters<typeof setup>[1] = {}) => {
+    const harness = await setup({}, { sshKey: "at-create", ...options });
+    await harness.lifecycle.create(request(harness.account.id));
+    await vi.waitFor(() =>
+      expect(harness.lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
+    );
+    const bindingId = harness.store.bindings()[0]!.id;
+    const route = await harness.lifecycle.ensureAccess(bindingId);
+    const keyPath = /IdentityFile "(.+)"/.exec(await fs.readFile(route.configPath, "utf8"))![1]!;
+    const createKey = vi.mocked(harness.provider.create).mock.calls[0]![1].publicKey!;
+    vi.mocked(harness.provider.sshAccess).mockClear();
+    harness.run.mockClear();
+    return { ...harness, bindingId, keyPath, createKey };
+  };
+
+  const LOST = [
+    ["both key files", ["", ".pub"]],
+    ["the private key", [""]],
+  ] as const;
+
+  /** What is left of the public half once `suffixes` were removed: gone, or the create's key. */
+  const leftPublicHalf = async (keyPath: string, suffixes: readonly string[]) =>
+    suffixes.includes(".pub")
+      ? expect(fs.access(`${keyPath}.pub`)).rejects.toMatchObject({ code: "ENOENT" })
+      : expect(fs.readFile(`${keyPath}.pub`, "utf8")).resolves.toBeTruthy();
+
+  it.each(LOST)(
+    "makes and registers a new key for a created machine that lost %s (#17929)",
+    async (_lost, suffixes) => {
+      const { lifecycle, provider, bindingId, keyPath, createKey } = await createdAndReached();
+      for (const suffix of suffixes) await fs.rm(`${keyPath}${suffix}`);
+      await leftPublicHalf(keyPath, suffixes);
+      // The new key is still on its way to the machine: the provider's wait is the answer.
+      const delivering = new BoatApiError("network", "lost", null, null, null);
+      vi.mocked(provider.authorizeSsh).mockRejectedValueOnce(delivering);
+      const waiting = await lifecycle.ensureAccess(bindingId).catch((error: unknown) => error);
+      expect(waiting).toBeInstanceOf(TransportError);
+      expect(waiting).not.toBeInstanceOf(UnusableConnectionError);
+      expect((waiting as TransportError).detail).toBe(provider.describeError(delivering).message);
+      // A wait, not a refusal: nothing parks the host.
+      expect(lifecycle.statuses()[0]?.lastError).toBeNull();
+      const madeKey = (await fs.readFile(`${keyPath}.pub`, "utf8")).trim();
+      expect(madeKey).toMatch(/^ssh-ed25519 /);
+      expect(madeKey).not.toBe(createKey);
+      expect(provider.authorizeSsh).toHaveBeenLastCalledWith(
+        expect.anything(),
+        "bx_23456789",
+        madeKey
+      );
+      // The key is on disk again, but the machine still predates it: the retry waits on the provider too.
+      await lifecycle.ensureAccess(bindingId);
+      expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+      expect(provider.authorizeSsh).toHaveBeenLastCalledWith(
+        expect.anything(),
+        "bx_23456789",
+        madeKey
+      );
+      expect(provider.sshAccess).not.toHaveBeenCalled();
+      expect((await fs.readFile(`${keyPath}.pub`, "utf8")).trim()).toBe(madeKey);
+      expect(lifecycle.statuses()[0]?.lastError).toBeNull();
+      // Once the machine holds it, the route is reused without asking again.
+      await lifecycle.ensureAccess(bindingId);
+      expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each(LOST)(
+    "says the host's key is missing, and makes none, when the provider can't give a created machine another after it lost %s (#17929)",
+    async (_lost, suffixes) => {
+      let clock = 1_000_000;
+      const { lifecycle, provider, store, run, bindingId, keyPath } = await createdAndReached({
+        now: () => clock,
+      });
+      delete (provider as { authorizeSsh?: unknown }).authorizeSsh;
+      for (const suffix of suffixes) await fs.rm(`${keyPath}${suffix}`);
+      const error = await lifecycle.ensureAccess(bindingId).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(UnusableConnectionError);
+      expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+        code: "ssh-authorization",
+        message: expect.stringMatching(/SSH key is missing/),
+      });
+      expect((error as UnusableConnectionError).detail).toBe(
+        lifecycle.statuses()[0]?.lastError?.message
+      );
+      expect(provider.sshAccess).not.toHaveBeenCalled();
+      expect(ran(run)).not.toContain("ssh-keygen");
+      await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await leftPublicHalf(keyPath, suffixes);
+      // Dialled again later, the same refusal is kept as it was, not written again.
+      const recorded = store.bindings()[0]!.lastError;
+      clock += 1_000;
+      await expect(lifecycle.ensureAccess(bindingId)).rejects.toBeInstanceOf(
+        UnusableConnectionError
+      );
+      expect(store.bindings()[0]!.lastError).toEqual(recorded);
+    }
+  );
+
+  it("reaches a created machine whose key is intact through a provider that can't give it another", async () => {
+    const { lifecycle, provider, run, bindingId } = await createdAndReached();
+    delete (provider as { authorizeSsh?: unknown }).authorizeSsh;
+    await lifecycle.ensureAccess(bindingId, undefined, { fresh: true });
+    expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+    expect(lifecycle.statuses()[0]?.lastError).toBeNull();
+    expect(ran(run)).not.toContain("ssh-keygen");
+  });
+
+  it("puts a key made since on a created machine that holds an older one, before reusing its route (#17929)", async () => {
+    const { lifecycle, provider, files, account, bindingId, keyPath, createKey } =
+      await createdAndReached();
+    // Something else on the account (another create, an import's dial) made the key again.
+    await fs.rm(keyPath);
+    const remade = await files.publicKey(account.id);
+    expect(remade).not.toBe(createKey);
+    const authorize = vi.mocked(provider.authorizeSsh).getMockImplementation()!;
+    let release: () => void = () => {};
+    vi.mocked(provider.authorizeSsh).mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return authorize(...args);
+    });
+    let settled = false;
+    const dial = lifecycle.ensureAccess(bindingId).finally(() => (settled = true));
+    await vi.waitFor(() => expect(provider.authorizeSsh).toHaveBeenCalled());
+    // The cached route waits on the key reaching the machine; it isn't handed out meanwhile.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    release();
+    await dial;
+    expect(provider.authorizeSsh).toHaveBeenCalledWith(expect.anything(), "bx_23456789", remade);
+    expect(provider.sshAccess).not.toHaveBeenCalled();
+    // Once it holds the key, the route is reused again without asking the provider.
+    await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    expect(provider.sshAccess).not.toHaveBeenCalled();
+  });
+
+  it("makes no key for a created host removed while its dial waited (#17929)", async () => {
+    // The dial waits on the tunnel's command while the host and its account go.
+    let held: Promise<void> | null = null;
+    const findCommand = vi.fn(async () => {
+      await held;
+      return "/opt/acme/bin/acme";
+    });
+    const { lifecycle, provider, store, run, files, account, bindingId, keyPath } =
+      await createdAndReached({ transport: "provider-command", findCommand });
+    await fs.rm(keyPath);
+    await fs.rm(`${keyPath}.pub`);
+    let release: () => void = () => {};
+    held = new Promise<void>((resolve) => (release = resolve));
+    findCommand.mockClear();
+    const dial = lifecycle.ensureAccess(bindingId).catch((caught: unknown) => caught);
+    await vi.waitFor(() => expect(findCommand).toHaveBeenCalled());
+    store.removeBinding(bindingId);
+    await files.forgetAccount(account.id);
+    release();
+    expect(await dial).toBeInstanceOf(UnusableConnectionError);
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(ran(run)).not.toContain("ssh-keygen");
+    expect(await files.hasKey(account.id)).toBe(false);
+  });
+
+  it("authorizes nothing for a created host removed while its key was read (#17929)", async () => {
+    const { lifecycle, provider, store, files, bindingId, keyPath } = await createdAndReached();
+    await fs.rm(keyPath);
+    const make = files.publicKey.bind(files);
+    vi.spyOn(files, "publicKey").mockImplementationOnce(async (accountId) => {
+      store.removeBinding(bindingId);
+      return make(accountId);
+    });
+    const error = await lifecycle.ensureAccess(bindingId).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+  });
+
+  it("puts the key on again when its route couldn't be written after it was put on (#17929)", async () => {
+    const { lifecycle, provider, files, bindingId, keyPath } = await createdAndReached();
+    await fs.rm(keyPath);
+    vi.spyOn(files, "write").mockRejectedValueOnce(new Error("disk full"));
+    await expect(lifecycle.ensureAccess(bindingId)).rejects.toThrow("disk full");
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+    // Nothing vouches for the route on disk: the next dial bypasses it and asks again.
+    await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+    await lifecycle.ensureAccess(bindingId);
+    expect(provider.authorizeSsh).toHaveBeenCalledTimes(2);
+  });
+
+  it("puts the key on a created machine once after a restart, which can't know what it holds (#17929)", async () => {
+    const { lifecycle, provider, store, run, bindingId, createKey, restart } =
+      await createdAndReached();
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(store.bindings()[0]!.access).not.toBeNull();
+    const next = restart(lifecycle);
+    try {
+      expect(next.store.bindings()[0]!.access).not.toBeNull();
+      await next.lifecycle.ensureAccess(bindingId);
+      expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+      expect(provider.authorizeSsh).toHaveBeenCalledWith(
+        expect.anything(),
+        "bx_23456789",
+        createKey
+      );
+      await next.lifecycle.ensureAccess(bindingId, undefined, { fresh: true });
+      expect(provider.authorizeSsh).toHaveBeenCalledTimes(1);
+      expect(provider.sshAccess).toHaveBeenCalledTimes(1);
+      expect(ran(run)).not.toContain("ssh-keygen");
+    } finally {
+      next.lifecycle.dispose();
+    }
+  });
+
+  it("keeps the key a created machine took when only its public half is gone (#17929)", async () => {
+    const { lifecycle, provider, bindingId, keyPath, createKey } = await createdAndReached();
+    const privateKey = await fs.readFile(keyPath, "utf8");
+    await fs.rm(`${keyPath}.pub`);
+    const route = await lifecycle.ensureAccess(bindingId, undefined, { fresh: true });
+    expect(provider.sshAccess).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+    expect(provider.authorizeSsh).not.toHaveBeenCalled();
+    expect(await fs.readFile(route.configPath, "utf8")).toContain(`IdentityFile "${keyPath}"`);
+    expect(await fs.readFile(keyPath, "utf8")).toBe(privateKey);
+    // The dial got the public half back from the private one; no new key replaced it.
+    expect((await fs.readFile(`${keyPath}.pub`, "utf8")).trim()).toBe(createKey);
   });
 
   it("sends nothing when the account's key can't be made, and says why", async () => {
@@ -3953,7 +4267,11 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     // Once the machine shows up, the next look binds it.
     const bindingId = env.store.bindings()[0]!.id;
     vi.mocked(env.provider.list).mockResolvedValue([
-      resource({ resourceId: "bx_found0001", labels: { "daintree-binding": bindingId } }),
+      resource({
+        resourceId: "bx_found0001",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
     ]);
     await env.lifecycle.retryCreate("build");
     expect(env.store.bindings()[0]!.resourceId).toBe("bx_found0001");
@@ -3978,7 +4296,361 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
     next.lifecycle.dispose();
   });
 
-  it("binds the earliest machine carrying a lost create's labels, never a later copy of it", async () => {
+  /** A create that went out just before Daintree quit: the mark stays, with no answer and no error. */
+  async function quitWhileSent(env: Awaited<ReturnType<typeof setup>>) {
+    vi.mocked(env.provider.create).mockImplementationOnce(() => new Promise(() => {}));
+    await create(env);
+    await vi.waitFor(() => expect(env.provider.create).toHaveBeenCalledTimes(1));
+    expect(env.store.bindings()[0]).toMatchObject({
+      creation: { sentAt: expect.any(Number) },
+      lastError: null,
+    });
+  }
+
+  it("leaves a startup lookup that couldn't reach the provider with a Retry, which finds the machine once online (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    await quitWhileSent(env);
+    const bindingId = env.store.bindings()[0]!.id;
+    const hint = async (lifecycle: CloudHostLifecycle) =>
+      (
+        (await lifecycle
+          .ensureAccess(bindingId)
+          .catch((e: unknown) => e)) as UnusableConnectionError
+      ).detail;
+    // While the create is still out, there is no Retry to point to.
+    expect(await hint(env.lifecycle)).not.toContain("retry");
+    vi.mocked(env.provider.list).mockRejectedValueOnce(
+      new BoatApiError("network", "offline", null, null, null)
+    );
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(next.lifecycle.statuses()[0]?.lastError).not.toBeNull());
+    // What Settings needs to offer Retry, which the connect message points to.
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      resourceId: null,
+      operation: null,
+      providerUnavailable: null,
+      lastError: {
+        code: "outcome-unknown",
+        message: expect.stringContaining("Retry looks for it again"),
+      },
+    });
+    expect(next.store.bindings()[0]!.creation).toEqual(env.store.bindings()[0]!.creation);
+    expect(await hint(next.lifecycle)).toContain("to retry");
+    vi.mocked(env.provider.list).mockResolvedValue([
+      resource({
+        resourceId: "bx_found0001",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
+    ]);
+    await next.lifecycle.retryCreate("build");
+    expect(next.store.bindings()[0]).toMatchObject({ resourceId: "bx_found0001", lastError: null });
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    next.lifecycle.dispose();
+  });
+
+  it("keeps what a Retry found over a startup lookup that fails after it (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    await quitWhileSent(env);
+    let failStartup: (error: unknown) => void = () => {};
+    vi.mocked(env.provider.list)
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            failStartup = reject;
+          })
+      )
+      .mockResolvedValue([]);
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(env.provider.list).toHaveBeenCalledTimes(1));
+    await expect(next.lifecycle.retryCreate("build")).rejects.toThrow(/remove the host/);
+    const said = next.lifecycle.statuses()[0]!.lastError;
+    expect(said?.message).toContain("isn't in the account");
+    failStartup(new BoatApiError("network", "offline", null, null, null));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(next.lifecycle.statuses()[0]!.lastError).toEqual(said);
+    next.lifecycle.dispose();
+  });
+
+  it("says why a startup lookup couldn't be made when the account's credentials are gone (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    await quitWhileSent(env);
+    const gone = vi.spyOn(MemoryCloudCredentialVault.prototype, "get").mockResolvedValue(null);
+    onTestFinished(() => gone.mockRestore());
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(next.lifecycle.statuses()[0]?.lastError).not.toBeNull());
+    expect(next.lifecycle.statuses()[0]!.lastError).toMatchObject({
+      code: "outcome-unknown",
+      message: expect.stringContaining("Replace them in Settings"),
+    });
+    expect(env.provider.list).not.toHaveBeenCalled();
+    next.lifecycle.dispose();
+  });
+
+  it("sends a create again with its own key once online, after a startup lookup that couldn't reach a same-key provider (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    await quitWhileSent(env);
+    const key = env.store.bindings()[0]!.creation!.idempotencyKey;
+    vi.mocked(env.provider.list).mockRejectedValueOnce(
+      new BoatApiError("network", "offline", null, null, null)
+    );
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
+    );
+    expect(next.lifecycle.statuses()[0]!.lastError!.message).toContain("asks for it again");
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    const looked = vi.mocked(env.provider.list).mock.calls.length;
+    await next.lifecycle.retryCreate("build");
+    expect(vi.mocked(env.provider.list).mock.calls.length).toBe(looked + 1);
+    expect(env.provider.create).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(env.provider.create).mock.calls[1]![1].idempotencyKey).toBe(key);
+    expect(vi.mocked(env.provider.list).mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      vi.mocked(env.provider.create).mock.invocationCallOrder[1]!
+    );
+    expect(next.store.bindings()[0]).toMatchObject({ resourceId: "bx_23456789", lastError: null });
+    next.lifecycle.dispose();
+  });
+
+  it("leaves Retry to a Retry still looking when the startup lookup failed, which records its own failure (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    await quitWhileSent(env);
+    const failures: Array<(error: unknown) => void> = [];
+    const held = () =>
+      new Promise<ProviderResource[]>((_resolve, reject) => {
+        failures.push(reject);
+      });
+    vi.mocked(env.provider.list).mockImplementationOnce(held).mockImplementationOnce(held);
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(failures).toHaveLength(1));
+    const retry = next.lifecycle.retryCreate("build").catch((error: unknown) => error);
+    await vi.waitFor(() => expect(failures).toHaveLength(2));
+    failures[0]!(new BoatApiError("network", "offline", null, null, null));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(next.store.bindings()[0]!.lastError).toBeNull();
+    failures[1]!(new BoatApiError("network", "offline", null, null, null));
+    await retry;
+    expect(next.lifecycle.statuses()[0]).toMatchObject({
+      operation: null,
+      lastError: {
+        code: "outcome-unknown",
+        message: expect.stringContaining("Retry looks for it again"),
+      },
+    });
+    next.lifecycle.dispose();
+  });
+
+  it("gives an earlier run's error way to why this startup's lookup failed (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+    vi.mocked(env.provider.list).mockRejectedValueOnce(
+      new BoatApiError("network", "offline", null, null, null)
+    );
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.lastError?.message).toContain("couldn't look")
+    );
+    next.lifecycle.dispose();
+  });
+
+  /** A provider that readies each create first, held until the test lets it finish. */
+  function readies(env: Awaited<ReturnType<typeof setup>>) {
+    const send = vi.fn(async () => resource({ machine: "running" }));
+    let finish: () => void = () => {};
+    const prepareCreate = vi.fn<NonNullable<CloudProvider["prepareCreate"]>>(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve(send);
+        })
+    );
+    (env.provider as CloudProvider).prepareCreate = prepareCreate;
+    return { send, prepareCreate, finish: () => finish() };
+  }
+
+  it("asks nobody when the provider was replaced while the create was readied (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const { send, prepareCreate, finish } = readies(env);
+    await create(env);
+    await vi.waitFor(() => expect(prepareCreate).toHaveBeenCalled());
+    vi.spyOn(env.accounts, "provider").mockReturnValue({ ...env.provider });
+    finish();
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]?.lastError).toMatchObject({
+        message: expect.stringContaining("replaced while the machine was readied"),
+      })
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.creation!.sentAt).toBeNull();
+  });
+
+  it("refuses a key replacement for a provider that can't say whose a key is while a create is readied (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const { send, prepareCreate, finish } = readies(env);
+    await create(env);
+    await vi.waitFor(() => expect(prepareCreate).toHaveBeenCalled());
+    vi.mocked(env.provider.checkCredentials).mockResolvedValueOnce({
+      identity: null,
+      scopes: [{ scope: { kind: "personal", id: "personal", name: "Personal" }, active: true }],
+    });
+    // Nothing is marked as sent yet, but the create is about to be sent with this account's key.
+    await expect(
+      env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_y" })
+    ).rejects.toThrow(/hasn't been confirmed yet/);
+    finish();
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(prepareCreate.mock.calls[0]![0].values).toEqual({ apiKey: "boat_live_x" });
+  });
+
+  it("refuses a Retry while the host is being removed, so nothing is made after its look (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+    let answer: (found: ProviderResource[]) => void = () => {};
+    vi.mocked(env.provider.list).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    const removing = env.lifecycle.deleteMachine("build", null);
+    await vi.waitFor(() => expect(env.provider.list).toHaveBeenCalled());
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/being removed/);
+    answer([]);
+    await removing;
+    expect(env.hosts).toHaveLength(0);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+  });
+
+  /** A sent create whose answer was lost, with Retry on offer. */
+  async function lostAnswer(env: Awaited<ReturnType<typeof setup>>) {
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+  }
+
+  /** Each `list` from now on held until the test answers it, in the order they were asked. */
+  function holdLists(env: Awaited<ReturnType<typeof setup>>) {
+    const held: Array<{ answer: (found: ProviderResource[]) => void; fail: (e: unknown) => void }> =
+      [];
+    vi.mocked(env.provider.list).mockImplementation(
+      () =>
+        new Promise((answer, fail) => {
+          held.push({ answer, fail });
+        })
+    );
+    return held;
+  }
+
+  it("keeps Retry refused while a second removal of the host is still looking (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    await lostAnswer(env);
+    const held = holdLists(env);
+    const first = env.lifecycle.deleteMachine("build", null).catch((error: unknown) => error);
+    const second = env.lifecycle.deleteMachine("build", null);
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    held[0]!.fail(new BoatApiError("network", "offline", null, null, null));
+    expect(await first).toBeInstanceOf(Error);
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/being removed/);
+    held[1]!.answer([]);
+    await second;
+    expect(env.hosts).toHaveLength(0);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes the machine a restart's lookup bound while the removal looked (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    await quitWhileSent(env);
+    const held = holdLists(env);
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const bindingId = next.store.bindings()[0]!.id;
+    const removing = next.lifecycle.deleteMachine("build", null);
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    held[0]!.answer([
+      resource({
+        resourceId: "bx_found0001",
+        labels: { "daintree-binding": bindingId },
+        createdAt: new Date().toISOString(),
+      }),
+    ]);
+    await vi.waitFor(() => expect(next.store.bindings()[0]?.resourceId).toBe("bx_found0001"));
+    held[1]!.answer([]);
+    await removing;
+    expect(env.provider.delete).toHaveBeenCalledWith(expect.anything(), "bx_found0001");
+    expect(env.hosts).toHaveLength(0);
+    next.lifecycle.dispose();
+  });
+
+  it("marks nothing and sends nothing when the create is stopped while it is readied (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const { send, prepareCreate, finish } = readies(env);
+    await create(env);
+    await vi.waitFor(() => expect(prepareCreate).toHaveBeenCalled());
+    env.lifecycle.dispose();
+    finish();
+    await vi.waitFor(() => expect(env.store.bindings()[0]!.lastError).not.toBeNull());
+    expect(send).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]).toMatchObject({
+      creation: { sentAt: null },
+      lastError: { message: expect.stringMatching(/stopped while the machine was readied/) },
+    });
+  });
+
+  it("keeps an earlier unanswered create in doubt when readying its retry fails (#17928)", async () => {
+    const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
+    const send = vi
+      .fn<() => Promise<ProviderResource>>()
+      .mockRejectedValueOnce(new BoatApiError("network", "lost", null, null, null));
+    const prepareCreate = vi.fn<NonNullable<CloudProvider["prepareCreate"]>>(async () => send);
+    (env.provider as CloudProvider).prepareCreate = prepareCreate;
+    await create(env);
+    await vi.waitFor(() =>
+      expect(env.lifecycle.statuses()[0]).toMatchObject({
+        operation: null,
+        lastError: { code: "outcome-unknown" },
+      })
+    );
+    const sent = env.store.bindings()[0]!.creation!;
+    expect(sent.sentAt).toEqual(expect.any(Number));
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    prepareCreate.mockRejectedValueOnce(new BoatApiError("network", "offline", null, null, null));
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow();
+    expect(env.store.bindings()[0]!.creation).toEqual(sent);
+    expect(env.lifecycle.statuses()[0]!.lastError).toMatchObject({
+      code: "outcome-unknown",
+      message: expect.stringContaining("earlier request"),
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds the machine made as a lost create was sent, never a later copy carrying its labels", async () => {
     const env = await setup({}, { lifetime: IDLE, adapt: atCreate });
     vi.mocked(env.provider.create).mockRejectedValueOnce(
       new BoatApiError("network", "lost", null, null, null)
@@ -3988,10 +4660,15 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
       expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
     );
     await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    const sentAt = env.store.bindings()[0]!.creation!.sentAt!;
     const labels = { "daintree-binding": env.store.bindings()[0]!.id };
     vi.mocked(env.provider.list).mockResolvedValue([
-      resource({ resourceId: "bx_fork00001", labels, createdAt: "2026-11-17T10:05:00.000Z" }),
-      resource({ resourceId: "bx_orig00001", labels, createdAt: "2026-11-17T10:00:00.000Z" }),
+      resource({
+        resourceId: "bx_fork00001",
+        labels,
+        createdAt: new Date(sentAt + 2 * 3_600_000).toISOString(),
+      }),
+      resource({ resourceId: "bx_orig00001", labels, createdAt: new Date(sentAt).toISOString() }),
     ]);
     await env.lifecycle.retryCreate("build");
     expect(env.store.bindings()[0]!.resourceId).toBe("bx_orig00001");
@@ -4662,5 +5339,395 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     expect(provider.delete).toHaveBeenCalledTimes(1);
     lifecycle.dispose();
     expect(stopListening).toHaveBeenCalled();
+  });
+});
+
+describe("CloudHostLifecycle with a lost create's label on a machine it didn't make (#17927)", () => {
+  const SENT = Date.parse("2026-11-17T10:00:00.000Z");
+  const minutesAfterSend = (minutes: number) => new Date(SENT + minutes * 60_000).toISOString();
+
+  /** A host whose create went out at SENT and whose answer was lost. */
+  async function lostCreate(options: { lookupOnly?: boolean; now?: () => number } = {}) {
+    const env = await setup({}, { now: options.now ?? (() => SENT) });
+    if (options.lookupOnly) {
+      (env.provider as { createReplay?: string }).createReplay = "lookup-only";
+    }
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await env.lifecycle.create({
+      accountId: env.account.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(env.lifecycle.statuses()[0]?.operation).toBeNull());
+    const bindingId = env.store.bindings()[0]!.id;
+    const labelled = (overrides: Partial<ProviderResource>) =>
+      resource({ labels: { daintree: "1", "daintree-binding": bindingId }, ...overrides });
+    const bindingOf = (hostId: string) => env.store.bindings().find((b) => b.hostId === hostId);
+    return { ...env, bindingId, labelled, bindingOf };
+  }
+
+  it("never binds a fork that outlived its deleted original: not on Retry, a restart, or removal", async () => {
+    const env = await lostCreate({ lookupOnly: true });
+    // The original is gone from the list; only a copy made two hours later carries its labels,
+    // beside a machine another create labelled while this one was sent.
+    vi.mocked(env.provider.list).mockResolvedValue([
+      env.labelled({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(120) }),
+      resource({
+        resourceId: "bx_other0001",
+        labels: { daintree: "1", "daintree-binding": "cb_someone0001" },
+        createdAt: minutesAfterSend(1),
+      }),
+    ]);
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/isn't in the account/);
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+    const next = env.restart(env.lifecycle);
+    await vi.waitFor(() =>
+      expect(next.lifecycle.statuses()[0]?.lastError?.message).toContain("hasn't shown a machine")
+    );
+    expect(next.store.bindings()[0]!.resourceId).toBeNull();
+    await next.lifecycle.deleteMachine("build", null);
+    expect(env.provider.delete).not.toHaveBeenCalled();
+    expect(env.hosts).toEqual([]);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    next.lifecycle.dispose();
+  });
+
+  it("lets the fork be added as a host of its own, and still binds the original while it lives", async () => {
+    const env = await lostCreate();
+    const original = env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) });
+    const fork = env.labelled({
+      resourceId: "bx_fork00001",
+      name: "copy",
+      createdAt: minutesAfterSend(120),
+    });
+    vi.mocked(env.provider.list).mockResolvedValue([original, fork]);
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(fork);
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_fork00001",
+      name: "copy",
+    });
+    await env.lifecycle.retryCreate("build");
+    expect(env.bindingOf("build")!.resourceId).toBe("bx_orig00001");
+    expect(env.bindingOf("copy")!.resourceId).toBe("bx_fork00001");
+  });
+
+  const UNCLEAR = /can't tell whether a machine carrying this host's label/;
+  const MISSING = /isn't in the account/;
+  type Rows = (r: (o: Partial<ProviderResource>) => ProviderResource) => ProviderResource[];
+  it.each<[string, Rows, RegExp]>([
+    [
+      "two made while it was sent",
+      (r) => [
+        r({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+        r({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(3) }),
+      ],
+      UNCLEAR,
+    ],
+    [
+      "one whose create time is unknown beside one made while it was sent",
+      (r) => [
+        r({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+        r({ resourceId: "bx_fork00001", createdAt: null }),
+      ],
+      UNCLEAR,
+    ],
+    [
+      "a lone one whose create time is unknown",
+      (r) => [r({ resourceId: "bx_orig00001", createdAt: null })],
+      UNCLEAR,
+    ],
+    [
+      "a deleted original and a copy made long after",
+      (r) => [
+        r({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1), machine: "deleted" }),
+        r({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(120) }),
+      ],
+      MISSING,
+    ],
+    [
+      "an older machine its labels were copied onto, beside the original",
+      (r) => [
+        r({ resourceId: "bx_older0001", createdAt: minutesAfterSend(-1) }),
+        r({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+      ],
+      UNCLEAR,
+    ],
+    [
+      "a machine made well before it was sent",
+      (r) => [r({ resourceId: "bx_older0001", createdAt: minutesAfterSend(-10) })],
+      MISSING,
+    ],
+  ])(
+    "binds and deletes nothing when it can't tell its machine apart: %s",
+    async (_, rows, said) => {
+      const env = await lostCreate({ lookupOnly: true });
+      vi.mocked(env.provider.list).mockResolvedValue(rows(env.labelled));
+      await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(said);
+      expect(env.bindingOf("build")!.resourceId).toBeNull();
+      await env.lifecycle.deleteMachine("build", null);
+      expect(env.provider.delete).not.toHaveBeenCalled();
+      expect(env.hosts).toEqual([]);
+    }
+  );
+
+  it("says after a restart that it saw machines it can't tell apart, not that there are none", async () => {
+    const env = await lostCreate({ lookupOnly: true });
+    vi.mocked(env.provider.list).mockResolvedValue([
+      env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+      env.labelled({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(2) }),
+    ]);
+    const next = env.restart(env.lifecycle);
+    try {
+      await vi.waitFor(() =>
+        expect(next.lifecycle.statuses()[0]?.lastError?.message).toMatch(UNCLEAR)
+      );
+      expect(next.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+      expect(next.store.bindings()[0]!.resourceId).toBeNull();
+    } finally {
+      next.lifecycle.dispose();
+    }
+  });
+
+  it("reserves the machine a later replay may have made, but binds and deletes it only once it can tell", async () => {
+    let now = SENT;
+    const env = await lostCreate({ now: () => now });
+    now = SENT + 60 * 60_000;
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    vi.mocked(env.provider.create).mockRejectedValueOnce(
+      new BoatApiError("timeout", "slow", null, null, null)
+    );
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow();
+    // Made around the replay: the replay's own machine, or a copy made then; nothing says which.
+    const made = env.labelled({ resourceId: "bx_late00001", createdAt: minutesAfterSend(61) });
+    vi.mocked(env.provider.list).mockResolvedValue([made]);
+    const listed = await env.accounts.listResources(env.account.id);
+    expect(listed.find((r) => r.resourceId === "bx_late00001")?.boundHostId).toBe("build");
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(UNCLEAR);
+    expect(env.provider.create).toHaveBeenCalledTimes(2);
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+    await env.lifecycle.deleteMachine("build", null);
+    expect(env.provider.delete).not.toHaveBeenCalled();
+    expect(env.hosts).toEqual([]);
+  });
+
+  it("asks a provider with an idempotency key for no other machine when it can't tell its own apart", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.list).mockResolvedValue([
+      env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) }),
+      env.labelled({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(2) }),
+    ]);
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(UNCLEAR);
+    expect(env.provider.create).toHaveBeenCalledTimes(1);
+    expect(env.lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown");
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+  });
+
+  it("lists the machine a pending create may have made as that host's, and won't import it", async () => {
+    const env = await lostCreate();
+    const original = env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) });
+    const fork = env.labelled({ resourceId: "bx_fork00001", createdAt: minutesAfterSend(120) });
+    const held = resource({ resourceId: "bx_held00001" });
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(held);
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_held00001",
+      name: "held",
+    });
+    vi.mocked(env.provider.list).mockResolvedValue([original, fork, held]);
+    const listed = await env.accounts.listResources(env.account.id);
+    expect(listed.find((r) => r.resourceId === "bx_orig00001")?.boundHostId).toBe("build");
+    expect(listed.find((r) => r.resourceId === "bx_fork00001")?.boundHostId).toBeNull();
+    expect(listed.find((r) => r.resourceId === "bx_held00001")?.boundHostId).toBe("held");
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(original);
+    await expect(
+      env.lifecycle.importMachine({
+        accountId: env.account.id,
+        resourceId: "bx_orig00001",
+        name: "other",
+      })
+    ).rejects.toThrow(/build is still being set up/);
+    expect(env.hosts.map((host) => host.id)).toEqual(["build", "held"]);
+  });
+
+  it("refuses an import whose inspect was out while the recovery bound the machine", async () => {
+    const env = await lostCreate();
+    const original = env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) });
+    vi.mocked(env.provider.list).mockResolvedValue([original]);
+    let release: () => void = () => {};
+    vi.mocked(env.provider.inspect).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return original;
+    });
+    const importing = env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_orig00001",
+      name: "other",
+    });
+    await vi.waitFor(() => expect(env.provider.inspect).toHaveBeenCalled());
+    await env.lifecycle.retryCreate("build");
+    expect(env.bindingOf("build")!.resourceId).toBe("bx_orig00001");
+    release();
+    await expect(importing).rejects.toThrow(/already in your host list as build/);
+    await env.lifecycle.deleteMachine("build", "bx_orig00001");
+    expect(vi.mocked(env.provider.delete).mock.calls).toEqual([
+      [expect.anything(), "bx_orig00001"],
+    ]);
+    expect(env.hosts).toEqual([]);
+  });
+
+  it("never takes a machine an import landed on while the recovery looked, and removal keeps it", async () => {
+    const env = await lostCreate();
+    const original = env.labelled({ resourceId: "bx_orig00001", createdAt: minutesAfterSend(1) });
+    let answer: (rows: ProviderResource[]) => void = () => {};
+    vi.mocked(env.provider.list).mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    const retrying = env.lifecycle.retryCreate("build");
+    await vi.waitFor(() => expect(env.provider.list).toHaveBeenCalled());
+    // An inspect that carries no labels, so the import can't see the pending create.
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce({ ...original, labels: {} });
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_orig00001",
+      name: "other",
+    });
+    answer([original]);
+    await expect(retrying).rejects.toThrow(/already in your host list as other/);
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+
+    vi.mocked(env.provider.list).mockResolvedValue([original]);
+    // So what the restart says is its own look's, not the Retry's.
+    env.store.updateBinding(env.bindingId, (current) => ({ ...current, lastError: null }));
+    const next = env.restart(env.lifecycle);
+    try {
+      await vi.waitFor(() =>
+        expect(
+          next.lifecycle.statuses().find((s) => s.hostId === "build")?.lastError?.message
+        ).toContain("already in your host list as other")
+      );
+      // Still unsettled, so removing it warns before a delete it may make.
+      expect(next.lifecycle.statuses().find((s) => s.hostId === "build")?.lastError?.code).toBe(
+        "outcome-unknown"
+      );
+      expect(next.store.bindings().find((b) => b.hostId === "build")!.resourceId).toBeNull();
+      await next.lifecycle.deleteMachine("build", null);
+      expect(env.provider.delete).not.toHaveBeenCalled();
+      expect(env.hosts.map((host) => host.id)).toEqual(["other"]);
+      expect(next.store.bindings().find((b) => b.hostId === "other")!.resourceId).toBe(
+        "bx_orig00001"
+      );
+    } finally {
+      next.lifecycle.dispose();
+    }
+  });
+
+  it("binds nothing when a same-key replay answers with a machine another host holds", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(resource({ resourceId: "bx_orig00001" }));
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_orig00001",
+      name: "other",
+    });
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    vi.mocked(env.provider.create).mockResolvedValueOnce(
+      resource({ resourceId: "bx_orig00001", machine: "starting", rawState: "provisioning" })
+    );
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(
+      /already in your host list as other/
+    );
+    expect(env.bindingOf("build")!.resourceId).toBeNull();
+    await env.lifecycle.deleteMachine("build", null);
+    expect(env.provider.delete).not.toHaveBeenCalled();
+    expect(env.bindingOf("other")!.resourceId).toBe("bx_orig00001");
+  });
+
+  it("deletes the machine a Retry bound while removal was looking", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.list).mockImplementationOnce(async () => {
+      env.store.updateBinding(env.bindingId, (current) => ({
+        ...current,
+        resourceId: "bx_orig00001",
+        creation: null,
+      }));
+      return [];
+    });
+    await env.lifecycle.deleteMachine("build", null);
+    expect(vi.mocked(env.provider.delete).mock.calls).toEqual([
+      [expect.anything(), "bx_orig00001"],
+    ]);
+    expect(env.hosts).toEqual([]);
+  });
+
+  it("never lets removal's older look replace the machine bound while it looked", async () => {
+    const env = await lostCreate();
+    const seen = env.labelled({ resourceId: "bx_seen00001", createdAt: minutesAfterSend(1) });
+    let answer: (rows: ProviderResource[]) => void = () => {};
+    vi.mocked(env.provider.list).mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    const removing = env.lifecycle.deleteMachine("build", null);
+    await vi.waitFor(() => expect(env.provider.list).toHaveBeenCalledTimes(1));
+    // Retry is refused while the removal looks; a restart's lookup that began first can still bind.
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(/being removed/);
+    env.store.updateBinding(env.bindingId, (current) => ({
+      ...current,
+      resourceId: "bx_named0001",
+      creation: null,
+    }));
+    answer([seen]);
+    await removing;
+    expect(vi.mocked(env.provider.delete).mock.calls).toEqual([
+      [expect.anything(), "bx_named0001"],
+    ]);
+    expect(env.hosts).toEqual([]);
+  });
+
+  it("fails a Retry that names the machine a provider answered with after the host settled on another", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.list).mockResolvedValue([]);
+    vi.mocked(env.provider.create).mockImplementationOnce(async () => {
+      env.store.updateBinding(env.bindingId, (current) => ({
+        ...current,
+        resourceId: "bx_first0001",
+        creation: null,
+      }));
+      return resource({
+        resourceId: "bx_extra0001",
+        name: "build-2",
+        machine: "starting",
+        rawState: "provisioning",
+      });
+    });
+    await expect(env.lifecycle.retryCreate("build")).rejects.toThrow(
+      /answered with a machine \(build-2\)/
+    );
+    expect(env.bindingOf("build")!.resourceId).toBe("bx_first0001");
+    expect(env.lifecycle.statuses()[0]?.lastError?.message).toContain("Check your Boat account");
+  });
+
+  it("never deletes a machine another host also holds, however the two came to share it", async () => {
+    const env = await lostCreate();
+    vi.mocked(env.provider.inspect).mockResolvedValueOnce(resource({ resourceId: "bx_orig00001" }));
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_orig00001",
+      name: "other",
+    });
+    // As an earlier version could leave them: the stuck host bound to the same machine.
+    env.store.updateBinding(env.bindingId, (current) => ({
+      ...current,
+      resourceId: "bx_orig00001",
+      creation: null,
+    }));
+    await expect(env.lifecycle.deleteMachine("build", "bx_orig00001")).rejects.toThrow(
+      /also in your host list as other/
+    );
+    expect(env.provider.delete).not.toHaveBeenCalled();
+    expect(env.hosts.map((host) => host.id)).toEqual(["build", "other"]);
   });
 });

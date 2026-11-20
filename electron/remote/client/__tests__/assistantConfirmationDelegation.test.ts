@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   ASSISTANT_HOST_SETTINGS_CONFIRMATION,
+  ASSISTANT_NEXT_FALLBACK_CONFIRMATION,
+  ASSISTANT_PRESET_MOVE_TOOL,
   DELEGABLE_ASSISTANT_CONFIRMATIONS,
   UNDELEGABLE_ASSISTANT_CONFIRMATIONS,
   isDelegableAssistantConfirmation,
@@ -30,7 +32,8 @@ describe("assistant confirmation delegation (#16752)", () => {
   });
 
   it("never offers the delegate an owned tool stands in for", () => {
-    for (const { id } of DELEGABLE_ASSISTANT_CONFIRMATIONS) {
+    for (const entry of DELEGABLE_ASSISTANT_CONFIRMATIONS) {
+      const id = entry.calledActionId ?? entry.id;
       const owned = Object.hasOwn(OWNED_RESOURCE_TOOLS, id) ? OWNED_RESOURCE_TOOLS[id] : undefined;
       const delegateTo = owned && "delegateTo" in owned ? owned.delegateTo : undefined;
       if (typeof delegateTo === "string" && delegateTo !== id) {
@@ -41,12 +44,35 @@ describe("assistant confirmation delegation (#16752)", () => {
 
   it("names only real ids, none on both lists", () => {
     const known = new Set<string>([...BUILT_IN_ACTION_IDS, HOST_SETTINGS_TOOL]);
-    for (const { id } of DELEGABLE_ASSISTANT_CONFIRMATIONS) expect(known.has(id)).toBe(true);
+    for (const entry of DELEGABLE_ASSISTANT_CONFIRMATIONS) {
+      expect(known.has(entry.calledActionId ?? entry.id)).toBe(true);
+      // A scoped tick's own key is never a tool a policy keyed on the called id could match.
+      if (entry.calledActionId !== undefined) expect(known.has(entry.id)).toBe(false);
+    }
+    const keys = DELEGABLE_ASSISTANT_CONFIRMATIONS.map((entry) => entry.id);
+    expect(new Set(keys).size).toBe(keys.length);
     for (const id of undelegableIds) {
       expect(known.has(id)).toBe(true);
       expect(isDelegableAssistantConfirmation(id)).toBe(false);
     }
     expect(ASSISTANT_HOST_SETTINGS_CONFIRMATION).toBe(HOST_SETTINGS_TOOL);
+  });
+
+  it("hands over a preset or account move only to the next step of the pane's own chain (#17917)", () => {
+    for (const id of [ASSISTANT_PRESET_MOVE_TOOL, "terminal.restartOnAccountOwned"]) {
+      expect(isDelegableAssistantConfirmation(id)).toBe(false);
+      expect(undelegableIds).toContain(id);
+    }
+    expect(isDelegableAssistantConfirmation(ASSISTANT_NEXT_FALLBACK_CONFIRMATION)).toBe(false);
+    const scoped = DELEGABLE_ASSISTANT_CONFIRMATIONS.find(
+      (entry) => entry.id === ASSISTANT_NEXT_FALLBACK_CONFIRMATION
+    );
+    expect(scoped?.calledActionId).toBe(ASSISTANT_PRESET_MOVE_TOOL);
+    for (const entry of UNDELEGABLE_ASSISTANT_CONFIRMATIONS) {
+      if (entry.ids.some((id) => id.startsWith("terminal.restartOn"))) {
+        expect(entry.reason).toMatch(/^Always asks: /);
+      }
+    }
   });
 
   it("keeps a stored list to the delegable ids, once each, in catalog order", () => {
@@ -59,6 +85,13 @@ describe("assistant confirmation delegation (#16752)", () => {
         "worktree.deleteOwned",
       ])
     ).toEqual(["worktree.deleteOwned", HOST_SETTINGS_TOOL]);
+    expect(
+      sanitizeDelegatedConfirmations([
+        HOST_SETTINGS_TOOL,
+        ASSISTANT_PRESET_MOVE_TOOL,
+        ASSISTANT_NEXT_FALLBACK_CONFIRMATION,
+      ])
+    ).toEqual([ASSISTANT_NEXT_FALLBACK_CONFIRMATION, HOST_SETTINGS_TOOL]);
     expect(sanitizeDelegatedConfirmations("worktree.deleteOwned")).toEqual([]);
     expect(sanitizeDelegatedConfirmations(undefined)).toEqual([]);
   });

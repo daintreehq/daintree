@@ -1,6 +1,6 @@
 import type { FleetSnapshot, RunCanopyRefinement } from "@shared/types/ipc/fleet";
 import { formatTimeAgo } from "@/utils/timeAgo";
-import { bandForRun, isAgentReportedNeed, runCanopyPlacement } from "@/lib/fleetAttention";
+import { canopyPlacingRun } from "@/lib/fleetAttention";
 
 /** Longest quote a row carries; the screen line it came from can run to the pane's width. */
 const MAX_QUOTE_LENGTH = 160;
@@ -68,11 +68,8 @@ export function canopyPlacementForRun(
   if (index === undefined) {
     index = new Map();
     for (const run of snapshot.runs) {
-      const placement = runCanopyPlacement(run);
-      if (placement === undefined || isAgentReportedNeed(run)) continue;
-      const band = bandForRun(run);
-      if (band === "parked" || band === "snoozed") continue;
-      index.set(run.runId, placement);
+      const placement = canopyPlacingRun(run);
+      if (placement !== undefined) index.set(run.runId, placement);
     }
     indexCache.set(snapshot, index);
   }

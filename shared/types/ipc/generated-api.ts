@@ -17,9 +17,18 @@ export interface GeneratedElectronAPI {
     add(
       ...args: IpcInvokeMap["agent-accounts:add"]["args"]
     ): Promise<IpcInvokeMap["agent-accounts:add"]["result"]>;
+    applyEverywhere(
+      ...args: IpcInvokeMap["agent-accounts:apply-everywhere"]["args"]
+    ): Promise<IpcInvokeMap["agent-accounts:apply-everywhere"]["result"]>;
+    listChoicesAway(
+      ...args: IpcInvokeMap["agent-accounts:list-choices-away"]["args"]
+    ): Promise<IpcInvokeMap["agent-accounts:list-choices-away"]["result"]>;
     remove(
       ...args: IpcInvokeMap["agent-accounts:remove"]["args"]
     ): Promise<IpcInvokeMap["agent-accounts:remove"]["result"]>;
+    rename(
+      ...args: IpcInvokeMap["agent-accounts:rename"]["args"]
+    ): Promise<IpcInvokeMap["agent-accounts:rename"]["result"]>;
   };
   agentCapabilities: {
     getAgentIds(
@@ -70,6 +79,11 @@ export interface GeneratedElectronAPI {
     set(
       ...args: IpcInvokeMap["agent-toolbar-pins:set"]["args"]
     ): Promise<IpcInvokeMap["agent-toolbar-pins:set"]["result"]>;
+  };
+  agentUsage: {
+    setFollowing(
+      ...args: IpcInvokeMap["agent-usage:set-following"]["args"]
+    ): Promise<IpcInvokeMap["agent-usage:set-following"]["result"]>;
   };
   app: {
     getVersionInfo(
@@ -427,6 +441,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["codex:resolve-resume-latest-session"]["args"]
     ): Promise<IpcInvokeMap["codex:resolve-resume-latest-session"]["result"]>;
   };
+  codexLimitContinue: {
+    list(
+      ...args: IpcInvokeMap["codex-limit-continue:list"]["args"]
+    ): Promise<IpcInvokeMap["codex-limit-continue:list"]["result"]>;
+    set(
+      ...args: IpcInvokeMap["codex-limit-continue:set"]["args"]
+    ): Promise<IpcInvokeMap["codex-limit-continue:set"]["result"]>;
+  };
   composerHold: {
     hold(
       ...args: IpcInvokeMap["composer-hold:hold"]["args"]
@@ -589,6 +611,9 @@ export interface GeneratedElectronAPI {
     markAnswerHandled(
       ...args: IpcInvokeMap["decisions:mark-answer-handled"]["args"]
     ): Promise<IpcInvokeMap["decisions:mark-answer-handled"]["result"]>;
+    markQuestions(
+      ...args: IpcInvokeMap["decisions:mark-questions"]["args"]
+    ): Promise<IpcInvokeMap["decisions:mark-questions"]["result"]>;
     prepareRelayDeploy(
       ...args: IpcInvokeMap["decisions:prepare-relay-deploy"]["args"]
     ): Promise<IpcInvokeMap["decisions:prepare-relay-deploy"]["result"]>;
@@ -1354,6 +1379,9 @@ export interface GeneratedElectronAPI {
     activateStagedProjectPlugin(
       ...args: IpcInvokeMap["plugin:project-activate-staged"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-activate-staged"]["result"]>;
+    addCatalogSource(
+      ...args: IpcInvokeMap["plugin:catalog-sources-add"]["args"]
+    ): Promise<IpcInvokeMap["plugin:catalog-sources-add"]["result"]>;
     advanceProjectLayoutSeed(
       ...args: IpcInvokeMap["plugin:project-layout-seed-advance"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-layout-seed-advance"]["result"]>;
@@ -1426,6 +1454,9 @@ export interface GeneratedElectronAPI {
     getBackgroundUpdateCheckSettings(
       ...args: IpcInvokeMap["plugin:bg-update-check-settings-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:bg-update-check-settings-get"]["result"]>;
+    getCatalogSources(
+      ...args: IpcInvokeMap["plugin:catalog-sources-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:catalog-sources-get"]["result"]>;
     getContextProviders(
       ...args: IpcInvokeMap["plugin:context-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:context-providers-get"]["result"]>;
@@ -1585,6 +1616,9 @@ export interface GeneratedElectronAPI {
     reloadProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-reload"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-reload"]["result"]>;
+    removeCatalogSource(
+      ...args: IpcInvokeMap["plugin:catalog-sources-remove"]["args"]
+    ): Promise<IpcInvokeMap["plugin:catalog-sources-remove"]["result"]>;
     reportPanelInventory(
       ...args: IpcInvokeMap["plugin:report-panel-inventory"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-inventory"]["result"]>;
@@ -2308,6 +2342,12 @@ export interface GeneratedElectronAPI {
     cancel(
       ...args: IpcInvokeMap["voice-input:cancel"]["args"]
     ): Promise<IpcInvokeMap["voice-input:cancel"]["result"]>;
+    cancelLocalModel(
+      ...args: IpcInvokeMap["voice-input:cancel-local-model"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:cancel-local-model"]["result"]>;
+    downloadLocalModel(
+      ...args: IpcInvokeMap["voice-input:download-local-model"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:download-local-model"]["result"]>;
     flushParagraph(
       ...args: IpcInvokeMap["voice-input:flush-paragraph"]["args"]
     ): Promise<IpcInvokeMap["voice-input:flush-paragraph"]["result"]>;
@@ -2317,6 +2357,9 @@ export interface GeneratedElectronAPI {
     getLiveSession(
       ...args: IpcInvokeMap["voice-input:get-live-session"]["args"]
     ): Promise<IpcInvokeMap["voice-input:get-live-session"]["result"]>;
+    getLocalModel(
+      ...args: IpcInvokeMap["voice-input:get-local-model"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:get-local-model"]["result"]>;
     isAppReplaced(
       ...args: IpcInvokeMap["voice-input:is-app-replaced"]["args"]
     ): Promise<IpcInvokeMap["voice-input:is-app-replaced"]["result"]>;
@@ -2326,6 +2369,9 @@ export interface GeneratedElectronAPI {
     publishDetails(
       ...args: IpcInvokeMap["voice-input:publish-details"]["args"]
     ): Promise<IpcInvokeMap["voice-input:publish-details"]["result"]>;
+    removeLocalModel(
+      ...args: IpcInvokeMap["voice-input:remove-local-model"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:remove-local-model"]["result"]>;
     restartReplacedApp(
       ...args: IpcInvokeMap["voice-input:restart-replaced-app"]["args"]
     ): Promise<IpcInvokeMap["voice-input:restart-replaced-app"]["result"]>;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
-import { projectDecisionQuestions, standingOf } from "../questionList.js";
+import { projectDecisionQuestions, questionAsks, standingOf } from "../questionList.js";
 import { threadNeedsAttention } from "../attentionList.js";
 import { DECLINE, SECRET, answers, askedAt, messages, qid, row } from "./questionRows.js";
 
@@ -713,5 +713,52 @@ describe("follow-up and stall events (#17235)", () => {
         })
       ).stall?.reason
     ).toBe("unspecified");
+  });
+});
+
+describe("questionAsks", () => {
+  const agent = (id: string, seq: number, expectsReply = false) => ({
+    message_id: id,
+    side: "agent" as const,
+    expects_reply: expectsReply,
+    event_seq: seq,
+    delivery: null,
+  });
+
+  it("names each question's latest agent follow-up by ledger seq, or null for the question alone", () => {
+    const rows = [
+      row(1),
+      // Out of order in the array: the ledger seq decides which is latest.
+      row(2, { messages_json: messages(agent("note-2", 9), agent("note-1", 4)) }),
+      row(3, {
+        local_status: "human-answered",
+        answers_json: answers({ event_seq: 5 }),
+        messages_json: messages(agent("ask-3", 6, true)),
+      }),
+    ];
+    const asks = questionAsks(rows, new Set([qid(1), qid(2), qid(3)]));
+    expect(asks).toEqual(
+      new Map([
+        [qid(1), null],
+        [qid(2), "note-2"],
+        [qid(3), "ask-3"],
+      ])
+    );
+  });
+
+  it("doesn't take the person's own follow-ups as something asked of them", () => {
+    const asks = questionAsks(
+      [
+        row(1, {
+          messages_json: messages(agent("note-1", 4), { message_id: "mine", event_seq: 8 }),
+        }),
+      ],
+      new Set([qid(1)])
+    );
+    expect(asks.get(qid(1))).toBe("note-1");
+  });
+
+  it("reads only the questions named", () => {
+    expect(questionAsks([row(1), row(2)], new Set([qid(2)]))).toEqual(new Map([[qid(2), null]]));
   });
 });

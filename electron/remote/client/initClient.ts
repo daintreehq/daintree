@@ -2,10 +2,12 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { app, type BrowserWindow, type Event, type WebContents } from "electron";
 import type { HostRestartImpact, RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
+import type { HostSettingLeaf } from "../../../shared/types/hostSettings.js";
 import { MetricsLinkMethod, RestartImpactSchema } from "../metrics/linkMethods.js";
 import {
   isLocalHostId,
   parseHostScopedKey,
+  sameHostConnection,
   toHostScopedKey,
   type HostConnection,
   type HostDescriptor,
@@ -46,6 +48,7 @@ import {
 } from "../../window/projectOwnership.js";
 import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
 import { CloudGuestPowerOff } from "../cloud/CloudGuestPowerOff.js";
+import { CloudKeepAwakeLinks } from "../cloud/CloudKeepAwakeLinks.js";
 import { CloudMachineKeys } from "../cloud/CloudMachineKeys.js";
 import { CloudSshFiles } from "../cloud/CloudSshFiles.js";
 import { initCloudHosts } from "../cloud/initCloudHosts.js";
@@ -140,6 +143,8 @@ export function setHostAgentsSource(source: AgentsSource | null): void {
 
 /** How long an update waits for a host it has to dial before asking it what a restart ends. */
 const RESTART_IMPACT_CONNECT_MS = 15_000;
+/** How long Remove waits on stopping a host started on connect: a check, then its quit. */
+const REMOVE_STOP_MS = 120_000;
 
 /** How often the network is compared while an ssh host's connection is wanted. */
 const HOST_NETWORK_POLL_MS = 1_000;
@@ -840,6 +845,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   /** Sends a Remote Hosts event to every view on this machine. */
   emitLocal(event: RemoteHostsEvent): void;
   registry: HostRegistry;
+  /** A change that landed on a host's settings: a new idle time becomes its cloud machine's own (#17916). */
+  idleTimePicked(hostId: HostId, settings: readonly HostSettingLeaf[]): void;
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
@@ -958,6 +965,12 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emit: broadcastLocal,
     listViews: () => getAllAppWebContents().map((wc) => wc.id),
     onFirstUse: hooks.onFirstUse,
+    // Daintree there runs until stopped and nothing else would stop it; one
+    // kept running by a service or login item is left as it is.
+    onRemoving: async (descriptor): Promise<void> => {
+      if (descriptor.startsOnConnect !== true) return;
+      await setup.stopStartedOnConnect(descriptor.connection, AbortSignal.timeout(REMOVE_STOP_MS));
+    },
     onForget: async (descriptor): Promise<void> => {
       stopSignIn(descriptor.connection);
       await forgetHostState(descriptor.id, HOST_STATE_CLEANUPS);
@@ -1093,6 +1106,15 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emit: broadcastLocal,
     isRetiring: (connection) => client.isRetiring(connection),
     wslKeepalive,
+    onProbed: (connection, result) => {
+      // PID 1 unread says nothing either way: what was seen before stands.
+      if (result.platform === "linux" && result.advice.systemd == null) return;
+      for (const host of registry.list()) {
+        if (sameHostConnection(host.connection, connection)) {
+          registry.recordStartsOnConnect(host.id, result.startsOnConnect === true);
+        }
+      }
+    },
   });
   // A host whose Daintree answered is checked afresh the next time it isn't serving.
   const stopStartRechecks = manager.onStateChange((hostId, state) => {
@@ -1126,6 +1148,16 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopGuestPowerOff = manager.onSessionOpened((hostId, session) =>
     guestPowerOff.sessionOpened(hostId, session)
   );
+  const keepAwake = new CloudKeepAwakeLinks({
+    store: cloud.store,
+    accounts: cloud.accounts,
+    hosts: { get: (hostId) => registry.get(hostId) },
+    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    changed: () => cloud.cloudHosts.changed(),
+  });
+  const stopKeepAwake = manager.onSessionOpened((hostId, session) =>
+    keepAwake.sessionOpened(hostId, session)
+  );
   cloudLifecycle = new CloudHostLifecycle({
     store: cloud.store,
     accounts: cloud.accounts,
@@ -1133,6 +1165,25 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     clientDir,
     machineKeys,
     guestPowerOff,
+    keepAwake,
+    idleClaims: {
+      sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+      idleOn: (hostId, session) =>
+        getRemoteService("hostMetrics")?.idleOn(hostId, session, 60_000) ?? null,
+      release: (hostId, session) => {
+        const current = manager.get(hostId)?.currentSession ?? null;
+        if (current !== null && current !== session) return;
+        // Not a person's disconnect: anything that dials it later reads it asleep and stops there.
+        void manager.disconnect(hostId).catch(() => {});
+      },
+      reconnect: (hostId) => {
+        // Only a link the sleep let go: one a person disconnected, or one up again, is left be.
+        if (!registry.get(hostId) || manager.get(hostId) || client.isDisconnectedByPerson(hostId)) {
+          return;
+        }
+        manager.connect(hostId);
+      },
+    },
     hosts: {
       add: (name, connection, pendingPlacement) =>
         client.add({ name, connection, ...(pendingPlacement ? { pendingPlacement } : {}) }),
@@ -1189,6 +1240,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     manager,
     emitLocal: broadcastLocal,
     registry,
+    idleTimePicked: (hostId, settings) => cloudLifecycle?.idleTimePicked(hostId, settings),
     async dispose() {
       stopWakeWatch();
       app.off("browser-window-focus", onWindowFocus);
@@ -1205,6 +1257,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       machineKeys?.dispose();
       stopGuestPowerOff();
       guestPowerOff.dispose();
+      stopKeepAwake();
+      keepAwake.dispose();
       cloudLifecycle?.dispose();
       cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.

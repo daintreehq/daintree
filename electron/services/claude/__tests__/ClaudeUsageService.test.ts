@@ -7,6 +7,7 @@ import {
   type ClaudeUsageRecord,
 } from "../ClaudeUsageObservations.js";
 import {
+  claudeLiveAccountKey,
   defaultClaudeConfigDir,
   paneDisplayTitle,
   readClaudeUsageAccounts,
@@ -45,6 +46,28 @@ function deps(overrides: Partial<ClaudeUsageDeps> = {}): ClaudeUsageDeps {
     ...overrides,
   };
 }
+
+describe("claudeLiveAccountKey (#17318)", () => {
+  afterEach(() => clearClaudeUsageObservations());
+
+  it("matches a live pane to the group its folder's readings are under, however the folder is spelled", async () => {
+    recordClaudeUsageObservation(record({ configDir: WORK }));
+    const [work] = await readClaudeUsageAccounts(deps());
+    expect(await claudeLiveAccountKey(LINK_TO_WORK, deps())).toBe(work!.key);
+  });
+
+  it("takes no login for a pane its shell's profile may have moved to another folder", async () => {
+    recordClaudeUsageObservation(record({ configDir: WORK, shell: "/bin/bash" }));
+    const moved = deps({
+      readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: STRAY } }),
+    });
+    const accounts = await readClaudeUsageAccounts(moved);
+    const key = await claudeLiveAccountKey(WORK, moved);
+    expect(accounts.find((account) => account.key === key)).toBeUndefined();
+    // On the folder the profile exports, the pane is certain.
+    expect(await claudeLiveAccountKey(STRAY, moved)).not.toBe(key);
+  });
+});
 
 describe("readClaudeUsageAccounts (#16370)", () => {
   afterEach(() => clearClaudeUsageObservations());

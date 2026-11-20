@@ -975,6 +975,11 @@ export const CHANNELS = {
   VOICE_INPUT_SET_PAUSED_LIVE: "voice-input:set-paused-live",
   VOICE_INPUT_PAUSE_REQUESTED: "voice-input:pause-requested",
   VOICE_INPUT_SESSION_VOCABULARY: "voice-input:session-vocabulary",
+  VOICE_INPUT_GET_LOCAL_MODEL: "voice-input:get-local-model",
+  VOICE_INPUT_DOWNLOAD_LOCAL_MODEL: "voice-input:download-local-model",
+  VOICE_INPUT_CANCEL_LOCAL_MODEL: "voice-input:cancel-local-model",
+  VOICE_INPUT_REMOVE_LOCAL_MODEL: "voice-input:remove-local-model",
+  VOICE_INPUT_LOCAL_MODEL_STATUS: "voice-input:local-model-status",
   RECENT_DICTATIONS_RECORD: "recent-dictations:record",
   RECENT_DICTATIONS_SET_CORRECTED_TEXT: "recent-dictations:set-corrected-text",
   RECENT_DICTATIONS_LIST: "recent-dictations:list",
@@ -1205,6 +1210,9 @@ export const CHANNELS = {
   PLUGIN_PREVIEW_FROM_CATALOG: "plugin:preview-from-catalog",
   PLUGIN_INSTALL_FROM_CATALOG: "plugin:install-from-catalog",
   PLUGIN_BROWSE_CATALOG: "plugin:browse-catalog",
+  PLUGIN_CATALOG_SOURCES_GET: "plugin:catalog-sources-get",
+  PLUGIN_CATALOG_SOURCES_ADD: "plugin:catalog-sources-add",
+  PLUGIN_CATALOG_SOURCES_REMOVE: "plugin:catalog-sources-remove",
   PLUGIN_UNINSTALL: "plugin:uninstall",
   PLUGIN_CHECK_FOR_UPDATE: "plugin:check-for-update",
   PLUGIN_INVOKE: "plugin:invoke",
@@ -1503,6 +1511,10 @@ export const CHANNELS = {
   AGENT_TOOLBAR_PINS_SET: "agent-toolbar-pins:set",
   AGENT_TOOLBAR_PINS_CHANGED: "agent-toolbar-pins:changed",
 
+  // The sidebar's agent usage readout (#17318)
+  AGENT_USAGE_SET_FOLLOWING: "agent-usage:set-following",
+  AGENT_USAGE_CHANGED: "agent-usage:changed",
+
   // The person's own prompt templates, from a folder on this machine (#16398)
   USER_PROMPT_TEMPLATES_LIST: "user-prompt-templates:list",
   USER_PROMPT_TEMPLATES_OPEN_FOLDER: "user-prompt-templates:open-folder",
@@ -1510,6 +1522,9 @@ export const CHANNELS = {
   // An agent's accounts (#16040)
   AGENT_ACCOUNTS_ADD: "agent-accounts:add",
   AGENT_ACCOUNTS_REMOVE: "agent-accounts:remove",
+  AGENT_ACCOUNTS_RENAME: "agent-accounts:rename",
+  AGENT_ACCOUNTS_LIST_CHOICES_AWAY: "agent-accounts:list-choices-away",
+  AGENT_ACCOUNTS_APPLY_EVERYWHERE: "agent-accounts:apply-everywhere",
 
   // Every copy of an agent's CLI, read when its settings page is open (#16409)
   AGENT_CLI_COPIES_LIST: "agent-cli-copies:list",
@@ -1572,6 +1587,10 @@ export const CHANNELS = {
   SCHEDULES_RUN_CLOSED: "schedules:run-closed",
 
   // An agent terminal's When done choice (#16171)
+  CODEX_LIMIT_CONTINUE_SET: "codex-limit-continue:set",
+  CODEX_LIMIT_CONTINUE_LIST: "codex-limit-continue:list",
+  /** An armed pane's continuation changed, or it was disarmed (#17909). */
+  CODEX_LIMIT_CONTINUE_CHANGED: "codex-limit-continue:changed",
   TERMINAL_WHEN_DONE_SET: "terminal-when-done:set",
   TERMINAL_WHEN_DONE_LIST: "terminal-when-done:list",
   TERMINAL_WHEN_DONE_CHANGED: "terminal-when-done:changed",
@@ -1613,6 +1632,8 @@ export const CHANNELS = {
   DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE: "decisions:get-question-image-by-reference",
   DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE: "decisions:get-question-summaries-by-reference",
   DECISIONS_CANCEL_QUESTION_BY_REFERENCE: "decisions:cancel-question-by-reference",
+  // The person seeing, clearing or restoring questions on this computer only (#17895).
+  DECISIONS_MARK_QUESTIONS: "decisions:mark-questions",
   DECISIONS_ANSWER_QUESTION: "decisions:answer-question",
   DECISIONS_GET_ANSWER_RESULT: "decisions:get-answer-result",
   // The person's decline, signed by this computer's owner key (#17239).

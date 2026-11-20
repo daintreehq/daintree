@@ -222,6 +222,7 @@ import {
   type PluginBlocklistMatch,
 } from "./plugin/PluginBlocklistService.js";
 import { PluginInstaller, type PluginUpdateCheckOptions } from "./plugin/PluginInstaller.js";
+import { installedCatalogOf } from "./plugin/pluginCatalogSourceUrl.js";
 import { checkPluginEngineRange, type PluginEngineMismatch } from "./plugin/pluginEngineCompat.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
@@ -5060,6 +5061,15 @@ export class PluginService {
    */
   getPluginsRoot(): string {
     return this.pluginsRoot;
+  }
+
+  /**
+   * The catalog the installed copy of `pluginId` came from (#17434): `null`
+   * when it isn't a catalog install (or isn't installed), `sourceUrl` absent
+   * for Daintree's own catalog.
+   */
+  getInstalledCatalog(pluginId: string): { sourceUrl?: string } | null {
+    return installedCatalogOf(this.records.getInstalledRecord(pluginId));
   }
 
   registerHandler<TArgs, TResult>(

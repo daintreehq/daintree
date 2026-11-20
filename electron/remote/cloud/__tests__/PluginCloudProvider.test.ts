@@ -676,4 +676,10 @@ describe("consent to a plugin's providers as its registrations see it (#17352)",
     expect(env.accounts.providerUnavailable("acme.clouds.ec2")).toContain("Acme Clouds");
     env.watch.dispose();
   });
+
+  it("never says a plugin's machines stop by their host once idle: the contract has no way to (#17921)", () => {
+    const env = connected();
+    expect(env.accounts.providerInfos().map((info) => info.hostIdleStop)).toEqual([false, false]);
+    env.watch.dispose();
+  });
 });

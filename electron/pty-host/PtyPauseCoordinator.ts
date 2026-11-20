@@ -97,6 +97,12 @@ export class PtyPauseCoordinator {
     return this.capturing;
   }
 
+  /**
+   * When reads last resumed after a hold: bytes the PTY buffered meanwhile
+   * are still on their way in for a moment after (#17909).
+   */
+  readsResumedAt: number | null = null;
+
   /** At least one owner has asked for this PTY to be held, enforced or not. */
   get isPaused(): boolean {
     return this.holds.size > 0;
@@ -136,6 +142,7 @@ export class PtyPauseCoordinator {
         this.raw.pause();
       } else {
         this.raw.resume();
+        this.readsResumedAt = Date.now();
       }
     } catch {
       // PTY process may already be dead

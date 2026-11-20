@@ -409,6 +409,24 @@ describe("SessionHost", () => {
     expect(changes).toHaveLength(2);
   });
 
+  it("tells the idle clock nothing about a link that carries no view (#17920)", () => {
+    const opened = vi.fn();
+    const changes = vi.fn();
+    host.onEndpointOpened(opened);
+    host.onTransportChange(changes);
+    // Summaries and the host chip: attached, dropped and resumed with no view.
+    const link = fakeLink();
+    server.attach("s1", link);
+    link.drop();
+    const resumed = fakeLink();
+    server.attach("s1", resumed, true);
+    expect(opened).not.toHaveBeenCalled();
+    expect(changes).not.toHaveBeenCalled();
+
+    open(resumed, "view-1", "p");
+    expect(opened).toHaveBeenCalledTimes(1);
+  });
+
   it("resyncs a Shell whose event lane stays over high water past the grace", () => {
     const link = fakeLink();
     server.attach("s1", link);

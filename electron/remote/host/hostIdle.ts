@@ -6,6 +6,7 @@ import { store } from "../../store.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { registerRemoteService } from "../runtime.js";
 import { HostIdleTracker, agentWorkOf, type HostWorkReading } from "./HostIdleTracker.js";
+import type { SessionHost } from "./SessionHost.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -27,7 +28,9 @@ async function readAgentWork(fresh = false): Promise<HostWorkReading["agents"]> 
  * Start this host's idle clock for as long as it listens, and register it
  * for whatever acts on idleness here. The disposer stops it.
  */
-export function installHostIdle(sessionHost: { readonly servesViews: boolean }): () => void {
+export function installHostIdle(
+  sessionHost: Pick<SessionHost, "servesViews" | "onEndpointOpened" | "onTransportChange">
+): () => void {
   const tracker = new HostIdleTracker({
     read: async () => {
       const agents = await readAgentWork();
@@ -42,10 +45,18 @@ export function installHostIdle(sessionHost: { readonly servesViews: boolean }):
   const offAgents = events.on("agent:state-changed", (payload) => {
     if (ACTIVE_AGENT_STATES.has(payload.state)) tracker.noteWork();
   });
+  // A window open here is work, and one opened and closed again between two
+  // checks would never be seen by them. A link with no view raises neither.
+  const offOpened = sessionHost.onEndpointOpened(() => tracker.noteWork());
+  const offTransport = sessionHost.onTransportChange((_, attached) => {
+    if (attached) tracker.noteWork();
+  });
   const unregister = registerRemoteService("hostIdle", tracker);
   tracker.start();
   return () => {
     offAgents();
+    offOpened();
+    offTransport();
     unregister();
     tracker.dispose();
   };

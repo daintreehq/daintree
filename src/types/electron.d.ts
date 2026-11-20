@@ -11,6 +11,8 @@ import type {
 import type { NotificationsE2EApi } from "@/lib/e2eNotificationBackdoor";
 import type { PendingMcpConfirm } from "@/store/mcpConfirmStore";
 import type { PendingPluginMcpConsent } from "@/store/pluginMcpConfirmStore";
+import type { WakeContinueEntry, WakeContinueOffer } from "@/store/wakeContinueStore";
+import type { TerminalRestoreDisposition } from "@shared/types/panel";
 
 declare global {
   interface Window {
@@ -40,6 +42,12 @@ declare global {
       item: Omit<PendingPluginMcpConsent, "enqueuedAt">
     ) => void;
     __DAINTREE_E2E_RESET_PLUGIN_MCP_CONFIRM__?: () => void;
+    /** Parks a continue-note offer over open panes for its screenshot harness. */
+    __DAINTREE_E2E_SET_WAKE_OFFER__?: (offer: {
+      phase: WakeContinueOffer["phase"];
+      entries: Array<WakeContinueEntry & { disposition?: TerminalRestoreDisposition }>;
+      open?: boolean;
+    }) => void;
     __DAINTREE_E2E_IPC__?: {
       getRendererListenerCount: (channel: string) => number;
     };

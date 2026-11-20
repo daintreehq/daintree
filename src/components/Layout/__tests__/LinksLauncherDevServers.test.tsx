@@ -23,6 +23,22 @@ function mockSessions(
   snapshot = { sessions, hydrated: true, fetchError: false, ...overrides };
 }
 
+const h = vi.hoisted(() => ({
+  panelInView: vi.fn<(session: { panelId: string; projectId: string }) => boolean>(() => true),
+  expectHandoff: vi.fn(),
+  onOpen: vi.fn(),
+  onOpenExternal: vi.fn(),
+}));
+
+vi.mock("@/services/openDevServer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/openDevServer")>()),
+  devServerPanelInView: (session: { panelId: string; projectId: string }) =>
+    h.panelInView(session) ? { id: session.panelId } : undefined,
+}));
+vi.mock("@/components/ui/overlay-focus-restore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/overlay-focus-restore")>()),
+  useOverlayFocusRestore: () => ({ expectHandoff: h.expectHandoff }),
+}));
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (s: unknown) => unknown) => useWorktreeStore(selector),
 }));
@@ -45,7 +61,27 @@ function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
 }
 
 function DevServers() {
-  return <LinksLauncherDevServers snapshot={snapshot} sectionId="dev" />;
+  return (
+    <LinksLauncherDevServers
+      snapshot={snapshot}
+      sectionId="dev"
+      onOpen={h.onOpen}
+      onOpenExternal={h.onOpenExternal}
+    />
+  );
+}
+
+/** The rows that open something: the row's own button, never one of its actions. */
+function openableRows(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("li > button"));
+}
+
+/** The accessible description of a row's button, read off its id references. */
+function description(row: HTMLElement): string {
+  return (row.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
 }
 
 function session(overrides: Partial<DevPreviewSessionState> = {}): DevPreviewSessionState {
@@ -73,6 +109,7 @@ let restartByWorktree: ReturnType<typeof vi.fn>;
 let stopDevServerByWorktree: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  h.panelInView.mockReturnValue(true);
   restart = vi.fn(() => Promise.resolve());
   stop = vi.fn(() => Promise.resolve());
   restartByWorktree = vi.fn(() => Promise.resolve());
@@ -135,11 +172,11 @@ describe("LinksLauncherDevServers", () => {
     expect(screen.getByText("feature-foo")).toBeTruthy();
   });
 
-  it("renders a running server's label and port, keeping routine output to the tooltip", async () => {
+  it("renders a running server's address, keeping routine output to the tooltip", async () => {
     mockSessions([session({ url: "http://localhost:4321", lastOutput: "ready in 200ms" })]);
     const { container } = render(<DevServers />);
     expect(screen.getByText("feature-foo")).toBeTruthy();
-    expect(screen.getByText(":4321")).toBeTruthy();
+    expect(screen.getByText("localhost:4321")).toBeTruthy();
     expect(screen.queryByText("ready in 200ms")).toBeNull();
     // Through the app's tooltip, never a native title.
     const row = container.querySelector("li")!;
@@ -147,7 +184,7 @@ describe("LinksLauncherDevServers", () => {
     expect(row.querySelectorAll("[title]")).toHaveLength(0);
     // On the status text rather than the row, so the action buttons don't inherit it beside
     // their own tooltips.
-    const trigger = screen.getByText(":4321").closest<HTMLElement>("[data-state]")!;
+    const trigger = screen.getByText("localhost:4321").closest<HTMLElement>("[data-state]")!;
     expect(trigger).toBeTruthy();
     expect(row.contains(trigger)).toBe(true);
     expect(trigger.querySelector("button")).toBeNull();
@@ -161,15 +198,17 @@ describe("LinksLauncherDevServers", () => {
     expect(screen.getByText("> app@1.0.0 dev")).toBeTruthy();
   });
 
-  it("uses predictedUrl for the port when url is null", () => {
+  it("shows the predicted address while a server has none of its own, without opening it", () => {
     mockSessions([session({ url: null, predictedUrl: "http://localhost:5050" })]);
     render(<DevServers />);
-    expect(screen.getByText(":5050")).toBeTruthy();
+    expect(screen.getByText("localhost:5050")).toBeTruthy();
+    expect(openableRows()).toHaveLength(0);
   });
 
-  it("omits the port when neither url has one", () => {
+  it("shows a server at its scheme's default port by its host alone", () => {
     mockSessions([session({ url: "http://localhost", predictedUrl: null })]);
     const { container } = render(<DevServers />);
+    expect(screen.getByText("localhost")).toBeTruthy();
     expect(container.textContent).not.toContain(":");
   });
 
@@ -471,5 +510,105 @@ describe("LinksLauncherDevServers", () => {
     ]);
     render(<DevServers />);
     expect(screen.getByText("2 running · 1 failed")).toBeTruthy();
+  });
+});
+
+describe("opening a dev server from its row", () => {
+  it("opens a running server's own session from its row, described by the address it opens", () => {
+    const running = session({ url: "http://localhost:5824" });
+    mockSessions([running]);
+    render(<DevServers />);
+    const [row] = openableRows();
+    // A native button: Enter activates it as a click does.
+    expect(row!.tagName).toBe("BUTTON");
+    expect(row!.textContent).toContain("feature-foo");
+    expect(description(row!)).toContain("localhost:5824");
+    fireEvent.click(row!, { detail: 0 });
+    expect(h.onOpen).toHaveBeenCalledTimes(1);
+    expect(h.onOpen).toHaveBeenCalledWith(running);
+    expect(h.onOpenExternal).not.toHaveBeenCalled();
+  });
+
+  it("hands focus off when its preview is a panel of this view, and only then", () => {
+    mockSessions([
+      session({ panelId: "p-here", worktreeId: "wt-1" }),
+      session({ panelId: "p-away", projectId: "project-2", worktreeId: "wt-9" }),
+    ]);
+    h.panelInView.mockImplementation((s) => s.panelId === "p-here");
+    render(<DevServers />);
+    const [here, away] = openableRows();
+    fireEvent.click(away!);
+    expect(h.expectHandoff).not.toHaveBeenCalled();
+    expect(h.panelInView).toHaveBeenLastCalledWith(
+      expect.objectContaining({ panelId: "p-away", projectId: "project-2" })
+    );
+    fireEvent.click(here!);
+    expect(h.expectHandoff).toHaveBeenCalledTimes(1);
+    expect(h.onOpen.mock.calls.map(([s]) => [s.panelId, s.projectId])).toEqual([
+      ["p-away", "project-2"],
+      ["p-here", "project-1"],
+    ]);
+  });
+
+  it("asks where the server's panel is when the row is pressed, not when it was drawn", () => {
+    mockSessions([session()]);
+    h.panelInView.mockReturnValue(false);
+    render(<DevServers />);
+    h.panelInView.mockReturnValue(true);
+    fireEvent.click(openableRows()[0]!);
+    expect(h.expectHandoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Open in external browser for a running server, sending its address", () => {
+    mockSessions([session({ url: "http://localhost:5824" })]);
+    render(<DevServers />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open dev server for feature-foo in external browser" })
+    );
+    expect(h.onOpenExternal).toHaveBeenCalledTimes(1);
+    expect(h.onOpenExternal).toHaveBeenCalledWith("http://localhost:5824");
+    expect(h.onOpen).not.toHaveBeenCalled();
+    expect(h.expectHandoff).not.toHaveBeenCalled();
+  });
+
+  it("never opens the row from its Restart or Stop", () => {
+    mockSessions([session()]);
+    render(<DevServers />);
+    fireEvent.click(screen.getByLabelText("Restart dev server for feature-foo"));
+    fireEvent.click(screen.getByLabelText("Stop dev server for feature-foo"));
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(h.onOpen).not.toHaveBeenCalled();
+    expect(h.onOpenExternal).not.toHaveBeenCalled();
+    expect(h.expectHandoff).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["starting", {}],
+    ["installing", {}],
+    ["stopping", {}],
+    ["error", { terminalId: null }],
+    ["restored-stopped", {}],
+  ] as const)("keeps a %s row's controls and opens nothing from it", (status, extra) => {
+    mockSessions([session({ status, ...extra })]);
+    render(<DevServers />);
+    expect(openableRows()).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /in external browser$/ })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /^(Start|Restart) dev server for feature-foo$/ })
+    ).toBeTruthy();
+  });
+
+  it("keeps a focused Stop mounted as its server stops being openable", () => {
+    mockSessions([session()]);
+    const { rerender } = render(<DevServers />);
+    const stopButton = screen.getByLabelText("Stop dev server for feature-foo");
+    stopButton.focus();
+    mockSessions([session({ status: "stopping" })]);
+    rerender(<DevServers />);
+    expect(openableRows()).toHaveLength(0);
+    expect(screen.getByLabelText("Stop dev server for feature-foo")).toBe(stopButton);
+    expect(document.activeElement).toBe(stopButton);
+    expect(stopButton.getAttribute("aria-disabled")).toBe("true");
   });
 });

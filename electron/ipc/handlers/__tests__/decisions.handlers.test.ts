@@ -31,6 +31,8 @@ import type {
 import type {
   AnswerDecisionQuestionPayload,
   CancelDecisionQuestionByReferencePayload,
+  DecisionQuestionMarkResult,
+  MarkDecisionQuestionsPayload,
   DeclineDecisionQuestionPayload,
   DecisionAnswerResultRead,
   DecisionDeclineResultRead,
@@ -56,6 +58,7 @@ import type {
   GetDecisionQuestionSummariesByReferencePayload,
   GetDecisionQuestionSummariesPayload,
 } from "../../../../shared/types/decisionsQuestion.js";
+import { DECISION_QUESTION_MARKS_PER_CALL } from "../../../../shared/types/decisionsQuestion.js";
 import type {
   DecisionsInvolvementRead,
   DecisionsInvolvementSaveResult,
@@ -121,6 +124,12 @@ const decisionsEntry = vi.hoisted(() => ({
     async (
       _payload: CancelDecisionQuestionByReferencePayload
     ): Promise<DecisionQuestionCancelResult> => ({ result: "cancelling" })
+  ),
+  markDecisionQuestions: vi.fn(
+    async (_payload: MarkDecisionQuestionsPayload): Promise<DecisionQuestionMarkResult> => ({
+      result: "marked",
+      marked: 0,
+    })
   ),
   answerDecisionQuestion: vi.fn(
     async (_payload: AnswerDecisionQuestionPayload): Promise<DecisionQuestionAnswerResult> => ({
@@ -340,6 +349,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionQuestionImageByReference: decisionsEntry.getDecisionQuestionImageByReference,
     getDecisionQuestionSummariesByReference: decisionsEntry.getDecisionQuestionSummariesByReference,
     cancelDecisionQuestionByReference: decisionsEntry.cancelDecisionQuestionByReference,
+    markDecisionQuestions: decisionsEntry.markDecisionQuestions,
     answerDecisionQuestion: decisionsEntry.answerDecisionQuestion,
     getDecisionAnswerResult: decisionsEntry.getDecisionAnswerResult,
     declineDecisionQuestion: decisionsEntry.declineDecisionQuestion,
@@ -447,6 +457,9 @@ const cancelQuestionByReference = decisionsNamespace.ops.cancelQuestionByReferen
   .handler as unknown as (
   payload: CancelDecisionQuestionByReferencePayload
 ) => Promise<DecisionQuestionCancelResult>;
+const markQuestions = decisionsNamespace.ops.markQuestions.handler as unknown as (
+  payload: MarkDecisionQuestionsPayload
+) => Promise<DecisionQuestionMarkResult>;
 const answerQuestion = decisionsNamespace.ops.answerQuestion.handler as unknown as (
   payload: AnswerDecisionQuestionPayload
 ) => Promise<DecisionQuestionAnswerResult>;
@@ -626,6 +639,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE,
   CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE,
   CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
+  CHANNELS.DECISIONS_MARK_QUESTIONS,
   CHANNELS.DECISIONS_ANSWER_QUESTION,
   CHANNELS.DECISIONS_GET_ANSWER_RESULT,
   CHANNELS.DECISIONS_DECLINE_QUESTION,
@@ -679,6 +693,7 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionQuestionImageByReference.mockClear();
     decisionsEntry.getDecisionQuestionSummariesByReference.mockClear();
     decisionsEntry.cancelDecisionQuestionByReference.mockClear();
+    decisionsEntry.markDecisionQuestions.mockClear();
     decisionsEntry.answerDecisionQuestion.mockClear();
     decisionsEntry.getDecisionAnswerResult.mockClear();
     decisionsEntry.declineDecisionQuestion.mockClear();
@@ -888,6 +903,9 @@ describe("decisions IPC", () => {
         await expect(cancelQuestionByReference({ reference: REFERENCE })).resolves.toEqual({
           result: "off",
         });
+        await expect(
+          markQuestions({ action: "clear", questions: [{ reference: REFERENCE, ask: null }] })
+        ).resolves.toEqual({ result: "off" });
 
         expect(decisionsEntry.evaluated).toBe(0);
         expect(decisionsEntry.libraries).toBe(0);
@@ -1581,6 +1599,47 @@ describe("decisions IPC", () => {
       expect(decisionsEntry.cancelDecisionQuestionByReference).toHaveBeenCalledExactlyOnceWith({
         reference: REFERENCE,
       });
+    });
+
+    it("hands the person's marks to Decisions once on, as they were sent (#17895)", async () => {
+      saved.value = { enabled: true };
+      const payload: MarkDecisionQuestionsPayload = {
+        action: "seen",
+        questions: [{ reference: REFERENCE, ask: "msg_agent_0001" }],
+      };
+      const marked: DecisionQuestionMarkResult = { result: "marked", marked: 1 };
+      decisionsEntry.markDecisionQuestions.mockResolvedValueOnce(marked);
+      await expect(markQuestions(payload)).resolves.toBe(marked);
+      expect(decisionsEntry.markDecisionQuestions).toHaveBeenCalledExactlyOnceWith(payload);
+    });
+
+    it("takes marks for whole references, a page at a time, and nothing else (#17895)", () => {
+      const schema = decisionsNamespace.ops.markQuestions.schema as SafeParse;
+      const one = { reference: REFERENCE, ask: null };
+      for (const action of ["seen", "clear", "restore"]) {
+        expect(schema.safeParse({ action, questions: [one] }).success).toBe(true);
+      }
+      expect(
+        schema.safeParse({
+          action: "clear",
+          questions: Array(DECISION_QUESTION_MARKS_PER_CALL).fill(one),
+        }).success
+      ).toBe(true);
+      for (const bad of [
+        { action: "clear", questions: [] },
+        { action: "clear", questions: Array(DECISION_QUESTION_MARKS_PER_CALL + 1).fill(one) },
+        { action: "answer", questions: [one] },
+        { action: "clear", questions: [{ reference: REFERENCE }] },
+        { action: "clear", questions: [{ ...one, ask: "" }] },
+        { action: "clear", questions: [{ ...one, extra: 1 }] },
+        {
+          action: "clear",
+          questions: [{ reference: { ...REFERENCE, questionId: "../q" }, ask: null }],
+        },
+        { action: "clear", questions: [one], projectId: "project-2" },
+      ]) {
+        expect(schema.safeParse(bad).success, JSON.stringify(bad).slice(0, 120)).toBe(false);
+      }
     });
 
     it("takes a whole reference and nothing else", () => {

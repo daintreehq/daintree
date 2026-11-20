@@ -355,6 +355,25 @@ describe("Preset fallback chain sanitization", () => {
     ]);
   });
 
+  it("keeps the continuation switch only when it is exactly true (#17912)", () => {
+    const stringy = { id: "string", name: "String" };
+    Reflect.set(stringy, "continueAtLimitReset", "true");
+    const result = getMergedPresets("codex", [
+      { id: "on", name: "On", continueAtLimitReset: true },
+      stringy,
+      { id: "off", name: "Off", continueAtLimitReset: false },
+    ]);
+    expect(
+      result
+        .filter((p) => ["on", "string", "off"].includes(p.id))
+        .map((p) => [p.id, p.continueAtLimitReset])
+    ).toEqual([
+      ["on", true],
+      ["string", undefined],
+      ["off", undefined],
+    ]);
+  });
+
   it("keeps a well-formed pinned account on the user's own presets alone (#16133)", () => {
     const numeric = { id: "numeric", name: "Numeric" };
     Reflect.set(numeric, "accountId", 7);

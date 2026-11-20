@@ -86,6 +86,38 @@ describe("isWaitingOnPerson", () => {
   });
 });
 
+describe("isWaitingOnPerson, once the person has marked a question (#17895)", () => {
+  const open: DecisionQuestionStanding = { kind: "waiting", reason: "open" };
+  it("leaves out what they've seen or cleared, and counts it again at a new ask", () => {
+    const at = (seen: boolean, cleared: boolean) => ({
+      standing: open,
+      inbox: { ask: "note-1", seen, cleared },
+    });
+    expect(isWaitingOnPerson(at(false, false))).toBe(true);
+    expect(isWaitingOnPerson(at(true, false))).toBe(false);
+    expect(isWaitingOnPerson(at(false, true))).toBe(false);
+    // A mark made at an earlier ask: main lists the new ask unmarked.
+    expect(
+      isWaitingOnPerson({ standing: open, inbox: { ask: "note-2", seen: false, cleared: false } })
+    ).toBe(true);
+  });
+
+  it("counts what the list leaves unmarked", async () => {
+    render(<Probe active />);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [
+          { ...question(open, 0), inbox: { ask: null, seen: true, cleared: false } },
+          { ...question(open, 1), inbox: { ask: null, seen: false, cleared: true } },
+          { ...question({ kind: "queued" }, 2), inbox: { ask: null, seen: false, cleared: false } },
+        ],
+      })
+    );
+    expect(seen.at(-1)).toBe(1);
+  });
+});
+
 describe("useDecisionsWaitingCount", () => {
   it("reads nothing while inactive", () => {
     render(<Probe active={false} />);

@@ -303,7 +303,11 @@ export function computeIdArrayDelta<T extends { id: string }>(
       changedIndices.push(index);
     }
     if (trackedFields === undefined || prev === undefined) continue;
-    const edited = trackedFields.filter((field) => prev[field] !== entry[field]);
+    // By value: hydration rebuilds an object-valued field from the very record the
+    // baseline holds, and a copy that matches it is no edit.
+    const edited = trackedFields.filter(
+      (field) => !deepEqualIgnoringUndefined(prev[field], entry[field])
+    );
     if (edited.length === 0) continue;
     fieldEdits.push([index, [...edited]]);
     // A claim is only honoured for an entry the writer is allowed to touch, so

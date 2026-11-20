@@ -28,6 +28,9 @@ export const MAIN_STATIC_ESM_ENTRIES = [
   // utilityProcess by openaiVadProcess (#12577); needs its own entry so
   // esbuild emits a standalone bundle at the resolved path.
   "electron/services/voice/openaiVadWorker.ts",
+  // On-device transcription (#17338): the speech model and its VAD in a
+  // utilityProcess forked by localSpeechProcess, kept loaded between sessions.
+  "electron/services/voice/localSpeechWorker.ts",
   // Canopy's local screen reader (#14448): the ONNX model in a utilityProcess
   // forked by canopyReaderProcess, so a native abort never takes down main.
   "electron/services/canopy/canopyReaderWorker.ts",

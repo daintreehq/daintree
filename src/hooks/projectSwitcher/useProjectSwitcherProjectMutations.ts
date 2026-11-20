@@ -30,10 +30,6 @@ export type ProjectSwitcherProjectMutations = Pick<
   | "setRemoveConfirmProject"
   | "confirmRemoveProject"
   | "isRemovingProject"
-  | "sleepConfirmProject"
-  | "setSleepConfirmProject"
-  | "confirmSleep"
-  | "isSleepingProject"
 >;
 
 export interface UseProjectSwitcherProjectMutationsOptions {
@@ -111,25 +107,21 @@ async function stopProjectConfirmed(
   }
 }
 
-async function sleepProjectConfirmed(
-  capturedId: string,
-  {
-    doSleepProject,
-    setSleepConfirmProject,
-    setIsSleepingProject,
-  }: {
-    doSleepProject: (projectId: string) => Promise<void>;
-    setSleepConfirmProject: (project: SearchableProject | null) => void;
-    setIsSleepingProject: (isSleeping: boolean) => void;
-  }
-): Promise<void> {
-  setIsSleepingProject(true);
-  try {
-    await doSleepProject(capturedId);
-    setSleepConfirmProject(null);
-  } finally {
-    setIsSleepingProject(false);
-  }
+/**
+ * Through `project.sleep`, so the switcher, the toolbar pill and the palette
+ * share one confirmation, its "when idle" choice (#17882), and its rule for
+ * when a quiet background project sleeps without asking.
+ */
+async function dispatchSleep(projectId: string): Promise<void> {
+  const result = await actionService.dispatch("project.sleep", { projectId }, { source: "user" });
+  if (result.ok) return;
+  notify({
+    type: "error",
+    title: "Couldn't sleep project",
+    message: result.error.message || "Couldn't put the project to sleep",
+    actions: [{ label: "Try again", variant: "primary", onClick: () => dispatchSleep(projectId) }],
+    context: { eventKind: "uiFeedback" },
+  });
 }
 
 async function removeProjectConfirmed(
@@ -212,12 +204,9 @@ export function useProjectSwitcherProjectMutations({
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
   const [isRemovingProject, setIsRemovingProject] = useState(false);
-  const [sleepConfirmProject, setSleepConfirmProject] = useState<SearchableProject | null>(null);
-  const [isSleepingProject, setIsSleepingProject] = useState(false);
 
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
-  const sleepProjectAction = useProjectStore((state) => state.sleepProject);
   const closeProject = useProjectStore((state) => state.closeProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const openRelocation = useProjectRelocationStore((state) => state.open);
@@ -229,14 +218,6 @@ export function useProjectSwitcherProjectMutations({
       setRemoveConfirmProject(null);
     }
   }, [removeConfirmProject, searchableProjects]);
-
-  useEffect(() => {
-    if (!sleepConfirmProject) return;
-    const stillExists = searchableProjects.some((p) => p.id === sleepConfirmProject.id);
-    if (!stillExists) {
-      setSleepConfirmProject(null);
-    }
-  }, [sleepConfirmProject, searchableProjects]);
 
   // "Locate moved project" (missing) and "Move or rename project" (healthy) both
   // open the shared relocation dialog (#11282, phase 4), superseding the old
@@ -353,68 +334,13 @@ export function useProjectSwitcherProjectMutations({
     [findLiveProject, removeConfirmProject]
   );
 
-  const doSleepProject = useCallback(
-    async (projectId: string) => {
-      // Through the store, not projectClient: sleeping the ACTIVE project also
-      // has to flush pending panel saves before the teardown and drop the window
-      // to the no-project state after it.
-      const run = () => sleepProjectAction(projectId);
-      try {
-        await run();
-      } catch (error) {
-        const retry = async () => {
-          try {
-            await run();
-          } catch (retryError) {
-            notify({
-              type: "error",
-              title: "Couldn't sleep project",
-              message: formatErrorMessage(retryError, "Couldn't put the project to sleep"),
-              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-              context: { eventKind: "uiFeedback" },
-            });
-          }
-        };
-        notify({
-          type: "error",
-          title: "Couldn't sleep project",
-          message: formatErrorMessage(error, "Couldn't put the project to sleep"),
-          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-          context: { eventKind: "uiFeedback" },
-        });
-      }
-    },
-    [sleepProjectAction]
-  );
-
   const sleepProject = useCallback(
     async (projectId: string) => {
-      const project = findLiveProject(projectId);
-      if (!project) return;
-
+      if (!findLiveProject(projectId)) return;
       close();
-
-      const hasProcesses =
-        project.processCount > 0 || project.activeAgentCount > 0 || project.waitingAgentCount > 0;
-
-      // D1 (confirm) when live processes would be stopped, or when the target is
-      // the project on screen here — that tears down what the user is looking
-      // at. D0 (immediate) for a background project with nothing running to
-      // interrupt. The snapshot freezes the counts the dialog previews.
-      //
-      // `isActive` only covers THIS window, and no cross-window signal is
-      // available here: the persisted `status` is a singleton keyed to the
-      // last-switched project, so "active" doesn't mean "open in some window".
-      // A project open in ANOTHER window can therefore be slept without a
-      // confirm — bounded harm, since nothing is running in that case and the
-      // other window is told what happened (`useSleptProjectTransition`).
-      if (hasProcesses || project.isActive) {
-        setSleepConfirmProject(project);
-      } else {
-        await doSleepProject(projectId);
-      }
+      await dispatchSleep(projectId);
     },
-    [findLiveProject, close, doSleepProject]
+    [findLiveProject, close]
   );
 
   const restartProject = useCallback(
@@ -424,15 +350,6 @@ export function useProjectSwitcherProjectMutations({
     },
     [close]
   );
-
-  const confirmSleep = useCallback(async () => {
-    if (!sleepConfirmProject || isSleepingProject) return;
-    await sleepProjectConfirmed(sleepConfirmProject.id, {
-      doSleepProject,
-      setSleepConfirmProject,
-      setIsSleepingProject,
-    });
-  }, [sleepConfirmProject, isSleepingProject, doSleepProject]);
 
   const confirmRemoveProject = useCallback(async () => {
     if (!removeConfirmProject || isRemovingProject) return;
@@ -461,9 +378,5 @@ export function useProjectSwitcherProjectMutations({
     setRemoveConfirmProject,
     confirmRemoveProject,
     isRemovingProject,
-    sleepConfirmProject,
-    setSleepConfirmProject,
-    confirmSleep,
-    isSleepingProject,
   };
 }

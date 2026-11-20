@@ -135,7 +135,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       queueNotice: (lane, wake) => queued.push({ lane, wake }),
       askApproval: async (question) => {
         asked.push(question);
-        return "approved";
+        return { decision: "approved" };
       },
       local: {
         name: () => "greg-mbp",
@@ -556,6 +556,38 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           ["g", true],
         ]);
         expect(opened[0]!.calls[0]!.args).toEqual({ owned: true, global: true });
+      });
+    });
+
+    // #17919: what the caller's conversation makes is held under it, here and on a host.
+    describe("whose conversation the call is (#17919)", () => {
+      beforeEach(() => {
+        runs.set("a", { ...RUN_A, conversationOwnershipId: "conv-a" });
+        runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+        relayCall.mockResolvedValue({
+          status: "done",
+          result: { isError: false, structured: null, text: "ok" },
+        });
+      });
+
+      it("names the lane's conversation from main's own record of the run, never the model's", async () => {
+        const spoof = { ...LIST, conversationId: "forged", args: { conversationId: "forged" } };
+        await runtime.call("a", spoof as unknown as typeof LIST, { tier: "core" });
+        await runtime.call("b", spoof as unknown as typeof LIST, { tier: "core" });
+        const remote = { ...LIST, hostId: "studio", projectId: "host-p" };
+        await runtime.call("a", remote, { tier: "core" });
+        await runtime.call("b", remote, { tier: "core" });
+
+        expect(
+          opened.map((session) => [session.spec.helpSessionId, session.spec.conversationId])
+        ).toEqual([
+          ["a", "conv-a"],
+          ["b", undefined],
+        ]);
+        expect(relayCall.mock.calls.map(([, payload]) => payload.conversationId)).toEqual([
+          "conv-a",
+          undefined,
+        ]);
       });
     });
 

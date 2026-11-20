@@ -11,15 +11,17 @@ import type {
   DecisionQuestionDeclineResult,
   DecisionQuestionList,
   DecisionQuestionListItem,
+  DecisionQuestionMarkResult,
   DecisionQuestionReference,
   DecisionQuestionStanding,
   DecisionQuestionSummariesResult,
   DeclineDecisionQuestionPayload,
+  MarkDecisionQuestionsPayload,
 } from "@shared/types/decisionsQuestion";
 import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
+import { answerKey, useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 
 let decisionsOn = true;
@@ -85,6 +87,8 @@ const declineQuestion =
 const getDeclineResult =
   vi.fn<(payload: { declineId: string }) => Promise<DecisionDeclineResultRead>>();
 const getInvolvement = vi.fn<() => Promise<DecisionsInvolvementRead>>();
+const markQuestions =
+  vi.fn<(payload: MarkDecisionQuestionsPayload) => Promise<DecisionQuestionMarkResult>>();
 let listListeners: Array<(list: DecisionQuestionList) => void> = [];
 let statusListeners: Array<(status: DecisionsStatus) => void> = [];
 
@@ -202,8 +206,17 @@ function rows() {
   return screen.queryAllByTestId("decisions-inbox-row");
 }
 
+/** A row's alias: its trailing id, or its line when the line couldn't be read and the alias names it. */
+function aliasOf(row: HTMLElement): string | null {
+  return (
+    row.querySelector('[data-testid="decisions-inbox-row-alias"]')?.textContent ??
+    row.querySelector('[data-testid="decisions-inbox-row-line"]')?.textContent ??
+    null
+  );
+}
+
 function rowNamed(alias: string) {
-  const row = rows().find((candidate) => candidate.textContent?.startsWith(alias));
+  const row = rows().find((candidate) => aliasOf(candidate) === alias);
   if (!row) throw new Error(`no row ${alias}`);
   return row;
 }
@@ -273,6 +286,9 @@ beforeEach(() => {
   });
   getAllTerminals.mockReset().mockResolvedValue([]);
   dispatch.mockReset().mockResolvedValue({ ok: true });
+  markQuestions
+    .mockReset()
+    .mockImplementation(async ({ questions }) => ({ result: "marked", marked: questions.length }));
   Reflect.set(window, "electron", {
     decisions: {
       listQuestions,
@@ -283,6 +299,7 @@ beforeEach(() => {
       declineQuestion,
       getDeclineResult,
       getInvolvement,
+      markQuestions,
     },
     events: {
       on: (
@@ -342,11 +359,11 @@ describe("DecisionsInboxDialog", () => {
     expect(own.textContent).not.toContain("Alpha (as asked)");
     expect(own.textContent).toContain("feature-x");
     expect(own.textContent).toContain("Waiting for an answer");
-    // The dots between agent, project and worktree are hidden from assistive technology.
+    // The agent is named by its mark; the dot between project and worktree is hidden from assistive technology.
     const dots = Array.from(own.querySelectorAll("span")).filter(
       (span) => span.textContent?.trim() === "·"
     );
-    expect(dots).toHaveLength(2);
+    expect(dots).toHaveLength(1);
     for (const dot of dots) expect(dot.getAttribute("aria-hidden")).toBe("true");
     // Another project's question keeps the name it was asked under, and its own agent.
     const other = rowNamed("q-3");
@@ -453,7 +470,7 @@ describe("DecisionsInboxDialog", () => {
     await waitFor(() =>
       expect(screen.getByTestId("decisions-inbox-group-history").textContent).toContain("q-3")
     );
-    expect(rows().map((row) => row.textContent?.slice(0, 3))).toEqual(["q-2", "q-3", "q-1"]);
+    expect(rows().map(aliasOf)).toEqual(["q-2", "q-3", "q-1"]);
     expect(rowNamed("q-3").getAttribute("aria-current")).toBe("true");
     expect(shownBody()).toContain("Body of question 3");
     expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
@@ -608,7 +625,9 @@ describe("DecisionsInboxDialog", () => {
     for (const references of asked) expect(references.length).toBeLessThanOrEqual(64);
     const ids = asked.flat().map((ref) => ref.questionId);
     expect(ids.slice().sort()).toEqual(many.map((entry) => entry.reference.questionId).sort());
-    expect(within(rowNamed("q-100")).getByTestId("decisions-inbox-row-line").textContent).toBe("");
+    expect(within(rowNamed("q-100")).getByTestId("decisions-inbox-row-line").textContent).toBe(
+      "q-100"
+    );
   });
 
   it("dismisses the question shown only after the confirmation naming it, at the revision read (#17239)", async () => {
@@ -673,6 +692,146 @@ describe("DecisionsInboxDialog", () => {
     fireEvent.click(rowNamed("q-1"));
     await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
     expect(screen.queryByTestId("decisions-inbox-dismiss")).toBeNull();
+  });
+
+  describe("a Remote Host's question while its Host is away (#17946)", () => {
+    const AWAY_REFERENCE = reference("question-9", { hostId: "qhost_studio_0001" });
+    const AWAY = {
+      ...item("question-9", 9, OPEN, {
+        reference: AWAY_REFERENCE,
+        remoteHost: { hostId: "studio", name: "Studio", connected: false },
+      }),
+      inbox: { ask: null, seen: true, cleared: false },
+    };
+
+    beforeEach(() => {
+      listQuestions.mockResolvedValue({ revision: 2, questions: [AWAY] });
+    });
+
+    it("dismisses it from what was last read of it, and never offers withdrawing in its place", async () => {
+      getQuestionContentByReference.mockResolvedValue({
+        result: "host-not-connected",
+        lastRead: { result: "read", revision: 4, alias: 9, readAt: Date.now() - 60_000 },
+      });
+      declineQuestion.mockImplementation(async ({ declineId }) => ({
+        result: "submitted",
+        declineId,
+        outcome: { status: "unsupported", by: "asking-desktop" },
+      }));
+      open();
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-question-unavailable").textContent).toMatch(
+          /isn't connected.*last read it 1 minute ago, so you can still dismiss it/
+        )
+      );
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      expect(confirm.textContent).toContain("Dismiss question q-9?");
+      expect(confirm.textContent).toMatch(/dismissed as this computer last read it/);
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      });
+      await waitFor(() =>
+        expect(declineQuestion).toHaveBeenCalledExactlyOnceWith({
+          reference: AWAY_REFERENCE,
+          declineId: expect.any(String),
+          expectedRevision: 4,
+        })
+      );
+
+      // Not taken: said plainly, with nothing withdrawn and no withdrawal offered instead.
+      await waitFor(() =>
+        expect(confirm.textContent).toMatch(
+          /Daintree on the computer that asked q-9 needs an update/
+        )
+      );
+      expect(within(confirm).queryByRole("button", { name: "Withdraw question" })).toBeNull();
+      fireEvent.click(within(confirm).getByRole("button", { name: "Close" }));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(screen.queryByTestId("decisions-inbox-withdraw")).toBeNull();
+      expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    });
+
+    it("never offers withdrawing for a dismissal signed from the last read once the Host went away under the confirmation", async () => {
+      getQuestionContentByReference.mockResolvedValue({
+        result: "read",
+        question: content("question-9", 9, {
+          reference: AWAY_REFERENCE,
+          status: "open",
+          revision: 4,
+        }),
+      });
+      declineQuestion.mockImplementation(async ({ declineId }) => ({
+        result: "submitted",
+        declineId,
+        outcome: { status: "unsupported", by: "relay" },
+      }));
+      open();
+      fireEvent.click(await screen.findByTestId("decisions-inbox-dismiss"));
+      const confirm = await screen.findByRole("alertdialog");
+      // The Host goes away while the person reads the confirmation opened on a live read.
+      getQuestionContentByReference.mockResolvedValue({
+        result: "host-not-connected",
+        lastRead: { result: "read", revision: 4, alias: 9, readAt: Date.now() },
+      });
+      await act(async () => {
+        fireEvent.click(within(confirm).getByRole("button", { name: "Dismiss question" }));
+      });
+      await waitFor(() =>
+        expect(confirm.textContent).toMatch(/Your relay needs an update.*q-9 wasn't dismissed/)
+      );
+      expect(declineQuestion).toHaveBeenCalledOnce();
+      expect(confirm.textContent).not.toContain("Withdraw question");
+      expect(confirm.textContent).not.toMatch(/withdraw it instead/);
+      expect(cancelQuestionByReference).not.toHaveBeenCalled();
+    });
+
+    it("offers no withdrawal for a dismissal signed from the last read once the Host is back", async () => {
+      const declineId = "0190f0aa-1111-4222-8333-44445555ee01";
+      useDecisionsAnswerStore.getState().update(answerKey(AWAY_REFERENCE), (record) => ({
+        ...record,
+        decline: {
+          declineId,
+          payload: { reference: AWAY_REFERENCE, declineId, expectedRevision: 4 },
+          phase: { kind: "settled", outcome: { status: "unsupported", by: "relay" } },
+          resubmitted: false,
+          lastReadAt: 1_000,
+        },
+      }));
+      getQuestionContentByReference.mockResolvedValue({
+        result: "read",
+        question: content("question-9", 9, {
+          reference: AWAY_REFERENCE,
+          status: "open",
+          revision: 4,
+        }),
+      });
+      open();
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-dismiss-status").textContent).toMatch(
+          /^Your relay needs an update.*q-9 wasn't dismissed\.$/
+        )
+      );
+      expect(screen.queryByTestId("decisions-inbox-withdraw")).toBeNull();
+      // A new Dismiss, from the live read, is its own decision.
+      expect(screen.getByTestId("decisions-inbox-dismiss")).toBeTruthy();
+    });
+
+    it("says why it can't be dismissed when nothing read here says where it stands, and keeps Clear", async () => {
+      getQuestionContentByReference.mockResolvedValue({
+        result: "host-not-connected",
+        lastRead: { result: "not-read" },
+      });
+      open();
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-question-unavailable").textContent).toMatch(
+          /isn't connected.*can't be dismissed until the Host is back/
+        )
+      );
+      expect(screen.queryByTestId("decisions-inbox-dismiss")).toBeNull();
+      expect(screen.getByTestId("decisions-inbox-clear").textContent).toBe("Clear from Needs you");
+      expect(declineQuestion).not.toHaveBeenCalled();
+    });
   });
 
   describe("going to the terminal that asked", () => {
@@ -792,6 +951,365 @@ describe("DecisionsInboxDialog", () => {
       expect(getAllTerminals).not.toHaveBeenCalled();
       // Its projects are another computer's, whatever their ids.
       expect(rowNamed("q-2").textContent).toContain("Alpha (as asked)");
+    });
+  });
+
+  describe("seen and cleared on this computer (#17895)", () => {
+    const unmarked: NonNullable<DecisionQuestionListItem["inbox"]> = {
+      ask: null,
+      seen: false,
+      cleared: false,
+    };
+    /** `LIST` as this computer lists it: question-2, in Needs you, carrying `inbox`. */
+    function marked(inbox = unmarked, revision = 2, extra: DecisionQuestionListItem[] = []) {
+      return {
+        revision,
+        questions: [
+          ...LIST.questions.map((question) =>
+            question.reference.questionId === "question-2" ? { ...question, inbox } : question
+          ),
+          ...extra,
+        ],
+      };
+    }
+    const seenCalls = () => markQuestions.mock.calls.filter(([p]) => p.action === "seen");
+
+    beforeEach(() => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("marks the question it shows seen once its read is on screen, at the ask the list names", async () => {
+      listQuestions.mockResolvedValue(marked());
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      await waitFor(() =>
+        expect(seenCalls().map(([payload]) => payload)).toEqual([
+          { action: "seen", questions: [{ reference: reference("question-2"), ask: null }] },
+        ])
+      );
+      // Once the list says it took, nothing more is sent for it.
+      push(marked({ ...unmarked, seen: true }, 3));
+      await act(async () => {});
+      expect(seenCalls()).toHaveLength(1);
+    });
+
+    it("marks nothing seen while its window doesn't have focus, and does once it has", async () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      listQuestions.mockResolvedValue(marked());
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      await act(async () => {});
+      expect(seenCalls()).toHaveLength(0);
+
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await waitFor(() => expect(seenCalls()).toHaveLength(1));
+    });
+
+    it("marks nothing seen while another modal covers the inbox, and does once it closes", async () => {
+      let land!: (read: DecisionQuestionContentResult) => void;
+      getQuestionContentByReference.mockImplementation(
+        () => new Promise<DecisionQuestionContentResult>((resolve) => (land = resolve))
+      );
+      listQuestions.mockResolvedValue(marked());
+      open();
+      await waitFor(() => expect(readsOf("question-2")).toBe(1));
+      // An image opened full size over the reader: a modal of its own, on top of the inbox.
+      const cover = document.createElement("div");
+      cover.setAttribute("role", "dialog");
+      cover.setAttribute("aria-modal", "true");
+      cover.tabIndex = -1;
+      document.body.appendChild(cover);
+      try {
+        act(() => cover.focus());
+        await act(async () => land({ result: "read", question: CONTENT["question-2"]! }));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+        await act(async () => {});
+        expect(seenCalls()).toHaveLength(0);
+
+        // Closed: the keyboard comes back into the inbox.
+        act(() => {
+          cover.remove();
+          const active = document.activeElement;
+          if (active instanceof HTMLElement) active.blur();
+          rowNamed("q-2").focus();
+        });
+        await waitFor(() => expect(seenCalls()).toHaveLength(1));
+      } finally {
+        cover.remove();
+      }
+    });
+
+    it("waits for a read that holds the agent's follow-up the ask names before marking it seen", async () => {
+      const followUp = {
+        type: "message" as const,
+        messageId: "note-1",
+        from: "agent" as const,
+        text: "Also check the staging branch",
+        images: [],
+        expectsReply: false,
+        sentAt: "2026-11-02T10:05:00.000Z",
+        deliveryStatus: null,
+        unreadable: false,
+      };
+      // Seen at the question alone; the list's first push is the baseline the reader compares with.
+      listQuestions.mockResolvedValue(marked({ ...unmarked, seen: true }));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      push(marked({ ...unmarked, seen: true }, 2));
+      await waitFor(() => expect(readsOf("question-2")).toBe(2));
+      // The agent follows up: the list says so, and only that moves, so the question is read again.
+      let land!: (read: DecisionQuestionContentResult) => void;
+      getQuestionContentByReference.mockImplementation(
+        () => new Promise<DecisionQuestionContentResult>((resolve) => (land = resolve))
+      );
+      push(marked({ ...unmarked, ask: "note-1" }, 3));
+      await waitFor(() => expect(readsOf("question-2")).toBe(3));
+      await act(async () => {});
+      // The read on screen predates the follow-up.
+      expect(seenCalls()).toHaveLength(0);
+
+      await act(async () =>
+        land({ result: "read", question: { ...CONTENT["question-2"]!, thread: [followUp] } })
+      );
+      await waitFor(() =>
+        expect(seenCalls().map(([payload]) => payload.questions[0]?.ask)).toEqual(["note-1"])
+      );
+    });
+
+    it("holds Clear while the read on screen predates what the question asks now", async () => {
+      listQuestions.mockResolvedValue(marked({ ...unmarked, seen: true }));
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      let land!: (read: DecisionQuestionContentResult) => void;
+      getQuestionContentByReference.mockImplementation(
+        () => new Promise<DecisionQuestionContentResult>((resolve) => (land = resolve))
+      );
+      push(marked({ ...unmarked, ask: "note-1" }, 3));
+      const clear = screen.getByTestId("decisions-inbox-clear");
+      await waitFor(() => expect(clear.getAttribute("aria-disabled")).toBe("true"));
+      fireEvent.click(clear);
+      await act(async () => {});
+      expect(markQuestions.mock.calls.filter(([p]) => p.action === "clear")).toHaveLength(0);
+
+      // The read with the follow-up lands: Clear takes it, at that ask.
+      await act(async () =>
+        land({
+          result: "read",
+          question: {
+            ...CONTENT["question-2"]!,
+            thread: [
+              {
+                type: "message",
+                messageId: "note-1",
+                from: "agent",
+                text: "One more thing",
+                images: [],
+                expectsReply: false,
+                sentAt: "2026-11-02T10:05:00.000Z",
+                deliveryStatus: null,
+                unreadable: false,
+              },
+            ],
+          },
+        })
+      );
+      await waitFor(() => expect(clear.getAttribute("aria-disabled")).toBeNull());
+      fireEvent.click(clear);
+      await waitFor(() =>
+        expect(markQuestions).toHaveBeenCalledWith({
+          action: "clear",
+          questions: [{ reference: reference("question-2"), ask: "note-1" }],
+        })
+      );
+    });
+
+    it("marks the first question to reach an empty inbox seen as it shows, with no focus moving", async () => {
+      listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+      open();
+      await waitFor(() => expect(screen.getByTestId("decisions-inbox-empty")).toBeTruthy());
+      await act(async () => {});
+      push(marked(unmarked, 2));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      await waitFor(() => expect(seenCalls()).toHaveLength(1));
+    });
+
+    it("marks a follow-up seen only once it's scrolled into view", async () => {
+      const observed: Array<{ target: Element; fire: (visible: boolean) => void }> = [];
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class implements IntersectionObserver {
+          readonly root = null;
+          readonly rootMargin = "0px";
+          readonly scrollMargin = "0px";
+          readonly thresholds = [0];
+          constructor(private readonly callback: IntersectionObserverCallback) {}
+          observe(target: Element) {
+            observed.push({
+              target,
+              fire: (visible) => {
+                const rect = target.getBoundingClientRect();
+                const entry: IntersectionObserverEntry = {
+                  boundingClientRect: rect,
+                  intersectionRatio: visible ? 1 : 0,
+                  intersectionRect: rect,
+                  isIntersecting: visible,
+                  rootBounds: null,
+                  target,
+                  time: 0,
+                };
+                this.callback([entry], this);
+              },
+            });
+          }
+          unobserve() {}
+          disconnect() {}
+          takeRecords(): IntersectionObserverEntry[] {
+            return [];
+          }
+        }
+      );
+      const followUp = {
+        type: "message" as const,
+        messageId: "note-1",
+        from: "agent" as const,
+        text: "Also check the staging branch",
+        images: [],
+        expectsReply: false,
+        sentAt: "2026-11-02T10:05:00.000Z",
+        deliveryStatus: null,
+        unreadable: false,
+      };
+      getQuestionContentByReference.mockImplementation(async ({ reference: ref }) => ({
+        result: "read",
+        question:
+          ref.questionId === "question-2"
+            ? { ...CONTENT["question-2"]!, thread: [followUp] }
+            : CONTENT[ref.questionId]!,
+      }));
+      listQuestions.mockResolvedValue(marked({ ...unmarked, ask: "note-1" }));
+      try {
+        open();
+        await waitFor(() => expect(observed.length).toBeGreaterThan(0));
+        const entry = observed.at(-1)!;
+        expect(entry.target.getAttribute("data-message-id")).toBe("note-1");
+        act(() => entry.fire(false));
+        await act(async () => {});
+        expect(seenCalls()).toHaveLength(0);
+
+        act(() => entry.fire(true));
+        await waitFor(() =>
+          expect(seenCalls().map(([payload]) => payload.questions[0]?.ask)).toEqual(["note-1"])
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("clears the question shown from Needs you without a confirmation, and restores it", async () => {
+      listQuestions.mockResolvedValue(marked());
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      const button = screen.getByTestId("decisions-inbox-clear");
+      fireEvent.click(button);
+      await waitFor(() =>
+        expect(markQuestions).toHaveBeenCalledWith({
+          action: "clear",
+          questions: [{ reference: reference("question-2"), ask: null }],
+        })
+      );
+      // No confirmation, nothing withdrawn or declined.
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(cancelQuestionByReference).not.toHaveBeenCalled();
+      expect(declineQuestion).not.toHaveBeenCalled();
+
+      push(marked({ ...unmarked, seen: true, cleared: true }, 3));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-cleared").textContent).toContain("q-2")
+      );
+      expect(screen.queryByTestId("decisions-inbox-group-needs-you")).toBeNull();
+      // Still the question shown, and one button that now undoes it.
+      expect(shownBody()).toContain("Body of question 2");
+      expect(screen.getByTestId("decisions-inbox-clear")).toBe(button);
+      fireEvent.click(button);
+      await waitFor(() =>
+        expect(markQuestions).toHaveBeenLastCalledWith({
+          action: "restore",
+          questions: [{ reference: reference("question-2"), ask: null }],
+        })
+      );
+    });
+
+    it("clears a question it can't read, as for a Host that isn't connected", async () => {
+      getQuestionContentByReference.mockResolvedValue({ result: "host-not-connected" });
+      const away = {
+        ...item("question-9", 9, OPEN, {
+          reference: reference("question-9", { hostId: "qhost_studio_0001" }),
+          remoteHost: { hostId: "studio", name: "Studio", connected: false },
+        }),
+        inbox: { ask: "note-3", seen: false, cleared: false },
+      };
+      listQuestions.mockResolvedValue({ revision: 2, questions: [away] });
+      open();
+      await waitFor(() => expect(readsOf("question-9")).toBe(1));
+      await act(async () => {});
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear"));
+      await waitFor(() =>
+        expect(markQuestions).toHaveBeenCalledWith({
+          action: "clear",
+          questions: [{ reference: away.reference, ask: "note-3" }],
+        })
+      );
+      // Never read, never seen.
+      expect(seenCalls()).toHaveLength(0);
+    });
+
+    it("clears all of Needs you at once, seen questions included, each at the ask shown", async () => {
+      const second = {
+        ...item("question-4", 4, OPEN),
+        inbox: { ask: "note-9", seen: true, cleared: false },
+      };
+      listQuestions.mockResolvedValue(marked(unmarked, 2, [second]));
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(4));
+      fireEvent.click(screen.getByTestId("decisions-inbox-clear-all"));
+      await waitFor(() =>
+        expect(markQuestions).toHaveBeenCalledWith({
+          action: "clear",
+          questions: [
+            { reference: reference("question-2"), ask: null },
+            { reference: reference("question-4"), ask: "note-9" },
+          ],
+        })
+      );
+
+      // With Needs you empty the button stays where the keyboard is, and does nothing.
+      push(
+        marked({ ...unmarked, cleared: true }, 3, [
+          { ...second, inbox: { ...second.inbox, cleared: true } },
+        ])
+      );
+      await waitFor(() =>
+        expect(screen.queryByTestId("decisions-inbox-group-needs-you")).toBeNull()
+      );
+      const clearAll = screen.getByTestId("decisions-inbox-clear-all");
+      expect(clearAll.getAttribute("aria-disabled")).toBe("true");
+      markQuestions.mockClear();
+      fireEvent.click(clearAll);
+      await act(async () => {});
+      expect(markQuestions.mock.calls.filter(([p]) => p.action === "clear")).toHaveLength(0);
+    });
+
+    it("keeps the dialog's first focus on the question list, not on clearing it", async () => {
+      listQuestions.mockResolvedValue(marked());
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
     });
   });
 

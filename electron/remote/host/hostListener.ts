@@ -243,13 +243,22 @@ async function buildHostListener(
         caller: relayCallerOf(spec),
       });
     },
-    retirePrincipal: (senderId, helpSessionId) => {
+    retirePrincipal: (senderId, helpSessionId, keepConversation) => {
       void import("../../services/McpServerService.js")
         .then(({ mcpServerService }) =>
-          mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
+          mcpServerService.retireRelayPrincipal(senderId, helpSessionId, keepConversation)
         )
         .catch((error: unknown) => {
           logger.warn("Couldn't retire a relay principal", { error });
+        });
+    },
+    forgetConversation: (senderId, conversationId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) =>
+          mcpServerService.forgetRelayConversation(senderId, conversationId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't forget a relay conversation", { error });
         });
     },
     watchingNoticeCalls: async (senderId, helpSessionId) => {
@@ -298,7 +307,8 @@ async function buildHostListener(
   teardowns.push(installSettingsCopyHost(server));
   // This machine's own settings, read and changed by name when a Shell asks (#14167).
   teardowns.push(installSettingsControlHost(server));
-  // A cloud machine renewing and stopping itself by its idle clock, with the key a Shell hands it (#17361).
+  // A cloud machine renewing and stopping itself by its idle clock, with the key a Shell hands it
+  // (#17361), and the claim a Shell makes before acting on this host's idleness (#17922).
   teardowns.push(installMachineKeeperHost(server));
   // Plugin prompts go to the project's driving frontend; view bundles are
   // served per endpoint alongside its other streams.

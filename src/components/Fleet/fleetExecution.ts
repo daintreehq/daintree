@@ -230,6 +230,25 @@ function noteRejected(terminalId: string): void {
     withTerminalService((service) => service.clearDirectingState(terminalId), terminalId);
 }
 
+/**
+ * One fixed note to one agent outside any fleet: Sleep's pause note (#17882).
+ * Goes through the same submit lane as a broadcast, refused while the agent is
+ * on a choice dialog the Enter would answer. The pane bookkeeping a fleet send
+ * does is done only when this view holds the pane; a background project's
+ * agent has no instance here, and making one would invent local state.
+ */
+export async function submitNoteToAgent(terminalId: string, text: string): Promise<void> {
+  const ownsPane = getNarrowPanel(usePanelStore.getState().panelsById, terminalId) !== undefined;
+  if (ownsPane) noteUserInput(terminalId, text);
+  try {
+    await terminalClient.submit(terminalId, text, undefined, undefined, "no-choice-dialog");
+  } catch (error) {
+    if (ownsPane) noteRejected(terminalId);
+    throw error;
+  }
+  if (ownsPane) noteSubmitted(terminalId);
+}
+
 interface ResolvedSubmission {
   terminalId: string;
   payload: string;

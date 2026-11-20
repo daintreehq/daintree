@@ -1320,6 +1320,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         break;
 
       case "git:project-pulse":
+      case "idle-pause-result":
         this.handleRequestResult(this.toResult(event, true));
         break;
 

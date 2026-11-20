@@ -20,13 +20,18 @@ import type { ResourceProfile } from "./resourceProfile.js";
 import type { PowerPolicyLevel } from "./powerPolicy.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
-import type { AgentEndObservation, AgentFallbackTriggeredPayload } from "./ipc/agent.js";
+import type {
+  AgentEndObservation,
+  AgentFallbackTriggeredPayload,
+  UpdateInstalledObservation,
+} from "./ipc/agent.js";
 import type { RequiredPluginToolStatus } from "./ipc/pluginAgentMcp.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { MemorySource } from "./memoryAccounting.js";
 import type { SerializedTerminalSnapshot } from "./terminal.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
+import type { CodexLimitAnswer, CodexLimitQuery } from "./codexLimitReset.js";
 import type { TerminalHandback } from "./handback.js";
 import type {
   ClosedProcessKillResult,
@@ -82,6 +87,12 @@ export interface PtyHostSpawnOptions {
   /** Title ownership rung at spawn — lets the backend skip its own default-title rewrites for pinned titles. */
   titleMode?: PanelTitleMode;
   projectId?: string;
+  /**
+   * Placed in no project on purpose, by a window that shows none (#17926), so
+   * its cwd never makes it a project's as an unstamped record's can. Set by
+   * PtyClient from a spawn whose projectId is null.
+   */
+  unplaced?: true;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
   restore?: boolean;
   /** Whether to kill the PTY when the frontend disconnects (no terminal registry entry) */
@@ -121,6 +132,8 @@ export interface PtyHostSpawnOptions {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops for revert UX. */
   originalAgentPresetId?: string;
+  /** Fallback hops the pane has taken from its original preset (#17909: main reads the next one). */
+  fallbackChainIndex?: number;
   /**
    * The run already has its first-prompt record, or launches with the prompt
    * that becomes it (#15521). Main reads it to stop offering the run's sends as
@@ -331,6 +344,15 @@ export type PtyHostRequest =
   | { type: "withdraw-submission"; id: string; submissionToken: string }
   /** Drop input queued for the PTY but not yet written; input stays open. */
   | { type: "cancel-pending-input"; id: string }
+  /** Arm or disarm reporting this pane's settled Codex stop (#17909). */
+  | { type: "set-codex-limit-continue"; id: string; armed: boolean }
+  /** Check the pane is still at `stop` and type the line that continues it (#17909). */
+  | {
+      type: "continue-codex-limit";
+      id: string;
+      requestId: string;
+      stop: import("./codexLimitContinuation.js").CodexLimitStopRef;
+    }
   | { type: "batch-double-escape"; ids: string[]; inputOwner?: string }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
@@ -439,7 +461,14 @@ export type PtyHostRequest =
   // The project's full terminal records in one round trip, for restore
   // (#17776); `get-terminals-for-project` stays for callers that need ids only.
   | { type: "get-project-terminals"; projectId: string; requestId: string }
-  | { type: "get-terminal"; id: string; requestId: string; submissionToken?: string }
+  | {
+      type: "get-terminal";
+      id: string;
+      requestId: string;
+      submissionToken?: string;
+      /** Asks when the pane's spent Codex window resets (#17906). */
+      codexLimit?: CodexLimitQuery;
+    }
   /**
    * The few fields a status read needs, for many terminals in one round trip
    * (#17809), instead of a full `get-terminal` record per id. An id the shard
@@ -907,6 +936,13 @@ export type PtyHostEvent =
       timestamp: number;
     }
   | {
+      /** This pane's update-installed observation was set or cleared (#17905). */
+      type: "agent-update-installed-changed";
+      terminalId: string;
+      updateInstalled: UpdateInstalledObservation | null;
+      timestamp: number;
+    }
+  | {
       /** A Claude Code usage message in this pane (#15727), as parsed fields only. */
       type: "agent-claude-usage-observed";
       terminalId: string;
@@ -929,6 +965,17 @@ export type PtyHostEvent =
       /** This pane may move to its next fallback preset (#14370). */
       type: "agent-fallback-triggered";
       payload: AgentFallbackTriggeredPayload;
+    }
+  | {
+      /**
+       * A Codex pane armed to continue at its limit's reset settled at a stop
+       * banner (#17909): its process and the banner's sighting, no text.
+       */
+      type: "codex-limit-stopped";
+      terminalId: string;
+      run: string;
+      seq: number;
+      timestamp: number;
     }
   | {
       type: "agent-detected";
@@ -1028,6 +1075,11 @@ export type PtyHostEvent =
     }
   | { type: "replay-history-result"; requestId: string; replayed: number }
   | { type: "reset-terminal-modes-result"; requestId: string; reset: boolean }
+  | {
+      type: "continue-codex-limit-result";
+      requestId: string;
+      result: import("./codexLimitContinuation.js").CodexLimitContinueResult;
+    }
   | {
       type: "serialized-state";
       requestId: string;
@@ -1338,7 +1390,14 @@ export interface PtyHostTerminalInfo {
    * query family omits it, so bulk inventory reads are unchanged.
    */
   submission?: TerminalSubmissionRecord;
+  /**
+   * When the pane's spent Codex window resets, or the banner to resolve
+   * against a reading (#17906). Only on a targeted `get-terminal` that asked.
+   */
+  codexLimit?: CodexLimitAnswer;
   projectId?: string;
+  /** Placed in no project on purpose (#17926), as its spawn said. */
+  unplaced?: true;
   kind?: PanelKind;
   /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
   isAssistantTerminal?: boolean;
@@ -1408,6 +1467,12 @@ export interface PtyHostTerminalInfo {
    * sets none. Absent when the env names one that can't be resolved.
    */
   claudeConfigDir?: string;
+  /**
+   * The Codex home this terminal's launch env names: its `CODEX_HOME` (an
+   * account's folder), or `~/.codex` when it sets none (#17318). Absent when
+   * the env names one that can't be resolved. Main's alone, like the folder above.
+   */
+  codexHome?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
@@ -1425,6 +1490,8 @@ export interface PtyHostTerminalInfo {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops. */
   originalAgentPresetId?: string;
+  /** Fallback hops taken from the original preset, as the launch said (#17909). */
+  fallbackChainIndex?: number;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
   /**
@@ -1433,6 +1500,11 @@ export interface PtyHostTerminalInfo {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905). Absent when not seen, or once that run ended.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Lifecycle-ledger generation this record belongs to, so a reader can tell it from a relaunch's. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */

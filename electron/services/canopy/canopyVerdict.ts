@@ -152,7 +152,9 @@ export function refinementOf(
     // stopped on. Whatever wait the patterns named, the reading is the ask.
     if (BUSY_READ_STATE.test(entry.readState)) return null;
     const quote = evidence.question?.trim();
-    return quote ? { kind: "asked", quote, readAt: entry.readAt, seen } : null;
+    return quote
+      ? { kind: "asked", ask: classified.category, quote, readAt: entry.readAt, seen }
+      : null;
   }
   if (run.agentState === "waiting" && run.waitingReason === "question") {
     // Only a reading of this very wait can say it asks nothing.

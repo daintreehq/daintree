@@ -39,7 +39,12 @@ const pluginServiceMock = vi.hoisted(() => ({
 
 // The catalog client is real, fed by a fake catalog fetch, so a pass reads the
 // catalog the way it does in the app (#17805).
-const catalogRef = vi.hoisted(() => ({ current: null as unknown, accessed: 0 }));
+const catalogRef = vi.hoisted(() => ({
+  current: null as unknown,
+  accessed: 0,
+  // Catalogs the person added, by URL (#17434).
+  added: new Map<string, unknown>(),
+}));
 
 vi.mock("electron", () => ({ powerMonitor: powerMonitorMock }));
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
@@ -51,9 +56,9 @@ vi.mock("../plugin/PluginCatalogService.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugin/PluginCatalogService.js")>();
   return {
     ...actual,
-    getPluginCatalogService: () => {
+    getPluginCatalogService: (sourceUrl?: string) => {
       catalogRef.accessed += 1;
-      return catalogRef.current;
+      return sourceUrl === undefined ? catalogRef.current : catalogRef.added.get(sourceUrl);
     },
   };
 });
@@ -376,6 +381,8 @@ describe("PluginUpdateCheckService", () => {
       await svc.maybeRunDue("Periodic");
       expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledWith("pub.a", {
         catalog: expect.anything(),
+        // An added catalog's install reads that catalog's own batch (#17434).
+        catalogFor: expect.any(Function),
       });
       expect(storeState.value.lastCheckedAt).toBe(START - 2 * DAY);
 
@@ -509,6 +516,7 @@ describe("PluginUpdateCheckService", () => {
 
     expect(pluginServiceMock.checkForUpdate).toHaveBeenCalledWith("pub.a", {
       catalog: expect.anything(),
+      catalogFor: expect.any(Function),
     });
   });
 
@@ -771,6 +779,48 @@ describe("PluginUpdateCheckService", () => {
       expect([...answers.values()]).toEqual(TEN.map(() => ({ status: "up-to-date" })));
       expect(storeState.value.lastCheckedAt).not.toBeNull();
       expect(broadcastMock).not.toHaveBeenCalled();
+    });
+
+    it("gives an added catalog's installs that catalog's own fetch (#17434)", async () => {
+      const SOURCE = "https://plugins.example.org/catalog.json";
+      storeState.value = { enabled: true, lastCheckedAt: null };
+      pluginServiceMock.listPlugins.mockReturnValue(["pub.a", "pub.b", "pub.c"].map(catalogPlugin));
+      const ownFetch = catalogServes({ entries: [release("pub.a", "1.0.0")] });
+      const addedFetch = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ entries: [release("pub.b", "1.0.0"), release("pub.c", "1.0.0")] }),
+            { headers: { "content-type": "application/json" } }
+          )
+      );
+      catalogRef.added.set(
+        SOURCE,
+        new PluginCatalogService({ cachePath: null, fetchImpl: addedFetch })
+      );
+      const answers = new Map<string, unknown>();
+      // pub.b and pub.c were installed from the added catalog, pub.a from Daintree's.
+      pluginServiceMock.checkForUpdate.mockImplementation(async (id: string, options?: unknown) => {
+        const { catalog, catalogFor } = options as {
+          catalog: PluginCatalogUpdateSource;
+          catalogFor: (sourceUrl: string) => PluginCatalogUpdateSource;
+        };
+        const source = id === "pub.a" ? catalog : catalogFor(SOURCE);
+        const lookup = await source.lookupUpdate(id, "1.0.0");
+        answers.set(id, lookup.status);
+        return lookup.status === "current" ? { status: "up-to-date" } : { status: "fetch-failed" };
+      });
+
+      const svc = new PluginUpdateCheckService();
+      await svc._checkNowForTest();
+
+      expect(Object.fromEntries(answers)).toEqual({
+        "pub.a": "current",
+        "pub.b": "current",
+        "pub.c": "current",
+      });
+      expect(ownFetch).toHaveBeenCalledTimes(1);
+      expect(addedFetch).toHaveBeenCalledTimes(1);
+      catalogRef.added.clear();
     });
 
     it("answers each install from the one catalog by its own id and version", async () => {

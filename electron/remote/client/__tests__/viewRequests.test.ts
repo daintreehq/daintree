@@ -10,6 +10,21 @@ const m = vi.hoisted(() => ({
   callsOut: new Set<string>(),
   // This Shell's runtime's verdict on a host's dispatch of one of its calls (#15698).
   skipsRelayedDispatch: vi.fn((_hostId: string, _dispatch: unknown) => false),
+  // The hand-over this Shell's runtime offers for one of its relayed calls (#16752).
+  relayedDelegation: vi.fn(
+    (
+      _hostId: string,
+      _dispatch: unknown
+    ): {
+      offer: { label: string; detail: string };
+      approved: () => void;
+      commit: () => boolean;
+    } | null => null
+  ),
+  // Whether it offers a preset move as one the view may run unasked (#17917).
+  offersNextFallback: vi.fn((_hostId: string, _dispatch: unknown): (() => void) | null => null),
+  // What the offer hands back, called once the view ran the move.
+  ranOffered: vi.fn(),
   // The project each view of this Shell shows, keyed as the Shell keys it.
   viewProjects: new Map<number, string>(),
 }));
@@ -28,6 +43,8 @@ vi.mock("../../runtime.js", () => ({
         ? {
             hasCallInFlight: (hostId: string) => m.callsOut.has(hostId),
             skipsRelayedDispatch: m.skipsRelayedDispatch,
+            relayedDelegation: m.relayedDelegation,
+            offersNextFallback: m.offersNextFallback,
           }
         : undefined,
 }));
@@ -55,6 +72,7 @@ import {
 } from "../reverseRequests.js";
 import {
   askHostApprovalInWindow,
+  askSettingsApprovalInWindow,
   HOST_DISPATCHABLE_ACTION_IDS,
   installViewReverseRequests,
 } from "../viewRequests.js";
@@ -67,6 +85,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.callsOut.clear();
   m.skipsRelayedDispatch.mockReturnValue(false);
+  m.relayedDelegation.mockReturnValue(null);
+  m.offersNextFallback.mockReturnValue(null);
   m.viewProjects.clear();
   _resetReverseRequestMethodsForTesting();
 });
@@ -234,6 +254,108 @@ describe("view reverse requests", () => {
     }
   );
 
+  describe("a preset move the view may run unasked as the pane's next own step (#17917)", () => {
+    const relayedMove = {
+      actionId: "terminal.restartOnPreset",
+      args: { terminalId: "t-9", presetId: "p-1" },
+      confirmed: false,
+      sessionOrigin: "external",
+      relayed: true,
+      relayCall: { callId: "call-1", helpSessionId: "help-a" },
+    };
+    const hostsOwnMove = {
+      actionId: "terminal.restartOnPreset",
+      args: { terminalId: "t-9", presetId: "p-1" },
+      confirmed: false,
+      sessionOrigin: "help",
+      confirmationCondition: "next-own-fallback",
+    };
+
+    beforeEach(() => {
+      installViewReverseRequests();
+      m.callsOut.add("studio");
+      m.viewProjects.set(11, toHostScopedKey("studio", "proj-2"));
+      m.requestManifestForHost.mockResolvedValue([
+        { id: "terminal.restartOnPreset", danger: "confirm" },
+      ]);
+    });
+
+    it("hands its own relayed move to the view to settle, and notes the run once the view ran it", async () => {
+      m.offersNextFallback.mockReturnValue(m.ranOffered);
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        authorization: "skip-preference",
+      });
+
+      const answer = await ask("mcp:dispatch-action", relayedMove);
+
+      // Never ask is asked first; the offer only when it won't skip outright.
+      expect(m.skipsRelayedDispatch).toHaveBeenCalledTimes(1);
+      expect(m.offersNextFallback).toHaveBeenCalledWith("studio", {
+        callId: "call-1",
+        helpSessionId: "help-a",
+        projectId: "proj-2",
+        actionId: "terminal.restartOnPreset",
+        args: { terminalId: "t-9", presetId: "p-1" },
+      });
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+        confirmationCondition: "next-own-fallback",
+        fixedDeadline: true,
+      });
+      expect(m.ranOffered).toHaveBeenCalledTimes(1);
+      expect(answer).toEqual({ result: { ok: true, result: 1 }, authorization: "skip-preference" });
+    });
+
+    it("reports the view's own dialog, and no run unasked, when the move wasn't the next step", async () => {
+      m.offersNextFallback.mockReturnValue(m.ranOffered);
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        confirmationDecision: "approved",
+      });
+
+      const answer = await ask("mcp:dispatch-action", relayedMove);
+
+      expect(m.ranOffered).not.toHaveBeenCalled();
+      expect(answer).toEqual({ result: { ok: true, result: 1 }, confirmationDecision: "approved" });
+    });
+
+    it("takes the host's own assistant's offer for that move alone, and leaves the deciding to the view", async () => {
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        authorization: "skip-preference",
+      });
+
+      const answer = await ask("mcp:dispatch-action", hostsOwnMove);
+
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+        confirmationCondition: "next-own-fallback",
+        fixedDeadline: true,
+      });
+      expect(answer).toEqual({ result: { ok: true, result: 1 }, authorization: "skip-preference" });
+    });
+
+    it.each([
+      ["an agent pane or api-key client", { sessionOrigin: "external" }],
+      ["another action", { actionId: "worktree.delete", args: { worktreeId: "/srv/wt" } }],
+      ["a confirmed call", { confirmed: true }],
+      ["a call marked as relayed with no call of this Shell's named", { relayed: true }],
+      ["an unknown condition", { confirmationCondition: "anything" }],
+    ])("passes no offer on for %s", async (_label, fields) => {
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        authorization: "skip-preference",
+      });
+
+      const answer = await ask("mcp:dispatch-action", { ...hostsOwnMove, ...fields });
+
+      const options = m.dispatchActionForHost.mock.calls[0]?.[6] as Record<string, unknown>;
+      expect(options.confirmationCondition).toBeUndefined();
+      expect(answer).toEqual({ result: { ok: true, result: 1 } });
+    });
+  });
+
   describe("this Shell's own assistant's relayed call (#15698)", () => {
     const relayedDelete = {
       actionId: "worktree.delete",
@@ -289,6 +411,99 @@ describe("view reverse requests", () => {
       expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
       expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ fixedDeadline: true });
       expect(answer).toEqual({ result: { ok: true, result: 1 } });
+    });
+
+    it("offers this Shell's hand-over on the dialog it asks with, and keeps it from the host (#16752)", async () => {
+      const commit = vi.fn(() => true);
+      const offer = { label: "Delete a worktree it created", detail: "Only a clean one" };
+      const approved = vi.fn();
+      m.relayedDelegation.mockReturnValue({ offer, approved, commit });
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        confirmationDecision: "approved",
+        approvalScope: "delegate",
+      });
+
+      const answer = await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(m.relayedDelegation).toHaveBeenCalledWith("studio", {
+        callId: "call-1",
+        helpSessionId: "help-a",
+        projectId: "proj-2",
+        actionId: "worktree.delete",
+        args: { worktreeId: "/srv/wt" },
+      });
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+        fixedDeadline: true,
+        delegationOffer: offer,
+        onDelegationApproved: approved,
+      });
+      expect(commit).toHaveBeenCalledTimes(1);
+      // The host hears the decision and nothing of the tick.
+      expect(answer).toEqual({ result: { ok: true, result: 1 }, confirmationDecision: "approved" });
+    });
+
+    it.each([
+      { confirmationDecision: "rejected", approvalScope: "delegate" },
+      { confirmationDecision: "timeout", approvalScope: "delegate" },
+      { confirmationDecision: "approved" },
+    ])("writes no hand-over for a dialog answered %o (#16752)", async (reply) => {
+      const commit = vi.fn(() => true);
+      m.relayedDelegation.mockReturnValue({
+        offer: { label: "x", detail: "y" },
+        approved: () => {},
+        commit,
+      });
+      m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 }, ...reply });
+
+      const answer = await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toHaveProperty("delegationOffer");
+      expect(commit).not.toHaveBeenCalled();
+      expect(answer).toMatchObject({ confirmationDecision: reply.confirmationDecision });
+    });
+
+    it("offers no hand-over for a call it runs under the skip (#16752)", async () => {
+      m.skipsRelayedDispatch.mockReturnValue(true);
+      m.relayedDelegation.mockReturnValue({
+        offer: { label: "x", detail: "y" },
+        approved: () => {},
+        commit: () => true,
+      });
+
+      await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).not.toHaveProperty("delegationOffer");
+    });
+
+    it("binds the hand-over to the call out when the dispatch arrives (#16752)", async () => {
+      const order: string[] = [];
+      m.relayedDelegation.mockImplementation(() => {
+        order.push("offer");
+        return null;
+      });
+      m.requestManifestForHost.mockImplementation(async () => {
+        order.push("manifest");
+        return [{ id: "worktree.delete", danger: "confirm" }];
+      });
+
+      await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(order).toEqual(["offer", "manifest"]);
+    });
+
+    it("offers no hand-over for a host's own assistant's call (#16752)", async () => {
+      const { relayCall: _relayCall, relayed: _relayed, ...hostsOwn } = relayedDelete;
+      m.relayedDelegation.mockReturnValue({
+        offer: { label: "x", detail: "y" },
+        approved: () => {},
+        commit: () => true,
+      });
+
+      await ask("mcp:dispatch-action", { ...hostsOwn, sessionOrigin: "help" });
+
+      expect(m.relayedDelegation).not.toHaveBeenCalled();
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).not.toHaveProperty("delegationOffer");
     });
 
     it("lets a decision from the view speak over the skip it was sent with", async () => {
@@ -889,7 +1104,7 @@ describe("askHostApprovalInWindow (#13501)", () => {
       confirmationDecision: "approved",
     });
 
-    await expect(askHostApprovalInWindow(7, QUESTION)).resolves.toBe("approved");
+    await expect(askHostApprovalInWindow(7, QUESTION)).resolves.toEqual({ decision: "approved" });
 
     expect(m.dispatchActionForHost).toHaveBeenCalledWith(
       7,
@@ -929,13 +1144,39 @@ describe("askHostApprovalInWindow (#13501)", () => {
       confirmationDecision: "rejected",
     });
 
-    await expect(askHostApprovalInWindow(7, { ...QUESTION, hostId: "local" })).resolves.toBe(
-      "rejected"
-    );
+    await expect(askHostApprovalInWindow(7, { ...QUESTION, hostId: "local" })).resolves.toEqual({
+      decision: "rejected",
+    });
 
     expect(m.dispatchActionForHost.mock.calls.at(-1)?.at(-1)).toEqual({
       userAgent: "Your assistant, in another project here",
       token4LastChars: "",
+    });
+  });
+
+  it("offers the hand-over and reports it only beside an approval (#16752)", async () => {
+    const delegation = { label: "Delete a worktree it created", detail: "Only a clean one" };
+    m.dispatchActionForHost.mockResolvedValueOnce({
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+      approvalScope: "delegate",
+    });
+    await expect(askHostApprovalInWindow(7, { ...QUESTION, delegation })).resolves.toEqual({
+      decision: "approved",
+      delegate: true,
+    });
+    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toMatchObject({
+      approvalOnly: true,
+      delegationOffer: delegation,
+    });
+
+    m.dispatchActionForHost.mockResolvedValueOnce({
+      result: { ok: true, result: null },
+      confirmationDecision: "rejected",
+      approvalScope: "delegate",
+    });
+    await expect(askHostApprovalInWindow(7, { ...QUESTION, delegation })).resolves.toEqual({
+      decision: "rejected",
     });
   });
 
@@ -947,5 +1188,56 @@ describe("askHostApprovalInWindow (#13501)", () => {
 
     m.dispatchActionForHost.mockRejectedValueOnce(new Error("window gone"));
     await expect(askHostApprovalInWindow(7, QUESTION)).resolves.toBeNull();
+  });
+});
+
+describe("askSettingsApprovalInWindow (#14167)", () => {
+  const SETTINGS_ASK = {
+    actionId: "host.settings",
+    args: { hostIds: ["studio"], patch: { canopyMode: "on" } },
+    subject: "Change settings on Studio Mac",
+    lines: ["Canopy: unset → on"],
+  };
+
+  it("asks approval-only as this machine's assistant, offering the hand-over when given (#16752)", async () => {
+    const delegation = { label: "Change a host's settings", detail: "Only as previewed" };
+    m.dispatchActionForHost.mockResolvedValueOnce({
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+      approvalScope: "delegate",
+    });
+
+    await expect(askSettingsApprovalInWindow(7, { ...SETTINGS_ASK, delegation })).resolves.toEqual({
+      decision: "approved",
+      delegate: true,
+    });
+    expect(m.dispatchActionForHost).toHaveBeenCalledWith(
+      7,
+      "host.settings",
+      SETTINGS_ASK.args,
+      false,
+      undefined,
+      "external",
+      {
+        approvalOnly: true,
+        hostPreview: { lines: SETTINGS_ASK.lines, subject: SETTINGS_ASK.subject },
+        delegationOffer: delegation,
+      },
+      { userAgent: "Your assistant, here", token4LastChars: "" }
+    );
+  });
+
+  it("offers nothing it wasn't given, and reads no decision as null", async () => {
+    m.dispatchActionForHost.mockResolvedValueOnce({
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+    });
+    await expect(askSettingsApprovalInWindow(7, SETTINGS_ASK)).resolves.toEqual({
+      decision: "approved",
+    });
+    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).not.toHaveProperty("delegationOffer");
+
+    m.dispatchActionForHost.mockResolvedValueOnce({ result: { ok: true, result: null } });
+    await expect(askSettingsApprovalInWindow(7, SETTINGS_ASK)).resolves.toBeNull();
   });
 });

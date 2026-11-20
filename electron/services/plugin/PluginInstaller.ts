@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { randomUUID } from "node:crypto";
+import * as semver from "semver";
 import { createRequire as nodeCreateRequire } from "node:module";
 
 import {
@@ -32,6 +33,7 @@ import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility
 import { forgetPluginCloudProviderConsent } from "./pluginCloudProviders.js";
 import { findUnusablePluginAssets } from "./pluginManifestAssetFiles.js";
 import { parseInstallExpectation } from "./installExpectation.js";
+import { installedCatalogOf, replacedCatalogOf } from "./pluginCatalogSourceUrl.js";
 import {
   isCommunityPluginId,
   isRequestablePluginVersion,
@@ -174,9 +176,12 @@ async function readInstalledManifest(dir: string): Promise<InstalledManifestFiel
  */
 export type ReplacementCheck = (installedVersion: string | null) => string | null;
 
-/** A background pass hands every catalog install the same catalog (#17805). */
+/** A background pass hands each catalog install a catalog read once for the pass (#17805). */
 export interface PluginUpdateCheckOptions {
+  /** Daintree's own catalog for the pass. */
   catalog?: PluginCatalogUpdateSource;
+  /** An added catalog's for the pass, by its canonical URL (#17434). */
+  catalogFor?: (sourceUrl: string) => PluginCatalogUpdateSource;
 }
 
 /**
@@ -664,6 +669,39 @@ export class PluginInstaller {
         );
       }
 
+      // A catalog install was reviewed knowing which other catalog's copy, if
+      // any, it replaces (#17434). Another window can have installed this id
+      // from a third catalog since; replacing that copy unseen would switch
+      // its updates to a catalog nobody chose for it. An update was offered to
+      // a copy from its own catalog, so it lands only on a copy still from
+      // that catalog: never on one a URL or file install has replaced since.
+      const installedCatalog = existing
+        ? installedCatalogOf(this.records.getInstalledRecord(pluginId))
+        : null;
+      if (
+        opts?.source === "catalog" &&
+        opts.catalogUpdate === true &&
+        (installedCatalog === null || installedCatalog.sourceUrl !== opts.catalog?.sourceUrl)
+      ) {
+        return fail(
+          "archive_mismatch",
+          `"${pluginId}" is no longer installed from the catalog this update comes from, so it wasn't applied`
+        );
+      }
+      if (opts?.source === "catalog" && opts.catalogReplaces !== undefined) {
+        const replaced = replacedCatalogOf(installedCatalog, opts.catalog?.sourceUrl);
+        const reviewed = opts.catalogReplaces;
+        if (
+          (replaced === null) !== (reviewed === null) ||
+          replaced?.sourceUrl !== reviewed?.sourceUrl
+        ) {
+          return fail(
+            "archive_mismatch",
+            `The installed copy of "${pluginId}" changed catalogs since this was reviewed, so it wasn't replaced`
+          );
+        }
+      }
+
       // Checked here, under the lock and against what is installed right now,
       // so a check made before queueing can't be stale by the time this
       // replaces anything: an update queued behind a newer one must not
@@ -672,6 +710,27 @@ export class PluginInstaller {
       if (replacement) {
         const refusal = replacement(this.installedVersion(pluginId, installedManifest));
         if (refusal) return fail("archive_mismatch", refusal);
+      }
+      // The same for a catalog update reviewed before another window installed
+      // a newer release from that catalog (#17434): it never moves back.
+      if (opts?.source === "catalog" && opts.catalogUpdate === true) {
+        // The copy on disk first; an unreadable or invalid manifest falls back
+        // to the release the record names, then to the loaded copy's.
+        const installedVersion = [
+          installedManifest?.version,
+          this.records.getInstalledRecord(pluginId)?.catalog?.version,
+          this.deps.getInstalledVersion(pluginId),
+        ].find((v): v is string => typeof v === "string" && semver.valid(v) !== null);
+        if (
+          installedVersion !== undefined &&
+          semver.valid(manifest.version) !== null &&
+          !semver.gt(manifest.version, installedVersion)
+        ) {
+          return fail(
+            "archive_mismatch",
+            `v${installedVersion} of "${pluginId}" is installed now, so this update to v${manifest.version} wasn't applied`
+          );
+        }
       }
 
       // A mode change strands state either way (#14256): settings, grants and
@@ -1157,7 +1216,7 @@ export class PluginInstaller {
     // Before the URL guards: a catalog install is never checked against the
     // URL it came from, even when its provenance is unusable.
     if (record.source === "catalog") {
-      return this._checkCatalogForUpdate(pluginId, record, options.catalog);
+      return this._checkCatalogForUpdate(pluginId, record, options);
     }
     // A sideload/builtin with no original URL — the UI gates the button on
     // `originalUrl !== null`, so this is unreachable in practice; treat it as
@@ -1212,7 +1271,7 @@ export class PluginInstaller {
   private async _checkCatalogForUpdate(
     pluginId: string,
     record: InstalledPluginRecord,
-    catalog: PluginCatalogUpdateSource | undefined
+    options: PluginUpdateCheckOptions
   ): Promise<PluginCheckUpdateResult> {
     const installed = record.catalog;
     const unusable: PluginCheckUpdateResult = {
@@ -1232,14 +1291,24 @@ export class PluginInstaller {
       return unusable;
     }
     // Lazy: the catalog client costs nothing until a catalog install is checked.
-    const { getPluginCatalogService, isComparableVersion } =
-      await import("./PluginCatalogService.js");
+    const [{ getPluginCatalogService, isComparableVersion }, { catalogSourceOf }] =
+      await Promise.all([
+        import("./PluginCatalogService.js"),
+        import("./pluginCatalogSourceUrl.js"),
+      ]);
     // The pattern admits numbers semver can't hold, and its comparisons throw.
     if (!isComparableVersion(installed.version)) return unusable;
-    const lookup = await (catalog ?? getPluginCatalogService()).lookupUpdate(
-      pluginId,
-      installed.version
-    );
+    // The catalog the record names, whether or not this machine's person still
+    // lists it (#17434): an update never moves a plugin to another catalog. A
+    // name that isn't a catalog URL is refused, never read as Daintree's own.
+    // A background pass's batch is per catalog, so it never answers for another.
+    const sourceUrl = catalogSourceOf(installed.sourceUrl);
+    if (sourceUrl === null) return unusable;
+    const source =
+      sourceUrl === undefined
+        ? (options.catalog ?? getPluginCatalogService())
+        : (options.catalogFor?.(sourceUrl) ?? getPluginCatalogService(sourceUrl));
+    const lookup = await source.lookupUpdate(pluginId, installed.version);
     switch (lookup.status) {
       case "stale":
       case "unavailable":
@@ -1278,7 +1347,12 @@ export class PluginInstaller {
       }
       return {
         ...updatePreview(manifest, downloadedHash),
-        catalog: { id: entry.id, version: entry.version, repo: entry.repo },
+        catalog: {
+          id: entry.id,
+          version: entry.version,
+          repo: entry.repo,
+          ...(sourceUrl === undefined ? {} : { sourceUrl }),
+        },
         ...(entry.repo === installed.repo ? {} : { previousRepo: installed.repo }),
       };
     });

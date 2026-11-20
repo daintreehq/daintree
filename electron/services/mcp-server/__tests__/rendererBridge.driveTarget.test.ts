@@ -404,6 +404,31 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
       expect(payload).not.toHaveProperty("actionsListWalk");
     });
 
+    it("never offers another machine's view a hand-over, nor takes one back from it (#16752)", async () => {
+      const endpoint = makeRemoteEndpoint(async () => ({
+        result: { ok: true, result: null },
+        confirmationDecision: "approved",
+        approvalScope: "delegate",
+      }));
+      setMcpDriveTargetResolver((projectId) =>
+        projectId === WORKSPACE ? { state: "live", endpoint } : { state: "vacant" }
+      );
+
+      const envelope = await bridge.dispatchActionForWorkspace(
+        WORKSPACE,
+        "worktree.delete",
+        {},
+        false,
+        "external",
+        { delegationOffer: { label: "Delete a worktree it created", detail: "Only a clean one" } }
+      );
+
+      const [, payload] = vi.mocked(endpoint.request).mock.calls[0];
+      expect(payload).not.toHaveProperty("delegationOffer");
+      expect(envelope.confirmationDecision).toBe("approved");
+      expect(envelope).not.toHaveProperty("approvalScope");
+    });
+
     describe("how long it waits on the driving view (#15699)", () => {
       // A Shell's own call, as `host.call` makes it, into that Shell's own driving view.
       const relayed = (holdUntil?: number) => ({
@@ -1632,6 +1657,88 @@ describe("rendererBridge — this machine's assistant in another of its projects
       read
     );
     expect(envelope.result).toEqual({ ok: true, result: "remote" });
+  });
+
+  // #17917: a local `host.call`'s preset move is matched to that call here, as
+  // a host's dispatch is on its Shell, and its own view settles the rest.
+  describe("a local call's preset move under the next-fallback tick (#17917)", () => {
+    const MOVE_ARGS = { terminalId: "t-1", presetId: "work" };
+
+    function answeringView(id: number, reply: Record<string, unknown>) {
+      const sent: Array<Record<string, unknown>> = [];
+      const wc = makeWebContents(id, (channel, payload) => {
+        if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+        sent.push(payload as unknown as Record<string, unknown>);
+        queueMicrotask(() =>
+          mockIpcMain.emit(
+            CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+            { sender: { id } },
+            { requestId: payload.requestId, result: { ok: true, result: "moved" }, ...reply }
+          )
+        );
+      });
+      mockWebContentsRegistry.set(id, wc);
+      mockProjectViews.set(WORKSPACE, [wc]);
+      return sent;
+    }
+
+    function relayWith(offered: boolean) {
+      const ran = vi.fn();
+      const offer = vi.fn(() => (offered ? ran : null));
+      return { ran, offer, options: { relay: { ...write.relay, nextFallback: offer } } };
+    }
+
+    it("offers the move to this machine's own view, and notes the run the view reports", async () => {
+      const sent = answeringView(7, { authorization: "skip-preference" });
+      const { ran, offer, options } = relayWith(true);
+
+      const envelope = await bridge.dispatchActionForWorkspace(
+        WORKSPACE,
+        "terminal.restartOnPreset",
+        MOVE_ARGS,
+        false,
+        "external",
+        options
+      );
+
+      // Matched on the project the view shows, never one the caller named.
+      expect(offer).toHaveBeenCalledWith(WORKSPACE, "terminal.restartOnPreset", MOVE_ARGS);
+      expect(sent[0]).toMatchObject({
+        confirmed: false,
+        confirmationCondition: "next-own-fallback",
+      });
+      expect(envelope.authorization).toBe("skip-preference");
+      expect(ran).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers nothing the call doesn't match, and nothing for another action", async () => {
+      const sent = answeringView(7, { authorization: "skip-preference" });
+      const refused = relayWith(false);
+
+      const envelope = await bridge.dispatchActionForWorkspace(
+        WORKSPACE,
+        "terminal.restartOnPreset",
+        MOVE_ARGS,
+        false,
+        "external",
+        refused.options
+      );
+      expect(sent[0]).not.toHaveProperty("confirmationCondition");
+      expect(envelope.authorization).toBeUndefined();
+      expect(refused.ran).not.toHaveBeenCalled();
+
+      const other = relayWith(true);
+      await bridge.dispatchActionForWorkspace(
+        WORKSPACE,
+        "terminal.new",
+        {},
+        false,
+        "external",
+        other.options
+      );
+      expect(other.offer).not.toHaveBeenCalled();
+      expect(sent[1]).not.toHaveProperty("confirmationCondition");
+    });
   });
 });
 

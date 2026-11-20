@@ -19,6 +19,21 @@ vi.mock("@/components/Layout/AccountSwitchNotice", async (importOriginal) => ({
   readUsageLimitedPaneIds,
 }));
 
+// The confirm itself is covered with the dialog; here only which account the row opens it on.
+const everywhereDialog = vi.hoisted(() => ({
+  props: null as null | {
+    account?: { id: string | null; name: string };
+    onSaved?: () => void;
+    onClose: () => void;
+  },
+}));
+vi.mock("@/components/Layout/UseAccountEverywhereDialog", () => ({
+  UseAccountEverywhereDialog: (props: NonNullable<typeof everywhereDialog.props>) => {
+    everywhereDialog.props = props;
+    return <div data-testid="use-everywhere-dialog" />;
+  },
+}));
+
 // The reading itself is covered with the hook; here only what the row asks of it.
 const headroomHook = vi.hoisted(() => ({
   calls: [] as Array<[string | undefined, boolean]>,
@@ -92,12 +107,14 @@ vi.mock("@/components/Settings/SettingsSelect", () => ({
 }));
 
 import { AgentAccountsSection } from "../AgentAccountsSection";
+import { SettingsFlushContext } from "../SettingsFlushRegistry";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import type { AgentSettingsEntry } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
 
 const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.codex-personal" };
 
 function renderSection(
   entry: AgentSettingsEntry,
@@ -206,6 +223,122 @@ describe("AgentAccountsSection (#16040)", () => {
     await act(async () => {});
 
     expect(updateAgent).toHaveBeenCalledWith("codex", { accountId: undefined });
+  });
+
+  it("says a preset's pin wins over the default too", () => {
+    renderSection({ accounts: [COMPANY] });
+    expect(
+      screen.getByText(
+        "What a new launch signs in as, unless its worktree picks another in the toolbar or its preset pins one"
+      )
+    ).toBeTruthy();
+  });
+
+  describe("using one account everywhere (#17893)", () => {
+    beforeEach(() => {
+      everywhereDialog.props = null;
+    });
+
+    const open = () => fireEvent.click(screen.getByRole("button", { name: "Use everywhere…" }));
+
+    it("opens on the saved default, or the default login when none is saved", () => {
+      renderSection({ accounts: [PERSONAL, COMPANY], accountId: "company" });
+      expect(screen.queryByTestId("use-everywhere-dialog")).toBeNull();
+      open();
+      expect(everywhereDialog.props?.account).toEqual({ id: "company", name: "Company" });
+
+      cleanup();
+      renderSection({ accounts: [COMPANY], defaultLoginName: "Home" });
+      open();
+      expect(everywhereDialog.props?.account).toEqual({
+        id: null,
+        name: "Home · default login",
+      });
+    });
+
+    it("leaves the account to the dialog when the saved default is gone", () => {
+      renderSection({ accounts: [], accountId: "gone" });
+      open();
+      expect(screen.getByTestId("use-everywhere-dialog")).toBeTruthy();
+      expect(everywhereDialog.props?.account).toBeUndefined();
+
+      cleanup();
+      renderSection({ accounts: [COMPANY], accountId: "gone" });
+      open();
+      expect(everywhereDialog.props?.account).toBeUndefined();
+    });
+
+    it("is offered when only a worktree pick or preset pin names an account that's gone", () => {
+      renderSection({ worktreeAccounts: { "/work/app/main": "gone" } });
+      open();
+      expect(everywhereDialog.props?.account).toEqual({ id: null, name: "Default login" });
+
+      cleanup();
+      renderSection({ customPresets: [{ id: "review", name: "Review", accountId: "gone" }] });
+      expect(screen.getByRole("button", { name: "Use everywhere…" })).toBeTruthy();
+
+      cleanup();
+      // On the default login already: nothing for the action to reach.
+      renderSection({ worktreeAccounts: { "/work/app/main": null } });
+      expect(screen.queryByRole("button", { name: "Use everywhere…" })).toBeNull();
+    });
+
+    it("drops an offer the Default account select raised once the change is saved", async () => {
+      usePanelStore.setState({
+        panelsById: {
+          p1: {
+            id: "p1",
+            kind: "terminal",
+            title: "Parser",
+            cwd: "/repo",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            launchAgentId: "codex",
+            agentState: "waiting",
+          } as PtyPanelData,
+        },
+        panelIds: ["p1"],
+      });
+      readUsageLimitedPaneIds.mockResolvedValue(["p1"]);
+      useAgentSettingsStore.setState({ updateAgent: vi.fn().mockResolvedValue(undefined) });
+      renderSection({ accounts: [COMPANY] });
+      await act(async () => {
+        fireEvent.change(screen.getByRole("combobox", { name: "Default account" }), {
+          target: { value: "company" },
+        });
+      });
+      expect(screen.getByRole("status").textContent).toBe(
+        "1 Codex terminal stopped on a usage limit"
+      );
+
+      open();
+      act(() => everywhereDialog.props?.onSaved?.());
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("tells Settings once the change is saved, and closes on the dialog's word", () => {
+      const onSettingsChange = vi.fn();
+      render(
+        <AgentAccountsSection
+          agentId="codex"
+          agentName="Codex"
+          entry={{ accounts: [COMPANY] }}
+          onSettingsChange={onSettingsChange}
+        />
+      );
+      open();
+      expect(onSettingsChange).not.toHaveBeenCalled();
+      act(() => everywhereDialog.props?.onSaved?.());
+      expect(onSettingsChange).toHaveBeenCalledTimes(1);
+      act(() => everywhereDialog.props?.onClose());
+      expect(screen.queryByTestId("use-everywhere-dialog")).toBeNull();
+    });
+
+    it("isn't offered until there's an account, or a saved default, to use", () => {
+      renderSection({});
+      expect(screen.queryByRole("button", { name: "Use everywhere…" })).toBeNull();
+    });
   });
 
   it("asks before forgetting an account, then removes it", async () => {
@@ -436,5 +569,307 @@ describe("AgentAccountsSection (#16040)", () => {
         { source: "user" }
       );
     });
+  });
+});
+
+describe("naming the default login and renaming accounts (#17080)", () => {
+  function editField(rename: HTMLElement, value: string): HTMLInputElement {
+    fireEvent.click(rename);
+    const input = document.activeElement as HTMLInputElement;
+    expect(input.tagName).toBe("INPUT");
+    fireEvent.change(input, { target: { value } });
+    return input;
+  }
+
+  it("lists the default login with its folder even before any account, and names it by id", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({});
+
+    expect(screen.getByText("Default login")).toBeTruthy();
+    expect(screen.getByText("~/.codex")).toBeTruthy();
+    const rename = screen.getByRole("button", { name: "Rename default login" });
+    const input = editField(rename, "  Work ");
+    expect(screen.getByRole("textbox", { name: "Default login name" })).toBe(input);
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    expect(renameAccount).toHaveBeenCalledTimes(1);
+    expect(renameAccount).toHaveBeenCalledWith("codex", null, "Work");
+    // The blur the field's unmount brings doesn't save a second time.
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Rename default login" })
+    );
+  });
+
+  it("shows the name beside the default login in the row and the default account choice, and clears it", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({ accounts: [COMPANY], defaultLoginName: "Work" });
+
+    expect(
+      screen.getByText("Work · default login", { selector: "[data-settings-row-label]" })
+    ).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Default account" }) as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      "Work · default login",
+      "Company",
+    ]);
+
+    const input = editField(screen.getByRole("button", { name: "Rename default login" }), "");
+    expect(input.placeholder).toBe("Default login");
+    await act(async () => {
+      fireEvent.blur(input);
+    });
+    expect(renameAccount).toHaveBeenCalledWith("codex", null, "");
+  });
+
+  it("renames a saved account in place, never by removing and adding it", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    const removeAccount = vi.fn();
+    const addAccount = vi.fn();
+    useAgentSettingsStore.setState({ renameAccount, removeAccount, addAccount });
+    renderSection({ accounts: [COMPANY] });
+
+    const input = editField(screen.getByRole("button", { name: "Rename Company" }), "Acme");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    expect(renameAccount).toHaveBeenCalledWith("codex", "company", "Acme");
+    expect(removeAccount).not.toHaveBeenCalled();
+    expect(addAccount).not.toHaveBeenCalled();
+  });
+
+  it("keeps a saved account's field open on a blank name, and saves nothing", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({ accounts: [COMPANY] });
+
+    const input = editField(screen.getByRole("button", { name: "Rename Company" }), "  ");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    expect(renameAccount).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe("Give the account a name");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("keeps the draft and says why when the save is refused", async () => {
+    const renameAccount = vi
+      .fn()
+      .mockRejectedValue(new Error("That account isn't saved any more."));
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({ accounts: [COMPANY] });
+
+    const input = editField(screen.getByRole("button", { name: "Rename Company" }), "Acme");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe("That account isn't saved any more.");
+    expect((screen.getByRole("textbox", { name: "Account name" }) as HTMLInputElement).value).toBe(
+      "Acme"
+    );
+  });
+
+  it("saves once while a save is in flight, and leaves an unchanged name and Escape unsaved", async () => {
+    let finish: () => void = () => {};
+    const renameAccount = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    useAgentSettingsStore.setState({ renameAccount });
+    renderSection({ accounts: [COMPANY] });
+
+    const input = editField(screen.getByRole("button", { name: "Rename Company" }), "Acme");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
+    expect(renameAccount).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+
+    renameAccount.mockClear();
+    const same = editField(screen.getByRole("button", { name: "Rename Company" }), "Company");
+    await act(async () => {
+      fireEvent.keyDown(same, { key: "Enter" });
+    });
+    const cancelled = editField(screen.getByRole("button", { name: "Rename Company" }), "Other");
+    fireEvent.keyDown(cancelled, { key: "Escape" });
+    expect(renameAccount).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "Account name" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Rename Company" }));
+  });
+});
+
+describe("renaming against other views and a Settings close (#17080)", () => {
+  it("lists the default login first, above the saved accounts", () => {
+    renderSection({ accounts: [COMPANY] });
+    expect(
+      [...document.querySelectorAll("[data-settings-row-label]")].map((label) => label.textContent)
+    ).toEqual(["Default login", "Company", "Use one account everywhere"]);
+  });
+
+  it("leaves a rename another view made alone when the field is left untouched", async () => {
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    const view = renderSection({ accounts: [COMPANY], defaultLoginName: "Work" });
+    fireEvent.click(screen.getByRole("button", { name: "Rename default login" }));
+
+    view.rerender(
+      <AgentAccountsSection
+        agentId="codex"
+        agentName="Codex"
+        entry={{ accounts: [COMPANY], defaultLoginName: "Team" }}
+      />
+    );
+    await act(async () => {
+      fireEvent.blur(screen.getByRole("textbox", { name: "Default login name" }));
+    });
+
+    expect(renameAccount).not.toHaveBeenCalled();
+  });
+
+  it("clears a refused name's reason once the name changes", async () => {
+    renderSection({ accounts: [COMPANY] });
+    fireEvent.click(screen.getByRole("button", { name: "Rename Company" }));
+    const input = screen.getByRole("textbox", { name: "Account name" });
+    fireEvent.change(input, { target: { value: "" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "Acme" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("saves an open edit when Settings closes, and holds the close on the field when the save is refused", async () => {
+    const flushers: Array<(reason: "close" | "hide") => unknown> = [];
+    const register = vi.fn((_tab: string, fn: (reason: "close" | "hide") => unknown) => {
+      flushers.push(fn);
+      return () => flushers.splice(flushers.indexOf(fn), 1);
+    });
+    const renameAccount = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("This host can't rename accounts yet."))
+      .mockResolvedValueOnce(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    render(
+      <SettingsFlushContext.Provider value={{ register, flushAll: vi.fn() }}>
+        <AgentAccountsSection agentId="codex" agentName="Codex" entry={{ accounts: [COMPANY] }} />
+      </SettingsFlushContext.Provider>
+    );
+    expect(flushers).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename Company" }));
+    const input = screen.getByRole("textbox", { name: "Account name" });
+    fireEvent.change(input, { target: { value: "Acme" } });
+    expect(register).toHaveBeenCalledWith("agents", expect.any(Function));
+
+    let failure: unknown;
+    await act(async () => {
+      failure = await flushers[0]!("close");
+    });
+    expect(renameAccount).toHaveBeenCalledWith("codex", "company", "Acme");
+    // The landing focuses the first field in the element it names: this one.
+    const landOn = (failure as { landOn: string }).landOn;
+    expect(document.getElementById(landOn)?.querySelector("input")).toBe(input);
+    expect(screen.getByRole("alert").textContent).toBe("This host can't rename accounts yet.");
+
+    let saved: unknown;
+    await act(async () => {
+      saved = await flushers[0]!("close");
+    });
+    expect(saved).toBeUndefined();
+    expect(flushers).toHaveLength(0);
+  });
+
+  it("sends a rename once when a close waits on it and another close follows", async () => {
+    const flushers: Array<(reason: "close" | "hide") => unknown> = [];
+    const register = vi.fn((_tab: string, fn: (reason: "close" | "hide") => unknown) => {
+      flushers.push(fn);
+      return () => flushers.splice(flushers.indexOf(fn), 1);
+    });
+    let finish: () => void = () => {};
+    const renameAccount = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    useAgentSettingsStore.setState({ renameAccount });
+    render(
+      <SettingsFlushContext.Provider value={{ register, flushAll: vi.fn() }}>
+        <AgentAccountsSection agentId="codex" agentName="Codex" entry={{ accounts: [COMPANY] }} />
+      </SettingsFlushContext.Provider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Rename Company" }));
+    const input = screen.getByRole("textbox", { name: "Account name" });
+    fireEvent.change(input, { target: { value: "Acme" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const flush = flushers[0]!;
+
+    // A close while the Enter's save is in flight waits on that save.
+    let firstResult: unknown = "pending";
+    const first = (flush("close") as Promise<unknown>).then((result) => (firstResult = result));
+    await act(async () => {});
+    expect(firstResult).toBe("pending");
+    expect(renameAccount).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish();
+      await first;
+    });
+    expect(firstResult).toBeUndefined();
+
+    // A close queued behind it reaches the row before it unregisters.
+    expect(renameAccount).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await flush("close");
+    });
+    expect(renameAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a close through an untouched name saved before today's cleaning, and saves a cleanup", async () => {
+    const flushers: Array<(reason: "close" | "hide") => unknown> = [];
+    const register = vi.fn((_tab: string, fn: (reason: "close" | "hide") => unknown) => {
+      flushers.push(fn);
+      return () => flushers.splice(flushers.indexOf(fn), 1);
+    });
+    const renameAccount = vi.fn().mockResolvedValue(undefined);
+    useAgentSettingsStore.setState({ renameAccount });
+    const marked = { id: "marked", name: "W\u200bork", configDir: "/Users/me/.codex-m" };
+    const blank = { id: "blank", name: "\u200b", configDir: "/Users/me/.codex-b" };
+    render(
+      <SettingsFlushContext.Provider value={{ register, flushAll: vi.fn() }}>
+        <AgentAccountsSection
+          agentId="codex"
+          agentName="Codex"
+          entry={{ accounts: [marked, blank] }}
+        />
+      </SettingsFlushContext.Provider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename \u200b" }));
+    let result: unknown = "pending";
+    await act(async () => {
+      result = await flushers[0]!("close");
+    });
+    expect(result).toBeUndefined();
+    expect(renameAccount).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename W\u200bork" }));
+    const input = screen.getByRole("textbox", { name: "Account name" });
+    fireEvent.change(input, { target: { value: "Work" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(renameAccount).toHaveBeenCalledWith("codex", "marked", "Work");
   });
 });

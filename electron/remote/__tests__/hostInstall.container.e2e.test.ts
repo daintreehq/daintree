@@ -8,11 +8,10 @@ import type { HostHandshakeInfo } from "../../../shared/types/remoteHosts.js";
 import { REMOTE_PROTOCOL_VERSION } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { lookupArtifactChecksum } from "../client/clientBuild.js";
-import { LINUX_START_SCRIPT } from "../client/hostModeBootstrap.js";
 import { HostSetupService } from "../client/HostSetupService.js";
 import type { ClientBuild, ClientBundle } from "../client/installPlan.js";
 import { LinkClient } from "../client/LinkClient.js";
-import { SshTransport } from "../client/sshTransport.js";
+import { closeSshMaster, SshTransport } from "../client/sshTransport.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, InteractiveKind } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
@@ -42,10 +41,11 @@ import {
 /**
  * The real install path onto a bare Linux machine: a container with sshd and no
  * Daintree, a release feed serving a packaged build, and the real AppImage
- * extracting and starting headless over ssh. Only systemd is stood in for (see
- * harness/linuxHost/standins/systemctl), as it needs to be PID 1. Everything on
- * this side is the product's own setup and link code, with the build it claims
- * to be injected, since this process isn't a packaged app.
+ * extracting and starting headless over ssh. Like Agent 37 and most container
+ * sandboxes it has no init system (no systemctl, loginctl or /run/user) and an
+ * unprivileged login, so Host mode is started on connect, never as a service.
+ * Everything on this side is the product's own setup and link code, with the
+ * build it claims to be injected, since this process isn't a packaged app.
  *
  * Opt-in with DAINTREE_CONTAINER_E2E=1 and DAINTREE_CONTAINER_E2E_APPIMAGE naming
  * a packaged Linux build of the Docker daemon's architecture. See
@@ -58,6 +58,8 @@ const SETUP_TIMEOUT_MS = 20 * 60_000;
 const TEST_TIMEOUT_MS = 10 * 60_000;
 const TERMINAL_TIMEOUT_MS = 60_000;
 const INSTALLED_PATH = "Applications/Daintree.AppImage";
+/** Where a host with no init system listens (see host/hostSocketPath.ts). */
+const HOST_DIR = ".cache/daintree/run";
 const DEVICE_ID = crypto.randomUUID();
 
 let root: string;
@@ -104,7 +106,8 @@ function setupFor(
   const starts: SeenAtStart[] = [];
   const setup = new HostSetupService({
     run: async (command, args, options) => {
-      if (args.at(-1)?.includes(LINUX_START_SCRIPT)) {
+      // A start where no init system can run a service: Daintree in a session of its own.
+      if (args.at(-1)?.includes("nohup")) {
         const [imageSha256, running] = await Promise.all([
           host.shell(`sha256sum "$HOME/${INSTALLED_PATH}" | cut -d' ' -f1`),
           host.shell("pgrep -x daintree || true"),
@@ -145,16 +148,26 @@ function unwrap<T>(envelope: IpcEnvelope): T {
   throw new Error(`[${envelope.error.code ?? "UNKNOWN"}] ${envelope.error.message}`);
 }
 
-/** Dial the host as a client on this build would and wait for the link. */
+/**
+ * Dial the host as a client on this build would and wait for the link. With
+ * `setup`, a dial that finds no Host serving starts it, as a Shell's does.
+ */
 async function connect(
   host: ContainerHost,
-  buildCommit = commit
+  buildCommit = commit,
+  setup?: HostSetupService
 ): Promise<{ link: LinkClient; session: LinkSession; handshake: HostHandshakeInfo }> {
   const link = new LinkClient({
     transport: new SshTransport({
       target: host.target,
       clientDir: host.clientDir,
       spawn: host.spawnSsh,
+      ...(setup
+        ? {
+            ensureRunning: async (signal: AbortSignal) =>
+              (await setup.ensureHostRunning(host.connection, signal)) !== "not-startable",
+          }
+        : {}),
     }),
     handshake: {
       version,
@@ -287,7 +300,7 @@ async function hostState(host: ContainerHost): Promise<{
     host.shell(
       `ls -d /tmp/daintree-stage.* "$HOME/${INSTALLED_PATH}".old-* "$HOME/${INSTALLED_PATH}".build-info.json.old-* 2>/dev/null || true`
     ),
-    host.shell(`cat "/run/user/$(id -u)/daintree/host.json" 2>/dev/null || true`),
+    host.shell(`cat "$HOME/${HOST_DIR}/host.json" 2>/dev/null || true`),
   ]);
   const listeningPid = record ? ((JSON.parse(record) as { pid?: number }).pid ?? null) : null;
   const listeningFrom =
@@ -305,14 +318,30 @@ async function withDiagnostics(host: ContainerHost, scenario: () => Promise<void
   }
 }
 
-/** Host mode on for good, the link up on exactly this build, and a terminal that answers. */
+/**
+ * Host mode on for good, started on connect, outliving the SSH connection that
+ * started it, the link up on exactly this build, and a terminal that answers.
+ */
 async function expectHostUp(host: ContainerHost, setup: HostSetupService): Promise<void> {
   const { probe } = await setup.startHostMode({ connection: host.connection });
   expect(probe.hostModeListening).toBe(true);
   expect(probe.matchesClient).toBe(true);
   expect(probe.hostBuild).toEqual({ version, commit, order: "same" });
-  expect(probe.hostModeState).toMatchObject({ enabled: true, startAtLogin: true });
-  expect(probe.advice).toMatchObject({ hostModeUnit: true, startAtLoginInstalled: true });
+  expect(probe.startsOnConnect).toBe(true);
+  expect(probe.hostModeState).toMatchObject({
+    enabled: true,
+    startMethod: "on-connect",
+    startAtLogin: false,
+    startAtLoginError: null,
+  });
+  expect(probe.advice).toMatchObject({ systemd: false, hostModeUnit: false });
+
+  const started = (await hostState(host)).listeningPid;
+  expect(started).not.toBeNull();
+  // Not a child of the login that started it: that login ending leaves it running.
+  await closeSshMaster(host.runCommand, host.clientDir, host.target, 10_000, "ssh");
+  expect(await host.shell(`ps -o sid= -p ${started} | xargs ps -o comm= -p`)).not.toBe("sshd");
+  expect((await hostState(host)).listeningPid).toBe(started);
 
   const { link, session, handshake } = await connect(host);
   try {
@@ -544,6 +573,55 @@ describe.skipIf(!ENABLED)(
             } finally {
               await link.stop();
             }
+          });
+        },
+        TEST_TIMEOUT_MS
+      );
+
+      it(
+        "is started again by a connection that finds it gone",
+        async () => {
+          await withDiagnostics(host, async () => {
+            const before = await hostState(host);
+            expect(before.listeningPid).not.toBeNull();
+            // Gone without a word: its socket and discovery file stay behind.
+            await host.shell(`kill -KILL ${before.listeningPid}`);
+            const deadline = Date.now() + TERMINAL_TIMEOUT_MS;
+            while ((await host.shell("pgrep -x daintree || true")) !== "") {
+              if (Date.now() > deadline) throw new Error("Daintree was still running");
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            expect(await host.shell(`ls "$HOME/${HOST_DIR}"`)).toContain("host.json");
+
+            const { setup } = setupFor(host, clientBuild({ kind: "none" }));
+            const { link, session, handshake } = await connect(host, commit, setup);
+            try {
+              expect(handshake).toMatchObject({ version, commit });
+              const after = await hostState(host);
+              expect(after.listeningPid).not.toBeNull();
+              expect(after.listeningPid).not.toBe(before.listeningPid);
+              await expectWorkingTerminal(host, session);
+            } finally {
+              await link.stop();
+            }
+          });
+        },
+        TEST_TIMEOUT_MS
+      );
+
+      it(
+        "is stopped when it's removed, leaving the install and its projects",
+        async () => {
+          await withDiagnostics(host, async () => {
+            expect((await hostState(host)).listeningPid).not.toBeNull();
+            const { setup } = setupFor(host, clientBuild({ kind: "none" }));
+            await expect(setup.stopStartedOnConnect(host.connection)).resolves.toBe(true);
+            expect(await host.shell("pgrep -x daintree || true")).toBe("");
+            expect(
+              await host.shell(`ls -d "$HOME/${INSTALLED_PATH}" "$HOME/e2e-project"`)
+            ).toContain("Daintree.AppImage");
+            // Nothing starts it again without a Shell asking.
+            await expect(connect(host)).rejects.toThrow();
           });
         },
         TEST_TIMEOUT_MS

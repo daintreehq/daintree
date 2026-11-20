@@ -99,6 +99,14 @@ export const GuestPowerOffStatusSchema = z.object({
   armed: z.boolean(),
   /** Why it won't, in a sentence; null while armed or never asked. */
   problem: z.string().max(500).nullable(),
+  /**
+   * Set only on the answer to a grant whose machine the metadata server
+   * confirmed and whose OS then wouldn't let it power off (sudo wanting a
+   * password, no systemctl): the machine is the one asked about and only the
+   * power-off stands in the way, so a stop from the provider's API still fits
+   * (#17924). Absent from hosts from before it, which counts as not confirmed.
+   */
+  powerOffProbeRefused: z.boolean().optional(),
 });
 export type GuestPowerOffStatus = z.infer<typeof GuestPowerOffStatusSchema>;
 
@@ -112,3 +120,43 @@ export function sameGuestPowerOffTarget(a: GuestPowerOffTarget, b: GuestPowerOff
   }
   return false;
 }
+
+/**
+ * Session CALLs a Shell uses to let an Agent 37 instance's host hold it awake
+ * while it sees work, with no Shell connected (#17918). Agent 37 counts only
+ * traffic on the instance's URLs as activity, so the host sends requests to
+ * itself through a signed URL for one port of its own instance: the one
+ * credential Agent 37 scopes to a single instance. A host too old to know
+ * them answers `UNSUPPORTED`.
+ */
+export const KeepAwakeLinkMethod = {
+  /** Opens the host's listener if it isn't open, and says its port and what the host holds. */
+  STATUS: "machine-keeper.keep-awake.status",
+  /** Hold this URL in place of any other. */
+  ARM: "machine-keeper.keep-awake.arm",
+} as const;
+
+export const KeepAwakeStatusRequestSchema = MachineKeeperStatusRequestSchema;
+
+export const KeepAwakeArmSchema = z
+  .object({
+    resourceId: z.string().min(1).max(128),
+    /** A signed URL for the listener's port; a secret until it expires. */
+    url: z.string().min(1).max(2048),
+    expiresAt: z.number().int().positive(),
+  })
+  .strict();
+export type KeepAwakeArmRequest = z.infer<typeof KeepAwakeArmSchema>;
+
+/** What a host's keep-awake keeper holds, as it says. Never the URL. */
+export const KeepAwakeStatusSchema = z.object({
+  /** The port its listener answers on; null while it has none open. */
+  port: z.number().int().min(1).max(65_535).nullable(),
+  /** When the URL it holds stops working; null while it holds none. */
+  expiresAt: z.number().nullable(),
+  /** When a request through that URL last reached this host; null before the first. */
+  reachedAt: z.number().nullable(),
+  /** Why it holds none, in a sentence; null while it holds one or was never given one. */
+  problem: z.string().max(500).nullable(),
+});
+export type KeepAwakeStatus = z.infer<typeof KeepAwakeStatusSchema>;

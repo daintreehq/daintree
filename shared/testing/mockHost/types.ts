@@ -57,7 +57,7 @@ import type {
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginTerminalLifecycleEvent,
-  PluginAgentPaneObservation,
+  PluginAgentPane,
   PluginAllAgentsSnapshot,
   PluginRemoteHost,
   PluginFocusedPanel,
@@ -647,8 +647,12 @@ export interface MockHostState {
   simulateWorktreesResult(result: PluginWorktreesResult | null): void;
   /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
   simulateConfirmResponse(result: boolean): void;
-  /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
-  simulateAgentsChange(agents: PluginAgentPaneObservation[]): void;
+  /**
+   * Replace the agent panes `agents.list()` reports and `sendToAgent` targets.
+   * Each pane's `band` and `canopy` are reported as given, with a Canopy quote
+   * kept only when the manifest declares `terminal:read`.
+   */
+  simulateAgentsChange(agents: Omit<PluginAgentPane, "launchedByThisPlugin">[]): void;
   /**
    * Count `terminalId` as an agent this plugin launched, so the `host.agents`
    * input methods reach it. A `dispatch("agent.launch")` whose result reports
@@ -659,6 +663,8 @@ export interface MockHostState {
   /**
    * Replace what `agents.listAll()` reports and push it, frozen and reduced to
    * the allowlist like production, to every `onDidChangeAllAgents` subscriber.
+   * A Canopy quote on a run is kept only when the manifest declares
+   * `terminal:read`.
    */
   simulateAllAgentsChange(snapshot: PluginAllAgentsSnapshot): void;
   /**
@@ -849,12 +855,15 @@ export interface CreateMockHostOptions {
    * `terminalId` against. A pane with `canDraft: false` refuses with its
    * `draftRefusal`. Defaults to none. Each pane's `launchedByThisPlugin` is the
    * mock's own: whether `simulateAgentLaunched` or a dispatched `agent.launch`
-   * counted it.
+   * counted it. A pane's `band` and `canopy` are reported as given, with a
+   * Canopy quote kept only when the manifest declares `terminal:read` — the
+   * mock takes declaring it as the user's grant, as it does for screen reads.
    */
-  agents?: PluginAgentPaneObservation[];
+  agents?: Omit<PluginAgentPane, "launchedByThisPlugin">[];
   /**
    * What `agents.listAll()` reports. Defaults to a healthy, empty app
-   * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
+   * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`). A Canopy quote
+   * on a run is kept only when the manifest declares `terminal:read`.
    */
   allAgents?: PluginAllAgentsSnapshot;
   /**

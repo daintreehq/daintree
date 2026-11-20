@@ -2,7 +2,12 @@ import type { TerminalStatusEntry, TerminalStatusResult } from "@shared/types/te
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
-import { deliveryFromPhase, launchReadiness, type DeliveryState } from "./deliveryState";
+import {
+  deliveryFromPhase,
+  launchReadiness,
+  type AgentReadiness,
+  type DeliveryState,
+} from "./deliveryState";
 
 const DELIVERY_POLL_MS = 250;
 const DELIVERY_TIMEOUT_MS = 10_000;
@@ -93,6 +98,12 @@ export interface AgentRequestOptions {
   verify?: (after?: "built") => Promise<string | null>;
   /** A launch resolved to this terminal — the owner may want to point at it. */
   onDestination?: (terminalId: string) => void;
+  /**
+   * What counts as the agent being able to take the request. Defaults to
+   * {@link launchReadiness}; an owner typing into a session it didn't just
+   * start can ask for something stricter.
+   */
+  readiness?: (entry: TerminalStatusEntry) => AgentReadiness;
 }
 
 interface Run extends AgentRequestDelivery {
@@ -444,6 +455,12 @@ export function deliverAgentRequest(options: AgentRequestOptions): Promise<void>
 
 async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
   const { worktreeId, stillOwned, verify, buildPrompt, onDestination, settled } = options;
+  const readinessOf = (entry: TerminalStatusEntry | undefined): AgentReadiness =>
+    entry === undefined
+      ? "not-yet"
+      : options.readiness
+        ? options.readiness(entry)
+        : launchReadiness(entry.agentState, entry.waitingReason);
   let destination = options.destination;
   const { title } = destination;
   // An owner that closed, moved or switched off stops the run here, whether or
@@ -565,8 +582,7 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
         // No readable status is no evidence of readiness; neither is a terminal
         // the detector hasn't classified. Both keep waiting — and the user may
         // say "send now", because a detector can stay silent.
-        let readiness =
-          entry === undefined ? "not-yet" : launchReadiness(entry.agentState, entry.waitingReason);
+        let readiness = readinessOf(entry);
         // Only an agent seen doing something counts as having picked the last
         // request up. An unreadable status is not that, and neither is a question.
         const busy =
@@ -683,7 +699,7 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
         );
         return;
       }
-      const lastReadiness = launchReadiness(lastLook?.agentState, lastLook?.waitingReason);
+      const lastReadiness = readinessOf(lastLook);
       if (run.forced || (lastReadiness === "ready" && !justSentTo())) break;
       // Not at its prompt after all, or another owner's request has only just
       // gone in: back to waiting, with the terminal handed on.

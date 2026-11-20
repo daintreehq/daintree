@@ -72,6 +72,37 @@ beforeEach(() => {
   client.disconnect.mockClear();
 });
 
+describe("HostDetail on a machine where Daintree starts on connect", () => {
+  it("says how it is kept running and what that doesn't cover, and that removing it stops it", async () => {
+    const seen = entry({ status: "unreachable", lastSeenAt: null, detail: "timed out" });
+    render(
+      <HostDetail
+        entry={{ ...seen, descriptor: { ...seen.descriptor, startsOnConnect: true } }}
+        onBack={() => {}}
+      />
+    );
+    const kept = screen.getByText(/has no systemd for a Host mode service/);
+    expect(kept.textContent).toContain(
+      "doesn't come back by itself after the machine reboots, stops or is rebuilt"
+    );
+    expect(kept.textContent).toContain("Connecting from Daintree starts it again.");
+    expect(
+      screen.getByText("Daintree on studio-01 stops, with its terminals and agents")
+    ).toBeTruthy();
+  });
+
+  it("says nothing of the kind for a host kept running by a service", () => {
+    render(
+      <HostDetail
+        entry={entry({ status: "unreachable", lastSeenAt: null, detail: "timed out" })}
+        onBack={() => {}}
+      />
+    );
+    expect(screen.queryByText(/has no systemd for a Host mode service/)).toBeNull();
+    expect(screen.getByText("Projects and Daintree on studio-01 keep running")).toBeTruthy();
+  });
+});
+
 describe("HostDetail connection controls", () => {
   it("disconnects a connected host with no window on it", async () => {
     render(

@@ -9,6 +9,7 @@ import {
 import { Globe, ServerCog } from "lucide-react";
 import { GitPullRequest, Link, ListChecks } from "@/components/icons";
 import type { DeclaredProjectLink, DeclaredProjectLinkSource } from "@shared/types";
+import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { linkHost } from "@shared/utils/projectLinks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,7 +40,8 @@ import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
-import { opensInPanel, openLinkUrl, openUrlExternally } from "@/services/openLinkUrl";
+import { opensInPanel, openLinkUrl, openLinkUrlExternally } from "@/services/openLinkUrl";
+import { openDevServer, openDevServerExternally } from "@/services/openDevServer";
 import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { useLinksLauncherStore } from "@/store/linksLauncherStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -68,7 +70,7 @@ import {
   useLauncherPullRequestChecks,
   type LauncherChecks,
 } from "./LinksLauncherPullRequest";
-import { LinksLauncherRow } from "./LinksLauncherRow";
+import { LINKS_LAUNCHER_CONTENT_ATTR as CONTENT_ATTR, LinksLauncherRow } from "./LinksLauncherRow";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { focusToolbarControl } from "./PluginToolbarPopover";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
@@ -108,11 +110,12 @@ function DeclaredNote({ source }: { source: DeclaredProjectLinkSource }) {
   return <span className="sr-only">, declared in the project&apos;s {source}</span>;
 }
 
-/** Marks the launcher's content, so a close can tell whether focus was inside it. */
-const CONTENT_ATTR = "data-links-launcher";
-
 function openLink(url: string): void {
   openLinkUrl(url).catch((error: unknown) => logError("Failed to open link", error));
+}
+
+function openLinkExternally(url: string): void {
+  openLinkUrlExternally(url).catch((error: unknown) => logError("Failed to open link", error));
 }
 
 const LOG_PREFIX = "[LinksLauncher]";
@@ -152,9 +155,18 @@ interface LinkRowProps {
   /** The manifest that declares the link, for one nobody saved. */
   declaredIn?: DeclaredProjectLinkSource;
   onOpen: (url: string) => void;
+  onOpenExternal: (url: string) => void;
 }
 
-function LinkRow({ rowId, title, url, addedByAssistant, declaredIn, onOpen }: LinkRowProps) {
+function LinkRow({
+  rowId,
+  title,
+  url,
+  addedByAssistant,
+  declaredIn,
+  onOpen,
+  onOpenExternal,
+}: LinkRowProps) {
   return (
     <LinksLauncherRow
       rowId={rowId}
@@ -176,6 +188,7 @@ function LinkRow({ rowId, title, url, addedByAssistant, declaredIn, onOpen }: Li
       }
       url={url}
       onOpen={onOpen}
+      onOpenExternal={onOpenExternal}
     />
   );
 }
@@ -223,6 +236,8 @@ export function LinksLauncherList({
   devSessions,
   onOpen,
   onOpenExternal,
+  onOpenDevServer,
+  onOpenDevServerExternally,
   onManage,
 }: {
   links: LinksLauncherLinks;
@@ -232,8 +247,12 @@ export function LinksLauncherList({
   deployments: LauncherDeployments;
   devSessions: DevSessionsSnapshot;
   onOpen: (url: string) => void;
-  /** Opens in the system browser, whatever the address. */
+  /** Opens in the system browser, whatever the address, through the host on a Remote Host. */
   onOpenExternal: (url: string) => void;
+  /** Opens a running dev server in its own preview, else the system browser. */
+  onOpenDevServer: (session: DevPreviewSessionState) => void;
+  /** Opens a dev server's address in the system browser, through the host on a Remote Host. */
+  onOpenDevServerExternally: (url: string) => void;
   onManage: () => void;
 }) {
   const baseId = useId();
@@ -275,6 +294,7 @@ export function LinksLauncherList({
               url={link.url}
               addedByAssistant={link.addedByAssistant === true}
               onOpen={onOpen}
+              onOpenExternal={onOpenExternal}
             />
           ))}
         </LinkSection>
@@ -294,6 +314,7 @@ export function LinksLauncherList({
               addedByAssistant={false}
               declaredIn={group.source}
               onOpen={onOpen}
+              onOpenExternal={onOpenExternal}
             />
           ))}
         </LinkSection>
@@ -308,6 +329,7 @@ export function LinksLauncherList({
               url={link.url}
               addedByAssistant={false}
               onOpen={onOpen}
+              onOpenExternal={onOpenExternal}
             />
           ))}
         </LinkSection>
@@ -320,6 +342,7 @@ export function LinksLauncherList({
           checks={checks}
           sectionId={`${baseId}-pull-request`}
           onOpen={onOpen}
+          onOpenExternal={onOpenExternal}
         />
       )}
       {deploymentTarget !== null && (
@@ -333,7 +356,12 @@ export function LinksLauncherList({
           onOpen={onOpenExternal}
         />
       )}
-      <LinksLauncherDevServers snapshot={devSessions} sectionId={`${baseId}-dev-servers`} />
+      <LinksLauncherDevServers
+        snapshot={devSessions}
+        sectionId={`${baseId}-dev-servers`}
+        onOpen={onOpenDevServer}
+        onOpenExternal={onOpenDevServerExternally}
+      />
     </div>
   );
 }
@@ -415,7 +443,19 @@ function LinksLauncherPopoverContent({
         }}
         onOpenExternal={(url) => {
           close(seq ?? undefined);
-          openUrlExternally(url, LOG_PREFIX);
+          openLinkExternally(url);
+        }}
+        onOpenDevServer={(session) => {
+          close(seq ?? undefined);
+          openDevServer(session).catch((error: unknown) =>
+            logError(`${LOG_PREFIX} Failed to open the dev server`, error)
+          );
+        }}
+        onOpenDevServerExternally={(url) => {
+          close(seq ?? undefined);
+          openDevServerExternally(url).catch((error: unknown) =>
+            logError(`${LOG_PREFIX} Failed to open the dev server`, error)
+          );
         }}
         onManage={() => {
           close(seq ?? undefined);

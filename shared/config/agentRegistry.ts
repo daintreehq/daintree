@@ -63,6 +63,20 @@ export interface AgentInputSuggestionConfig {
   borderPattern: string;
   /** Fixed placeholders an empty box shows, matched against its styled text: they read as `empty`. */
   placeholderPatterns?: string[];
+  /**
+   * How the box's edges are drawn. `rules` (the default): rows matching
+   * `borderPattern` above and below it. `band`: a background of its own, not
+   * the terminal's default, opening and closing on rows matching
+   * `borderPattern`; every row inside it, blank ones included, is the box.
+   */
+  frame?: "rules" | "band";
+  /** The style echoes of sent messages draw the prompt glyph in: a row whose glyph is drawn so is never the box. */
+  echoGlyphStyle?: "dim";
+  /**
+   * The box always shows one of `placeholderPatterns` when empty, so a box
+   * with nothing visible in it holds something not drawn and reads `unknown`.
+   */
+  emptyShowsPlaceholder?: boolean;
 }
 
 /**
@@ -267,6 +281,13 @@ export interface AgentPreset {
    * on an offer in the pane rather than walking on.
    */
   keepConversationOnRateLimit?: boolean;
+  /**
+   * Launch every pane on this preset armed to continue once its usage limit
+   * resets (#17912), for agents Daintree can wait out (#17909). Read from the
+   * user's own presets alone, like `fallbackOnRateLimit`: arming lets Daintree
+   * type into the agent later, which a shared preset can't agree to for them.
+   */
+  continueAtLimitReset?: boolean;
   /**
    * One of the agent's accounts (#16133) a launch of this preset signs in as,
    * unless the launch or its worktree chooses another. Kept on the user's own

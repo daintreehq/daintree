@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   accountFolderName,
+  defaultLoginLabel,
+  defaultLoginPhrase,
+  describeLaunchAccount,
+  isAccountId,
   isUsableAccountFolder,
+  launchAnswer,
+  listAccountChoicesAway,
+  listAgentAccountIdentities,
   keepPaneAccount,
   paneAccountEnv,
   resolveEffectiveAccountId,
   resolveLaunchAccount,
   sanitizeAgentAccounts,
+  sanitizeLoginName,
   withAccountEnv,
 } from "../agentAccounts.js";
+import type { AgentSettingsEntry } from "../../types/agentSettings.js";
 
 describe("sanitizeAgentAccounts", () => {
   it("keeps the first well-formed entry of each id and drops the rest", () => {
@@ -29,6 +38,56 @@ describe("sanitizeAgentAccounts", () => {
       { id: "f", name: "Windows", configDir: "C:\\Users\\me\\.codex-f" },
     ]);
     expect(sanitizeAgentAccounts({ not: "an array" })).toEqual([]);
+  });
+});
+
+describe("defaultLoginLabel and defaultLoginPhrase (#17080)", () => {
+  it("falls back to the default login when no usable name is saved", () => {
+    for (const name of [undefined, null, "", "   ", "\u0000\n\t", 42, { name: "Work" }]) {
+      expect(defaultLoginLabel(name)).toBe("Default login");
+      expect(defaultLoginPhrase(name)).toBe("the default login");
+    }
+  });
+
+  it("keeps the default login beside the name, as an account name is cleaned", () => {
+    expect(defaultLoginLabel("  Work\u0007ChatGPT  ")).toBe("Work ChatGPT · default login");
+    expect(defaultLoginPhrase("Work")).toBe("Work (the default login)");
+    const long = "x".repeat(80);
+    expect(defaultLoginLabel(long)).toBe(`${"x".repeat(60)} · default login`);
+    expect(defaultLoginPhrase("  Work\u0007Lab ")).toBe("Work Lab (the default login)");
+  });
+
+  it("keeps a saved account whose name a login name's cleaning would empty", () => {
+    for (const name of ["\u200b", "\u200c\u2067", "\ud800", "\u0085"]) {
+      const saved = { id: "a", name, configDir: "/Users/me/.codex-a" };
+      expect(sanitizeAgentAccounts([saved])).toEqual([saved]);
+      expect(sanitizeLoginName(name)).toBeUndefined();
+    }
+  });
+
+  it("cleans a login name to the same name a second time, so what a field sends is what's saved", () => {
+    for (const raw of [
+      "\ud800\ud801",
+      `${"x".repeat(59)}😀`,
+      " Work\u202e\u00ad ",
+      "a\udc00b",
+      "Wörk 😀",
+    ]) {
+      const once = sanitizeLoginName(raw);
+      expect(sanitizeLoginName(once)).toBe(once);
+    }
+    expect(sanitizeLoginName("a\udc00b😀")).toBe("ab😀");
+  });
+
+  it("drops marks that would reorder the words beside a name, or leave it looking empty", () => {
+    expect(defaultLoginLabel("Work\u202enigol")).toBe("Worknigol · default login");
+    expect(defaultLoginLabel("\u200f\u202e\u2066\u00ad\u061c")).toBe("Default login");
+    expect(defaultLoginLabel("Work\u0085Lab")).toBe("Work Lab · default login");
+  });
+
+  it("never cuts a character in half at the cap, nor leaves a space where it cut", () => {
+    expect(defaultLoginLabel(`${"x".repeat(59)}😀tail`)).toBe(`${"x".repeat(59)} · default login`);
+    expect(defaultLoginLabel(`${"x".repeat(59)} tail`)).toBe(`${"x".repeat(59)} · default login`);
   });
 });
 
@@ -154,5 +213,214 @@ describe("accountFolderName", () => {
     [".codex", "!!!", undefined],
   ])("%s + %s → %s", (defaultDir, name, expected) => {
     expect(accountFolderName(defaultDir, name)).toBe(expected);
+  });
+});
+
+describe("listAgentAccountIdentities (#17079)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+
+  it("names each saved account and the default, and never its folder", () => {
+    const listed = listAgentAccountIdentities({
+      accounts: [COMPANY, PERSONAL, { id: "bad id", name: "x", configDir: "/x" }],
+      accountId: "personal",
+    });
+
+    expect(listed).toEqual([
+      { id: "company", name: "Company", isDefault: false },
+      { id: "personal", name: "Personal", isDefault: true },
+    ]);
+    expect(JSON.stringify(listed)).not.toContain("/Users/me");
+  });
+
+  it("marks no account the default when the CLI's own login is", () => {
+    expect(listAgentAccountIdentities({ accounts: [COMPANY] })).toEqual([
+      { id: "company", name: "Company", isDefault: false },
+    ]);
+    expect(listAgentAccountIdentities(undefined)).toEqual([]);
+  });
+});
+
+describe("describeLaunchAccount (#17079)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+  const entry = {
+    accounts: [COMPANY, PERSONAL],
+    accountId: "personal",
+    worktreeAccounts: { "wt-company": "company", "wt-cli": null },
+  };
+  const pinned = { id: "work", accountId: "company" };
+
+  it("says the worktree's own pick chose it, the CLI's login included, over a preset's pin", () => {
+    expect(describeLaunchAccount(entry, "wt-company", pinned)).toEqual({
+      accountId: "company",
+      source: "worktree",
+    });
+    expect(describeLaunchAccount(entry, "wt-cli", pinned)).toEqual({
+      accountId: null,
+      source: "worktree",
+    });
+  });
+
+  it("names the preset whose pin chose it, else the agent's default, else the CLI's login", () => {
+    expect(describeLaunchAccount(entry, "wt-other", pinned)).toEqual({
+      accountId: "company",
+      source: "preset",
+      presetId: "work",
+    });
+    expect(describeLaunchAccount(entry, "wt-other", { id: "plain" })).toEqual({
+      accountId: "personal",
+      source: "agentDefault",
+    });
+    expect(describeLaunchAccount({ accounts: [COMPANY] }, "wt-other", undefined)).toEqual({
+      accountId: null,
+      source: "cliDefault",
+    });
+  });
+
+  it("flags an id whose saved row has an unusable folder, as a launch reads it", () => {
+    const broken = { accounts: [{ id: "relative", name: "Rel", configDir: ".claude-rel" }] };
+    expect(describeLaunchAccount({ ...broken, accountId: "relative" }, "wt", undefined)).toEqual({
+      accountId: "relative",
+      source: "agentDefault",
+      missing: true,
+    });
+  });
+
+  it("names no account while presets load, unless the worktree's own pick decides", () => {
+    const viaPreset = describeLaunchAccount(entry, "wt-other", pinned);
+    expect(launchAnswer(viaPreset, false)).toEqual({ presetsComplete: false });
+    expect(launchAnswer(viaPreset, true)).toEqual({ ...viaPreset, presetsComplete: true });
+    // The defaults sit under a preset that hasn't loaded, which may yet pin one.
+    const noDefault = { accounts: entry.accounts };
+    for (const [owner, preset] of [
+      [entry, { id: "plain" }],
+      [noDefault, undefined],
+    ] as const) {
+      const viaDefault = describeLaunchAccount(owner, "wt-other", preset);
+      expect(["agentDefault", "cliDefault"]).toContain(viaDefault.source);
+      expect(launchAnswer(viaDefault, false)).toEqual({ presetsComplete: false });
+    }
+    const viaWorktree = describeLaunchAccount(entry, "wt-company", pinned);
+    expect(launchAnswer(viaWorktree, false)).toEqual({ ...viaWorktree, presetsComplete: false });
+  });
+
+  it("flags an id no saved account answers to, which a launch refuses", () => {
+    expect(
+      describeLaunchAccount({ accounts: [COMPANY], accountId: "gone" }, "wt", undefined)
+    ).toEqual({ accountId: "gone", source: "agentDefault", missing: true });
+  });
+
+  it("reads an inherited worktree key as no pick of its own", () => {
+    const inherited = Object.create({ "wt-proto": "company" }) as Record<string, string>;
+    expect(
+      describeLaunchAccount({ ...entry, worktreeAccounts: inherited }, "wt-proto", undefined)
+    ).toEqual({ accountId: "personal", source: "agentDefault" });
+  });
+});
+
+describe("listAccountChoicesAway (#17893)", () => {
+  const entry = {
+    accountId: "spent",
+    accounts: [
+      { id: "spent", name: "Spent", configDir: "/Users/me/.codex-spent" },
+      { id: "fresh", name: "Fresh", configDir: "/Users/me/.codex-fresh" },
+    ],
+    worktreeAccounts: {
+      "/work/project-a/main": "spent",
+      "/work/project-b/feature": null,
+      "/work/project-c/fix": "fresh",
+      "/work/project-d/old": "removed",
+    },
+    customPresets: [
+      { id: "work", name: "  Work  ", accountId: "spent" },
+      { id: "home", name: "Home", accountId: "fresh" },
+      { id: "plain", name: "Plain" },
+      { id: "bad", name: "Bad pin", accountId: "bad id" },
+      { id: "old", name: "Old", accountId: "removed" },
+    ],
+  };
+
+  it("names every worktree pick and pin on another login, removed accounts included", () => {
+    expect(listAccountChoicesAway(entry, "fresh")).toEqual({
+      worktrees: [
+        { worktreeId: "/work/project-a/main", accountId: "spent" },
+        { worktreeId: "/work/project-b/feature", accountId: null },
+        { worktreeId: "/work/project-d/old", accountId: "removed" },
+      ],
+      presets: [
+        { presetId: "work", presetName: "Work", accountId: "spent" },
+        { presetId: "old", presetName: "Old", accountId: "removed" },
+      ],
+    });
+  });
+
+  it("tells the default login in a worktree from a worktree that inherits", () => {
+    const { worktrees, presets } = listAccountChoicesAway(entry, null);
+    expect(worktrees.map((choice) => choice.worktreeId)).toEqual([
+      "/work/project-a/main",
+      "/work/project-c/fix",
+      "/work/project-d/old",
+    ]);
+    expect(presets.map((pin) => pin.presetId)).toEqual(["work", "home", "old"]);
+    expect(listAccountChoicesAway({}, null)).toEqual({ worktrees: [], presets: [] });
+    expect(listAccountChoicesAway(undefined, "fresh")).toEqual({ worktrees: [], presets: [] });
+  });
+
+  it("lists the preset a launch reads, past a stored copy the launcher drops", () => {
+    const { presets } = listAccountChoicesAway(
+      {
+        customPresets: [
+          { id: "review", name: "   ", accountId: "fresh" },
+          { id: "review", name: "Review", accountId: "spent" },
+          { id: "build", name: "<b>Build</b>", accountId: "spent" },
+          { id: 7, name: "Numbered", accountId: "spent" },
+          { id: "named", name: 42, accountId: "spent" },
+        ],
+      } as unknown as AgentSettingsEntry,
+      "fresh"
+    );
+    // Two stored copies share the id, so it's flagged, whichever one launches.
+    expect(presets).toEqual([
+      { presetId: "review", presetName: "Review", accountId: "spent", sharedId: true },
+    ]);
+  });
+
+  it("leaves every launch on the account once the listed choices are cleared", () => {
+    const { worktrees, presets } = listAccountChoicesAway(entry, "fresh");
+    const cleared = new Set(worktrees.map((choice) => choice.worktreeId));
+    const unpinned = new Set(presets.map((pin) => pin.presetId));
+    const after = {
+      ...entry,
+      accountId: "fresh",
+      worktreeAccounts: Object.fromEntries(
+        Object.entries(entry.worktreeAccounts).filter(([id]) => !cleared.has(id))
+      ),
+      customPresets: entry.customPresets.map((preset) =>
+        unpinned.has(preset.id) ? { ...preset, accountId: undefined } : preset
+      ),
+    };
+    for (const worktreeId of [...Object.keys(entry.worktreeAccounts), "/work/new"]) {
+      for (const preset of after.customPresets) {
+        const pin = isAccountId(preset.accountId) ? preset.accountId : undefined;
+        expect(resolveEffectiveAccountId(after, worktreeId, undefined, pin)).toBe("fresh");
+      }
+    }
+    expect(listAccountChoicesAway(after, "fresh")).toEqual({ worktrees: [], presets: [] });
+  });
+
+  it("keeping a worktree's pick, or a pin, leaves that one choice where it was", () => {
+    const { worktrees } = listAccountChoicesAway(entry, "fresh");
+    const after = {
+      ...entry,
+      accountId: "fresh",
+      worktreeAccounts: { "/work/project-a/main": "spent" },
+    };
+    expect(worktrees.length).toBeGreaterThan(1);
+    expect(resolveEffectiveAccountId(after, "/work/project-a/main")).toBe("spent");
+    // A kept pin wins in every worktree whose own pick was cleared.
+    expect(resolveEffectiveAccountId(after, "/work/project-b/feature", undefined, "spent")).toBe(
+      "spent"
+    );
   });
 });

@@ -1,4 +1,5 @@
 import type {
+  McpCallAdmission,
   McpDispatchAuthorization,
   McpConfirmationDecision,
 } from "../../../shared/types/ipc/mcpServer.js";
@@ -46,11 +47,12 @@ export function settleCall(
     readonly confirmationDecision: McpConfirmationDecision | undefined;
     readonly dispatchAuthorization: McpDispatchAuthorization | undefined;
     readonly started: { readonly danger: boolean; readonly asks: boolean } | undefined;
+    readonly admission?: McpCallAdmission;
   }
 ): void {
   const { sessionId, actionId, args, tier, startedAt, capturedTurnId } = facts;
   const { appendAuditRecord, notifyToolCallSettled } = deps;
-  const { outcome, confirmationDecision, dispatchAuthorization, started } = settled;
+  const { outcome, confirmationDecision, dispatchAuthorization, started, admission } = settled;
   const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };
   // Compute the duration once so the audit record and the live strip
   // report the same wall-clock, not two reads a few µs apart (#9759).
@@ -74,6 +76,7 @@ export function settleCall(
       outcome: settledOutcome,
       confirmationDecision,
       ...(recordedAuthorization !== undefined ? { authorization: recordedAuthorization } : {}),
+      ...(admission !== undefined ? { admission } : {}),
       capturedTurnId,
     });
   } catch (err) {

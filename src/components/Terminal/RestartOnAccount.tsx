@@ -21,7 +21,7 @@ import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import type { ActionSource } from "@shared/types/actions";
 import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
 import { isPtyPanel } from "@shared/types/panel";
-import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { defaultLoginLabel, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import { reopensFromConversationStore } from "@shared/utils/conversationStore";
 import {
   DestructiveConsequence,
@@ -88,6 +88,9 @@ export function useRestartAccountChoices(
   const savedAccounts = useAgentSettingsStore((s) =>
     agentId ? s.settings?.agents?.[agentId]?.accounts : undefined
   );
+  const defaultLoginName = useAgentSettingsStore((s) =>
+    agentId ? s.settings?.agents?.[agentId]?.defaultLoginName : undefined
+  );
   const customPresets = useAgentSettingsStore((s) =>
     agentId ? s.settings?.agents?.[agentId]?.customPresets : undefined
   );
@@ -102,11 +105,11 @@ export function useRestartAccountChoices(
     const accounts = sanitizeAgentAccounts(savedAccounts);
     if (accounts.length === 0 && !currentAccountId) return [];
     const all: RestartAccountChoice[] = [
-      { id: null, name: "Default login" },
+      { id: null, name: defaultLoginLabel(defaultLoginName) },
       ...accounts.map((account) => ({ id: account.id, name: account.name })),
     ];
     return all.filter((choice) => choice.id !== (currentAccountId ?? null));
-  }, [agentId, currentAccountId, savedAccounts]);
+  }, [agentId, currentAccountId, savedAccounts, defaultLoginName]);
 
   const headroomFor = useAgentAccountHeadroom(agentId, open && choices.length > 0);
   // A preset that can't be found refuses the switch anyway; its folder is unknown.

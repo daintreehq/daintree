@@ -196,7 +196,9 @@ export type {
   IssueNotFoundPayload,
   // Project close IPC types
   ProjectCloseResult,
+  ProjectSleepOptions,
   ProjectSleepResult,
+  SleepRequestWorking,
   ProjectStats,
   BulkProjectStatsEntry,
   BulkProjectStats,
@@ -598,6 +600,8 @@ export type {
   VoiceKeytermSource,
   VoiceSentTerm,
   LastDictationTerms,
+  LocalSpeechModelState,
+  LocalSpeechModelStatus,
   VoiceSessionEndReason,
   VoiceStartOutcome,
   VoiceTranscriptPhase,

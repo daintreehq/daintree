@@ -16,6 +16,8 @@ export type TerminalTaskType = "interactive" | "background" | "idle";
 export interface TerminalKillOptions {
   /** The pane survives this teardown and will receive a replacement process. */
   forRestart?: boolean;
+  /** The pane goes with this teardown, for good: nothing will replace it. */
+  closesPane?: boolean;
 }
 
 /** What Main knows about why a terminal exited, beyond its exit code. */

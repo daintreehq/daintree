@@ -39,6 +39,11 @@ import {
   handleGetLatestBackgroundUpdateCheck,
 } from "./plugin/install.js";
 import {
+  handleAddCatalogSource,
+  handleGetCatalogSources,
+  handleRemoveCatalogSource,
+} from "./plugin/catalogSources.js";
+import {
   handleToolbarButtons,
   handleLaunchEntries,
   handleLayouts,
@@ -193,7 +198,12 @@ export const pluginNamespace = defineIpcNamespace({
     installFromCatalog: op(PLUGIN_METHOD_CHANNELS.installFromCatalog, handleInstallFromCatalogOp, {
       withContext: true,
     }),
-    browseCatalog: op(PLUGIN_METHOD_CHANNELS.browseCatalog, handleBrowseCatalog),
+    browseCatalog: op(PLUGIN_METHOD_CHANNELS.browseCatalog, handleBrowseCatalog, {
+      withContext: true,
+    }),
+    getCatalogSources: op(PLUGIN_METHOD_CHANNELS.getCatalogSources, handleGetCatalogSources),
+    addCatalogSource: op(PLUGIN_METHOD_CHANNELS.addCatalogSource, handleAddCatalogSource),
+    removeCatalogSource: op(PLUGIN_METHOD_CHANNELS.removeCatalogSource, handleRemoveCatalogSource),
     cancelInstall: op(PLUGIN_METHOD_CHANNELS.cancelInstall, handleCancelInstall),
     uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
     checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),

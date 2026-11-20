@@ -41,6 +41,21 @@ export function sanitizeAgentObservation(value: unknown): TerminalAgentObservati
 }
 
 /**
+ * What a restore judges a relaunched agent by (#17886): what was observed when
+ * its process was last stopped, or failing that the last state the host
+ * reported. Undefined on a snapshot from before either was kept.
+ */
+export function readStopObservation(saved: {
+  stopObservation?: unknown;
+  lastAgentObservation?: unknown;
+}): TerminalAgentObservation | undefined {
+  return (
+    sanitizeAgentObservation(saved.stopObservation) ??
+    sanitizeAgentObservation(saved.lastAgentObservation)
+  );
+}
+
+/**
  * The later of two observations of one pane, by when each state began. A read
  * taken before a live report must not roll the pane back to it. Ties keep `a`.
  */

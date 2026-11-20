@@ -224,3 +224,13 @@ export const WORKER_STEER_REFUSALS = {
   /** A slash command that isn't one of the fixed forms its agent takes from a steer (#16101). */
   commandNotAllowed: "WORKER_COMMAND_NOT_ALLOWED",
 } as const;
+
+/**
+ * How a finished agent the global Assistant didn't launch may be closed
+ * (#16750), as the host it runs on read it. `handback`: its stop handed the
+ * work back, so the person's Daintree confirmations decide. `requires-person`:
+ * it stopped on an error, such as a usage limit it can resume from, so only the
+ * person's own yes closes it: neither Never ask nor a tick reaches it.
+ */
+export const GLOBAL_CLOSE_CLASSES = ["handback", "requires-person"] as const;
+export type GlobalCloseClass = (typeof GLOBAL_CLOSE_CLASSES)[number];

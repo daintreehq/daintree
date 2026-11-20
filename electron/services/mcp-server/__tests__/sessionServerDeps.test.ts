@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MCP_REMOTE_CONFIRM_MARGIN_MS } from "../../../../shared/config/mcpConfirmWindow.js";
 
 const { webContentsById } = vi.hoisted(() => ({
   webContentsById: new Map<number, { isDestroyed: () => boolean }>(),
@@ -339,6 +340,73 @@ describe("createSessionServerDeps", () => {
     expect(relays()).toEqual([undefined]);
   });
 
+  // #17917: a local call's matcher reaches its dispatch bound to that one call,
+  // and another machine's relay never carries one.
+  it("binds a local relay's next-fallback matcher to the call each dispatch runs", async () => {
+    const ran = vi.fn();
+    const offers = vi.fn(() => ran);
+    const bound = (relay: Record<string, unknown>) => {
+      const deps = fakeSource();
+      const dispatchActionForWorkspace = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+        dispatchActionForWorkspace;
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+        workspaceBinding: { workspaceId: WS_A },
+        relay: relay as never,
+      });
+      type Bound = (p: string, a: string, x: unknown) => (() => void) | null;
+      const matchers = () =>
+        dispatchActionForWorkspace.mock.calls.map(
+          (call) =>
+            ((call as unknown[])[5] as { relay?: { nextFallback?: Bound } } | undefined)?.relay
+              ?.nextFallback
+        );
+      return { sessionDeps, matchers };
+    };
+    const caller = {
+      linkSessionId: "local",
+      senderId: "local",
+      helpSessionId: "help-1",
+      shellName: "Mac",
+      nextFallback: offers,
+    };
+    const move = { terminalId: "t-1", presetId: "work" };
+
+    const local = bound({ ...caller, local: true });
+    await local.sessionDeps.dispatchAction(
+      "terminal.restartOnPreset",
+      move,
+      false,
+      undefined,
+      "call-1"
+    );
+    await local.sessionDeps.dispatchAction("terminal.restartOnPreset", move, false);
+    const [named, unnamed] = local.matchers();
+    expect(named?.("proj-1", "terminal.restartOnPreset", move)).toBe(ran);
+    expect(offers).toHaveBeenCalledWith({
+      callId: "call-1",
+      helpSessionId: "help-1",
+      projectId: "proj-1",
+      actionId: "terminal.restartOnPreset",
+      args: move,
+    });
+    expect(unnamed).toBeUndefined();
+
+    const remote = bound(caller);
+    await remote.sessionDeps.dispatchAction(
+      "terminal.restartOnPreset",
+      move,
+      false,
+      undefined,
+      "call-2"
+    );
+    expect(remote.matchers()).toEqual([undefined]);
+  });
+
   // #14551: only a relay caller its Shell's runtime named global is handed the
   // steer, from this machine's global Assistant or another's.
   const RELAY = {
@@ -416,6 +484,75 @@ describe("createSessionServerDeps", () => {
       await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
     }
   );
+
+  // #16750: the close's read follows the binding, and no binding is no agent to close.
+  it("reads a close target through the steer bound at each call", async () => {
+    const { state, host } = mutableHost();
+    const sessionDeps = createSessionServerDeps(fakeSource(), host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: { ...RELAY, global: true },
+    });
+    const steer = sessionDeps.globalSteer!;
+
+    await expect(steer.closeTarget("p", "t")).resolves.toBeNull();
+
+    const found = { generation: 1, closeClass: "handback" as const };
+    const closeTarget = vi.fn(async () => found);
+    state.binding = {
+      control: {} as AssistantControlBinding["control"],
+      sessionProject: () => null,
+      steer: { closeTarget } as never,
+    };
+    await expect(steer.closeTarget("p", "t")).resolves.toBe(found);
+    expect(closeTarget).toHaveBeenCalledWith("p", "t");
+  });
+
+  // #16750: the close's question goes to the Shell inside the call's own wait.
+  it("asks the Shell about a global close inside its call's deadline, and not after it", async () => {
+    const requestApproval = vi.fn(async () => ({ decision: "approved" as const, deadline: 1 }));
+    let deadline: number | undefined = 100_000;
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: {
+        ...RELAY,
+        global: true,
+        requestApproval,
+        callDeadline: () => deadline,
+      },
+    });
+    const ask = {
+      actionId: "terminal.close",
+      args: { terminalId: "t" },
+      subject: "Fix it",
+      lines: ["Panel: Fix it (t)"],
+      closeClass: "handback" as const,
+    };
+
+    await sessionDeps.relay!.askClose!("call-1", ask);
+    expect(requestApproval).toHaveBeenCalledWith({
+      ...ask,
+      callId: "call-1",
+      holdUntil: 100_000 - MCP_REMOTE_CONFIRM_MARGIN_MS,
+    });
+
+    // The call has already been answered: nobody is asked about it.
+    deadline = undefined;
+    await expect(sessionDeps.relay!.askClose!("call-1", ask)).resolves.toEqual({
+      decision: "timeout",
+    });
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a project assistant's relay session no way to ask about a close", () => {
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: { ...RELAY, requestApproval: vi.fn() },
+    });
+    expect(sessionDeps.relay?.askClose).toBeUndefined();
+  });
 
   it.each([
     ["a project assistant's relay session", { relay: RELAY }],
@@ -531,6 +668,46 @@ describe("createSessionServerDeps", () => {
       await sessionDeps.dispatchAction("actions.list", {}, false, undefined, undefined, WALK);
 
       expect((dispatchActionForWebContents.mock.calls[0] as unknown[])[6]).toEqual(WALK);
+    });
+
+    it("carries the dialog's hand-over offer to this machine's own help session's view only (#16752)", async () => {
+      const offer = { label: "Delete a worktree it created", detail: "Only a clean one" };
+      const dispatchActionForWebContents = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      const deps = fakeSource();
+      (deps as { dispatchActionForWebContents?: unknown }).dispatchActionForWebContents =
+        dispatchActionForWebContents;
+      deps.sessionStore.sessionOriginMap.set("s", "help");
+      deps.sessionStore.sessionWebContentsMap.set("s", 7);
+      deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
+      const help = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+      });
+
+      await help.dispatchAction("worktree.delete", {}, false, undefined, undefined, {
+        delegationOffer: offer,
+      });
+
+      expect((dispatchActionForWebContents.mock.calls[0] as unknown[])[6]).toMatchObject({
+        delegationOffer: offer,
+      });
+
+      // A pinned session that isn't one of this machine's help sessions never carries it.
+      deps.sessionStore.sessionOriginMap.set("p", "external");
+      deps.sessionStore.sessionWebContentsMap.set("p", 8);
+      const other = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "p",
+        role: ROLE,
+      });
+      await other.dispatchAction("worktree.delete", {}, false, undefined, undefined, {
+        delegationOffer: offer,
+      });
+
+      const sent = (dispatchActionForWebContents.mock.calls[1] as unknown[])[6] as
+        Record<string, unknown> | undefined;
+      expect(sent?.delegationOffer).toBeUndefined();
     });
 
     it("rides a workspace-bound dispatch's options without dropping a pane's own", async () => {

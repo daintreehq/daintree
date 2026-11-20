@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deliveryFromPhase, launchReadiness } from "../deliveryState";
+import { deliveryFromPhase, launchReadiness, promptReadiness } from "../deliveryState";
 
 describe("deliveryFromPhase", () => {
   it("claims sent only once the whole prompt reached the pty", () => {
@@ -28,5 +28,35 @@ describe("launchReadiness", () => {
     expect(launchReadiness("waiting", "error")).toBe("needs-you");
     expect(launchReadiness("working", undefined)).toBe("not-yet");
     expect(launchReadiness(null, undefined)).toBe("not-yet");
+  });
+});
+
+describe("promptReadiness", () => {
+  it("takes only an agent settled at its own prompt", () => {
+    expect(
+      promptReadiness({ agentState: "waiting", waitingReason: "prompt", lastTransitionAt: 1 })
+    ).toBe("ready");
+    // Idle is the pane before its agent drew anything: the shell takes the line.
+    expect(promptReadiness({ agentState: "idle", lastTransitionAt: 1 })).toBe("not-yet");
+    expect(promptReadiness({ agentState: "waiting", lastTransitionAt: 1 })).toBe("not-yet");
+    expect(promptReadiness({ agentState: "waiting", waitingReason: "prompt" })).toBe("not-yet");
+    // A reason left over from the last wait says nothing once the agent moved on.
+    expect(
+      promptReadiness({ agentState: "working", waitingReason: "prompt", lastTransitionAt: 1 })
+    ).toBe("not-yet");
+    for (const agentState of ["idle", "completed", "exited"] as const) {
+      expect(promptReadiness({ agentState, waitingReason: "prompt", lastTransitionAt: 1 })).toBe(
+        "not-yet"
+      );
+    }
+    expect(promptReadiness({ agentState: null })).toBe("not-yet");
+  });
+
+  it("leaves a question, approval or error to the person", () => {
+    for (const waitingReason of ["question", "approval", "error"]) {
+      expect(promptReadiness({ agentState: "waiting", waitingReason, lastTransitionAt: 1 })).toBe(
+        "needs-you"
+      );
+    }
   });
 });

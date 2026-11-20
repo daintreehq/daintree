@@ -528,3 +528,57 @@ describe("decisionsClient reads by reference (#17229)", () => {
     ]);
   });
 });
+
+describe("decisionsClient.markQuestions (#17895)", () => {
+  let markQuestions: ReturnType<typeof vi.fn>;
+  const reference = (n: number): DecisionQuestionReference => ({
+    hostId: "host_1",
+    projectId: "project-1",
+    terminalId: "pane-a",
+    questionId: `q_question_${n}`,
+  });
+  const questions = (count: number) =>
+    Array.from({ length: count }, (_, n) => ({ reference: reference(n), ask: null }));
+
+  beforeEach(async () => {
+    vi.resetModules();
+    markQuestions = vi.fn(async (payload: { questions: unknown[] }) => ({
+      result: "marked",
+      marked: payload.questions.length,
+    }));
+    typedGlobal.window = { electron: { decisions: { markQuestions } } };
+    ({ decisionsClient } = await import("../decisionsClient"));
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("marks more than one call takes a page at a time, adding up what each changed", async () => {
+    const { DECISION_QUESTION_MARKS_PER_CALL: page } =
+      await import("@shared/types/decisionsQuestion");
+    const all = questions(page * 2 + 3);
+    await expect(decisionsClient.markQuestions("clear", all)).resolves.toEqual({
+      result: "marked",
+      marked: all.length,
+    });
+    expect(markQuestions.mock.calls.map(([payload]) => payload.questions.length)).toEqual([
+      page,
+      page,
+      3,
+    ]);
+    expect(markQuestions.mock.calls.flatMap(([payload]) => payload.questions)).toEqual(all);
+    expect(markQuestions.mock.calls.every(([payload]) => payload.action === "clear")).toBe(true);
+  });
+
+  it("stops at the first page that isn't marked, and says why", async () => {
+    const { DECISION_QUESTION_MARKS_PER_CALL: page } =
+      await import("@shared/types/decisionsQuestion");
+    markQuestions.mockResolvedValueOnce({ result: "marked", marked: 1 });
+    markQuestions.mockResolvedValueOnce({ result: "failed" });
+    await expect(decisionsClient.markQuestions("seen", questions(page * 3))).resolves.toEqual({
+      result: "failed",
+    });
+    expect(markQuestions).toHaveBeenCalledTimes(2);
+  });
+});

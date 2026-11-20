@@ -1,7 +1,9 @@
 import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "@shared/types";
 import type {
+  AccountChoicesAway,
   AddAgentAccountRequest,
   AddAgentAccountResult,
+  ApplyAccountEverywhereRequest,
 } from "@shared/types/ipc/agentAccounts";
 
 // Value cache + singleflight on get(): burst paths (bulk restart, duplicate,
@@ -49,9 +51,13 @@ export const agentSettingsClient = {
   /** Drop the cached snapshot so the next get() hits main. */
   invalidate,
 
-  set: (agentId: string, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings> => {
+  set: (
+    agentId: string,
+    settings: Partial<AgentSettingsEntry>,
+    options?: { lockContinueAtLimitReset?: boolean }
+  ): Promise<AgentSettings> => {
     invalidate();
-    return window.electron.agentSettings.set(agentId, settings).finally(invalidate);
+    return window.electron.agentSettings.set(agentId, settings, options).finally(invalidate);
   },
 
   setGlobal: (value: boolean): Promise<AgentSettings> => {
@@ -79,6 +85,29 @@ export const agentSettingsClient = {
   removeAccount: (agentId: string, accountId: string): Promise<AgentSettings> => {
     invalidate();
     return window.electron.agentAccounts.remove(agentId, accountId).finally(invalidate);
+  },
+
+  /** Rename a saved account, or with `accountId` null the default login (#17080). */
+  renameAccount: (
+    agentId: string,
+    accountId: string | null,
+    name: string
+  ): Promise<AgentSettings> => {
+    invalidate();
+    return window.electron.agentAccounts.rename(agentId, accountId, name).finally(invalidate);
+  },
+
+  /** What using the account everywhere would clear, read from the host each time (#17893). */
+  listAccountChoicesAway: (
+    agentId: string,
+    accountId: string | null
+  ): Promise<AccountChoicesAway> =>
+    window.electron.agentAccounts.listChoicesAway(agentId, accountId),
+
+  /** Make the account the default and clear the ticked choices, in one write in main (#17893). */
+  applyAccountEverywhere: (request: ApplyAccountEverywhereRequest): Promise<AgentSettings> => {
+    invalidate();
+    return window.electron.agentAccounts.applyEverywhere(request).finally(invalidate);
   },
 
   stampVersion: (version: number): Promise<Record<string, unknown>> => {

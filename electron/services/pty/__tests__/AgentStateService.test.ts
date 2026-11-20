@@ -1841,3 +1841,53 @@ describe("usage-limit memory (#16136)", () => {
     expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
   });
 });
+
+describe("AgentStateService update-installed observation (#17905)", () => {
+  const OBSERVED = { observedAt: 1_000, namesRestart: true };
+
+  afterEach(() => {
+    events.removeAllListeners();
+  });
+
+  function observedPane(overrides: Partial<TerminalInfo> = {}) {
+    const terminal = createTerminal(overrides);
+    terminal.updateInstalled = { ...OBSERVED };
+    return terminal;
+  }
+
+  function collectClears() {
+    const cleared: string[] = [];
+    events.on("agent:update-installed-changed", (payload) => {
+      if (payload.updateInstalled === null) cleared.push(payload.terminalId);
+    });
+    return cleared;
+  }
+
+  it("keeps it through the turns of the run that showed it", () => {
+    const service = new AgentStateService();
+    const terminal = observedPane({ agentState: "idle" });
+    const cleared = collectClears();
+
+    service.updateAgentState(terminal, { type: "input" });
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+    service.updateAgentState(terminal, { type: "busy" });
+
+    expect(terminal.updateInstalled).toEqual(OBSERVED);
+    expect(cleared).toEqual([]);
+  });
+
+  it.each([
+    ["an exit", "working", { type: "exit", code: 0 }],
+    ["a kill", "working", { type: "kill" }],
+    ["a respawn into the shell an agent left", "exited", { type: "respawn" }],
+  ] as const)("clears it on %s", (_name, agentState, event) => {
+    const service = new AgentStateService();
+    const terminal = observedPane({ agentState });
+    const cleared = collectClears();
+
+    service.updateAgentState(terminal, event);
+
+    expect(terminal.updateInstalled).toBeUndefined();
+    expect(cleared).toEqual(["term-1"]);
+  });
+});

@@ -11,6 +11,11 @@ import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import type { AssistantLaneSnapshot } from "../services/HelpSessionService.js";
 import { getLifecycleLedger } from "../services/pty/lifecycleLedger.js";
 import {
+  applyStopObservations,
+  hasStopReading,
+  stopObservationsFor,
+} from "../services/pty/stopObservation.js";
+import {
   getActiveAgentCount,
   getActiveAgents,
   showQuitWarning,
@@ -83,6 +88,7 @@ import {
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
   CANOPY_READER_DRAIN_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
+  LOCAL_SPEECH_DRAIN_BUDGET_MS,
   POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
@@ -435,6 +441,17 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     console.warn("[MAIN] Rate-limit queue drain at quit failed:", err);
   }
 
+  // Before anything below ends a relay hold, a bearer or a session: none of that
+  // is a decision about what an Assistant launched, so the panes it kept for the
+  // next run stay kept (#16845). Guarded like the drain above.
+  try {
+    const { beginAssistantPaneCreationQuit } =
+      await import("../services/mcp-server/assistantPaneCreations.js");
+    beginAssistantPaneCreationQuit();
+  } catch (err) {
+    console.warn("[MAIN] Keeping Assistant pane creations at quit failed:", err);
+  }
+
   if (deps.stopRemoteHosts) {
     const stopRemoteHosts = deps.stopRemoteHosts;
     await settleWithin(
@@ -642,7 +659,21 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             r.agentSessionId &&
             !isAssistantTerminalRecord(terminalInfoById.get(r.id) ?? { id: r.id })
         );
-        if (captured.length === 0) continue;
+        // What each pane the quit stops was doing, read before the kill
+        // (#17886): every one of them goes with the app, reported back or not.
+        const stoppedIds = new Set([
+          ...[...terminalInfoById.values()]
+            .filter((t) => t.projectId === projectIds[i])
+            .map((t) => t.id),
+          ...results.map((r) => r.id),
+        ]);
+        const observations = stopObservationsFor(
+          [...stoppedIds].filter(
+            (id) => !isAssistantTerminalRecord(terminalInfoById.get(id) ?? { id })
+          ),
+          terminalInfoById
+        );
+        if (captured.length === 0 && !hasStopReading(observations)) continue;
 
         try {
           await projectStore.enqueueProjectStateUpdate(projectIds[i], (state) => {
@@ -653,7 +684,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
                 snapshot.agentSessionId = result.agentSessionId ?? undefined;
               }
             }
-            return state;
+            const observed = applyStopObservations(state.terminals, observations);
+            return captured.length > 0 || observed ? state : null;
           });
         } catch (error) {
           // Per-project so one failed write can't skip the remaining projects —
@@ -1122,6 +1154,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         .catch((error) => {
           console.warn("[MAIN] Canopy reader drain at quit failed:", error);
         });
+      // The on-device speech process, when one ever started, stops the same
+      // way; a download under way is stopped and resumes next launch.
+      const localSpeechDrain = import("../services/voice/localSpeech.js")
+        .then(({ shutdownLocalSpeech }) => shutdownLocalSpeech(LOCAL_SPEECH_DRAIN_BUDGET_MS))
+        .catch((error) => {
+          console.warn("[MAIN] On-device speech drain at quit failed:", error);
+        });
       const cleanupErr = deps.getCleanupErrorHandlers();
       if (cleanupErr) {
         cleanupErr();
@@ -1212,6 +1251,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       await vadDrain;
       currentPhase = "canopy-reader-drain";
       await readerDrain;
+      currentPhase = "local-speech-drain";
+      await localSpeechDrain;
     });
 
   const timeoutPromise = new Promise<never>((_, reject) => {

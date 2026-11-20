@@ -530,3 +530,143 @@ describe("CloudMachineKeys", () => {
     expect(env.machineKeys.issue).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("standing in for a machine refused a key (#17924)", () => {
+  it("stops standing in once the account's key is replaced, until the new key is tried", async () => {
+    const env = setup();
+    env.machineKeys.issue.mockRejectedValue(
+      new BoatApiError("forbidden", "missing account.admin", 403, "api_key_action_forbidden", null)
+    );
+    await env.keys.arm(HOST, env.session);
+    expect(env.keys.standsInFor(BINDING)).toBe(true);
+    const account = env.store.account(ACCOUNT)!;
+    // Replaced with a key that happens to end alike: told apart by its revision.
+    env.store.putAccount({ ...account, credentialRevision: "rev-2" });
+    expect(env.keys.standsInFor(BINDING)).toBe(false);
+    // The new key is asked at once, and its own refusal stands in again.
+    await env.keys.arm(HOST, env.session);
+    expect(env.machineKeys.issue).toHaveBeenCalledTimes(2);
+    expect(env.keys.standsInFor(BINDING)).toBe(true);
+  });
+
+  it("forgets a removed machine's finding, and the link it was found on", async () => {
+    const env = setup();
+    env.machineKeys.issue.mockRejectedValue(
+      new BoatApiError("forbidden", "missing account.admin", 403, "api_key_action_forbidden", null)
+    );
+    await env.keys.arm(HOST, env.session);
+    expect(env.keys.problemFor(BINDING)).not.toBeNull();
+    env.store.removeBinding(BINDING);
+    env.keys.forgetRemoved();
+    expect(env.keys.problemFor(BINDING)).toBeNull();
+    expect(env.keys.standsInFor(BINDING)).toBe(false);
+  });
+
+  const leavesAccountStop = () => [
+    new BoatApiError("forbidden", "missing account.admin", 403, "api_key_action_forbidden", null),
+    new BoatApiError(
+      "no-capacity",
+      "Scoped keys aren't on yet",
+      503,
+      "scoped_api_key_creation_disabled",
+      null
+    ),
+    new UnusableMachineKeyError("sak_wide", null, "Boat issued a key other than asked."),
+  ];
+
+  it("stands in where the account's own key may still stop the machine, on the link it was found on", async () => {
+    for (const refusal of leavesAccountStop()) {
+      const env = setup();
+      env.machineKeys.issue.mockRejectedValue(refusal);
+      await env.keys.arm(HOST, env.session);
+      expect(env.keys.standsInFor(BINDING)).toBe(true);
+
+      // A new link says nothing until its host says it still holds no key; no key is asked for meanwhile.
+      const next = env.newSession();
+      expect(env.keys.standsInFor(BINDING)).toBe(false);
+      await env.keys.arm(HOST, next);
+      expect(env.machineKeys.issue).toHaveBeenCalledTimes(1);
+      expect(env.keys.standsInFor(BINDING)).toBe(true);
+      expect(env.keys.problemFor(BINDING)).toMatch(/can't stop itself when idle/);
+    }
+  });
+
+  it("never stands in where the account's key can't stop it either, or the refusal may pass", async () => {
+    const refusals = [
+      new BoatApiError("unauthorized", "bad key", 401, null, null),
+      new BoatApiError("forbidden", "expired", 403, "api_key_expired", null),
+      new BoatApiError("payment-required", "card declined", 402, null, null),
+      new BoatApiError("server", "x", 500, null, null),
+    ];
+    for (const refusal of refusals) {
+      const env = setup();
+      env.machineKeys.issue.mockRejectedValueOnce(refusal);
+      await env.keys.arm(HOST, env.session);
+      expect(env.keys.problemFor(BINDING)).not.toBeNull();
+      expect(env.keys.standsInFor(BINDING)).toBe(false);
+    }
+  });
+
+  it("never stands in for a host too old to take a key, or one that refused the key itself", async () => {
+    const old = setup();
+    old.call.mockRejectedValueOnce(
+      new AppError({ code: "UNSUPPORTED", message: "Unknown method: machine-keeper.status" })
+    );
+    await old.keys.arm(HOST, old.session);
+    expect(old.keys.problemFor(BINDING)).toMatch(/too old/);
+    expect(old.keys.standsInFor(BINDING)).toBe(false);
+
+    const refusing = setup();
+    refusing.call.mockImplementation(async (method: string, payload: unknown) => {
+      if (method === MachineKeeperLinkMethod.ARM) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "That isn't a Boat machine.",
+          userMessage: "That isn't a Boat machine.",
+        });
+      }
+      return refusing.answer(method, payload);
+    });
+    await refusing.keys.arm(HOST, refusing.session);
+    expect(refusing.keys.problemFor(BINDING)).toMatch(/isn't a Boat machine/);
+    expect(refusing.keys.standsInFor(BINDING)).toBe(false);
+  });
+
+  it("stops standing in once the machine holds a working key, another device's included", async () => {
+    const env = setup();
+    env.machineKeys.issue.mockRejectedValueOnce(
+      new BoatApiError("forbidden", "missing account.admin", 403, "api_key_action_forbidden", null)
+    );
+    await env.keys.arm(HOST, env.session);
+    expect(env.keys.standsInFor(BINDING)).toBe(true);
+    env.changed.mockClear();
+
+    // Another device with an admin key armed it meanwhile, as this link's host now says.
+    env.call.mockImplementation(async (method: string, payload: unknown) =>
+      method === MachineKeeperLinkMethod.STATUS
+        ? {
+            grantId: "mk_otherdevice",
+            resourceId: SANDBOX,
+            expiresAt: env.clock.now + 20 * DAY,
+            problem: null,
+          }
+        : env.answer(method, payload)
+    );
+    await env.keys.arm(HOST, env.session);
+    expect(env.keys.standsInFor(BINDING)).toBe(false);
+    expect(env.keys.problemFor(BINDING)).toBeNull();
+    expect(env.changed).toHaveBeenCalled();
+
+    // This device's own key, once the account may make one.
+    const own = setup();
+    own.machineKeys.issue.mockRejectedValueOnce(
+      new BoatApiError("forbidden", "missing account.admin", 403, "api_key_action_forbidden", null)
+    );
+    await own.keys.arm(HOST, own.session);
+    own.clock.now += 61 * 60_000;
+    await own.keys.tick();
+    expect(own.machineKeys.issue).toHaveBeenCalledTimes(2);
+    expect(own.keys.standsInFor(BINDING)).toBe(false);
+    expect(own.keys.problemFor(BINDING)).toBeNull();
+  });
+});

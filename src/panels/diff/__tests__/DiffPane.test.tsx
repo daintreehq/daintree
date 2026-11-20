@@ -70,7 +70,7 @@ const { viewerOverlay, viewerDraftSessions } = vi.hoisted(() => ({
 }));
 vi.mock("@/components/Worktree/DiffViewer", async () => {
   const { createPortal } = await import("react-dom");
-  const { use } = await import("react");
+  const { use, useEffect } = await import("react");
   const { DiffNoteDraftContext } = await import("@/components/Worktree/diffNoteDrafts");
   const { parseFilePatch } = await import("@shared/utils/patchHunks");
   return {
@@ -83,8 +83,17 @@ vi.mock("@/components/Worktree/DiffViewer", async () => {
       diff?: string;
       onShowWhitespaceChanges?: () => void;
       renderHunkActions?: (hunk: never, index: number, file: never) => ReactNode;
+      onHunkCount?: (count: number, forDiff: string) => void;
+      revealHunk?: { index: number; seq: number } | null;
     }) => {
       viewerDraftSessions.add(use(DiffNoteDraftContext));
+      // Reports its hunks as the real viewer does once it has parsed the patch:
+      // a test's count when it sets one, else git's own hunks in the patch.
+      const { diff, onHunkCount } = props;
+      useEffect(() => {
+        const count = viewerHunkCount.current ?? parseFilePatch(diff ?? "")?.hunks.length ?? 0;
+        onHunkCount?.(count, diff ?? "");
+      }, [diff, onHunkCount]);
       // Each rendered hunk through the host's slot, as the real viewer draws
       // them in its hunk headers: git's own hunks, unless a test merges them
       // the way expanded context or the full-file view does.
@@ -96,7 +105,25 @@ vi.mock("@/components/Worktree/DiffViewer", async () => {
           data-testid="diff-viewer-mock"
           data-wrap-lines={String(props.wrapLines)}
           data-diff={props.diff}
+          data-reveal-index={props.revealHunk?.index}
+          data-reveal-seq={props.revealHunk?.seq}
         >
+          <div tabIndex={0} data-testid="diff-viewer-region" />
+          {viewerHunkCount.current !== null && (
+            // Hunks before `viewerDrawnFrom` belong to a file drawn collapsed.
+            <div data-hunk-offset={viewerDrawnFrom.current}>
+              <table>
+                <tbody>
+                  {Array.from(
+                    { length: viewerHunkCount.current - viewerDrawnFrom.current },
+                    (_, index) => (
+                      <tr key={index} className="diff-hunk-anchor" />
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
           {hunks.map((hunk, index) => (
             <div key={index} data-testid="hunk-actions">
               {props.renderHunkActions!(hunk as never, index, {} as never)}
@@ -130,7 +157,7 @@ interface RenderedMockProps {
   status: string;
   attemptKey: string;
   requestKey: string;
-  onChangeCount?: (count: number, forAttempt: string) => void;
+  onChangeCount?: (count: number | null, forAttempt: string) => void;
 }
 // The latest props the stub was rendered with, so a test can report up through
 // the same callbacks the real view uses.
@@ -178,10 +205,9 @@ vi.mock("@/components/ui/EmptyState", () => ({
 
 // Exposes the resolved index so the identity resolution is observable from the
 // sidebar as well as from the footer position indicator.
-// Its one row claims `v` for its own file the way the real row button does:
-// `preventDefault()` without stopping propagation.
+// Its one row stands for the last file of the set, marked by `data-file-index`
+// on the row around its button as the real shelf marks it.
 const sidebarSelect = vi.fn<(index: number) => void>();
-const { sidebarRowViewed } = vi.hoisted(() => ({ sidebarRowViewed: vi.fn() }));
 vi.mock("@/components/FileViewer/DiffFileSidebar", () => ({
   DiffFileSidebar: (props: {
     files: DiffChangeSetEntry[];
@@ -199,17 +225,18 @@ vi.mock("@/components/FileViewer/DiffFileSidebar", () => ({
         value={props.filter}
         onChange={(event) => props.onFilterChange(event.target.value)}
       />
-      <button
-        type="button"
-        data-testid="diff-sidebar-row"
-        onKeyDown={(event) => {
-          if (event.key !== "v") return;
-          event.preventDefault();
-          sidebarRowViewed();
-        }}
-      />
+      <div data-file-index={props.files.length - 1}>
+        <button type="button" data-testid="diff-sidebar-row" />
+      </div>
     </div>
   ),
+}));
+
+// How many hunks the viewer stub reports (and draws an anchor row for), null
+// for the count of git's own hunks in the patch.
+const { viewerHunkCount, viewerDrawnFrom } = vi.hoisted(() => ({
+  viewerHunkCount: { current: null as number | null },
+  viewerDrawnFrom: { current: 0 },
 }));
 
 // Hunk ranges the viewer stub renders in place of git's own, null for git's.
@@ -254,7 +281,7 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 }));
 
 const preferences = {
-  diffViewType: "unified" as const,
+  diffViewType: "unified" as "unified" | "split",
   setDiffViewType: vi.fn(),
   diffMarkdownRendered: false,
   setDiffMarkdownRendered: vi.fn(),
@@ -316,6 +343,9 @@ import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention
 import { GridGroupTabReorderContext } from "@/components/Panel/gridGroupTabReorder";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { actionService } from "@/services/ActionService";
+import { keybindingService } from "@/services/KeybindingService";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { sendDiffCommand, type DiffCommand } from "../diffCommands";
 import { _resetDiffCacheForTests, peekCachedDiff, requestDiff } from "../diffContentCache";
 
 const PANEL_ID = "diff-1";
@@ -348,9 +378,48 @@ function renderPane(isFocused = true, location: "grid" | "dialog" = "dialog") {
   return render(paneElement(isFocused, location));
 }
 
-/** The stepping shortcuts ride bubbling from inside the pane, not the document. */
+const DIFF_ACTION_COMMANDS: Record<string, DiffCommand> = {
+  "diff.nextChange": "nextChange",
+  "diff.previousChange": "previousChange",
+  "diff.nextFile": "nextFile",
+  "diff.previousFile": "previousFile",
+  "diff.toggleViewed": "toggleViewed",
+};
+
+/**
+ * A key pressed with focus on `target`, carried the way the app's global key
+ * layer carries it: resolved by the real keybinding service in whatever scope
+ * is current, and a diff action's command sent to this panel as its action
+ * sends it. Returns whether the key reached the pane at all. (Text fields and
+ * terminals are kept out by that layer itself, and tested there.)
+ */
+function pressKey(
+  key: string,
+  target: HTMLElement = screen.getByTestId("panel-root"),
+  init: KeyboardEventInit = {}
+): boolean {
+  act(() => target.focus());
+  const { match } = keybindingService.resolveKeybinding(
+    new KeyboardEvent("keydown", { key, ...init })
+  );
+  const command = match ? DIFF_ACTION_COMMANDS[match.actionId] : undefined;
+  if (!command) return false;
+  sendCommand(command, PANEL_ID, true);
+  return true;
+}
+
+/** A command as an action sends it; whether some diff viewer claimed it. */
+function sendCommand(command: DiffCommand, id = PANEL_ID, fromKeyboard = false): boolean {
+  let delivered = false;
+  act(() => {
+    delivered = sendDiffCommand({ id, command, fromKeyboard });
+  });
+  return delivered;
+}
+
+/** The stepping shortcuts, pressed with focus on the pane root. */
 function pressInPane(key: string): void {
-  fireEvent.keyDown(screen.getByTestId("diff-pane-body"), { key });
+  pressKey(key);
 }
 
 function positionText(): string {
@@ -370,11 +439,13 @@ beforeEach(() => {
   });
   viewedKeys.clear();
   viewerOverlay.open = false;
+  viewerHunkCount.current = null;
+  viewerDrawnFrom.current = 0;
   viewerDraftSessions.clear();
-  sidebarRowViewed.mockReset();
   isImageDiffCandidateMock.mockReset();
   isImageDiffCandidateMock.mockReturnValue(false);
   preferences.diffShowFileList = true;
+  preferences.diffViewType = "unified";
   preferences.diffWrapLines = null;
   preferences.setDiffWrapLines.mockClear();
   preferences.diffIgnoreWhitespace = false;
@@ -883,6 +954,8 @@ describe("DiffPane — stepping in the sidebar's order (#16898)", () => {
 
     fireEvent.click(screen.getByLabelText("Next file"));
     expectSelected(lib);
+    // Announced by its place on the shelf; it is last in the raw set.
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("lib.ts, file 2 of 3");
 
     seedPanel({ filePath: "src/zed.ts", fileStatus: "modified", changeSet: unordered });
     rerender(paneElement());
@@ -1108,11 +1181,11 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
       rerender(paneElement(true, location));
       expect(document.activeElement).toBe(next);
 
-      fireEvent.keyDown(next, { key: "]" });
+      pressKey("]", next);
       expectStepTo(2);
-      fireEvent.keyDown(screen.getByRole("button", { name: "Previous file" }), { key: "[" });
+      pressKey("[", screen.getByRole("button", { name: "Previous file" }));
       expectStepTo(0);
-      fireEvent.keyDown(next, { key: "v" });
+      pressKey("v", next);
       expect(toggleViewedMock).toHaveBeenCalledTimes(1);
       expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, changeSet[1]!.viewedKey);
     }
@@ -1127,10 +1200,10 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
       fireEvent.click(viewed);
       expect(toggleViewedMock).toHaveBeenCalledTimes(1);
 
-      fireEvent.keyDown(viewed, { key: "v" });
+      pressKey("v", viewed);
       expect(toggleViewedMock).toHaveBeenCalledTimes(2);
       expect(toggleViewedMock).toHaveBeenLastCalledWith(WORKTREE_PATH, changeSet[0]!.viewedKey);
-      fireEvent.keyDown(viewed, { key: "]" });
+      pressKey("]", viewed);
       expectStepTo(1);
     }
   );
@@ -1140,12 +1213,10 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     (location) => {
       seedAt(1);
       renderPane(true, location);
-      const root = screen.getByTestId("panel-root");
-      root.focus();
 
-      fireEvent.keyDown(root, { key: "]" });
+      pressKey("]");
       expectStepTo(2);
-      fireEvent.keyDown(root, { key: "[" });
+      pressKey("[");
       expectStepTo(0);
     }
   );
@@ -1154,13 +1225,13 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     seedAt(1);
     renderPane();
 
-    fireEvent.keyDown(screen.getByRole("button", { name: "Wrap long lines" }), { key: "]" });
+    pressKey("]", screen.getByRole("button", { name: "Wrap long lines" }));
     expectStepTo(2);
     const split = within(screen.getByRole("radiogroup", { name: "Diff layout" })).getByRole(
       "radio",
       { name: "Split" }
     );
-    fireEvent.keyDown(split, { key: "[" });
+    pressKey("[", split);
     expectStepTo(0);
   });
 
@@ -1175,40 +1246,32 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     expect(footer.classList.contains("border-border-strong")).toBe(false);
   });
 
-  it("leaves a key the focused control already claimed to that control", () => {
+  it("marks the focused shelf row's file viewed rather than the open one", () => {
     seedAt(0);
     renderPane();
 
-    fireEvent.keyDown(screen.getByTestId("diff-sidebar-row"), { key: "v" });
+    pressKey("v", screen.getByTestId("diff-sidebar-row"));
 
-    // The row marked its own file; the pane's current file is left alone.
-    expect(sidebarRowViewed).toHaveBeenCalledTimes(1);
-    expect(toggleViewedMock).not.toHaveBeenCalled();
+    // The row stands for c.ts; the pane's open file, a.ts, is left alone.
+    expect(toggleViewedMock).toHaveBeenCalledTimes(1);
+    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, changeSet[2]!.viewedKey);
   });
 
-  it("lets the keys type into text fields anywhere in the pane", () => {
+  it("holds the diff scope only while focus is inside the pane", () => {
     seedAt(1);
     renderPane();
-    const search = document.createElement("input");
-    search.type = "search";
-    const select = document.createElement("select");
-    const note = document.createElement("textarea");
-    const editor = document.createElement("div");
-    editor.contentEditable = "true";
-    // jsdom leaves `isContentEditable` unimplemented.
-    Object.defineProperty(editor, "isContentEditable", { value: true });
-    screen.getByTestId("diff-pane-body").append(search, select);
-    screen.getByTestId("diff-pane-footer").append(note, editor);
-
-    for (const field of [search, select, note, editor]) {
-      for (const key of ["[", "]", "v"]) {
-        // Not cancelled, so the character still reaches the field.
-        expect(fireEvent.keyDown(field, { key })).toBe(true);
-      }
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    try {
+      act(() => screen.getByTestId("panel-root").focus());
+      expect(keybindingService.getScope()).toBe("diff");
+      act(() => outside.focus());
+      expect(keybindingService.getScope()).toBe("global");
+      expect(pressKey("]", outside)).toBe(false);
+      expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    } finally {
+      outside.remove();
     }
-
-    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
-    expect(toggleViewedMock).not.toHaveBeenCalled();
   });
 
   it("leaves keys pressed in an overlay the pane opened alone", () => {
@@ -1217,8 +1280,14 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     renderPane();
     const item = screen.getByRole("menuitem", { name: "Overlay item" });
     expect(screen.getByTestId("panel-root").contains(item)).toBe(false);
+    act(() => screen.getByTestId("panel-root").focus());
+    expect(keybindingService.getScope()).toBe("diff");
 
-    for (const key of ["[", "]", "v"]) expect(fireEvent.keyDown(item, { key })).toBe(true);
+    // Portalled outside the pane, so focus moving there gives the scope back
+    // and a menu's typeahead keeps its letters.
+    act(() => item.focus());
+    expect(keybindingService.getScope()).toBe("global");
+    for (const key of ["[", "]", "v", "n", "p"]) expect(pressKey(key, item)).toBe(false);
 
     expect(setDiffPanelFileMock).not.toHaveBeenCalled();
     expect(toggleViewedMock).not.toHaveBeenCalled();
@@ -1228,9 +1297,9 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
     seedAt(1);
     renderPane(false);
 
-    fireEvent.keyDown(screen.getByTestId("panel-root"), { key: "]" });
-    fireEvent.keyDown(screen.getByRole("button", { name: "Next file" }), { key: "]" });
-    fireEvent.keyDown(screen.getByRole("checkbox", { name: "Viewed" }), { key: "v" });
+    expect(pressKey("]")).toBe(false);
+    expect(pressKey("]", screen.getByRole("button", { name: "Next file" }))).toBe(false);
+    expect(pressKey("v", screen.getByRole("checkbox", { name: "Viewed" }))).toBe(false);
 
     expect(setDiffPanelFileMock).not.toHaveBeenCalled();
     expect(toggleViewedMock).not.toHaveBeenCalled();
@@ -1239,8 +1308,7 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
   it("follows the pane's focus as it leaves and returns", () => {
     seedAt(1);
     const { rerender } = renderPane();
-    const press = () =>
-      fireEvent.keyDown(screen.getByRole("button", { name: "Next file" }), { key: "]" });
+    const press = () => pressKey("]", screen.getByRole("button", { name: "Next file" }));
 
     rerender(paneElement(false));
     press();
@@ -1254,15 +1322,595 @@ describe("DiffPane — file keys across the whole pane (#16643)", () => {
   it("leaves modified chords to the app", () => {
     seedAt(1);
     renderPane();
-    const root = screen.getByTestId("panel-root");
 
-    // Not cancelled either, so the chord still reaches whatever owns it.
-    expect(fireEvent.keyDown(root, { key: "]", metaKey: true })).toBe(true);
-    expect(fireEvent.keyDown(root, { key: "[", ctrlKey: true })).toBe(true);
-    expect(fireEvent.keyDown(root, { key: "v", altKey: true })).toBe(true);
+    // Ctrl and Alt are extra modifiers on every platform. (Meta counts only on
+    // macOS: the keybinding service ignores the Windows key everywhere.)
+    expect(pressKey("]", undefined, { ctrlKey: true })).toBe(false);
+    expect(pressKey("[", undefined, { ctrlKey: true })).toBe(false);
+    expect(pressKey("v", undefined, { altKey: true })).toBe(false);
 
     expect(setDiffPanelFileMock).not.toHaveBeenCalled();
     expect(toggleViewedMock).not.toHaveBeenCalled();
+  });
+
+  it("acts only on commands addressed to this panel, and claims the ones it takes", () => {
+    seedAt(1);
+    renderPane();
+
+    expect(sendCommand("nextFile", "another-diff")).toBe(false);
+    expect(sendCommand("previousChange", "another-diff")).toBe(false);
+    expect(sendCommand("toggleViewed", "another-diff")).toBe(false);
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+    expect(toggleViewedMock).not.toHaveBeenCalled();
+
+    expect(sendCommand("nextFile")).toBe(true);
+    expectStepTo(2);
+  });
+
+  it("marks the open file, not a focused shelf row, for a Viewed that wasn't a key", () => {
+    seedAt(0);
+    renderPane();
+    act(() => screen.getByTestId("diff-sidebar-row").focus());
+
+    // The palette or an agent: whatever happens to hold focus says nothing.
+    sendCommand("toggleViewed");
+
+    expect(toggleViewedMock).toHaveBeenCalledTimes(1);
+    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, changeSet[0]!.viewedKey);
+  });
+
+  it("takes the diff scope back when another scope is pushed over it", () => {
+    seedAt(1);
+    renderPane();
+    act(() => screen.getByTestId("panel-root").focus());
+    expect(keybindingService.getScope()).toBe("diff");
+
+    // An expanded worktree card mounting as the sidebar scrolls.
+    act(() => keybindingService.setScope("worktreeGrid"));
+    try {
+      expect(keybindingService.getScope()).toBe("diff");
+      expect(pressKey("]")).toBe(true);
+      expectStepTo(2);
+    } finally {
+      act(() => keybindingService.restoreScope("worktreeGrid"));
+    }
+  });
+
+  it("names the file a step lands on for a screen reader", () => {
+    seedAt(0);
+    renderPane();
+    pressKey("]");
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("b.ts, file 2 of 3");
+  });
+});
+
+describe("DiffPane — hunk stepping (#17326)", () => {
+  const changeSet = [entry("a.ts"), entry("b.ts", "added"), entry("c.ts")];
+
+  function seedAt(index: number): void {
+    const target = changeSet[index]!;
+    seedPanel({
+      filePath: target.path,
+      fileStatus: target.status,
+      viewedKey: target.viewedKey,
+      changeSet,
+    });
+  }
+
+  function seedSingle(): void {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified" });
+  }
+
+  function withContent(content: string | undefined): void {
+    useDiffContentMock.mockReturnValue({ content, stale: false, retry: vi.fn() });
+  }
+
+  function stepperText(): string | null {
+    return screen.queryByRole("group", { name: "Hunks" })?.textContent || null;
+  }
+
+  function revealed(): number | null {
+    const value = screen.getByTestId("diff-viewer-mock").getAttribute("data-reveal-index");
+    return value === null ? null : Number(value);
+  }
+
+  function expectSelected(index: number): void {
+    const target = changeSet[index]!;
+    expect(setDiffPanelFileMock).toHaveBeenCalledTimes(1);
+    expect(setDiffPanelFileMock).toHaveBeenCalledWith(
+      PANEL_ID,
+      target.path,
+      target.status,
+      target.viewedKey,
+      target.side
+    );
+    setDiffPanelFileMock.mockClear();
+  }
+
+  it.each(["unified", "split"] as const)(
+    "steps through a file's hunks with the keys and says where it is (%s)",
+    (viewType) => {
+      preferences.diffViewType = viewType;
+      viewerHunkCount.current = 3;
+      seedSingle();
+      renderPane();
+      expect(stepperText()).toBe("1 of 3");
+      expect(revealed()).toBe(null);
+
+      pressInPane("n");
+      expect(revealed()).toBe(1);
+      expect(stepperText()).toBe("2 of 3");
+      pressInPane("n");
+      expect(revealed()).toBe(2);
+      expect(stepperText()).toBe("3 of 3");
+      pressInPane("p");
+      expect(revealed()).toBe(1);
+      expect(stepperText()).toBe("2 of 3");
+    }
+  );
+
+  it("takes the stepper's arrows down the same path as the keys", () => {
+    viewerHunkCount.current = 3;
+    seedSingle();
+    renderPane();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next hunk" }));
+    expect(revealed()).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Next hunk" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous hunk" }));
+    expect(revealed()).toBe(1);
+    expect(stepperText()).toBe("2 of 3");
+  });
+
+  it("stops at both ends of a single-file diff, a list of one", () => {
+    viewerHunkCount.current = 2;
+    seedSingle();
+    renderPane();
+    const arrow = (name: string) =>
+      screen.getByRole("button", { name }).getAttribute("aria-disabled") === "true";
+    expect(arrow("Previous hunk")).toBe(true);
+
+    pressInPane("p");
+    expect(revealed()).toBe(null);
+    pressInPane("n");
+    pressInPane("n");
+    expect(revealed()).toBe(1);
+    expect(stepperText()).toBe("2 of 2");
+    expect(arrow("Next hunk")).toBe(true);
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+  });
+
+  it("runs on into the next file and lands on its first hunk", () => {
+    viewerHunkCount.current = 2;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    const { rerender } = renderPane();
+
+    pressInPane("n");
+    pressInPane("n");
+    expectSelected(1);
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("b.ts, file 2 of 3");
+
+    // The store moves the pane; b.ts holds four hunks.
+    viewerHunkCount.current = 4;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(0);
+    expect(stepperText()).toBe("1 of 4");
+  });
+
+  it("runs back into the previous file and lands on its last hunk, then forward again", () => {
+    viewerHunkCount.current = 2;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+
+    pressInPane("p");
+    expectSelected(0);
+
+    viewerHunkCount.current = 5;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(4);
+    expect(stepperText()).toBe("5 of 5");
+
+    // Overshooting is one key back: `n` from a.ts's last hunk returns to b.ts.
+    pressInPane("n");
+    expectSelected(1);
+  });
+
+  it("waits for the destination's hunks, and a key meanwhile can't cross again", () => {
+    viewerHunkCount.current = 1;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    const { rerender } = renderPane();
+
+    pressInPane("n");
+    expectSelected(1);
+
+    // b.ts is still being read.
+    seedAt(1);
+    withContent(undefined);
+    rerender(paneElement());
+    pressInPane("n");
+    expect(setDiffPanelFileMock).not.toHaveBeenCalled();
+
+    viewerHunkCount.current = 3;
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(0);
+    expect(stepperText()).toBe("1 of 3");
+  });
+
+  it("drops the landing when the pane ends up on some other file first", () => {
+    viewerHunkCount.current = 1;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+
+    pressInPane("p");
+    expectSelected(0);
+
+    // An opener re-aims the pane at c.ts before a.ts ever lands.
+    viewerHunkCount.current = 3;
+    seedAt(2);
+    withContent("diff --git a/c.ts b/c.ts\n@@ c @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(null);
+    expect(stepperText()).toBe("1 of 3");
+  });
+
+  it("treats a file with nothing to step through as one stop", () => {
+    viewerHunkCount.current = 1;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    const { rerender } = renderPane();
+    pressInPane("n");
+    expectSelected(1);
+
+    // b.ts has no changes to show: no count, but the arrows still cross.
+    seedAt(1);
+    withContent("NO_CHANGES");
+    rerender(paneElement());
+    expect(stepperText()).toBe(null);
+    expect(screen.getByRole("button", { name: "Next hunk" })).toBeTruthy();
+
+    pressInPane("n");
+    expectSelected(2);
+  });
+
+  it("never replays a step onto content that refreshed under it", () => {
+    viewerHunkCount.current = 3;
+    seedSingle();
+    withContent("diff --git a/a.ts b/a.ts\n@@ one @@");
+    const { rerender } = renderPane();
+    pressInPane("n");
+    expect(revealed()).toBe(1);
+
+    withContent("diff --git a/a.ts b/a.ts\n@@ two @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(null);
+    // The same file keeps its place in the count.
+    expect(stepperText()).toBe("2 of 3");
+  });
+
+  describe("following the reader's own scrolling", () => {
+    let restore: (() => void)[] = [];
+    afterEach(() => {
+      for (const undo of restore) undo();
+      restore = [];
+    });
+
+    function layOut(tops: number[]): void {
+      const root = document.querySelector<HTMLElement>(".diff-scroll-root")!;
+      Object.defineProperty(root, "clientHeight", { configurable: true, value: 600 });
+      root.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+      root.querySelectorAll<HTMLElement>("tr.diff-hunk-anchor").forEach((row, index) => {
+        row.getBoundingClientRect = () => ({ top: tops[index]! }) as DOMRect;
+      });
+    }
+
+    // Frames queue as a browser's do, and run when a scroll has been handled.
+    let frames: FrameRequestCallback[] = [];
+    function scroll(): void {
+      const root = document.querySelector<HTMLElement>(".diff-scroll-root")!;
+      act(() => {
+        root.dispatchEvent(new Event("scroll"));
+        const due = frames;
+        frames = [];
+        for (const frame of due) frame(0);
+      });
+    }
+
+    beforeEach(() => {
+      frames = [];
+      const request = window.requestAnimationFrame;
+      const cancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = (callback) => frames.push(callback);
+      window.cancelAnimationFrame = () => {};
+      restore.push(() => {
+        window.requestAnimationFrame = request;
+        window.cancelAnimationFrame = cancel;
+      });
+    });
+
+    it("counts the hunk whose first change has passed the top third", () => {
+      viewerHunkCount.current = 3;
+      seedSingle();
+      renderPane();
+
+      layOut([-500, 150, 700]);
+      scroll();
+      expect(stepperText()).toBe("2 of 3");
+      layOut([-900, -250, 250]);
+      scroll();
+      expect(stepperText()).toBe("2 of 3");
+      layOut([-900, -600, 100]);
+      scroll();
+      expect(stepperText()).toBe("3 of 3");
+    });
+
+    it("holds a step's landing until the reader scrolls by hand", () => {
+      viewerHunkCount.current = 3;
+      seedSingle();
+      renderPane();
+
+      // The last hunk can't reach the top: the browser stops the scroll short.
+      pressInPane("n");
+      pressInPane("n");
+      layOut([-900, 50, 400]);
+      scroll();
+      expect(stepperText()).toBe("3 of 3");
+
+      act(() => {
+        document.querySelector(".diff-scroll-root")!.dispatchEvent(new Event("wheel"));
+      });
+      // Taking the scroll back withdraws the step, so nothing lands later.
+      expect(revealed()).toBe(null);
+      scroll();
+      expect(stepperText()).toBe("2 of 3");
+    });
+
+    it("numbers anchors within their file, past a collapsed one before them", () => {
+      // A type change's patch: the first file, holding hunk 0, is drawn collapsed.
+      viewerHunkCount.current = 3;
+      viewerDrawnFrom.current = 1;
+      seedSingle();
+      renderPane();
+
+      layOut([-100, 400]);
+      scroll();
+      expect(stepperText()).toBe("2 of 3");
+    });
+
+    it("lets a reload that returns the same patch end a step's hold", () => {
+      viewerHunkCount.current = 3;
+      seedSingle();
+      withContent("diff --git a/a.ts b/a.ts\n@@ one @@");
+      const { rerender } = renderPane();
+      pressInPane("n");
+      pressInPane("n");
+      expect(stepperText()).toBe("3 of 3");
+
+      withContent(undefined);
+      rerender(paneElement());
+      withContent("diff --git a/a.ts b/a.ts\n@@ one @@");
+      rerender(paneElement());
+      layOut([50, 400, 800]);
+      scroll();
+      expect(stepperText()).toBe("1 of 3");
+    });
+
+    it("lets a refreshed patch end a step's hold", () => {
+      viewerHunkCount.current = 3;
+      seedSingle();
+      withContent("diff --git a/a.ts b/a.ts\n@@ one @@");
+      const { rerender } = renderPane();
+      pressInPane("n");
+      pressInPane("n");
+      expect(stepperText()).toBe("3 of 3");
+
+      // The refresh put the viewport back near the top.
+      withContent("diff --git a/a.ts b/a.ts\n@@ two @@");
+      rerender(paneElement());
+      layOut([50, 400, 800]);
+      scroll();
+      expect(stepperText()).toBe("1 of 3");
+    });
+  });
+
+  it("says where each deliberate step landed", () => {
+    viewerHunkCount.current = 3;
+    seedSingle();
+    renderPane();
+
+    pressInPane("n");
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Hunk 2 of 3");
+    // The count itself stays quiet, or hand scrolling would narrate it.
+    expect(screen.getByRole("group", { name: "Hunks" }).querySelector("[aria-live]")).toBe(null);
+  });
+
+  it("keeps the arrows, unavailable, while the destination of a crossing loads", () => {
+    viewerHunkCount.current = 1;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    const { rerender } = renderPane();
+    const next = screen.getByRole("button", { name: "Next hunk" });
+    fireEvent.click(next);
+    expectSelected(1);
+
+    seedAt(1);
+    withContent(undefined);
+    rerender(paneElement());
+    const arrow = screen.getByRole("button", { name: "Next hunk" });
+    expect(arrow).toBe(next);
+    expect(arrow.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Previous hunk" }).getAttribute("aria-disabled")
+    ).toBe("true");
+  });
+
+  it("lets hand scrolling call off a crossing still waiting to land", () => {
+    viewerHunkCount.current = 1;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+    pressInPane("p");
+    expectSelected(0);
+
+    seedAt(0);
+    withContent(undefined);
+    rerender(paneElement());
+    act(() => {
+      document.querySelector(".diff-scroll-root")!.dispatchEvent(new Event("wheel"));
+    });
+
+    viewerHunkCount.current = 4;
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(null);
+  });
+
+  it("lets only a scrolling key call off a pending landing, not a held step key's repeats", () => {
+    viewerHunkCount.current = 1;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+    pressInPane("p");
+    expectSelected(0);
+    seedAt(0);
+    withContent(undefined);
+    rerender(paneElement());
+
+    // Held down: the global layer consumes the first press and lets repeats by.
+    const root = screen.getByTestId("panel-root");
+    fireEvent.keyDown(root, { key: "p", repeat: true });
+    viewerHunkCount.current = 4;
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(3);
+
+    // PageDown is the reader moving the view: a step in flight goes.
+    pressInPane("p");
+    fireEvent.keyDown(root, { key: "PageDown" });
+    expect(revealed()).toBe(null);
+  });
+
+  it("asks the viewer afresh for a step after the reader withdrew the last one", () => {
+    viewerHunkCount.current = 3;
+    seedSingle();
+    renderPane();
+    const seq = () => screen.getByTestId("diff-viewer-mock").getAttribute("data-reveal-seq");
+
+    pressInPane("n");
+    const first = seq();
+    act(() => {
+      document.querySelector(".diff-scroll-root")!.dispatchEvent(new Event("wheel"));
+    });
+    expect(seq()).toBe(null);
+    pressInPane("n");
+    // A sequence the viewer has already carried out would be ignored.
+    expect(seq()).not.toBe(first);
+    expect(revealed()).toBe(2);
+  });
+
+  it("drops the landing once the pane returns to the file it left", () => {
+    viewerHunkCount.current = 1;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+    pressInPane("p");
+    expectSelected(0);
+
+    // a.ts starts loading, then an opener re-aims the pane at b.ts…
+    seedAt(0);
+    withContent(undefined);
+    rerender(paneElement());
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    rerender(paneElement());
+
+    // …and a later, unrelated open of a.ts lands at its top, not its last hunk.
+    viewerHunkCount.current = 4;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(null);
+    expect(stepperText()).toBe("1 of 4");
+  });
+
+  it("waits out a pending whole-file read before landing in Full file", () => {
+    preferences.diffFullFile = true;
+    viewerHunkCount.current = 1;
+    seedAt(1);
+    withContent("diff --git a/b.ts b/b.ts\n@@ b @@");
+    const { rerender } = renderPane();
+    pressInPane("p");
+    expectSelected(0);
+
+    // a.ts's patch is in, but the read that reflows it isn't.
+    viewerHunkCount.current = 3;
+    useDiffFileSourceMock.mockReturnValue({ source: undefined, errorCode: null });
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    rerender(paneElement());
+    expect(revealed()).toBe(null);
+
+    useDiffFileSourceMock.mockReturnValue({ source: "a\n", errorCode: null });
+    rerender(paneElement());
+    expect(revealed()).toBe(2);
+  });
+
+  it("treats a comparison that can't be asked for as one stop", () => {
+    viewerHunkCount.current = 1;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    const { rerender } = renderPane();
+    pressInPane("n");
+    expectSelected(1);
+
+    // The worktree went away: no request will ever be made for b.ts.
+    worktrees.clear();
+    seedAt(1);
+    withContent(undefined);
+    rerender(paneElement());
+    pressInPane("n");
+    expectSelected(2);
+  });
+
+  it("keeps focus in the pane when a step swaps the body it sat in", () => {
+    viewerHunkCount.current = 1;
+    seedAt(0);
+    withContent("diff --git a/a.ts b/a.ts\n@@ a @@");
+    renderPane();
+
+    pressKey("n", screen.getByTestId("diff-viewer-region"));
+    expectSelected(1);
+    expect(document.activeElement).toBe(screen.getByTestId("panel-root"));
+    expect(keybindingService.getScope()).toBe("diff");
+  });
+
+  it("walks rendered changes without wrapping at the ends", async () => {
+    preferences.diffMarkdownRendered = true;
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    withContent("diff --git a/docs/guide.md b/docs/guide.md\n@@ x @@");
+    renderPane();
+    const view = await screen.findByTestId("rendered-markdown-mock");
+    act(() => renderedProps.current?.onChangeCount?.(2, view.getAttribute("data-attempt-key")!));
+    const text = () => screen.getByRole("group", { name: "Changes" }).textContent;
+    expect(text()).toBe("1 of 2");
+
+    pressInPane("n");
+    expect(text()).toBe("2 of 2");
+    // The fourth Next used to wrap to the first; a single-file diff ends here.
+    pressInPane("n");
+    expect(text()).toBe("2 of 2");
+    pressInPane("p");
+    pressInPane("p");
+    expect(text()).toBe("1 of 2");
   });
 });
 

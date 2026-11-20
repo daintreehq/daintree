@@ -265,6 +265,154 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     expect(h.keeper.status()).toEqual({ armed: true, problem: null });
   });
 
+  describe("and a Shell's claim on the same idle time (#17922)", () => {
+    const shellClaims = async (h: ReturnType<typeof harness>) =>
+      h.tracker.tryClaim(await h.tracker.checkFresh(), Symbol("shell-link"));
+
+    it("never powers off on an idle time a Shell claimed first, given the permission before or after", async () => {
+      for (const grantFirst of [true, false]) {
+        const h = make();
+        if (grantFirst) await h.keeper.set({ target: TARGET, enabled: true });
+        await h.pass(0);
+        h.advance(IDLE + MINUTE);
+        expect(await shellClaims(h)).toBe(true);
+        if (!grantFirst) await h.keeper.set({ target: TARGET, enabled: true });
+        for (let i = 0; i < 3; i++) await h.pass(MINUTE);
+        expect(h.system.preparePowerOff).not.toHaveBeenCalled();
+        expect(h.launch).not.toHaveBeenCalled();
+        h.keeper.dispose();
+        h.tracker.dispose();
+      }
+    });
+
+    it("never launches when a Shell claims while the power-off is being prepared", async () => {
+      const h = make();
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.pass(0);
+      h.advance(IDLE + MINUTE);
+      const prepared = gate();
+      h.prepare.hold = prepared.promise;
+      const ticking = h.keeper.tick();
+      await vi.waitFor(() => expect(h.system.preparePowerOff).toHaveBeenCalled());
+      expect(await shellClaims(h)).toBe(true);
+      prepared.release();
+      await ticking;
+      expect(h.launch).not.toHaveBeenCalled();
+    });
+
+    it("refuses a Shell the idle time it powered off on, accepted, lost or refused", async () => {
+      for (const outcome of [
+        { kind: "accepted" },
+        { kind: "unknown" },
+        { kind: "refused", problem: "This machine refused to power itself off." },
+      ] satisfies PowerOffOutcome[]) {
+        const h = make();
+        h.outcomes.push(outcome);
+        await h.keeper.set({ target: TARGET, enabled: true });
+        await h.idleOut();
+        expect(h.launch).toHaveBeenCalledTimes(1);
+        expect(await shellClaims(h)).toBe(false);
+        h.keeper.dispose();
+        h.tracker.dispose();
+      }
+    });
+
+    it("tries a refused power-off again on its own claim, never on one a Shell holds", async () => {
+      const h = make();
+      h.outcomes.push({ kind: "refused", problem: "This machine refused to power itself off." });
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.idleOut();
+      expect(await shellClaims(h)).toBe(false);
+      await h.pass(3 * MINUTE);
+      expect(h.launch).toHaveBeenCalledTimes(2);
+
+      // Taken back after a refusal: given again, it holds no claim to retry on.
+      const other = make();
+      other.outcomes.push({
+        kind: "refused",
+        problem: "This machine refused to power itself off.",
+      });
+      await other.keeper.set({ target: TARGET, enabled: true });
+      await other.idleOut();
+      await other.keeper.set({ target: TARGET, enabled: false });
+      await other.keeper.set({ target: TARGET, enabled: true });
+      await other.pass(3 * MINUTE);
+      expect(other.launch).toHaveBeenCalledTimes(1);
+      h.keeper.dispose();
+      h.tracker.dispose();
+    });
+
+    it("refuses a Shell while its power-off is still being asked of the OS", async () => {
+      const h = make();
+      const asked = gate<PowerOffOutcome>();
+      h.launch.mockImplementationOnce(() => asked.promise);
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.pass(0);
+      h.advance(IDLE + MINUTE);
+      const ticking = h.keeper.tick();
+      await vi.waitFor(() => expect(h.launch).toHaveBeenCalledTimes(1));
+      expect(await shellClaims(h)).toBe(false);
+      asked.release({ kind: "accepted" });
+      await ticking;
+    });
+
+    it("never retries a refused power-off on an idle time a Shell claimed after newer work", async () => {
+      const h = make();
+      h.outcomes.push({ kind: "refused", problem: "This machine refused to power itself off." });
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.idleOut();
+      expect(h.launch).toHaveBeenCalledTimes(1);
+      h.tracker.noteWork();
+      await h.pass(0);
+      h.advance(IDLE + MINUTE);
+      const prepared = gate();
+      h.prepare.hold = prepared.promise;
+      const ticking = h.keeper.tick();
+      await vi.waitFor(() => expect(h.system.preparePowerOff).toHaveBeenCalledTimes(2));
+      expect(await shellClaims(h)).toBe(true);
+      prepared.release();
+      await ticking;
+      expect(h.launch).toHaveBeenCalledTimes(1);
+    });
+
+    it("never takes a later idle time a Shell claimed as use, for its power-off that didn't happen", async () => {
+      const h = make();
+      h.outcomes.push({ kind: "unknown" });
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.idleOut();
+      expect(h.launch).toHaveBeenCalledTimes(1);
+      // Still running; an agent works and finishes, and a Shell claims the idle time after it.
+      h.tracker.noteWork();
+      await h.tracker.check();
+      h.advance(IDLE + MINUTE);
+      expect(await shellClaims(h)).toBe(true);
+      // The keeper settles its old power-off past its settle time: no new idle time for it to take.
+      await h.pass(MINUTE);
+      expect(h.keeper.status().problem).toMatch(/kept running/);
+      // A full idle time from the next check, as a restart at the settle would have given it.
+      await h.pass(0);
+      await h.pass(IDLE + MINUTE);
+      await h.pass(MINUTE);
+      expect(h.launch).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the idle time to a Shell when its permission went during its last look", async () => {
+      const h = make();
+      await h.keeper.set({ target: TARGET, enabled: true });
+      await h.pass(0);
+      h.advance(IDLE + MINUTE);
+      const read = gate<HostWorkReading>();
+      h.holdNextRead(() => read.promise);
+      const ticking = h.keeper.tick();
+      await vi.waitFor(() => expect(h.system.preparePowerOff).toHaveBeenCalled());
+      await h.keeper.set({ target: TARGET, enabled: false });
+      read.release(IDLE_READING);
+      await ticking;
+      expect(h.launch).not.toHaveBeenCalled();
+      expect(await shellClaims(h)).toBe(true);
+    });
+  });
+
   it("says why it can't power off when the OS has no way to, and waits before looking again", async () => {
     const h = make();
     h.prepare.problem = "This machine has no systemctl to power itself off with.";
@@ -284,13 +432,75 @@ describe("GuestPowerOffKeeper (#17362)", () => {
     });
     h.identity.result = { ok: true };
     h.probe.problem = "needs a password";
+    // Confirmed as that machine, refused only the power-off: said, so a Shell may stop it instead (#17924).
     await expect(h.keeper.set({ target: TARGET, enabled: true })).resolves.toEqual({
       armed: false,
       problem: "needs a password",
+      powerOffProbeRefused: true,
     });
     expect(h.stored()).toBeNull();
     await h.idleOut();
     expect(h.launch).not.toHaveBeenCalled();
+  });
+
+  it("says only of a confirmed machine whose OS refused the power-off that the power-off alone was refused (#17924)", async () => {
+    const said = async (h: ReturnType<typeof make>) =>
+      (await h.keeper.set({ target: TARGET, enabled: true })).powerOffProbeRefused === true;
+
+    const noSystemctl = make();
+    noSystemctl.probe.problem = "This machine has no systemctl to power itself off with.";
+    expect(await said(noSystemctl)).toBe(true);
+    noSystemctl.keeper.dispose();
+    noSystemctl.tracker.dispose();
+
+    const unreadable = make();
+    unreadable.identity.result = { ok: false, definite: false, problem: "unreadable" };
+    unreadable.probe.problem = "needs a password";
+    expect(await said(unreadable)).toBe(false);
+    expect(unreadable.system.probePowerOff).not.toHaveBeenCalled();
+    unreadable.keeper.dispose();
+    unreadable.tracker.dispose();
+
+    const otherOs = make();
+    otherOs.system.unsupported.mockReturnValue(
+      "Only a Linux machine can power itself off when idle."
+    );
+    expect(await said(otherOs)).toBe(false);
+    otherOs.keeper.dispose();
+    otherOs.tracker.dispose();
+
+    // Armed, then the OS refused the launch: the host keeps its own claim to retry, so nothing more is said.
+    const armed = make();
+    await armed.keeper.set({ target: TARGET, enabled: true });
+    armed.outcomes.push({ kind: "refused", problem: "This machine refused to power itself off." });
+    await armed.idleOut();
+    expect(armed.keeper.status()).toEqual({
+      armed: true,
+      problem: "This machine refused to power itself off.",
+    });
+    expect(await said(armed)).toBe(false);
+    expect(armed.keeper.status().powerOffProbeRefused).toBeUndefined();
+  });
+
+  it("says nothing more of a refusal a take-back overtook while the old permission was removed", async () => {
+    const h = make();
+    await h.keeper.set({ target: TARGET, enabled: true });
+    h.probe.problem = "needs a password";
+    let releaseSave!: () => void;
+    h.system.saveArm.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        })
+    );
+    const granting = h.keeper.set({ target: TARGET, enabled: true });
+    await vi.waitFor(() => expect(h.system.saveArm).toHaveBeenCalledTimes(2));
+    const revoking = h.keeper.set({ target: TARGET, enabled: false });
+    releaseSave();
+    const answer = await granting;
+    expect(answer.powerOffProbeRefused).toBeUndefined();
+    expect(answer.armed).toBe(false);
+    await revoking;
   });
 
   it("keeps a permission it holds when its metadata can't be read for a repeat, and drops it when it names another machine", async () => {

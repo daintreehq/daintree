@@ -45,6 +45,7 @@ vi.mock("../index.js", () => ({
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import { events } from "../../events.js";
+import { setContinuationForgetter } from "../../codexLimitContinuation/forgetPane.js";
 import {
   _resetScheduledRunDonePolicyForTest,
   armScheduledRunDonePolicy,
@@ -164,6 +165,19 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
     await vi.waitFor(() =>
       expect(state.forget).toHaveBeenCalledWith({ id: "project-store" }, "project-1", "terminal-1")
     );
+  });
+
+  it("forgets the continuation choice of a run's pane it closes (#17912)", async () => {
+    const forgetPane = vi.fn();
+    setContinuationForgetter({ forgetPane, forgetProject: vi.fn(), noteSpawn: vi.fn() });
+    try {
+      state.runs.set("run-1", settledRun());
+      arm("close");
+      await vi.waitFor(() => expect(state.forget).toHaveBeenCalled());
+      expect(forgetPane).toHaveBeenCalledExactlyOnceWith("terminal-1");
+    } finally {
+      setContinuationForgetter(null);
+    }
   });
 
   it("captures nothing when the agent gave no session id, and still closes the pane", async () => {

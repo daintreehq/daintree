@@ -44,6 +44,9 @@ export const VAD_DRAIN_BUDGET_MS = 1_000;
 // miss still meets the reader's own SIGKILL backstop.
 export const CANOPY_READER_DRAIN_BUDGET_MS = 1_000;
 
+/** How long quit waits for the on-device speech process to release its model and exit. */
+export const LOCAL_SPEECH_DRAIN_BUDGET_MS = 1_000;
+
 // Bounds the post-cleanup tail — the telemetry flush and perf-trace flush that run
 // AFTER the cleanup race resolves and are therefore NOT covered by
 // CLEANUP_TIMEOUT_MS. Sized for the worst-case closeTelemetry(): the Sentry

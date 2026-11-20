@@ -12,8 +12,20 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./agentAccounts.js").AddAgentAccountRequest];
     result: import("./agentAccounts.js").AddAgentAccountResult;
   };
+  "agent-accounts:apply-everywhere": {
+    args: [request: import("./agentAccounts.js").ApplyAccountEverywhereRequest];
+    result: import("../agentSettings.js").AgentSettings;
+  };
+  "agent-accounts:list-choices-away": {
+    args: [agentId: string, accountId: string | null];
+    result: import("./agentAccounts.js").AccountChoicesAway;
+  };
   "agent-accounts:remove": {
     args: [agentId: string, accountId: string];
+    result: import("../agentSettings.js").AgentSettings;
+  };
+  "agent-accounts:rename": {
+    args: [agentId: string, accountId: string | null, name: string];
     result: import("../agentSettings.js").AgentSettings;
   };
   "agent-capabilities:get-agent-ids": {
@@ -133,6 +145,10 @@ export interface GeneratedIpcInvokeMap {
   "agent-toolbar-pins:set": {
     args: [agentId: string, pinned: boolean];
     result: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
+  };
+  "agent-usage:set-following": {
+    args: [payload: { following: boolean }];
+    result: import("./agentUsage.js").AgentUsageSnapshot | null;
   };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
@@ -772,6 +788,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { accountId: string }];
     result: import("../cloudHosts.js").CloudAccountSummary;
   };
+  "codex-limit-continue:list": {
+    args: [];
+    result: import("../codexLimitContinuation.js").CodexLimitContinueEntry[];
+  };
+  "codex-limit-continue:set": {
+    args: [terminalId: string, enabled: boolean];
+    result: void;
+  };
   "codex:find-sessions": {
     args: [__0: { cwd: string; codexHome?: string | undefined }];
     result: import("./agentSubagents.js").CodexFolderSessionsResult;
@@ -1019,6 +1043,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:mark-answer-handled": {
     args: [payload: import("../decisionsAttention.js").MarkDecisionsAnswerHandledPayload];
     result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
+  "decisions:mark-questions": {
+    args: [payload: import("../decisionsQuestion.js").MarkDecisionQuestionsPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionMarkResult;
   };
   "decisions:prepare-relay-deploy": {
     args: [];
@@ -3304,8 +3332,8 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
   };
   "plugin:browse-catalog": {
-    args: [];
-    result: import("../plugin.js").PluginCatalogBrowseResult;
+    args: [request?: import("../plugin.js").PluginCatalogBrowseRequest | undefined];
+    result: import("../plugin.js").PluginCatalogsBrowseResult;
   };
   "plugin:cancel-install": {
     args: [jobId: string];
@@ -3314,6 +3342,18 @@ export interface GeneratedIpcInvokeMap {
   "plugin:capture-panel": {
     args: [rect: import("../pluginPanelCapture.js").PluginPanelCaptureRect];
     result: import("../pluginPanelCapture.js").PluginPanelCaptureResult;
+  };
+  "plugin:catalog-sources-add": {
+    args: [url: string];
+    result: import("../plugin.js").PluginCatalogSourceAddResult;
+  };
+  "plugin:catalog-sources-get": {
+    args: [];
+    result: import("../plugin.js").PluginCatalogSources;
+  };
+  "plugin:catalog-sources-remove": {
+    args: [url: string];
+    result: import("../plugin.js").PluginCatalogSources;
   };
   "plugin:check-for-update": {
     args: [pluginId: string];
@@ -4015,7 +4055,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "project:sleep": {
-    args: [projectId: string];
+    args: [projectId: string, options?: import("./project.js").ProjectSleepOptions | undefined];
     result: import("./project.js").ProjectSleepResult;
   };
   "recent-dictations:list": {
@@ -4984,6 +5024,7 @@ export interface GeneratedIpcInvokeMap {
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
+        fallbackChainIndex?: number | undefined;
         handbackCode?: string | undefined;
         whenDone?: "background" | "close" | undefined;
         hasFirstPrompt?: boolean | undefined;
@@ -5123,6 +5164,14 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: void;
   };
+  "voice-input:cancel-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
+  };
+  "voice-input:download-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
+  };
   "voice-input:flush-paragraph": {
     args: [sessionId: string];
     result: { rawText: string | null };
@@ -5134,6 +5183,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-input:get-live-session": {
     args: [];
     result: import("../voice.js").VoiceLiveSessionUpdate;
+  };
+  "voice-input:get-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
   };
   "voice-input:is-app-replaced": {
     args: [];
@@ -5163,6 +5216,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-input:publish-details": {
     args: [request: import("../voice.js").VoicePublishDetailsRequest];
     result: boolean;
+  };
+  "voice-input:remove-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
   };
   "voice-input:restart-replaced-app": {
     args: [];

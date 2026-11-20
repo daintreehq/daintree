@@ -5,6 +5,7 @@ import {
   assertSocketPathFits,
   hostSocketLocation,
   remoteHostSocketLocation,
+  startsOnConnectForInit,
 } from "../hostSocketPath.js";
 import { parseDiscoveryInfo, tokensEqual } from "../discoveryFile.js";
 
@@ -34,6 +35,50 @@ describe("host socket location", () => {
     expect(
       remoteHostSocketLocation({ platform: "linux", uid: 1001, home: "/home/greg" }).socketPath
     ).toBe("/run/user/1001/daintree/host.sock");
+  });
+
+  it("keeps a Linux host with no init system under the home's cache, where its record lasts", () => {
+    expect(
+      hostSocketLocation({
+        platform: "linux",
+        uid: 1000,
+        home: "/home/node",
+        startsOnConnect: true,
+      })
+    ).toEqual({
+      dir: "/home/node/.cache/daintree/run",
+      socketPath: "/home/node/.cache/daintree/run/host.sock",
+      discoveryPath: "/home/node/.cache/daintree/run/host.json",
+    });
+    expect(
+      hostSocketLocation({
+        platform: "linux",
+        uid: 1000,
+        home: "/home/node",
+        dirName: "daintree-dev",
+        startsOnConnect: true,
+      }).dir
+    ).toBe("/home/node/.cache/daintree-dev/run");
+    // Told it starts on connect without a home, it keeps the runtime directory.
+    expect(hostSocketLocation({ platform: "linux", uid: 1000, startsOnConnect: true }).dir).toBe(
+      "/run/user/1000/daintree"
+    );
+    expect(
+      remoteHostSocketLocation({
+        platform: "linux",
+        uid: 1000,
+        home: "/home/node",
+        startsOnConnect: true,
+      }).discoveryPath
+    ).toBe("/home/node/.cache/daintree/run/host.json");
+  });
+
+  it("starts on connect only where PID 1 was read and isn't systemd", () => {
+    expect(startsOnConnectForInit("systemd\n")).toBe(false);
+    expect(startsOnConnectForInit("docker-init\n")).toBe(true);
+    expect(startsOnConnectForInit("init")).toBe(true);
+    expect(startsOnConnectForInit("")).toBe(false);
+    expect(startsOnConnectForInit(null)).toBe(false);
   });
 
   it("enforces the sun_path limit per platform", () => {

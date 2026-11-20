@@ -17,10 +17,11 @@ import type { AgentCliDetail } from "../types/ipc/system.js";
 import { appendCallerLaunchFlagsToCommand } from "./callerLaunchFlags.js";
 import {
   applyPresetBehaviorOverrides,
-  getMergedPreset,
   getMergedPresetIdentities,
   isPresetAbsenceSettled,
+  resolveRequestedPresetId,
   sanitizeAgentEnv,
+  settleLaunchPreset,
   type PresetInventoryState,
 } from "./agentPresets.js";
 import { sanitizeTerminalName } from "./agentLaunchValidation.js";
@@ -250,57 +251,32 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     const entry = input.settings?.agents?.[agentId] ?? {};
     const scopedId =
       worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
-    // null = explicitly default — skip preset lookup entirely
-    // undefined = use saved preset for this worktree (or agent-level
-    //   default, or nothing). Worktree-scoped override wins over the
-    //   agent-level `presetId` so switching worktrees doesn't silently
-    //   surface another worktree's pick. A worktree slot saved as `null` is
-    //   the same explicit default, so the agent-level and registry defaults
-    //   stay out of this worktree's launches.
-    const explicitDefault =
-      options?.presetId === null || (options?.presetId === undefined && scopedId === null);
-    const savedPresetId = resolveEffectivePresetId(entry, worktreeId);
-    const resolvedPresetId = explicitDefault ? undefined : (options?.presetId ?? savedPresetId);
-    const primaryPreset =
-      isAgent && !explicitDefault
-        ? getMergedPreset(
-            agentId,
-            resolvedPresetId,
-            entry.customPresets,
-            input.ccrPresets,
-            input.projectPresets
-          )
-        : undefined;
-    preset = primaryPreset;
-
-    // Fallback for this launch: if the worktree-scoped pick is stale but the
-    // agent-level default is still valid, use the agent default now. Without
-    // this, a deleted scoped preset would launch preset-free even when a valid
-    // global fallback exists. The stale scoped slot is still reported below so
-    // the next launch resolves directly against global.
-    if (
-      !primaryPreset &&
-      isAgent &&
-      !explicitDefault &&
-      options?.presetId === undefined &&
-      scopedId &&
-      scopedId === resolvedPresetId &&
-      entry.presetId &&
-      entry.presetId !== scopedId
-    ) {
-      preset = getMergedPreset(
-        agentId,
-        entry.presetId,
-        entry.customPresets,
-        input.ccrPresets,
-        input.projectPresets
-      );
-    }
+    // A worktree slot saved as `null` is the same explicit default as a
+    // caller's `null`, so the agent-level and registry defaults stay out of
+    // this worktree's launches.
+    // Only an agent's launch looks a preset up; anything else keeps the id it
+    // asked for, so a vanished one is still cleared.
+    const settled = isAgent
+      ? settleLaunchPreset(
+          agentId,
+          entry,
+          worktreeId,
+          options?.presetId,
+          input.ccrPresets,
+          input.projectPresets
+        )
+      : {
+          preset: undefined,
+          resolvedPresetId: resolveRequestedPresetId(entry, worktreeId, options?.presetId),
+          primaryFound: false,
+        };
+    const { resolvedPresetId, primaryFound } = settled;
+    preset = settled.preset;
 
     // Stale presetId cleanup: clear whichever scope held the vanished ID. The
     // worktree slot wins at resolution time, so only fall through to clearing
     // the agent-level default when that's what the launch used.
-    if (resolvedPresetId && !primaryPreset) {
+    if (resolvedPresetId && !primaryFound) {
       if (scopedId && scopedId === resolvedPresetId && worktreeId) {
         input.onStalePreset?.("worktree");
       } else if (entry.presetId && entry.presetId === resolvedPresetId) {

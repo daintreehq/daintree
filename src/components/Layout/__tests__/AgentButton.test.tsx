@@ -386,7 +386,9 @@ vi.mock("@/components/ui/context-menu", () => ({
       {children}
     </span>
   ),
-  ContextMenuSub: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuSub: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="context-menu-sub">{children}</div>
+  ),
   ContextMenuSubContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuSubTrigger: ({
     children,
@@ -455,6 +457,27 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
 // The worktree submenu draws each row's branch-type glyph through BranchLabel,
 // which reaches for many more icons than this file queries; the real module
 // fills those in and the stubs below stay queryable.
+// The confirm itself is covered with the dialog; here only which account the menu opens it on.
+vi.mock("../UseAccountEverywhereDialog", () => ({
+  UseAccountEverywhereDialog: ({
+    account,
+    onClose,
+  }: {
+    account?: { id: string | null; name: string };
+    onClose: () => void;
+  }) => (
+    <div
+      data-testid="use-everywhere-dialog"
+      data-account={account === undefined ? "none" : (account.id ?? "default-login")}
+    >
+      {account?.name}
+      <button type="button" onClick={onClose}>
+        Close everywhere
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("lucide-react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("lucide-react")>()),
   Settings2: () => <span data-testid="settings-icon" />,
@@ -472,6 +495,7 @@ vi.mock("lucide-react", async (importOriginal) => ({
   PanelTop: () => <span data-testid="panel-top-icon" />,
   Plug: () => <span data-testid="plug-icon" />,
   UserRound: () => <span data-testid="user-round-icon" />,
+  UserRoundCheck: () => <span data-testid="user-round-check-icon" />,
   // Check / Circle render the preset-row gutter affordance (issue #10720):
   // Check marks the active default, Circle is the hover hint on other rows.
   // Queryable spans let the gutter-indicator tests assert which row is armed.
@@ -580,6 +604,14 @@ describe("AgentButton preset UX", () => {
           "CompanyWeekly limit 82% used",
           "Personal",
         ]);
+      });
+
+      it("names the default login's row as the user named it (#17080)", () => {
+        const { getAllByRole } = renderCodex({ defaultLoginName: "Team" });
+        act(() => dropdownOnOpenChange!(true));
+        expect(getAllByRole("menuitemradio")[0]?.textContent).toBe(
+          "Team · default login5-hour limit 10% used"
+        );
       });
 
       it("takes the default login's window from the preset a launch settles on", () => {
@@ -2663,6 +2695,16 @@ describe("AgentButton external links — issue #10350", () => {
 
 // Every mocked glyph above renders a `*-icon` test id, so "leads with an icon"
 // is readable without knowing which icon a row carries — the rule, not the pick.
+// The mocked submenus render inline, each wrapping its trigger and its rows.
+function submenuRows(trigger: string): HTMLElement[] {
+  const content = screen.getByTestId("context-menu-content");
+  const sub = within(content)
+    .getAllByTestId("context-menu-sub")
+    .find((node) => within(node).getByTestId("context-menu-sub-trigger").textContent === trigger);
+  if (!sub) throw new Error(`No submenu "${trigger}"`);
+  return within(sub).getAllByTestId("context-menu-item");
+}
+
 function rowsMissingLeadingIcon(content: HTMLElement): string[] {
   return Array.from(content.querySelectorAll<HTMLElement>('[role="menuitem"]'))
     .filter((row) => !row.firstElementChild?.getAttribute("data-testid")?.endsWith("-icon"))
@@ -2735,12 +2777,8 @@ describe("Move terminals to account in the agent's menu (#17089)", () => {
     mockWorktrees = [];
   });
 
-  // The mocked submenu renders inline; its rows are the items that lead with the account glyph.
   function moveRows(): HTMLElement[] {
-    const content = screen.getByTestId("context-menu-content");
-    return within(content)
-      .getAllByTestId("context-menu-item")
-      .filter((row) => row.firstElementChild?.getAttribute("data-testid") === "user-round-icon");
+    return submenuRows("Move terminals to account");
   }
 
   it("lists the default login and every saved account, and opens the move for the one picked", () => {
@@ -2763,12 +2801,118 @@ describe("Move terminals to account in the agent's menu (#17089)", () => {
     expect(updateAgentMock).not.toHaveBeenCalled();
   });
 
+  it("names the default login as the user named it (#17080)", () => {
+    mockSettings = settingsWith({ claude: { accounts: [COMPANY], defaultLoginName: "Home" } });
+    render(<AgentButton type="claude" availability="ready" />);
+
+    expect(moveRows().map((row) => row.textContent)).toEqual(["Home · default login", "Company"]);
+  });
+
   it("isn't offered to an agent with no saved account", () => {
     mockSettings = settingsWith({ claude: {} });
     mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }];
     render(<AgentButton type="claude" availability="ready" />);
 
     expect(screen.queryByText("Move terminals to account")).toBeNull();
+  });
+});
+
+describe("Use account everywhere in the agent's menu (#17893)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    updateAgentMock.mockClear();
+    updateWorktreeAccountMock.mockClear();
+    mockActiveWorktreeId = "wt-A";
+    mockMergedPresetsFn = () => [];
+    mockCcrPresetsByAgent = {};
+    mockProjectPresetsByAgent = {};
+    mockCliDetails = {};
+    mockPanelsById = {};
+    mockPanelIds = [];
+    mockPanelIdsByWorktreeId = {};
+    mockWorktrees = [];
+  });
+
+  it("lists the default login and every saved account, and opens the confirm on the one picked", () => {
+    mockSettings = settingsWith({
+      claude: { accounts: [COMPANY, PERSONAL], defaultLoginName: "Home" },
+    });
+    render(<AgentButton type="claude" availability="ready" />);
+
+    const rows = submenuRows("Use account everywhere");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Home · default login",
+      "Company",
+      "Personal",
+    ]);
+    expect(screen.queryByTestId("use-everywhere-dialog")).toBeNull();
+
+    fireEvent.click(rows[2]!);
+    const dialog = screen.getByTestId("use-everywhere-dialog");
+    expect(dialog.dataset.account).toBe("personal");
+    expect(dialog.textContent).toContain("Personal");
+
+    fireEvent.click(rows[0]!);
+    expect(screen.getByTestId("use-everywhere-dialog").dataset.account).toBe("default-login");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close everywhere" }));
+    expect(screen.queryByTestId("use-everywhere-dialog")).toBeNull();
+    // Opening it changes nothing: the confirm saves, and only what's left checked.
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(updateWorktreeAccountMock).not.toHaveBeenCalled();
+    expect(updateAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("is offered with one saved account, and marks the pick as handing focus to the confirm", () => {
+    mockSettings = settingsWith({ claude: { accounts: [COMPANY] } });
+    const expectHandoff = vi.fn();
+    const focusRestore = {
+      setRestoreTarget: () => {},
+      resetForOpen: () => {},
+      deferToRadix: () => {},
+      restoreIfStranded: () => {},
+      expectHandoff,
+      onContentPointerDown: () => {},
+      onContentPointerDownOutside: () => {},
+      onContentInteractOutside: () => {},
+      onContentKeyDown: () => {},
+      onContentClick: () => {},
+      onContentCloseAutoFocus: () => {},
+    } satisfies OverlayFocusRestore;
+    render(
+      <OverlayFocusRestoreContext.Provider value={focusRestore}>
+        <AgentButton type="claude" availability="ready" />
+      </OverlayFocusRestoreContext.Provider>
+    );
+
+    const rows = submenuRows("Use account everywhere");
+    expect(rows.map((row) => row.textContent)).toEqual(["Default login", "Company"]);
+    fireEvent.click(rows[1]!);
+    expect(expectHandoff).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("use-everywhere-dialog").dataset.account).toBe("company");
+  });
+
+  it("isn't offered to an agent with no saved account", () => {
+    mockSettings = settingsWith({ claude: {} });
+    mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }];
+    render(<AgentButton type="claude" availability="ready" />);
+
+    expect(screen.queryByText("Use account everywhere")).toBeNull();
+  });
+
+  it("keeps the confirm open when the last account goes and the button loses its menu of choices", () => {
+    mockSettings = settingsWith({ claude: { accounts: [COMPANY] } });
+    const { rerender } = render(<AgentButton type="claude" availability="ready" />);
+    fireEvent.click(submenuRows("Use account everywhere")[1]!);
+    expect(screen.getByTestId("use-everywhere-dialog")).toBeTruthy();
+
+    mockSettings = settingsWith({ claude: {} });
+    rerender(<AgentButton type="claude" availability="ready" />);
+    expect(screen.queryByText("Use account everywhere")).toBeNull();
+    expect(screen.getByTestId("use-everywhere-dialog")).toBeTruthy();
   });
 });
 

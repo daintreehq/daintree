@@ -452,6 +452,7 @@ export const TerminalSpawnOptionsSchema = z.object({
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),
   originalAgentPresetId: z.string().optional(),
+  fallbackChainIndex: z.number().int().nonnegative().optional(),
   // Handback code for the initial prompt (#12488). Listed or zod strips it, and
   // held to the marker grammar because the pty-host searches for it literally.
   handbackCode: z.string().regex(HANDBACK_CODE_PATTERN).optional(),
@@ -873,7 +874,7 @@ export const VoicePublishDetailsRequestSchema = z.object({
     locked: z.boolean(),
     wordCount: z.number().int().min(0).max(1_000_000),
     transcript: z.string().max(VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
-    provider: z.enum(["openai", "deepgram", "grok"]).nullable(),
+    provider: z.enum(["openai", "deepgram", "grok", "local"]).nullable(),
     clock: z
       .object({
         at: z.number().finite().min(0),

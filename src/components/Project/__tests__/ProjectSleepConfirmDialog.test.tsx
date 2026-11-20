@@ -1,8 +1,20 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
-import type { SleepConfirmProject, SleepConfirmRequest } from "@/store/projectSleepConfirmStore";
+import type {
+  SleepChoice,
+  SleepConfirmProject,
+  SleepConfirmRequest,
+} from "@/store/projectSleepConfirmStore";
+
+vi.mock("@/services/projectSleepWait", () => ({
+  SLEEP_PAUSE_NOTE: "Pause, please.",
+  SLEEP_WAIT_TIMEOUT_MS: 1_800_000,
+  cancelSleepWait: vi.fn(),
+  keepWaiting: vi.fn(),
+  sleepWaitingNow: vi.fn(),
+}));
 import { ProjectSleepConfirmDialog, formatEstimatedMemory } from "../ProjectSleepConfirmDialog";
 
 function project(id: string, overrides: Partial<SleepConfirmProject> = {}): SleepConfirmProject {
@@ -178,5 +190,105 @@ describe("ProjectSleepConfirmDialog", () => {
     expect(root.textContent).toContain("3 terminals");
     expect(root.textContent).toContain("1 active agent");
     expect(root.textContent).not.toContain("waiting agent");
+  });
+
+  describe("when to sleep", () => {
+    function openChoice(request: SleepConfirmRequest): Promise<SleepChoice | null> {
+      let answer!: Promise<SleepChoice | null>;
+      act(() => {
+        answer = useProjectSleepConfirmStore.getState().requestSleepChoice(request);
+      });
+      return answer;
+    }
+
+    const radio = (root: HTMLElement, value: string) =>
+      root.querySelector<HTMLInputElement>(`input[name="sleep-when"][value="${value}"]`)!;
+    const noteBox = (root: HTMLElement) =>
+      root.querySelector<HTMLButtonElement>("[data-sleep-pause-note]")!;
+
+    it("offers no choice unless the request asks for one", async () => {
+      render(<ProjectSleepConfirmDialog />);
+      void open({ kind: "project", projects: [project("a")] });
+      const el = await dialog();
+      expect(el.querySelector('input[name="sleep-when"]')).toBeNull();
+    });
+
+    it("starts on Sleep now, with the pause note unavailable, and answers now", async () => {
+      render(<ProjectSleepConfirmDialog />);
+      const answer = openChoice({
+        kind: "project",
+        offerWhenIdle: true,
+        projects: [project("a")],
+      });
+      const el = await dialog();
+      expect(radio(el, "now").checked).toBe(true);
+      expect(noteBox(el).disabled).toBe(true);
+      await act(async () => {
+        fireEvent.click(button(el, "Sleep project"));
+      });
+      expect(await answer).toEqual({ when: "now" });
+    });
+
+    it("answers the wait, with the pause note only when ticked, and previews the note", async () => {
+      render(<ProjectSleepConfirmDialog />);
+      const answer = openChoice({
+        kind: "all",
+        offerWhenIdle: true,
+        projects: [project("a"), project("b")],
+      });
+      const el = await dialog();
+      expect(el.textContent).toContain("Sleep 2 open projects?");
+      expect(el.textContent).toContain("Pause, please.");
+      act(() => {
+        fireEvent.click(radio(el, "idle"));
+      });
+      expect(noteBox(el).disabled).toBe(false);
+      act(() => {
+        fireEvent.click(noteBox(el));
+      });
+      await act(async () => {
+        fireEvent.click(button(el, "Sleep when idle"));
+      });
+      expect(await answer).toEqual({ when: "idle", pauseNote: true });
+    });
+
+    it("starts a superseding request from Sleep now with the note off", async () => {
+      render(<ProjectSleepConfirmDialog />);
+      const first = openChoice({ kind: "project", offerWhenIdle: true, projects: [project("a")] });
+      let el = await dialog();
+      act(() => {
+        fireEvent.click(radio(el, "idle"));
+      });
+      act(() => {
+        fireEvent.click(noteBox(el));
+      });
+      void openChoice({ kind: "project", offerWhenIdle: true, projects: [project("b")] });
+      expect(await first).toBeNull();
+      await waitFor(() =>
+        expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+          "Sleep 'Project b'?"
+        )
+      );
+      el = await dialog();
+      expect(radio(el, "now").checked).toBe(true);
+      expect(noteBox(el).getAttribute("data-state")).toBe("unchecked");
+    });
+
+    it("leaves the pause note off unless it is ticked", async () => {
+      render(<ProjectSleepConfirmDialog />);
+      const answer = openChoice({
+        kind: "project",
+        offerWhenIdle: true,
+        projects: [project("a")],
+      });
+      const el = await dialog();
+      act(() => {
+        fireEvent.click(radio(el, "idle"));
+      });
+      await act(async () => {
+        fireEvent.click(button(el, "Sleep when idle"));
+      });
+      expect(await answer).toEqual({ when: "idle", pauseNote: false });
+    });
   });
 });

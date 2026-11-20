@@ -7,6 +7,8 @@ import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { projectStore } from "../ProjectStore.js";
 import { createLogger } from "../../utils/logger.js";
 import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
+import type { SleepRequestWorking } from "../../../shared/types/ipc/project.js";
+import { applyStopObservations, hasStopReading, stopObservationsFor } from "./stopObservation.js";
 
 const logger = createLogger("main:ProjectSessionJournal");
 
@@ -32,6 +34,12 @@ export interface ProjectTeardownOptions {
    * record it is about to delete.
    */
   writeBackSessionIds?: boolean;
+  /**
+   * Agents the user's Sleep request found working (#17886), recorded as the
+   * stop observation of each pane still running that agent. Read only with
+   * `writeBackSessionIds`; every other stopped agent gets its pre-kill reading.
+   */
+  workingAtRequest?: readonly SleepRequestWorking[];
   /**
    * Last word on whether the kill goes ahead, asked synchronously after the
    * pre-kill snapshot and immediately before the kill request. Nothing awaits
@@ -148,10 +156,16 @@ export async function gracefulTeardownAndJournalProject(
   // Persist the captured ids into the saved terminal snapshots before
   // journaling, mirroring `shutdown.ts`: the snapshot is what a reopen reads to
   // resume each agent in place, the journal is what the session picker reads.
-  // Only callers that keep the restoration state ask for this.
+  // Only callers that keep the restoration state ask for this. What each
+  // stopped agent was doing rides the same write (#17886), captured id or not.
   if (options.writeBackSessionIds) {
     const capturedIds = outcome.sessions.filter((r) => r.agentSessionId && !isAssistant(r.id));
-    if (capturedIds.length > 0) {
+    const observations = stopObservationsFor(
+      outcome.sessions.map((r) => r.id).filter((id) => !isAssistant(id)),
+      infoById,
+      options.workingAtRequest
+    );
+    if (capturedIds.length > 0 || hasStopReading(observations)) {
       try {
         await projectStore.enqueueProjectStateUpdate(scopeId, (state) => {
           if (!state?.terminals) return null;
@@ -161,7 +175,8 @@ export async function gracefulTeardownAndJournalProject(
               snapshot.agentSessionId = result.agentSessionId ?? undefined;
             }
           }
-          return state;
+          const observed = applyStopObservations(state.terminals, observations);
+          return capturedIds.length > 0 || observed ? state : null;
         });
       } catch (error) {
         // Best-effort, exactly as in shutdown: losing the writeback costs an

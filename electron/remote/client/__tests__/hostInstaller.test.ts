@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import { processStartTime } from "../../host/hostSocketLock.js";
+import { detachedStartScript } from "../hostModeBootstrap.js";
 import { probeHost } from "../hostProbe.js";
 import {
   busyAgents,
@@ -665,6 +666,99 @@ describe("runHostInstall", () => {
     );
     expect(rollback).toBeGreaterThan(-1);
     expect(shell.scripts.slice(rollback + 1).some((s) => s.startsWith("open "))).toBe(true);
+  });
+
+  describe("on a Linux machine with no init system", () => {
+    const record = (overrides: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        daintreeHostMode: 1,
+        pid: 77,
+        enabled: true,
+        startMethod: "on-connect",
+        startAtLogin: false,
+        startAtLoginInstalled: null,
+        startAtLoginError: null,
+        keychain: { state: "ok", detail: "ok", checked: true },
+        ...overrides,
+      });
+    const box = (opts: { build?: string; listening?: boolean; state?: string } = {}) =>
+      [
+        "@@dt:uname Linux x86_64",
+        "@@dt:appimage /home/node/Applications/Daintree.AppImage",
+        `@@dt:appimageinfo ${opts.build ?? OLD_BUILD}`,
+        "@@dt:unit no",
+        "@@dt:fuse no",
+        "@@dt:init docker-init",
+        ...(opts.listening === false
+          ? []
+          : ["@@dt:running yes", "@@dt:listening yes", "@@dt:hostpid 77", "@@dt:hoststart 55"]),
+        `@@dt:hostmodestate ${opts.state ?? record()}`,
+        "@@dt:end",
+      ].join("\n");
+    const starts = (scripts: string[]) => scripts.filter((s) => s.includes("nohup"));
+
+    it("stops it, replaces the AppImage in place and starts it again as a connection would", async () => {
+      const shell = fakeShell();
+      const deps = makeDeps({
+        shell,
+        probes: [box(), box(), box({ build: NEW_BUILD })],
+        working: [0],
+      });
+      await expect(install(deps, { hostId: "box" })).resolves.toMatchObject({
+        status: "installed",
+      });
+      const stop = shell.scripts.find((s) => s.includes("@@dt:stopped"))!;
+      expect(stop).toContain("hp=77");
+      // A start still unpacking is waited for, not killed: its runtime cleans up after itself.
+      expect(stop).toContain("host-launch.pid");
+      expect(stop).not.toContain(`kill -TERM "$lp"`);
+      expect(starts(shell.scripts)).toEqual([
+        detachedStartScript({
+          executable: "/home/node/Applications/Daintree.AppImage",
+          appPath: null,
+          appImageExtractAndRun: true,
+        }),
+      ]);
+      expect(shell.scripts.some((s) => s.includes("systemctl"))).toBe(false);
+    });
+
+    it("stops whatever the new build started, even still unpacking, before putting the old one back", async () => {
+      const shell = fakeShell();
+      const deps = makeDeps({
+        shell,
+        probes: [
+          box(),
+          box(),
+          ...Array.from({ length: 200 }, () => box({ build: NEW_BUILD, listening: false })),
+          box(),
+        ],
+      });
+      deps.comeBackTimeoutMs = 5_000;
+      await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(
+        /Host mode didn't come back/
+      );
+      const rolledAt = shell.scripts.findIndex((s) => s.includes("@@dt:rolledback"));
+      const recoveryStop = shell.scripts[rolledAt - 1]!;
+      expect(recoveryStop).toContain(`kill -TERM "$lp"`);
+      // Signalled once: by name only when no start of its own is known.
+      expect(recoveryStop).toContain(`if [ -z "$lp" ] && pgrep`);
+      // The new build started, then the old one again.
+      expect(starts(shell.scripts)).toHaveLength(2);
+      const lastStart = shell.scripts.reduce(
+        (last, script, index) => (script.includes("nohup") ? index : last),
+        -1
+      );
+      expect(lastStart).toBeGreaterThan(rolledAt);
+    });
+
+    it("won't stop one whose own record doesn't say it was started on connect", async () => {
+      for (const state of [record({ startMethod: undefined }), record({ enabled: false })]) {
+        const shell = fakeShell();
+        const deps = makeDeps({ shell, probes: [box({ state })], working: [0] });
+        await expect(install(deps)).rejects.toMatchObject({ code: "UNSUPPORTED" });
+        expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+      }
+    });
   });
 
   it("won't stop a running Linux AppImage it has no way to restart", async () => {
@@ -1674,6 +1768,58 @@ describe("runHostInstall applying the host's own downloaded update", () => {
     const stop = shell.scripts.find((s) => s.includes("@@dt:stopped"))!;
     expect(stop).toContain("systemctl --user stop daintree-host.service");
     expect(shell.scripts).toContain("systemctl --user start daintree-host.service");
+  });
+
+  it("starts a Linux host with no init system from the image its updater left after quitting", async () => {
+    const shell = fakeShell();
+    const record = (pid: number, build: { version: string; commit: string }, staged?: object) =>
+      `@@dt:hostmodestate ${JSON.stringify({
+        daintreeHostMode: 1,
+        pid,
+        build,
+        ...(staged ? { stagedUpdate: staged } : {}),
+        enabled: true,
+        startMethod: "on-connect",
+        startAtLogin: false,
+        startAtLoginInstalled: null,
+        startAtLoginError: null,
+        keychain: { state: "ok", detail: "ok", checked: true },
+      })}`;
+    const box = (
+      image: string,
+      live: { pid: number; build: typeof OLD_RUNNING } | null,
+      staged?: object
+    ) =>
+      [
+        "@@dt:uname Linux x86_64",
+        `@@dt:appimage /home/node/Applications/${image}`,
+        "@@dt:unit no",
+        "@@dt:init docker-init",
+        ...(live
+          ? ["@@dt:listening yes", `@@dt:hostpid ${live.pid}`, record(live.pid, live.build, staged)]
+          : [record(0, OLD_RUNNING)]),
+        "@@dt:end",
+      ].join("\n");
+    const deps = makeDeps({
+      shell,
+      client: { ...CLIENT, platform: "linux", arch: "x64", bundle: { kind: "none" } },
+      probes: [
+        box("Daintree-1.3.0.AppImage", { pid: 77, build: OLD_RUNNING }, STAGED),
+        box("Daintree-1.3.0.AppImage", { pid: 77, build: OLD_RUNNING }, STAGED),
+        // Gone, and its updater gave the new build a name of its own.
+        box("Daintree-1.4.0.AppImage", null),
+        box("Daintree-1.4.0.AppImage", { pid: 78, build: NEW_RUNNING }),
+      ],
+    });
+    await expect(
+      install(deps, { hostId: "box", applyStaged: { version: "1.4.0" } })
+    ).resolves.toMatchObject({ status: "staged-applied" });
+    const stop = shell.scripts.find((s) => s.includes("@@dt:stopped"))!;
+    expect(stop).not.toContain("systemctl");
+    expect(stop).toContain("host-launch.pid");
+    const start = shell.scripts.filter((s) => s.includes("nohup"));
+    expect(start).toHaveLength(1);
+    expect(start[0]).toContain("'/home/node/Applications/Daintree-1.4.0.AppImage'");
   });
 
   it("waits for the restarted host's own record, not just its socket", async () => {

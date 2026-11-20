@@ -45,10 +45,20 @@ import {
   type AgentPresetMutationActionId,
 } from "./agentPresetMutation";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { accountRowId, planAgentAccountAdd } from "./agentAccountAdd";
 import type { ActionContext } from "@shared/types/actions";
-import type { AgentPreset } from "@shared/config/agentRegistry";
+import { getAgentConfigFolderAccount, type AgentPreset } from "@shared/config/agentRegistry";
+import {
+  describeLaunchAccount,
+  launchAnswer,
+  listAgentAccountIdentities,
+} from "@shared/utils/agentAccounts";
+import { settleLaunchPreset } from "@shared/utils/agentPresets";
+import { findUnloadedLaunchPreset } from "@shared/utils/agentLaunchPlan";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 import {
+  AgentListAccountsArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
   BookmarkAndCloseArgsSchema,
@@ -332,9 +342,13 @@ async function runPresetWrite(
       "Preset write refused: the preset or its defaults changed after the user approved the change, so the approval doesn't cover what would be written. Nothing was written. Call again to raise a fresh confirmation."
     );
   }
+  // The whole list goes back, so main keeps every preset's continuation switch
+  // as stored: an MCP write can't arm panes, even from a stale view (#17912).
   await useAgentSettingsStore
     .getState()
-    .updateAgent(mutation.agentId, agentPresetMutationUpdates(mutation));
+    .updateAgent(mutation.agentId, agentPresetMutationUpdates(mutation), {
+      lockContinueAtLimitReset: true,
+    });
   const written = {
     presetId: mutation.preset.id,
     name: typeof mutation.preset.name === "string" ? mutation.preset.name : "",
@@ -707,6 +721,7 @@ export const agentActionRuns = {
           spawnedAt: panel.startedAt ?? null,
           terminalId: panel.id,
           found: true,
+          ...(panel.updateInstalled !== undefined && { updateInstalled: panel.updateInstalled }),
         };
       }
     }
@@ -1008,6 +1023,107 @@ export const agentActionRuns = {
         sources.projectPresets
       ),
     };
+  },
+  "agent.listAccounts": async (args: unknown, ctx: ActionContext) => {
+    const { agentId, worktreeId } = AgentListAccountsArgsSchema.parse(args ?? {});
+    if (!isRegisteredAgent(agentId))
+      throw new UnactionableTargetError(unknownAgentIdMessage(agentId));
+    if (!getAgentConfigFolderAccount(agentId)) {
+      throw new UnactionableTargetError(
+        `${getAgentDisplayTitle(agentId)} has no accounts: it signs in one way only.`
+      );
+    }
+    const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
+    if (!useAgentSettingsStore.getState().isInitialized) {
+      await useAgentSettingsStore.getState().initialize();
+    }
+    // An unread store is a failure, never an agent with no accounts.
+    const settings = useAgentSettingsStore.getState().settings;
+    if (!settings) throw new Error("Couldn't read the agent settings, so no accounts were listed.");
+    const agents = settings.agents;
+    const entry = agents && Object.hasOwn(agents, agentId) ? agents[agentId] : undefined;
+    const accounts = listAgentAccountIdentities(entry);
+    if (worktreeId === undefined) return { accounts };
+
+    // Refused as a launch refuses it, without echoing the id: a worktree id
+    // can be its path, which names the user.
+    const { worktrees, isInitialized } = getCurrentViewStore().getState();
+    if (isInitialized && !worktrees.has(worktreeId)) {
+      throw new UnactionableTargetError(
+        "No worktree in this project has that id. Use an id from the worktree listing."
+      );
+    }
+    const { readLaunchPresetSources } = await import("@/utils/presetInventory");
+    const sources = readLaunchPresetSources(agentId, {
+      projectId: ctx.projectId,
+      scratchId: ctx.scratchId,
+    });
+    const settled = settleLaunchPreset(
+      agentId,
+      entry ?? {},
+      worktreeId,
+      undefined,
+      sources.ccrPresets,
+      sources.projectPresets
+    );
+    const presetsComplete =
+      findUnloadedLaunchPreset({
+        agentId,
+        isAgent: true,
+        worktreeId,
+        settings,
+        options: undefined,
+        ...sources,
+      }) === undefined;
+    return {
+      accounts,
+      worktreeLaunch: launchAnswer(
+        describeLaunchAccount(entry, worktreeId, settled.preset),
+        presetsComplete
+      ),
+    };
+  },
+  "agent.addAccount": async (args: unknown, ctx: ActionContext) => {
+    const plan = planAgentAccountAdd(args);
+    if (!plan.ok) throw new UnactionableTargetError(plan.message);
+    // Only the rows a person kept ticked in this call's own dialog. A grant,
+    // Never ask or a bare `confirmed` names no rows, so it adds none.
+    const approved = ctx.hostApprovedTargets;
+    if (approved === undefined) {
+      throw new Error(
+        "Adding accounts needs the user to tick each one in Daintree's dialog. Nothing was added."
+      );
+    }
+    const kept = new Set(approved.map((target) => target.id));
+    const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
+    const accounts: Array<Record<string, unknown>> = [];
+    // One at a time: each add reads the saved accounts main just wrote, so a
+    // folder an earlier row took is refused rather than registered twice.
+    for (const row of plan.rows) {
+      const base = { index: row.index, agentId: row.agentId };
+      if (!kept.has(accountRowId(row.index))) {
+        accounts.push({ ...base, status: "declined" });
+        continue;
+      }
+      if (ctx.dispatchDeadlineAt !== undefined && Date.now() >= ctx.dispatchDeadlineAt) {
+        accounts.push({ ...base, status: "notAttempted" });
+        continue;
+      }
+      try {
+        const account = await useAgentSettingsStore
+          .getState()
+          .addAccount({ agentId: row.agentId, name: row.name, folder: row.folder });
+        accounts.push({ ...base, status: "added", accountId: account.id, name: account.name });
+      } catch (err) {
+        // Main's messages name a folder by its name only, never its path.
+        accounts.push({
+          ...base,
+          status: "failed",
+          error: formatErrorMessage(err, "Couldn't add the account"),
+        });
+      }
+    }
+    return { accounts };
   },
   "agent.createPreset": (args: unknown, ctx: ActionContext) =>
     runPresetWrite("agent.createPreset", args, ctx),

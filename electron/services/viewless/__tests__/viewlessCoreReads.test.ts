@@ -28,6 +28,7 @@ const CORE_READS = [
   "actions.getContext",
   "recipe.list",
   "agent.listPresets",
+  "agent.listAccounts",
   "agent.listModels",
   "worktree.waitForPullRequest",
 ];
@@ -449,6 +450,151 @@ describe("core reads with no frontend", () => {
       );
 
       expect(result).toEqual({ ok: true, result: { presetsComplete: true, presets: [] } });
+    });
+  });
+
+  describe("agent.listAccounts (#17079)", () => {
+    const settings = {
+      agents: {
+        claude: {
+          accounts: [
+            { id: "company", name: "Company", configDir: "/Users/me/.claude-company" },
+            { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" },
+          ],
+          accountId: "personal",
+          presetId: "work",
+          customPresets: [{ id: "work", name: "Work", accountId: "company" }],
+          worktreeAccounts: { "/repo-wt/feature": null },
+        },
+      },
+    } as unknown as AgentSettings;
+
+    function accountDeps() {
+      const made = makeDeps(
+        { getPtyReader: () => makePty(), getWorkspaceHosts: () => makeHosts() },
+        { worktrees: [makeWorktree(), FEATURE] }
+      );
+      made.deps.agents.getSettings = async () => settings;
+      return made;
+    }
+
+    it("lists each account's id, name and default, and no folder", async () => {
+      const { deps } = accountDeps();
+      const ccr = vi.fn(deps.agents.getCcrPresets);
+      deps.agents.getCcrPresets = ccr;
+
+      const result = await executeViewlessAction(
+        request("agent.listAccounts", { agentId: "claude" }),
+        deps
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        result: {
+          accounts: [
+            { id: "company", name: "Company", isDefault: false },
+            { id: "personal", name: "Personal", isDefault: true },
+          ],
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("/Users/me");
+      // With no worktree there is no launch to answer for, so no preset is read.
+      expect(ccr).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["/repo", "company"],
+      ["/repo-wt/feature", undefined],
+    ])(
+      "names the account a launch with no view in %s signs in as",
+      async (worktreeId, launched) => {
+        const { deps } = accountDeps();
+        const listed = await executeViewlessAction(
+          request("agent.listAccounts", { agentId: "claude", worktreeId }),
+          deps
+        );
+        if (!listed?.ok) throw new Error(JSON.stringify(listed));
+        const choice = (listed.result as { worktreeLaunch: { accountId: string | null } })
+          .worktreeLaunch;
+        expect(choice.accountId).toBe(launched ?? null);
+
+        const { deps: launch, invoke } = accountDeps();
+        const launchResult = await executeViewlessAction(
+          request("agent.launch", { agentId: "claude", worktreeId }),
+          launch
+        );
+        expect(launchResult?.ok).toBe(true);
+        const call = invoke.mock.calls.find(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN);
+        expect(call).toBeDefined();
+        const spawned = call?.[2][0] as { env?: Record<string, string> } | undefined;
+        expect(spawned?.env?.CLAUDE_CONFIG_DIR).toBe(
+          launched === undefined ? undefined : `/Users/me/.claude-${launched}`
+        );
+      }
+    );
+
+    it("names no account while the worktree's repository preset can't be read", async () => {
+      const { deps } = accountDeps();
+      deps.agents.getSettings = async () =>
+        ({
+          agents: {
+            claude: {
+              ...(settings.agents.claude as object),
+              worktreePresets: { "/repo": "repo-team" },
+            },
+          },
+        }) as unknown as AgentSettings;
+      deps.agents.getProjectPresets = async () => {
+        throw new Error("unreadable");
+      };
+
+      const result = await executeViewlessAction(
+        request("agent.listAccounts", { agentId: "claude", worktreeId: "/repo" }),
+        deps
+      );
+
+      if (!result?.ok) throw new Error(JSON.stringify(result));
+      expect((result.result as { worktreeLaunch: unknown }).worktreeLaunch).toEqual({
+        presetsComplete: false,
+      });
+    });
+
+    it("refuses a worktree the project doesn't have, without echoing its id", async () => {
+      const { deps } = accountDeps();
+
+      const result = await executeViewlessAction(
+        request("agent.listAccounts", { agentId: "claude", worktreeId: "/Users/me/elsewhere" }),
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+      expect(JSON.stringify(result)).not.toContain("/Users/me");
+    });
+
+    it("refuses an agent that signs in one way only, and an unknown one", async () => {
+      const { deps } = accountDeps();
+
+      for (const agentId of ["cursor", "__proto__"]) {
+        const result = await executeViewlessAction(
+          request("agent.listAccounts", { agentId }),
+          deps
+        );
+        expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+      }
+    });
+
+    it("fails rather than listing no accounts when the settings can't be read", async () => {
+      const { deps } = accountDeps();
+      deps.agents.getSettings = async () => {
+        throw new Error("unreadable");
+      };
+
+      const result = await executeViewlessAction(
+        request("agent.listAccounts", { agentId: "claude" }),
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
     });
   });
 

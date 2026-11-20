@@ -10,6 +10,8 @@ import type { SessionStore } from "../../sessionStore.js";
 export const RETAINED_COLLECTIONS: Readonly<Record<string, string>> = {
   "resourceOwnership.livePrincipals":
     "principal keys: a bearer's authority outlives its sessions (#12487)",
+  "resourceOwnership.conversationByPrincipal":
+    "principal keys bound to a conversation, unbound with the bearer (#17919)",
   "terminalAdoption.byTerminal": "held by bearer principals, never by a session (#12490)",
   "terminalAdoption.listeners": "change subscribers, not session state",
   "workerCreations.byTerminal":
@@ -130,6 +132,12 @@ export function opaqueHolders(
 export const OPAQUE_HOLDERS: Readonly<Record<string, string>> = {
   "grantCache.sweepTimer":
     "the cache's own sweep interval handle (a Node Timeout under real timers)",
+  "resourceOwnership.callerNamed":
+    "a WeakSet of creation records whose caller named the id (#16845): keyed by the record objects, so an entry goes with its record and names no session",
+  "resourceOwnership.recordedAt":
+    "a WeakMap of creation records to when they were made (#16845): keyed by the record objects, so an entry goes with its record and names no session",
+  "resourceOwnership.restored":
+    "a WeakSet of creation records an earlier run kept and this one gave back (#16845): keyed by the record objects, so an entry goes with its record and names no session",
 };
 
 export interface SeedOptions {

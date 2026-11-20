@@ -545,6 +545,22 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(result.unavailableFields).not.toContain("lastHandback");
   });
 
+  it("reports a working pane's update footer off the host record (#17905)", async () => {
+    const updateInstalled = { observedAt: 4_000, namesRestart: false };
+    const result = await buildViewlessTerminalStatus(
+      deps([
+        record({ id: "seen", agentState: "working", detectedAgentId: "claude", updateInstalled }),
+        record({ id: "plain" }),
+      ]),
+      WORKSPACE,
+      { terminalIds: ["seen", "plain"] }
+    );
+
+    expect(result.terminals[0]).toMatchObject({ agentState: "working", updateInstalled });
+    expect(result.terminals[0]).not.toHaveProperty("waitingReason");
+    expect(result.terminals[1]).not.toHaveProperty("updateInstalled");
+  });
+
   it("keeps hasPty through the output attachment, in both polarities", async () => {
     // `recentOutput` is assigned onto the entry after `buildEntry` returns, so
     // the two must not clobber each other.
@@ -592,32 +608,32 @@ describe("buildViewlessTerminalStatus results", () => {
       deps(
         [
           // Detection outranks the launch, as the entry's own `agentId` does.
-          record({ id: "detected", launchAgentId: "codex", detectedAgentId: "claude" }),
+          record({ id: "detected", launchAgentId: "gemini", detectedAgentId: "claude" }),
           record({ id: "typed" }),
-          record({ id: "codex", launchAgentId: "codex" }),
+          record({ id: "gemini", launchAgentId: "gemini" }),
           record({ id: "gone" }),
         ],
         {
           serialized: {
             detected: { data: screen },
             typed: { data: typed },
-            codex: { data: screen },
+            gemini: { data: screen },
             gone: null,
           },
         }
       ),
       WORKSPACE,
-      { terminalIds: ["detected", "typed", "codex", "gone"], includeOutput: {} }
+      { terminalIds: ["detected", "typed", "gemini", "gone"], includeOutput: {} }
     );
 
-    const [detected, typedEntry, codex, gone] = result.terminals;
+    const [detected, typedEntry, gemini, gone] = result.terminals;
     expect(detected?.inputLine).toEqual({ state: "suggestion", text: "open the PR" });
     expect(detected?.recentOutput).toContain("\n❯ [suggested by Claude Code: open the PR]\n");
     expect(typedEntry?.inputLine).toEqual({ state: "typed", text: "open the PR" });
     expect(typedEntry?.recentOutput).toContain("\n❯ open the PR\n");
     // An agent with no declared rule reads as unknown, its tail as drawn.
-    expect(codex?.inputLine).toEqual({ state: "unknown", text: "" });
-    expect(codex?.recentOutput).toContain("\n❯ open the PR\n");
+    expect(gemini?.inputLine).toEqual({ state: "unknown", text: "" });
+    expect(gemini?.recentOutput).toContain("\n❯ open the PR\n");
     // No screen was read, so there is no box to report.
     expect(gone?.recentOutput).toBeNull();
     expect(gone).not.toHaveProperty("inputLine");

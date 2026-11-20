@@ -513,8 +513,9 @@ export const projectActionRuns = {
     // renderer dialog a headless client can't click, so asking again would
     // hang past the dispatch deadline and could still fire afterwards (#11538).
     if (mayStopWork && ctx.dispatchSource !== "agent") {
-      const ok = await useProjectSleepConfirmStore.getState().requestConfirmation({
+      const choice = await useProjectSleepConfirmStore.getState().requestSleepChoice({
         kind: "project",
+        offerWhenIdle: true,
         projects: [
           {
             id,
@@ -527,10 +528,74 @@ export const projectActionRuns = {
           },
         ],
       });
-      if (!ok) return { slept: false };
+      if (!choice) return { slept: false };
+      if (choice.when === "idle") {
+        // The wait outlives this dispatch; its dialog reports what happens.
+        const { startSleepWait } = await import("@/services/projectSleepWait");
+        await startSleepWait([id], { pauseNote: choice.pauseNote });
+        return { slept: false };
+      }
     }
     await useProjectStore.getState().sleepProject(id);
     return { slept: true };
+  },
+
+  "project.sleepAll": async (_args: unknown, ctx: ActionContext) => {
+    // Every project's assistant is among the terminals this stops, so an agent
+    // sleeping them all would end its own session mid-call.
+    if (ctx.dispatchSource === "agent") {
+      throw new Error("Sleeping every project is only available to the user");
+    }
+    const store = useProjectStore.getState();
+    const currentId = store.currentProject?.id;
+    const open = store.projects.filter(
+      (p) => p.id === currentId || p.status === "active" || p.status === "background"
+    );
+    if (open.length === 0) {
+      notify({
+        type: "info",
+        priority: "high",
+        title: "No open projects",
+        message: "Every project is already asleep or closed.",
+        context: { eventKind: "uiFeedback" },
+      });
+      return { slept: false, count: 0 };
+    }
+    const stats = useProjectStatsStore.getState().stats;
+    const liveCounts = new Map<string, number>();
+    try {
+      for (const t of await terminalClient.getAll()) {
+        if (!t.projectId || t.isTrashed || t.hasPty === false) continue;
+        liveCounts.set(t.projectId, (liveCounts.get(t.projectId) ?? 0) + 1);
+      }
+    } catch {
+      // The preview falls back to the pushed counts.
+    }
+    const ids = open.map((p) => p.id);
+    const choice = await useProjectSleepConfirmStore.getState().requestSleepChoice({
+      kind: "all",
+      offerWhenIdle: true,
+      projects: open.map((p) => {
+        const entry = stats[p.id];
+        return {
+          id: p.id,
+          name: p.name,
+          path: p.path,
+          terminalCount: Math.max(entry?.processCount ?? 0, liveCounts.get(p.id) ?? 0),
+          activeAgentCount: entry?.activeAgentCount ?? 0,
+          waitingAgentCount: entry?.waitingAgentCount ?? 0,
+          isActive: p.id === currentId,
+        };
+      }),
+    });
+    if (!choice) return { slept: false, count: 0 };
+    const { startSleepWait, sleepProjectsInOrder } = await import("@/services/projectSleepWait");
+    if (choice.when === "idle") {
+      await startSleepWait(ids, { pauseNote: choice.pauseNote });
+      return { slept: false, count: 0 };
+    }
+    const count = await sleepProjectsInOrder(ids);
+    return { slept: count > 0, count };
   },
 
   "project.restart": async (args: unknown, ctx: ActionContext) => {

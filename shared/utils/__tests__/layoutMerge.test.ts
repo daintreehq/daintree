@@ -400,6 +400,24 @@ describe("field-level merge for out-of-band fields (#11461)", () => {
     expect(delta.fieldEdits).toEqual([{ id: "1", fields: ["agentSessionId"] }]);
   });
 
+  it("compares an object-valued tracked field by value, not by identity (#17886)", () => {
+    // Hydration rebuilds the object from the very record the baseline holds.
+    type Stopped = { id: string; stopObservation?: { agentState: string; at?: number } };
+    const base: Stopped[] = [{ id: "1", stopObservation: { agentState: "working", at: 4 } }];
+    const same: Stopped[] = [{ id: "1", stopObservation: { agentState: "working", at: 4 } }];
+    const cleared: Stopped[] = [{ id: "1" }];
+    const changed: Stopped[] = [{ id: "1", stopObservation: { agentState: "working", at: 9 } }];
+    const eq = deepEqualIgnoringUndefined;
+
+    expect(computeIdArrayDelta(base, same, eq, ["stopObservation"]).fieldEdits).toBeUndefined();
+    expect(computeIdArrayDelta(base, cleared, eq, ["stopObservation"]).fieldEdits).toEqual([
+      { id: "1", fields: ["stopObservation"] },
+    ]);
+    expect(computeIdArrayDelta(base, changed, eq, ["stopObservation"]).fieldEdits).toEqual([
+      { id: "1", fields: ["stopObservation"] },
+    ]);
+  });
+
   it("claims nothing for an entry with no baseline", () => {
     // A missing baseline usually means the writer just created the panel, but it
     // can also mean an earlier save failed or the view was cached across a switch

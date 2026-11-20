@@ -1012,6 +1012,45 @@ describe("checkForUpdate — catalog installs (#16781)", () => {
     service.dispose();
   });
 
+  it("answers an install from an added catalog from that catalog's batch, never Daintree's (#17434)", async () => {
+    const SOURCE = "https://plugins.example.org/catalog.json";
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const installedHash = await installFromCatalog(service, "0.1.0", {
+      id: ID,
+      version: "0.1.0",
+      repo: REPO,
+      sourceUrl: SOURCE,
+    });
+    const sharedFetch = catalogServes();
+    const own = passCatalog({ entries: [] });
+    const added = passCatalog({ entries: [entry("0.1.0", installedHash)] });
+    const catalogFor = vi.fn(() => added.batch);
+
+    const result = await service.checkForUpdate(ID, { catalog: own.batch, catalogFor });
+
+    // Daintree's batch lists nothing, which would read as delisted.
+    expect(result).toEqual({ status: "up-to-date" });
+    expect(catalogFor).toHaveBeenCalledWith(SOURCE);
+    expect(own.passFetch).not.toHaveBeenCalled();
+    expect(sharedFetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("refuses a record whose catalog isn't a catalog URL, rather than reading Daintree's (#17434)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installFromCatalog(service, "0.1.0", {
+      id: ID,
+      version: "0.1.0",
+      repo: REPO,
+      sourceUrl: "http://plugins.example.org/catalog.json",
+    });
+    const sharedFetch = catalogServes({ entries: [] });
+
+    expect((await service.checkForUpdate(ID)).status).toBe("fetch-failed");
+    expect(sharedFetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   it("offers the update a pass's catalog lists once its archive checks out", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     const installedHash = await installFromCatalog(service);

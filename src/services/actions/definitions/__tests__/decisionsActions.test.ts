@@ -182,6 +182,37 @@ describe("Decisions actions", () => {
       ).toEqual(["q1", "q2"]);
     });
 
+    it("starts at the oldest question not yet seen, stepping through seen ones too, never cleared ones (#17895)", async () => {
+      const open: DecisionQuestionStanding = { kind: "waiting", reason: "open" };
+      const marked = (id: string, seen: boolean, cleared: boolean) => ({
+        ...question(id, open),
+        inbox: { ask: null, seen, cleared },
+      });
+      listed(
+        marked("seen", true, false),
+        marked("cleared", false, true),
+        marked("new", false, false)
+      );
+      await dispatch("decisions.openNextQuestion");
+      const request = useDecisionsQuestionViewStore.getState().request!;
+      expect(
+        request.questions.map((target) =>
+          target.scope === "reference" ? target.reference.questionId : null
+        )
+      ).toEqual(["seen", "new"]);
+      expect(request.index).toBe(1);
+    });
+
+    it("opens a question seen and left when nothing new waits (#17895)", async () => {
+      listed({
+        ...question("seen", { kind: "waiting", reason: "open" }),
+        inbox: { ask: null, seen: true, cleared: false },
+      });
+      await dispatch("decisions.openNextQuestion");
+      expect(opened()).toBe("question");
+      expect(useDecisionsQuestionViewStore.getState().request!.index).toBe(0);
+    });
+
     it("opens an answered question at the follow-up asking for a reply", async () => {
       listed(question("q1", { kind: "waiting", reason: "reply" }, "m-7"));
       await dispatch("decisions.openNextQuestion");

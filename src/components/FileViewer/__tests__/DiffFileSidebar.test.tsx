@@ -530,15 +530,17 @@ describe("DiffFileSidebar — one tab stop, arrows move it", () => {
     expect(document.activeElement).toBe(buttons[2]);
   });
 
-  it("toggles the focused file's viewed mark with V", () => {
+  it("advertises the Viewed key on each row and names the row's file for it", () => {
     renderSidebar({ files: FILES, currentIndex: 0 });
     const button = tabbable()[0]!;
-    button.focus();
-    fireEvent.keyDown(button, { key: "v" });
-    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE, "working-tree:src/b.ts");
+    // The key is the diff viewer's Viewed action, bound in the diff scope; it
+    // marks the file of the row holding focus, found by this index.
+    expect(button.getAttribute("aria-keyshortcuts")).toBe("V");
+    const row = button.closest<HTMLElement>("[data-file-index]")!;
+    expect(FILES[Number(row.dataset.fileIndex)]!.viewedKey).toBe("working-tree:src/b.ts");
 
-    toggleViewedMock.mockClear();
-    fireEvent.keyDown(button, { key: "v", metaKey: true });
+    // The row no longer claims the key itself, so a rebind moves it everywhere.
+    fireEvent.keyDown(button, { key: "v" });
     expect(toggleViewedMock).not.toHaveBeenCalled();
   });
 

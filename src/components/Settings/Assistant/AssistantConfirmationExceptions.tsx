@@ -8,7 +8,11 @@ import { SettingsDependents } from "../SettingsGroup";
 interface AssistantConfirmationExceptionsProps {
   /** The ids handed over now, as stored. */
   selected: readonly string[];
-  onChange: (next: string[]) => void;
+  /**
+   * One row ticked or unticked. A change rather than the whole list, so the
+   * owner can apply it to the list as stored when it lands.
+   */
+  onToggle: (id: string, on: boolean) => void;
   disabled: boolean;
 }
 
@@ -21,16 +25,9 @@ const rowId = (id: string): string => `assistant-confirmation-except-${id.replac
  */
 export function AssistantConfirmationExceptions({
   selected,
-  onChange,
+  onToggle,
   disabled,
 }: AssistantConfirmationExceptionsProps) {
-  const toggle = (id: string, on: boolean) => {
-    const next = new Set(selected);
-    if (on) next.add(id);
-    else next.delete(id);
-    onChange(DELEGABLE_ASSISTANT_CONFIRMATIONS.map((entry) => entry.id).filter((x) => next.has(x)));
-  };
-
   return (
     <SettingsDependents>
       {DELEGABLE_ASSISTANT_CONFIRMATIONS.map((entry) => {
@@ -42,7 +39,7 @@ export function AssistantConfirmationExceptions({
             label={entry.label}
             description={entry.detail}
             checked={checked}
-            onChange={(value) => toggle(entry.id, value)}
+            onChange={(value) => onToggle(entry.id, value)}
             disabled={disabled}
             isModified={checked}
           />

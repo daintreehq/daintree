@@ -12,6 +12,7 @@ vi.mock("@/store/panelStore", () => ({
 
 import { ClientAppError } from "@/utils/clientAppError";
 import {
+  atForwardedOrigin,
   callbackPortOf,
   HostPortInUseError,
   hostForwardFailure,
@@ -212,6 +213,29 @@ describe("link parsing", () => {
       )
     ).toBeNull();
     expect(callbackPortOf("https://example.com/?next=http%3A%2F%2Flocalhost%3A1")).toBeNull();
+  });
+});
+
+describe("atForwardedOrigin", () => {
+  it("moves an address onto the forward's host and port, keeping everything after them", () => {
+    expect(
+      atForwardedOrigin(
+        "http://user:pw@0.0.0.0:3000/docs/0.0.0.0?bind=0.0.0.0#setup",
+        "http://localhost:49152/"
+      )
+    ).toBe("http://user:pw@localhost:49152/docs/0.0.0.0?bind=0.0.0.0#setup");
+  });
+
+  it("keeps a forward to the scheme's default port when the two schemes differ", () => {
+    expect(atForwardedOrigin("https://localhost:8443/app", "http://localhost/")).toBe(
+      "https://localhost:80/app"
+    );
+    expect(atForwardedOrigin("http://localhost:3000/app", "https://localhost/")).toBe(
+      "http://localhost:443/app"
+    );
+    expect(atForwardedOrigin("https://localhost:8443/app", "https://localhost/")).toBe(
+      "https://localhost/app"
+    );
   });
 });
 

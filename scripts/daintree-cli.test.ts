@@ -4,6 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { McpDiscoveryFile } from "../electron/services/mcp-server/discoveryFile.js";
+import {
+  daintreeProfileDir,
+  startFakeDaintreeApp,
+  stopProcess,
+  type FakeDaintreeApp,
+} from "../electron/services/mcp-server/__tests__/helpers/fakeDaintreeApp.js";
 
 const SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), "daintree-cli.sh");
 
@@ -494,5 +501,157 @@ describe.runIf(process.platform === "linux")("daintree-cli.sh --status", () => {
     app = spawn(binary, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(status(false)).toBe("Daintree is running");
+  });
+});
+
+// `--status --json` for scripts (#17904): the port the running app published
+// and the saved MCP setting, beside whether the app's processes are there.
+// pgrep is stubbed to find nothing, so a Daintree running on the test machine
+// can't decide `running`; only a live runtime file can.
+describe.skipIf(process.platform === "win32")("daintree-cli.sh --status --json", () => {
+  let home: string;
+  let shim: string;
+  let app: FakeDaintreeApp | null = null;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-json-home-"));
+    shim = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-json-shim-"));
+    fs.writeFileSync(path.join(shim, "pgrep"), "#!/usr/bin/env bash\nexit 1\n", { mode: 0o755 });
+  });
+
+  afterEach(async () => {
+    if (app) await stopProcess(app.process);
+    app = null;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(shim, { recursive: true, force: true });
+  });
+
+  const run = (...args: string[]) =>
+    spawnSync("bash", [SCRIPT_SOURCE, ...args], {
+      encoding: "utf8",
+      env: { PATH: `${shim}${path.delimiter}${process.env.PATH ?? ""}`, HOME: home },
+      timeout: 10_000,
+    });
+
+  const version = () =>
+    run("--version")
+      .stdout.trim()
+      .replace(/^daintree /, "");
+
+  function saveConfig(config: unknown): void {
+    fs.mkdirSync(daintreeProfileDir(home), { recursive: true });
+    fs.writeFileSync(
+      path.join(daintreeProfileDir(home), "config.json"),
+      typeof config === "string" ? config : JSON.stringify(config, null, 2),
+      { mode: 0o600 }
+    );
+  }
+
+  /** Publishes the port the fake app listens on, as the app does; returns it. */
+  async function publishFromApp(bundle?: string): Promise<number> {
+    app = await startFakeDaintreeApp(home, { bundle });
+    fs.mkdirSync(daintreeProfileDir(home), { recursive: true });
+    new McpDiscoveryFile({ dir: () => daintreeProfileDir(home), pid: app.process.pid! }).publish(
+      app.port
+    );
+    return app.port;
+  }
+
+  it("prints one JSON object with nulls for what it can't read, in every order of the flags", () => {
+    for (const args of [
+      ["--status", "--json"],
+      ["-s", "--json"],
+      ["--json", "--status"],
+      ["--json", "-s"],
+    ]) {
+      const result = run(...args);
+      expect(result.status).toBe(1);
+      expect(result.stdout.endsWith("}\n")).toBe(true);
+      expect(result.stdout.trim().split("\n")).toHaveLength(1);
+      expect(JSON.parse(result.stdout)).toEqual({
+        version: version(),
+        running: false,
+        mcpEnabled: null,
+        mcpPort: null,
+      });
+    }
+  });
+
+  it.each<[string, unknown, boolean | null]>([
+    ["on", { mcpServer: { enabled: true, port: 45454, apiKey: "daintree_k" } }, true],
+    [
+      "off",
+      { projects: { "a b": [1, { c: 'é "q" \\ }' }] }, mcpServer: { enabled: false } },
+      false,
+    ],
+    ["not a boolean", { mcpServer: { enabled: "yes" } }, null],
+    ["missing", { mcpServer: { port: 45454 } }, null],
+    ["in a file that isn't JSON", '{"mcpServer":{"enabled":true}', null],
+  ])("reads the saved MCP setting while nothing serves (%s)", (_name, config, enabled) => {
+    saveConfig(config);
+
+    const result = run("--status", "--json");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({
+      version: version(),
+      running: false,
+      mcpEnabled: enabled,
+      mcpPort: null,
+    });
+  });
+
+  it("reports the port a live app published, and the app as running", async () => {
+    saveConfig({ mcpServer: { enabled: false } });
+    const port = await publishFromApp();
+
+    const result = run("--json", "--status");
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      version: version(),
+      running: true,
+      mcpEnabled: true,
+      mcpPort: port,
+    });
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "knows the app by its executable under a bundle the user renamed",
+    async () => {
+      const port = await publishFromApp("Daintree Work.app");
+
+      expect(JSON.parse(run("--status", "--json").stdout)).toMatchObject({
+        running: true,
+        mcpPort: port,
+      });
+    }
+  );
+
+  it("reads past a runtime file whose app has exited", async () => {
+    saveConfig({ mcpServer: { enabled: true } });
+    await publishFromApp();
+    await stopProcess(app!.process);
+
+    const result = run("--status", "--json");
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      running: false,
+      mcpEnabled: true,
+      mcpPort: null,
+    });
+  });
+
+  it("keeps plain --status as text, and refuses anything more after --json", () => {
+    const plain = run("--status");
+    expect(plain.status).toBe(1);
+    expect(plain.stdout).toBe("Daintree is not running\n");
+
+    const extra = run("--status", "--json", "now");
+    expect(extra.status).toBe(2);
+    expect(extra.stdout).toBe("");
+    expect(extra.stderr).toContain("--json");
   });
 });

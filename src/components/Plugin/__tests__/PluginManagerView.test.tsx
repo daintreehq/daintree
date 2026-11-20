@@ -21,6 +21,8 @@ import type {
   PluginInstallError,
   SettingDefinition,
   PluginDeepLinkIntent,
+  PluginCatalogBrowseResult,
+  PluginCatalogsBrowseResult,
 } from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -28,6 +30,11 @@ import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { nestedLayerOwnsEscape } from "@/lib/pluginManagerEscape";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { usePanelStore } from "@/store/panelStore";
+
+/** Daintree's own catalog alone, as Browse reads it when no catalog was added. */
+function ownCatalog(result: PluginCatalogBrowseResult): PluginCatalogsBrowseResult {
+  return { ...result, added: [] };
+}
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -1454,6 +1461,8 @@ describe("PluginManagerView", () => {
             pluginId: "acme.demo",
             version: "1.0.1",
             repo: REPO,
+            // An update is held to the catalog the installed copy came from (#17434).
+            intent: "update",
             expected: { kind: "update", pluginId: "acme.demo", archiveHash: REVIEWED_HASH },
           },
           expect.any(String)
@@ -1462,6 +1471,28 @@ describe("PluginManagerView", () => {
       expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledTimes(1);
       expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
       expect(screen.queryByText(/Install over HTTP/)).toBeNull();
+    });
+
+    it("holds an update from an added catalog to that catalog (#17434)", async () => {
+      const SOURCE = "https://plugins.example.org/catalog.json";
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        catalogPlugin({
+          catalog: { id: "acme.demo", version: "1.0.0", repo: REPO, sourceUrl: SOURCE },
+        }),
+      ]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+        ...offer(),
+        catalog: { id: "acme.demo", version: "1.0.1", repo: REPO, sourceUrl: SOURCE },
+      });
+      await checkSelected();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Update plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ sourceUrl: SOURCE, intent: "update", version: "1.0.1" }),
+          expect.any(String)
+        )
+      );
     });
 
     it("warns that an update from another repository is a different source, naming both", async () => {
@@ -2449,6 +2480,47 @@ describe("PluginManagerView", () => {
         expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
           { pluginId: "acme.demo", version: "2.3.4" },
           expect.any(String)
+        );
+      });
+
+      it("asks the catalog a link names, and installs from that catalog (#17434)", async () => {
+        const SOURCE = "https://plugins.example.org/catalog.json";
+        vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue({
+          status: "preview",
+          preview: {
+            url: CATALOG_URL,
+            archiveHash: PREVIEW_HASH,
+            installedOnDisk: false,
+            manifest: previewManifest(),
+            catalog: { id: "acme.demo", version: "1.0.0", repo: REPO, sourceUrl: SOURCE },
+          },
+        });
+        renderIntent({ action: "install-catalog", pluginId: "acme.demo", sourceUrl: SOURCE });
+
+        const dialog = await urlReviewDialog();
+        expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+          { pluginId: "acme.demo", sourceUrl: SOURCE },
+          expect.any(String)
+        );
+        // The curator, not Daintree, is named as the reviewer.
+        const source = within(dialog).getByTestId("archive-install-source").textContent ?? "";
+        expect(source).toContain(
+          "Listed by plugins.example.org/catalog.json from github.com/acme/demo"
+        );
+        expect(source).toMatch(/not Daintree/);
+
+        await approveUrlReview();
+        await waitFor(() =>
+          expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+            {
+              pluginId: "acme.demo",
+              version: "1.0.0",
+              repo: REPO,
+              sourceUrl: SOURCE,
+              expected: { kind: "install", pluginId: "acme.demo", archiveHash: PREVIEW_HASH },
+            },
+            expect.any(String)
+          )
         );
       });
 
@@ -4517,19 +4589,21 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
       .mockResolvedValueOnce([])
       .mockReturnValueOnce(read.promise)
       .mockResolvedValue([]);
-    window.electron.plugin.browseCatalog = vi.fn(async () => ({
-      status: "available" as const,
-      listings: [
-        {
-          id: "acme.other",
-          version: "1.0.0",
-          repo: "https://github.com/acme/other",
-          capabilities: [],
-        },
-      ],
-      fetchedAt: Date.now(),
-      stale: false as const,
-    }));
+    window.electron.plugin.browseCatalog = vi.fn(async () =>
+      ownCatalog({
+        status: "available" as const,
+        listings: [
+          {
+            id: "acme.other",
+            version: "1.0.0",
+            repo: "https://github.com/acme/other",
+            capabilities: [],
+          },
+        ],
+        fetchedAt: Date.now(),
+        stale: false as const,
+      })
+    );
     window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
       status: "cancelled" as const,
     }));
@@ -4581,12 +4655,14 @@ describe("PluginManagerView — Browse (#16782)", () => {
 
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
-    window.electron.plugin.browseCatalog = vi.fn(async () => ({
-      status: "available" as const,
-      listings: [LISTING],
-      fetchedAt: Date.now(),
-      stale: false as const,
-    }));
+    window.electron.plugin.browseCatalog = vi.fn(async () =>
+      ownCatalog({
+        status: "available" as const,
+        listings: [LISTING],
+        fetchedAt: Date.now(),
+        stale: false as const,
+      })
+    );
     window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
       status: "preview" as const,
       preview: {
@@ -4680,6 +4756,70 @@ describe("PluginManagerView — Browse (#16782)", () => {
     expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
   });
 
+  it("replaces a copy from another catalog only after naming both catalogs (#17434)", async () => {
+    const SOURCE = "https://plugins.example.org/catalog.json";
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([
+      makePlugin({
+        source: "catalog",
+        catalog: { id: "acme.demo", version: "1.0.0", repo: REPO },
+      }),
+    ]);
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
+      status: "available",
+      listings: [LISTING],
+      fetchedAt: Date.now(),
+      stale: false,
+      added: [
+        {
+          sourceUrl: SOURCE,
+          result: {
+            status: "available",
+            listings: [{ ...LISTING, sourceUrl: SOURCE }],
+            fetchedAt: Date.now(),
+            stale: false,
+          },
+        },
+      ],
+    });
+    vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue({
+      status: "preview",
+      preview: {
+        url: `${REPO}/releases/download/v1.0.0/acme.demo-1.0.0.dntr`,
+        archiveHash: PREVIEW_HASH,
+        installedOnDisk: true,
+        manifest: previewManifest(),
+        catalog: { id: "acme.demo", version: "1.0.0", repo: REPO, sourceUrl: SOURCE },
+        replacesCatalog: {},
+      },
+    });
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+    await openBrowse();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Replace installed acme.demo with the listing from plugins.example.org/catalog.json",
+      })
+    );
+    const dialog = await urlReviewDialog();
+    expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+      { pluginId: "acme.demo", version: "1.0.0", sourceUrl: SOURCE },
+      expect.any(String)
+    );
+    expect(within(dialog).getByTestId("plugin-install-catalog-switch").textContent).toBe(
+      "This replaces the copy installed from Daintree's catalog with the listing from plugins.example.org/catalog.json, and its updates will come from there."
+    );
+    expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+
+    await approveUrlReview();
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceUrl: SOURCE, replacesCatalog: {} }),
+        expect.any(String)
+      )
+    );
+  });
+
   it("returns to Browse when the selection is cleared, and to the installed home when toggled off", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
     renderDialog();
@@ -4740,13 +4880,15 @@ describe("PluginManagerView — Browse (#16782)", () => {
   it.each(LINK_WORDED_FAILURES)(
     "words a %s refusal of a Browse preview for Browse, with no review left open",
     async (code, message) => {
-      vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
-        status: "available",
-        listings: [LISTING],
-        fetchedAt: Date.now() - 60 * 60 * 1000,
-        stale: true,
-        failure: "unreachable",
-      });
+      vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue(
+        ownCatalog({
+          status: "available",
+          listings: [LISTING],
+          fetchedAt: Date.now() - 60 * 60 * 1000,
+          stale: true,
+          failure: "unreachable",
+        })
+      );
       vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue({
         status: "failed",
         errors: [{ code, message }],
@@ -4781,12 +4923,17 @@ describe("PluginManagerView — Browse (#16782)", () => {
 
   it("won't start a Browse install over an uninstall that is waiting on its confirm", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
-    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
-      status: "available",
-      listings: [LISTING, { ...LISTING, id: "acme.other", repo: "https://github.com/acme/other" }],
-      fetchedAt: Date.now(),
-      stale: false,
-    });
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue(
+      ownCatalog({
+        status: "available",
+        listings: [
+          LISTING,
+          { ...LISTING, id: "acme.other", repo: "https://github.com/acme/other" },
+        ],
+        fetchedAt: Date.now(),
+        stale: false,
+      })
+    );
     renderDialog();
     await selectPlugin();
     fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
@@ -4838,10 +4985,9 @@ describe("PluginManagerView — Browse (#16782)", () => {
 
   it("leaves the installed list alone when the catalog can't be read", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
-    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
-      status: "unavailable",
-      failure: "unreachable",
-    });
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue(
+      ownCatalog({ status: "unavailable", failure: "unreachable" })
+    );
     renderDialog();
     await findPluginRowButton("Acme Demo");
     fireEvent.click(browseButton());

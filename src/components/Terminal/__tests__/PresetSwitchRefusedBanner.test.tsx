@@ -189,6 +189,29 @@ describe("PresetSwitchRefusedBanner on an account switch (#16135)", () => {
     expect(screen.getByRole("button", { name: "Back to the default login" })).toBeTruthy();
   });
 
+  it("names the default login by the name the user gave it (#17080)", () => {
+    seed(
+      {
+        ...accountAttempt,
+        target: { kind: "account", accountId: null },
+        prior: { agentPresetId: "company", agentAccountId: "side", cwd: "/repo" },
+        refused: true,
+      },
+      { agentAccountId: undefined }
+    );
+    const settings = useAgentSettingsStore.getState().settings!;
+    useAgentSettingsStore.setState({
+      settings: {
+        ...settings,
+        agents: { codex: { ...settings.agents.codex, defaultLoginName: "Personal" } },
+      },
+    });
+    render(<PresetSwitchRefusedBanner panelId="t1" />);
+    expect(
+      screen.getByRole("button", { name: "Start new on Personal (the default login)" })
+    ).toBeTruthy();
+  });
+
   it("goes back without a name when the account it left has been removed", () => {
     seed(
       {

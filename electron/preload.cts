@@ -28,6 +28,7 @@ import type {
   McpApprovalReason,
   McpHostPreview,
   McpRequester,
+  McpDelegationOffer,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
   McpHelpDisplayImagePayload,
@@ -135,8 +136,10 @@ import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
 import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
+import { buildAgentUsagePreloadBindings } from "./ipc/handlers/agentUsage.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildTerminalWhenDonePreloadBindings } from "./ipc/handlers/terminalWhenDone.preload.js";
+import { buildCodexLimitContinuePreloadBindings } from "./ipc/handlers/codexLimitContinue.preload.js";
 import { buildComposerHoldPreloadBindings } from "./ipc/handlers/composerHold.preload.js";
 import { buildBulkWorktreeRunsPreloadBindings } from "./ipc/handlers/bulkWorktreeRuns.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
@@ -223,6 +226,7 @@ import type {
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
   VoiceLiveLevel,
+  LocalSpeechModelStatus,
   VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
@@ -1743,7 +1747,10 @@ function buildElectronApi(): ElectronAPI {
       close: (projectId: string, options?: { killTerminals?: boolean }) =>
         _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
 
-      sleepProject: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_SLEEP, projectId),
+      sleepProject: (
+        projectId: string,
+        options?: import("../shared/types/ipc/project.js").ProjectSleepOptions
+      ) => _unwrappingInvoke(CHANNELS.PROJECT_SLEEP, projectId, options),
 
       reopen: (
         projectId: string,
@@ -1942,8 +1949,16 @@ function buildElectronApi(): ElectronAPI {
     agentSettings: {
       get: () => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_GET),
 
-      set: (agentId: string, settings: Partial<AgentSettingsEntry>) =>
-        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: agentId, settings }),
+      set: (
+        agentId: string,
+        settings: Partial<AgentSettingsEntry>,
+        options?: { lockContinueAtLimitReset?: boolean }
+      ) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET, {
+          agentType: agentId,
+          settings,
+          ...(options?.lockContinueAtLimitReset === true && { lockContinueAtLimitReset: true }),
+        }),
 
       setGlobal: (value: boolean) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL, value),
 
@@ -1990,6 +2005,15 @@ function buildElectronApi(): ElectronAPI {
 
       onChanged: (callback: (snapshot: AgentToolbarPinsSnapshot) => void) =>
         _typedOn(CHANNELS.AGENT_TOOLBAR_PINS_CHANGED, callback),
+    },
+
+    // The sidebar's agent usage readout (#17318)
+    agentUsage: {
+      ...buildAgentUsagePreloadBindings(_unwrappingInvoke),
+
+      onChanged: (
+        callback: (snapshot: import("../shared/types/ipc/agentUsage.js").AgentUsageSnapshot) => void
+      ) => _typedOn(CHANNELS.AGENT_USAGE_CHANGED, callback),
     },
 
     // An agent's accounts (#16040)
@@ -2109,6 +2133,14 @@ function buildElectronApi(): ElectronAPI {
       ) => {
         ipcRenderer.send(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY, reply);
       },
+    },
+
+    // Continuing a Codex pane once its usage limit resets (#17909)
+    codexLimitContinue: {
+      ...buildCodexLimitContinuePreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (change: IpcEventMap["codex-limit-continue:changed"]) => void) =>
+        _typedOn(CHANNELS.CODEX_LIMIT_CONTINUE_CHANGED, callback),
     },
 
     // A pane composer's send held while its agent works (#16379)
@@ -3252,7 +3284,7 @@ function buildElectronApi(): ElectronAPI {
           xaiApiKey: string;
           anthropicApiKey: string;
           language: string;
-          transcriptionProvider: "openai" | "deepgram" | "grok";
+          transcriptionProvider: "openai" | "deepgram" | "grok" | "local";
           transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
           correctionProvider: "openai" | "anthropic";
@@ -3325,6 +3357,8 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, callback),
       onLiveLevel: (callback: (payload: VoiceLiveLevel) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_LIVE_LEVEL, callback),
+      onLocalModelStatus: (callback: (status: LocalSpeechModelStatus) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_LOCAL_MODEL_STATUS, callback),
       onPauseRequested: (callback: (payload: VoicePauseRequest) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_PAUSE_REQUESTED, callback),
       onSessionVocabulary: (callback: (payload: VoiceSessionVocabulary) => void) =>
@@ -3431,8 +3465,10 @@ function buildElectronApi(): ElectronAPI {
           hostPreview?: McpHostPreview;
           authorization?: McpDispatchAuthorization;
           requester?: McpRequester;
+          delegationOffer?: McpDelegationOffer;
           dispatchDeadlineAt?: number;
           actionsListWalk?: boolean;
+          confirmationCondition?: "next-own-fallback";
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 
@@ -3440,7 +3476,8 @@ function buildElectronApi(): ElectronAPI {
         requestId: string;
         result: unknown;
         confirmationDecision?: "approved" | "rejected" | "timeout";
-        approvalScope?: "once" | "session";
+        approvalScope?: "once" | "session" | "delegate";
+        authorization?: "skip-preference";
       }) => {
         ipcRenderer.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, payload);
       },
@@ -3597,6 +3634,8 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("plugin:actions-changed", callback),
       onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
         _eventBusOn("plugin:provenance-changed", callback),
+      onCatalogSourcesChanged: (callback: (payload: Record<string, never>) => void) =>
+        _eventBusOn("plugin:catalog-sources-changed", callback),
       onSettingsChanged: (callback: (payload: { pluginId: string }) => void) =>
         _eventBusOn("plugin:settings-changed", callback),
       // Direct channel, not the event bus: install progress is targeted at the

@@ -48,6 +48,12 @@ export function agentWorkOf(terminals: readonly CountableTerminal[]): {
   return { active, unreadable };
 }
 
+/** What acts on idleness here needs of the tracker. */
+export type HostIdleActorSource = Pick<
+  HostIdleTracker,
+  "observation" | "checkFresh" | "mayClaim" | "tryClaim" | "noteWork" | "noteWorkIfCurrent"
+>;
+
 const CHECK_INTERVAL_MS = 15_000;
 const READ_TIMEOUT_MS = 10_000;
 
@@ -65,19 +71,26 @@ export function seesWork(reading: HostWorkReading): boolean {
  * When this host last saw work, judged on the host itself so it holds with no
  * Shell attached (#17357). Checks on its own timer, and takes an agent's turn
  * to work from its event at once, so a burst between checks still counts.
- * Nothing here stops anything: whatever acts on idleness reads
- * {@link observation} and checks again before it acts.
+ * Nothing here stops anything: whatever acts on idleness takes a fresh reading
+ * with {@link checkFresh} and claims the ended idle time with {@link tryClaim}
+ * before it acts, so only one of them ever acts on one idle time (#17922).
  */
 export class HostIdleTracker {
   private readonly clock: () => ElapsedStamp;
   private lastWork: ElapsedStamp;
   private busy = true;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private reading: Promise<void> | null = null;
+  private reading: Promise<number | null> | null = null;
   /** Ends the read under way as a failed one: set while it is out. */
   private abandonRead: (() => void) | null = null;
-  /** Counts work noted outside a check, so a check can tell one came while it read. */
-  private workNoted = 0;
+  /**
+   * Counts every time work restarted the clock, noted or found by a check: a
+   * read can tell work came while it was out, and a claim that its reading
+   * still describes the idle time under way.
+   */
+  private workSeen = 0;
+  /** Who claimed the idle time under way; cleared by the next work. */
+  private claimedBy: symbol | null = null;
   private disposed = false;
 
   constructor(private readonly deps: HostIdleTrackerDeps) {
@@ -96,31 +109,65 @@ export class HostIdleTracker {
   /** Work seen outside a check: an agent that just started working or waiting. */
   noteWork(): void {
     if (this.disposed) return;
-    this.workNoted += 1;
-    this.lastWork = this.clock();
-    this.busy = true;
+    this.recordWork();
+  }
+
+  /**
+   * Work, as {@link noteWork}, only while the idle time `reading` was claimed
+   * on is still the one under way: an owner's own attempt that never happened
+   * restarts the clock, never an idle time someone claimed after newer work.
+   */
+  noteWorkIfCurrent(reading: number): void {
+    if (this.disposed || reading !== this.workSeen) return;
+    this.recordWork();
   }
 
   /** One check; a check already under way is shared rather than doubled. */
-  check(): Promise<void> {
-    if (this.disposed) return Promise.resolve();
+  async check(): Promise<void> {
+    if (this.disposed) return;
     this.reading ??= this.readOnce(this.deps.read).finally(() => {
+      this.reading = null;
+    });
+    await this.reading;
+  }
+
+  /**
+   * A check whose read starts now: one already under way may have looked
+   * before the latest work. For whatever acts on idleness, just before it does.
+   * Resolves to the reading to claim with: null when it saw work, failed, or
+   * work came while it was out.
+   */
+  async checkFresh(): Promise<number | null> {
+    while (this.reading) await this.reading;
+    if (this.disposed) return null;
+    this.reading = this.readOnce(this.deps.readFresh ?? this.deps.read).finally(() => {
       this.reading = null;
     });
     return this.reading;
   }
 
   /**
-   * A check whose read starts now: one already under way may have looked
-   * before the latest work. For whatever acts on idleness, just before it does.
+   * Whether `owner` could claim the idle time now, by the latest check: it has
+   * ended and nobody else claimed it. Asks nothing; {@link tryClaim} decides.
    */
-  async checkFresh(): Promise<void> {
-    while (this.reading) await this.reading;
-    if (this.disposed) return;
-    this.reading = this.readOnce(this.deps.readFresh ?? this.deps.read).finally(() => {
-      this.reading = null;
-    });
-    return this.reading;
+  mayClaim(owner: symbol, retryOwn = false): boolean {
+    if (this.disposed || !this.ended(this.clock())) return false;
+    return this.claimedBy === null || (retryOwn && this.claimedBy === owner);
+  }
+
+  /**
+   * Claims the idle time `reading` (from {@link checkFresh}) found for
+   * `owner`, once and for all: until new work restarts the clock, nobody else
+   * is granted it, whatever becomes of the owner. `retryOwn` lets an owner
+   * whose own attempt definitely didn't happen try again on its own claim.
+   * Decided at once, so the caller acts in the same turn it is granted.
+   */
+  tryClaim(reading: number | null, owner: symbol, retryOwn = false): boolean {
+    if (reading === null || reading !== this.workSeen || !this.mayClaim(owner, retryOwn)) {
+      return false;
+    }
+    this.claimedBy = owner;
+    return true;
   }
 
   observation(): HostIdleObservation {
@@ -128,17 +175,11 @@ export class HostIdleTracker {
     const lastWorkAt = this.lastWork.wall;
     if (this.busy) return { idleAfterMinutes, lastWorkAt, busy: true, idleEndsAt: null };
     const now = this.clock();
-    // The lesser of the two clocks: one stepped either way, or a machine
-    // asleep, never makes the idle time end sooner than really passed.
-    const idleFor = Math.max(
-      0,
-      Math.min(now.mono - this.lastWork.mono, now.wall - this.lastWork.wall)
-    );
     return {
       idleAfterMinutes,
       lastWorkAt,
       busy: false,
-      idleEndsAt: now.wall + idleAfterMinutes * 60_000 - idleFor,
+      idleEndsAt: now.wall + idleAfterMinutes * 60_000 - this.elapsed(now),
     };
   }
 
@@ -149,8 +190,28 @@ export class HostIdleTracker {
     this.abandonRead?.();
   }
 
-  private async readOnce(read: () => Promise<HostWorkReading>): Promise<void> {
-    const noted = this.workNoted;
+  /** How long since the last work, by the lesser of the two clocks. */
+  private elapsed(now: ElapsedStamp): number {
+    // One stepped either way, or a machine asleep, never makes the idle time
+    // end sooner than really passed.
+    return Math.max(0, Math.min(now.mono - this.lastWork.mono, now.wall - this.lastWork.wall));
+  }
+
+  /** Whether the idle time has ended by `now`. */
+  private ended(now: ElapsedStamp): boolean {
+    return !this.busy && this.elapsed(now) >= this.deps.idleAfterMinutes() * 60_000;
+  }
+
+  private recordWork(): void {
+    this.workSeen += 1;
+    this.lastWork = this.clock();
+    this.busy = true;
+    this.claimedBy = null;
+  }
+
+  /** The work count this read describes when it found none; null otherwise. */
+  private async readOnce(read: () => Promise<HostWorkReading>): Promise<number | null> {
+    const seen = this.workSeen;
     let reading: HostWorkReading | null;
     try {
       reading = await Promise.race([read.call(this.deps), this.readDeadline()]);
@@ -159,14 +220,13 @@ export class HostIdleTracker {
     } finally {
       this.abandonRead?.();
     }
-    if (this.disposed) return;
+    if (this.disposed) return null;
     if (reading === null || seesWork(reading)) {
-      this.lastWork = this.clock();
-      this.busy = true;
-      return;
+      this.recordWork();
+      return null;
     }
     // Work noted while this read was out is newer than what it saw.
-    if (this.workNoted !== noted) return;
+    if (this.workSeen !== seen) return null;
     if (this.busy) {
       // The read's parts are taken at different moments during it, and the
       // work may have ended only just before the last: the idle time counts
@@ -174,6 +234,7 @@ export class HostIdleTracker {
       this.lastWork = this.clock();
       this.busy = false;
     }
+    return seen;
   }
 
   /** Resolves null once a read has taken too long, or is abandoned. */

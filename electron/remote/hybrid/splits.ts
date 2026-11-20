@@ -49,6 +49,11 @@ import { mergeByOwnership, splitByOwnership } from "./fieldOwnership.js";
 import { sshTargetOf } from "../client/connection.js";
 import { expectAccountSignIn } from "../plugins/accountSignIn.js";
 import { wslUncPath } from "../../../shared/utils/wslPath.js";
+import {
+  pluginBrowseCatalog,
+  pluginInstallFromCatalog,
+  pluginPreviewFromCatalog,
+} from "./pluginCatalogSplits.js";
 
 type SplitCall = Parameters<HybridSplit>[0];
 
@@ -642,6 +647,10 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
     (host) => `Opening a folder on ${host} from this window isn't available yet.`
   ),
   [CHANNELS.SCRATCH_SWITCH]: scratchSwitch,
+  // Which catalogs the person trusts is this machine's setting (#17434).
+  [CHANNELS.PLUGIN_BROWSE_CATALOG]: pluginBrowseCatalog,
+  [CHANNELS.PLUGIN_PREVIEW_FROM_CATALOG]: pluginPreviewFromCatalog,
+  [CHANNELS.PLUGIN_INSTALL_FROM_CATALOG]: pluginInstallFromCatalog,
   [CHANNELS.PLUGIN_INSTALL_FROM_FILE]: refuse(
     (host) => `Installing a plugin file from this computer on ${host} isn't available yet.`
   ),
@@ -691,6 +700,10 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.NOTIFICATION_SESSION_MUTE_SET,
   // The sign-in runs on the host; its browser half is asked back of the calling Shell.
   CHANNELS.PLUGIN_ACCOUNT_CONNECT,
+  // Browse and catalog installs, with the calling Shell's catalogs (#17434).
+  CHANNELS.PLUGIN_BROWSE_CATALOG,
+  CHANNELS.PLUGIN_PREVIEW_FROM_CATALOG,
+  CHANNELS.PLUGIN_INSTALL_FROM_CATALOG,
   // Answer a remote caller with the page's URL, for its Shell to open.
   CHANNELS.FORGE_OPEN_PR,
   CHANNELS.FORGE_OPEN_PRS,

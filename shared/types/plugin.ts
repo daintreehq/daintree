@@ -4096,7 +4096,45 @@ export interface PluginCatalogProvenance {
   version: string;
   /** `https://github.com/{owner}/{repo}`, as the catalog lists it. */
   repo: string;
+  /**
+   * The catalog that listed the release, when it is one the person added
+   * (#17434), as its normalized URL. Absent means Daintree's own catalog, which
+   * is what every record written before added catalogs existed reads as, so
+   * those installs keep checking where they always did.
+   */
+  sourceUrl?: string;
 }
+
+/**
+ * Why a catalog URL wasn't added (#17434): not an `https://` URL that parses
+ * (`malformed`, `insecure`), carries a user name or password (`credentials`),
+ * names a private or loopback host (`private-host`), is longer than the limit
+ * (`too-long`), is Daintree's own catalog (`builtin`), is already in the list
+ * (`duplicate`), or the list is full (`too-many`).
+ */
+export type PluginCatalogSourceRefusal =
+  | "malformed"
+  | "insecure"
+  | "credentials"
+  | "private-host"
+  | "too-long"
+  | "builtin"
+  | "duplicate"
+  | "too-many";
+
+/**
+ * The catalogs this machine's person added beside Daintree's own (#17434), in
+ * the order they were added, each as its normalized URL. Kept in their own
+ * settings, never a repository's, and never synced to a host.
+ */
+export interface PluginCatalogSources {
+  sources: string[];
+}
+
+/** Outcome of adding a catalog: the list as it now stands either way. */
+export type PluginCatalogSourceAddResult =
+  | { status: "added"; sourceUrl: string; sources: string[] }
+  | { status: "refused"; reason: PluginCatalogSourceRefusal; sources: string[] };
 
 /**
  * Why a recognised `daintree://plugin/install` link was refused before
@@ -4108,6 +4146,7 @@ export interface PluginCatalogProvenance {
  * - `malformed-sha256` — `sha256` isn't 64 hex digits
  * - `malformed-id` — `id` isn't a community plugin id (`publisher.name`, outside `daintree.*`)
  * - `malformed-version` — `version` isn't a semver version
+ * - `malformed-source` — `source` isn't an `https://` catalog URL (#17434)
  * - `conflicting-params` — parameters that don't belong together, or repeat
  */
 export type PluginDeepLinkRefusal =
@@ -4116,6 +4155,7 @@ export type PluginDeepLinkRefusal =
   | "malformed-sha256"
   | "malformed-id"
   | "malformed-version"
+  | "malformed-source"
   | "conflicting-params";
 
 /**
@@ -4130,9 +4170,11 @@ export type PluginDeepLinkRefusal =
  *   user presses install, so the HTTP warning fires before the preview. With
  *   `&sha256=<64 hex>` (https only) the archive is previewed straight away and
  *   only an archive with that digest can be previewed or installed.
- * - `install-catalog` — `daintree://plugin/install?id=<publisher.name>[&version=]`:
+ * - `install-catalog` — `daintree://plugin/install?id=<publisher.name>[&version=][&source=]`:
  *   resolves the release from a freshly fetched community catalog (the newest
  *   one when no version is named), previews it, and installs only its digest.
+ *   `source` names a catalog the person added (#17434); a link can't add one,
+ *   so a catalog they haven't added is refused before anything is fetched.
  * - `install-refused` — a recognised install link that is malformed; the
  *   Plugin Manager says why.
  * - `open` — `daintree://plugin/open?id=<publisher.name>`: opens the Plugin
@@ -4140,7 +4182,7 @@ export type PluginDeepLinkRefusal =
  */
 export type PluginDeepLinkIntent =
   | { action: "install"; url: string; sha256?: string }
-  | { action: "install-catalog"; pluginId: string; version?: string }
+  | { action: "install-catalog"; pluginId: string; version?: string; sourceUrl?: string }
   | { action: "install-refused"; reason: PluginDeepLinkRefusal }
   | { action: "open"; pluginId: string };
 
@@ -4234,26 +4276,50 @@ export interface PluginUrlInstallPreview {
    * rather than trusting `url`.
    */
   catalog?: PluginCatalogProvenance;
+  /**
+   * Set when the installed copy came from a different catalog than this
+   * release (#17434), naming that catalog (`sourceUrl` absent is Daintree's
+   * own). Installing replaces that copy, and its updates then come from this
+   * release's catalog.
+   */
+  replacesCatalog?: { sourceUrl?: string };
 }
 
 /**
  * A catalog release to preview (#16779): `version` omitted means the newest
- * one the catalog lists.
+ * one the catalog lists. `sourceUrl` names a catalog the person added
+ * (#17434); omitted, it is Daintree's own.
  */
 export interface PluginCatalogPreviewRequest {
   pluginId: string;
   version?: string;
+  sourceUrl?: string;
 }
 
 /**
  * The confirm of a catalog release's preview. Main looks the release up in a
- * fresh catalog again and refuses unless it still lists this `version` from
- * this `repo` with the digest in `expected`, which must name `pluginId`.
+ * fresh copy of the catalog `sourceUrl` names (Daintree's own when omitted)
+ * again and refuses unless it still lists this `version` from this `repo` with
+ * the digest in `expected`, which must name `pluginId`.
+ *
+ * `intent: "update"` is the update an installed copy was offered (#16781): its
+ * catalog must be the one that copy was installed from, so an update never
+ * moves a plugin to another catalog, and that catalog needn't still be in the
+ * person's list. Otherwise the catalog must be one they added (#17434).
+ * `sourceUrl` and `intent` are new: an older Daintree reads the request as
+ * one for its own catalog, and the preview it answers names no `sourceUrl`.
  */
 export interface PluginCatalogInstallRequest {
   pluginId: string;
   version: string;
   repo: string;
+  sourceUrl?: string;
+  intent?: "update";
+  /**
+   * The preview's {@link PluginUrlInstallPreview.replacesCatalog}, echoed back
+   * so the install is refused if the installed copy changed catalogs since.
+   */
+  replacesCatalog?: { sourceUrl?: string };
   expected: PluginInstallExpectation;
 }
 
@@ -4276,6 +4342,11 @@ export interface PluginCatalogListing {
   repo: string;
   /** The manifest's list at review time. Display only: it grants nothing. */
   capabilities: string[];
+  /**
+   * The catalog that lists it, stamped by main rather than read from the
+   * catalog (#17434). Absent for Daintree's own.
+   */
+  sourceUrl?: string;
 }
 
 /**
@@ -4298,6 +4369,32 @@ export type PluginCatalogBrowseResult =
       failure: PluginCatalogFailure;
     }
   | { status: "unavailable"; failure: PluginCatalogFailure };
+
+/**
+ * What `plugin.browseCatalog` may carry (#17434): the added catalogs a remote
+ * window's machine lists, sent by that machine's main process. A local window
+ * sends nothing, and main reads its own list.
+ */
+export interface PluginCatalogBrowseRequest {
+  sourceUrls?: string[];
+}
+
+/** One catalog's part of a Browse read (#17434); `sourceUrl` absent is Daintree's own. */
+export interface PluginCatalogSourceBrowse {
+  sourceUrl?: string;
+  result: PluginCatalogBrowseResult;
+}
+
+/**
+ * Outcome of `plugin.browseCatalog` (#17434): Daintree's own catalog, in the
+ * shape it always had so an older Daintree reading the answer still lists it,
+ * and under `added` each catalog the person added, in their order. Each is
+ * read on its own, so one that can't be read never hides the others. An older
+ * host answers without `added`.
+ */
+export type PluginCatalogsBrowseResult = PluginCatalogBrowseResult & {
+  added?: PluginCatalogSourceBrowse[];
+};
 
 /**
  * Outcome of `plugin.previewFromUrl` and `plugin.previewFromCatalog`. Failures
@@ -4539,7 +4636,9 @@ export interface InstalledPluginRecord {
  * - `catalog_not_listed` — the fresh catalog doesn't list the plugin, or that version of it
  * - `catalog_mismatch` — the archive or the listing no longer matches the release that was
  *   reviewed: its manifest names another plugin or version, or the confirm found the entry's
- *   digest or repository changed since the preview
+ *   digest or repository changed since the preview, or an update names another catalog than
+ *   the installed copy came from
+ * - `catalog_source_unknown` — the release names a catalog the person hasn't added (#17434)
  */
 export type PluginInstallErrorCode =
   | "lock_failed"
@@ -4564,7 +4663,8 @@ export type PluginInstallErrorCode =
   | "catalog_unavailable"
   | "catalog_stale"
   | "catalog_not_listed"
-  | "catalog_mismatch";
+  | "catalog_mismatch"
+  | "catalog_source_unknown";
 
 /**
  * Structured install validation error. `path` is the JSON pointer segments
@@ -4621,6 +4721,19 @@ export interface PluginInstallOptions {
    * install IPC.
    */
   catalog?: PluginCatalogProvenance;
+  /**
+   * Main-only, with `catalog`: the other catalog the reviewed preview said
+   * this install replaces a copy from (#17434), or `null` when it said none.
+   * Checked under the install lock against the installed record, so a copy
+   * that changed catalogs since the review isn't replaced unseen. Transient.
+   */
+  catalogReplaces?: { sourceUrl?: string } | null;
+  /**
+   * Main-only, with `catalog`: this is the update an installed copy was
+   * offered (#17434). Under the install lock it lands only on a copy still
+   * installed from the same catalog, and only over an older version. Transient.
+   */
+  catalogUpdate?: boolean;
   /**
    * Correlation id for progress reporting and cancellation (#11302). Minted by
    * the caller that wants feedback; omitting it installs exactly as before, just
@@ -5330,6 +5443,63 @@ export type PluginSendToAgentRefusalReason =
   | "busy";
 
 /**
+ * Where Pilot places an agent run, worst-first: the same band every Daintree
+ * surface sorts the run into, so a plugin's list and Pilot agree on which run
+ * needs the user. Read from the user's own decisions first, then the agent's
+ * own report, then Canopy's reading when it is on, then the state the host
+ * observed off the terminal — an ordering, never a guarantee about what the
+ * agent is doing.
+ *
+ * - `blocked` — stopped on an error.
+ * - `needs-you` — asking the user something: the agent printed that it needs
+ *   them, or Canopy read its stop as an approval or question the user hasn't
+ *   had in front of them.
+ * - `quiet` — working, but its terminal has been silent long enough to look
+ *   stalled.
+ * - `review` — stopped after work, or on an approval or question wait, that
+ *   the user hasn't looked at since.
+ * - `running` — working.
+ * - `done` — stopped after work the user has seen.
+ * - `parked` — the user parked it.
+ * - `snoozed` — the user snoozed it.
+ * - `idle` — nothing to report: a shell at its prompt, a session restored
+ *   with no work since, an ask already seen.
+ */
+export type PluginAgentBand =
+  // `FleetBand`, spelled out so the SDK bundle never pulls the fleet types and
+  // their panel imports; pinned to it by a type test.
+  "blocked" | "needs-you" | "quiet" | "review" | "running" | "done" | "parked" | "snoozed" | "idle";
+
+/**
+ * Canopy's reading, when it is what placed a run in its band: a suggestion
+ * from the local model the user turned on, never an observation. Advisory —
+ * show it as "read by Canopy", not as fact.
+ *
+ * What it read follows from the band it placed the run in: an ask for
+ * `needs-you` (or `idle` once seen), a wait that asks nothing for `review`
+ * (or `done` once seen), a screen standing still behind its spinner for
+ * `quiet`.
+ */
+export interface PluginAgentCanopyNote {
+  /** When the screen behind the reading was read (epoch ms). */
+  readonly readAt: number;
+  /**
+   * Which ask the reading saw, when it read one: an approval of something the
+   * agent is about to do, or a question only the user can answer. Absent when
+   * the reading isn't an ask, or didn't say which.
+   */
+  readonly ask?: "approval" | "question";
+  /**
+   * The question, verbatim from the screen. Only on an ask, and only for a
+   * plugin that declares `terminal:read` and is a built-in or holds the user's
+   * lasting grant of it ("Allow and remember" at a
+   * {@link PluginTerminalsApi.readScreen} prompt): reading the list never
+   * raises the consent prompt itself. Up to 160 characters.
+   */
+  readonly quote?: string;
+}
+
+/**
  * One agent pane in the plugin's project, as {@link PluginAgentsApi.list}
  * reports it.
  *
@@ -5371,14 +5541,26 @@ export interface PluginAgentPane {
    * sent there with `{ hostId }` since this machine last started.
    */
   readonly launchedByThisPlugin: boolean;
+  /**
+   * The band Pilot places the run in. Absent when the host has no place for
+   * it: before it has read its agents once, for a pane it hasn't read yet, and
+   * in a view of a Remote Host's project.
+   */
+  readonly band?: PluginAgentBand;
+  /** Present when Canopy's reading is what placed the run in {@link band}. */
+  readonly canopy?: PluginAgentCanopyNote;
 }
 
 /**
- * An agent pane without `launchedByThisPlugin`: what the project's view
- * reports, and what a `createMockHost` fixture supplies. Who launched a pane is
- * answered only from the host's own launch record, never from the pane itself.
+ * An agent pane as the project's view reports it: without
+ * `launchedByThisPlugin`, `band` or `canopy`. Who launched a pane, and where
+ * Pilot places it, are answered only from the host's own records, never from
+ * the pane itself.
  */
-export type PluginAgentPaneObservation = Omit<PluginAgentPane, "launchedByThisPlugin">;
+export type PluginAgentPaneObservation = Omit<
+  PluginAgentPane,
+  "launchedByThisPlugin" | "band" | "canopy"
+>;
 
 /**
  * One agent run anywhere in the app, as {@link PluginAgentsApi.listAll}
@@ -5407,6 +5589,13 @@ export interface PluginAgentRun {
   readonly agentId?: string;
   /** Last observed agent state, when there is one. An observation, not a fact. */
   readonly observedState?: AgentState;
+  /**
+   * The band Pilot places the run in. Present on every run the host reports;
+   * optional only so a test fixture written before it still compiles.
+   */
+  readonly band?: PluginAgentBand;
+  /** Present when Canopy's reading is what placed the run in {@link band}. */
+  readonly canopy?: PluginAgentCanopyNote;
 }
 
 /**

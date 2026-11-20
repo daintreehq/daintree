@@ -41,6 +41,7 @@ import {
   platformLabel,
   isLoginRefused,
   removeHostOutcome,
+  STARTS_ON_CONNECT_COVERAGE,
 } from "./hostLabels";
 import { SshSignInDialog } from "./SshSignInDialog";
 import { useSshSignIn } from "./useSshSignIn";
@@ -189,7 +190,11 @@ export function HostDetail({
   // Only an ssh target can be changed here; another kind of connection is shown as it is.
   const sshTarget = sshTargetOf(descriptor.connection);
   const wslDistro = wslDistroOf(descriptor.connection);
-  const removeOutcome = removeHostOutcome(descriptor.connection, hostName);
+  const removeOutcome = removeHostOutcome(
+    descriptor.connection,
+    hostName,
+    descriptor.startsOnConnect === true
+  );
   const [changeTargetOpen, setChangeTargetOpen] = useState(false);
   const changeTargetButtonRef = useRef<HTMLButtonElement | null>(null);
   const connected = connection.status === "connected";
@@ -471,6 +476,12 @@ export function HostDetail({
               }
             />
           )}
+          {descriptor.startsOnConnect === true && (
+            <SettingsRow
+              label="Kept running"
+              description={`${hostName} has no systemd for a Host mode service, so Host mode runs in the background once started. ${STARTS_ON_CONNECT_COVERAGE}`}
+            />
+          )}
           <SettingsRow
             label="Daintree build"
             description={
@@ -676,6 +687,7 @@ export function HostDetail({
           status={cloud}
           providerName={cloudProvider?.name ?? "the provider"}
           provider={cloudProvider}
+          startsOnConnect={descriptor.startsOnConnect === true}
           onClose={() => setConfirmRemove(false)}
           onRemoved={() => onBack(false)}
         />

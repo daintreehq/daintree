@@ -1,5 +1,6 @@
 import type { ActionRegistry } from "../actionTypes";
 import { decisionsClient } from "@/clients/decisionsClient";
+import { inboxGroupOf } from "@/components/Decisions/decisionsInboxModel";
 import { readDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { isWaitingOnPerson } from "@/hooks/useDecisionsWaitingCount";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
@@ -82,8 +83,10 @@ export function registerDecisionsActions(actions: ActionRegistry): void {
     keywords: ["decisions", "question", "next", "waiting", "answer", "reply"],
     run: async () => {
       const list = await decisionsClient.listQuestions();
-      const waiting = list.questions.filter(isWaitingOnPerson);
-      const next = waiting[0];
+      // Every question still in Needs you, opened at the oldest the person hasn't seen yet (#17895):
+      // one they've seen and left is still theirs to answer, one they cleared isn't stepped to.
+      const waiting = list.questions.filter((item) => inboxGroupOf(item) === "needs-you");
+      const next = waiting.find(isWaitingOnPerson) ?? waiting[0];
       // Switched off while the list was read: nothing it held is still asked.
       if (next === undefined || !runnable()) return;
       useDecisionsQuestionViewStore.getState().openReference(

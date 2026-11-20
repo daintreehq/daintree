@@ -4,6 +4,7 @@ import type {
   Project,
   ProjectAddOptions,
   ProjectCloseResult,
+  ProjectSleepOptions,
   ProjectSleepResult,
   ProjectCreationIdentity,
 } from "@shared/types";
@@ -385,8 +386,9 @@ interface ProjectState {
    * and the layout survives, so reopening restores it like a relaunch. When the
    * project is the one on screen this also drops the window to the no-project
    * state, the way {@link closeActiveProject} does but without wiping state.
+   * `options` carries what the user's request saw of its agents (#17886).
    */
-  sleepProject: (projectId: string) => Promise<ProjectSleepResult>;
+  sleepProject: (projectId: string, options?: ProjectSleepOptions) => Promise<ProjectSleepResult>;
   /**
    * Drop this window to the no-project state without touching main — the local
    * half of {@link sleepProject}, reused when another window slept the project
@@ -1520,7 +1522,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     clearPanelStoreForSwitchThroughAccessor({ destroyInstances: true });
   },
 
-  sleepProject: async (projectId) => {
+  sleepProject: async (projectId, options) => {
     const isActive = get().currentProject?.id === projectId;
 
     // Main broadcasts `project:slept` while this call is still in flight, and
@@ -1550,7 +1552,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       }
 
       const projectName = get().projects.find((p) => p.id === projectId)?.name ?? "the project";
-      const result = await projectClient.sleepProject(projectId);
+      const result = await projectClient.sleepProject(projectId, options);
       notifyPluginWorkStopped(projectName, result.pluginWorkStopped);
 
       if (isActive) {

@@ -3,9 +3,19 @@ import { decisionsClient } from "@/clients/decisionsClient";
 import { groupOf } from "@/components/Decisions/decisionsInboxModel";
 import type { DecisionQuestionListItem } from "@shared/types/decisionsQuestion";
 
-/** A question waits on the person while it can be answered: the inbox's "Needs you" group. */
-export function isWaitingOnPerson(item: Pick<DecisionQuestionListItem, "standing">): boolean {
-  return groupOf(item.standing) === "needs-you";
+/**
+ * A question waits on the person while it can be answered and they haven't
+ * seen or cleared what it asks now (#17895): the inbox's "Needs you" group,
+ * less what they've already looked at or set aside on this computer.
+ */
+export function isWaitingOnPerson(
+  item: Pick<DecisionQuestionListItem, "standing" | "inbox">
+): boolean {
+  return (
+    groupOf(item.standing) === "needs-you" &&
+    item.inbox?.seen !== true &&
+    item.inbox?.cleared !== true
+  );
 }
 
 /**

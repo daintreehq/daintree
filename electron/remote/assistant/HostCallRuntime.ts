@@ -3,6 +3,11 @@ import {
   globalAssistantMayRelay,
   isGlobalAssistantId,
 } from "../../../shared/config/globalAssistant.js";
+import {
+  ASSISTANT_GLOBAL_CLOSE_CONFIRMATION,
+  ASSISTANT_GLOBAL_CLOSE_TOOL,
+  ASSISTANT_PRESET_MOVE_DELEGATE,
+} from "../../../shared/config/assistantConfirmationDelegation.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../shared/utils/launchInNewWorktree.js";
@@ -45,7 +50,12 @@ import {
   type HostThrowawayRefusal,
 } from "../../../shared/types/hostThrowaway.js";
 import type { HostBringBackAnswer } from "../../../shared/types/hostWake.js";
-import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
+import {
+  HostSettingsRequests,
+  type HostSettingsRequestDeps,
+  type WindowApprovalAnswer,
+} from "./HostSettingsRequests.js";
+import type { PreparedAssistantDelegation } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import { HostWatches, type AgentWatchRead, type HostWatchListener } from "./HostWatches.js";
 import type { AgentWaitingListener } from "../metrics/agentWaiting.js";
 import { runHostBringBack } from "./hostBringBack.js";
@@ -126,7 +136,7 @@ import {
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
 import { OWNED_RESOURCE_TOOLS } from "../../services/mcp-server/sessionCallOwnership.js";
 import { HOST_ALWAYS_ASKS_ACTION_IDS } from "../client/hostDispatchableActions.js";
-import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
+import type { McpDelegationOffer } from "../../../shared/types/ipc/mcpServer.js";
 import { createLogger } from "../../utils/logger.js";
 
 const logger = createLogger("main:HostCallRuntime");
@@ -192,6 +202,11 @@ export interface OpenRun {
   sessionId: string;
   terminalId: string;
   launchGeneration: number;
+  /**
+   * The conversation its lane runs, as main minted it (#17919): a host holds
+   * what the run makes there under it, so the conversation resumed keeps it.
+   */
+  conversationOwnershipId?: string;
 }
 
 export interface HostCallRuntimeDeps {
@@ -266,7 +281,7 @@ export interface HostCallRuntimeDeps {
    * host's own preview. Null when it couldn't be asked there; absent, no host
    * is ever answered.
    */
-  askApproval?(ask: RelayApprovalQuestion): Promise<McpConfirmationDecision | null>;
+  askApproval?(ask: RelayApprovalQuestion): Promise<WindowApprovalAnswer | null>;
   /**
    * Whether a help session's assistant runs its call to `calledActionId`
    * with Daintree's confirmations skipped here (#15698, #16752): the person's
@@ -274,6 +289,23 @@ export interface HostCallRuntimeDeps {
    * says. Absent, or throwing, every relayed call that would ask still asks.
    */
   confirmationsSkipped?(helpSessionId: string, calledActionId: string): boolean;
+  /**
+   * "Don't ask again for this kind of action" for a dialog about a help
+   * session's call to `calledActionId` (#16752): this machine's preference
+   * for that session's assistant, never a host's. Null when it can't be
+   * offered; absent, or throwing, nothing is.
+   */
+  prepareDelegation?(
+    helpSessionId: string,
+    calledActionId: string
+  ): PreparedAssistantDelegation | null;
+  /**
+   * Whether a help session's assistant may run its call to `calledActionId`
+   * unasked once the view holding the pane finds it that pane's next own
+   * fallback step (#17917): this machine's own preference, read at each
+   * dispatch. Absent, or throwing, the call asks.
+   */
+  checksNextFallback?(helpSessionId: string, calledActionId: string): boolean;
   /**
    * Makes sure one of this machine's projects is on a host, with no window
    * (#14140): the Shell's switch service. Absent, no project is ever brought.
@@ -373,6 +405,8 @@ export interface RelayApprovalQuestion {
    * the host's own wait for the answer. Absent from a host too old to say.
    */
   holdUntil?: number;
+  /** "Don't ask again for this kind of action", for the tool the assistant called (#16752). */
+  delegation?: McpDelegationOffer;
 }
 
 /** A relayed call out to a host right now, and the run here that made it. */
@@ -402,11 +436,32 @@ interface CallInFlight {
   sends: number;
 }
 
+/** A host's dispatch into this Shell's view, naming one of this Shell's own calls. */
+interface RelayedDispatch {
+  callId: string;
+  helpSessionId: string;
+  projectId: string;
+  actionId: string;
+  args: unknown;
+}
+
 /**
  * The confirm-gated actions a host may ask this Shell to approve (#13501):
  * the ones its own form of the action can preview with no view there.
  */
 const RELAY_APPROVABLE: ReadonlySet<string> = new Set(["worktree.delete"]);
+
+/**
+ * The global Assistant's close of finished agents it didn't launch (#16750),
+ * by the action a host asks about and the tool the call must have been: one
+ * owned close, asked about as the close it stands in for, or a batch asked
+ * about whole. Only a host's ask that says how it read each stop is one of
+ * these, and only about a call the global Assistant made.
+ */
+const GLOBAL_CLOSE_ASKS: ReadonlyMap<string, string> = new Map([
+  ["terminal.close", ASSISTANT_GLOBAL_CLOSE_TOOL],
+  ["terminal.closeMany", "terminal.closeMany"],
+]);
 
 /** What a host's MCP server runs a call with: its arguments less the request's own keys. */
 function relayedActionArgs(args: Record<string, unknown>): Record<string, unknown> {
@@ -471,7 +526,18 @@ function runsAsCall(call: CallInFlight, actionId: string, args: unknown): boolea
  * in for, on the same id and nothing else.
  */
 function asksAboutCall(call: CallInFlight, payload: RelayApprovePayload): boolean {
-  if (!RELAY_APPROVABLE.has(payload.actionId)) return false;
+  const closeTool = GLOBAL_CLOSE_ASKS.get(payload.actionId);
+  if (closeTool !== undefined) {
+    if (
+      payload.closeClass === undefined ||
+      call.tool !== closeTool ||
+      !isGlobalAssistantId(call.run.projectId)
+    ) {
+      return false;
+    }
+  } else if (payload.closeClass !== undefined || !RELAY_APPROVABLE.has(payload.actionId)) {
+    return false;
+  }
   if (canonicalArgsHash(payload.actionId, payload.args) !== payload.argsHash) return false;
   return runsAsCall(call, payload.actionId, payload.args);
 }
@@ -618,7 +684,7 @@ const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts
 const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
 const CALL_GLOBAL_WITHHELD_DETAIL =
-  "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, and closes, restarts or deletes only what it launched there or the user handed it. Ask the user to do it.";
+  "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, closes finished ones with `terminal.closeOwned` or `terminal.closeMany`, and restarts or deletes only what it launched there. Ask the user to do it.";
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -989,6 +1055,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           return false;
         }
       },
+      prepareDelegation: (helpSessionId) =>
+        this.prepareDelegation(helpSessionId, HOST_SETTINGS_TOOL),
       now: () => this.now(),
       newId: () => this.newId(),
     });
@@ -1127,16 +1195,55 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * preference, read now: nothing the host sends turns it on. The host is
    * the connection's, never the payload's.
    */
-  skipsRelayedDispatch(
-    hostId: HostId,
-    dispatch: {
-      callId: string;
-      helpSessionId: string;
-      projectId: string;
-      actionId: string;
-      args: unknown;
+  skipsRelayedDispatch(hostId: HostId, dispatch: RelayedDispatch): boolean {
+    const call = this.relayedDispatchCall(hostId, dispatch);
+    if (call === undefined || !this.skipsConfirmations(call, dispatch.actionId)) return false;
+    this.grantSkip(call);
+    return true;
+  }
+
+  /**
+   * Whether a host's dispatch, matched to one of this Shell's own calls as
+   * {@link skipsRelayedDispatch} matches it, is a preset move its view may
+   * run unasked if that view finds it the pane's next own fallback step
+   * (#17917). The call's one ask goes to that view, which either runs the
+   * move or asks itself. Answers with what to call once the view says it ran
+   * the move, bound to this call's own record so a resend that replaces it
+   * under the id can't take the note; null when nothing is offered.
+   */
+  offersNextFallback(hostId: HostId, dispatch: RelayedDispatch): (() => void) | null {
+    if (dispatch.actionId !== ASSISTANT_PRESET_MOVE_DELEGATE) return null;
+    const call = this.relayedDispatchCall(hostId, dispatch);
+    if (call === undefined) return null;
+    let offered: boolean;
+    try {
+      offered = this.deps.checksNextFallback?.(call.helpSessionId, call.tool) === true;
+    } catch (error) {
+      logger.warn("Couldn't read the assistant's confirmations preference", { error });
+      return null;
     }
-  ): boolean {
+    if (!offered) return null;
+    call.asked = true;
+    return () => {
+      if (!call.skipped) this.grantSkip(call);
+      // A resend of this very call to the same host, recorded afresh after
+      // another send replaced this record under the id, joined the same run.
+      const current = this.callsInFlight.get(dispatch.callId);
+      if (
+        current !== undefined &&
+        current !== call &&
+        current.hostId === call.hostId &&
+        current.helpSessionId === call.helpSessionId &&
+        sameCall(current, call) &&
+        !current.skipped
+      ) {
+        this.grantSkip(current);
+      }
+    };
+  }
+
+  /** The call a host's dispatch runs, while it may still be answered without asking. */
+  private relayedDispatchCall(hostId: HostId, dispatch: RelayedDispatch): CallInFlight | undefined {
     const call = this.callsInFlight.get(dispatch.callId);
     if (
       this.disposed ||
@@ -1147,13 +1254,82 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       call.projectId !== dispatch.projectId ||
       !runsAsCall(call, dispatch.actionId, dispatch.args) ||
       !this.stillRunning(call.run) ||
-      !this.controlOn(hostId) ||
-      !this.skipsConfirmations(call, dispatch.actionId)
+      !this.controlOn(hostId)
     ) {
-      return false;
+      return undefined;
     }
-    this.grantSkip(call);
-    return true;
+    return call;
+  }
+
+  /**
+   * "Don't ask again for this kind of action" on the dialog a host's dispatch
+   * into this Shell's view raises (#16752), for one of this Shell's own
+   * assistants' calls, matched exactly as {@link skipsRelayedDispatch}
+   * matches it and settled on the tool the assistant called. Its commit
+   * writes only while that call is still out from the run that made it and
+   * the person's control switch for the host is still on. Null otherwise.
+   */
+  relayedDelegation(
+    hostId: HostId,
+    dispatch: {
+      callId: string;
+      helpSessionId: string;
+      projectId: string;
+      actionId: string;
+      args: unknown;
+    }
+  ): PreparedAssistantDelegation | null {
+    const call = this.callsInFlight.get(dispatch.callId);
+    if (
+      this.disposed ||
+      call === undefined ||
+      call.hostId !== hostId ||
+      call.helpSessionId !== dispatch.helpSessionId ||
+      call.projectId !== dispatch.projectId ||
+      HOST_ALWAYS_ASKS_ACTION_IDS.has(dispatch.actionId) ||
+      !runsAsCall(call, dispatch.actionId, dispatch.args) ||
+      !this.stillRunning(call.run) ||
+      !this.controlOn(hostId)
+    ) {
+      return null;
+    }
+    return this.callDelegation(call, dispatch.callId);
+  }
+
+  /**
+   * The hand-over a dialog about `call` may offer, whose commit holds only
+   * while the call is still the one out under `callId`, from a run still
+   * running, with the host's control switch on.
+   */
+  private callDelegation(
+    call: CallInFlight,
+    callId: string,
+    calledActionId: string = call.tool
+  ): PreparedAssistantDelegation | null {
+    const prepared = this.prepareDelegation(call.helpSessionId, calledActionId);
+    if (prepared === null) return null;
+    return {
+      offer: prepared.offer,
+      approved: () => prepared.approved(),
+      commit: () =>
+        this.callsInFlight.get(callId) === call &&
+        this.stillRunning(call.run) &&
+        this.controlOn(call.hostId) &&
+        prepared.commit(),
+    };
+  }
+
+  /** The hand-over a dialog may offer, or null when it can't be read or offered. */
+  private prepareDelegation(
+    helpSessionId: string,
+    calledActionId: string
+  ): PreparedAssistantDelegation | null {
+    try {
+      return this.deps.prepareDelegation?.(helpSessionId, calledActionId) ?? null;
+    } catch (error) {
+      logger.warn("Couldn't read the assistant's confirmations preference", { error });
+      return null;
+    }
   }
 
   /** Spends a call's one ask on the skip, and tells every send of it still out. */
@@ -1172,10 +1348,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * hand over that. Callers have already matched the dispatch to the call. A
    * failed read keeps the dialog.
    */
-  private skipsConfirmations(call: CallInFlight, actionId: string): boolean {
+  private skipsConfirmations(
+    call: CallInFlight,
+    actionId: string,
+    calledActionId: string = call.tool
+  ): boolean {
     if (HOST_ALWAYS_ASKS_ACTION_IDS.has(actionId)) return false;
     try {
-      return this.deps.confirmationsSkipped?.(call.helpSessionId, call.tool) === true;
+      return this.deps.confirmationsSkipped?.(call.helpSessionId, calledActionId) === true;
     } catch (error) {
       logger.warn("Couldn't read the assistant's confirmations preference", { error });
       return false;
@@ -1339,15 +1519,27 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       return answer("refused");
     }
     call.asked = true;
+    // A close of finished agents is one kind of action however it was called
+    // (#16750), so a batch answers to the same tick as one close. One the host saw
+    // stopped on an error is the person's alone: no skip and no tick reach
+    // it, and its dialog offers none.
+    const personOnly = payload.closeClass === "requires-person";
+    const calledActionId =
+      payload.closeClass !== undefined ? ASSISTANT_GLOBAL_CLOSE_CONFIRMATION : call.tool;
     // The person's own "Never ask" covers their assistant's call on a host as
     // it does one here (#15698): nobody is asked, and the host is told so.
-    if (this.skipsConfirmations(call, payload.actionId)) {
+    if (!personOnly && this.skipsConfirmations(call, payload.actionId, calledActionId)) {
       this.grantSkip(call);
       return answer("skip-preference");
     }
-    let decision: McpConfirmationDecision | null;
+    // Settled on the tool the assistant called (#16752), never the action
+    // the host asks about: an owned delete is asked about as `worktree.delete`.
+    const delegation = personOnly
+      ? null
+      : this.callDelegation(call, payload.callId, calledActionId);
+    let reply: WindowApprovalAnswer | null;
     try {
-      decision = await ask({
+      reply = await ask({
         hostId,
         helpSessionId: payload.helpSessionId,
         actionId: payload.actionId,
@@ -1357,11 +1549,13 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         ...("holdBudgetMs" in payload
           ? { holdUntil: remoteHoldUntil(receivedAt, payload.holdBudgetMs) }
           : {}),
+        ...(delegation !== null ? { delegation: delegation.offer } : {}),
       });
     } catch (error) {
       logger.warn("Asking about a host's call failed", { error });
-      decision = null;
+      reply = null;
     }
+    const decision = reply?.decision ?? null;
     // The call can end, or its run be replaced, while the person decides.
     if (
       decision === "approved" &&
@@ -1370,6 +1564,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         !this.controlOn(hostId))
     ) {
       return answer("refused");
+    }
+    // The host is told only the decision; the tick is this Shell's own.
+    if (decision === "approved" && reply?.delegate === true && delegation !== null) {
+      delegation.approved();
+      delegation.commit();
     }
     return answer(decision ?? "refused");
   }
@@ -1709,6 +1908,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         runMs,
         // From the runtime's own lane, so no argument the model passes can set or clear it.
         ...(isGlobalAssistantId(caller.projectId) ? { global: true as const } : {}),
+        ...(caller.conversationOwnershipId !== undefined
+          ? { conversationId: caller.conversationOwnershipId }
+          : {}),
       };
       const noted = resend
         ? NOTHING_NOTED

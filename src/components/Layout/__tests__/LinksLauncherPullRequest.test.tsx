@@ -118,7 +118,13 @@ describe("useLauncherPullRequestChecks", () => {
 describe("LinksLauncherPullRequest loading", () => {
   function section(checks: Parameters<typeof LinksLauncherPullRequest>[0]["checks"]) {
     return (
-      <LinksLauncherPullRequest pullRequest={PR} checks={checks} sectionId="s" onOpen={() => {}} />
+      <LinksLauncherPullRequest
+        pullRequest={PR}
+        checks={checks}
+        sectionId="s"
+        onOpen={() => {}}
+        onOpenExternal={() => {}}
+      />
     );
   }
 

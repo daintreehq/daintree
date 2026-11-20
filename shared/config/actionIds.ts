@@ -307,6 +307,7 @@ export const BUILT_IN_ACTION_IDS = [
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "project.sleepAll",
   "project.remove",
   "project.archive",
   "project.unarchive",
@@ -436,6 +437,8 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.listAccounts",
+  "agent.addAccount",
   "agent.listModels",
   "agentSessionHistory.list",
   "agentSessionHistory.resume",
@@ -470,6 +473,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.restartOnPreset",
   "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
   "terminal.startHeld",
   "terminal.redraw",
   "terminal.resetModes",
@@ -606,6 +610,13 @@ export const BUILT_IN_ACTION_IDS = [
   "devPreview.toggleTool",
   "devPreview.toggleElementPicker",
 
+  // -- diffActions --
+  "diff.nextChange",
+  "diff.previousChange",
+  "diff.nextFile",
+  "diff.previousFile",
+  "diff.toggleViewed",
+
   // -- devPreviewActions --
   "devPreview.reloadPreview",
   "devPreview.restart",
@@ -714,6 +725,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.readLastMessageOwned",
   // Main checks ownership before dispatching it; nothing in its `run()` does.
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",
@@ -749,4 +761,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  // Makes credential folders and changes what later launches sign in as; the
+  // person ticks each one in a dialog a plugin dispatch never raises (#17079).
+  "agent.addAccount",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

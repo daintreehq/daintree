@@ -10,6 +10,8 @@ export * from "./brands";
 // Each was chosen to fit the metaphor.
 export {
   Activity, // project pulse / live activity heartbeat
+  AlarmClock, // a pane waiting to be continued at a set time — once its usage limit resets
+  AlarmClockCheck, // a pane continued at its set time — its usage limit reset and the line went in
   AlarmClockOff, // a project exempt from automatic sleep — the idle timer never runs out on it
   AppWindow, // where an opened folder or host lands — a window of its own or the current one
   Archive, // file a project away — out of the switcher's main list, everything about it kept
@@ -32,7 +34,7 @@ export {
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from the observed finished ring (DoneCircle)
   CircuitBoard, // an infrastructure branch (infra/) — system wiring, kept apart from the host machine's Server
-  CircleArrowUp, // a CLI below the version Daintree needs, or a host whose build was refused — the same up-arrow-in-a-circle plugins show for an available update
+  CircleArrowUp, // a CLI below the version Daintree needs, a host whose build was refused, or a pane whose CLI installed an update — the same up-arrow-in-a-circle plugins show for an available update
   CircleCheck, // a check that passed or a step that is done (setup, forge, review) — a finished agent draws DoneCircle on the family's own ring instead
   CircleDashed, // a check or step that has not run yet (PR checks, setup) — Pilot's snoozed band draws SnoozedCircle on the family's own ring instead
   CircleDot, // an open issue on forge surfaces — Pilot's idle band draws IdleCircle on the family's own ring instead
@@ -67,6 +69,7 @@ export {
   Hourglass, // an environment reporting it is still coming up (starting, provisioning) — a shape beside the neutral status word, so the word keeps its contrast
   Info, // a NOTE alert in rendered Markdown — GitHub's info glyph, the same shape the info severity wears through SEVERITY_GLYPH
   KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
+  Laptop, // on-device transcription — the speech model runs on this computer, so the audio stays on it
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Lightbulb, // a TIP alert in rendered Markdown — GitHub's light bulb, kept apart from the success check mark, since a tip says nothing finished
@@ -109,5 +112,6 @@ export {
   TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors; also a WARNING alert in rendered Markdown
   Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there; also detaching a project attachment (Cable) from the worktree holding it
   UserRound, // an agent's account — who it signs in as, chosen apart from its preset (#16040)
+  UserRoundCheck, // one account used everywhere — the agent's default, with every worktree pick and preset pin on another account cleared (#17893)
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

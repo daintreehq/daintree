@@ -125,6 +125,7 @@ describe("terminal resource-metrics fan-out", () => {
     ptyClient = Object.assign(new EventEmitter(), {
       // "p3-t0" belongs to p3; anything else, "resource-governor" included, to no project.
       getTerminalProjectId: (id: string) => /^(\w+)-t\d+$/.exec(id)?.[1] ?? null,
+      isUnplacedTerminal: () => false,
     });
     const disposeTerminal = registerTerminalEventHandlers({
       ptyClient,

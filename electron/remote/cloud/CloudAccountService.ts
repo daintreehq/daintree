@@ -21,6 +21,7 @@ import {
 import { AppError } from "../../utils/errorTypes.js";
 import type { CloudCredentialVault } from "./CloudCredentialVault.js";
 import {
+  cloudMachineClaim,
   readPluginProviderLabel,
   type CloudHostStore,
   type StoredCloudAccount,
@@ -239,7 +240,9 @@ export class CloudAccountService {
     return [...this.deps.providers.values()].map((provider) => {
       const info = provider.info(this.deps.platform ?? process.platform);
       const plugin = this.consentFor(info.id);
-      return plugin ? { ...info, plugin } : info;
+      const hostIdleStop =
+        provider.machineKeys !== undefined || typeof provider.checkGuestPowerOff === "function";
+      return { ...info, ...(plugin ? { plugin } : {}), hostIdleStop };
     });
   }
 
@@ -770,8 +773,14 @@ export class CloudAccountService {
     values: CloudCredentialValues
   ): Promise<void> {
     const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
-    // A create sent and not yet found is looked for, and deleted, with the account's key.
-    if (bound.some((binding) => binding.resourceId === null && binding.creation?.sentAt != null)) {
+    // A create sent and not yet found is looked for, and deleted, with the account's key; one
+    // still being readied (Agent 37 registers its key first) is about to be sent with it (#17928).
+    // One whose host was never added (a crash between the two writes) is never sent.
+    if (
+      bound.some(
+        (binding) => binding.resourceId === null && binding.creation && binding.hostId !== null
+      )
+    ) {
       throw invalid(
         "A machine this account asked for hasn't been confirmed yet, and a new key may not see it. Replace the key once it has, or remove that host first."
       );
@@ -943,9 +952,7 @@ export class CloudAccountService {
       this.noteFailure(account, provider, error);
       throw this.asAppError(provider, error);
     }
-    const bindings = this.deps.store
-      .bindings()
-      .filter((binding) => binding.providerId === account.providerId);
+    const bindings = this.deps.store.bindings();
     return resources
       .filter((resource) => resource.machine !== "deleted")
       .map((resource) => ({
@@ -959,8 +966,9 @@ export class CloudAccountService {
         createdAt: resource.createdAt,
         stoppedAt: resource.stoppedAt,
         dataExpired: resource.dataExpired,
+        // A machine an unanswered create may have made is that host's until it's settled.
         boundHostId:
-          bindings.find((binding) => binding.resourceId === resource.resourceId)?.hostId ?? null,
+          cloudMachineClaim(bindings, account.providerId, resource)?.binding.hostId ?? null,
         restricted: resource.restricted,
         asleep: resource.machine === "stopped" && resource.asleep === true,
       }));

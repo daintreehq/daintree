@@ -273,6 +273,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           originalAgentPresetId: t.originalAgentPresetId,
           everDetectedAgent: t.everDetectedAgent,
           agentIncarnation: t.agentIncarnation,
+          updateInstalled: t.updateInstalled,
           detectedAgentId: t.detectedAgentId,
           detectedProcessId: t.detectedProcessId,
         }));
@@ -329,6 +330,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           originalAgentPresetId: t.originalAgentPresetId,
           everDetectedAgent: t.everDetectedAgent,
           agentIncarnation: t.agentIncarnation,
+          updateInstalled: t.updateInstalled,
           detectedAgentId: t.detectedAgentId,
           detectedProcessId: t.detectedProcessId,
         }));
@@ -374,6 +376,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           originalAgentPresetId: t.originalAgentPresetId,
           everDetectedAgent: t.everDetectedAgent,
           agentIncarnation: t.agentIncarnation,
+          updateInstalled: t.updateInstalled,
           detectedAgentId: t.detectedAgentId,
           detectedProcessId: t.detectedProcessId,
         }));
@@ -547,6 +550,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         originalAgentPresetId: terminal.originalAgentPresetId,
         everDetectedAgent: terminal.everDetectedAgent,
         agentIncarnation: terminal.agentIncarnation,
+        updateInstalled: terminal.updateInstalled,
         detectedAgentId: terminal.detectedAgentId,
         detectedProcessId: terminal.detectedProcessId,
       };

@@ -54,6 +54,11 @@ import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
 import type { GitDiffSide } from "../../shared/types/git.js";
 import type { GitFileDiffResult } from "../../shared/types/ipc/git.js";
 import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
+import type {
+  IdlePauseCheck,
+  IdlePausePreparation,
+  IdlePauseRunOutcome,
+} from "../../shared/types/idlePause.js";
 import type { HostLoadKind } from "./ProjectSwitchStatusTiming.js";
 import type { CopyTreeOperationOwner, CopyTreeOwnerPredicate } from "./copyTreeOperationOwner.js";
 
@@ -124,6 +129,10 @@ const FETCH_WORKTREE_TIMEOUT_MS = 5 * 60_000;
  * so it gets the same ceiling a view's delete over its port has.
  */
 const MERGED_WORKTREE_REMOVAL_TIMEOUT_MS = 20 * 60_000;
+/** Reads config and approvals from disk, behind whatever the host is doing. */
+const IDLE_PAUSE_CHECK_TIMEOUT_MS = 30_000;
+/** A manual pause's own budget: its commands are bounded host-side by the environment's timeout. */
+const IDLE_PAUSE_RUN_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * A host's worktree snapshot read plus its own "is there a repository here"
@@ -1247,6 +1256,65 @@ export class WorkspaceClient extends EventEmitter {
     } finally {
       release();
     }
+  }
+
+  /**
+   * Asks the workspace host that has this worktree whether an idle pause of
+   * it may run (#17925). Only a host already running: one started for this
+   * would hold no box status to check the pause against, and would refuse.
+   */
+  async prepareIdlePause(worktreeId: string): Promise<IdlePausePreparation> {
+    const worktreePath = pathResolve(worktreeId);
+    const projectPath = this.pool.entries.has(worktreePath)
+      ? worktreePath
+      : this.pool.worktreePathToProject.get(worktreePath);
+    const entry = projectPath === undefined ? undefined : this.pool.entries.get(projectPath);
+    if (!entry || !entry.host.isReady()) {
+      return { ok: false, reason: "No running workspace host has the worktree" };
+    }
+    const current = () => this.pool.entries.get(projectPath!) === entry && entry.host.isReady();
+    let check: IdlePauseCheck | undefined;
+    try {
+      ({ check } = await entry.host.sendWithResponse<{ check?: IdlePauseCheck }>(
+        { type: "idle-pause-check", requestId: entry.host.generateRequestId(), worktreeId },
+        IDLE_PAUSE_CHECK_TIMEOUT_MS
+      ));
+    } catch (error) {
+      return { ok: false, reason: formatErrorMessage(error, "The check went unanswered") };
+    }
+    if (!check) return { ok: false, reason: "The workspace host sent no answer" };
+    if (!check.ok) return check;
+    if (!current()) return { ok: false, reason: "The project's workspace host restarted" };
+    const guard = check.guard;
+    return {
+      ok: true,
+      guard,
+      run: () => {
+        if (!current()) {
+          return Promise.resolve({ ran: false, reason: "The project's workspace host restarted" });
+        }
+        return entry.host
+          .sendWithResponse<{ outcome?: IdlePauseRunOutcome }>(
+            {
+              type: "idle-pause-run",
+              requestId: entry.host.generateRequestId(),
+              worktreeId,
+              guard,
+            },
+            IDLE_PAUSE_RUN_TIMEOUT_MS
+          )
+          .then(
+            ({ outcome }): IdlePauseRunOutcome =>
+              outcome ?? { ran: true, success: false, error: "The workspace host sent no answer" },
+            // Posted, so it may have started: told as a failure, never tried again.
+            (error: unknown): IdlePauseRunOutcome => ({
+              ran: true,
+              success: false,
+              error: `No answer came back, so the pause may not have run (${formatErrorMessage(error, "no answer")})`,
+            })
+          );
+      },
+    };
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {

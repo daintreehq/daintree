@@ -1,8 +1,8 @@
-import type { HostIdleObservation } from "../../../shared/types/hostIdle.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { lifetimeRenewalDue, stopUnderWay } from "../cloud/lifetimeRenewal.js";
 import type { MachineKeeperArmRequest, MachineKeeperStatus } from "../cloud/machineKeeperLink.js";
 import type { ProviderResource } from "../cloud/provider.js";
+import type { HostIdleActorSource } from "./HostIdleTracker.js";
 
 /** What a failed request means for the key: try again later, or it no longer works. */
 export type MachineKeeperFailure = { kind: "retry" } | { kind: "lost"; problem: string };
@@ -18,12 +18,7 @@ export interface MachineDriver {
 }
 
 export interface MachineKeeperDeps {
-  idle: {
-    observation(): HostIdleObservation;
-    /** A check whose read starts now, after any already under way. */
-    checkFresh(): Promise<void>;
-    noteWork(): void;
-  };
+  idle: HostIdleActorSource;
   /** The driver for a key, or why this host can't use it. */
   driverFor(request: MachineKeeperArmRequest): MachineDriver | string;
   now?: () => number;
@@ -81,11 +76,16 @@ export class MachineKeeper {
   private reading: { resource: ProviderResource; at: number } | null = null;
   private retryAt = 0;
   private failures = 0;
-  /** A stop seen under way, or this machine's own sent (its outcome perhaps unknown), until it runs again. */
-  private stopping: { since: number; own: boolean } | null = null;
+  /**
+   * A stop seen under way, or this machine's own sent (its outcome perhaps
+   * unknown) with the idle time it claimed, until it runs again.
+   */
+  private stopping: { since: number; claimed: number | null } | null = null;
   private marker: string | null = null;
   /** Arms in the order they came, so a late one from a link since gone can't land over a newer one. */
   private arms: Promise<unknown> = Promise.resolve();
+  /** Who this keeper is to the idle clock, when it claims an idle time to stop on. */
+  private readonly claimant = Symbol("machine-keeper");
   private disposed = false;
 
   constructor(private readonly deps: MachineKeeperDeps) {}
@@ -261,14 +261,20 @@ export class MachineKeeper {
     const restartedBetweenLooks = this.marker !== null && marker !== this.marker;
     this.marker = marker;
     if (resource.machine !== "running" || stopUnderWay(resource.stop)) {
-      this.stopping ??= { since: now, own: false };
+      // Seen taking effect: running again from here is a start, whoever's stop it was.
+      if (this.stopping) this.stopping.claimed = null;
+      else this.stopping = { since: now, claimed: null };
       return;
     }
     if (this.stopping) {
+      const { since, claimed } = this.stopping;
       // Its own stop may not show yet; past that, running means the stop was overtaken.
-      if (this.stopping.own && now - this.stopping.since < STOP_SETTLE_MS) return;
+      if (claimed !== null && now - since < STOP_SETTLE_MS) return;
       this.stopping = null;
-      this.deps.idle.noteWork();
+      // A start after a stop is use; its own stop never seen taking effect is use only for the
+      // idle time it claimed, never for one a Shell claimed after newer work.
+      if (claimed !== null && !restartedBetweenLooks) this.deps.idle.noteWorkIfCurrent(claimed);
+      else this.deps.idle.noteWork();
       return;
     }
     if (restartedBetweenLooks) this.deps.idle.noteWork();
@@ -305,7 +311,9 @@ export class MachineKeeper {
       } else if (idle.busy) {
         await this.keepRunning(held, read, current, signal);
       } else if (idle.idleEndsAt !== null && idle.idleEndsAt <= this.now()) {
-        await this.stopIdle(held, read, current, signal);
+        if (this.deps.idle.mayClaim(this.claimant))
+          await this.stopIdle(held, read, current, signal);
+        else await this.followSpent(read);
       }
       if (current()) {
         this.failures = 0;
@@ -343,6 +351,16 @@ export class MachineKeeper {
     if (current()) this.reading = { resource: renewed, at: this.now() };
   }
 
+  /**
+   * An idle time someone else claimed: nothing is sent, but the machine is
+   * still read now and then, so a stop and start at the provider is use.
+   */
+  private async followSpent(read: () => Promise<ProviderResource>): Promise<void> {
+    const cached = this.reading;
+    if (cached !== null && this.now() - cached.at < READING_TTL_MS) return;
+    await read();
+  }
+
   private renewalDue(resource: ProviderResource): boolean {
     if (resource.machine !== "running" || stopUnderWay(resource.stop)) return false;
     const lifetime = resource.lifetimeSeconds;
@@ -355,7 +373,9 @@ export class MachineKeeper {
   /**
    * Idle past its idle time: stop the machine, once the provider confirms it
    * is still running with no stop under way and a check of the host started
-   * after that answer still sees no work.
+   * after that answer still sees no work and claims the idle time for this
+   * keeper, so a Shell that claimed it first is never followed by a stop here.
+   * A stop sent is followed by reading the machine, never by a second claim.
    */
   private async stopIdle(
     held: HeldKey,
@@ -367,11 +387,12 @@ export class MachineKeeper {
     if (!current() || this.stopping !== null) return;
     // A stop would erase a disk nothing saves; Daintree never makes or takes such a machine.
     if (resource.snapshotsDisabled) return;
-    await this.deps.idle.checkFresh();
-    const idle = this.deps.idle.observation();
-    if (!current() || idle.busy || idle.idleEndsAt === null || idle.idleEndsAt > this.now()) return;
+    const reading = await this.deps.idle.checkFresh();
+    // A key that lapsed meanwhile can't stop the machine, so it spends no idle time either.
+    if (!current() || this.stopping !== null || this.now() >= held.expiresAt) return;
+    if (reading === null || !this.deps.idle.tryClaim(reading, this.claimant)) return;
     // Recorded before it goes: an answer lost on the way back still leaves it followed, never sent twice.
-    this.stopping = { since: this.now(), own: true };
+    this.stopping = { since: this.now(), claimed: reading };
     const stopping = await held.driver.stop(signal);
     if (current() && stopping) this.reading = { resource: stopping, at: this.now() };
   }

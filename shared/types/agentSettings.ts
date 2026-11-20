@@ -154,6 +154,8 @@ export interface AgentSettingsEntry {
     fallbackOnRateLimit?: boolean;
     /** Reopen the same conversation on a usage-limit hop (#16045). */
     keepConversationOnRateLimit?: boolean;
+    /** Launch panes armed to continue once their usage limit resets (#17912). */
+    continueAtLimitReset?: boolean;
     /** The account a launch of this preset signs in as, unless overridden (#16133). */
     accountId?: string;
   }>;
@@ -168,6 +170,13 @@ export interface AgentSettingsEntry {
    * Host-local: the folders are this machine's.
    */
   accounts?: AgentAccount[];
+  /**
+   * A name the user gave the CLI's own default login (#17080), shown beside
+   * "default login" wherever that login is offered. Display only: a launch on
+   * the default login still sets no account folder. Host-local, like
+   * `accounts`, since each machine's default login is its own.
+   */
+  defaultLoginName?: string;
   /**
    * Agent-level default account; absent launches on the CLI's default login.
    * A preset's own pinned account wins over it (#16133).

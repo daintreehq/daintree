@@ -19,6 +19,20 @@ export const LinkMethod = {
   /** Shell → Host: the project this Shell last showed here, if the Host still has it. */
   LAST_ACTIVE_PROJECT: "host.last-active-project",
   /**
+   * Shell → Host, right before the Shell acts on the Host's idleness (#17922):
+   * the Host reads afresh and grants this link its ended idle time, at most
+   * once per idle time. A Host from before it answers `UNSUPPORTED`.
+   */
+  CLAIM_IDLE: "host.claim-idle",
+  /**
+   * Shell → Host, for a Shell standing in for a cloud machine's own idle stop
+   * that was refused (#17924): as {@link LinkMethod.CLAIM_IDLE}, but refused
+   * while one of the Host's keepers would stop its machine itself, so a
+   * keeper given a working key or permission meanwhile keeps that idle time.
+   * A Host from before it answers `UNSUPPORTED`.
+   */
+  CLAIM_IDLE_STAND_IN: "host.claim-idle-stand-in",
+  /**
    * Shell → Host, on a resumed session: the endpoints this Shell holds. Any
    * other the Host kept for it, and not opened again since, was closed in a
    * frame still queued when the link dropped.
@@ -129,6 +143,13 @@ export const HostInfoSchema = z.object({
 });
 
 export const EmptyPayloadSchema = z.union([z.null(), z.undefined(), z.object({}).strict()]);
+
+/**
+ * The Host's answer to {@link LinkMethod.CLAIM_IDLE}: granted, the idle time
+ * that ended is this link's alone to act on, now; refused, nothing is.
+ */
+export const IdleClaimAnswerSchema = z.object({ granted: z.boolean() });
+export type IdleClaimAnswer = z.infer<typeof IdleClaimAnswerSchema>;
 
 export const DescribeProjectPayloadSchema = z.object({ projectId: z.string().min(1).max(256) });
 

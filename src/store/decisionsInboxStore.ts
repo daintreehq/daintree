@@ -9,6 +9,8 @@ export interface DecisionsInboxRequest {
   terminalId: string | null;
   /** Rises with every opening, so opening again while open still lands. */
   seq: number;
+  /** When it opened (epoch ms): the clock deadlines in the list are read against. */
+  openedAt?: number;
 }
 
 interface DecisionsInboxState {
@@ -29,7 +31,11 @@ export const useDecisionsInboxStore = create<DecisionsInboxState>()((set) => ({
   open: (options) =>
     set((state) => ({
       isOpen: true,
-      request: { terminalId: options?.terminalId ?? null, seq: state.request.seq + 1 },
+      request: {
+        terminalId: options?.terminalId ?? null,
+        seq: state.request.seq + 1,
+        openedAt: Date.now(),
+      },
     })),
   close: () => set({ isOpen: false }),
 }));

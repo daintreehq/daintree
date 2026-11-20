@@ -235,6 +235,10 @@ vi.mock("@/services/TerminalInstanceService", () => {
     onDisabled: vi.fn(() => vi.fn()),
     onActive: vi.fn(() => vi.fn()),
   },
+  // The update-installed listener's bus subscription (#17905).
+  events: {
+    on: vi.fn(() => vi.fn()),
+  },
 };
 
 const { usePanelStore, setupTerminalStoreListeners, cleanupTerminalStoreListeners } =

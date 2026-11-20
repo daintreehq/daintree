@@ -14,6 +14,7 @@ import { PluginPanelReloadConfirmDialog } from "@/components/Plugin/PluginPanelR
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { ImportConfigDialogGate } from "@/components/Config/ImportConfigDialogGate";
 import { ProjectDialogHost } from "./ProjectDialogHost";
+import { WakeContinueDialog } from "@/components/WakeContinue/WakeContinueDialog";
 import { DecisionQuestionHost } from "@/components/Decisions/DecisionQuestionHost";
 import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
 import { DecisionsInboxHost } from "@/components/Decisions/DecisionsInboxHost";
@@ -978,6 +979,8 @@ export function AppLayout({
       {/* Not under the sidebar: these open from actions, the palette and
           keybindings too, so they must answer whatever the sidebar shows. */}
       {hasWorkspace && isHydrated && <ProjectDialogHost />}
+      {/* Above the grid, so its keys never reach the note being written (#17883). */}
+      {hasWorkspace && isHydrated && <WakeContinueDialog />}
       {/* Outside the workspace gate: any window can show a question by its
           reference, and this computer's answers needing attention, so a
           notification's click opens them wherever it lands (#17232, #17235). */}

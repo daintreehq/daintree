@@ -52,6 +52,7 @@ import { resolveVisiblePanelId, restorePanelsPhase } from "./panelRestorePhase";
 import { isRemoteWindow, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
+import { publishWakeCandidates } from "@/services/wakeContinue/wakeContinue";
 
 /**
  * Record which machine this view's project lives on. A remote view also asks
@@ -628,6 +629,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           logHydrationInfo,
         });
         const { restoreTasks } = restoreResult;
+        // The agents this restore started again with their conversations get
+        // a continue-note offer; nothing is sent unless the user asks (#17883).
+        publishWakeCandidates(currentWorkspaceId, restoreResult.wakeCandidates ?? []);
         // Capture the saved→restored panel id remap so the tab-group block
         // below (outside this try) can keep group membership intact when a
         // panel respawned with a fresh id (#10440).

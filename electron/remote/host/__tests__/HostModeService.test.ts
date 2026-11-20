@@ -626,6 +626,48 @@ describe("HostModeService enabling from host setup", () => {
     });
   });
 
+  it("where no init system runs, asks setup for no start at login and records that a connection starts it", async () => {
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service, settings } = makeService({
+      startAtLogin: null,
+      startsOnConnect: true,
+      writeStatus: async (observation) => void recorded.push(observation),
+    });
+    const status = await service.enableFromSetup();
+    expect(settings()).toEqual({ enabled: true, startAtLogin: false, advertise: true });
+    await waitFor(() => recorded.length > 0);
+    expect(recorded.at(-1)).toMatchObject({
+      enabled: true,
+      startMethod: "on-connect",
+      startAtLogin: false,
+      startAtLoginInstalled: null,
+      startAtLoginError: null,
+    });
+    expect(row(status, "start-at-login")).toMatchObject({
+      state: "unavailable",
+      detail: expect.stringContaining("Not available without systemd"),
+    });
+
+    // Asked for anyway, from the host's own switch: it says why it can't.
+    await service.setEnabled({ enabled: true, startAtLogin: true });
+    await waitFor(() => recorded.at(-1)?.startAtLoginError != null);
+    expect(recorded.at(-1)).toMatchObject({
+      startMethod: "on-connect",
+      startAtLogin: false,
+      startAtLoginError: "it needs systemd, which this machine doesn't run",
+    });
+  });
+
+  it("records no start method where start at login applies", async () => {
+    const recorded: Array<Record<string, unknown>> = [];
+    const { service } = makeService({
+      writeStatus: async (observation) => void recorded.push(observation),
+    });
+    await service.setEnabled({ enabled: true });
+    await waitFor(() => recorded.length > 0);
+    expect(recorded.every((r) => !("startMethod" in r))).toBe(true);
+  });
+
   it("records a start-at-login failure in the host's words, and records nothing twice", async () => {
     const recorded: Array<{ startAtLoginError: string | null; startAtLogin: boolean }> = [];
     const { service } = makeService({

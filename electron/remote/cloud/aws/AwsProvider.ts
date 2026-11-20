@@ -867,12 +867,13 @@ export class AwsProvider implements CloudProvider {
 
   async stop(
     credentials: ProviderCredentials,
-    resourceId: string
+    resourceId: string,
+    options: { once?: boolean } = {}
   ): Promise<ProviderResource | null> {
     const { region, instanceId } = requireResourceId(resourceId);
     let state: string | null;
     try {
-      state = await this.client.stopInstance(this.ctx(credentials, region), instanceId);
+      state = await this.client.stopInstance(this.ctx(credentials, region), instanceId, options);
     } catch (error) {
       return this.joinTransition(credentials, resourceId, error, ["stopping", "stopped"]);
     }

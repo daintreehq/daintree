@@ -189,6 +189,7 @@ describe("useMcpBridge", () => {
         authorization?: "tier" | "user" | "session-grant" | "native-grant" | "skip-preference";
         requester?:
           { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
+        delegationOffer?: { label: string; detail: string; switchesMode?: true };
         dispatchDeadlineAt?: number;
         actionsListWalk?: boolean;
       }) => void | Promise<void>)
@@ -807,6 +808,38 @@ describe("useMcpBridge", () => {
     });
     // Main runs this call itself on the answer, so nothing here claims a run (#14989).
     expect(holdDispatch).not.toHaveBeenCalledWith(expect.objectContaining({ phase: "approved" }));
+  });
+
+  // #16752: main's own assistant's question about another machine's call, with
+  // the hand-over main settled; the view reports the tick, main writes it.
+  it("puts main's hand-over offer in the dialog and reports the tick beside the approval", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "host.settings", title: "Change settings" }));
+    const offer = { label: "Change a host's settings", detail: "Only as previewed" };
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-hand-over",
+      actionId: "host.settings",
+      args: {},
+      sessionOrigin: "external",
+      approvalOnly: true,
+      hostPreview: { lines: ["Canopy: unset → on"] },
+      delegationOffer: offer,
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.delegationOffer).toEqual(offer);
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "delegate");
+    await dispatched;
+
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-hand-over",
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+      approvalScope: "delegate",
+    });
   });
 
   // #14992: the dialog names the pane that asked, as this view names it when

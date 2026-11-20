@@ -15,6 +15,7 @@ import {
   type DecisionsServiceOptions,
   type DecisionsStoreOpener,
   type HostServedQuestions,
+  type QuestionInboxFacts,
 } from "../DecisionsService.js";
 import type { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
@@ -24,7 +25,7 @@ import type {
   DecisionsStatusEvent,
   PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
-import { answers, outstandingRows, qid, row } from "./questionRows.js";
+import { answers, messages, outstandingRows, qid, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
 import type { QuestionReadScope } from "../questionContent.js";
@@ -40,6 +41,12 @@ import type {
   SetDecisionsInvolvementPayload,
 } from "../../../../shared/types/decisionsInvolvement.js";
 import { HANDLED_ANSWERS_META_KEY } from "../attentionList.js";
+import {
+  QUESTION_MARKS_META_KEY,
+  markKey,
+  parseQuestionMarks,
+  serializeQuestionMarks,
+} from "../questionMarks.js";
 import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
 import {
   FakeAdapter,
@@ -602,6 +609,8 @@ describe("DecisionsService question list (#17229)", () => {
     let rows: QuestionRow[] = [];
     let reads = 0;
     let handled = options.handled ?? null;
+    // The person's marks (#17895) as stored, or an error to throw reading them.
+    let marks: string | Error | null = null;
     // Set to hold the next read until the test lets it land.
     let gate: Promise<void> | null = null;
     const listeners = new Set<() => void>();
@@ -617,10 +626,18 @@ describe("DecisionsService question list (#17229)", () => {
         if (gate !== null) await gate;
         return read;
       },
-      getMeta: async (key: string) =>
-        key === HANDLED_ANSWERS_META_KEY && handled !== null ? JSON.stringify(handled) : null,
+      getMeta: async (key: string) => {
+        if (key === QUESTION_MARKS_META_KEY) {
+          if (marks instanceof Error) throw marks;
+          return marks;
+        }
+        return key === HANDLED_ANSWERS_META_KEY && handled !== null
+          ? JSON.stringify(handled)
+          : null;
+      },
     } as unknown as DaintreeLocalStore;
     const lists: DecisionQuestionListItem[][] = [];
+    const inboxes: Array<QuestionInboxFacts | undefined> = [];
     const listing: boolean[] = [];
     const hostLists: Array<HostServedQuestions | null> = [];
     const panes: PaneDecisionState[] = [];
@@ -628,9 +645,10 @@ describe("DecisionsService question list (#17229)", () => {
       openStore: async () => store,
       keyFilePath: () => ABSENT_KEY_FILE,
       publishPaneState: (_projectId, state) => panes.push(state),
-      publishQuestions: (questions, nowListing) => {
+      publishQuestions: (questions, nowListing, inbox) => {
         lists.push([...questions]);
         listing.push(nowListing);
+        inboxes.push(inbox);
       },
       publishHostQuestions: (list) =>
         hostLists.push(list === null ? null : { ...list, questions: [...list.questions] }),
@@ -646,6 +664,8 @@ describe("DecisionsService question list (#17229)", () => {
       service,
       store,
       lists,
+      inboxes,
+      setMarks: (next: string | Error | null) => (marks = next),
       listing,
       hostLists,
       panes,
@@ -813,6 +833,67 @@ describe("DecisionsService question list (#17229)", () => {
     await service.stop();
   });
 
+  it("lists the person's marks and what each question in Needs you asks with the first list (#17895)", async () => {
+    const { service, inboxes, setRows, setMarks } = listed();
+    const record = serializeQuestionMarks(
+      new Map([
+        [
+          markKey({ hostId: "host_1", questionId: qid(1) }),
+          { hostId: "host_1", questionId: qid(1), ask: "note-1", seen: false, cleared: true },
+        ],
+      ])
+    );
+    setMarks(record);
+    setRows([
+      row(1, {
+        messages_json: messages({
+          message_id: "note-1",
+          side: "agent",
+          event_seq: 4,
+          delivery: null,
+        }),
+      }),
+      row(2, { local_status: "expired" }),
+    ]);
+    await service.start(on(HOST));
+    await vi.waitFor(() => expect(inboxes.length).toBeGreaterThan(0));
+
+    const first = inboxes.find((inbox) => inbox !== undefined)!;
+    // Only a question in Needs you has an ask; one that expired asks nothing.
+    expect(first.asks).toEqual(new Map([[qid(1), "note-1"]]));
+    expect([...first.marks.values()]).toEqual([
+      { hostId: "host_1", questionId: qid(1), ask: "note-1", seen: false, cleared: true },
+    ]);
+    await service.stop();
+  });
+
+  it("keeps the marks it last read when a read of them fails", async () => {
+    const { service, inboxes, setRows, setMarks, commit } = listed();
+    const record = serializeQuestionMarks(
+      new Map([
+        [
+          markKey({ hostId: "host_1", questionId: qid(1) }),
+          { hostId: "host_1", questionId: qid(1), ask: null, seen: true, cleared: false },
+        ],
+      ])
+    );
+    setMarks(record);
+    setRows([row(1)]);
+    await service.start(on(HOST));
+    await vi.waitFor(() => expect(inboxes.at(-1)?.marks.size).toBe(1));
+
+    setMarks(new Error("SQLITE_BUSY"));
+    await commit([row(1), row(2)]);
+    expect(inboxes.at(-1)?.marks).toEqual(parseQuestionMarks(record));
+    expect(inboxes.at(-1)?.asks).toEqual(
+      new Map([
+        [qid(1), null],
+        [qid(2), null],
+      ])
+    );
+    await service.stop();
+  });
+
   it("lists nothing for a Remote Host's own lifetime: its questions are its owner's to show", async () => {
     const { service, lists, setRows } = listed();
     setRows([row(1)]);
@@ -831,6 +912,8 @@ describe("DecisionsService question list (#17229)", () => {
       questions: [
         expect.objectContaining({ reference: expect.objectContaining({ hostId: "host_1" }) }),
       ],
+      // What its open question asks, for an owner that reads it (#17895).
+      asks: new Map([[qid(1), null]]),
     });
 
     setRows([

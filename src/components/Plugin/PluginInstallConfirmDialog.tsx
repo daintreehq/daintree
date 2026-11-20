@@ -193,6 +193,13 @@ export type PluginInstallConfirmSource =
       /** The listed repository, as `github.com/{owner}/{repo}`. */
       repoLabel: string;
       installedOnDisk: boolean;
+      /** The catalog the person added that lists it (#17434); absent for Daintree's own. */
+      catalogLabel?: string;
+      /**
+       * The other catalog the installed copy came from, when installing this
+       * replaces it (#17434), named the way Browse names it.
+       */
+      replacesCatalogLabel?: string;
     };
 
 export interface PluginInstallConfirmRequest {
@@ -359,6 +366,21 @@ export function PluginInstallConfirmDialog({
           replacement={replacement}
           replacesUnlisted={replacesUnlisted}
         />
+        {/* Taking another catalog's listing moves where the plugin's updates
+            come from, so both catalogs are named before the user confirms (#17434). */}
+        {request.source.kind === "catalog" && request.source.replacesCatalogLabel !== undefined && (
+          <Callout severity="warning" data-testid="plugin-install-catalog-switch">
+            <p>
+              This replaces the copy installed from{" "}
+              <span className="font-mono break-all">{request.source.replacesCatalogLabel}</span>{" "}
+              with the listing from{" "}
+              <span className="font-mono break-all">
+                {request.source.catalogLabel ?? "Daintree's catalog"}
+              </span>
+              , and its updates will come from there.
+            </p>
+          </Callout>
+        )}
         <ArchivePermissions
           capabilities={request.manifest.capabilities}
           permissionBypassAgents={request.manifest.permissionBypassAgents}
@@ -463,7 +485,13 @@ function ArchiveIdentityCard({
           ) : (
             <Globe className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
           )}
-          {source.kind === "catalog" ? (
+          {source.kind === "catalog" && source.catalogLabel !== undefined ? (
+            <span className="break-words min-w-0">
+              Listed by <span className="font-mono break-all">{source.catalogLabel}</span> from{" "}
+              <span className="font-mono break-all">{source.repoLabel}</span>. Its curator checked
+              the source and the bytes, not Daintree, and not that the code is safe.
+            </span>
+          ) : source.kind === "catalog" ? (
             <span className="break-words min-w-0">
               Community listing from <span className="font-mono break-all">{source.repoLabel}</span>
               . Review checked the source and the bytes, not that the code is safe.

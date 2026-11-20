@@ -328,6 +328,182 @@ describe("MachineKeeper", () => {
     expect(h.driver.stop).toHaveBeenCalledTimes(1);
   });
 
+  describe("and a Shell's claim on the same idle time (#17922)", () => {
+    const shellClaims = async (h: ReturnType<typeof harness>) =>
+      h.tracker.tryClaim(await h.tracker.checkFresh(), Symbol("shell-link"));
+
+    it("never stops on an idle time a Shell claimed first, armed before the claim or after it", async () => {
+      for (const armFirst of [true, false]) {
+        const h = setup({ busy: false });
+        if (armFirst) await h.arm();
+        await h.pass();
+        h.advance(31 * MINUTE);
+        expect(await shellClaims(h)).toBe(true);
+        if (!armFirst) await h.arm();
+        const reads = h.driver.inspect.mock.calls.length;
+        for (let i = 0; i < 3; i++) {
+          h.advance(MINUTE);
+          await h.pass();
+        }
+        expect(h.driver.stop).not.toHaveBeenCalled();
+        // An idle time already spent is only looked at now and then, never every pass.
+        expect(h.driver.inspect.mock.calls.length - reads).toBeLessThanOrEqual(1);
+        h.keeper.dispose();
+        h.tracker.dispose();
+      }
+    });
+
+    it("sends nothing when a Shell claims while the machine is being read", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.tracker.check();
+      let claimed: boolean | null = null;
+      h.driver.inspect.mockImplementationOnce(async () => {
+        claimed = await shellClaims(h);
+        return resource(h.machine, h.now());
+      });
+      await h.keeper.tick();
+      expect(claimed).toBe(true);
+      expect(h.driver.stop).not.toHaveBeenCalled();
+    });
+
+    it("doesn't stop on retrying a failed read after a Shell claimed meanwhile", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      h.failOnce(new Error("socket hang up"));
+      await h.pass();
+      expect(await shellClaims(h)).toBe(true);
+      h.advance(10 * MINUTE);
+      await h.pass();
+      expect(h.driver.stop).not.toHaveBeenCalled();
+    });
+
+    it("refuses a Shell the idle time it stopped on, while the stop is out and after its answer is lost", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      let answer: (() => void) | null = null;
+      h.driver.stop.mockImplementationOnce(
+        () =>
+          new Promise<ProviderResource>((_resolve, reject) => {
+            answer = () => reject(new Error("socket hang up"));
+          })
+      );
+      const passing = h.pass();
+      await vi.waitFor(() => expect(answer).not.toBeNull());
+      expect(await shellClaims(h)).toBe(false);
+      answer!();
+      await passing;
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+      expect(await shellClaims(h)).toBe(false);
+    });
+
+    it("still reads the machine now and then on a spent idle time, so a start at the provider is use", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      expect(await shellClaims(h)).toBe(true);
+      // The Shell stopped it and the person started it again; this process carried on through it.
+      h.machine.stop = { id: "stop_desktop", status: "completed", error: null };
+      h.machine.stoppedAt = new Date(h.now()).toISOString();
+      h.advance(11 * MINUTE);
+      await h.pass();
+      expect(h.tracker.observation().busy).toBe(true);
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.pass();
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+    });
+
+    it("spends nothing when its key lapses during its last look", async () => {
+      const h = setup({ busy: false });
+      await h.arm({ expiresAt: h.now() + 40 * MINUTE });
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.tracker.check();
+      h.driver.inspect.mockImplementationOnce(async () => {
+        h.advance(10 * MINUTE);
+        return resource(h.machine, h.now());
+      });
+      await h.keeper.tick();
+      expect(h.driver.stop).not.toHaveBeenCalled();
+      expect(await shellClaims(h)).toBe(true);
+    });
+
+    it("takes a start after its own stop took effect as use, though work came before it looked", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.pass();
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+      // Seen stopped, then started again with nothing about the stop changed since that look.
+      h.machine.state = "stopped";
+      h.machine.stop = { id: "stop_own", status: "completed", error: null };
+      h.machine.stoppedAt = new Date(h.now()).toISOString();
+      h.advance(MINUTE);
+      await h.pass();
+      h.machine.state = "running";
+      // An agent works and finishes before the keeper looks again, a full idle time back.
+      h.tracker.noteWork();
+      await h.tracker.check();
+      h.advance(31 * MINUTE);
+      await h.keeper.tick();
+      expect(h.tracker.observation().busy).toBe(true);
+      for (let i = 0; i < 3; i++) {
+        h.advance(MINUTE);
+        await h.pass();
+      }
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+    });
+
+    it("never takes a later idle time a Shell claimed as use, for its own stop that didn't happen", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      h.driver.stop.mockImplementationOnce(async () => {
+        throw new Error("socket hang up");
+      });
+      await h.pass();
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+      // Boat can't be read for a while; meanwhile an agent works, and a Shell claims the idle time after.
+      h.fail(new Error("socket hang up"));
+      h.tracker.noteWork();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.pass();
+      expect(await shellClaims(h)).toBe(true);
+      h.fail(null);
+      h.advance(11 * MINUTE);
+      await h.pass();
+      for (let i = 0; i < 4; i++) {
+        h.advance(11 * MINUTE);
+        await h.pass();
+      }
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops on the next idle time, once new work has ended a Shell's", async () => {
+      const h = setup({ busy: false });
+      await h.arm();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      expect(await shellClaims(h)).toBe(true);
+      h.tracker.noteWork();
+      await h.pass();
+      h.advance(31 * MINUTE);
+      await h.pass();
+      expect(h.driver.stop).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("doesn't renew a machine that is stopping or retrying its save", async () => {
     for (const status of ["pending", "failing"] as const) {
       const h = setup();

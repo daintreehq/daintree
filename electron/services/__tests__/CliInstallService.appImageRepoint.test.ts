@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { McpDiscoveryFile } from "../mcp-server/discoveryFile.js";
+import {
+  daintreeProfileDir,
+  startFakeDaintreeApp,
+  stopProcess,
+} from "../mcp-server/__tests__/helpers/fakeDaintreeApp.js";
 
 const home = vi.hoisted(() => ({ dir: "" }));
 
@@ -211,19 +217,145 @@ describe("CliInstallService — following a moved AppImage", () => {
         const env = { ...process.env };
         delete env.DAINTREE_MCP_URL;
         delete env.DAINTREE_MCP_TOKEN;
+        delete env.DAINTREE_MCP_SESSION;
         return spawnSync("bash", [wrapper, ...args], { encoding: "utf8", env, timeout: 10_000 });
       };
 
       expect(run(["--help"]).stdout).toContain("daintree call <tool>");
+      expect(run(["--help"]).stdout).toContain("daintree session start|end");
       const help = run(["call", "--help"]);
       expect(help.status).toBe(0);
       expect(help.stdout).toContain("Usage: daintree call <tool>");
       const outsidePane = run(["call", "terminal.list"]);
       expect(outsidePane.status).toBe(4);
       expect(outsidePane.stderr).toContain("DAINTREE_MCP_URL");
+      const sessionHelp = run(["session", "--help"]);
+      expect(sessionHelp.status).toBe(0);
+      expect(sessionHelp.stdout).toContain("Usage: daintree session start");
+      const start = run(["session", "start"]);
+      expect(start.status).toBe(4);
+      expect(start.stderr).toContain("daintree session: DAINTREE_MCP_TOKEN is not set");
       // The launch line and the version stamp still read back as before.
       expect(service.appImageOfWrapper(content)).toBe("/nonexistent/Daintree.AppImage");
       expect(run(["--version"]).stdout.trim()).toBe("daintree 1.2.3");
+    }
+  );
+
+  // A repoint that can't read the packaged script keeps the block already
+  // installed, which can predate `session`: that word stays a directory there.
+  it.skipIf(process.platform === "win32")(
+    "dispatches session only to a client block that has it",
+    async () => {
+      const service = await load();
+      const oldBlock = [
+        "# >>> daintree call >>>",
+        "daintree_call() { echo old-call; exit 0; }",
+        "# <<< daintree call <<<",
+      ].join("\n");
+      const content = service.generateAppImageWrapper(
+        "/nonexistent/Daintree.AppImage",
+        "1.2.3",
+        oldBlock
+      );
+      const wrapper = path.join(root, "daintree-cli.sh");
+      fs.writeFileSync(wrapper, content, { mode: 0o755 });
+      const run = (...args: string[]) =>
+        spawnSync("bash", [wrapper, ...args], { encoding: "utf8", timeout: 10_000 });
+
+      expect(run("call").stdout).toBe("old-call\n");
+      expect(run("--help").stdout).not.toContain("session");
+      const session = run("session", "start");
+      expect(session.status).toBe(2);
+      expect(session.stderr).toContain("expected one directory");
+    }
+  );
+
+  // The wrapper's `--status --json` and a token-only `call` read the runtime
+  // file through the carried client, so they work with the image unmounted (#17904).
+  it.skipIf(process.platform === "win32")(
+    "answers --status --json from the carried client, with the port a live app published",
+    async () => {
+      const service = await load();
+      const content = await withPackagedScript(() =>
+        service.generateAppImageWrapper("/nonexistent/Daintree.AppImage", "1.2.3")
+      );
+      const wrapper = path.join(root, "daintree-cli.sh");
+      fs.writeFileSync(wrapper, content, { mode: 0o755 });
+      // The fake app and its profile follow the real platform, as the script's `uname` does.
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+      const profileHome = path.join(root, "profile-home");
+      const run = (args: string[]) =>
+        spawnSync("bash", [wrapper, ...args], {
+          encoding: "utf8",
+          env: { PATH: process.env.PATH, HOME: profileHome, DAINTREE_MCP_TOKEN: "k" },
+          timeout: 10_000,
+        });
+
+      const unpublished = run(["call", "terminal.list"]);
+      expect(unpublished.status).toBe(4);
+      expect(unpublished.stderr).toContain("no running Daintree has published");
+
+      const app = await startFakeDaintreeApp(profileHome);
+      try {
+        fs.mkdirSync(daintreeProfileDir(profileHome), { recursive: true });
+        new McpDiscoveryFile({
+          dir: () => daintreeProfileDir(profileHome),
+          pid: app.process.pid!,
+        }).publish(app.port);
+        const status = run(["--json", "--status"]);
+        expect(status.status).toBe(0);
+        expect(JSON.parse(status.stdout)).toEqual({
+          version: "1.2.3",
+          running: true,
+          mcpEnabled: true,
+          mcpPort: app.port,
+        });
+      } finally {
+        await stopProcess(app.process);
+      }
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "still answers --status --json, with the MCP fields null, from a wrapper without the client's status",
+    async () => {
+      const service = await load();
+      const shim = path.join(root, "shim");
+      fs.mkdirSync(shim);
+      fs.writeFileSync(path.join(shim, "pgrep"), "#!/usr/bin/env bash\nexit 1\n", { mode: 0o755 });
+      const olderClient =
+        "# >>> daintree call >>>\ndaintree_call() { echo older; }\n# <<< daintree call <<<";
+      for (const client of [null, olderClient]) {
+        const wrapper = path.join(root, "daintree-cli.sh");
+        fs.writeFileSync(
+          wrapper,
+          service.generateAppImageWrapper("/nonexistent/Daintree.AppImage", "1.2.3", client),
+          { mode: 0o755 }
+        );
+        const run = (...args: string[]) =>
+          spawnSync("bash", [wrapper, ...args], {
+            encoding: "utf8",
+            env: { PATH: `${shim}${path.delimiter}${process.env.PATH ?? ""}`, HOME: root },
+          });
+
+        for (const args of [
+          ["--status", "--json"],
+          ["--json", "-s"],
+        ]) {
+          const status = run(...args);
+          expect(status.status).toBe(1);
+          expect(JSON.parse(status.stdout)).toEqual({
+            version: "1.2.3",
+            running: false,
+            mcpEnabled: null,
+            mcpPort: null,
+          });
+        }
+        expect(run("--status").stdout).toBe("Daintree is not running\n");
+        const extra = run("--status", "--json", "now");
+        expect(extra.status).toBe(2);
+        expect(extra.stdout).toBe("");
+      }
     }
   );
 

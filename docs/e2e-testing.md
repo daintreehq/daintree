@@ -48,7 +48,7 @@ Tests are split into ten Playwright projects:
 - **full-worktree** — Worktree lifecycle, project switching, git detection, cross-project flows, agent and scrollback restore across relaunch.
 - **full-presets** — Agent presets, recipes, CCR, and what a preset launch actually hands the agent.
 - **full-platform** — Settings, persistence, a11y, keyboard, OS-shell surfaces, oauth, security.
-- **full-panels** — Browser, dev-preview, portal, Review Hub, file viewer and editor, drag-drop, action palette, notifications, toolbar chrome.
+- **full-panels** — Browser, dev-preview, Review Hub, file viewer and editor, drag-drop, action palette, notifications, toolbar chrome.
 - **full-resilience** — Errors, IPC faults, real pty-host and renderer crashes, races, process cleanup, diagnostics, MCP consent and workspace binding.
 - **full-plugins** — Plugin manager UI, plugin lifecycle (enable/disable, restart gating), manifest contribution rendering against the sideloaded sample plugin, and `launchMcp` for every wired agent.
 - **nightly** — Long-running memory-leak / soak detection, 4 specs (workers=1, no retries). The project name predates the scheduled nightly; it now runs as part of the `stabilize` sweep and on demand, not on a cron.
@@ -216,7 +216,7 @@ e2e/
 │   ├── worktree/        # worktree, project, git, restore
 │   ├── presets/         # agent presets, recipes, launch outcome
 │   ├── platform/        # settings, persistence, a11y, oauth
-│   ├── panels/          # browser, dev-preview, portal, Review Hub, files
+│   ├── panels/          # browser, dev-preview, Review Hub, files
 │   ├── resilience/      # errors, IPC faults, crashes, races, MCP consent
 │   └── plugins/         # plugin manager UI, lifecycle, manifest contributions, launchMcp
 ├── nightly/             # 4 memory-leak / soak specs (stabilize sweep / on demand)

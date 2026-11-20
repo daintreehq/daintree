@@ -68,6 +68,8 @@ export class FakePtyHost {
       connection.port.close();
     },
     getTerminalProjectId: (id: string) => this.terminals.get(id)?.projectId ?? null,
+    // Every terminal this fake holds names its project.
+    isUnplacedTerminal: (_id: string) => false,
     getTerminalAsync: async (id: string, _submissionToken?: string, _options?: object) => {
       const terminal = this.terminals.get(id);
       if (!terminal) return null;

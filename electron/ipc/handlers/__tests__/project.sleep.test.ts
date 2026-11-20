@@ -128,13 +128,17 @@ function setup(
   const handleMock = vi.mocked(ipcMain.handle);
   const entry = handleMock.mock.calls.find(([channel]) => channel === CHANNELS.PROJECT_SLEEP);
   if (!entry) throw new Error("project:sleep was never registered");
-  const handler = entry[1] as (event: unknown, projectId: unknown) => Promise<ProjectSleepResult>;
+  const handler = entry[1] as (
+    event: unknown,
+    projectId: unknown,
+    options?: unknown
+  ) => Promise<ProjectSleepResult>;
 
   return {
     dispose,
     evictProject,
     releaseWindowForProject,
-    invoke: (projectId: unknown) => handler({}, projectId),
+    invoke: (projectId: unknown, options?: unknown) => handler({}, projectId, options),
   };
 }
 
@@ -248,6 +252,44 @@ describe("project:sleep", () => {
       const [scopeId, , , options] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[0]!;
       expect(scopeId).toBe("proj-1");
       expect(options).toEqual({ preserveSession: true, writeBackSessionIds: true });
+    });
+
+    it("hands the teardown the agents the request found working, checked (#17886)", async () => {
+      const { invoke } = setup();
+
+      await invoke("proj-1", {
+        workingAtRequest: [
+          { terminalId: "t1", at: 10, spawnedAt: 5, agentIncarnation: 2 },
+          { terminalId: "t2", at: "soon", spawnedAt: 5 },
+          // An identity that can't be read would match whatever runs there now.
+          { terminalId: "t3", at: 10, spawnedAt: 5, agentIncarnation: -1 },
+          { terminalId: "t4", at: 10, spawnedAt: "earlier" },
+          { terminalId: "t6", at: 10 },
+          { terminalId: "t7", at: 10, spawnedAt: undefined, agentIncarnation: undefined },
+          { terminalId: 7, at: 10, spawnedAt: 5 },
+          { terminalId: "" },
+          null,
+          "t5",
+        ],
+      });
+
+      const [, , , options] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[0]!;
+      expect((options as { workingAtRequest?: unknown }).workingAtRequest).toStrictEqual([
+        { terminalId: "t1", at: 10, spawnedAt: 5, agentIncarnation: 2 },
+        { terminalId: "t2", spawnedAt: 5 },
+      ]);
+
+      await invoke("proj-1", { workingAtRequest: "everything" });
+      const [, , , second] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[1]!;
+      expect(second).toEqual({ preserveSession: true, writeBackSessionIds: true });
+
+      const many = Array.from({ length: 1_005 }, (_, i) => ({ terminalId: `t${i}`, spawnedAt: 5 }));
+      await invoke("proj-1", { workingAtRequest: many });
+      const [, , , third] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[2]!;
+      const kept = (third as { workingAtRequest: Array<{ terminalId: string }> }).workingAtRequest;
+      expect(kept.map((entry) => entry.terminalId)).toEqual(
+        many.slice(0, 1_000).map((e) => e.terminalId)
+      );
     });
 
     it("capture-revokes the assistant's session before tearing the project down", async () => {

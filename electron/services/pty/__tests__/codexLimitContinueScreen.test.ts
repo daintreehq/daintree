@@ -1,0 +1,151 @@
+import { describe, expect, it } from "vitest";
+import { codexStopContext, judgeCodexLimitScreen } from "../codexLimitContinueScreen.js";
+import { scanCodexLimitBanner } from "../CodexUsageLimit.js";
+
+// A Codex 0.170 screen in the serializer's shape: the stop banner as the last
+// history cell, then the composer's tinted band and its footer.
+const TINT = "\x1b[48;2;30;30;30m";
+const PAD = " \x1b[99X";
+const GLYPH = "\x1b[1m›\x1b[22m";
+const PLACEHOLDER = "\x1b[2mAsk Codex to do anything\x1b[22m";
+const BANNER = "■ You’ve hit your usage limit. Try again at 3:40 PM.";
+/** The banner the wait was for, as the pty host holds it. */
+const KEY = JSON.stringify(scanCodexLimitBanner([BANNER]));
+
+function screen({
+  above = "• Ran the tests.",
+  banner = BANNER,
+  between = [] as string[],
+  box = PLACEHOLDER,
+  footer = "  ? for shortcuts                                 100% context left",
+} = {}): string {
+  return [
+    above,
+    "",
+    banner,
+    "",
+    ...between,
+    `${TINT}${PAD}`,
+    `${GLYPH} ${box}\x1b[50X`,
+    `${PAD}`,
+    `\x1b[0m${footer}`,
+  ].join("\r\n");
+}
+
+describe("judgeCodexLimitScreen (#17909)", () => {
+  it("continues a plain turn stopped at its limit", () => {
+    expect(judgeCodexLimitScreen(screen(), 80, KEY)).toEqual({ line: "continue" });
+  });
+
+  it.each([
+    ["alone", "  Goal hit usage limits (/goal resume)"],
+    [
+      "beside the IDE indicator",
+      "  ? for shortcuts   Goal hit usage limits (/goal resume) · IDE context",
+    ],
+  ])("resumes a /goal run whose footer says it hit the limit, %s", (_, footer) => {
+    expect(judgeCodexLimitScreen(screen({ footer }), 120, KEY)).toEqual({ line: "/goal resume" });
+  });
+
+  it.each([
+    ["a paused goal", "  Goal paused (/goal resume)"],
+    ["a goal still pursued", "  Pursuing goal (12k tokens)"],
+    ["a goal status clipped at the edge", "  Goal hit usage li"],
+    ["plan mode, which hides any goal status", "  Plan mode (shift+tab to cycle)"],
+  ])("types nothing when the footer shows %s", (_, footer) => {
+    expect(judgeCodexLimitScreen(screen({ footer }), 80, KEY)).toEqual({
+      skip: "unrecognized-footer",
+    });
+  });
+
+  it("types nothing once something was printed below the banner", () => {
+    expect(judgeCodexLimitScreen(screen({ between: ["• Working on it", ""] }), 80, KEY)).toEqual({
+      skip: "banner-not-last",
+    });
+  });
+
+  it("types nothing over a draft in the composer", () => {
+    expect(judgeCodexLimitScreen(screen({ box: "fix the flaky test" }), 80, KEY)).toEqual({
+      skip: "draft",
+    });
+  });
+
+  it("types nothing when the banner is gone", () => {
+    expect(judgeCodexLimitScreen(screen({ banner: "• All done." }), 80, KEY)).toEqual({
+      skip: "banner-gone",
+    });
+  });
+
+  it("types nothing at a screen with no composer below the banner", () => {
+    const dialog = [
+      "• Ran the tests.",
+      "",
+      BANNER,
+      "",
+      "  Would you like to run the following command?",
+      "› 1. Yes, proceed",
+      "  2. No, and tell Codex what to do differently",
+    ].join("\r\n");
+    expect(judgeCodexLimitScreen(dialog, 80, KEY)).toEqual({ skip: "banner-not-last" });
+    expect(judgeCodexLimitScreen(`• Ran the tests.\r\n\r\n${BANNER}\r\n`, 80, KEY)).toEqual({
+      skip: "no-composer",
+    });
+  });
+
+  it("types nothing at a different stop drawn since the one the wait was for", () => {
+    const later = screen({ banner: "■ You’ve hit your usage limit. Try again at 9:05 PM." });
+    expect(judgeCodexLimitScreen(later, 80, KEY)).toEqual({ skip: "banner-changed" });
+    const spendCap = screen({
+      banner:
+        "■ You hit your spend cap set in your workspace. Increase your spend cap to continue.",
+    });
+    expect(judgeCodexLimitScreen(spendCap, 80, KEY)).toEqual({ skip: "banner-changed" });
+  });
+
+  it("types nothing once something is printed after Codex's footer, such as a shell prompt", () => {
+    const shell = `${screen()}\r\nme@host project % `;
+    expect(judgeCodexLimitScreen(shell, 80, KEY)).toEqual({ skip: "banner-not-last" });
+  });
+
+  it("types nothing in a pane too narrow for Codex to show a goal label, unless it shows one", () => {
+    expect(judgeCodexLimitScreen(screen({ footer: "  ? for shortcuts" }), 32, KEY)).toEqual({
+      skip: "unrecognized-footer",
+    });
+  });
+
+  it("needs room for the goal label beside Codex's Vim label before reading its absence", () => {
+    const vim = screen({ footer: "  Vim: Insert · ? for shortcuts" });
+    expect(judgeCodexLimitScreen(vim, 44, KEY)).toEqual({ skip: "unrecognized-footer" });
+    expect(judgeCodexLimitScreen(vim, 80, KEY)).toEqual({ line: "continue" });
+  });
+
+  it("reads a goal label in a narrow pane all the same", () => {
+    const goal = screen({ footer: "  Goal hit usage limits (/goal resume)" });
+    expect(judgeCodexLimitScreen(goal, 38, KEY)).toEqual({ line: "/goal resume" });
+  });
+
+  it("reads a banner Codex word-wrapped at a narrow pane", () => {
+    const wrapped = screen({
+      banner: "■ You’ve hit your usage limit. Try again at\r\n3:40 PM.",
+    });
+    expect(judgeCodexLimitScreen(wrapped, 44, KEY)).toEqual({ line: "continue" });
+  });
+});
+
+describe("codexStopContext (#17909)", () => {
+  const history = ["• Ran the full test suite and found two", "failures in the parser.", ""];
+
+  it("reads the same history rewrapped at another width as the same", () => {
+    const rewrapped = ["• Ran the full test suite", "and found two failures in", "the parser."];
+    expect(codexStopContext([...rewrapped, BANNER], 3)).toBe(
+      codexStopContext([...history, BANNER], 3)
+    );
+  });
+
+  it("reads other history above the same banner as different", () => {
+    const other = ["› try again", "• Looked at the parser again.", ""];
+    expect(codexStopContext([...other, BANNER], 3)).not.toBe(
+      codexStopContext([...history, BANNER], 3)
+    );
+  });
+});

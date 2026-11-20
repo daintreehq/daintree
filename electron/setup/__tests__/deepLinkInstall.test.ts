@@ -212,6 +212,51 @@ describe("parseDaintreeUrl — pinned and catalog install links (#16779)", () =>
     }
   });
 
+  it("carries the catalog a link names, for main to check against the person's list (#17434)", async () => {
+    const SOURCE = encodeURIComponent("https://plugins.example.org/catalog.json");
+    expect(await parse(`id=acme.notes&source=${SOURCE}`)).toEqual({
+      action: "install-catalog",
+      pluginId: "acme.notes",
+      sourceUrl: "https://plugins.example.org/catalog.json",
+    });
+    expect(await parse(`id=acme.notes&version=1.0.0&source=${SOURCE}`)).toEqual({
+      action: "install-catalog",
+      pluginId: "acme.notes",
+      version: "1.0.0",
+      sourceUrl: "https://plugins.example.org/catalog.json",
+    });
+  });
+
+  it("refuses a catalog that isn't an https URL, rather than reading another one (#17434)", async () => {
+    for (const source of [
+      "",
+      "plugins.example.org/catalog.json",
+      "http://plugins.example.org/catalog.json",
+      "https://user:pass@plugins.example.org/catalog.json",
+      "file:///etc/catalog.json",
+    ]) {
+      expect(await parse(`id=acme.notes&source=${encodeURIComponent(source)}`)).toEqual({
+        action: "install-refused",
+        reason: "malformed-source",
+      });
+    }
+  });
+
+  it("refuses a catalog that repeats, or comes without an id (#17434)", async () => {
+    const SOURCE = encodeURIComponent("https://plugins.example.org/catalog.json");
+    for (const query of [
+      `source=${SOURCE}`,
+      `url=${ARCHIVE}&source=${SOURCE}`,
+      `url=${ARCHIVE}&sha256=${DIGEST}&source=${SOURCE}`,
+      `id=acme.notes&source=${SOURCE}&source=${SOURCE}`,
+    ]) {
+      expect(await parse(query)).toEqual({
+        action: "install-refused",
+        reason: "conflicting-params",
+      });
+    }
+  });
+
   it("keeps an unpinned link exactly as it was", async () => {
     expect(await parse(`url=${ARCHIVE}&utm_source=web`)).toEqual({
       action: "install",

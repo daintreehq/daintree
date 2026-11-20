@@ -12,10 +12,12 @@ import {
   Agent37Provider,
 } from "../agent37/Agent37Provider.js";
 import { agent37MachineState } from "../agent37/agent37State.js";
+import { DEFAULT_HOST_IDLE_MINUTES } from "../../../../shared/types/hostIdle.js";
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import { FAKE_AGENT37_KEY, FakeAgent37Api } from "./fakeAgent37Api.js";
 
 const PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClientKeyForDaintree daintree";
+const OTHER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClientKeyMadeAgain daintree";
 const LABELS = { daintree: "1", "daintree-binding": "cb_0123456789ab" };
 
 function env(options: { now?: () => number } = {}) {
@@ -206,6 +208,22 @@ describe("Agent37Client", () => {
     expect(sleeps).toEqual([2_000, 4_000, 8_000, 10_000]);
   });
 
+  it("sends a sleep once, whatever comes back: a caller acting on idleness can't send it again", async () => {
+    const { api, client, ctx, sleeps } = env();
+    const instance = api.seed();
+    api.fail("POST", /\/sleep$/, FakeAgent37Api.error(409, "try_again"));
+    const busy = await client.sleepInstance(ctx, instance.id).catch((e: unknown) => e);
+    expect(busy).toBeInstanceOf(Agent37ApiError);
+    expect((busy as Agent37ApiError).busy).toBe(true);
+    api.fail("POST", /\/sleep$/, () => new TypeError("socket hang up"));
+    await expect(client.sleepInstance(ctx, instance.id)).rejects.toMatchObject({
+      kind: "network",
+    });
+    expect(api.calls("POST", /\/sleep$/)).toHaveLength(2);
+    expect(sleeps).toEqual([]);
+    expect(api.instances.get(instance.id)!.status).toBe("running");
+  });
+
   it("sends a start again after a lost answer: a start of a running instance is the same ack", async () => {
     const { api, client, ctx } = env();
     const instance = api.seed({ status: "stopped" });
@@ -297,6 +315,17 @@ describe("redactAgent37Text", () => {
     expect(
       redactAgent37Text("ssh_key_exists: sk_live_ABCDEFGH12345678 and Bearer sk_live_x.y")
     ).toBe("ssh_key_exists: [redacted] and Bearer [redacted]");
+  });
+
+  it("removes a signed URL's token, however it is quoted (#17918)", () => {
+    expect(redactAgent37Text("https://ab12cd34ef-9119.agent37.app/?a37_token=6a2be1f0&x=1")).toBe(
+      "https://ab12cd34ef-9119.agent37.app/?a37_token=[redacted]&x=1"
+    );
+    expect(redactAgent37Text("https://ab12cd34ef-9119.agent37.app/?x=1&a37_token=6a2be1f0")).toBe(
+      "https://ab12cd34ef-9119.agent37.app/?x=1&a37_token=[redacted]"
+    );
+    expect(redactAgent37Text("bad a37_token=6a2be1f0 here")).toBe("bad a37_token=[redacted] here");
+    expect(redactAgent37Text('{"a37_token":"6a2be1f0"}')).toBe('{"a37_token":"[redacted]"}');
   });
 });
 
@@ -404,7 +433,8 @@ describe("Agent37Provider", () => {
       name: "x".repeat(60),
       metadata: LABELS,
       auto_sleep: true,
-      idle_timeout_seconds: AGENT37_IDLE_SECONDS,
+      // The host's own idle time, which its Idle after starts at (#17916).
+      idle_timeout_seconds: DEFAULT_HOST_IDLE_MINUTES * 60,
     });
     expect(created).toMatchObject({
       machine: "running",
@@ -540,6 +570,120 @@ describe("Agent37Provider", () => {
     expect(api.instances.has(instance.id)).toBe(false);
   });
 
+  it("puts an instance to sleep with one request, and takes one already asleep as asleep (#17916)", async () => {
+    const { api, provider, credentials } = env();
+    const instance = api.seed();
+    await provider.sleepIdle(credentials, instance.id);
+    expect(api.instances.get(instance.id)!.status).toBe("sleeping");
+    await provider.sleepIdle(credentials, instance.id);
+    expect(api.calls("POST", `/instances/${instance.id}/sleep`)).toHaveLength(2);
+    expect(api.calls("POST", `/instances/${instance.id}/stop`)).toHaveLength(0);
+    const stopped = api.seed({ status: "stopped" });
+    const refused = await provider.sleepIdle(credentials, stopped.id).catch((e: unknown) => e);
+    expect(provider.describeError(refused).code).toBe("failed");
+    expect(api.instances.get(stopped.id)!.status).toBe("stopped");
+  });
+
+  it("never takes a sleep Agent 37 says it did to another instance as this one's", async () => {
+    const { api, provider, credentials } = env();
+    const instance = api.seed();
+    api.fail(
+      "POST",
+      /\/sleep$/,
+      () =>
+        new Response(JSON.stringify({ id: "zzzzzzzzzz", status: "sleeping" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+    );
+    await expect(provider.sleepIdle(credentials, instance.id)).rejects.toMatchObject({
+      kind: "bad-response",
+    });
+  });
+
+  it("says a sleep that met another operation on the instance found Agent 37 busy, asking once", async () => {
+    const { api, provider, credentials } = env();
+    const instance = api.seed();
+    api.fail("POST", /\/sleep$/, FakeAgent37Api.error(409, "try_again"), 3);
+    const busy = await provider.sleepIdle(credentials, instance.id).catch((e: unknown) => e);
+    expect(provider.describeError(busy).message).toContain("busy with another change");
+    expect(api.calls("POST", /\/sleep$/)).toHaveLength(1);
+  });
+
+  it("sets an instance's own idle timeout, turning its idle sleep on only when asked (#17916)", async () => {
+    const { api, provider, credentials } = env();
+    const instance = api.seed({ auto_sleep: false, idle_timeout_seconds: 600, name: "kept" });
+    const kept = await provider.setIdleSleep(credentials, instance.id, 300, false);
+    expect(api.calls("PATCH", `/instances/${instance.id}`).at(-1)!.body).toEqual({
+      idle_timeout_seconds: 300,
+    });
+    expect(kept.idleSleep).toEqual({ enabled: false, idleSeconds: 300 });
+    const on = await provider.setIdleSleep(credentials, instance.id, 86_400, true);
+    expect(on.idleSleep).toEqual({ enabled: true, idleSeconds: 86_400 });
+    expect(api.instances.get(instance.id)).toMatchObject({
+      auto_sleep: true,
+      idle_timeout_seconds: 86_400,
+      name: "kept",
+    });
+    // Outside what Agent 37 takes: refused before anything is sent.
+    for (const seconds of [299, 86_401, 900.5]) {
+      await expect(
+        provider.setIdleSleep(credentials, instance.id, seconds, true)
+      ).rejects.toThrow();
+    }
+    expect(api.calls("PATCH", `/instances/${instance.id}`)).toHaveLength(2);
+  });
+
+  it("mints a seven-day URL for one port of an instance for its host to keep it awake with (#17918)", async () => {
+    const { api, provider, credentials } = env();
+    const instance = api.seed();
+    const grant = await provider.keepAwakeUrl(credentials, instance.id, 41_000);
+    expect(api.calls("POST", `/instances/${instance.id}/signed-url`)[0]!.body).toEqual({
+      port: 41_000,
+      ttl_seconds: 7 * 24 * 60 * 60,
+    });
+    expect(grant.expiresAt).toBe(api.now + 7 * 24 * 60 * 60 * 1000);
+    expect(new URL(grant.url).hostname).toBe(`${instance.id}-41000.agent37.app`);
+    expect(new URL(grant.url).searchParams.get("a37_token")).toBe(api.signedUrls[0]!.token);
+
+    // A link for another port or machine than asked is never handed on.
+    api.fail("POST", /\/signed-url$/, () =>
+      Response.json({
+        url: `https://${instance.id}-41000.agent37.app/?a37_token=t`,
+        domain_urls: [],
+        port: 41_001,
+        expires_at: 1,
+      })
+    );
+    await expect(provider.keepAwakeUrl(credentials, instance.id, 41_000)).rejects.toMatchObject({
+      kind: "bad-response",
+    });
+    for (const url of [
+      `https://${instance.id}-41001.agent37.app/?a37_token=t`,
+      `https://zzzzzzzzzz-41000.agent37.app/?a37_token=t`,
+      `https://${instance.id}-41000.agent37.app.example.net/?a37_token=t`,
+    ]) {
+      api.fail("POST", /\/signed-url$/, () =>
+        Response.json({ url, domain_urls: [], port: 41_000, expires_at: 1 })
+      );
+      await expect(provider.keepAwakeUrl(credentials, instance.id, 41_000)).rejects.toMatchObject({
+        kind: "bad-response",
+      });
+    }
+  });
+
+  it("refuses to mint for SSH's port, as Agent 37 does", async () => {
+    const { api, client, ctx } = env();
+    const instance = api.seed();
+    await expect(
+      client.signedUrl(ctx, instance.id, { port: 22_022, ttlSeconds: 60 })
+    ).rejects.toMatchObject({ status: 400 });
+    expect(api.calls("POST", `/instances/${instance.id}/signed-url`)[0]!.body).toEqual({
+      port: 22_022,
+      ttl_seconds: 60,
+    });
+  });
+
   it("reaches a machine it created as node through the tunnel's name for it, with no key to pin", async () => {
     const { api, provider, credentials } = env();
     const created = await provider.create(credentials, createRequest());
@@ -584,6 +728,118 @@ describe("Agent37Provider", () => {
     ).resolves.toMatchObject({
       user: "node",
     });
+  });
+
+  it("waits out a new key's delivery to a machine it created with a key that was lost since (#17929)", async () => {
+    let now = 1_000_000;
+    const { api, provider, credentials } = env({ now: () => now });
+    const created = await provider.create(credentials, createRequest());
+    // The key it booted with gets it straight through.
+    await expect(
+      provider.authorizeSsh(credentials, created.resourceId, PUBLIC_KEY)
+    ).resolves.toMatchObject({ user: "node" });
+    const error = await provider
+      .authorizeSsh(credentials, created.resourceId, OTHER_KEY)
+      .catch((e) => e);
+    expect(provider.describeError(error)).toMatchObject({
+      code: "provider-unreachable",
+      message: expect.stringContaining("still delivering"),
+    });
+    now += AGENT37_KEY_DELIVERY_MS - 1_000;
+    const still = await provider
+      .authorizeSsh(credentials, created.resourceId, OTHER_KEY)
+      .catch((e) => e);
+    expect(provider.describeError(still).message).toContain("still delivering");
+    now += 1_000;
+    await expect(
+      provider.authorizeSsh(credentials, created.resourceId, OTHER_KEY)
+    ).resolves.toMatchObject({ user: "node" });
+    expect(api.sshKeys.map((entry) => entry.key)).toEqual(
+      [PUBLIC_KEY, OTHER_KEY].map((key) => key.split(" ").slice(0, 2).join(" "))
+    );
+  });
+
+  it("holds every machine waiting on one new key until its registration is answered (#17929)", async () => {
+    const { api, client, provider, credentials } = env();
+    const first = api.seed();
+    const second = api.seed();
+    const register = client.registerSshKey.bind(client);
+    let release: () => void = () => {};
+    vi.spyOn(client, "registerSshKey").mockImplementationOnce(async (...args) => {
+      const answer = await register(...args);
+      // Registered at Agent 37, but the answer saying when arrives late.
+      await new Promise<void>((resolve) => (release = resolve));
+      return answer;
+    });
+    let settled = 0;
+    const one = provider
+      .authorizeSsh(credentials, first.id, OTHER_KEY)
+      .catch((e) => e)
+      .finally(() => settled++);
+    const other = provider
+      .authorizeSsh(credentials, second.id, OTHER_KEY)
+      .catch((e) => e)
+      .finally(() => settled++);
+    try {
+      await vi.waitFor(() => expect(api.sshKeys).toHaveLength(1));
+      await vi.waitFor(() => expect(api.calls("GET", `/instances/${second.id}`)).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Neither is answered while the registration's own answer is outstanding.
+      expect(settled).toBe(0);
+    } finally {
+      release();
+    }
+    for (const outcome of [await one, await other]) {
+      expect(provider.describeError(outcome)).toMatchObject({
+        code: "provider-unreachable",
+        message: expect.stringContaining("still delivering"),
+      });
+    }
+    expect(api.calls("POST", "/ssh-keys")).toHaveLength(1);
+  });
+
+  it("stops waiting on a shared registration when its own caller gives up, leaving it to the rest", async () => {
+    const { api, client, provider, credentials } = env();
+    const existing = api.seed();
+    const register = client.registerSshKey.bind(client);
+    let release: () => void = () => {};
+    const sent = vi.spyOn(client, "registerSshKey").mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return register(...args);
+    });
+    const abort = new AbortController();
+    const quitter = provider
+      .authorizeSsh({ ...credentials, signal: abort.signal }, existing.id, OTHER_KEY)
+      .catch((e) => e);
+    try {
+      await vi.waitFor(() => expect(sent).toHaveBeenCalled());
+      // Sent for everyone, so with no one caller's signal.
+      expect(sent.mock.calls[0]![0].signal).toBeUndefined();
+      const stayer = provider.authorizeSsh(credentials, existing.id, OTHER_KEY).catch((e) => e);
+      await vi.waitFor(() => expect(api.calls("GET", `/instances/${existing.id}`)).toHaveLength(2));
+      abort.abort();
+      expect(await quitter).toMatchObject({ kind: "cancelled" });
+      release();
+      expect(provider.describeError(await stayer)).toMatchObject({
+        code: "provider-unreachable",
+        message: expect.stringContaining("still delivering"),
+      });
+    } finally {
+      release();
+    }
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(api.sshKeys).toHaveLength(1);
+  });
+
+  it("sends nothing for a create cancelled before its key was registered", async () => {
+    const { api, provider, credentials } = env();
+    const abort = new AbortController();
+    abort.abort();
+    await expect(
+      provider.create({ ...credentials, signal: abort.signal }, createRequest())
+    ).rejects.toBeTruthy();
+    expect(api.calls("POST", "/ssh-keys")).toHaveLength(0);
+    expect(api.calls("POST", "/instances")).toHaveLength(0);
   });
 
   it("hands no tunnel to an instance that isn't awake: a sleeper would wake, a stopped one refuse", async () => {

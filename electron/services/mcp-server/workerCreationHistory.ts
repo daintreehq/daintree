@@ -3,6 +3,7 @@ import {
   type AssistantOwnershipPrincipal,
   type OwnedResourceDraft,
   type OwnedResourceKind,
+  type OwnedResourceRecord,
   type ResourceOwnershipLedger,
 } from "./resourceOwnership.js";
 import type { TerminalAdoptionLedger } from "./terminalAdoption.js";
@@ -20,6 +21,29 @@ export interface WorkerCreation {
   createdAt: number;
   /** Order of noting, for fencing a prune against creations a read could not have seen. */
   sequence: number;
+  /**
+   * The ledger record this creation was given, when it was given one. Whoever
+   * holds that very record holds this run (#17919): a conversation's records
+   * outlive the bearer that made them, so the owner key alone can't say it.
+   */
+  record?: OwnedResourceRecord;
+}
+
+/**
+ * Whether `owner` created this run: noted under it, or holding the very record
+ * the creation was given (#17919), as a resumed Assistant does for what its
+ * conversation launched before. A record for a later run under the id is
+ * another record, and a run with no creation is no one's.
+ */
+export function isCreationOf(
+  creation: WorkerCreation | undefined,
+  owner: string,
+  heldRecord: OwnedResourceRecord | undefined
+): boolean {
+  if (creation === undefined) return false;
+  return (
+    creation.owner === owner || (creation.record !== undefined && creation.record === heldRecord)
+  );
 }
 
 /**
@@ -43,23 +67,40 @@ export class WorkerCreationHistory {
     private readonly max: number = WORKER_CREATION_HISTORY_MAX
   ) {}
 
-  /** Note the terminals among a trusted dispatch's created resources. */
-  noteDrafts(owner: string, drafts: readonly OwnedResourceDraft[]): void {
+  /**
+   * Note the terminals among a trusted dispatch's created resources, with the
+   * ledger records the dispatch was given for them, if any.
+   */
+  noteDrafts(
+    owner: string,
+    drafts: readonly OwnedResourceDraft[],
+    recorded: readonly OwnedResourceRecord[] = []
+  ): void {
+    const records = new Map(
+      recorded.filter((record) => record.kind === TERMINAL).map((record) => [record.id, record])
+    );
     this.note(
       owner,
-      drafts.filter((draft) => draft.kind === TERMINAL).map((draft) => draft.id)
+      drafts.filter((draft) => draft.kind === TERMINAL).map((draft) => draft.id),
+      records
     );
   }
 
   /** Note the terminals `owner` was just recorded as creating. */
-  note(owner: string, terminalIds: readonly string[]): void {
+  note(
+    owner: string,
+    terminalIds: readonly string[],
+    records?: ReadonlyMap<string, OwnedResourceRecord>
+  ): void {
     for (const terminalId of terminalIds) {
+      const record = records?.get(terminalId);
       this.byTerminal.delete(terminalId);
       this.byTerminal.set(terminalId, {
         owner,
         launchGeneration: this.launchGenerationOf(terminalId),
         createdAt: this.now(),
         sequence: ++this.sequence,
+        ...(record !== undefined ? { record } : {}),
       });
       if (this.byTerminal.size > this.max) {
         this.byTerminal.delete(this.byTerminal.keys().next().value as string);
@@ -121,9 +162,17 @@ export function readRunAssistantWork(
 ): RunAssistantWork {
   const creation = records.workerCreations.get(terminalId, launchGeneration);
   const createdBy = creation === undefined ? null : assistantPrincipalOf(creation.owner);
-  const owner = records.resourceOwnership.creatorOf("terminal", terminalId);
-  if (owner !== undefined && creation?.owner === owner) {
-    const principal = assistantPrincipalOf(owner);
+  const holder = records.resourceOwnership.creatorOf("terminal", terminalId);
+  const record = records.resourceOwnership.recordOf("terminal", terminalId);
+  if (
+    holder !== undefined &&
+    creation !== undefined &&
+    (creation.owner === holder || (creation.record !== undefined && creation.record === record))
+  ) {
+    // A conversation's record is controlled by its bound bearer, and by no one
+    // while none is (#17919).
+    const controller = records.resourceOwnership.controllerOf("terminal", terminalId);
+    const principal = controller === undefined ? null : assistantPrincipalOf(controller);
     return { createdBy, controlledBy: principal ? { principal, basis: "creation" } : null };
   }
   const held = records.terminalAdoption.holderOf(terminalId);

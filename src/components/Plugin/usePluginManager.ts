@@ -220,6 +220,8 @@ const BROWSE_INSTALL_ERRORS: Partial<Record<PluginInstallError["code"], string>>
   fetch_failed: "Couldn't download the plugin. Check your connection and try again.",
   content_type_rejected:
     "The catalog's download for this release isn't a plugin archive, so nothing was installed.",
+  catalog_source_unknown:
+    "That catalog is no longer one of your plugin catalogs, so nothing was installed. Refresh Browse to see what your catalogs list now.",
 };
 
 /** A Browse install arrived while another install, update or confirm was under way. */
@@ -240,6 +242,8 @@ const DEEP_LINK_REFUSAL_MESSAGES: Record<PluginDeepLinkRefusal, string> = {
     "The install link's plugin id isn't a community plugin id, so nothing was installed.",
   "malformed-version":
     "The install link's version isn't a valid version number, so nothing was installed.",
+  "malformed-source":
+    "The install link's catalog isn't an https:// address, so nothing was installed.",
   "conflicting-params":
     "The install link combines parameters that don't go together, so nothing was installed.",
 };
@@ -1167,11 +1171,16 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       void previewInstallFromUrl(intent.url, intent.sha256);
       return;
     }
-    const { pluginId, version } = intent;
+    const { pluginId, version, sourceUrl } = intent;
     void previewForReview(
       (jobId) =>
         window.electron.plugin.previewFromCatalog(
-          version === undefined ? { pluginId } : { pluginId, version },
+          {
+            pluginId,
+            ...(version === undefined ? {} : { version }),
+            // Main refuses a catalog the person hasn't added (#17434).
+            ...(sourceUrl === undefined ? {} : { sourceUrl }),
+          },
           jobId
         ),
       version === undefined ? pluginId : `${pluginId}@${version}`,
@@ -1185,14 +1194,26 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
    * a release published since can't take its place. The confirm installs it
    * through the catalog route, the same as a catalog install link's.
    */
-  const previewCatalogListing = ({ id, version }: { id: string; version: string }) => {
+  const previewCatalogListing = ({
+    id,
+    version,
+    sourceUrl,
+  }: {
+    id: string;
+    version: string;
+    sourceUrl?: string;
+  }) => {
     if (isInstalling || isInstallFlowBusy()) {
       setNoticeTone("warning");
       setNotice(BROWSE_INSTALL_BUSY);
       return;
     }
     void previewForReview(
-      (jobId) => window.electron.plugin.previewFromCatalog({ pluginId: id, version }, jobId),
+      (jobId) =>
+        window.electron.plugin.previewFromCatalog(
+          { pluginId: id, version, ...(sourceUrl === undefined ? {} : { sourceUrl }) },
+          jobId
+        ),
       `${id}@${version}`,
       "browse"
     );
@@ -1216,9 +1237,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const expected: PluginInstallExpectation = replacesInstalled
       ? { kind: "update", ...binding }
       : { kind: "install", ...binding };
-    const { catalog } = review;
+    const { catalog, replacesCatalog } = review;
     // A catalog release is installed by naming it, never by its URL: main
-    // looks it up again and fetches what the catalog lists (#16779).
+    // looks it up again and fetches what the catalog lists (#16779), from the
+    // catalog that listed it, and refuses if the copy it replaces came from
+    // another catalog than the review said (#17434).
     await performInstallFromUrl(
       review.url,
       expected,
@@ -1227,7 +1250,14 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         ? undefined
         : (jobId) =>
             window.electron.plugin.installFromCatalog(
-              { pluginId: catalog.id, version: catalog.version, repo: catalog.repo, expected },
+              {
+                pluginId: catalog.id,
+                version: catalog.version,
+                repo: catalog.repo,
+                ...(catalog.sourceUrl === undefined ? {} : { sourceUrl: catalog.sourceUrl }),
+                ...(replacesCatalog === undefined ? {} : { replacesCatalog }),
+                expected,
+              },
               jobId
             ),
       review.origin
@@ -1826,6 +1856,12 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
                     // The offered release's repository, which the user saw:
                     // main refuses the install if the listing has moved since.
                     repo: target.catalog.repo,
+                    // Held to the catalog the installed copy came from, which
+                    // needn't still be on the person's list (#17434).
+                    ...(target.catalog.sourceUrl === undefined
+                      ? {}
+                      : { sourceUrl: target.catalog.sourceUrl }),
+                    intent: "update",
                     expected: { kind: "update", ...expected },
                   },
                   jobId

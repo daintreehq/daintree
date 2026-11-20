@@ -1182,6 +1182,15 @@ events.on("agent:rate-limit-observed", (payload) => {
   });
 });
 
+events.on("agent:update-installed-changed", (payload) => {
+  sendEvent({
+    type: "agent-update-installed-changed",
+    terminalId: payload.terminalId,
+    updateInstalled: payload.updateInstalled,
+    timestamp: payload.timestamp,
+  });
+});
+
 events.on("agent:claude-usage-observed", (payload) => {
   sendEvent({
     type: "agent-claude-usage-observed",
@@ -1193,6 +1202,16 @@ events.on("agent:claude-usage-observed", (payload) => {
     observedAt: payload.observedAt,
     configDir: payload.configDir,
     shell: payload.shell,
+    timestamp: payload.timestamp,
+  });
+});
+
+events.on("agent:codex-limit-stopped", (payload) => {
+  sendEvent({
+    type: "codex-limit-stopped",
+    terminalId: payload.terminalId,
+    run: payload.run,
+    seq: payload.seq,
     timestamp: payload.timestamp,
   });
 });

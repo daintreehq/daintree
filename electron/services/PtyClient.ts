@@ -84,6 +84,7 @@ import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycle
 import { BrokerError } from "./rpc/index.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
+import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
 import type { TerminalLaunchAttribution } from "./pty/TerminalLifecycleObserver.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { RecentTerminalExits } from "./pty/RecentTerminalExits.js";
@@ -148,8 +149,14 @@ import type {
 } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
+import type { CodexLimitAnswer, CodexLimitQuery } from "../../shared/types/codexLimitReset.js";
+import type {
+  CodexLimitContinueResult,
+  CodexLimitStopRef,
+} from "../../shared/types/codexLimitContinuation.js";
 import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
+import type { UpdateInstalledObservation } from "../../shared/types/ipc/agent.js";
 import { withoutHandbackInstruction } from "../../shared/utils/handback.js";
 import { buildFirstPrompt, sanitizeFirstPrompt } from "../../shared/utils/firstPrompt.js";
 import { isCheckoutPendingProject } from "./projectClone/checkoutGate.js";
@@ -160,6 +167,8 @@ const __dirname = path.dirname(__filename);
 interface TerminalInfoResponse {
   id: string;
   projectId?: string;
+  /** Placed in no project on purpose (#17926), as its spawn said. */
+  unplaced?: true;
   kind?: PanelKind;
   launchAgentId?: AgentId;
   /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
@@ -211,6 +220,8 @@ interface TerminalInfoResponse {
   agentSessionId?: string;
   /** The Claude store the launch env names; absent when it can't be resolved (#16269). */
   claudeConfigDir?: string;
+  /** The Codex home the launch env names; absent when it can't be resolved (#17318). */
+  codexHome?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
   /** The scheduled run this terminal was launched for (#15977). */
@@ -220,6 +231,7 @@ interface TerminalInfoResponse {
   agentPresetId?: string;
   agentPresetColor?: string;
   originalAgentPresetId?: string;
+  fallbackChainIndex?: number;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
   /**
@@ -228,6 +240,11 @@ interface TerminalInfoResponse {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905). Absent when not seen, or once that run ended.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Lifecycle-ledger generation of the record that answered. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
@@ -244,6 +261,8 @@ interface TerminalInfoResponse {
   submission?: TerminalSubmissionRecord;
   /** Most recent handback marker observed for a request this terminal held (#12488). */
   lastHandback?: TerminalHandback;
+  /** Present only when {@link PtyClient.getTerminalAsync} asked about the Codex limit (#17906). */
+  codexLimit?: CodexLimitAnswer;
 }
 
 /**
@@ -265,6 +284,14 @@ export type PtySubmitDecorator = (
   text: string,
   handbackCode: string | undefined
 ) => { text: string; handbackCode: string; handbackInstruction: "run" } | null;
+
+/**
+ * What a spawn is handed: `projectId: null` places the terminal in no project
+ * on purpose (#17926), where an absent one takes the active project.
+ */
+export type PtyClientSpawnOptions = Omit<PtyHostSpawnOptions, "projectId" | "unplaced"> & {
+  projectId?: string | null;
+};
 
 export interface PtyIncarnationExit {
   terminalId: string;
@@ -343,6 +370,8 @@ const CLOSED_PROCESS_KILL_TIMEOUT_MS = 15_000;
 const END_TRASH_GRACE_TIMEOUT_MS = 5000;
 /** One run of Main's tree-kill helper for roots a disposing host handed over. */
 const HANDOFF_TREE_KILL_TIMEOUT_MS = 3000;
+/** The host's own lane wait (30 s) plus the screen read, before main stops listening (#17909). */
+const CONTINUE_CODEX_LIMIT_TIMEOUT_MS = 45_000;
 /**
  * How long quit waits, once the hosts have exited, for those kills: Main's
  * helper is usually cold, and it dies with Main. Only a host that could not
@@ -660,6 +689,14 @@ export class PtyClient extends EventEmitter {
       incarnationLost: (id, launchGeneration) => {
         const fact: PtyIncarnationLost = { terminalId: id, launchGeneration };
         this.emit("incarnation-lost", fact);
+        // The host that observed this run's update footer died with it, so no
+        // clear will come from there (#17905).
+        bridgePtyEvent({
+          type: "agent-update-installed-changed",
+          terminalId: id,
+          updateInstalled: null,
+          timestamp: Date.now(),
+        });
       },
       logWarn,
     });
@@ -1569,7 +1606,7 @@ export class PtyClient extends EventEmitter {
     return null;
   }
 
-  spawn(id: string, options: PtyHostSpawnOptions): void {
+  spawn(id: string, options: PtyClientSpawnOptions): void {
     if (!this.pendingSpawns.has(id) && this.pendingSpawns.size >= this.MAX_PENDING_SPAWNS) {
       logWarn(
         `[PtyClient] spawn rejected — pendingSpawns at cap (${this.MAX_PENDING_SPAWNS}), id=${id}`
@@ -1586,13 +1623,16 @@ export class PtyClient extends EventEmitter {
       return;
     }
 
-    const activeProjectId = this.activeProjectId ?? undefined;
+    const { projectId: requestedProjectId, ...placeless } = options;
     const normalizedProjectId =
-      typeof options.projectId === "string" && options.projectId.trim()
-        ? options.projectId
+      typeof requestedProjectId === "string" && requestedProjectId.trim()
+        ? requestedProjectId
         : undefined;
-
-    const resolvedProjectId = normalizedProjectId ?? activeProjectId;
+    // A spawn that names no project takes the active one, for callers that
+    // never name one; one placed in none on purpose never does.
+    const unplaced = requestedProjectId === null;
+    const resolvedProjectId =
+      normalizedProjectId ?? (unplaced ? undefined : (this.activeProjectId ?? undefined));
     // Every launch path ends here: a project still awaiting its clone has no
     // folder, and the pty-host would quietly fall back to another cwd (#16352).
     // Only a named project is checked: a spawn naming none isn't asking for
@@ -1609,8 +1649,14 @@ export class PtyClient extends EventEmitter {
       this.emit("spawn-result", id, result);
       return;
     }
+    // Stored for crash replay as sent, so a replay can't take whichever
+    // project is active by then either.
     const projectResolvedOptions: PtyHostSpawnOptions =
-      resolvedProjectId !== undefined ? { ...options, projectId: resolvedProjectId } : options;
+      resolvedProjectId !== undefined
+        ? { ...placeless, projectId: resolvedProjectId }
+        : unplaced
+          ? { ...placeless, unplaced: true }
+          : placeless;
     // Mint the launch generation here — every spawn (fresh, restart, resume)
     // funnels through this method, so the ledger sees each incarnation exactly
     // once. The pty-host adopts the stamped generation and echoes it on exits
@@ -2015,8 +2061,22 @@ export class PtyClient extends EventEmitter {
    * Null for unknown terminals — callers fall back to unscoped delivery.
    */
   getTerminalProjectId(id: string): string | null {
-    const projectId = this.pendingSpawns.get(id)?.projectId;
+    // The running incarnation's, while a duplicate awaits the host's answer:
+    // its output, input and lease are still that project's (#17926).
+    const projectId = (this.displacedSpawns.get(id)?.entry ?? this.pendingSpawns.get(id))
+      ?.projectId;
     return typeof projectId === "string" && projectId.length > 0 ? projectId : null;
+  }
+
+  /** Whether main holds `id`'s spawn record as one placed in no project on purpose (#17926). */
+  isUnplacedTerminal(id: string): boolean {
+    // A duplicate still awaiting the host's answer doesn't speak for the
+    // terminal it would displace, which may still be running in a project.
+    const displaced = this.displacedSpawns.get(id)?.entry;
+    return (
+      this.pendingSpawns.get(id)?.unplaced === true &&
+      (displaced === undefined || displaced.unplaced === true)
+    );
   }
 
   /**
@@ -2790,18 +2850,26 @@ export class PtyClient extends EventEmitter {
    * `strict` rejects when a live host fails to answer in time instead of
    * resolving `null`, so a caller confirming that a terminal is gone doesn't
    * mistake a stalled query for its absence. A host that is gone still resolves
-   * `null` — its terminals went with it.
+   * `null` — its terminals went with it. `codexLimit` asks when the pane's
+   * spent Codex window resets (#17906).
    */
   async getTerminalAsync(
     id: string,
     submissionToken?: string,
-    options?: { strict?: boolean }
+    options?: { strict?: boolean; codexLimit?: CodexLimitQuery }
   ): Promise<TerminalInfoResponse | null> {
     const shard = this.shardForTerminal(id);
+    const codexLimit = options?.codexLimit;
     const promise = sendPtyHostRpc<TerminalInfoResponse | null>(
       shard,
       submissionToken === undefined ? `terminal-${id}` : `terminal-${id}-sub-${submissionToken}`,
-      (requestId) => ({ type: "get-terminal", id, requestId, submissionToken })
+      (requestId) => ({
+        type: "get-terminal",
+        id,
+        requestId,
+        submissionToken,
+        ...(codexLimit !== undefined && { codexLimit }),
+      })
     );
     return promise.catch((error) => {
       if (
@@ -3103,6 +3171,25 @@ export class PtyClient extends EventEmitter {
       requestId,
     }));
     return promise.catch(() => false);
+  }
+
+  /** Arm or disarm reporting the terminal's settled Codex stop (#17909). */
+  setCodexLimitContinue(id: string, armed: boolean): void {
+    this.shardForTerminal(id).send({ type: "set-codex-limit-continue", id, armed });
+  }
+
+  /**
+   * Have the terminal's host check the pane is still at `stop` and type the
+   * line that continues it (#17909). Rejects when the host didn't answer.
+   */
+  continueCodexLimitAsync(id: string, stop: CodexLimitStopRef): Promise<CodexLimitContinueResult> {
+    const shard = this.shardForTerminal(id);
+    return sendPtyHostRpc<CodexLimitContinueResult>(
+      shard,
+      `continue-codex-limit-${id}`,
+      (requestId) => ({ type: "continue-codex-limit", id, requestId, stop }),
+      { method: "continue-codex-limit", timeoutMs: CONTINUE_CODEX_LIMIT_TIMEOUT_MS }
+    );
   }
 
   /** Replay terminal history */

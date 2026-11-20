@@ -51,6 +51,11 @@ export interface MetricsHostDeps {
     /** How old a summary is by this host's own clocks; null when it can't say. */
     ageOf?(summary: HostMetricsSummary): number | null;
   };
+  /**
+   * Wants this host's agent usage readings (#17318) for as long as it samples
+   * for a Shell, so its summaries carry them; returns the release.
+   */
+  watchAgentUsage?(): () => void;
   listFleetTargets(): Promise<HostFleetTargetList>;
   submitFleet(
     terminalId: string,
@@ -277,12 +282,17 @@ export function installHostMetricsHostWith(
 
   // Sample only while some Shell is attached; the loop stops itself when the last one leaves.
   let offLoop: (() => void) | null = null;
+  let releaseUsage: (() => void) | null = null;
   const stopLoop = (): void => {
     offLoop?.();
     offLoop = null;
+    releaseUsage?.();
+    releaseUsage = null;
   };
   const ensureLoop = (): void => {
     if (offLoop) return;
+    // A host watched only through its Shells' summaries reads its own quota on its own clock.
+    releaseUsage = deps.watchAgentUsage?.() ?? null;
     offLoop = deps.loop.subscribe((summary) => {
       const sessions = server.sessions.filter((ctx) => ctx.session.isOpen);
       if (sessions.length === 0) {
@@ -410,6 +420,7 @@ export async function installHostMetricsHost(
     { getPtyClient },
     registry,
     { agentNotificationService },
+    { getAgentUsageWatch },
   ] = await Promise.all([
     import("./localLoop.js"),
     import("./hostOps.js"),
@@ -418,9 +429,11 @@ export async function installHostMetricsHost(
     import("../../window/serviceRefs.js"),
     import("../../../shared/config/agentRegistry.js"),
     import("../../services/AgentNotificationService.js"),
+    import("../../services/agentUsage/AgentUsageWatch.js"),
   ]);
   return installHostMetricsHostWith(server, {
     loop: getLocalSummaryLoop(),
+    watchAgentUsage: () => getAgentUsageWatch().acquire(),
     listFleetTargets: ops.listLocalFleetTargets,
     submitFleet: ops.submitLocalFleet,
     listWorktrees: ops.listLocalWorktrees,

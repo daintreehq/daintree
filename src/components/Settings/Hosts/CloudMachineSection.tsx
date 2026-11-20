@@ -609,6 +609,11 @@ export function CloudMachineSection({
           idle={liveSummary?.idle}
           sampledAt={liveSummary?.sampledAt ?? null}
           selfStopProblem={status.selfStopProblem ?? null}
+          linkedIdleStop={status.linkedIdleStop ?? null}
+          provider={provider}
+          lifetime={status.lifetime}
+          idleTimeFollowsHost={status.idleTimeFollowsHost ?? false}
+          keepAwake={status.keepAwake ?? null}
         />
         <SettingsRow
           label="Disk"

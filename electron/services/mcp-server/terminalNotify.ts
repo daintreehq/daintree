@@ -2967,7 +2967,10 @@ export const NOTIFY_CLOSE_TOOLS: ReadonlySet<string> = new Set([
  * notice for it is held across the call rather than dropped, since the user
  * can refuse the restart and the agent then carries on.
  */
-export const NOTIFY_RESTART_TOOLS: ReadonlySet<string> = new Set(["terminal.restartOnPresetOwned"]);
+export const NOTIFY_RESTART_TOOLS: ReadonlySet<string> = new Set([
+  "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
+]);
 
 /** The key paths that take `notify: true`. */
 export const NOTIFY_KEY_TOOLS: ReadonlySet<string> = new Set([

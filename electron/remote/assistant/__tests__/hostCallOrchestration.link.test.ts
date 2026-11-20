@@ -514,7 +514,7 @@ function startShell(
     controlEnabled: (hostId) => options.control.has(hostId),
     askApproval: async (question) => {
       options.asked.push(question.actionId);
-      return options.decision();
+      return { decision: options.decision() };
     },
     newId: () => `00000000-0000-4000-8000-${shellId}${String(++ids).padStart(6, "0")}`,
   });

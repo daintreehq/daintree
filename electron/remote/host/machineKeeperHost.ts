@@ -6,20 +6,27 @@ import { BOAT_SANDBOX_ID } from "../cloud/boat/boatSchemas.js";
 import {
   GUEST_POWER_OFF_METHOD,
   GuestPowerOffRequestSchema,
+  KeepAwakeArmSchema,
+  KeepAwakeLinkMethod,
+  KeepAwakeStatusRequestSchema,
   MachineKeeperArmSchema,
   MachineKeeperLinkMethod,
   MachineKeeperStatusRequestSchema,
 } from "../cloud/machineKeeperLink.js";
 import type { LinkSession } from "../link/session.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
+import { EmptyPayloadSchema, LinkMethod, type IdleClaimAnswer } from "./linkMethods.js";
 import { GuestPowerOffKeeper } from "./GuestPowerOffKeeper.js";
 import { createGuestPowerOffSystem, type GuestPowerOffSystem } from "./guestPowerOffSystem.js";
+import { KeepAwakeKeeper, type KeepAwakeKeeperDeps } from "./KeepAwakeKeeper.js";
+import { openKeepAwakeListener } from "./keepAwakeListener.js";
 import { MachineKeeper } from "./MachineKeeper.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
     machineKeeper: MachineKeeper;
     guestPowerOff: GuestPowerOffKeeper;
+    keepAwake: KeepAwakeKeeper;
   }
 }
 
@@ -30,13 +37,21 @@ export interface MachineKeeperHostServer {
 /**
  * Host mode: take the key a Shell hands this cloud machine and keep it
  * running, or stop it, by this host's idle clock (#17361); or, on EC2 and
- * Compute Engine, the permission to power it off once idle (#17362). Nothing
- * runs and no request is made until a Shell hands one over, or one was handed
- * over earlier in this boot.
+ * Compute Engine, the permission to power it off once idle (#17362); or, on
+ * Agent 37, a signed URL to hold its instance awake while it sees work
+ * (#17918). Nothing runs, no port opens and no request is made until a Shell
+ * hands one over, or one was handed over earlier in this boot.
+ *
+ * Also answers a Shell about to act on this host's idleness itself (#17922):
+ * the same claim the keepers make, so one idle time is acted on once, by a
+ * keeper or by one link, whichever claims it first.
  */
 export function installMachineKeeperHost(
   server: MachineKeeperHostServer,
-  options: { guestSystem?: GuestPowerOffSystem } = {}
+  options: {
+    guestSystem?: GuestPowerOffSystem;
+    keepAwake?: Pick<KeepAwakeKeeperDeps, "listen" | "fetch" | "now">;
+  } = {}
 ): () => void {
   const idle = getRemoteService("hostIdle");
   if (!idle) return () => {};
@@ -66,8 +81,36 @@ export function installMachineKeeperHost(
   });
   const unregisterGuest = registerRemoteService("guestPowerOff", guest);
   void guest.restore().catch(() => {});
+  const keepAwake = new KeepAwakeKeeper({
+    idle,
+    listen: openKeepAwakeListener,
+    ...options.keepAwake,
+  });
+  const unregisterKeepAwake = registerRemoteService("keepAwake", keepAwake);
+  let live = true;
+  const claimIdle = async (
+    session: LinkSession,
+    claimant: symbol,
+    standIn = false
+  ): Promise<IdleClaimAnswer> => {
+    const reading = await idle.checkFresh();
+    // A Shell standing in for a refused self-stop leaves the idle time to a keeper that now stops
+    // the machine itself (#17924), decided in the same turn as the claim.
+    if (standIn && (keeper.stopsWhenIdle() || guest.stopsWhenIdle())) return { granted: false };
+    // A link gone, or Host mode stopping, before the decision claims nothing; one gone after it
+    // leaves the idle time spent, its answer perhaps lost.
+    return { granted: live && session.isOpen && idle.tryClaim(reading, claimant) };
+  };
   const off = server.onSession(({ session }) => {
+    // Each link claims as itself, once: one resumed after a drop is a new link, never the old claim.
+    const claimant = Symbol("shell-link");
     const handlers = [
+      session.registerCallHandler(LinkMethod.CLAIM_IDLE, EmptyPayloadSchema, () =>
+        claimIdle(session, claimant)
+      ),
+      session.registerCallHandler(LinkMethod.CLAIM_IDLE_STAND_IN, EmptyPayloadSchema, () =>
+        claimIdle(session, claimant, true)
+      ),
       session.registerCallHandler(
         MachineKeeperLinkMethod.STATUS,
         MachineKeeperStatusRequestSchema,
@@ -79,13 +122,22 @@ export function installMachineKeeperHost(
       session.registerCallHandler(GUEST_POWER_OFF_METHOD, GuestPowerOffRequestSchema, (request) =>
         guest.set(request)
       ),
+      session.registerCallHandler(KeepAwakeLinkMethod.STATUS, KeepAwakeStatusRequestSchema, () =>
+        keepAwake.open()
+      ),
+      session.registerCallHandler(KeepAwakeLinkMethod.ARM, KeepAwakeArmSchema, (request) =>
+        keepAwake.arm(request)
+      ),
     ];
     session.onClose(() => {
       for (const dispose of handlers) dispose();
     });
   });
   return () => {
+    live = false;
     off();
+    unregisterKeepAwake();
+    keepAwake.dispose();
     unregisterGuest();
     guest.dispose();
     unregister();
