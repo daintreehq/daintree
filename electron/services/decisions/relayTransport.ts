@@ -1,6 +1,5 @@
 import { net, powerMonitor } from "electron";
 import type {
-  DecisionsBridge,
   DeliveryEngine,
   InjectResult,
   InjectionIntent,
@@ -11,7 +10,7 @@ import type {
   TerminalSink,
   WebSocketLike,
 } from "@daintreehq/decisions-client";
-import { targetOf } from "@daintreehq/decisions-client";
+import { DecisionsBridge, targetOf } from "@daintreehq/decisions-client";
 
 export type BridgeLock = DecisionsBridge["ctx"]["lock"];
 
@@ -158,6 +157,110 @@ export function inertAttemptDelivery(
 ): void {
   engine.drain = async () => ({ delivered: 0, deferred: 0, needsAttention: 0, uncertain: 0 });
   engine.closureWrite = closureWrite;
+}
+
+const noop = (): void => {};
+
+/**
+ * A pump asked for while one runs, run once more after it. The library joins
+ * such a call to the pass in flight, which may already have read its outbox:
+ * a question committed then would reach the relay only on the next pump, 30 s
+ * later (#18002). Every call made meanwhile shares the one pass after it,
+ * which waits on the passes in flight alone, never on the advisory read the
+ * library runs beside them. A call made once that pass has started queues
+ * another. Each caller still settles as the pass it joined does; the pass
+ * after is extra work, so it fails to `report`, as a background pump does.
+ */
+export class TrailingPump {
+  private queued: { started: Promise<void>; done: Promise<void> } | null = null;
+
+  constructor(
+    private readonly pass: () => Promise<void>,
+    private readonly inFlight: () => Promise<unknown> | null,
+    private readonly report: (error: Error) => void
+  ) {}
+
+  run(): Promise<void> {
+    const running = this.inFlight();
+    const joined = this.pass();
+    if (running === null) return joined;
+    this.queued ??= this.after(running);
+    return Promise.all([joined, this.queued.done]).then(noop);
+  }
+
+  /** Settles once the queued pass has started, from when the library's `idle()` sees it; null with none queued. */
+  started(): Promise<void> | null {
+    return this.queued?.started ?? null;
+  }
+
+  /**
+   * Starts a pass once none is in flight. One another call started meanwhile
+   * may have read before a call sharing this pass was made, so it's waited out
+   * too.
+   */
+  private after(running: Promise<unknown>): { started: Promise<void>; done: Promise<void> } {
+    let done: Promise<void> = Promise.resolve();
+    const start = async (current: Promise<unknown>): Promise<void> => {
+      await current.then(noop, noop);
+      const next = this.inFlight();
+      if (next !== null) {
+        await start(next);
+        return;
+      }
+      this.queued = null;
+      try {
+        done = this.pass();
+      } catch (error) {
+        done = Promise.reject(error as Error);
+      }
+    };
+    const started = start(running);
+    return {
+      started,
+      done: started
+        .then(() => done)
+        .catch((error: unknown) => {
+          try {
+            this.report(error instanceof Error ? error : new Error(String(error)));
+          } catch {
+            // A listener's own failure: its callers still settle as the pass they joined.
+          }
+        }),
+    };
+  }
+}
+
+/**
+ * A socket attempt's bridge, whose pump never joins a pass that may already
+ * have read past what the call was made for (`TrailingPump`). The library's
+ * own calls, from an ask, a cancel, a thread post and the end of a replay,
+ * reach the override too. A stopped or revoked bridge, and a library without
+ * the pass where this reads it, pump as the library does.
+ */
+export class AttemptBridge extends DecisionsBridge {
+  private trailing: TrailingPump | undefined;
+
+  override pump(): Promise<void> {
+    if (this.state === "stopped" || this.state === "revoked") return super.pump();
+    this.trailing ??= new TrailingPump(
+      () => super.pump(),
+      () => (this as unknown as { pumping?: Promise<unknown> | null }).pumping ?? null,
+      (error) => this.reportPumpError(error)
+    );
+    return this.trailing.run();
+  }
+
+  override idle(): Promise<void> {
+    const queued = this.trailing?.started() ?? null;
+    return queued === null ? super.idle() : queued.then(() => super.idle());
+  }
+
+  /** On the bridge's `error`, where the library reports a background pump's failure. */
+  private reportPumpError(error: Error): void {
+    const emit = (this as unknown as { emitError?: (e: Error) => void }).emitError;
+    if (typeof emit === "function") emit.call(this, error);
+    else console.warn("[Decisions] A relay pump failed:", error.message);
+  }
 }
 
 /**

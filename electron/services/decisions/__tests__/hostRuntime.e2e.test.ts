@@ -338,12 +338,9 @@ class FakeRelay {
     const method = init.method ?? "GET";
     const body = typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : null;
     const auth = new Headers(init.headers).get("authorization");
-    this.requests.push({
-      path: pathname,
-      deviceId: /(?:^|[ ,])d=([^,]+)/.exec(auth ?? "")?.[1] ?? null,
-      body,
-    });
-    if (this.down || this.away.has(this.requests.at(-1)!.deviceId ?? "")) {
+    const deviceId = /(?:^|[ ,])d=([^,]+)/.exec(auth ?? "")?.[1] ?? null;
+    this.requests.push({ path: pathname, deviceId, body });
+    if (this.down || this.away.has(deviceId ?? "")) {
       throw new TypeError("fetch failed");
     }
     // A 0.4.0 relay advertises threads; nothing is sent to a desktop that doesn't declare them.
@@ -501,7 +498,7 @@ class FakeRelay {
       }
       this.messages.push({
         questionId: thread[1]!,
-        deviceId: this.requests.at(-1)!.deviceId,
+        deviceId,
         record: message.record,
         envelope: message.envelope,
       });
@@ -534,7 +531,7 @@ class FakeRelay {
     }
     if (method === "POST" && pathname === "/api/v1/socket-ticket") {
       const declared = (body as { features?: string[] } | null)?.features ?? [];
-      this.declared.set(this.requests.at(-1)!.deviceId ?? "", declared);
+      this.declared.set(deviceId ?? "", declared);
       return json(200, {
         ticket: `ticket-${this.requests.length}`,
         expires_at: new Date(Date.now() + 30_000).toISOString(),
@@ -989,8 +986,82 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/** Where a question the relay doesn't hold got to on this machine. */
+async function publishStage(relay: FakeRelay, questionId: string): Promise<string> {
+  const store = new DaintreeLocalStore(sqlite);
+  const local = await store.getQuestion(questionId);
+  if (local === null) return "never committed on this machine";
+  const create = (await store.outboxFor(questionId)).find((item) => item.kind === "create");
+  const sent = relay.requests.filter(
+    (request) =>
+      request.path === "/api/v1/questions" &&
+      (request.body as { question: { record: { question_id?: unknown } } } | null)?.question?.record
+        ?.question_id === questionId
+  ).length;
+  if (create === undefined) {
+    return `committed (${local.local_status}, error ${local.error_code ?? "none"}) with no create in the outbox, sent ${sent} time(s)`;
+  }
+  return `committed, its create still in the outbox after ${create.attempts} failed attempt(s) (${create.last_error ?? "no error"}), sent ${sent} time(s)`;
+}
+
+/**
+ * Waits for the relay to hold each of `questionIds`, as this machine publishes
+ * them. A timeout names each question it lacks and where that one got to.
+ */
+async function publishedToRelay(relay: FakeRelay, questionIds: string[]): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const missing: string[] = [];
+      for (const questionId of questionIds) {
+        if (!relay.questions.has(questionId)) {
+          const stage = await publishStage(relay, questionId).catch(
+            (error: unknown) => `unreadable (${String(error)})`
+          );
+          missing.push(`${questionId}: ${stage}`);
+        }
+      }
+      if (missing.length > 0) throw new Error(`The relay doesn't hold ${missing.join("; ")}`);
+    },
+    { timeout: 15_000 }
+  );
+}
+
+/**
+ * The machine's store, able to hold its pump just after the pump has
+ * published a question and read the outbox again to find it empty: a pump
+ * that has sent all it read and is still finishing. The hold is on the read's
+ * result, so the store goes on serving everything else.
+ */
+class HeldOutboxStore extends DaintreeLocalStore {
+  /** A pump is held here now. */
+  holding = false;
+  private hold: Promise<void> | null = null;
+  private lastReadCreate = false;
+
+  /** Holds the next such pump until `release` is called. */
+  holdNextPump(): () => void {
+    let release!: () => void;
+    this.hold = new Promise<void>((resolve) => (release = resolve));
+    return release;
+  }
+
+  override async dueOutbox(now: number, limit: number) {
+    const due = await super.dueOutbox(now, limit);
+    const hold = this.hold;
+    const afterCreate = this.lastReadCreate;
+    this.lastReadCreate = due.some((item) => item.kind === "create");
+    if (hold !== null && afterCreate && due.length === 0) {
+      this.hold = null;
+      this.holding = true;
+      await hold;
+      this.holding = false;
+    }
+    return due;
+  }
+}
+
 /** The Host enrolled and its owner gone, with Decisions connected to the fake relay. */
-async function startHost() {
+async function startHost(options: { openStore?: () => DaintreeLocalStore } = {}) {
   // The owner enrolls the Host as its own device, then closes: nothing of the owner runs after this.
   const owner = await makeOwner();
   const pending = new MemoryPendingHostStore();
@@ -1045,7 +1116,13 @@ async function startHost() {
     credentialsRemovedAt: null,
     ownerTerminalSnapshots: false,
   };
-  const runtime = await runDecisions(relay, hostKeys, hostLifetimeSettings(record), "host");
+  const runtime = await runDecisions(
+    relay,
+    hostKeys,
+    hostLifetimeSettings(record),
+    "host",
+    options.openStore
+  );
   return { owner, phone, relay, host, record, ...runtime };
 }
 
@@ -1057,7 +1134,8 @@ async function runDecisions(
   relay: FakeRelay,
   keys: KeyStore,
   settings: DecisionsSettings,
-  role: "owner" | "host"
+  role: "owner" | "host",
+  openStore: () => DaintreeLocalStore = () => new DaintreeLocalStore(sqlite)
 ) {
   const terminals = new HostTerminals();
   terminals.add("pane-1");
@@ -1084,7 +1162,7 @@ async function runDecisions(
   });
 
   const service: DecisionsService = new DecisionsService({
-    openStore: async () => new DaintreeLocalStore(sqlite),
+    openStore: async () => openStore(),
     keyFilePath: () => path.join(dir, "keys.bin"),
     openQuestions: (source, previousClosed) =>
       openDecisionsMcpRoute(
@@ -1174,7 +1252,7 @@ describe("Answers the person makes on the owner computer (#17101)", () => {
   it("types the person's answer to the owner's own question into the pane that asked, through Daintree's view path", async () => {
     const { owner, relay, terminals, listener, service } = await startOwner();
     const asked = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     expect(relay.declared.get(owner.deviceId)).toContain("owner-desktop-answers-v1");
     const question = await readOnHost(service, "pane-2", asked);
     expect(question.reference).toEqual({
@@ -1241,7 +1319,7 @@ describe("Answers the person makes on the owner computer (#17101)", () => {
     const { owner, relay, terminals, listener, service } = await startOwner();
     relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
     const asked = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     expect(relay.declared.get(owner.deviceId)).toContain("owner-desktop-declines-v1");
     const question = await readOnHost(service, "pane-2", asked);
     const decline = {
@@ -1321,7 +1399,7 @@ describe("Follow-ups the person sends from the owner computer (#17238)", () => {
   it("types the person's follow-up into the pane that asked, before its answer and after it, and never changes the answer", async () => {
     const { owner, relay, terminals, listener, service, turnEnds } = await startOwner();
     const asked = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     expect(relay.declared.get(owner.deviceId)).toContain("owner-desktop-messages-v1");
     const store = new DaintreeLocalStore(sqlite);
     const question = await readOnHost(service, "pane-2", asked);
@@ -1477,7 +1555,7 @@ describe("Follow-ups the person sends from the owner computer (#17238)", () => {
   it("says a question past its expiry closed, and types nothing", async () => {
     const { relay, terminals, listener, service } = await startOwner();
     const asked = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     const question = await readOnHost(service, "pane-2", asked);
     relay.expired.add(asked);
 
@@ -1499,7 +1577,7 @@ describe("Follow-ups the person sends from the owner computer to a Remote Host's
     const { owner, relay, host, terminals, listener, service } = await startHost();
     relay.features = ["thread-messages-v1", "owner-desktop-messages-v1"];
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     // The Host told the relay it takes follow-ups sent from the computer.
     expect(relay.declared.get(host.config.deviceId)).toContain("owner-desktop-messages-v1");
     const question = await readOnHost(service, "pane-1", asked);
@@ -1555,7 +1633,7 @@ describe("Follow-ups the person sends from the owner computer to a Remote Host's
   it("reports a relay too old for follow-ups from the computer, posting it nothing and typing nothing", async () => {
     const { owner, relay, terminals, listener, service } = await startHost();
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     const question = await readOnHost(service, "pane-1", asked);
     const owners = ownerAnswerPath(owner, relay);
     const messageId = "0190f0aa-2222-4222-8333-444455550006";
@@ -1585,7 +1663,7 @@ describe("Follow-ups the person sends from the owner computer to a Remote Host's
     const { owner, relay, host, terminals, listener, service } = await startHost();
     relay.features = ["thread-messages-v1", "owner-desktop-messages-v1"];
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     const question = await readOnHost(service, "pane-1", asked);
     // As a Host from before #17238 would have declared.
     relay.declared.set(
@@ -1616,7 +1694,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
 
     // An agent on the Host asks; the question is the Host's own, with its host id.
     const first = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(first)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [first]);
     expect(relay.questions.get(first)!.signer_device_id).toBe(host.config.deviceId);
     const stored = await new DaintreeLocalStore(sqlite).getQuestion(first);
     expect(stored?.origin).toMatchObject({ host_id: record.hostId, pane_id: "pane-1" });
@@ -1660,7 +1738,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
 
     // The Host asks again, then is away while the phone answers: the answer waits in the relay.
     const second = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
-    await vi.waitFor(() => expect(relay.questions.has(second)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [second]);
     relay.down = true;
     relay.liveSocket()!.drop();
     await vi.waitFor(() => expect(service.getStatus().state).toBe("reconnecting"), {
@@ -1745,7 +1823,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
 
     const { owner, phone, relay, terminals, listener } = await startHost();
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     await phoneAnswers(relay, owner, phone, asked, "a");
     await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
     expect(typedChoices(terminals.submitted[0]!.text)).toEqual(["a"]);
@@ -1767,7 +1845,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
   it("types a phone's follow-up into the asking pane after its answer, and reports each receipt", async () => {
     const { owner, phone, relay, terminals, listener, service, turnEnds } = await startHost();
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     const store = new DaintreeLocalStore(sqlite);
 
     await phoneAnswers(relay, owner, phone, asked, "a");
@@ -1885,6 +1963,28 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
       ]);
     }
   }, 60_000);
+
+  // The library joins a pump asked for mid-pump to the running one, which may already have read its outbox (#18002).
+  it("publishes a question asked while the Host's pump is still finishing the one before it", async () => {
+    const store = new HeldOutboxStore(sqlite);
+    const { relay, listener, service } = await startHost({ openStore: () => store });
+    // Past the replay and the pumps it started, so none of them can publish the second question for the pump held.
+    const live = service.getQuestionSource()!.live()!;
+    await vi.waitFor(() => expect(live.socket.currentState).toBe("live"), { timeout: 15_000 });
+    await live.idle();
+    const release = store.holdNextPump();
+    cleanups.push(release);
+
+    const first = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(store.holding).toBe(true), { timeout: 15_000 });
+    expect(relay.questions.has(first)).toBe(true);
+    const second = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
+    expect(relay.questions.has(second)).toBe(false);
+    expect((await store.outboxFor(second)).map((item) => item.kind)).toEqual(["create"]);
+    release();
+    await publishedToRelay(relay, [first, second]);
+  }, 60_000);
+
   // A 0.7.0 phone offers Dismiss only on a question whose asking desktop declared person declines (#17234).
   it("declares person declines, types a phone's decline into the Host pane still listening, and never tells one that has gone", async () => {
     const { owner, phone, relay, host, terminals, listener, service } = await startHost();
@@ -1894,10 +1994,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     );
     const listening = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
     const gone = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
-    await vi.waitFor(
-      () => expect(relay.questions.has(listening) && relay.questions.has(gone)).toBe(true),
-      { timeout: 15_000 }
-    );
+    await publishedToRelay(relay, [listening, gone]);
 
     // Still listening: told plainly that the person declined, with nothing approved.
     await phoneDeclines(relay, owner, phone, listening);
@@ -2022,7 +2119,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     execFileSync("git", ["init", "-q"], { cwd: project });
     terminals.terminals.get("pane-1")!.cwd = project;
     const asked = await askHuman(listener.port, "token-pane-1", "Which connector is it?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
 
     // The smallest valid PNG: its bytes are what the phone signed and what the agent opens.
     const png = Buffer.from(
@@ -2098,7 +2195,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     };
 
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     // The relay holds it before the Host records the publish; a slow runner reads between the two.
     await vi.waitFor(
       async () => expect((await store.getQuestion(asked))!.local_status).toBe("open"),
@@ -2198,7 +2295,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const { owner, relay, host, terminals, listener, service } = await startHost();
     relay.features = ["thread-messages-v1", "owner-desktop-answers-v1"];
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     // The Host told the relay it takes answers made on the computer.
     expect(relay.declared.get(host.config.deviceId)).toContain("owner-desktop-answers-v1");
 
@@ -2281,7 +2378,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const { owner, relay, host, terminals, listener, service } = await startHost();
     relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     // The Host told the relay it takes declines made on the computer.
     expect(relay.declared.get(host.config.deviceId)).toContain("owner-desktop-declines-v1");
 
@@ -2343,10 +2440,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
     const listening = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
     const gone = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
-    await vi.waitFor(
-      () => expect(relay.questions.has(listening) && relay.questions.has(gone)).toBe(true),
-      { timeout: 15_000 }
-    );
+    await publishedToRelay(relay, [listening, gone]);
     expect(relay.declared.get(host.config.deviceId)).toContain("owner-desktop-declines-v1");
     // What the owner's view last read of each over the Host's link, before the Host went away.
     const listeningRead = await readOnHost(service, "pane-1", listening);
@@ -2433,7 +2527,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const { owner, relay, terminals, listener, service } = await startHost();
     relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     const question = await readOnHost(service, "pane-1", asked);
 
     relay.down = true;
@@ -2474,7 +2568,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
   it("reports a relay too old for declines made on the computer, sending it nothing and typing nothing (#17239)", async () => {
     const { owner, relay, terminals, listener, service } = await startHost();
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     const question = await readOnHost(service, "pane-1", asked);
     const owners = ownerAnswerPath(owner, relay);
     const decline = {
@@ -2504,7 +2598,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const { owner, relay, host, terminals, listener, service } = await startHost();
     relay.features = ["thread-messages-v1", "owner-desktop-declines-v1"];
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     const question = await readOnHost(service, "pane-1", asked);
     // As a Host from before #17239 would have declared.
     relay.declared.set(
@@ -2532,7 +2626,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
   it("reports a relay too old for answers made on the computer, sending it nothing and typing nothing (#17101)", async () => {
     const { owner, relay, terminals, listener, service } = await startHost();
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     const question = await readOnHost(service, "pane-1", asked);
     const owners = ownerAnswerPath(owner, relay);
     const answer = {
@@ -2565,7 +2659,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     const { owner, relay, host, terminals, listener, service } = await startHost();
     relay.features = ["thread-messages-v1", "owner-desktop-answers-v1"];
     const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await publishedToRelay(relay, [asked]);
     const question = await readOnHost(service, "pane-1", asked);
     // As a Host from before #17101 would have declared.
     relay.declared.set(
