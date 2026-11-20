@@ -117,6 +117,16 @@ describe("DecisionsSettingsTab section order", () => {
     expect(order()).toEqual(EVERYDAY_ORDER);
   });
 
+  it("has no section for Voice, its note being a row of Data", async () => {
+    await renderTab(FINISHED);
+
+    const sections = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-settings-section-title]")
+    ).map((title) => title.firstChild?.textContent);
+    expect(sections).not.toContain("Voice");
+    expect(document.querySelector("#decisions-data #decisions-voice")).not.toBeNull();
+  });
+
   it.each([
     ["no relay is set up", { state: "not-connected", consentedAt: 1 }],
     ["the recovery kit isn't verified", { ...FINISHED, recoveryKitVerifiedAt: undefined }],

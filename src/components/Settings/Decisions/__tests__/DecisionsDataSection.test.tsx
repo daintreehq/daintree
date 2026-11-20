@@ -496,8 +496,7 @@ describe("DecisionsDataSection folded away", () => {
   });
 
   const details = () => screen.getByRole("button", { name: /What's sent, and where/ });
-  const listShown = () =>
-    screen.queryByText("Questions and answers, end-to-end encrypted.") !== null;
+  const listShown = () => document.querySelector("#decisions-data-sent ul") !== null;
 
   function renderLinked(deepLink: SettingsDeepLink) {
     const tree = (value: SettingsDeepLink) => (
@@ -543,15 +542,25 @@ describe("DecisionsDataSection folded away", () => {
 
     fireEvent.click(details());
     expect(listShown()).toBe(false);
+    expect(details().getAttribute("aria-expanded")).toBe("false");
     expect(details().textContent).toBe("Details");
   });
 
-  it("opens the list for a settings search that names it, and keeps it open once the link clears", () => {
-    const { clear } = renderLinked(link("privacy"));
+  it.each(["privacy", "metadata"])(
+    "opens the list for a settings search (%s) that names it, and keeps it open once the link clears",
+    (query) => {
+      const { clear } = renderLinked(link(query));
 
-    expect(listShown()).toBe(true);
-    clear();
-    expect(listShown()).toBe(true);
+      expect(listShown()).toBe(true);
+      clear();
+      expect(listShown()).toBe(true);
+    }
+  );
+
+  it("leaves it closed for a search that names something else in the tab", () => {
+    renderLinked({ sectionId: "decisions-policy", query: "gates", request: {}, holds: null });
+
+    expect(listShown()).toBe(false);
   });
 
   it("leaves it closed for a link that didn't come from search, such as the relay-removal banner's", () => {

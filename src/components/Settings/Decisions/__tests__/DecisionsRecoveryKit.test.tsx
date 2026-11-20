@@ -371,41 +371,41 @@ describe("DecisionsRecoveryKit once a kit is verified", () => {
   });
 
   const toggle = () => screen.getByRole("button", { name: /Recovery kit verified/ });
-  const formsShown = () =>
-    document.getElementById("decisions-recovery-kit-save") !== null &&
-    document.getElementById("decisions-recovery-kit-verify") !== null;
+  const saveRow = () => document.getElementById("decisions-recovery-kit-save");
+  const verifyRow = () => document.getElementById("decisions-recovery-kit-verify");
+  const bothFormsShown = () => saveRow() !== null && verifyRow() !== null;
+  const anyFormShown = () => saveRow() !== null || verifyRow() !== null;
 
-  function link(sectionId: string | null): SettingsDeepLink {
+  function link(sectionId: string | null, query: string | null = "kit"): SettingsDeepLink {
     return {
       sectionId,
-      query: sectionId === null ? null : "kit",
+      query: sectionId === null ? null : query,
+      // A link is its own request, even to the same section again.
       request: sectionId === null ? null : { sectionId },
       holds: null,
     };
   }
 
-  function renderLinked(deepLink: SettingsDeepLink, props: { focusRequest?: number } = {}) {
-    const tree = (value: SettingsDeepLink, focusRequest = props.focusRequest ?? 0) => (
+  function linkedTree(value: SettingsDeepLink) {
+    return (
       <SettingsDeepLinkProvider value={value}>
         <TooltipProvider>
           <DecisionsRecoveryKit
             status={VERIFIED}
             disabled={false}
             onVerified={vi.fn()}
-            focusRequest={focusRequest}
+            focusRequest={0}
           />
         </TooltipProvider>
       </SettingsDeepLinkProvider>
     );
-    const view = render(tree(deepLink));
-    return { clear: () => view.rerender(tree(link(null))) };
   }
 
   it("shows the status and a button for the forms, not the forms", () => {
     renderKit({ status: VERIFIED });
 
     expect(screen.getByText("Recovery kit verified")).toBeTruthy();
-    expect(formsShown()).toBe(false);
+    expect(anyFormShown()).toBe(false);
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
     expect(toggle().getAttribute("aria-controls")).toBeNull();
   });
@@ -413,32 +413,37 @@ describe("DecisionsRecoveryKit once a kit is verified", () => {
   it("shows the forms with no button while no kit is verified", () => {
     renderKit({ status: UNFINISHED });
 
-    expect(formsShown()).toBe(true);
+    expect(bothFormsShown()).toBe(true);
     expect(screen.queryByRole("button", { name: /Save or verify a kit/ })).toBeNull();
   });
 
-  it("names the button by its row and its own words", () => {
+  it("names the button by its row's label and its own words, not the row's description", () => {
     renderKit({ status: VERIFIED });
 
+    const [rowLabel, own, ...rest] = toggle().getAttribute("aria-labelledby")?.split(" ") ?? [];
+    expect(document.getElementById(rowLabel ?? "")?.textContent).toBe("Recovery kit verified");
+    expect(own).toBe(toggle().id);
+    expect(rest).toEqual([]);
     expect(toggle().textContent).toBe("Save or verify a kit");
-    expect(toggle().getAttribute("aria-labelledby")?.split(" ")).toHaveLength(2);
-    expect(toggle().getAttribute("aria-labelledby")?.split(" ")[1]).toBe(toggle().id);
   });
 
-  it("opens the forms from the button and folds them again, dropping what was typed", () => {
+  it("opens the forms from the button and folds them again, dropping what was typed and chosen", async () => {
     renderKit({ status: VERIFIED });
 
     fireEvent.click(toggle());
-    expect(formsShown()).toBe(true);
+    expect(bothFormsShown()).toBe(true);
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
     expect(toggle().getAttribute("aria-controls")).toBe(
       "decisions-recovery-kit-save decisions-recovery-kit-verify"
     );
     fireEvent.change(saveField(), { target: { value: PASSPHRASE } });
     fireEvent.change(verifyField(), { target: { value: PASSPHRASE } });
+    await chooseKit('{"v":1}', "mine.json");
+    expect(screen.getByText("mine.json")).toBeTruthy();
 
     fireEvent.click(toggle());
-    expect(formsShown()).toBe(false);
+    expect(anyFormShown()).toBe(false);
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
 
     fireEvent.click(toggle());
     expect(saveField().value).toBe("");
@@ -446,13 +451,51 @@ describe("DecisionsRecoveryKit once a kit is verified", () => {
     expect(screen.getByText("No kit chosen")).toBeTruthy();
   });
 
-  it("opens a folded kit for setup's request and takes focus", () => {
+  it("takes a form's result away with it when they are folded", async () => {
+    exportRecoveryKit.mockResolvedValue({ result: "saved", fileName: "kit.json" });
+    renderKit({ status: VERIFIED });
+    fireEvent.click(toggle());
+    fireEvent.change(saveField(), { target: { value: PASSPHRASE } });
+    await submit(saveField());
+    expect(screen.getByText("Saved kit.json")).toBeTruthy();
+
+    fireEvent.click(toggle());
+
+    expect(screen.queryByText("Saved kit.json")).toBeNull();
+    expect(document.getElementById("decisions-recovery-kit-outcome")).toBeNull();
+  });
+
+  it("opens a folded kit for a request from setup that was there from the start", () => {
     const onFocused = vi.fn();
     renderKit({ status: VERIFIED, focusRequest: 1, onFocused });
 
-    expect(formsShown()).toBe(true);
+    expect(bothFormsShown()).toBe(true);
     expect(document.activeElement).toBe(saveField());
     expect(onFocused).toHaveBeenCalledOnce();
+  });
+
+  it("opens a folded kit for a request from setup that comes after, and takes focus", () => {
+    const onFocused = vi.fn();
+    const { rerender } = renderKit({ status: VERIFIED, onFocused });
+    expect(anyFormShown()).toBe(false);
+
+    rerender(1);
+
+    expect(bothFormsShown()).toBe(true);
+    expect(document.activeElement).toBe(saveField());
+    expect(onFocused).toHaveBeenCalledOnce();
+  });
+
+  it("lets the person fold the forms while a request from setup is still waiting for focus", () => {
+    const onFocused = vi.fn();
+    renderKit({ status: VERIFIED, focusRequest: 1, disabled: true, onFocused });
+    expect(bothFormsShown()).toBe(true);
+    expect(onFocused).not.toHaveBeenCalled();
+
+    fireEvent.click(toggle());
+
+    expect(anyFormShown()).toBe(false);
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
 
   it("keeps the forms, and the result, when a verification is what made the kit verified", async () => {
@@ -476,12 +519,12 @@ describe("DecisionsRecoveryKit once a kit is verified", () => {
 
     view.rerender(tree(VERIFIED));
 
-    expect(formsShown()).toBe(true);
+    expect(bothFormsShown()).toBe(true);
     expect(screen.getByText("Kit checked")).toBeTruthy();
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("can't be folded while a request is running", async () => {
+  it("can't be folded while a save is running", async () => {
     const saving = deferred<DecisionsKitExportResult>();
     exportRecoveryKit.mockReturnValue(saving.promise);
     renderKit({ status: VERIFIED });
@@ -489,14 +532,30 @@ describe("DecisionsRecoveryKit once a kit is verified", () => {
     fireEvent.change(saveField(), { target: { value: PASSPHRASE } });
     await submit(saveField());
 
-    expect((toggle() as HTMLButtonElement).disabled).toBe(true);
-    expect(formsShown()).toBe(true);
+    expect(toggle().hasAttribute("disabled")).toBe(true);
+    expect(bothFormsShown()).toBe(true);
 
     await act(async () => saving.resolve({ result: "cancelled" }));
-    expect((toggle() as HTMLButtonElement).disabled).toBe(false);
+    expect(toggle().hasAttribute("disabled")).toBe(false);
   });
 
-  it("opens when the kit stops being verified", () => {
+  it("can't be folded while a verification is running", async () => {
+    const checking = deferred<DecisionsKitVerifyResult>();
+    verifyRecoveryKit.mockReturnValue(checking.promise);
+    renderKit({ status: VERIFIED });
+    fireEvent.click(toggle());
+    await chooseKit('{"v":1}');
+    fireEvent.change(verifyField(), { target: { value: PASSPHRASE } });
+    await submit(verifyField());
+
+    expect(toggle().hasAttribute("disabled")).toBe(true);
+    expect(bothFormsShown()).toBe(true);
+
+    await act(async () => checking.resolve({ result: "verified", status: VERIFIED }));
+    expect(toggle().hasAttribute("disabled")).toBe(false);
+  });
+
+  it("opens when the same relay's kit stops being verified", () => {
     const tree = (status: DecisionsStatus) => (
       <TooltipProvider>
         <DecisionsRecoveryKit
@@ -508,57 +567,41 @@ describe("DecisionsRecoveryKit once a kit is verified", () => {
       </TooltipProvider>
     );
     const view = render(tree(VERIFIED));
-    expect(formsShown()).toBe(false);
+    expect(anyFormShown()).toBe(false);
 
-    view.rerender(tree({ ...UNFINISHED, relayOrigin: "https://other.example.workers.dev" }));
+    view.rerender(tree(UNFINISHED));
 
-    expect(formsShown()).toBe(true);
+    expect(bothFormsShown()).toBe(true);
   });
 
-  it("opens for a settings link to either form, and stays open once the link is cleared", () => {
-    const { clear } = renderLinked(link("decisions-recovery-kit-save"));
+  it.each(["decisions-recovery-kit-save", "decisions-recovery-kit-verify"])(
+    "opens for a settings link to %s, and stays open once the link is cleared",
+    (id) => {
+      const view = render(linkedTree(link(id)));
 
-    expect(formsShown()).toBe(true);
-    clear();
-    expect(formsShown()).toBe(true);
-  });
+      expect(bothFormsShown()).toBe(true);
+      view.rerender(linkedTree(link(null)));
+      expect(bothFormsShown()).toBe(true);
+    }
+  );
 
-  it("opens again for a second link after the person folded it", () => {
-    const first = link("decisions-recovery-kit-verify");
-    const view = render(
-      <SettingsDeepLinkProvider value={first}>
-        <TooltipProvider>
-          <DecisionsRecoveryKit
-            status={VERIFIED}
-            disabled={false}
-            onVerified={vi.fn()}
-            focusRequest={0}
-          />
-        </TooltipProvider>
-      </SettingsDeepLinkProvider>
-    );
+  it("opens again for a fresh link to the same form after the person folded it", () => {
+    const view = render(linkedTree(link("decisions-recovery-kit-save")));
+    view.rerender(linkedTree(link(null)));
     fireEvent.click(toggle());
-    expect(formsShown()).toBe(false);
+    expect(anyFormShown()).toBe(false);
 
-    view.rerender(
-      <SettingsDeepLinkProvider value={link("decisions-recovery-kit-save")}>
-        <TooltipProvider>
-          <DecisionsRecoveryKit
-            status={VERIFIED}
-            disabled={false}
-            onVerified={vi.fn()}
-            focusRequest={0}
-          />
-        </TooltipProvider>
-      </SettingsDeepLinkProvider>
-    );
+    view.rerender(linkedTree(link("decisions-recovery-kit-save")));
 
-    expect(formsShown()).toBe(true);
+    expect(bothFormsShown()).toBe(true);
   });
 
-  it("stays folded for a link to something else", () => {
-    renderLinked(link("decisions-data"));
+  it.each(["decisions-data", "decisions-policy", "decisions-connection"])(
+    "stays folded for a link to %s",
+    (id) => {
+      render(linkedTree(link(id)));
 
-    expect(formsShown()).toBe(false);
-  });
+      expect(anyFormShown()).toBe(false);
+    }
+  );
 });

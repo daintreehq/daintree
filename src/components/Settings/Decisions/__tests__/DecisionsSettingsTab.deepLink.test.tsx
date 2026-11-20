@@ -141,7 +141,8 @@ describe("Decisions settings links, in either order", () => {
 
     expect(onHandled).toHaveBeenCalledExactlyOnceWith("decisions-data", true);
     expect(sentList()).not.toBeNull();
-    expect(document.activeElement?.closest("#decisions-data-sent")).not.toBeNull();
+    expect(document.activeElement?.textContent).toBe("Details");
+    expect(document.activeElement?.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("leaves the list closed for a link that isn't a search, and still lands on its row", async () => {
@@ -153,6 +154,8 @@ describe("Decisions settings links, in either order", () => {
     expect(onHandled).toHaveBeenCalledExactlyOnceWith("decisions-data", true);
     expect(sentList()).toBeNull();
     expect(document.querySelector("#decisions-data-sent.settings-highlight")).not.toBeNull();
+    expect(document.activeElement?.textContent).toBe("Details");
+    expect(document.activeElement?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("waits for the first read of the status, then lands on a row behind the switch", async () => {
@@ -166,13 +169,22 @@ describe("Decisions settings links, in either order", () => {
     await act(async () => read.resolve(FINISHED));
 
     expect(onHandled).toHaveBeenCalledExactlyOnceWith("decisions-voice", true);
+    expect(document.querySelector("#decisions-voice.settings-highlight")).not.toBeNull();
   });
 
-  it("stops waiting when the first read fails, and reports the miss", async () => {
-    getStatus.mockRejectedValue(new Error("no answer"));
+  it("stops waiting when the first read fails, and reports the miss then", async () => {
+    let fail!: (error: Error) => void;
+    getStatus.mockReturnValue(
+      new Promise<DecisionsStatus>((_, reject) => {
+        fail = reject;
+      })
+    );
 
     const onHandled = renderLinked("decisions-voice", "dictation");
     await act(async () => {});
+    expect(onHandled).not.toHaveBeenCalled();
+
+    await act(async () => fail(new Error("no answer")));
 
     expect(onHandled).toHaveBeenCalledExactlyOnceWith("decisions-voice", false);
   });

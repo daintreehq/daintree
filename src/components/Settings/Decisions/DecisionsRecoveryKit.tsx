@@ -84,7 +84,15 @@ export function DecisionsRecoveryKit({
   });
   // Opened by what needs the forms, and latched, so a verification that
   // flips the kit to verified in this same update leaves them where they are.
-  if ((kitNeeded || focusRequest > 0) && !formsOpen) setFormsOpen(true);
+  // Setup's request opens them once, as it arrives: one that stays unmet
+  // (the field can't take focus while Settings is on another tab) mustn't
+  // reopen forms the person has since folded.
+  const [askedFor, setAskedFor] = useState(0);
+  if (focusRequest !== askedFor) {
+    setAskedFor(focusRequest);
+    if (focusRequest > 0 && !formsOpen) setFormsOpen(true);
+  }
+  if (kitNeeded && !formsOpen) setFormsOpen(true);
 
   // A request waits while the field is disabled or folded away, and counts as
   // met only once the field has focus, so one made mid-request isn't lost.
@@ -108,8 +116,12 @@ export function DecisionsRecoveryKit({
     setKitError(null);
   };
 
+  // Folding the forms takes their result with them: it may point at a field that's gone.
   const toggleForms = () => {
-    if (formsOpen) clearSecrets();
+    if (formsOpen) {
+      clearSecrets();
+      recovery.reset();
+    }
     setFormsOpen(!formsOpen);
   };
 

@@ -21,6 +21,11 @@ describe("SETTINGS_REGISTRY", () => {
     expect(agents.needsIsActive).toBe(true);
   });
 
+  it("tells the decisions tab when it's hidden, so a tab read ahead doesn't count as seen with Connection first (#18058)", () => {
+    const decisions = SETTINGS_REGISTRY.find((e) => e.id === "decisions");
+    expect(decisions && "needsIsActive" in decisions && decisions.needsIsActive).toBe(true);
+  });
+
   it.each([
     ["recovery kit", "decisions-recovery-kit-save"],
     ["recovery", "decisions-recovery-kit-save"],
