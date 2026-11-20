@@ -776,6 +776,9 @@ export const agentActionRuns = {
     return pageAgentFacingSessions(sessions, offset, limit);
   },
   "agentSessionHistory.resume": async (args: unknown, ctx: ActionContext) => {
+    // Before any await: a worktree chosen while the journal is read is already
+    // a newer choice than this call.
+    const selectedAtStart = useWorktreeSelectionStore.getState().activeWorktreeId;
     const parsed = ResumeSessionArgsSchema.parse(args);
     const { sessionId } = parsed;
     // Fail closed when a headless caller omits the worktree: the resolver
@@ -895,7 +898,6 @@ export const agentActionRuns = {
           }
         }
       : undefined;
-    const selectedAtStart = useWorktreeSelectionStore.getState().activeWorktreeId;
     const resumed = await resumeSessionIntoPanel(record, target, {
       validateSpawn: () => {
         if (spawnRefusal !== null) throw new Error(spawnRefusal);

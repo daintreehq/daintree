@@ -447,6 +447,7 @@ describe("findLiveResumePanelId", () => {
   it("passes over panes that don't hold the session to the one that does", () => {
     setPanels(
       pane("term-other", { agentSessionId: "s-2" }),
+      pane("term-dialog", { location: "dialog" }),
       pane("term-trash", { location: "trash" }),
       pane("term-shell", { agentState: "exited" }),
       pane("term-holder", { worktreeId: "wt-3" })
@@ -479,6 +480,14 @@ describe("bringResumedPaneForward", () => {
       (id) => order.push(`show:${id}`)
     );
     expect(order).toEqual(["show:wt-2", "restore", "activate"]);
+  });
+
+  it("leaves a pane closed into the trash while it opened where it is", () => {
+    setPanels(pane("term-9", { worktreeId: "wt-2", location: "trash" }));
+    const show = vi.fn();
+    bringResumedPaneForward({ terminalId: "term-9", outcome: "created", worktreeId: "wt-2" }, show);
+    expect(show).not.toHaveBeenCalled();
+    expect(activateTerminalMock).not.toHaveBeenCalled();
   });
 
   it("does nothing for a pane that has gone", () => {

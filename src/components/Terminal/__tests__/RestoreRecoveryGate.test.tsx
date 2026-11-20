@@ -287,7 +287,8 @@ describe("RestoreRecoveryGate (#12434)", () => {
       heldPanel("p-1", {
         cwd: "/repo",
         conversationCwd: undefined,
-        worktreeId: "/worktrees/task-a",
+        // An id spelled otherwise than the path it lists.
+        worktreeId: "wt-task-a",
         restoreRecovery: {
           reason: "destination-unavailable",
           sessionId: "sess-a",
@@ -297,7 +298,10 @@ describe("RestoreRecoveryGate (#12434)", () => {
     );
     const view = {
       getState: () => ({
-        worktrees: new Map([["/worktrees/task-a", { path: "/worktrees/task-a" }]]),
+        worktrees: new Map([
+          ["/repo", { path: "/repo" }],
+          ["wt-task-a", { path: "/worktrees/task-a" }],
+        ]),
       }),
       subscribe: () => () => {},
     } as never;
@@ -344,6 +348,29 @@ describe("RestoreRecoveryGate (#12434)", () => {
 
     expect(screen.queryByRole("button", { name: "Use this worktree" })).toBeNull();
     expect(screen.getByRole("button", { name: "Keep original folder" })).toBeTruthy();
+  });
+
+  it("still offers it to a pane in a sibling folder sharing the worktree's name", () => {
+    seed(
+      heldPanel("p-1", {
+        cwd: "/worktrees/task-ab",
+        restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
+      })
+    );
+    const view = {
+      getState: () => ({
+        worktrees: new Map([["/worktrees/task-a", { path: "/worktrees/task-a" }]]),
+      }),
+      subscribe: () => () => {},
+    } as never;
+
+    render(
+      <WorktreeStoreContext value={view}>
+        <RestoreRecoveryGate panelId="p-1" />
+      </WorktreeStoreContext>
+    );
+
+    expect(screen.getByRole("button", { name: "Use this worktree" })).toBeTruthy();
   });
 
   it("keeps the folder it shows, even when the pane last ran somewhere else", () => {

@@ -14,7 +14,12 @@ const currentViewStoreMock = vi.hoisted(() => ({ getCurrentViewStore: vi.fn() })
 const selectWorktreeMock = vi.hoisted(() => vi.fn());
 const worktreeSelectionMock = vi.hoisted(() => ({
   useWorktreeSelectionStore: {
-    getState: vi.fn(() => ({ activeWorktreeId: null, selectWorktree: selectWorktreeMock })),
+    getState: vi.fn(
+      (): { activeWorktreeId: string | null; selectWorktree: typeof selectWorktreeMock } => ({
+        activeWorktreeId: null,
+        selectWorktree: selectWorktreeMock,
+      })
+    ),
   },
 }));
 const agentRegistryMock = vi.hoisted(() => ({
@@ -116,6 +121,10 @@ beforeEach(() => {
     ])
   );
   listMock.mockResolvedValue([record()]);
+  worktreeSelectionMock.useWorktreeSelectionStore.getState.mockImplementation(() => ({
+    activeWorktreeId: null,
+    selectWorktree: selectWorktreeMock,
+  }));
   resumeMock.mockImplementation(
     async (
       _session: unknown,
@@ -314,6 +323,23 @@ describe("agentSessionHistory.resume — launch target", () => {
       expect.objectContaining({ terminalId: "term-moved", worktreeId: WT_B }),
       showWorktree
     );
+  });
+
+  it("leaves a worktree chosen while the journal was read where it is", async () => {
+    // A person switches away while the lookup is still out.
+    selectWorktreeMock.mockClear();
+    let active: string | null = WT_A;
+    worktreeSelectionMock.useWorktreeSelectionStore.getState.mockImplementation(() => ({
+      activeWorktreeId: active,
+      selectWorktree: selectWorktreeMock,
+    }));
+    listMock.mockImplementation(async () => {
+      active = "/repo/wt-c";
+      return [record()];
+    });
+    resumeMock.mockResolvedValue({ terminalId: "term-9", outcome: "created", worktreeId: WT_B });
+    await run({ worktreeId: WT_A, sessionId: "sess-1" }, { ...agentCtx, dispatchSource: "user" });
+    expect(bringForwardMock).not.toHaveBeenCalled();
   });
 
   it("refuses a record recorded in another worktree with no directory to compare", async () => {

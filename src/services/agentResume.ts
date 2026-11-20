@@ -214,7 +214,9 @@ function revealExistingPane(
   terminalId: string,
   showWorktree: ((worktreeId: string) => void) | undefined
 ): void {
-  if (!Object.hasOwn(usePanelStore.getState().panelsById, terminalId)) return;
+  // Gone, or closed into the trash while it was opening: nothing to show.
+  const panel = usePanelStore.getState().panelsById[terminalId];
+  if (!panel || panel.location === "trash" || panel.location === "dialog") return;
   const holderWorktreeId = filedWorktreeId(terminalId);
   const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
   if (holderWorktreeId !== activeWorktreeId) {
