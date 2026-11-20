@@ -108,6 +108,10 @@ function facts(): string {
   return screen.getByTestId("decisions-status-facts").textContent ?? "";
 }
 
+function tooltip(): string {
+  return screen.getByTestId("tooltip-content").textContent ?? "";
+}
+
 async function renderFacts(
   devices: UseDecisionsDevicesResult = devicesRead([PHONE]),
   policy: UseDecisionsPolicyResult = policyRead(["claude"])
@@ -153,12 +157,14 @@ describe("DecisionsStatusFacts (#18059)", () => {
     listQuestions.mockReturnValue(list.promise);
     const view = await renderFacts(devicesRead(null), policyRead(null));
     expect(facts()).toBe("Reading phones… · Reading agents… · Reading questions…");
+    expect(tooltip()).toBe(facts());
 
     const lastAsked = new Date(Date.now() - 5 * 60_000).toISOString();
     view.rerender(
       <DecisionsStatusFacts devices={devicesRead([PHONE])} policy={policyRead(["claude"])} />
     );
     expect(facts()).toBe("1 phone with notifications · 1 agent switched on · Reading questions…");
+    expect(tooltip()).toBe(facts());
     await act(async () => {
       list.resolve({ revision: 1, questions: [asked(lastAsked)] });
     });
@@ -166,28 +172,30 @@ describe("DecisionsStatusFacts (#18059)", () => {
     expect(facts()).toMatch(/^1 phone with notifications · 1 agent switched on · Last question /);
     expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(lastAsked);
     // One line that clips in a narrow window, so its tooltip carries all of it.
-    expect(screen.getByTestId("tooltip-content").textContent).toBe(facts());
+    expect(tooltip()).toBe(facts());
   });
 
   it("discloses the whole line in a styled tooltip only while it's clipped, never a native title", async () => {
-    const view = await renderFacts();
+    const devices = devicesRead([PHONE, { ...PHONE, deviceId: "dev_phone_2" }]);
+    const policy = policyRead(["claude"]);
+    const view = await renderFacts(devices, policy);
     const line = () => screen.getByTestId("decisions-status-facts");
+    const rerender = () =>
+      view.rerender(<DecisionsStatusFacts devices={devices} policy={policy} />);
     expect(line().hasAttribute("title")).toBe(false);
     expect(screen.queryByTestId("tooltip-content")).toBeNull();
     expect(line().hasAttribute("tabindex")).toBe(false);
 
     truncation.value = true;
-    view.rerender(
-      <DecisionsStatusFacts
-        devices={devicesRead([PHONE, { ...PHONE, deviceId: "dev_phone_2" }])}
-        policy={policyRead(["claude"])}
-      />
-    );
+    rerender();
     expect(line().hasAttribute("title")).toBe(false);
-    expect(screen.getByTestId("tooltip-content").textContent).toBe(
-      "2 phones with notifications · 1 agent switched on · No questions yet"
-    );
+    expect(tooltip()).toBe("2 phones with notifications · 1 agent switched on · No questions yet");
     expect(line().tabIndex).toBe(0);
+
+    truncation.value = false;
+    rerender();
+    expect(screen.queryByTestId("tooltip-content")).toBeNull();
+    expect(line().hasAttribute("tabindex")).toBe(false);
   });
 
   it("counts the phones and tablets the relay can notify, nothing else", async () => {

@@ -114,18 +114,24 @@ describe("useTruncationDetection", () => {
     expect(getByTestId("line")).toBe(el);
     expect(seen).toHaveBeenLastCalledWith(true);
 
+    // Back to the first text: the last one measured, not the first, decides.
     setWidths(el, 60, 100);
-    rerender(<Line text="No phones" onTruncated={seen} />);
+    rerender(<Line text="3 phones" onTruncated={seen} />);
     expect(seen).toHaveBeenLastCalledWith(false);
   });
 
-  it("reads no layout for a render that keeps the same text", () => {
-    const { getByTestId, rerender } = render(<Line text="3 phones" onTruncated={() => {}} />);
+  it("reads layout once on mount and not again for a render that keeps the same text", () => {
     const reads = vi.fn(() => 200);
-    Object.defineProperty(getByTestId("line"), "scrollWidth", { configurable: true, get: reads });
+    Object.defineProperty(HTMLElement.prototype, "scrollWidth", { configurable: true, get: reads });
+    try {
+      const { rerender } = render(<Line text="3 phones" onTruncated={() => {}} />);
+      expect(reads).toHaveBeenCalledTimes(1);
 
-    rerender(<Line text="3 phones" onTruncated={() => {}} />);
-    expect(reads).not.toHaveBeenCalled();
+      rerender(<Line text="3 phones" onTruncated={() => {}} />);
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollWidth");
+    }
   });
 
   it("stops observing an element when its label unmounts", () => {

@@ -21,7 +21,7 @@ import { TruncatedTooltip } from "../TruncatedTooltip";
 describe("TruncatedTooltip re-measuring", () => {
   // Under React Compiler the trigger's ref is memoized, so a text change at a
   // fixed width re-measures only through the text the detector is handed.
-  it("hands its detector the text it shows, so a change in place is measured again", () => {
+  it("forwards each primitive content to its detector, including 0, and nothing for rich content", () => {
     const { rerender } = render(
       <TruncatedTooltip content="Reading phones…">
         <span className="block truncate">Reading phones…</span>
@@ -35,10 +35,16 @@ describe("TruncatedTooltip re-measuring", () => {
       </TruncatedTooltip>
     );
     expect(detection).toHaveBeenLastCalledWith("2 phones with notifications");
-  });
 
-  it("hands it nothing for rich content, whose identity changes every render", () => {
-    render(
+    rerender(
+      <TruncatedTooltip content={0}>
+        <span className="truncate">0</span>
+      </TruncatedTooltip>
+    );
+    expect(detection).toHaveBeenLastCalledWith(0);
+
+    // Rich content's identity changes every render, so it would re-measure on each.
+    rerender(
       <TruncatedTooltip content={<strong>Full label</strong>}>
         <span className="truncate">Full label</span>
       </TruncatedTooltip>
