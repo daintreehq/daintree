@@ -290,20 +290,29 @@ const GENERIC_HEADINGS = new Set([
   "tldr",
 ]);
 
-/** A line's text without Markdown syntax: marks, emphasis, ticks and link syntax, keeping link labels. */
-function stripMarkdown(line: string): string {
-  return line
-    .replace(/^\s{0,3}(?:>\s*)+/, "")
-    .replace(/^\s*#{1,6}(?:\s+|$)/, "")
-    .replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+/, "")
-    .replace(/^\s*(?:`{3,}|~{3,})\S*\s*$/, "")
-    .replace(/^\s*(?:[-*_]\s*){3,}$/, "")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+const LINE_SCAN_CHARS = 1_000;
+
+/** Emphasis and links outside code spans; the line was already cut to a bounded length. */
+function stripInline(text: string): string {
+  return text
+    .replace(/!?\[([^\]]*)\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)/g, "$1")
     .replace(/<(https?:\/\/[^>\s]+)>/g, "$1")
-    .replace(/(\*\*|__|~~)(.+?)\1/g, "$2")
-    .replace(/(^|[^\w*])([*_])(?=\S)(.+?)(?<=\S)\2(?![\w*])/g, "$1$3")
-    .replace(/`+([^`]*)`+/g, "$1")
-    .replace(/\s+#+\s*$/, "")
+    .replace(/(^|[^\w*_])(\*\*|__|~~)(?=\S)(.+?)(?<=\S)\2(?![\w*_])/g, "$1$3")
+    .replace(/(^|[^\w*_])([*_])(?=\S)(.+?)(?<=\S)\2(?![\w*_])/g, "$1$3");
+}
+
+/** A line's text without Markdown syntax: marks, emphasis, ticks and link syntax, keeping link labels. */
+function stripMarkdown(raw: string): string {
+  let line = sanitizeAnswerText(raw.slice(0, LINE_SCAN_CHARS), LINE_SCAN_CHARS);
+  line = line.replace(/^\s{0,3}(?:>\s*)+/, "").replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+/, "");
+  if (/^\s*(?:`{3,}|~{3,})/.test(line) || /^\s*(?:[-*_=]\s*){3,}$/.test(line)) return "";
+  const heading = /^\s*#{1,6}(?:\s+|$)/.test(line);
+  line = line.replace(/^\s*#{1,6}(?:\s+|$)/, "");
+  if (heading) line = line.replace(/\s+#+\s*$/, "");
+  return line
+    .split(/(`+[^`]*`+)/)
+    .map((part, index) => (index % 2 === 1 ? part.replace(/^`+|`+$/g, "") : stripInline(part)))
+    .join("")
     .trim();
 }
 
@@ -313,11 +322,15 @@ function isGenericHeading(text: string): boolean {
 
 /** One line of a question, as data: Markdown syntax and controls gone, cut to fit a row. */
 export function questionLine(question: string): string | null {
-  const lines = question
-    .split(/\r\n?|\n|\u2028|\u2029/)
-    .map((raw) => sanitizeAnswerText(stripMarkdown(raw), QUESTION_CHARS))
-    .filter((line) => line !== "");
-  const line = lines.find((text) => !isGenericHeading(text)) ?? lines[0];
+  let first: string | undefined;
+  for (const raw of question.split(/\r\n?|\n|\u2028|\u2029/)) {
+    if (raw.trim() === "") continue;
+    const text = sanitizeAnswerText(stripMarkdown(raw), QUESTION_CHARS);
+    if (text === "") continue;
+    first ??= text;
+    if (!isGenericHeading(text)) return text;
+  }
+  const line = first;
   return line === undefined ? null : line;
 }
 

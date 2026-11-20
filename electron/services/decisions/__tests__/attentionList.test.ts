@@ -539,6 +539,24 @@ describe("questionLine", () => {
     expect(questionLine("snake_case_name stays")).toBe("snake_case_name stays");
   });
 
+  it("keeps literal identifiers, expressions and trailing marks", () => {
+    expect(questionLine("Keep foo__bar__baz?")).toBe("Keep foo__bar__baz?");
+    expect(questionLine("Use `2**3**4`?")).toBe("Use 2**3**4?");
+    expect(questionLine("Keep the trailing `#`")).toBe("Keep the trailing #");
+    expect(questionLine("\u001b[31m[the plan](https://x.test)\u001b[0m?")).toBe("the plan?");
+    expect(questionLine("Use [the plan](https://e.com/a_(b))?")).toBe("Use the plan?");
+  });
+
+  it("skips rules and fence openers and stays fast on long lines", () => {
+    expect(questionLine("Context\n===\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine('## Context\n```bash title="m"\nWhich?')).toBe("Which?");
+    expect(questionLine("- ## Context\nShould we deploy?")).toBe("Should we deploy?");
+    const start = Date.now();
+    questionLine(`Go?\n${" ".repeat(8000)}`);
+    questionLine(`${"[".repeat(4000)}`);
+    expect(Date.now() - start).toBeLessThan(200);
+  });
+
   it("gives way from a generic heading to the first substantive line", () => {
     expect(questionLine("## Context\n\nShould the cache be cleared?")).toBe(
       "Should the cache be cleared?"
