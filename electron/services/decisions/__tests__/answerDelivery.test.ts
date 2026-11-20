@@ -3764,9 +3764,9 @@ describe("AnswerDelivery, choosing where a stopped answer goes (#18056)", () => 
     live(h, "pane-other", { title: "Other" });
     const other = await listedAs(h, "pane-other");
 
-    await expect(
-      h.delivery.reassignAnswer(Q1, { terminalId: "pane-chosen", run: other.run })
-    ).resolves.toEqual({ result: "refused", reason: "destination-changed" });
+    expect(
+      await settled(h.delivery.reassignAnswer(Q1, { terminalId: "pane-chosen", run: other.run }))
+    ).toEqual({ result: "refused", reason: "destination-changed" });
     expect((await h.question(Q1))?.origin.pane_id).toBe(PANE);
   });
 });
