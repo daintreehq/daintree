@@ -4953,7 +4953,10 @@ describe("Decisions questions (#17232)", () => {
       const closed = {
         closedReason: "expired" as const,
         replyMode: "advisory" as const,
-        closureNotice: { delivery: "needs-attention" as const, disposition: "fallback-due" as const },
+        closureNotice: {
+          delivery: "needs-attention" as const,
+          disposition: "fallback-due" as const,
+        },
         standing: { kind: "needs-attention" as const, deliveryStatus: "needs-attention" as const },
         // The expiry closes round 0: the stall carries that revision.
         stall: { answerRevision: 0, followUpIds: [], reason: "pane_gone" },
@@ -4975,7 +4978,9 @@ describe("Decisions questions (#17232)", () => {
       expect(remoteTitle).toBe(
         `Timeout notice for ${agentName()} in Daintree on Atlas may or may not have been delivered`
       );
-      expect(remoteBody).toBe("Daintree stopped while typing it in, so it isn't typed again on its own.");
+      expect(remoteBody).toBe(
+        "Daintree stopped while typing it in, so it isn't typed again on its own."
+      );
       for (const text of [title, body, remoteTitle, remoteBody]) expect(text).not.toMatch(/plan/i);
 
       options.onClick();

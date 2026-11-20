@@ -1487,7 +1487,11 @@ class AgentNotificationService {
     this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
     const { agent, project } = decisionQuestionSource(question);
     const notice = stalledOnTimeoutNotice(question);
-    const subject = deliverySubject(stall.answerRevision !== null, stall.followUpIds.length, notice);
+    const subject = deliverySubject(
+      stall.answerRevision !== null,
+      stall.followUpIds.length,
+      notice
+    );
     const plural = deliverySubjectPlural(subject);
     const uncertain =
       standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";

@@ -200,9 +200,7 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
       "This timeout notice may or may not have been delivered"
     );
     expect(noticeOutcomeText(NOTICE)).toBe("Its deadline passed without an answer.");
-    expect(noticeOutcomeText({ kind: "never-published" })).toContain(
-      "before it reached the relay"
-    );
+    expect(noticeOutcomeText({ kind: "never-published" })).toContain("before it reached the relay");
   });
 
   it("says what typing it says of the plan, never that anything was carried out", () => {
@@ -218,7 +216,9 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
     expect(noticePlanText({ ...NOTICE, disposition: null })).toBeNull();
     for (const delivery of ["needs-attention", "delivery-uncertain"] as const) {
       for (const disposition of ["fallback-due", "fallback-withheld"] as const) {
-        expect(noticePlanText({ delivery, disposition })).not.toMatch(/went ahead|carried out|did /);
+        expect(noticePlanText({ delivery, disposition })).not.toMatch(
+          /went ahead|carried out|did /
+        );
       }
     }
   });

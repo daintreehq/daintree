@@ -2317,13 +2317,20 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     await expect(h.delivery.copiedAnswer(Q1)).resolves.toBeNull();
     expect(h.client.submitted).toEqual([]);
     // The sink refused the write it had admitted: nothing was typed, and a person decides.
-    expect((await trail(h)).map((t) => t.step)).toEqual(["attempted", "untyped", "needs-attention"]);
+    expect((await trail(h)).map((t) => t.step)).toEqual([
+      "attempted",
+      "untyped",
+      "needs-attention",
+    ]);
     await stopped(h.delivery);
   });
 
   it("says a notice the lifetime's policy no longer allows would be typed withheld", async () => {
     const h = setup({ advisory: { ...settledAttempt(), allowed: false }, listTerminals: true });
-    await advisoryExpired(h.store, Q1, 1, { delivery_status: "needs-attention", error_code: "pane_gone" });
+    await advisoryExpired(h.store, Q1, 1, {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
     const [item] = await h.delivery.attentionItems();
     expect(item?.notice?.disposition).toBe("fallback-withheld");
     await stopped(h.delivery);

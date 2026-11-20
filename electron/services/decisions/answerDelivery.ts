@@ -996,8 +996,7 @@ export class AnswerDelivery {
     const title =
       (await this.terminals()).find((terminal) => terminal.id === terminalId)?.title?.trim() ||
       null;
-    const waiting =
-      live.length > 0 || parseMessages(row.messages_json).some(isUndeliveredMessage);
+    const waiting = live.length > 0 || parseMessages(row.messages_json).some(isUndeliveredMessage);
     if (!waiting) return { result: "delivered", terminalId, title };
     // The run that asked is the only one it is typed into, so its agent says what it waits on.
     const queues = wakeGateOptionsFor(row.origin.agent_kind || undefined).acceptWorking === true;
