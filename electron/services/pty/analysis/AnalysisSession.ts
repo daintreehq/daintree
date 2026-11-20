@@ -439,6 +439,15 @@ export class AnalysisSession {
     });
   }
 
+  /** The visible screen once everything fed has parsed; see `AnalysisBackend.serializeScreen`. */
+  serializeScreen(): Promise<SerializedTerminalSnapshot | null> {
+    return this.drainThen(() => {
+      const [data, partial] = this.serializeTail(0);
+      const screen = this.withGeometry(data);
+      return screen && partial ? { ...screen, partial: true } : screen;
+    });
+  }
+
   serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {
     return this.drainThen(() => this.withGeometry(this.serializeBannerAware()));
   }

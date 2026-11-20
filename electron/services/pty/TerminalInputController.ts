@@ -32,6 +32,8 @@ import {
   OUTPUT_SETTLE_POLL_INTERVAL_MS,
 } from "./terminalInput.js";
 import { formatWithBracketedPaste } from "../../../shared/utils/terminalInputProtocol.js";
+import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
+import { showsSelectorAtEnter } from "./guardedEnterScreen.js";
 import {
   keysReachPrompt,
   stampPromptInput,
@@ -44,6 +46,12 @@ import {
 } from "../../../shared/utils/imageAttachmentInput.js";
 
 const IMAGE_STAT_TIMEOUT_MS = 1000;
+/**
+ * How long a guarded line's screen read before its Enter may take (#17984).
+ * Output arriving meanwhile holds the Enter however long the read took, so the
+ * bound only decides when a slow read is given up on.
+ */
+const ENTER_SCREEN_READ_TIMEOUT_MS = 1000;
 
 /**
  * A carriage return in `data` between `from` and `to` that isn't the second
@@ -91,6 +99,10 @@ export interface TerminalInputControllerHost {
   readonly identityWatcher: IdentityWatcher;
   readonly writeQueue: WriteQueue;
   logWriteError(error: unknown, context: { operation: string; traceId?: string }): void;
+  /** The visible screen once all output fed so far has parsed; see `AnalysisBackend.serializeScreen`. */
+  serializeScreen(): Promise<SerializedTerminalSnapshot | null>;
+  /** A count that moves whenever output reaches this terminal or goes on to its views. */
+  outputMark(): number;
 }
 
 function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
@@ -518,7 +530,7 @@ export class TerminalInputController {
     // its body and its Enter: an update observation recorded anew or a choice
     // dialog the terminal reports by then holds back the Enter the person
     // approved for an empty prompt. A dialog drawn in the delay itself isn't
-    // reported yet, as for every guarded line (#17984).
+    // reported yet; the screen read before every guarded Enter sees it (#17984).
     const holdsAtEnter =
       typeof guard === "object" && guard.updateObservedAt !== undefined
         ? () => this.stillOffersUpdate(guard.updateObservedAt!)
@@ -675,7 +687,12 @@ export class TerminalInputController {
       return;
     }
     terminal.lastInputTime = Date.now();
+    const laneSubmittedBefore = this.laneSubmittedAt;
     this.laneSubmittedAt = terminal.lastInputTime;
+    // Since when the mirror has read every byte, as the line takes the lane: a
+    // loss after this is output the screen read before the Enter can't
+    // account for (#17984). A gap before it is trusted as the guard trusts it.
+    const observedAtAdmission = this.host.analysis.observedSince();
 
     if (terminal.isExited) {
       return;
@@ -699,6 +716,24 @@ export class TerminalInputController {
     const identityWatcher = this.host.identityWatcher;
 
     if (body.length === 0) {
+      // A bare Enter at a selector picks its highlighted option (#17984).
+      if (ctx?.abandonEnterOnInput === true) {
+        const owner = this.captureOwner();
+        const typedBefore = terminal.lastTypedInputAt;
+        const screen = await this.readScreenAtEnter(observedAtAdmission);
+        if (
+          screen === null ||
+          !this.isStillOwnedBy(generation, owner) ||
+          this.host.terminalInfo.lastTypedInputAt !== typedBefore ||
+          ctx.isWithdrawn?.() === true ||
+          !screen.unchanged()
+        ) {
+          // Nothing reached the prompt, so a strict line after this one still
+          // finds it settled.
+          this.laneSubmittedAt = laneSubmittedBefore;
+          return;
+        }
+      }
       identityWatcher.armSuppressSignal();
       if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
       return;
@@ -782,6 +817,17 @@ export class TerminalInputController {
       await delay(getSubmitEnterDelay(terminal));
     }
 
+    // Read before the checks below, so they run again on everything that
+    // happened while it read, unless they already stop the Enter.
+    const enterStopped = () =>
+      this.host.terminalInfo.lastTypedInputAt !== typedAtBodyWrite ||
+      ctx?.isWithdrawn?.() === true ||
+      !this.isStillOwnedBy(generation, owner);
+    const screen =
+      ctx?.abandonEnterOnInput === true && !enterStopped()
+        ? await this.readScreenAtEnter(observedAtAdmission)
+        : undefined;
+
     if (!this.host.terminalInfo.ptyProcess) {
       return;
     }
@@ -820,12 +866,59 @@ export class TerminalInputController {
       return;
     }
 
+    // A dialog the agent drew while the body waited (#17984) isn't in the
+    // state the guard reads until a quiet spell later, and would take the
+    // Enter as a pick. Held, the body stays in the composer as a draft.
+    if (screen !== undefined && (screen === null || !screen.unchanged())) {
+      leaveDraft();
+      return;
+    }
+
     identityWatcher.armSuppressSignal();
     // Sent into a running agent, the body is the agent's input, not a new
     // shell command that would replace the agent's identity.
     if (identityWatcher.agentOwnsInput) identityWatcher.discardCapturedInput();
     else identityWatcher.onShellSubmit(body);
     if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
+  }
+
+  /**
+   * The screen just before a guarded line's Enter (#17984): null when the
+   * Enter must be held, otherwise a check, run again right before the Enter,
+   * that nothing has reached the terminal since. Held when the read shows a
+   * choice selector, can't show it saw every byte that came in (a mirror
+   * that lost output since the line took the lane, a read that failed, timed
+   * out or was overtaken by output), or comes back empty. A pass says only
+   * what the screen showed: output still in the pty, or a frame the agent
+   * hasn't flushed, can't be seen from here.
+   */
+  private async readScreenAtEnter(
+    observedAtAdmission: number | null
+  ): Promise<{ unchanged: () => boolean } | null> {
+    if (observedAtAdmission === null) return null;
+    const mark = this.host.outputMark();
+    const unchanged = () =>
+      this.host.outputMark() === mark && this.host.analysis.observedSince() === observedAtAdmission;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), ENTER_SCREEN_READ_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    try {
+      const snapshot = await Promise.race([
+        Promise.resolve()
+          .then(() => this.host.serializeScreen())
+          .catch(() => null),
+        timeout,
+      ]);
+      if (snapshot === null || !unchanged()) return null;
+      if (showsSelectorAtEnter(snapshot.data, this.host.terminalInfo.detectedAgentId)) return null;
+      return { unchanged };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**

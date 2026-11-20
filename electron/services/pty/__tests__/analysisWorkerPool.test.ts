@@ -514,6 +514,115 @@ describe("AnalysisWorkerPool", () => {
     e2ePool.dispose();
   });
 
+  it("reads the screen alone once a held feed has reached the worker (#17984)", async () => {
+    const e2ePool = new AnalysisWorkerPool(1, () => new RuntimeBackedWorker());
+    const backend = e2ePool.createBackend(
+      {
+        ...makeSpec("t1"),
+        rows: 4,
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 100_000 },
+      },
+      makeDelegate()
+    )!;
+
+    backend.feedChunk("scrolled-away\r\n".repeat(10), { agentLive: false });
+    backend.feedChunk("MARKER-held-bytes", { agentLive: false }); // held host-side
+
+    const screen = await backend.serializeScreen();
+    expect(screen?.data).toContain("MARKER-held-bytes");
+    expect(screen?.data).not.toContain(
+      "scrolled-away\r\nscrolled-away\r\nscrolled-away\r\nscrolled-away"
+    );
+    expect(screen?.partial).toBe(true);
+
+    e2ePool.dispose();
+  });
+
+  it("answers no screen when a held feed can't reach the worker (#17984)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 500 },
+      },
+      makeDelegate()
+    )!;
+    const worker = workers[0];
+    backend.feedChunk("x".repeat(20), { agentLive: false }); // posted
+    backend.feedChunk("y".repeat(5), { agentLive: false }); // held
+    // Only the held output is lost: a request would still go out.
+    const post = worker.postMessage.bind(worker);
+    worker.postMessage = (msg: unknown) => {
+      if ((msg as HostToWorkerMessage).type === "data") throw new Error("dropped");
+      post(msg);
+    };
+
+    const reading = backend.serializeScreen();
+    expect(worker.messagesOfType("request")).toHaveLength(0);
+    await expect(reading).resolves.toBeNull();
+  });
+
+  it("moves its observed-since stamp for every loss, two in one millisecond included (#17984)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 50 },
+      },
+      makeDelegate()
+    )!;
+    const overflow = () => {
+      backend.feedChunk("x".repeat(20), { agentLive: false });
+      backend.feedChunk("y".repeat(30), { agentLive: false });
+      backend.feedChunk("z".repeat(30), { agentLive: false });
+    };
+    vi.setSystemTime(20_000);
+    overflow();
+    const first = backend.observedSince();
+    overflow();
+    expect(workers[0].messagesOfType("create")).toHaveLength(3);
+    expect(first).toBe(20_000);
+    expect(backend.observedSince()).toBeGreaterThan(first!);
+  });
+
+  it("answers no screen when the slot is rebuilt while it reads (#17984)", async () => {
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 50 },
+      },
+      makeDelegate()
+    )!;
+    const worker = workers[0];
+    const reply = { data: "SCREEN", cols: 80, rows: 24 };
+    const answer = (promise: Promise<unknown>) => {
+      const request = worker.messagesOfType("request").at(-1)!;
+      expect(request.op).toBe("serialize-screen");
+      worker.emit("message", {
+        type: "response",
+        requestId: request.requestId,
+        terminalId: "t1",
+        result: reply,
+        generation: request.generation,
+      });
+      return promise;
+    };
+
+    await expect(answer(backend.serializeScreen())).resolves.toEqual(reply);
+
+    const reading = backend.serializeScreen();
+    // Past the hard cap the hold is dropped and the slot rebuilt empty.
+    backend.feedChunk("x".repeat(20), { agentLive: false });
+    backend.feedChunk("y".repeat(30), { agentLive: false });
+    backend.feedChunk("z".repeat(30), { agentLive: false });
+    expect(worker.messagesOfType("create")).toHaveLength(2);
+    await expect(answer(reading)).resolves.toBeNull();
+
+    // A mirror that lost output before the read covers everything since.
+    await expect(answer(backend.serializeScreen())).resolves.toEqual(reply);
+  });
+
   it("discards a worker reply stamped with a superseded generation", async () => {
     const backend = pool.createBackend(makeSpec("t1"), makeDelegate())!;
     const worker = workers[0];

@@ -479,6 +479,23 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     });
   }
 
+  serializeScreen(): Promise<SerializedTerminalSnapshot | null> {
+    const terminal = this.terminalInfo;
+    const headless = terminal.headlessTerminal;
+    if (terminal.preservedSnapshot !== undefined || !headless || !terminal.serializeAddon) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+      headlessMirrorScheduler.flush(this.id, headless, () => {
+        resolve(
+          terminal.headlessTerminal === headless
+            ? serializeTerminalTail(this.id, terminal, 0)
+            : null
+        );
+      });
+    });
+  }
+
   /** Banner-stripped serialize, synchronously, for the persistence paths. */
   serializeForPersistenceSync(): SerializedTerminalSnapshot | null {
     return serializeForPersistence(
