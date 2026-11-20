@@ -7,6 +7,7 @@ import type {
   AnswerDecisionQuestionPayload,
   DecisionAnswerResultRead,
   DecisionDeclineResultRead,
+  DecisionPendingDelivery,
   DecisionQuestionAttachment,
   DecisionQuestionImagePartResult,
   DecisionQuestionAnswerResult,
@@ -42,6 +43,7 @@ import { answerKey, useDecisionsAnswerStore } from "@/store/decisionsAnswerStore
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 
 let decisionsOn = true;
 const onListeners = new Set<() => void>();
@@ -65,8 +67,11 @@ vi.mock("@/hooks/useHostPlatform", () => ({
 }));
 vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => "project-a" }));
 
-/** The panels of this view (project A). */
-let panels: Record<string, { location: string }> = {};
+/** The panels of this view (project A), with what was last observed of their agents. */
+let panels: Record<
+  string,
+  { location: string; detectedAgentId?: string; agentState?: string; waitingReason?: string }
+> = {};
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (select: (state: { panelsById: typeof panels }) => unknown) =>
     select({ panelsById: panels }),
@@ -4606,6 +4611,231 @@ describe("DecisionsInboxDialog", () => {
       await act(async () => {});
       expect(selectedAlias()).toBe("q-2");
       expect(moved()).toEqual([]);
+    });
+  });
+
+  describe("what holds a delivery (#18032)", () => {
+    const RECORDED = "2026-11-02T11:30:00.000Z";
+
+    function delivering(
+      over: Partial<DecisionQuestionListItem> = {},
+      delivery: Partial<DecisionPendingDelivery> = {}
+    ): DecisionQuestionListItem {
+      return item(
+        "question-3",
+        3,
+        {
+          kind: "to-type",
+          delivery: {
+            answer: true,
+            followUps: 0,
+            first: "answer",
+            recordedAt: RECORDED,
+            hostAway: false,
+            ...delivery,
+          },
+        },
+        { agentKind: "claude", askedAt: "2026-11-02T09:00:00.000Z", ...over }
+      );
+    }
+
+    /** A terminal this computer runs, as its host reports its agent. */
+    function running(
+      id: string,
+      projectId: string,
+      agent: Pick<BackendTerminalInfo, "detectedAgentId" | "agentState" | "waitingReason">
+    ) {
+      return terminal({ id, projectId, hasPty: true, ...agent });
+    }
+
+    const AT_DIALOG = {
+      detectedAgentId: "claude",
+      agentState: "waiting",
+      waitingReason: "approval",
+    } as const;
+
+    function deliveryLine() {
+      return screen.getByTestId("decisions-inbox-delivery");
+    }
+
+    it("says on the row and beside Go to terminal what waits, what holds it, and when it came", async () => {
+      panels = { t1: { location: "grid" } };
+      getAllTerminals.mockResolvedValue([running("t1", "project-a", AT_DIALOG)]);
+      listQuestions.mockResolvedValue({ revision: 1, questions: [delivering()] });
+      open();
+      const words =
+        "Answer received, typing it in once the choice dialog in the terminal is closed";
+      await waitFor(() => expect(deliveryLine().textContent).toContain(words));
+      await waitFor(() => expect(rowNamed("q-3").textContent).toContain("Line of question-3"));
+      const row = rowNamed("q-3");
+      expect(drawnText(row)).toContain(words);
+      expect(nameOf(row)).toContain(words);
+      // When the answer came, not when the question was asked.
+      expect(row.querySelector("time")?.getAttribute("datetime")).toBe(RECORDED);
+      expect(nameOf(row)).toContain("Answer recorded");
+      expect(deliveryLine().querySelector("time")?.getAttribute("datetime")).toBe(RECORDED);
+      expect(deliveryLine().textContent).toContain("Answer recorded");
+      // Going there is what clears it, so the way there says why.
+      const go = screen.getByTestId("decisions-inbox-go-to-terminal");
+      expect(go.getAttribute("aria-describedby")?.split(" ")[0]).toBe(deliveryLine().id);
+    });
+
+    it("follows a draft in this view's composer as it comes and goes", async () => {
+      onTestFinished(() => useTerminalInputStore.setState({ draftInputs: new Map() }));
+      panels = { t1: { location: "grid" } };
+      getAllTerminals.mockResolvedValue([
+        running("t1", "project-a", { detectedAgentId: "claude", agentState: "working" }),
+      ]);
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [delivering({}, { followUps: 1 })],
+      });
+      open();
+      await waitFor(() => expect(getAllTerminals).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(deliveryLine().textContent).toContain(
+          "Answer and follow-up received, waiting to be typed in"
+        )
+      );
+      act(() =>
+        useTerminalInputStore.getState().setDraftInput("t1", "half a thought", "project-a")
+      );
+      expect(deliveryLine().textContent).toContain(
+        "typing them in once the draft in the terminal is sent or cleared"
+      );
+      expect(drawnText(rowNamed("q-3"))).toContain("once the draft in the terminal is sent");
+      // Whitespace alone is no draft.
+      act(() => useTerminalInputStore.getState().setDraftInput("t1", "   ", "project-a"));
+      expect(deliveryLine().textContent).toContain("waiting to be typed in");
+    });
+
+    it("reads another project's terminal by its project and id", async () => {
+      getAllTerminals.mockResolvedValue([
+        running("t9", "project-b", { ...AT_DIALOG, detectedAgentId: "gemini" }),
+        // The same id in another project is another terminal, whichever is listed last.
+        running("t9", "project-c", { detectedAgentId: "gemini", agentState: "working" }),
+      ]);
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [
+          delivering(
+            {
+              reference: reference("question-3", { projectId: "project-b", terminalId: "t9" }),
+              agentKind: "gemini",
+            },
+            { answer: false, followUps: 1, first: "follow-up" }
+          ),
+        ],
+      });
+      open();
+      await waitFor(() =>
+        expect(deliveryLine().textContent).toContain(
+          "Follow-up received, typing it in once the choice dialog in the terminal is closed"
+        )
+      );
+      expect(deliveryLine().textContent).toContain("Follow-up recorded");
+    });
+
+    it("names a wait nothing at the terminal clears without pointing there", async () => {
+      panels = { t1: { location: "grid" } };
+      getAllTerminals.mockResolvedValue([
+        running("t1", "project-a", { detectedAgentId: "gemini", agentState: "working" }),
+      ]);
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [delivering({ agentKind: "gemini" })],
+      });
+      open();
+      await waitFor(() =>
+        expect(deliveryLine().textContent).toContain("typing it in at the agent's next prompt")
+      );
+      const go = screen.getByTestId("decisions-inbox-go-to-terminal");
+      // Only what the button does: a turn to wait out is no reason to go there.
+      expect(go.getAttribute("aria-describedby")?.split(" ")).not.toContain(deliveryLine().id);
+    });
+
+    it("never carries one opening's look into the next", async () => {
+      getAllTerminals.mockResolvedValue([running("t1", "project-a", AT_DIALOG)]);
+      listQuestions.mockResolvedValue({ revision: 1, questions: [delivering()] });
+      open();
+      await waitFor(() => expect(deliveryLine().textContent).toContain("choice dialog"));
+      act(() => useDecisionsInboxStore.getState().close());
+      await waitFor(() => expect(screen.queryByTestId("decisions-inbox-dialog")).toBeNull());
+      // The dialog closed meanwhile; the next look hasn't come back yet.
+      getAllTerminals.mockImplementation(() => new Promise<BackendTerminalInfo[]>(() => {}));
+      open();
+      await screen.findByTestId("decisions-inbox-delivery");
+      expect(deliveryLine().textContent).toContain("Answer received, waiting to be typed in");
+    });
+
+    it("looks again as soon as this view sees its panel's agent change", async () => {
+      panels = { t1: { location: "grid", agentState: "working" } };
+      getAllTerminals.mockResolvedValue([
+        running("t1", "project-a", { detectedAgentId: "gemini", agentState: "working" }),
+      ]);
+      const list = { revision: 1, questions: [delivering({ agentKind: "gemini" })] };
+      listQuestions.mockResolvedValue(list);
+      open();
+      await waitFor(() => expect(deliveryLine().textContent).toContain("next prompt"));
+      const looks = getAllTerminals.mock.calls.length;
+      getAllTerminals.mockResolvedValue([
+        running("t1", "project-a", { ...AT_DIALOG, detectedAgentId: "gemini" }),
+      ]);
+      panels = { t1: { location: "grid", agentState: "waiting", waitingReason: "approval" } };
+      push({ ...list, revision: 2 });
+      await waitFor(() => expect(deliveryLine().textContent).toContain("choice dialog"));
+      expect(getAllTerminals.mock.calls.length).toBe(looks + 1);
+    });
+
+    it("asks for one more look after the one out, however many changes come meanwhile", async () => {
+      panels = { t1: { location: "grid", agentState: "working" } };
+      let land!: (terminals: BackendTerminalInfo[]) => void;
+      getAllTerminals.mockImplementation(
+        () => new Promise<BackendTerminalInfo[]>((resolve) => (land = resolve))
+      );
+      const list = { revision: 1, questions: [delivering({ agentKind: "gemini" })] };
+      listQuestions.mockResolvedValue(list);
+      open();
+      await waitFor(() => expect(getAllTerminals).toHaveBeenCalledOnce());
+      for (const [revision, agentState] of [
+        [2, "waiting"],
+        [3, "working"],
+        [4, "waiting"],
+      ] as const) {
+        panels = { t1: { location: "grid", agentState } };
+        push({ ...list, revision });
+      }
+      expect(getAllTerminals).toHaveBeenCalledOnce();
+      await act(async () =>
+        land([running("t1", "project-a", { detectedAgentId: "gemini", agentState: "working" })])
+      );
+      // The look that was out lands, and one more follows it.
+      expect(deliveryLine().textContent).toContain("next prompt");
+      await waitFor(() => expect(getAllTerminals).toHaveBeenCalledTimes(2));
+    });
+
+    it("says only that it waits for a Remote Host's question, and never takes a terminal here for it", async () => {
+      // This computer's own question at the same ids, at a dialog: not the Host's.
+      getAllTerminals.mockResolvedValue([running("t1", "project-a", AT_DIALOG)]);
+      const studio = { hostId: "host_2", name: "Studio", connected: true };
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [
+          item("question-3", 3, { kind: "to-type" }, { remoteHost: studio }),
+          delivering({ reference: reference("question-4"), alias: 4, remoteHost: studio }),
+          delivering({ reference: reference("question-5"), alias: 5 }),
+        ],
+      });
+      open();
+      await screen.findByTestId("decision-question-content");
+      await waitFor(() => expect(rowNamed("q-3").textContent).toContain("Line of question-3"));
+      expect(deliveryLine().textContent).toBe("Waiting to be typed in");
+      expect(nameOf(rowNamed("q-3"))).toContain("Waiting to be typed in");
+      expect(rowNamed("q-3").querySelector("time")?.getAttribute("datetime")).toBe(
+        "2026-11-02T10:00:00.000Z"
+      );
+      await waitFor(() => expect(drawnText(rowNamed("q-5"))).toContain("choice dialog"));
+      expect(drawnText(rowNamed("q-4"))).toContain("Answer received, waiting to be typed in");
     });
   });
 

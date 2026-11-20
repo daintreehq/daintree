@@ -4,6 +4,7 @@ import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import { decisionItems } from "@/components/Terminal/decisionsChipModel";
 import type {
+  DecisionPendingDelivery,
   DecisionQuestionListItem,
   DecisionQuestionStanding,
   DecisionThreadEntry,
@@ -32,6 +33,7 @@ import {
   folds,
   goneAsks,
   dismissFate,
+  deliveryFacts,
   groupOf,
   headerFacts,
   hiddenIn,
@@ -46,6 +48,7 @@ import {
   nextWaiting,
   originFacts,
   paneTitle,
+  recordedLabel,
   referenceKey,
   replyLine,
   replyLineKey,
@@ -1915,5 +1918,186 @@ describe("moving on once the person's action takes a question out of Needs you (
         "Question q-2 withdrawn. It's in History now."
       );
     });
+  });
+});
+
+describe("what holds a delivery (#18032)", () => {
+  const QUEUES = "claude";
+  const PROMPT_ONLY = "gemini";
+  const RECORDED = "2026-11-02T11:30:00.000Z";
+
+  function pending(over: Partial<DecisionPendingDelivery> = {}): DecisionQuestionStanding {
+    return {
+      kind: "to-type",
+      delivery: {
+        answer: true,
+        followUps: 0,
+        first: "answer",
+        recordedAt: RECORDED,
+        hostAway: false,
+        ...over,
+      },
+    };
+  }
+
+  type Pane = NonNullable<Parameters<typeof deliveryFacts>[1]>;
+  function pane(over: Partial<Pane> = {}): Pane {
+    return {
+      detectedAgentId: QUEUES,
+      agentState: "waiting",
+      waitingReason: "prompt",
+      draft: false,
+      ...over,
+    };
+  }
+
+  const facts = (standing: DecisionQuestionStanding, seen: Pane | null) =>
+    deliveryFacts(item("q1", standing), seen);
+  const waitOf = (seen: Pane | null, over: Partial<DecisionPendingDelivery> = {}) =>
+    facts(pending(over), seen)?.wait;
+
+  it("picks agents that do and don't take a line mid-turn", () => {
+    expect(getEffectiveAgentConfig(QUEUES)?.capabilities?.queuesInputWhileWorking).toBe(true);
+    expect(getEffectiveAgentConfig(PROMPT_ONLY)?.capabilities?.queuesInputWhileWorking).not.toBe(
+      true
+    );
+  });
+
+  it("says what the pane's chip says of a lone answer while a CLI that takes no line mid-turn works", () => {
+    const [chip] = decisionItems(
+      {
+        terminalId: "t1",
+        revision: 1,
+        openQuestions: [],
+        waitingAnswers: [
+          { questionId: "q1", alias: 1, kind: "answer", deliveryStatus: "desktop-received" },
+        ],
+        needsAttention: [],
+      },
+      "prompt"
+    );
+    const working = { agentState: "working", waitingReason: undefined } as const;
+    expect(facts(pending(), pane({ ...working, detectedAgentId: PROMPT_ONLY }))?.text).toBe(
+      chip!.status
+    );
+    // One that takes a line mid-turn is held by what's in its composer, which isn't seen here.
+    expect(facts(pending(), pane({ ...working, detectedAgentId: QUEUES }))?.wait).toBeNull();
+  });
+
+  it("names a choice dialog or an error on screen whatever else holds, as the gate blocks on them first", () => {
+    for (const draft of [false, true]) {
+      expect(waitOf(pane({ waitingReason: "approval", draft }))).toBe("choice-dialog");
+      expect(waitOf(pane({ waitingReason: "error", draft }))).toBe("error");
+    }
+  });
+
+  it("waits out a turn of a CLI that takes no line mid-turn before any draft", () => {
+    const turn: Partial<Pane> = {
+      detectedAgentId: PROMPT_ONLY,
+      agentState: "working",
+      waitingReason: undefined,
+    };
+    expect(waitOf(pane({ ...turn, draft: true }))).toBe("prompt");
+    // At its prompt, the draft is what holds it.
+    expect(waitOf(pane({ detectedAgentId: PROMPT_ONLY, draft: true }))).toBe("draft");
+  });
+
+  it("names a draft in this view wherever the gate reads the composer", () => {
+    const turn: Partial<Pane> = { agentState: "working", waitingReason: undefined };
+    expect(waitOf(pane({ ...turn, draft: true }))).toBe("draft");
+    expect(waitOf(pane({ draft: true }))).toBe("draft");
+    expect(waitOf(pane({ waitingReason: "question", draft: true }))).toBe("draft");
+  });
+
+  it("guesses nothing where what was seen doesn't say what holds it", () => {
+    // At its prompt with no draft here: text in its own line, or a draft in another view.
+    expect(waitOf(pane())).toBeNull();
+    expect(waitOf(pane({ waitingReason: "question" }))).toBeNull();
+    expect(waitOf(pane({ waitingReason: undefined }))).toBeNull();
+    // Waiting for no reason it names, or past its run, the gate never reaches the composer.
+    expect(waitOf(pane({ waitingReason: undefined, draft: true }))).toBeNull();
+    for (const agentState of ["directing", "completed", "exited"] as const) {
+      expect(waitOf(pane({ agentState, waitingReason: undefined, draft: true }))).toBeNull();
+    }
+    expect(waitOf(pane({ agentState: "working", waitingReason: undefined }))).toBeNull();
+    expect(waitOf(pane({ agentState: "idle", waitingReason: undefined, draft: true }))).toBeNull();
+    expect(waitOf(pane({ detectedAgentId: undefined, waitingReason: "approval" }))).toBeNull();
+    // Not seen running here: nothing about it, unless the store says it waits for its host.
+    expect(waitOf(null)).toBeNull();
+    expect(waitOf(null, { hostAway: true })).toBe("host");
+    // Seen running, its host is back, whatever the store last recorded.
+    expect(waitOf(pane({ waitingReason: "approval" }), { hostAway: true })).toBe("choice-dialog");
+    expect(facts(pending(), pane())?.text).toBe("Answer received, waiting to be typed in");
+  });
+
+  it("points at the terminal only for what a person there can deal with", () => {
+    const clearable = (seen: Pane | null, over: Partial<DecisionPendingDelivery> = {}) =>
+      facts(pending(over), seen)?.clearable;
+    expect(clearable(pane({ waitingReason: "approval" }))).toBe(true);
+    expect(clearable(pane({ waitingReason: "error" }))).toBe(true);
+    expect(clearable(pane({ draft: true }))).toBe(true);
+    expect(clearable(pane({ agentState: "working", waitingReason: undefined }))).toBe(false);
+    expect(
+      clearable(
+        pane({ detectedAgentId: PROMPT_ONLY, agentState: "working", waitingReason: undefined })
+      )
+    ).toBe(false);
+    expect(clearable(null, { hostAway: true })).toBe(false);
+    expect(clearable(pane())).toBe(false);
+    expect(clearable(null)).toBe(false);
+  });
+
+  it("says what waits, the answer and its follow-ups agreeing in number", () => {
+    const dialog = pane({ waitingReason: "approval" });
+    const said = (over: Partial<DecisionPendingDelivery>) => facts(pending(over), dialog)!.text;
+    const clause = "once the choice dialog in the terminal is closed";
+    expect(said({})).toBe(`Answer received, typing it in ${clause}`);
+    expect(said({ answer: false, followUps: 1, first: "follow-up" })).toBe(
+      `Follow-up received, typing it in ${clause}`
+    );
+    expect(said({ answer: false, followUps: 3, first: "follow-up" })).toBe(
+      `3 follow-ups received, typing them in ${clause}`
+    );
+    expect(said({ followUps: 1 })).toBe(`Answer and follow-up received, typing them in ${clause}`);
+    expect(said({ followUps: 2 })).toBe(
+      `Answer and 2 follow-ups received, typing them in ${clause}`
+    );
+  });
+
+  it("says each hold apart, of the terminal from outside it, in one sentence without a period", () => {
+    const texts = [
+      facts(pending({ hostAway: true }), null),
+      facts(pending(), pane({ waitingReason: "approval" })),
+      facts(pending(), pane({ waitingReason: "error" })),
+      facts(pending(), pane({ draft: true })),
+      facts(
+        pending(),
+        pane({ detectedAgentId: PROMPT_ONLY, agentState: "working", waitingReason: undefined })
+      ),
+      facts(pending(), pane()),
+    ].map((said) => said!.text);
+    expect(new Set(texts).size).toBe(texts.length);
+    for (const text of texts) {
+      expect(text.endsWith(".")).toBe(false);
+      expect(text).not.toMatch(/\bhere\b/);
+    }
+  });
+
+  it("keeps when the one waiting longest was recorded, labelled by what it is", () => {
+    for (const first of ["answer", "follow-up"] as const) {
+      expect(facts(pending({ followUps: 1, first }), null)).toMatchObject({
+        first,
+        recordedAt: RECORDED,
+      });
+    }
+    expect(recordedLabel("answer")).toMatch(/^Answer /);
+    expect(recordedLabel("follow-up")).toMatch(/^Follow-up /);
+  });
+
+  it("says no more than that it waits for a question whose machine didn't say what waits", () => {
+    expect(facts({ kind: "to-type" }, pane({ waitingReason: "approval" }))).toBeNull();
+    expect(facts(OPEN, null)).toBeNull();
+    // A stale notice can leave one waiting with no answer or follow-up: it names neither.
+    expect(standingText({ kind: "to-type" })).not.toMatch(/answer|follow-up/i);
   });
 });

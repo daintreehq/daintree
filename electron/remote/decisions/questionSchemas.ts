@@ -131,9 +131,20 @@ export const HostQuestionItemV3Schema = HostQuestionItemSchema.extend({
 
 type HostItem = Omit<DecisionQuestionListItem, "remoteHost" | "inbox">;
 
+/**
+ * An item as every list version reads it (#18032): a question waiting to be
+ * typed in without what waits, which no strict read takes yet, so its row
+ * reads as one from a Host before it rather than being refused.
+ */
+export function linkedItem(item: HostItem): HostItem {
+  return item.standing.kind === "to-type" && item.standing.delivery !== undefined
+    ? { ...item, standing: { kind: "to-type" } }
+    : item;
+}
+
 /** An item as a Shell from before #17943 reads it: without the round its strict read refuses. */
 export function legacyItem(item: HostItem): HostItem {
-  const legacy: HostItem = { ...item };
+  const legacy: HostItem = { ...linkedItem(item) };
   for (const field of ROUND_FIELDS) delete legacy[field];
   return legacy;
 }

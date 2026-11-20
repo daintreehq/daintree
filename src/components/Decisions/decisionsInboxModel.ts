@@ -1,6 +1,7 @@
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { basename } from "@shared/utils/path";
 import { getTerminalTaskTitle } from "@shared/utils/terminalTitleDisplay";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
@@ -15,6 +16,7 @@ import {
 } from "@shared/utils/decisionsDeliveryReasons";
 import type { ShownNotice } from "./decisionQuestionModel";
 import type {
+  DecisionPendingDelivery,
   DecisionQuestionContent,
   DecisionQuestionListItem,
   DecisionQuestionMarkResult,
@@ -454,7 +456,7 @@ export function standingText(standing: DecisionQuestionStanding, round: ItemRoun
         ? "Deadline passed before it reached the relay"
         : "Couldn't be sent";
     case "to-type":
-      // An answer or a person's follow-up: the list doesn't say which.
+      // Without what waits (a Remote Host's) nothing says which; `deliveryFacts` does.
       return "Waiting to be typed in";
     case "needs-attention": {
       const parts = heldParts(standing, round);
@@ -485,6 +487,128 @@ export function standingText(standing: DecisionQuestionStanding, round: ItemRoun
           return "Declined";
       }
   }
+}
+
+/**
+ * What holds an answer or follow-up back from being typed in (#18032), as one
+ * branch of the delivery gate (`evaluateWakeGate` with the Decisions options)
+ * reads it: a choice dialog on screen, the agent stopped on an error, a turn
+ * in a CLI that takes no line mid-turn, or a draft in the hybrid input; or,
+ * with nothing of the terminal seen, the host the store recorded it waiting
+ * for. Null when what was seen doesn't say which, so nothing is guessed.
+ */
+export type DeliveryWait = "host" | "choice-dialog" | "error" | "prompt" | "draft";
+
+/**
+ * What the inbox observed of the asking terminal: its agent as the terminals
+ * this computer runs report it, the record the gate reads, and whether this
+ * view's hybrid input holds a draft for it. Another project's view keeps its
+ * own drafts, out of sight here.
+ */
+export interface DeliveryPane {
+  detectedAgentId: string | undefined;
+  agentState: AgentState | undefined;
+  waitingReason: WaitingReason | undefined;
+  draft: boolean;
+}
+
+/** How each wait finishes the row's sentence, as the pane's chip says it, from outside the pane. */
+function waitClause(wait: DeliveryWait | null, them: boolean): string {
+  const it = them ? "them" : "it";
+  switch (wait) {
+    case "host":
+      return "delivering when the terminal's host is back";
+    case "choice-dialog":
+      return `typing ${it} in once the choice dialog in the terminal is closed`;
+    case "error":
+      return `typing ${it} in once the agent is no longer stopped on an error`;
+    case "prompt":
+      return `typing ${it} in at the agent's next prompt`;
+    case "draft":
+      return `typing ${it} in once the draft in the terminal is sent or cleared`;
+    case null:
+      return "waiting to be typed in";
+  }
+}
+
+/**
+ * The gate's branch for what was seen, in its order. Anything else (text
+ * typed in the terminal's own line, a draft in another view, a run still
+ * starting, a line about to go out) is out of sight here: null.
+ */
+export function deliveryWait(
+  delivery: Pick<DecisionPendingDelivery, "hostAway">,
+  pane: DeliveryPane | null
+): DeliveryWait | null {
+  // Seen running, its host is back, whatever the store last recorded.
+  if (pane === null) return delivery.hostAway ? "host" : null;
+  if (pane.detectedAgentId === undefined) return null;
+  if (pane.agentState === "waiting" && pane.waitingReason === "approval") return "choice-dialog";
+  if (pane.agentState === "waiting" && pane.waitingReason === "error") return "error";
+  const queues =
+    getEffectiveAgentConfig(pane.detectedAgentId)?.capabilities?.queuesInputWhileWorking === true;
+  if (pane.agentState === "working" && !queues) return "prompt";
+  // The gate reads the composer only mid-turn, or at a prompt or a question asked in prose.
+  const atPrompt =
+    pane.agentState === "waiting" &&
+    (pane.waitingReason === "prompt" || pane.waitingReason === "question");
+  if (pane.agentState !== "working" && !atPrompt) return null;
+  return pane.draft ? "draft" : null;
+}
+
+/** What waits, as the row names it: the answer, then the person's follow-ups. */
+function waitingSubject(delivery: Pick<DecisionPendingDelivery, "answer" | "followUps">): string {
+  // One reads as the noun alone ("Answer and follow-up"), more by their count.
+  const followUps =
+    delivery.followUps === 0
+      ? null
+      : delivery.followUps === 1
+        ? "follow-up"
+        : pluralize(delivery.followUps, "follow-up");
+  if (!delivery.answer) return followUps === null ? "Answer or follow-up" : capitalized(followUps);
+  return followUps === null ? "Answer" : `Answer and ${followUps}`;
+}
+
+/** Said of a question waiting to be typed in, whose machine said what waits (#18032). */
+export interface DeliveryFacts {
+  /** One sentence, sentence case, no period: what waits, and what it waits on. */
+  text: string;
+  wait: DeliveryWait | null;
+  /** Going to the terminal can clear the hold: a dialog or error to deal with, or a draft. */
+  clearable: boolean;
+  /** The one waiting longest, and when it was recorded. */
+  first: DecisionPendingDelivery["first"];
+  recordedAt: string;
+}
+
+const CLEARABLE: ReadonlySet<DeliveryWait> = new Set(["choice-dialog", "error", "draft"]);
+
+/**
+ * What a Being delivered question says of its delivery, from what its machine
+ * recorded and what was last observed of its terminal (`pane`, null when
+ * nothing was). Null when the question isn't waiting to be typed in, or its
+ * machine didn't say what waits (a Remote Host's).
+ */
+export function deliveryFacts(
+  item: Pick<DecisionQuestionListItem, "standing">,
+  pane: DeliveryPane | null
+): DeliveryFacts | null {
+  if (item.standing.kind !== "to-type" || item.standing.delivery === undefined) return null;
+  const delivery = item.standing.delivery;
+  const wait = deliveryWait(delivery, pane);
+  const count = (delivery.answer ? 1 : 0) + delivery.followUps;
+  return {
+    text: `${waitingSubject(delivery)} received, ${waitClause(wait, count > 1)}`,
+    wait,
+    clearable: wait !== null && CLEARABLE.has(wait),
+    first: delivery.first,
+    recordedAt: delivery.recordedAt,
+  };
+}
+
+/** What the recorded time is of, as its label says it: "Answer recorded 3h ago". */
+export function recordedLabel(first: DecisionPendingDelivery["first"]): string {
+  return first === "answer" ? "Answer recorded" : "Follow-up recorded";
 }
 
 /** Whether the row carries the warning glyph: a person has to decide what happens to it. */

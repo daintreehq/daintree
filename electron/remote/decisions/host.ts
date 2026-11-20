@@ -42,6 +42,7 @@ import {
   HostQuestionReadSchema,
   legacyContent,
   legacyItem,
+  linkedItem,
   MAX_HOST_QUESTION_LIST_BYTES,
   MAX_HOST_QUESTIONS,
   type HostQuestionList,
@@ -133,13 +134,18 @@ function legacyList(list: HostQuestionList): HostQuestionList {
   return { ...list, questions: list.questions.map(legacyItem) };
 }
 
+/** The list as a v3 Shell reads it: its items without what waits to be typed in (#18032). */
+function linkedList(list: HostQuestionList): HostQuestionList {
+  return { ...list, questions: list.questions.map(linkedItem) };
+}
+
 /**
  * The newest of the list's questions that fit one message as a session reads
  * them (#17943): with their rounds for one that reads v3, else without, so a
  * Shell from before them is never cut short by fields it isn't sent.
  */
 function boundedFor(list: HostQuestionList, rounds: boolean): HostQuestionList {
-  return bounded(rounds ? list : legacyList(list));
+  return bounded(rounds ? linkedList(list) : legacyList(list));
 }
 
 /**
