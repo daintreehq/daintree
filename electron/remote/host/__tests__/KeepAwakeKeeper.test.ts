@@ -234,7 +234,7 @@ describe("KeepAwakeKeeper (#17918)", () => {
     await env.keeper.open();
     await env.arm();
     env.setBusy(false);
-    const replaced = await env.arm(URL_B, env.now() + 8 * DAY);
+    const replaced = await env.arm(URL_B, env.now() + DAY);
     // What reached it was the old URL, not this one.
     expect(replaced.reachedAt).toBeNull();
     env.setBusy(true);
@@ -321,28 +321,41 @@ describe("KeepAwakeKeeper (#17918)", () => {
     expect(env.tokens()).not.toContain(TOKEN_B);
   });
 
-  it("keeps a longer URL that reached it over a shorter one that does too, unless they expire together", async () => {
+  it("keeps the longest-lived URL that reached it behind a shorter one that does too, unless they expire together", async () => {
     const env = setup();
     const TOKEN_C = "tok_live_5555555555";
     const URL_C = `https://${RESOURCE}-${PORT}.agent37.app/?a37_token=${TOKEN_C}`;
     await env.keeper.open();
     const first = await env.arm();
-    // An unchecked one comes between: the shorter one reaching it still leaves the longer in place.
+    // An unchecked one comes between, then a shorter one reaches it: that one is held, the first behind it.
     env.setBusy(false);
     await env.arm(URL_C, env.now() + 9 * DAY);
     env.setBusy(true);
     await expect(env.arm(URL_B, env.now() + DAY)).resolves.toMatchObject({
-      expiresAt: first.expiresAt,
-    });
-    await env.passes(1, 60_000);
-    expect(env.tokens().at(-1)).toBe(TOKEN_A);
-    // One that expires with it takes its place.
-    await expect(env.arm(URL_B, first.expiresAt!)).resolves.toMatchObject({
-      expiresAt: first.expiresAt,
+      expiresAt: env.now() + DAY,
       reachedAt: env.now(),
     });
     await env.passes(1, 60_000);
     expect(env.tokens().at(-1)).toBe(TOKEN_B);
+    // A later one is turned away: the first comes back, not the shorter one.
+    env.setBusy(false);
+    await env.arm(URL_C, env.now() + 9 * DAY);
+    env.setBusy(true);
+    env.answer((token) =>
+      token === TOKEN_C ? { status: 403, reaches: false } : { status: 204, reaches: true }
+    );
+    await env.passes(1, 10_000);
+    expect(env.keeper.status()).toMatchObject({ expiresAt: first.expiresAt, problem: null });
+    // One that expires with it lets it go: turned away, nothing is left.
+    await env.arm(URL_B, first.expiresAt!);
+    env.answer((token) =>
+      token === TOKEN_B ? { status: 403, reaches: false } : { status: 204, reaches: true }
+    );
+    await env.passes(1, 60_000);
+    expect(env.keeper.status()).toMatchObject({
+      expiresAt: null,
+      problem: expect.stringContaining("no longer accepts"),
+    });
   });
 
   it("keeps the URL that worked behind every unchecked one that came after it", async () => {

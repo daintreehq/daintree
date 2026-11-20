@@ -88,9 +88,7 @@ export class KeepAwakeKeeper {
   private held: HeldUrl | null = null;
   /**
    * A URL that reached this listener and still works, kept while the one that
-   * replaced it hasn't yet: taken back if that one is dropped. Also a shorter
-   * one that reached it, behind the one that outlasts it, until that one
-   * reaches it again.
+   * replaced it hasn't yet, or expires first: taken back if that one is dropped.
    */
   private fallback: HeldUrl | null = null;
   private problem: string | null = null;
@@ -146,8 +144,8 @@ export class KeepAwakeKeeper {
    * Holds this URL in place of any other, once it is checked to reach this
    * listener: at once while the host sees work, otherwise on the first request
    * it sends. Refused, the URL it held stays; replaced by one not checked yet,
-   * a URL that reached it is taken back if the new one is dropped, or if the
-   * new one turns out to expire first. Taken one at a time, in order.
+   * or by one that expires first, a URL that reached it is taken back if the
+   * new one is dropped or expires. Taken one at a time, in order.
    */
   arm(request: KeepAwakeArmRequest): Promise<KeepAwakeStatus> {
     const taken = this.arms.then(() => this.armNow(request));
@@ -199,27 +197,17 @@ export class KeepAwakeKeeper {
     // Behind a pass's request, or idle and never sent, it may have run out meanwhile.
     if (request.expiresAt <= this.now()) refuse("That link has already expired.");
     const reached = outcome?.kind === "reached";
-    const last = this.held?.verified ? this.held : this.fallback;
-    const working = last && last.expiresAt > this.now() ? last : null;
-    if (reached && working && working.expiresAt > candidate.expiresAt) {
-      // It reaches this listener, but the URL that already did outlasts it: that one stays, with
-      // this one behind it until that one reaches it again.
-      if (working !== this.held) this.replace(working);
+    const working = this.working();
+    this.replace(candidate);
+    // Not checked yet, or checked but outlasted: the longest-lived URL that reached it stays behind
+    // it, however many came between.
+    if (working && (!reached || working.expiresAt > candidate.expiresAt)) this.fallback = working;
+    if (reached) {
       candidate.verified = true;
       candidate.reachedAt = this.now();
-      this.fallback = candidate;
       this.lastSentAt = this.mono();
-    } else {
-      this.replace(candidate);
-      // Not checked yet: the last URL that reached it stays behind it, however many came between.
-      if (!reached && working) this.fallback = working;
-      if (reached) {
-        candidate.verified = true;
-        candidate.reachedAt = this.now();
-        this.lastSentAt = this.mono();
-      } else if (outcome?.kind === "retry") {
-        this.noteRetry();
-      }
+    } else if (outcome?.kind === "retry") {
+      this.noteRetry();
     }
     this.timer ??= setInterval(() => void this.tick(), this.deps.tickMs ?? TICK_MS);
     this.timer.unref?.();
@@ -304,6 +292,15 @@ export class KeepAwakeKeeper {
     }
   }
 
+  /** Of the URL held, once it reached this listener, and the one behind it, the live one that expires last. */
+  private working(): HeldUrl | null {
+    const now = this.now();
+    const held = this.held?.verified && this.held.expiresAt > now ? this.held : null;
+    const fallback = this.fallback && this.fallback.expiresAt > now ? this.fallback : null;
+    if (!held || !fallback) return held ?? fallback;
+    return fallback.expiresAt > held.expiresAt ? fallback : held;
+  }
+
   /** Lets go of the URL held, taking back the one it replaced if that still works. */
   private drop(problem: string): void {
     const fallback = this.fallback;
@@ -358,21 +355,13 @@ export class KeepAwakeKeeper {
       this.noteRetry();
       return;
     }
-    held.verified = true;
-    held.reachedAt = this.now();
-    this.lastSentAt = startedAt;
-    const fallback = this.fallback;
-    if (fallback && fallback.expiresAt > held.expiresAt && fallback.expiresAt > this.now()) {
-      // It reaches this listener, but the URL it replaced outlasts it: that one is taken back,
-      // with this one behind it until that one reaches it again.
-      this.replace(fallback);
-      this.fallback = held;
-      this.lastSentAt = startedAt;
-      return;
-    }
     this.failures = 0;
     this.retryAt = Number.NEGATIVE_INFINITY;
-    this.fallback = null;
+    held.verified = true;
+    held.reachedAt = this.now();
+    // The URL it replaced stays behind it while that one outlasts it, to go back to once it expires.
+    if (this.fallback && this.fallback.expiresAt <= held.expiresAt) this.fallback = null;
+    this.lastSentAt = startedAt;
   }
 
   /** One request through the URL, carrying a nonce only this listener knows to expect. */

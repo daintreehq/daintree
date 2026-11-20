@@ -357,7 +357,7 @@ export class CloudKeepAwakeLinks {
       rechecking && !gateOpen && (lastBypass === undefined || now - lastBypass >= REMINT_AFTER_MS);
     const lost = status.expiresAt === null && !this.retryAt.has(bindingId) && (gateOpen || bypass);
     if (!attempt.mint && !lost) return;
-    if (!attempt.mint && !gateOpen) this.bypassedAt.set(bindingId, now);
+    const bypassing = !attempt.mint && !gateOpen;
     attempt.mint = true;
     if (status.port === null) {
       // The host couldn't open its port, perhaps for a moment.
@@ -368,6 +368,8 @@ export class CloudKeepAwakeLinks {
     let credentials: ProviderCredentials;
     let grant: { url: string; expiresAt: number };
     this.mintedAt.set(bindingId, this.now());
+    // Spent only on a link actually asked for.
+    if (bypassing) this.bypassedAt.set(bindingId, this.now());
     // A link handed over since the failed question answers it.
     this.recheckAt.delete(bindingId);
     try {
