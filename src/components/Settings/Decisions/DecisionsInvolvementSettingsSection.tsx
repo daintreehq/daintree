@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
   SettingsActions,
@@ -15,6 +16,7 @@ import {
 } from "@/components/Settings/settingsDeepLink";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import {
   CONSULT_MAX,
   OVERRIDE_MAX_MS,
@@ -68,9 +70,20 @@ export function DecisionsInvolvementSettingsSection({
     locked,
   });
   const { load, read, now, notice } = involvement;
-  // A search result for this section lands once the read has settled, so Change is there to take the keyboard.
+  // A search result for this section lands once the read has settled, so Change is there to take the
+  // keyboard, but waits no longer than the person would notice: a landing much later could take focus
+  // from whatever they opened meanwhile.
   const link = useSettingsDeepLink();
-  useHoldSettingsDeepLink(link.sectionId === INVOLVEMENT_SECTION_ID && load.state === "loading");
+  const request = link.request;
+  const readPending =
+    request !== null && link.sectionId === INVOLVEMENT_SECTION_ID && load.state === "loading";
+  const [waitedOut, setWaitedOut] = useState<object | null>(null);
+  useEffect(() => {
+    if (!readPending) return;
+    const timer = setTimeout(() => setWaitedOut(request), UI_DOHERTY_THRESHOLD);
+    return () => clearTimeout(timer);
+  }, [readPending, request]);
+  useHoldSettingsDeepLink(readPending && waitedOut !== request);
 
   return (
     <SettingsSection title="Involvement" id={INVOLVEMENT_SECTION_ID}>

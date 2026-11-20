@@ -8,6 +8,7 @@ import type {
   SetDecisionsInvolvementPayload,
 } from "@shared/types/decisionsInvolvement";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import {
   SettingsDeepLinkProvider,
   createSettingsDeepLinkHolds,
@@ -198,9 +199,10 @@ describe("DecisionsInvolvementSettingsSection", () => {
 
     fireEvent.click(byId("decisions-involvement-change"));
     expect(field("decisions-involvement-until").disabled).toBe(true);
+    fireEvent.click(option("Usually", "Ask while exploring"));
     fireEvent.click(screen.getByRole("checkbox", { name: /For a while/ }));
     expect(field("decisions-involvement-until").disabled).toBe(false);
-    // Not the mode it starts out as, so the pick is what's sent.
+    // Neither the usual mode nor the one it starts out as, so the pick is what's sent.
     fireEvent.click(option("Mode for a while", "Bring a recommendation"));
     const end = localDateTime(NOW + 3 * HOUR);
     fireEvent.change(byId("decisions-involvement-until"), { target: { value: end } });
@@ -209,7 +211,7 @@ describe("DecisionsInvolvementSettingsSection", () => {
 
     expect(setInvolvement).toHaveBeenCalledExactlyOnceWith({
       expectedRevision: 3,
-      normalMode: "recommend",
+      normalMode: "involve-early",
       consultCount: 2,
       override: { mode: "recommend", until: new Date(NOW + 3 * HOUR).toISOString() },
     });
@@ -380,7 +382,7 @@ describe("DecisionsInvolvementSettingsSection", () => {
     render(
       <TooltipProvider>
         {/* As Settings focuses a tab's panel, which holds the section. */}
-        <div tabIndex={-1} data-testid="panel">
+        <div tabIndex={0} data-testid="panel">
           <DecisionsInvolvementSettingsSection active statusRevision={1} locked={false} />
         </div>
       </TooltipProvider>
@@ -432,5 +434,23 @@ describe("DecisionsInvolvementSettingsSection", () => {
     await act(async () => answer(reads(available())));
     expect(holds.isHeld()).toBe(false);
     expect(byId("decisions-involvement-change")).not.toBeNull();
+  });
+
+  it("lets a search result land without waiting past a moment on a read that stalls", async () => {
+    getInvolvement.mockReturnValue(new Promise(() => {}));
+    const holds = createSettingsDeepLinkHolds();
+    render(
+      <SettingsDeepLinkProvider
+        value={{ sectionId: "decisions-involvement", query: null, request: {}, holds }}
+      >
+        <TooltipProvider>
+          <DecisionsInvolvementSettingsSection active statusRevision={1} locked={false} />
+        </TooltipProvider>
+      </SettingsDeepLinkProvider>
+    );
+    await settle();
+    expect(holds.isHeld()).toBe(true);
+    await settle(UI_DOHERTY_THRESHOLD);
+    expect(holds.isHeld()).toBe(false);
   });
 });
