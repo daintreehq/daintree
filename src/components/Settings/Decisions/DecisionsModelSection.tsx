@@ -117,6 +117,13 @@ export function DecisionsModelSection({ model: read }: { model: UseDecisionsMode
         if (failure.runId) void read.cancelEvaluation(failure.runId);
         return;
       case "threshold":
+        // A withdrawal asks again, against the report main holds now.
+        if (failure.withdrawal && evaluation) {
+          void read.setThreshold(null, evaluation.evaluatedAt);
+          return;
+        }
+        void read.reload();
+        return;
       case "clear":
         void read.reload();
         return;
@@ -183,8 +190,8 @@ export function DecisionsModelSection({ model: read }: { model: UseDecisionsMode
           title={FAILURE_TITLE[failure.action]}
           message={failure.message}
           onRetry={retry}
-          // The choice is made again from what main holds now.
-          retryLabel={failure.action === "threshold" ? "Reload" : undefined}
+          // A confidence is chosen again from what main holds now.
+          retryLabel={failure.action === "threshold" && !failure.withdrawal ? "Reload" : undefined}
         />
       )}
 

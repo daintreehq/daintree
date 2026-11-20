@@ -494,6 +494,43 @@ describe("Decisions → Decision model", () => {
     expect(screen.queryByRole("button", { name: /Reset Answer automatically/ })).toBeNull();
   });
 
+  it("asks again on Retry when stopping automatic answers fails, rather than only reading main", async () => {
+    const armed = state({
+      learning: true,
+      adapter: "claude",
+      consentedAt: 5,
+      history: { state: "open", count: 60 },
+      evaluation: { ...EVALUATION, autoAnswerThreshold: 0.9 },
+      answeringFrom: 0.9,
+    });
+    // Main stopped answering in memory, but couldn't save that.
+    const stopped = { ...armed, revision: 1, answeringFrom: null };
+    getModel.mockResolvedValueOnce(armed);
+    setModelThreshold.mockRejectedValueOnce(new Error("The choice couldn't be saved. Try again."));
+    getModel.mockResolvedValueOnce(stopped);
+    await renderSection();
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Reset Answer automatically to default" })
+      );
+    });
+    expect(screen.getByText("Couldn't change when the model answers")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+    // Already reads as off, so the select can't ask again: Retry does.
+    expect(screen.queryByRole("button", { name: /Reset Answer automatically/ })).toBeNull();
+
+    setModelThreshold.mockResolvedValueOnce({ ...stopped, revision: 2 });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(setModelThreshold.mock.calls.map(([payload]) => payload)).toEqual([
+      { threshold: null, evaluatedAt: EVALUATION.evaluatedAt },
+      { threshold: null, evaluatedAt: EVALUATION.evaluatedAt },
+    ]);
+    expect(screen.queryByText("Couldn't change when the model answers")).toBeNull();
+  });
+
   // #18062: a threshold saved while Policy's old switch was off arms nothing,
   // and the heading and the select say what main does, not what was saved.
   it("says it answers nothing when main isn't answering from a saved threshold, and choosing it again is what turns it on", async () => {

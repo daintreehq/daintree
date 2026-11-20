@@ -68,7 +68,6 @@ function policyRead(
       ? null
       : {
           gates: [],
-          proxyAllowlisted: false,
           defaultQuestionExpiryMs: 1,
           maxQuestionExpiryMs: 2,
           askHumanAgents,
@@ -77,14 +76,11 @@ function policyRead(
   return {
     policy,
     loadError,
-    pending: null,
-    saveFailure: null,
     pendingExpiry: null,
     expirySaveFailure: null,
     pendingAgents: new Map(),
     agentSaveFailures: new Map(),
     reload: async () => {},
-    setProxyAllowlisted: async () => {},
     setDefaultQuestionExpiry: async () => {},
     setAgentAskHuman: async () => {},
   };

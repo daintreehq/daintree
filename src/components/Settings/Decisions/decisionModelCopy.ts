@@ -108,7 +108,9 @@ function nextAnsweringStep(
   if (model.history.state !== "open") {
     return "It can't be evaluated or answer until its history opens again.";
   }
-  if (model.running !== null) return `Once the evaluation finishes, ${CHOOSE_CONFIDENCE}`;
+  if (model.running !== null) {
+    return "Once the evaluation finishes, choose a confidence under Answer automatically if its report supports one.";
+  }
   if (model.evaluation === null) {
     return `Evaluate the model against your answers, then ${CHOOSE_CONFIDENCE}`;
   }
