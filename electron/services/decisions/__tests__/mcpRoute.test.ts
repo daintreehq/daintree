@@ -265,7 +265,7 @@ describe("/mcp/decisions (#16011)", () => {
       live: () => null,
       store,
       // The policy a lifetime starts with: the trusted gates, no proxy allowlist.
-      policy: createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false }),
+      policy: createTrustedPolicy({ ...defaultDecisionsSettings(), proxyAllowlisted: false }, "owner"),
       ...(attachments ? { attachments } : {}),
     };
     let held: number | null = null;

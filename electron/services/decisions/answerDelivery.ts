@@ -19,6 +19,7 @@ import {
   type OpenAnswerEntry,
   type PhoneImageCarrier,
   type PhoneImageStore,
+  type PolicyRegistry,
   type QuestionOrigin,
   type QuestionRow,
   type RelayClient,
@@ -175,6 +176,14 @@ export interface AnswerDeliveryOptions {
    * takes its turns under too; delivery's own when there is none.
    */
   lock?: BridgeLock;
+  /**
+   * The lifetime's trusted policy, which decides whether an advisory
+   * question's plan may go ahead when its notice is typed. The library's
+   * default, which allows no advice, when there is none.
+   */
+  policy?: PolicyRegistry;
+  /** Advisory outcomes are typed as their own notice (`RelayConnectionOptions.advisoryDeadlines`). */
+  advisoryDeadlines?: boolean;
   /** The keys couldn't be reloaded: the connection stops, and nothing more is written. */
   onKeysUnusable(): void;
 }
@@ -338,6 +347,8 @@ export class AnswerDelivery {
       store: this.resume ? withResumeReasons(this.store, this.resume) : this.store,
       sink: this.routed,
       client: options.client,
+      ...(options.policy ? { policy: options.policy } : {}),
+      ...(options.advisoryDeadlines ? { advisoryDeadlines: true } : {}),
       ...(options.phoneImages ? { phoneImages: options.phoneImages } : {}),
       ...(this.resume ? { adapters: this.resume.adapters } : {}),
       ...(deps.now ? { now: deps.now } : {}),

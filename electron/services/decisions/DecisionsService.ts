@@ -75,6 +75,7 @@ import {
   type RelayBinding,
   type RelayConnectionOptions,
 } from "./relayConnection.js";
+import { DAINTREE_DELIVERS_ADVISORY_OUTCOMES } from "./relayFeatures.js";
 import type { SetupDiagnostics } from "./setupDiagnostic.js";
 import { createTrustedPolicy } from "./workflowGates.js";
 import {
@@ -1256,6 +1257,8 @@ export class DecisionsService {
       ...(delivery
         ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }
         : {}),
+      // A Host's panes stay blocking until it settles its own deadlines (#17942).
+      advisoryDeadlines: role === "owner" && DAINTREE_DELIVERS_ADVISORY_OUTCOMES,
       ...(snapshots
         ? {
             snapshots: {
@@ -1313,7 +1316,8 @@ export class DecisionsService {
    */
   private applyPolicy(settings: DecisionsSettings): void {
     if (!this.policy) {
-      this.policy = createTrustedPolicy(settings);
+      // A lifetime of the other role ends first and drops its policy, so the role never changes in place.
+      this.policy = createTrustedPolicy(settings, this.role);
       return;
     }
     this.policy.proxyAllowlisted = settings.proxyAllowlisted;
