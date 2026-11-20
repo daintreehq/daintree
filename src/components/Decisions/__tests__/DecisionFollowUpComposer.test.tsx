@@ -1147,6 +1147,33 @@ describe("declining an agent's reply request (#18030)", () => {
     expect(sendFollowUp).not.toHaveBeenCalled();
   });
 
+  it("starts no decline while the answer's delivery is stopped, and drops one being confirmed when it stops", async () => {
+    questions = { q1: asked(agentAsks("m_agent_1")) };
+    await openOn("q1");
+    await confirmOpen();
+
+    // A decline is a follow-up too (#18028): it would only wait behind what stopped.
+    await pushList(listOf(STALLED, 2));
+    await waitFor(() => expect(screen.queryByText(TITLE)).toBeNull());
+    write("Thinking it over.");
+    await waitFor(() => expect(paused()).not.toBeNull());
+    expect(declineButton().getAttribute("aria-disabled")).toBe("true");
+    expect(declineButton().getAttribute("aria-describedby")).toBe(
+      screen.getByTestId("decision-follow-up-paused").id
+    );
+    fireEvent.click(declineButton());
+    await act(async () => {});
+    expect(screen.queryByText(TITLE)).toBeNull();
+    expect(sendFollowUp).not.toHaveBeenCalled();
+
+    await pushList(listOf(HANDLED, 3));
+    await waitFor(() => expect(declineButton().getAttribute("aria-disabled")).toBeNull());
+    await confirmOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Send decline" }));
+    await waitFor(() => expect(sendFollowUp).toHaveBeenCalledTimes(1));
+    expect(sendFollowUp.mock.calls[0]![0].text).toBe(DECLINE_REPLY_TEXT);
+  });
+
   it("never sends a lost decline again once the request it declined was replaced", async () => {
     questions = { q1: asked(agentAsks("m_agent_1")) };
     // The reply is lost, and by the time it's read back the agent has asked again.
