@@ -1134,7 +1134,11 @@ describe("agent stops (#17933)", () => {
     const b = await pair();
     // This host's clock, from just after both links began.
     const t0 = Math.max(a.host.startedAt.wall, b.host.startedAt.wall);
-    const d = deps({ now: () => t0 + 1_000, acceptsRemoteControl: () => false });
+    // This host's clocks, a second after then.
+    const d = deps({
+      clock: () => ({ wall: t0 + 1_000, mono: performance.now() + 1_000 }),
+      acceptsRemoteControl: () => false,
+    });
     const dispose = installHostMetricsHostWith(server, d);
     const heardA = hear(a);
     const heardB = hear(b);
@@ -1228,40 +1232,53 @@ describe("agent stops (#17933)", () => {
 
   it("never sends a link a stop seen before it began, though a stop taken back still goes", async () => {
     const server = new FakeServer();
-    const d = deps({ now: () => Date.now() });
-    const dispose = installHostMetricsHostWith(server, d);
     const p = await pair();
+    const began = p.host.startedAt;
+    // A second into the link, by this host's clocks.
+    const d = deps({ clock: () => ({ wall: began.wall + 1_000, mono: began.mono + 1_000 }) });
+    const dispose = installHostMetricsHostWith(server, d);
     const heard = hear(p);
     server.attach(p.host, "back", undefined, { agentStopChanges: true });
-    const began = p.host.startedAt.wall;
 
     // Seen while this Shell had no link: the link that came up after never hears it.
-    d.fireStop({
-      terminalId: "t1",
-      projectId: null,
-      stopped: true,
-      state: "completed",
-      seenAt: began - 1,
-    });
+    const stop = { projectId: null, state: "completed" as const, stopped: true };
+    d.fireStop({ ...stop, terminalId: "t1", seenAt: began.wall - 1 });
     d.fireStop({
       terminalId: "t1",
       projectId: null,
       stopped: false,
       state: null,
-      seenAt: began - 1,
+      seenAt: began.wall - 1,
     });
-    d.fireStop({
-      terminalId: "t2",
-      projectId: null,
-      stopped: true,
-      state: "completed",
-      seenAt: began,
-    });
+    d.fireStop({ ...stop, terminalId: "t2", seenAt: began.wall });
     await waitFor(() => heard.length === 2);
     expect(heard.map((body) => [body.terminalId, body.stopped])).toEqual([
       ["t1", false],
       ["t2", true],
     ]);
+    dispose();
+  });
+
+  it("keeps sending fresh stops after this host's clock is stepped back behind a link's start", async () => {
+    const server = new FakeServer();
+    const p = await pair();
+    const began = p.host.startedAt;
+    // An hour back on the wall clock, while a second has really passed.
+    const stepped = began.wall - 3_600_000;
+    const d = deps({ clock: () => ({ wall: stepped, mono: began.mono + 1_000 }) });
+    const dispose = installHostMetricsHostWith(server, d);
+    const heard = hear(p);
+    server.attach(p.host, "steady", undefined, { agentStopChanges: true });
+
+    d.fireStop({
+      terminalId: "t1",
+      projectId: null,
+      stopped: true,
+      state: "completed",
+      seenAt: stepped - 100,
+    });
+    await waitFor(() => heard.length === 1);
+    expect(heard[0]).toMatchObject({ terminalId: "t1", stopped: true, ageMs: 100 });
     dispose();
   });
 

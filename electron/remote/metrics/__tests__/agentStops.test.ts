@@ -89,6 +89,7 @@ describe("agentStopChangeOf (#17933)", () => {
       ["directing", "working"],
       ["working", "directing"],
       ["idle", "working"],
+      ["idle", "waiting"],
     ] as const) {
       expect(takenBack({ state, previousState }), `${previousState} → ${state}`).toBe(null);
     }
@@ -101,6 +102,10 @@ describe("agentStopChangeOf (#17933)", () => {
     expect(
       takenBack({ state: "exited", previousState: "completed", terminalClosing: true })
     ).toEqual(expect.objectContaining({ stopped: false }));
+    // A repeat of a stopped state, closing or not, says nothing.
+    expect(takenBack({ state: "exited", previousState: "exited", terminalClosing: true })).toBe(
+      null
+    );
     // A close while it worked still takes back whatever came before.
     expect(takenBack({ state: "waiting", terminalClosing: true })).toEqual(
       expect.objectContaining({ stopped: false })
@@ -110,6 +115,9 @@ describe("agentStopChangeOf (#17933)", () => {
   it("leaves out a run put aside here, whichever way it stops", () => {
     expect(agentStopChangeOf(change(), facts(["t1"]))).toBe(null);
     expect(agentStopChangeOf(change({ state: "exited" }), facts(["t1"]))).toBe(null);
+    expect(
+      agentStopChangeOf(change({ state: "exited", previousState: "waiting" }), facts(["t1"]))
+    ).toBe(null);
     // Its agent picking up again still takes back whatever was sent before it was put aside.
     expect(
       agentStopChangeOf(change({ state: "working", previousState: "completed" }), facts(["t1"]))
@@ -119,6 +127,10 @@ describe("agentStopChangeOf (#17933)", () => {
   it("sends nothing for a terminal id the link can't carry, and no project id it can't", () => {
     const long = "x".repeat(MAX_METRICS_ID_CHARS + 1);
     expect(takenBack({ terminalId: long })).toBe(null);
+    const longest = "x".repeat(MAX_METRICS_ID_CHARS);
+    expect(takenBack({ terminalId: longest })).toEqual(
+      expect.objectContaining({ terminalId: longest, stopped: true })
+    );
     expect(agentStopChangeOf(change(), facts([], long))).toEqual(
       expect.objectContaining({ terminalId: "t1", projectId: null, stopped: true })
     );

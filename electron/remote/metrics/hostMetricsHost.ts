@@ -13,6 +13,7 @@ import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, type LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
+import { elapsedSince, stampNow, type ElapsedStamp } from "../link/elapsed.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import type { FleetCaller } from "./hostOps.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
@@ -125,6 +126,8 @@ export interface MetricsHostDeps {
   /** Whether the Shell decides which of this host's agents alert it, by its own settings. */
   shellDecides(clientId: string): boolean;
   now(): number;
+  /** This machine's clocks, dating agents' stops against each link's start; the real ones by default. */
+  clock?(): ElapsedStamp;
 }
 
 /** What a restart ends on this machine, before the attached Shells are added. */
@@ -416,16 +419,18 @@ export function installHostMetricsHostWith(
 
   // Only to a Shell that said it reads them, and once: a Shell whose link is
   // down when an agent stops never hears of it, rather than hearing late, nor
-  // on the link that comes up after: a stop seen before a link began, by this
-  // machine's own clock, was seen while there was none.
+  // on the link that comes up after: a stop older than the link was seen while
+  // there was none. Ages, not times, are compared, so a clock stepped back
+  // can't make a fresh stop look older than its link.
   const offStops = deps.onAgentStopChanges((change) => {
-    const now = deps.now();
+    const at = (deps.clock ?? stampNow)();
+    const ageMs = Math.max(0, at.wall - change.seenAt);
     for (const ctx of server.sessions) {
       if (!ctx.session.isOpen || ctx.client.agentStopChanges !== true) continue;
-      if (change.stopped && change.seenAt < ctx.session.startedAt.wall) continue;
+      if (change.stopped && ageMs > elapsedSince(ctx.session.startedAt, at)) continue;
       const payload: AgentStopChangePayload = {
         ...change,
-        ageMs: Math.max(0, now - change.seenAt),
+        ageMs,
         afterPing: ctx.session.peerPingNonce,
       };
       ctx.session.call(MetricsLinkMethod.AGENT_STOP_CHANGED, payload).catch(() => {

@@ -2603,15 +2603,23 @@ describe("Decisions entry", () => {
         second.tell("studio", "t-1");
         expect(reports).toEqual([{ key: studioKey, stopped: true }]);
 
+        // Replaced without being withdrawn first: the old one is let go, and what it passed on.
+        const third = publishStops();
+        expect(second.listeners.size).toBe(0);
+        expect(third.listeners.size).toBe(1);
+        expect(reports).toEqual([
+          { key: studioKey, stopped: true },
+          { key: studioKey, stopped: false },
+        ]);
+
         off();
         off = null;
-        expect(second.listeners.size).toBe(0);
-        second.tell("studio", "t-3");
-        // Nor is a port published after it let go.
-        const third = publishStops();
         expect(third.listeners.size).toBe(0);
-        third.withdraw();
-        expect(reports).toHaveLength(1);
+        third.tell("studio", "t-3");
+        // Nor is a port published after it let go.
+        const fourth = publishStops();
+        expect(fourth.listeners.size).toBe(0);
+        expect(reports).toHaveLength(2);
       } finally {
         off?.();
         for (const withdraw of withdrawals) withdraw();

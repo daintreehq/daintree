@@ -608,7 +608,7 @@ describe("AgentStoppedPushes", () => {
       const h = harness("present");
       h.pushes.update();
       h.report("host-x");
-      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS * 2);
+      // Away before its batch would have gone: still never admitted.
       h.setPresence("away");
       vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS * 2);
       expect(h.send).not.toHaveBeenCalled();
@@ -638,8 +638,9 @@ describe("AgentStoppedPushes", () => {
       h.suspend();
       h.report("host-x");
       h.resume();
+      vi.advanceTimersByTime(AGENT_STOPPED_WAKE_GRACE_MS - 1);
       h.report("host-y");
-      vi.advanceTimersByTime(AGENT_STOPPED_WAKE_GRACE_MS);
+      vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
       expect(h.send).not.toHaveBeenCalled();
       h.report("host-z");
       vi.advanceTimersByTime(AGENT_STOPPED_BATCH_MS);
