@@ -1717,7 +1717,7 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
         origin_created_at: "2026-11-01T00:00:00.000Z",
         expires_at: deadline,
         local_status: "open",
-        delivery_status: "relay-accepted",
+        delivery_status: "relay-queued",
         last_injection_id: null,
         last_attempt_at: null,
         agent_resume_strategy: null,

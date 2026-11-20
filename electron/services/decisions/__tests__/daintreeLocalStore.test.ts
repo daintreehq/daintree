@@ -1140,6 +1140,10 @@ describe("DaintreeLocalStore ordering and failures", () => {
 
     const [create] = await store.outboxFor("q1");
     expect(create.payload).toEqual({ signed: 1, attachments: [], uploaded: ["a1"] });
+
+    // And a claim it makes stays, so a cancel from another bridge sends a real cancel after it.
+    await store.putOutbox({ ...item("o1", "q1"), payload: claimed });
+    expect((await store.outboxFor("q1"))[0].payload).toEqual(claimed);
   });
 
   it("keeps a cancelled question cancelled when a stale flush reports its create refused", async () => {

@@ -10,6 +10,7 @@ import {
   MemoryKeyStore,
   PolicyRegistry,
   loadIdentity,
+  parseAnswers,
   paneIdentityOf,
   type AttachmentResolver,
   type Identity,
@@ -579,6 +580,66 @@ describe("asking with attachments", () => {
     expect((await store.getQuestion(asked.questionId))?.local_status).toBe("cancelled");
     expect(await store.outboxFor(asked.questionId)).toEqual([]);
     expect(spooled()).toEqual([]);
+  });
+
+  it("queues a real cancel behind a create another attempt has claimed and is sending (#17939)", async () => {
+    writeImage("shot.png");
+    const asked = await bridge().registerQuestion({
+      origin: origin(),
+      input: { question: "Ship it?", attachments: [{ local_resource_id: "shot.png" }] },
+    });
+    let sendCreate!: () => void;
+    const sending = new Promise<void>((resolve) => (sendCreate = resolve));
+    const relay = slowRelay();
+    relay.release();
+    relay.client.createQuestion.mockImplementation(async () => {
+      await sending;
+      return { event_seq: 1 };
+    });
+    const { attempt } = liveAttempt(relay.client);
+    const pumping = attempt.pump();
+    await vi.waitFor(() => expect(relay.client.createQuestion).toHaveBeenCalledTimes(1));
+
+    // Between attempts, through a bridge whose publisher holds nothing in flight: only the stored claim says it may be out.
+    await bridge().cancelQuestion(asked.questionId, paneIdentityOf(origin()));
+
+    expect((await store.outboxFor(asked.questionId)).map((item) => item.kind)).toEqual([
+      "create",
+      "cancel",
+    ]);
+    expect((await store.getQuestion(asked.questionId))?.local_status).not.toBe("cancelled");
+    sendCreate();
+    await pumping;
+  });
+
+  it("settles a question whose deadline passed before it was ever sent as never published, sending nothing (#17939)", async () => {
+    const asked = await bridge().registerQuestion({
+      origin: origin(),
+      input: { question: "Ship it?", expires_in: "2m" },
+    });
+    const relay = slowRelay();
+    const attempt = new DecisionsBridge({
+      identity,
+      store,
+      policy: new PolicyRegistry(),
+      sink: holdingTerminalSink,
+      client: relay.client as unknown as RelayClient,
+      pumpIntervalMs: 0,
+      now: () => Date.now() + 5 * 60_000,
+    });
+
+    await attempt.pump();
+
+    expect(relay.client.createQuestion).not.toHaveBeenCalled();
+    const row = (await store.getQuestion(asked.questionId))!;
+    expect(row).toMatchObject({
+      local_status: "publish-failed",
+      delivery_status: "desktop-received",
+    });
+    expect(parseAnswers(row.answers_json)).toMatchObject([
+      { kind: "unpublished", source: "system", deliver: true, delivered: false },
+    ]);
+    expect(await store.outboxFor(asked.questionId)).toEqual([]);
   });
 
   it("drops the spool with a question cancelled before it was ever published", async () => {

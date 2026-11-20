@@ -407,7 +407,10 @@ describe("/mcp/decisions (#16011)", () => {
     const [row] = await store.listQuestions();
     // From 0.9.0 the receipt goes on to the deadline that applies and how to find the question again.
     expect(asked.content[0].text.startsWith(`${askedInstruction(row.alias)} `)).toBe(true);
-    expect(asked.content[0].text).toContain(`until ${row.expires_at} (UTC)`);
+    expect(asked.content[0].text).toContain(
+      `It waits for a decision until ${row.expires_at} (UTC); unanswered by then, it expires, and expiry authorises nothing.`
+    );
+    expect(asked.content[0].text).toContain("Policy: the deadline is the host's default.");
     expect(asked.content[0].text).toContain(`get_decision with question_id ${row.question_id}`);
     expect(asked.structuredContent.instruction).toBe(asked.content[0].text);
     const questionId = asked.structuredContent.question_id as string;

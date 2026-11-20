@@ -141,7 +141,11 @@ export async function relayRequests(
     const deadline = AbortSignal.timeout(
       download ? Math.max(timeoutMs, ATTACHMENT_TIMEOUT_MS) : timeoutMs
     );
-    const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+    // The library's own deadline or abort for this call (0.9.0 passes one per call) holds as well.
+    const sources = [deadline, options.signal, init.signal].filter(
+      (source): source is AbortSignal => source != null
+    );
+    const signal = sources.length === 1 ? deadline : AbortSignal.any(sources);
     let response: Response;
     try {
       response = await fetchImpl(url, {

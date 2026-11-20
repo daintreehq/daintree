@@ -733,8 +733,9 @@ describe("a person's decline (#17234)", () => {
 });
 
 describe("a question that never reached the relay (0.9.0, #17939)", () => {
+  // The library writes `source: system` for this kind whatever source it is handed.
   const unpublished = (fallbackDue?: boolean) =>
-    answer({ kind: "unpublished", source: "system", ...(fallbackDue ? { fallbackDue } : {}) });
+    answer({ kind: "unpublished", ...(fallbackDue ? { fallbackDue } : {}) });
 
   it("reads the library's notice as the system's, answering nothing", () => {
     const [block] = parsed(notice(unpublished()));
@@ -762,7 +763,8 @@ describe("a question that never reached the relay (0.9.0, #17939)", () => {
       "authorised: no",
     ]);
     expect(lines[source + 3]).toMatch(/^note: /);
-    expect(lines[source + 3]).toMatch(/never reached the person/);
+    expect(lines[source + 3]).toMatch(/never reached the relay/);
+    expect(lines[source + 3]).toMatch(/no answer was recorded/);
     expect(lines[source + 3]).toMatch(/not authorised to continue the gated step/);
     expect(unpublished()).not.toContain(lines[source + 3]);
     expect(lines[source + 4]).toBe(DECISION_BLOCK_END);

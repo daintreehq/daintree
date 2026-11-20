@@ -278,6 +278,27 @@ describe("relayRequests", () => {
     ).rejects.toThrow("network");
   });
 
+  it("stops a request when the library's own signal for that call aborts, as well as its own deadline", async () => {
+    let seen: AbortSignal | undefined;
+    const requests = await relayRequests(ORIGIN, {
+      fetchImpl: (_url, init) => {
+        seen = init.signal ?? undefined;
+        return new Promise((_resolve, reject) =>
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError"))
+          )
+        );
+      },
+    });
+    const call = new AbortController();
+
+    const sent = requests.fetch(`${ORIGIN}/api/v1/events`, { signal: call.signal });
+    call.abort();
+
+    await expect(sent).rejects.toThrow();
+    expect(seen?.aborted).toBe(true);
+  });
+
   it("refuses an image's ciphertext larger than the protocol's largest image", async () => {
     const tooLarge = new Uint8Array(LIMITS.attachmentBytes + 17);
     const requests = await relayRequests(ORIGIN, {

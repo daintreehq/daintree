@@ -64,6 +64,7 @@ describe("openDecisionsLocalStore", () => {
 
   it.each([
     ["no marker, as 0.8.0 left it", undefined],
+    ["the format before formats were marked", "0"],
     ["0.9.0's own format", String(STORE_FORMAT)],
   ])("opens a store with %s", async (_label, raw) => {
     db.getSharedSqlite.mockReturnValue({

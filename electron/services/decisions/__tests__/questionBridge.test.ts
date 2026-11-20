@@ -577,7 +577,9 @@ describe("QuestionBridge", () => {
     // From 0.9.0 the library's publisher knows whether its flush holds the create; nothing is marked here.
     expect(putOutbox).not.toHaveBeenCalled();
     const [create] = await store.outboxFor(asked.questionId);
-    expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBeUndefined();
+    expect(create?.kind).toBe("create");
+    expect((create.payload as { maybePublished?: boolean }).maybePublished).toBeUndefined();
+    expect(live.cancelQuestion).toHaveBeenCalledTimes(1);
     expect(live.cancelQuestion).toHaveBeenCalledWith(asked.questionId, pane);
   });
 
@@ -1237,9 +1239,11 @@ describe("QuestionBridge", () => {
       });
 
       // The view's scope stood in for the asker, so the library is asked without a pane.
+      expect(live.cancelQuestion).toHaveBeenCalledTimes(1);
       expect(live.cancelQuestion).toHaveBeenCalledWith(asked.questionId);
       const [create] = await store.outboxFor(asked.questionId);
-      expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBeUndefined();
+      expect(create?.kind).toBe("create");
+      expect((create.payload as { maybePublished?: boolean }).maybePublished).toBeUndefined();
       expect(await requests()).toMatchObject([
         { question_id: asked.questionId, result: "person", detail: { status: "queued" } },
       ]);

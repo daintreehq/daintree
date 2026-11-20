@@ -128,7 +128,7 @@ const EXPIRED_NOTE =
 const DECLINED_NOTE =
   "note: The person chose not to answer this question. Nothing was decided or approved: stop waiting for it, and don't continue the gated step.";
 const NEVER_PUBLISHED_NOTE =
-  "note: This question never reached the person: its deadline passed before this computer could send it, so nothing was decided or approved. You are not authorised to continue the gated step: ask again if you still need an answer, or stop and report.";
+  "note: This question never reached the relay: its deadline passed before this computer could send it, so it never reached the person's phone, no answer was recorded, and nothing was decided or approved. You are not authorised to continue the gated step: ask again if you still need an answer, or stop and report.";
 
 // The library's own fixed lines, which are all a `note:` may say.
 const LIBRARY_PROXY_NOTE =
