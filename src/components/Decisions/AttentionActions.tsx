@@ -198,9 +198,9 @@ export function AttentionActionRow({
           onOpenChange={(open) => {
             if (open && held) return;
             setMenuOpen(open);
-            if (open) return;
-            destinationsGenerationRef.current += 1;
-            setListedFor(null);
+            // Each opening lists afresh; a closing keeps its rows through the exit.
+            if (open) setListedFor(null);
+            else destinationsGenerationRef.current += 1;
           }}
         >
           <DropdownMenuTrigger asChild>
