@@ -354,7 +354,11 @@ describe("DecisionsRecoveryKit", () => {
 });
 
 describe("DecisionsRecoveryKit once a kit is verified", () => {
-  const VERIFIED: DecisionsStatus = { ...UNFINISHED, recoveryKitVerifiedAt: VERIFIED_AT };
+  const VERIFIED: DecisionsStatus = {
+    ...UNFINISHED,
+    recoveryKitVerifiedAt: VERIFIED_AT,
+    recoveryKitCurrent: true,
+  };
 
   beforeEach(() => {
     exportRecoveryKit.mockReset();
@@ -413,6 +417,14 @@ describe("DecisionsRecoveryKit once a kit is verified", () => {
   it("shows the forms with no button while no kit is verified", () => {
     renderKit({ status: UNFINISHED });
 
+    expect(bothFormsShown()).toBe(true);
+    expect(screen.queryByRole("button", { name: /Save or verify a kit/ })).toBeNull();
+  });
+
+  it("shows the forms with no button while the verified kit may be out of date (#18064)", () => {
+    renderKit({ status: { ...VERIFIED, recoveryKitCurrent: undefined } });
+
+    expect(screen.getByText("Recovery kit may be out of date")).toBeTruthy();
     expect(bothFormsShown()).toBe(true);
     expect(screen.queryByRole("button", { name: /Save or verify a kit/ })).toBeNull();
   });
