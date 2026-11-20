@@ -2,11 +2,7 @@ import { decisionsClient } from "@/clients/decisionsClient";
 import { readDecisionsSwitch } from "@/hooks/useDecisionsOn";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
-import type { DecisionsAttentionItem } from "@shared/types/decisionsAttention";
-import type {
-  DecisionQuestionListItem,
-  DecisionQuestionReference,
-} from "@shared/types/decisionsQuestion";
+import type { DecisionQuestionListItem } from "@shared/types/decisionsQuestion";
 import { resolvesHere } from "./useInboxAttentionItem";
 
 /** The pane, or Canopy run, whose stopped deliveries are reviewed. */
@@ -66,31 +62,6 @@ export function stoppedQuestion(
   );
 }
 
-/**
- * The reference the inbox names `scope`'s first stopped answer by, from the
- * attention list, when this computer asked it from a pane: a stall the
- * question list hasn't published yet. Undefined for one it can't list, asked
- * with no pane or by another machine, which only the attention list holds.
- */
-export function stoppedReference(
-  items: readonly DecisionsAttentionItem[],
-  scope: StoppedAnswersScope
-): DecisionQuestionReference | undefined {
-  const first = firstInOrder(
-    items.filter(
-      (item) =>
-        item.origin.paneId === scope.terminalId &&
-        (scope.projectId === undefined || item.origin.projectId === scope.projectId)
-    ),
-    (item) => item.questionId,
-    scope.questionIds
-  );
-  if (first === undefined || first.reference === null || first.origin.otherHost !== null) {
-    return undefined;
-  }
-  return first.reference;
-}
-
 /** A read that failed, by rejecting or by throwing, reads as nothing. */
 async function readOrNull<T>(read: () => Promise<T>): Promise<T | null> {
   try {
@@ -106,13 +77,12 @@ let latest = 0;
 /**
  * Review answers (#18048): opens the inbox at the stalled question `scope`
  * names, where this computer resolves its delivery in place. The question
- * list is ids only, so nothing's words are read to choose it; only when it
- * doesn't hold one, or couldn't be read, does the attention list say whether
- * the inbox can name it all the same (not yet published). One the inbox can't
- * list (asked with no pane, or by another machine), or when neither read can
- * say, opens the standalone list of answers needing attention, which holds
- * every one and says why it can't read them when it can't. Only this
- * computer's windows offer it: a Remote Host keeps its own panes' deliveries.
+ * list is ids only, so nothing's words are read to choose it. One the list
+ * doesn't hold (asked with no pane or by another machine, or not published
+ * yet), or a list that couldn't be read, opens the standalone list of answers
+ * needing attention instead, which holds every one and says why it can't read
+ * them when it can't. Only this computer's windows offer it: a Remote Host
+ * keeps its own panes' deliveries.
  */
 export async function openStoppedAnswers(
   scope: StoppedAnswersScope,
@@ -137,13 +107,7 @@ export async function openStoppedAnswers(
   };
   const list = await readOrNull(() => decisionsClient.listQuestions());
   if (!wanted()) return;
-  let reference = list === null ? undefined : stoppedQuestion(list.questions, scope)?.reference;
-  if (reference === undefined) {
-    const attention = await readOrNull(() => decisionsClient.listAttention());
-    if (!wanted()) return;
-    reference =
-      attention?.result === "listed" ? stoppedReference(attention.items, scope) : undefined;
-  }
+  const reference = list === null ? undefined : stoppedQuestion(list.questions, scope)?.reference;
   const returnFocusTo =
     opener.returnFocusTo === undefined ? {} : { returnFocusTo: opener.returnFocusTo };
   if (reference === undefined) {

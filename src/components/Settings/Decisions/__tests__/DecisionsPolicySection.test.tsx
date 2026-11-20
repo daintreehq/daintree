@@ -506,6 +506,14 @@ describe("Questions → Inbox (#17231)", () => {
       expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
     });
 
+    it("offers the attention list as soon as one read fails, while the other is still out", async () => {
+      listQuestions.mockRejectedValue(new Error("no list"));
+      listAttention.mockReturnValue(new Promise(() => {}));
+      render(<Sections />);
+      await act(async () => {});
+      expect(screen.getByTestId("decisions-attention-review")).toBeTruthy();
+    });
+
     it("offers nothing while Decisions isn't delivering, whatever the other read did", async () => {
       listQuestions.mockRejectedValue(new Error("no list"));
       listAttention.mockResolvedValue({ result: "not-running" });

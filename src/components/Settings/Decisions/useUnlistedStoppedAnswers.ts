@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
-import type { DecisionsAttentionItem } from "@shared/types/decisionsAttention";
-import type { DecisionQuestionListItem } from "@shared/types/decisionsQuestion";
+import type {
+  DecisionsAttentionItem,
+  DecisionsAttentionList,
+} from "@shared/types/decisionsAttention";
+import type {
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+} from "@shared/types/decisionsQuestion";
 
 /**
  * The answers needing a person whose question this computer's inbox doesn't
@@ -57,15 +63,26 @@ export function useUnlistedStoppedAnswers(stopped: number): UnlistedStoppedAnswe
   useEffect(() => {
     if (listOpen) return;
     let live = true;
-    Promise.all([
-      settle(() => decisionsClient.listAttention()),
-      settle(() => decisionsClient.listQuestions()),
-    ]).then(([attention, list]) => {
+    // Each read decides what it can as it lands (undefined while it's out), so one that hangs
+    // never holds back what the other already says.
+    let attention: DecisionsAttentionList | null | undefined;
+    let list: DecisionQuestionList | null | undefined;
+    const decide = () => {
       if (!live) return;
       // Not delivering holds nothing to review, whatever the other read did.
-      if (attention !== null && attention.result !== "listed") setUnlisted(0);
+      if (attention != null && attention.result !== "listed") setUnlisted(0);
       else if (attention === null || list === null) setUnlisted("unknown");
-      else setUnlisted(unlistedAnswers(attention.items, list.questions));
+      else if (attention !== undefined && list !== undefined) {
+        setUnlisted(unlistedAnswers(attention.items, list.questions));
+      }
+    };
+    void settle(() => decisionsClient.listAttention()).then((read) => {
+      attention = read;
+      decide();
+    });
+    void settle(() => decisionsClient.listQuestions()).then((read) => {
+      list = read;
+      decide();
     });
     return () => {
       live = false;
