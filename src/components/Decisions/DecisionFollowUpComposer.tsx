@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { isMac } from "@/lib/platform";
@@ -16,11 +17,16 @@ import type { DecisionQuestionContent } from "@shared/types/decisionsQuestion";
 import {
   awaitsConfirmation,
   confirmFollowUpInThread,
+  declineReply,
   followFollowUp,
   isFollowUpCommitted,
   sendFollowUp,
 } from "./decisionFollowUpSend";
 import {
+  DECLINE_REPLY_BODY,
+  DECLINE_REPLY_TEXT,
+  declinableReplyRequest,
+  declineReplyTitle,
   followUpAttemptText,
   followUpHoldText,
   followUpProgressText,
@@ -28,6 +34,7 @@ import {
   replyRequest,
   takesFollowUp,
 } from "./decisionFollowUpModel";
+import { aliasLabel } from "./decisionQuestionModel";
 import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
 import { contentDeadlineElapsed } from "./decisionDeadline";
 import { useDeadlineClock } from "./useDecisionsClock";
@@ -101,6 +108,29 @@ export function DecisionFollowUpComposer({
   const queued =
     submission?.phase.kind === "settled" && submission.phase.outcome.status === "queued";
   const asked = replyRequest(question) !== null;
+  // The request a decline would answer (#18030): offered until one sent from here for it is taken.
+  const declinable = declinableReplyRequest(question);
+  const declineSent =
+    declinable !== null &&
+    submission?.declines === declinable.messageId &&
+    isFollowUpCommitted(submission.phase);
+  const offersDecline = available && declinable !== null && !declineSent;
+  // A decline is a follow-up too: none starts while paused, or from a surface closing.
+  const declineReady = active && offersDecline && !paused && !inFlight;
+  // Consent covers the request it was asked about, on an open surface: a replaced or answered
+  // request, or the surface closing, closes the dialog.
+  const [confirming, setConfirming] = useState<{ key: string; requestId: string } | null>(null);
+  const confirmOpen =
+    declineReady &&
+    confirming !== null &&
+    confirming.key === key &&
+    confirming.requestId === declinable.messageId;
+  const [declining, setDeclining] = useState(false);
+  // Closed by anything but the person (a stall, the surface closing, the request moving): let go,
+  // so it never reopens by itself.
+  useEffect(() => {
+    if (!confirmOpen && confirming !== null) setConfirming(null);
+  }, [confirmOpen, confirming]);
   const hintId = useId();
   const pausedId = useId();
   const statusRef = useRef<HTMLDivElement>(null);
@@ -194,7 +224,9 @@ export function DecisionFollowUpComposer({
   // to where it stands rather than to the page.
   const focusedInside = useRef(false);
   const trackFocus = {
-    onFocus: () => {
+    onFocus: (event: React.FocusEvent<HTMLElement>) => {
+      // The decline's dialog is portalled out, but its focus still bubbles here through React.
+      if (!event.currentTarget.contains(event.target)) return;
       focusedInside.current = true;
       if (!engaged) setEngaged(true);
     },
@@ -215,6 +247,22 @@ export function DecisionFollowUpComposer({
   const send = () => {
     if (!ready) return;
     void sendFollowUp(key, target).finally(onMoved);
+  };
+
+  const askDecline = () => {
+    if (!declineReady) return;
+    setConfirming({ key, requestId: declinable.messageId });
+  };
+
+  const decline = () => {
+    if (!confirmOpen) return;
+    const requestId = confirming.requestId;
+    setConfirming(null);
+    setDeclining(true);
+    void declineReply(key, target, requestId).finally(() => {
+      setDeclining(false);
+      onMoved();
+    });
   };
 
   if (!available && progress === null && notice === null) return null;
@@ -315,10 +363,23 @@ export function DecisionFollowUpComposer({
                 {verdict.hint}
               </p>
             )}
+            {offersDecline && (
+              <Button
+                variant="ghost"
+                aria-disabled={!declineReady || undefined}
+                loading={record.preparing && declining}
+                aria-describedby={paused ? pausedId : undefined}
+                onClick={askDecline}
+                className="shrink-0"
+                data-testid="decision-follow-up-decline"
+              >
+                Decline to reply
+              </Button>
+            )}
             <Button
               variant={primary && !paused ? "contrast" : "outline"}
               aria-disabled={!ready || undefined}
-              loading={record.preparing}
+              loading={record.preparing && !declining}
               aria-describedby={
                 [paused ? pausedId : null, verdict.hint !== null ? hintId : null]
                   .filter((id) => id !== null)
@@ -333,6 +394,33 @@ export function DecisionFollowUpComposer({
           </div>
         </>
       )}
+      <ConfirmDialog
+        isOpen={confirmOpen}
+        onClose={() => setConfirming(null)}
+        variant="default"
+        zIndex="nested"
+        title={declineReplyTitle(aliasLabel(question.alias))}
+        description={<span className="[text-wrap:pretty]">{DECLINE_REPLY_BODY}</span>}
+        confirmLabel="Send decline"
+        initialFocus="cancel"
+        onConfirm={decline}
+        restoreFocusTo={() => statusRef.current}
+      >
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2 text-xs">
+          {declinable !== null && !declinable.unreadable && declinable.text !== null && (
+            <>
+              <dt className="text-text-secondary">Agent asked</dt>
+              <dd className="line-clamp-4 min-w-0 break-words text-text-primary [text-wrap:pretty]">
+                {declinable.text}
+              </dd>
+            </>
+          )}
+          <dt className="text-text-secondary">You send</dt>
+          <dd className="min-w-0 break-words text-text-primary" data-testid="decision-decline-text">
+            {DECLINE_REPLY_TEXT}
+          </dd>
+        </dl>
+      </ConfirmDialog>
     </section>
   );
 }

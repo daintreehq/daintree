@@ -36,6 +36,7 @@ vi.mock("@/hooks/useDecisionsOn", async () => {
 });
 
 import { DecisionQuestionDialog } from "../DecisionQuestionDialog";
+import { DECLINE_REPLY_TEXT } from "../decisionFollowUpModel";
 
 type Payload = { terminalId: string; questionId: string };
 const getQuestionContent = vi.fn<(payload: Payload) => Promise<DecisionQuestionContentResult>>();
@@ -1027,6 +1028,185 @@ describe("following up while the answer's delivery is stopped (#18028)", () => {
     expect(sendButton().getAttribute("aria-disabled")).toBe("true");
     write("Carry on.");
     expect(sendButton().getAttribute("aria-disabled")).toBeNull();
+  });
+});
+
+describe("declining an agent's reply request (#18030)", () => {
+  function agentAsks(messageId: string, text = "Which region?"): DecisionThreadMessage {
+    return {
+      ...personMessage(messageId),
+      from: "agent",
+      text,
+      expectsReply: true,
+      onComputer: false,
+      deliveryStatus: null,
+    };
+  }
+
+  /** Answered, and its agent asked a reply of the person since. */
+  function asked(...thread: DecisionThreadMessage[]): DecisionQuestionContent {
+    return question("q1", { status: "human-answered", thread });
+  }
+
+  const TITLE = "Decline to reply on q-7?";
+
+  function declineButton() {
+    return screen.getByTestId("decision-follow-up-decline");
+  }
+
+  async function confirmOpen() {
+    fireEvent.click(declineButton());
+    await screen.findByText(TITLE);
+  }
+
+  it("sends the fixed words as the person's follow-up once confirmed, leaving the draft and the answer alone", async () => {
+    questions = { q1: asked(agentAsks("m_agent_1")) };
+    await openOn("q1");
+    // A draft that happens to say the same thing still isn't what was sent.
+    write(DECLINE_REPLY_TEXT);
+
+    await confirmOpen();
+    expect(screen.getByText("Which region?", { selector: "dd" })).toBeTruthy();
+    expect(screen.getByTestId("decision-decline-text").textContent).toBe(DECLINE_REPLY_TEXT);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText(TITLE)).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    expect(sendFollowUp).not.toHaveBeenCalled();
+
+    await confirmOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Send decline" }));
+    await waitFor(() => expect(sendFollowUp).toHaveBeenCalledTimes(1));
+    const [sent] = sendFollowUp.mock.calls[0]!;
+    expect(sent).toEqual({
+      reference: { ...REFERENCE, questionId: "q1" },
+      messageId: expect.stringMatching(/^[A-Za-z0-9_-]{8,64}$/),
+      text: DECLINE_REPLY_TEXT,
+    });
+    await waitFor(() => expect(status()).toBe("Follow-up sent"));
+    expect(box().value).toBe(DECLINE_REPLY_TEXT);
+    expect(answerQuestion).not.toHaveBeenCalled();
+    // Taken: not offered again while the thread catches up, so it can't go twice.
+    expect(screen.queryByTestId("decision-follow-up-decline")).toBeNull();
+
+    // Once the thread holds it, nothing waits on the person: an ordinary follow-up again.
+    await move(asked(agentAsks("m_agent_1"), personMessage(sent.messageId)));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Follow up" })).toBeTruthy());
+    expect(screen.queryByTestId("decision-follow-up-decline")).toBeNull();
+  });
+
+  it("is offered only for an answered question whose agent still waits on a reply", async () => {
+    questions = { q1: question("q1", { status: "open", thread: [agentAsks("m_agent_1")] }) };
+    await openOn("q1");
+    // An open question is dismissed instead, which declines the question itself.
+    expect(screen.getByRole("heading", { name: "Reply to the agent" })).toBeTruthy();
+    expect(screen.queryByTestId("decision-follow-up-decline")).toBeNull();
+
+    await move(question("q1", { status: "human-answered" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Follow up" })).toBeTruthy());
+    expect(screen.queryByTestId("decision-follow-up-decline")).toBeNull();
+
+    await move(question("q1", { status: "proxy-answered", thread: [agentAsks("m_agent_2")] }));
+    await waitFor(() => expect(declineButton()).toBeTruthy());
+  });
+
+  it("sends nothing when the request it was confirmed for was replaced before the send", async () => {
+    questions = { q1: asked(agentAsks("m_agent_1")) };
+    await openOn("q1");
+    await confirmOpen();
+    // The agent asks again before the read at Send; the view hasn't shown it yet.
+    questions = { q1: asked(agentAsks("m_agent_1"), agentAsks("m_agent_2", "Which zone?")) };
+    fireEvent.click(screen.getByRole("button", { name: "Send decline" }));
+
+    await waitFor(() => expect(notice()).toMatch(/answered or replaced.*nothing was sent/));
+    expect(sendFollowUp).not.toHaveBeenCalled();
+    // Read again, the view offers declining the request that is outstanding now.
+    await waitFor(() => expect(screen.getByText("Which zone?")).toBeTruthy());
+    expect(declineButton().getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("sends nothing when a phone replied first", async () => {
+    questions = { q1: asked(agentAsks("m_agent_1")) };
+    await openOn("q1");
+    await confirmOpen();
+    questions = {
+      q1: asked(agentAsks("m_agent_1"), personMessage("m_phone", { onComputer: false })),
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Send decline" }));
+
+    await waitFor(() => expect(notice()).toMatch(/answered or replaced/));
+    expect(sendFollowUp).not.toHaveBeenCalled();
+  });
+
+  it("closes the confirmation once the request it asked about is replaced", async () => {
+    questions = { q1: asked(agentAsks("m_agent_1")) };
+    await openOn("q1");
+    await confirmOpen();
+
+    await move(asked(agentAsks("m_agent_1"), agentAsks("m_agent_2", "Which zone?")));
+    await waitFor(() => expect(screen.queryByText(TITLE)).toBeNull());
+    expect(sendFollowUp).not.toHaveBeenCalled();
+  });
+
+  it("starts no decline while the answer's delivery is stopped, and drops one being confirmed when it stops", async () => {
+    questions = { q1: asked(agentAsks("m_agent_1")) };
+    await openOn("q1");
+    await confirmOpen();
+
+    // A decline is a follow-up too (#18028): it would only wait behind what stopped.
+    await pushList(listOf(STALLED, 2));
+    await waitFor(() => expect(screen.queryByText(TITLE)).toBeNull());
+    write("Thinking it over.");
+    await waitFor(() => expect(paused()).not.toBeNull());
+    expect(declineButton().getAttribute("aria-disabled")).toBe("true");
+    expect(declineButton().getAttribute("aria-describedby")).toBe(
+      screen.getByTestId("decision-follow-up-paused").id
+    );
+    fireEvent.click(declineButton());
+    await act(async () => {});
+    expect(screen.queryByText(TITLE)).toBeNull();
+    expect(sendFollowUp).not.toHaveBeenCalled();
+
+    await pushList(listOf(HANDLED, 3));
+    await waitFor(() => expect(declineButton().getAttribute("aria-disabled")).toBeNull());
+    // The confirmation the stall closed is gone for good: only a new press asks again.
+    await act(async () => {});
+    expect(screen.queryByText(TITLE)).toBeNull();
+    await confirmOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Send decline" }));
+    await waitFor(() => expect(sendFollowUp).toHaveBeenCalledTimes(1));
+    expect(sendFollowUp.mock.calls[0]![0].text).toBe(DECLINE_REPLY_TEXT);
+  });
+
+  it("sends a lost decline again under the same id while its request still stands", async () => {
+    questions = { q1: asked(agentAsks("m_agent_1")) };
+    sendFollowUp.mockRejectedValueOnce(new Error("link dropped"));
+    await openOn("q1");
+    await confirmOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Send decline" }));
+
+    await waitFor(() => expect(sendFollowUp).toHaveBeenCalledTimes(2));
+    const [first, second] = sendFollowUp.mock.calls.map(([payload]) => payload);
+    expect(second).toEqual(first);
+    expect(second!.text).toBe(DECLINE_REPLY_TEXT);
+    await waitFor(() => expect(status()).toBe("Follow-up sent"));
+  });
+
+  it("never sends a lost decline again once the request it declined was replaced", async () => {
+    questions = { q1: asked(agentAsks("m_agent_1")) };
+    // The reply is lost, and by the time it's read back the agent has asked again.
+    sendFollowUp.mockImplementationOnce(async () => {
+      questions = { q1: asked(agentAsks("m_agent_1"), agentAsks("m_agent_2", "Which zone?")) };
+      throw new Error("link dropped");
+    });
+    await openOn("q1");
+    await confirmOpen();
+    fireEvent.click(screen.getByRole("button", { name: "Send decline" }));
+
+    await waitFor(() => expect(notice()).toMatch(/answered or replaced/));
+    expect(sendFollowUp).toHaveBeenCalledTimes(1);
+    expect(getFollowUpResult).toHaveBeenCalledWith({
+      messageId: sendFollowUp.mock.calls[0]![0].messageId,
+    });
   });
 });
 
