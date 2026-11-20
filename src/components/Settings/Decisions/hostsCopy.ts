@@ -6,14 +6,22 @@ import type {
   DecisionsHostRuntimeObservation,
   DecisionsHostsResult,
 } from "@shared/types/decisionsHosts";
+import { HOST_DEFAULT_QUESTION_EXPIRY_MS } from "@shared/config/decisionsQuestionExpiry";
 import { questionWaitText } from "./policyCopy";
 
-/**
- * The switch's own words: what enrolling gives a Host, how turning Decisions
- * off reaches it (#16022), and what turning this off leaves.
- */
+/** The switch's own words: what enrolling gives a Host, and what it lets the Host read. */
 export const AUTO_ENROLL_SUBTITLE =
-  "Each Remote Host you connect to gets its own keys, so its agents can ask you even while this computer sleeps, and it can read every question and answer. Turning Decisions off here turns it off on each Host when this computer next connects to it. Turn this off to enroll Hosts one at a time.";
+  "Each Remote Host you connect to gets its own keys, so its agents can ask you while this computer sleeps. An enrolled Host can read every question and answer.";
+
+/**
+ * A remote window's one note on whose settings these are (#18066): every
+ * Decisions setting is this computer's, while an enrolled Host gives
+ * `ask_human` to every supported agent launched there, whatever this
+ * computer's Agents switches say, and asks under its own default expiry.
+ */
+export function remoteWindowText(hostName: string, device: string): string {
+  return `These settings are saved on ${device}. On ${hostName}, once it's enrolled, every agent that supports ask_human gets it, and a question waits ${questionWaitText(HOST_DEFAULT_QUESTION_EXPIRY_MS)} unless its agent sets a time. Choose which agents on ${device} can ask from a local window.`;
+}
 
 /** A Remote Host device the relay lists that no Host this computer knows claims (#16222). */
 export const RELAY_ONLY_HOST_TEXT =
@@ -103,8 +111,12 @@ function runtimeState(runtime: DecisionsHostRuntime): string | null {
 
 /**
  * How a running Host said it asks its agents' questions (#17942), to follow
- * what it reports; empty for a Host that isn't running Decisions. A running
- * Host from before it says nothing of advice, and its agents can't ask for it.
+ * what it reports, only where that isn't what every current Host does: a
+ * Host from before it, whose agents can't ask for advice; one connected to
+ * the relay whose agents still can't, as its delivery didn't start; and a
+ * default expiry other than a Host's own. Empty otherwise, and for a Host
+ * that isn't running Decisions. A Host that is still connecting hasn't
+ * settled advice yet, so its "no" says nothing.
  */
 function questionPolicyText(runtime: DecisionsHostRuntime, live: boolean): string {
   if (runtime.state !== "running") return "";
@@ -113,13 +125,20 @@ function questionPolicyText(runtime: DecisionsHostRuntime, live: boolean): strin
     return " Its Daintree is too old for its agents to ask for advice; update it there to let them.";
   }
   const says = live ? "says" : "said";
+  const noAdvice = !policy.advisoryQuestions && runtime.connection === "connected";
+  const expiry = policy.defaultQuestionExpiryMs;
   const wait =
-    policy.defaultQuestionExpiryMs === null
-      ? "waits until it's answered or withdrawn"
-      : `waits ${questionWaitText(policy.defaultQuestionExpiryMs)}`;
-  return policy.advisoryQuestions
-    ? ` It ${says} its agents can ask for advice, closed on the Host when the deadline passes even while this computer sleeps, and a question asked there without a deadline ${wait}.`
-    : ` It ${says} its agents can't ask for advice now, and a question asked there without a deadline ${wait}.`;
+    expiry === HOST_DEFAULT_QUESTION_EXPIRY_MS
+      ? null
+      : expiry === null
+        ? "waits until it's answered or withdrawn"
+        : `waits ${questionWaitText(expiry)}`;
+  if (noAdvice && wait !== null) {
+    return ` It ${says} its agents can't ask for advice now, and a question asked there without a deadline ${wait}.`;
+  }
+  if (noAdvice) return ` It ${says} its agents can't ask for advice now.`;
+  if (wait !== null) return ` It ${says} a question asked there without a deadline ${wait}.`;
+  return "";
 }
 
 /**
@@ -155,7 +174,7 @@ function enrollmentText(host: DecisionsHost, autoEnroll: boolean): string {
     case "enrolling":
       return "Enrolling…";
     case "enrolled":
-      return `Enrolled as its own device.${offline}`;
+      return `Enrolled.${offline}`;
     case "not-enrolled":
       return `Not enrolled.${offline}`;
     case "revoked":

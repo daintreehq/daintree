@@ -105,11 +105,7 @@ export function DecisionsQuestionsSection({
         <SettingsSelect
           id="decisions-questions-expiry"
           label="Default expiry"
-          description={
-            policy === null
-              ? "An expired question authorises nothing, and the agent is told so"
-              : questionExpiryText(policy)
-          }
+          description={questionExpiryText(policy)}
           value={shownExpiry === null ? "" : expiryValue(shownExpiry.ms)}
           placeholder="Loading…"
           onValueChange={(value) =>

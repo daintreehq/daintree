@@ -5,6 +5,8 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { Callout } from "@/components/ui/Callout";
+import { deviceOwnerPhrase, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { useDecisions } from "./useDecisions";
 import { useDecisionsPolicy } from "./useDecisionsPolicy";
 import { useDecisionsModel } from "./useDecisionsModel";
@@ -28,6 +30,7 @@ import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { useHoldSettingsDeepLink } from "@/components/Settings/settingsDeepLink";
 import { holdRelayUrlRequests } from "./relayUrlRequest";
 import { unfinishedReason } from "./setupCheckCopy";
+import { remoteWindowText } from "./hostsCopy";
 
 /**
  * Setup is finished and the relay is up, so the page can lead with the everyday
@@ -72,6 +75,7 @@ export function DecisionsSettingsTab({
   const [pairFocusRequest, setPairFocusRequest] = useState(0);
   const askForPairing = () => setPairFocusRequest((count) => count + 1);
   const shownBefore = useRef<DecisionsStatus | null>(null);
+  const remoteHostName = useRemoteHostName();
 
   // A relay newly set up here and not yet verified asks for its recovery kit
   // next, whether the setup's own answer or a status push showed it first.
@@ -230,6 +234,13 @@ export function DecisionsSettingsTab({
             message={saveFailure.message}
             onRetry={() => void decisions.setEnabled(saveFailure.payload)}
           />
+        )}
+        {/* Said once for the page: Agents is left out here and Questions' default
+            is this computer's, while the Host serves its own agents (#18066). */}
+        {on && remoteHostName !== null && (
+          <Callout severity="neutral" data-testid="decisions-remote-window-note">
+            {remoteWindowText(remoteHostName, deviceOwnerPhrase())}
+          </Callout>
         )}
       </div>
 
