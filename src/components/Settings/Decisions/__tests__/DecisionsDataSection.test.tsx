@@ -357,7 +357,10 @@ describe("DecisionsDataSection", () => {
       fireEvent.click(within(confirmDialog).getByRole("button", { name: "Delete local data" }));
     });
 
-    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true, relayOrigin: ORIGIN });
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
+      oneClick: true,
+      relayOrigin: ORIGIN,
+    });
     expect(onChanged).toHaveBeenCalledExactlyOnceWith(status);
     await gone("alertdialog");
     expect(
