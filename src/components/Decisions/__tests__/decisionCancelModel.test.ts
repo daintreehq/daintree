@@ -46,6 +46,16 @@ describe("decisionCancelModel", () => {
     expect(body).toMatch(/declined on this computer/);
   });
 
+  it("neither says a question already out of Needs you leaves it, nor points to clearing it (#18053)", () => {
+    const aside = dismissBody({ ...TARGET, setAside: true });
+    expect(aside).toMatch(/declined on this computer\./);
+    expect(aside).not.toMatch(/Needs you/);
+    expect(aside).toMatch(/doesn't let the agent go ahead with any plan it stated/);
+    expect(dismissBody({ ...TARGET, setAside: false })).toBe(dismissBody(TARGET));
+    expect(dismissBody(TARGET)).toMatch(/leaves Needs you/);
+    expect(dismissBody(TARGET)).toMatch(/Clearing it from Needs you/);
+  });
+
   it("says a decline doesn't let an advisory round's plan go ahead, and points to Clear for local (#17943)", () => {
     const advisory = dismissBody({ ...TARGET, replyMode: "advisory" });
     const blocking = dismissBody({ ...TARGET, replyMode: "blocking" });

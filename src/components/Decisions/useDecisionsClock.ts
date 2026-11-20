@@ -22,14 +22,18 @@ export function onClockJump(refresh: () => void): () => void {
  * one of them shows changes next (its time left, its row coming within a day,
  * or its passing) and after the machine wakes or the window comes back.
  * Never every second, and never in render, where React Compiler would keep
- * the first reading. While `active` is false nothing is scheduled.
+ * the first reading. While `active` is false nothing is scheduled. With
+ * `detailed` false, only a deadline passing is waited for (#18053), for a
+ * surface that names no time left.
  */
 export function useDecisionsClock(
   deadlines: readonly (string | null | undefined)[],
-  active = true
+  active = true,
+  detailed = true
 ): number {
   // Coming back into use is a new observation too: a deadline may have passed while idle.
-  const key = `${active ? "on" : "off"}:${deadlines
+  const mode = !active ? "off" : detailed ? "on" : "due";
+  const key = `${mode}:${deadlines
     .map(deadlineMs)
     .filter((at): at is number => at !== null)
     .sort((a, b) => a - b)
@@ -46,16 +50,26 @@ export function useDecisionsClock(
     const refresh = () => setReading({ key, now: Date.now() });
     const list = key.slice(key.indexOf(":") + 1);
     const at = list === "" ? [] : list.split(",").map(Number);
-    const delay = nextDeadlineChange(at, now);
+    const delay = detailed ? nextDeadlineChange(at, now) : nextDeadline(at, now);
     const offFlip = delay === null ? null : scheduleFlip(delay, refresh);
     const offJump = onClockJump(refresh);
     return () => {
       offFlip?.();
       offJump();
     };
-  }, [key, now, active]);
+  }, [key, now, active, detailed]);
 
   return now;
+}
+
+/** How long until the soonest of `deadlines` still ahead passes; null when none is. */
+function nextDeadline(deadlines: readonly number[], nowMs: number): number | null {
+  let next: number | null = null;
+  for (const deadline of deadlines) {
+    const left = deadline - nowMs;
+    if (left > 0 && (next === null || left < next)) next = left;
+  }
+  return next;
 }
 
 /** The longest a browser timer waits; a later deadline is checked again after this. */

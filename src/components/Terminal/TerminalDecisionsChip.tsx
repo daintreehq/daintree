@@ -17,6 +17,7 @@ import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { useDecisionsOn } from "@/hooks/useDecisionsOn";
+import { usePaneClearedQuestions } from "@/hooks/useDecisionsWaitingCount";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { cn } from "@/lib/utils";
 import {
@@ -50,7 +51,9 @@ import {
   itemSentence,
   needsAttention,
   paneWaitOf,
+  questionCount,
   readsPaneWait,
+  setAsideOf,
   type DecisionItem,
 } from "./decisionsChipModel";
 
@@ -93,7 +96,8 @@ export function useQuestionLines(
   const [lines, setLines] = useState<{ key: string; lines: ReadonlyMap<string, string> } | null>(
     null
   );
-  const key = [terminalId, ...new Set(questionIds)].join("\u0000");
+  // Sorted: a row moving down the list (#18053) is no reason to read every line again.
+  const key = [terminalId, ...[...new Set(questionIds)].sort()].join("\u0000");
 
   useEffect(() => {
     // The key is the pane and its ids, so the read runs again only when either changes.
@@ -187,6 +191,9 @@ function DecisionRow({
 }) {
   const attention = ATTENTION_KINDS.has(item.kind);
   const deadline = deadlineNote(item, nowMs);
+  // No longer waiting on the person (#18053): listed, a step quieter.
+  const quiet = setAsideOf(item) !== null;
+  const ink = quiet ? "text-text-secondary" : "text-text-primary";
   const focusRestore = useOverlayFocusRestore();
   return (
     // Two sibling controls, never one inside the other: the row opens the
@@ -203,13 +210,13 @@ function DecisionRow({
         data-question-id={item.questionId}
         data-testid="terminal-decisions-row"
       >
-        <span className="w-9 shrink-0 font-mono text-xs leading-5 text-text-primary tabular-nums">
+        <span className={cn("w-9 shrink-0 font-mono text-xs leading-5 tabular-nums", ink)}>
           {item.label}
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           {line !== null && (
             <span
-              className="truncate text-xs leading-5 font-medium text-text-primary"
+              className={cn("truncate text-xs leading-5 font-medium", ink)}
               data-testid="terminal-decisions-row-line"
             >
               {line}
@@ -221,7 +228,7 @@ function DecisionRow({
               "flex items-start gap-1 [text-wrap:pretty]",
               line !== null
                 ? "text-2xs leading-4 text-text-secondary"
-                : "text-xs leading-5 text-text-primary"
+                : cn("text-xs leading-5", ink)
             )}
           >
             {attention && (
@@ -288,8 +295,18 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
   const [open, setOpen] = useState(false);
   const openAttention = useDecisionsAttentionStore((s) => s.open);
   const openInbox = useDecisionsInboxStore((s) => s.open);
+  // A question steps down as its deadline passes, popover open or not (#18053);
+  // closed, only a deadline passing is waited for, never the minutes ticking down.
+  const deadlines = state?.openQuestions.map((question) => question.expiresAt) ?? [];
+  const nowMs = useDecisionsClock(
+    deadlines,
+    open || deadlines.some((deadline) => deadline !== null),
+    open
+  );
+  // Only a pane with a question still out joins the list that says which were cleared.
+  const cleared = usePaneClearedQuestions(terminalId, (state?.openQuestions.length ?? 0) > 0);
   // Every pane header mounts this chip, so only one with something to say reads the drafts.
-  const watchDrafts = readsPaneWait(state);
+  const watchDrafts = readsPaneWait(state, nowMs);
   const hasDraft = useTerminalInputStore(
     (s) => watchDrafts && hasDraftText(s.draftInputs, terminalId)
   );
@@ -318,14 +335,10 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
     null
   );
   const chipRef = useRef<HTMLButtonElement>(null);
-  const items = state === null ? [] : decisionItems(state, wait, cancelling, dismissing);
+  const items =
+    state === null ? [] : decisionItems(state, wait, cancelling, dismissing, { nowMs, cleared });
   const questionIds = items.map((item) => item.questionId);
   const lines = useQuestionLines(terminalId, questionIds, open);
-  // Only while the popover is open: the chip itself names no deadline (#17943).
-  const nowMs = useDecisionsClock(
-    items.map((item) => (item.expiresAt === null ? null : new Date(item.expiresAt).toISOString())),
-    open
-  );
 
   // Outside the popover and the chip, so neither closing nor the last row going takes it away.
   const askedId = cancel === null ? null : questionOf(cancel.target.question).questionId;
@@ -439,7 +452,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                 Decisions
               </span>
               <span className={POPOVER_HEADER_META_CLASS}>
-                {pluralize(items.length, "question")}
+                {pluralize(questionCount(items), "question")}
               </span>
             </div>
             <ul
@@ -467,6 +480,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                               line: lines.get(item.questionId) ?? null,
                               // Named by alias alone: dismissed as it is open when confirmed.
                               revision: null,
+                              setAside: setAsideOf(item) !== null,
                             },
                             open: true,
                           });

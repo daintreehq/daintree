@@ -27,7 +27,7 @@ vi.mock("@/clients/decisionsClient", () => ({
 
 import { isWaitingOnPerson } from "@shared/utils/decisionWaiting";
 import { groupOf } from "@/components/Decisions/decisionsInboxModel";
-import { useDecisionsWaitingCount } from "../useDecisionsWaitingCount";
+import { usePaneClearedQuestions, useDecisionsWaitingCount } from "../useDecisionsWaitingCount";
 
 const seen: number[] = [];
 
@@ -301,5 +301,163 @@ describe("useDecisionsWaitingCount, as deadlines pass (#17943)", () => {
     unmount();
     expect(vi.getTimerCount()).toBe(0);
     expect(wake).toBeNull();
+  });
+});
+
+describe("usePaneClearedQuestions (#18053)", () => {
+  const cleared: Array<{ pane: string; ids: string }> = [];
+
+  function Chip({ terminalId, active = true }: { terminalId: string; active?: boolean }) {
+    const ids = usePaneClearedQuestions(terminalId, active);
+    cleared.push({ pane: terminalId, ids: [...ids].join(",") });
+    return null;
+  }
+
+  const lastFor = (pane: string) => cleared.filter((entry) => entry.pane === pane).at(-1)?.ids;
+
+  function asked(
+    index: number,
+    terminalId: string,
+    inbox: DecisionQuestionListItem["inbox"],
+    over: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    const item = question({ kind: "waiting", reason: "open" }, index);
+    return { ...item, reference: { ...item.reference, terminalId }, inbox, ...over };
+  }
+
+  const clearedAsk = { ask: null, seen: true, cleared: true };
+  const seenAsk = { ask: null, seen: true, cleared: false };
+
+  beforeEach(() => {
+    cleared.length = 0;
+    Reflect.deleteProperty(window, "__DAINTREE_HOST_ID__");
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, "__DAINTREE_HOST_ID__");
+  });
+
+  it("shares the toolbar's one list watch, and names each pane's cleared questions only", () => {
+    render(
+      <>
+        <Probe active />
+        <Chip terminalId="t1" />
+        <Chip terminalId="t2" />
+      </>
+    );
+    expect(watch.starts).toBe(1);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [
+          asked(0, "t1", clearedAsk),
+          asked(1, "t1", seenAsk),
+          { ...asked(4, "t1", clearedAsk), standing: { kind: "queued" } },
+          asked(2, "t2", undefined),
+          // A cleared mark on a question waiting for a reply isn't a question still out.
+          { ...asked(3, "t2", clearedAsk), standing: { kind: "waiting", reason: "reply" } },
+        ],
+      })
+    );
+    expect(lastFor("t1")).toBe("q0,q4");
+    expect(lastFor("t2")).toBe("");
+  });
+
+  it("keeps no clear over a stopped delivery, which can stand over a question still asking something new", () => {
+    render(<Chip terminalId="t1" />);
+    act(() => watch.onList?.({ revision: 1, questions: [asked(0, "t1", clearedAsk)] }));
+    expect(lastFor("t1")).toBe("q0");
+    const stopped = {
+      ...asked(0, "t1", undefined),
+      standing: { kind: "needs-attention" as const, deliveryStatus: "needs-attention" as const },
+    };
+    act(() => watch.onList?.({ revision: 2, questions: [stopped] }));
+    expect(lastFor("t1")).toBe("");
+  });
+
+  it("keeps a clear on a question answered since, until it asks again or leaves the list", () => {
+    render(<Chip terminalId="t1" />);
+    act(() => watch.onList?.({ revision: 1, questions: [asked(0, "t1", clearedAsk)] }));
+    expect(lastFor("t1")).toBe("q0");
+
+    // Answered on a phone: the list says so a moment before the pane's state does.
+    const answered = { ...asked(0, "t1", undefined), standing: { kind: "to-type" as const } };
+    act(() => watch.onList?.({ revision: 2, questions: [answered] }));
+    expect(lastFor("t1")).toBe("q0");
+    const closed = {
+      ...asked(0, "t1", undefined),
+      standing: { kind: "settled" as const, outcome: "expired" as const },
+    };
+    act(() => watch.onList?.({ revision: 3, questions: [closed] }));
+    expect(lastFor("t1")).toBe("q0");
+
+    // Asking again, at an ask nobody cleared.
+    act(() => watch.onList?.({ revision: 4, questions: [asked(0, "t1", seenAsk)] }));
+    expect(lastFor("t1")).toBe("");
+
+    act(() => watch.onList?.({ revision: 5, questions: [asked(0, "t1", clearedAsk)] }));
+    act(() => watch.onList?.({ revision: 6, questions: [] }));
+    expect(lastFor("t1")).toBe("");
+    // Never held over: back in the list, answered, it carries no clear it didn't have.
+    act(() => watch.onList?.({ revision: 7, questions: [answered] }));
+    expect(lastFor("t1")).toBe("");
+  });
+
+  it("tells a pane its question was cleared though the count stays where it was", () => {
+    render(
+      <>
+        <Probe active />
+        <Chip terminalId="t1" />
+      </>
+    );
+    act(() => watch.onList?.({ revision: 1, questions: [asked(0, "t1", seenAsk)] }));
+    expect(seen.at(-1)).toBe(0);
+    expect(lastFor("t1")).toBe("");
+
+    act(() => watch.onList?.({ revision: 2, questions: [asked(0, "t1", clearedAsk)] }));
+    expect(seen.at(-1)).toBe(0);
+    expect(lastFor("t1")).toBe("q0");
+
+    // Restored, or asking something new: no longer cleared.
+    act(() => watch.onList?.({ revision: 3, questions: [asked(0, "t1", seenAsk)] }));
+    expect(lastFor("t1")).toBe("");
+  });
+
+  it("keeps a Host's cleared question to that Host's window, never a local pane with the same id", () => {
+    const host = { hostId: "host-studio", name: "Studio", connected: true };
+    render(<Chip terminalId="t1" />);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [asked(0, "t1", clearedAsk, { remoteHost: host })],
+      })
+    );
+    expect(lastFor("t1")).toBe("");
+    cleanup();
+
+    Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "host-studio" });
+    render(<Chip terminalId="t1" />);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [asked(0, "t1", clearedAsk, { remoteHost: host }), asked(1, "t1", clearedAsk)],
+      })
+    );
+    expect(lastFor("t1")).toBe("q0");
+  });
+
+  it("joins no watch while inactive, and lets the watch go with its last reader", () => {
+    const { rerender, unmount } = render(<Chip terminalId="t1" active={false} />);
+    expect(watch.starts).toBe(0);
+    rerender(<Chip terminalId="t1" />);
+    expect(watch.starts).toBe(1);
+    act(() => watch.onList?.({ revision: 1, questions: [asked(0, "t1", clearedAsk)] }));
+    expect(lastFor("t1")).toBe("q0");
+    unmount();
+    expect(watch.stop).toHaveBeenCalledTimes(1);
+
+    // The next reader reads afresh rather than a list nobody kept up.
+    render(<Chip terminalId="t1" />);
+    expect(lastFor("t1")).toBe("");
   });
 });
