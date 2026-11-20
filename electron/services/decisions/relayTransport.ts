@@ -166,12 +166,12 @@ const noop = (): void => {};
  * such a call to the pass in flight, which may already have read its outbox:
  * a question committed then would reach the relay only on the next pump, 30 s
  * later (#18002). Every call made meanwhile shares the one pass after it,
- * which waits on the pass in flight alone, never on the advisory read the
- * library runs beside it. A call made once that pass has started queues
+ * which waits on the passes in flight alone, never on the advisory read the
+ * library runs beside them. A call made once that pass has started queues
  * another.
  */
 export class TrailingPump {
-  private queued: Promise<void> | null = null;
+  private queued: { started: Promise<void>; done: Promise<void> } | null = null;
 
   constructor(
     private readonly pass: () => Promise<void>,
@@ -182,16 +182,35 @@ export class TrailingPump {
     const running = this.inFlight();
     const joined = this.pass();
     if (running === null) return joined;
-    this.queued ??= running.then(noop, noop).then(() => {
-      this.queued = null;
-      return this.pass();
-    });
-    return Promise.all([joined, this.queued]).then(noop);
+    this.queued ??= this.after(running);
+    return Promise.all([joined, this.queued.done]).then(noop);
   }
 
-  /** Settles once a pass already queued has run; never rejects. */
-  settled(): Promise<void> {
-    return (this.queued ?? Promise.resolve()).then(noop, noop);
+  /** Settles once a queued pass has started, from when the library's `idle()` sees it; never rejects. */
+  started(): Promise<void> {
+    return this.queued?.started ?? Promise.resolve();
+  }
+
+  /**
+   * Starts a pass once none is in flight. One another call started meanwhile
+   * may have read before a call sharing this pass was made, so it's waited out
+   * too.
+   */
+  private after(running: Promise<unknown>): { started: Promise<void>; done: Promise<void> } {
+    let done: Promise<void> = Promise.resolve();
+    const start = (current: Promise<unknown>): Promise<void> =>
+      current.then(noop, noop).then(() => {
+        const next = this.inFlight();
+        if (next !== null) return start(next);
+        this.queued = null;
+        try {
+          done = this.pass();
+        } catch (error) {
+          done = Promise.reject(error as Error);
+        }
+      });
+    const started = start(running);
+    return { started, done: started.then(() => done) };
   }
 }
 
@@ -199,13 +218,14 @@ export class TrailingPump {
  * A socket attempt's bridge, whose pump never joins a pass that may already
  * have read past what the call was made for (`TrailingPump`). The library's
  * own calls, from an ask, a cancel, a thread post and the end of a replay,
- * reach the override too. A library without the pass where this reads it
- * pumps as the library does.
+ * reach the override too. A stopped or revoked bridge, and a library without
+ * the pass where this reads it, pump as the library does.
  */
 export class AttemptBridge extends DecisionsBridge {
   private trailing: TrailingPump | undefined;
 
   override pump(): Promise<void> {
+    if (this.state === "stopped" || this.state === "revoked") return super.pump();
     this.trailing ??= new TrailingPump(
       () => super.pump(),
       () => (this as unknown as { pumping?: Promise<unknown> | null }).pumping ?? null
@@ -214,7 +234,7 @@ export class AttemptBridge extends DecisionsBridge {
   }
 
   override async idle(): Promise<void> {
-    await this.trailing?.settled();
+    await this.trailing?.started();
     await super.idle();
   }
 }

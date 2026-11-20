@@ -995,8 +995,8 @@ async function publishStage(relay: FakeRelay, questionId: string): Promise<strin
   const sent = relay.requests.filter(
     (request) =>
       request.path === "/api/v1/questions" &&
-      (request.body as { question: { record: { question_id?: unknown } } } | null)?.question
-        ?.record?.question_id === questionId
+      (request.body as { question: { record: { question_id?: unknown } } } | null)?.question?.record
+        ?.question_id === questionId
   ).length;
   if (create === undefined) {
     return `committed (${local.local_status}) with no create in the outbox, sent ${sent} time(s)`;

@@ -207,12 +207,24 @@ describe("inertAttemptDelivery", () => {
   });
 });
 
+/** Whether `promise` has settled once everything already queued has run. */
+async function stateOf(promise: Promise<void>): Promise<"pending" | "resolved" | "rejected"> {
+  let state: "pending" | "resolved" | "rejected" = "pending";
+  promise.then(
+    () => (state = "resolved"),
+    () => (state = "rejected")
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return state;
+}
+
 describe("TrailingPump", () => {
   /**
    * The library's pump as 0.9.0 has it: a call while a pass runs joins that
    * pass, and each pass settles beside an advisory read it doesn't wait for.
+   * `onCleared` runs as a pass lets go of its place, before its callers hear.
    */
-  function libraryPump() {
+  function libraryPump(onCleared?: () => void) {
     const passes: Array<{ finish: () => void; fail: (error: Error) => void }> = [];
     let pumping: Promise<void> | null = null;
     let advisory: Promise<void> = Promise.resolve();
@@ -221,6 +233,7 @@ describe("TrailingPump", () => {
         const core = new Promise<void>((finish, fail) => passes.push({ finish, fail })).finally(
           () => {
             pumping = null;
+            onCleared?.();
           }
         );
         pumping = core;
@@ -230,6 +243,7 @@ describe("TrailingPump", () => {
     const pump = new TrailingPump(pass, () => pumping);
     return {
       pump,
+      pass,
       passes,
       holdAdvisory: () => {
         let release!: () => void;
@@ -239,23 +253,13 @@ describe("TrailingPump", () => {
     };
   }
 
-  const settledState = async (promise: Promise<void>) => {
-    let state = "pending";
-    promise.then(
-      () => (state = "resolved"),
-      () => (state = "rejected")
-    );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    return state;
-  };
-
   it("runs one pass when none is in flight", async () => {
     const { pump, passes } = libraryPump();
     const run = pump.run();
     expect(passes).toHaveLength(1);
     passes[0]!.finish();
     await run;
-    await pump.settled();
+    await pump.started();
     expect(passes).toHaveLength(1);
   });
 
@@ -269,12 +273,11 @@ describe("TrailingPump", () => {
     passes[0]!.finish();
     await first;
     await vi.waitFor(() => expect(passes).toHaveLength(2));
-    expect(await settledState(second)).toBe("pending");
-    expect(await settledState(third)).toBe("pending");
+    expect(await stateOf(second)).toBe("pending");
+    expect(await stateOf(third)).toBe("pending");
 
     passes[1]!.finish();
     await Promise.all([second, third]);
-    await pump.settled();
     expect(passes).toHaveLength(2);
   });
 
@@ -288,9 +291,27 @@ describe("TrailingPump", () => {
     const late = pump.run();
     passes[1]!.finish();
     await vi.waitFor(() => expect(passes).toHaveLength(3));
-    expect(await settledState(late)).toBe("pending");
+    expect(await stateOf(late)).toBe("pending");
     passes[2]!.finish();
     await late;
+  });
+
+  it("waits out a pass another call started before the pass after could, then runs its own", async () => {
+    let cleared = 0;
+    const { pump, pass, passes } = libraryPump(() => {
+      // Another of the library's callers starts a pass the moment the first lets go.
+      if (++cleared === 1) void pass();
+    });
+    void pump.run();
+    const queued = pump.run();
+    passes[0]!.finish();
+    await vi.waitFor(() => expect(passes).toHaveLength(2));
+    expect(await stateOf(queued)).toBe("pending");
+
+    passes[1]!.finish();
+    await vi.waitFor(() => expect(passes).toHaveLength(3));
+    passes[2]!.finish();
+    await queued;
   });
 
   it("still runs the pass after when the one in flight fails, and gives each caller the failure", async () => {
@@ -302,22 +323,27 @@ describe("TrailingPump", () => {
     await expect(joined).rejects.toThrow("relay gone");
     await vi.waitFor(() => expect(passes).toHaveLength(2));
     passes[1]!.finish();
-    await expect(pump.settled()).resolves.toBeUndefined();
+    await expect(pump.started()).resolves.toBeUndefined();
   });
 
-  it("waits on the pass in flight alone, never on the advisory read beside it", async () => {
+  it("starts the pass after, and says so, while the advisory read beside the first is still out", async () => {
     const { pump, passes, holdAdvisory } = libraryPump();
     const releaseAdvisory = holdAdvisory();
     void pump.run();
     void pump.run();
     passes[0]!.finish();
     await vi.waitFor(() => expect(passes).toHaveLength(2));
-    releaseAdvisory();
     passes[1]!.finish();
-    await pump.settled();
+    expect(await stateOf(pump.started())).toBe("resolved");
+    releaseAdvisory();
   });
+});
 
-  it("reads the installed library's pass in flight, so a pump asked for during it runs another", async () => {
+describe("AttemptBridge", () => {
+  async function bridgeOf(
+    kind: typeof DecisionsBridge,
+    store: MemoryLocalStore
+  ): Promise<DecisionsBridge> {
     const keys = new MemoryKeyStore();
     await keys.save({
       v: 1,
@@ -331,22 +357,35 @@ describe("TrailingPump", () => {
       epochs: [{ epoch: 1, raw: bytesToBase64Url(generateEpochKeyBytes()) }],
       currentEpoch: 1,
     });
-    const passes = async (bridge: typeof DecisionsBridge) => {
+    return new kind({
+      identity: await loadIdentity(keys),
+      store,
+      sink: holdingTerminalSink,
+      pumpIntervalMs: 0,
+    });
+  }
+
+  it("reads the installed library's pass in flight, so a pump asked for during it runs another", async () => {
+    const passes = async (kind: typeof DecisionsBridge) => {
       const store = new MemoryLocalStore();
       const reads = vi.spyOn(store, "dueOutbox");
-      const made = new bridge({
-        identity: await loadIdentity(keys),
-        store,
-        sink: holdingTerminalSink,
-        pumpIntervalMs: 0,
-      });
-      await Promise.all([made.pump(), made.pump()]);
-      await made.idle();
+      const bridge = await bridgeOf(kind, store);
+      await Promise.all([bridge.pump(), bridge.pump()]);
+      await bridge.idle();
       return reads.mock.calls.length;
     };
     // Each pass with nothing to send reads the outbox once.
     expect(await passes(DecisionsBridge)).toBe(1);
     expect(await passes(AttemptBridge)).toBe(2);
+  });
+
+  it("pumps nothing once stopped, without waiting for a pass the stop left running", async () => {
+    const store = new MemoryLocalStore();
+    vi.spyOn(store, "dueOutbox").mockImplementationOnce(() => new Promise(() => {}));
+    const bridge = await bridgeOf(AttemptBridge, store);
+    void bridge.pump();
+    await bridge.stop();
+    expect(await stateOf(bridge.pump())).toBe("resolved");
   });
 });
 
