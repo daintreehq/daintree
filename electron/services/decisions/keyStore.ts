@@ -320,6 +320,31 @@ export async function keyFileVersion(filePath: string): Promise<string | null> {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+const writeListeners = new Set<(filePath: string) => void>();
+
+/**
+ * Hears each write or removal of a key file by any store, once it has landed:
+ * a rotation's staged and promoted keys, the library's own saves, a disconnect
+ * (#18064). What reads the file's version is told again; nothing here depends
+ * on hearing it, since the version is read from the file each time.
+ */
+export function onKeyFileWritten(listener: (filePath: string) => void): () => void {
+  writeListeners.add(listener);
+  return () => {
+    writeListeners.delete(listener);
+  };
+}
+
+function keyFileWritten(filePath: string): void {
+  for (const listener of [...writeListeners]) {
+    try {
+      listener(filePath);
+    } catch (error) {
+      console.warn("[Decisions] A key file listener threw:", error);
+    }
+  }
+}
+
 /**
  * Every store's operations on one key file, in the order asked, shared by
  * every store on that file: two stores on the same file (a lifetime's, and a
@@ -436,6 +461,7 @@ export class SealedKeyStore implements KeyStore {
       await resilientAtomicWriteFile(this.filePath, JSON.stringify(envelope), "utf-8", {
         mode: OWNER_RW_FILE_MODE,
       });
+      keyFileWritten(this.filePath);
     });
   }
 
@@ -448,6 +474,7 @@ export class SealedKeyStore implements KeyStore {
       } catch (error) {
         if (!isMissing(error)) throw error;
       }
+      keyFileWritten(this.filePath);
     });
   }
 
@@ -469,6 +496,7 @@ export class SealedKeyStore implements KeyStore {
         if (!isMissing(error)) throw error;
       }
       await syncParentDirectory(this.filePath);
+      keyFileWritten(this.filePath);
       return true;
     });
   }

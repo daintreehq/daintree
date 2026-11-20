@@ -4714,11 +4714,25 @@ describe("Decisions entry", () => {
       expect(status).not.toHaveProperty("recoveryKitCurrent");
       expect(status).toHaveProperty("recoveryKitVerifiedAt");
 
-      // A setting restored from an older copy still names the old version, which the file doesn't hold.
+      // A setting restored from an older copy names the old version, which the file must hold to count.
       writeFileSync(keyFile.path, "sealed");
       expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCurrent: true });
       rmSync(keyFile.path);
       expect(await getDecisionsStatus()).not.toHaveProperty("recoveryKitCurrent");
+    });
+
+    it("pushes the status again when a key store changes the file, so Settings stops counting the kit (#18064)", async () => {
+      await setUp();
+      kitRuns.check.mockResolvedValue({ verified: RECORDED });
+      await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ recoveryKitCurrent: true })
+      );
+
+      await peekDecisionsService()!.getKeyStore().clear();
+
+      await vi.waitFor(() => expect(pushedStatuses().at(-1)).not.toHaveProperty("keysStored"));
+      expect(pushedStatuses().at(-1)).not.toHaveProperty("recoveryKitCurrent");
     });
 
     it("reads a verification from before the keys' version was recorded as not current (#18064)", async () => {

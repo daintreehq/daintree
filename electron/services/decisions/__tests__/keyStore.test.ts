@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +27,7 @@ import {
   DecisionsKeyStoreError,
   KeyFileChangedError,
   keyFileVersion,
+  onKeyFileWritten,
   SealedKeyStore,
 } from "../keyStore.js";
 
@@ -252,6 +254,28 @@ describe("SealedKeyStore", () => {
 
     await store.clear();
     await expect(store.version()).resolves.toBeNull();
+  });
+
+  it("tells its listeners of each write and removal once it has landed, from any store (#18064)", async () => {
+    keyed("v10");
+    const heard: Array<string | null> = [];
+    const stop = onKeyFileWritten((path) => {
+      expect(path).toBe(file);
+      heard.push(existsSync(path) ? "written" : null);
+    });
+    try {
+      await new SealedKeyStore(file).save(identity());
+      await new SealedKeyStore(file).saveIf(() => "refused", identity()).catch(() => {});
+      await new SealedKeyStore(file).clearIf(() => true);
+      await new SealedKeyStore(file).save(identity());
+      await new SealedKeyStore(file).clear();
+    } finally {
+      stop();
+    }
+    await new SealedKeyStore(file).save(identity());
+
+    // A refused save wrote nothing, and a listener stopped hears nothing more.
+    expect(heard).toEqual(["written", null, "written", null]);
   });
 
   it("reads a missing file as no keys without asking the keychain, even a locked one", async () => {

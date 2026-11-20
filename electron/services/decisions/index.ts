@@ -188,7 +188,7 @@ import {
   thresholdSupported,
   type DecisionModelRuntime,
 } from "./decisionModel.js";
-import { decisionsKeyFilePath, keyFileVersion } from "./keyStore.js";
+import { decisionsKeyFilePath, keyFileVersion, onKeyFileWritten } from "./keyStore.js";
 import { HostEnroller, type HostEnrollerOwner } from "./hostEnrollment.js";
 import { HostRecords } from "./hostEnrollmentRecords.js";
 import { RelayDeploySessions } from "./relayDeploySession.js";
@@ -762,6 +762,11 @@ function publishStatus(): void {
     })
     .catch(() => {});
 }
+
+// Whether a verified kit still holds every key is read from the key file, so
+// each change to the file is pushed to Settings: a rotation's new key, from
+// any route, makes the next erasure ask for the stronger confirmation (#18064).
+onKeyFileWritten(() => publishStatus());
 
 /**
  * The relay revoked the identity a connection ran on. Recorded against that
