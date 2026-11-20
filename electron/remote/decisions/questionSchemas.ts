@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { LIMITS } from "@daintreehq/decisions-protocol";
 import type {
+  DecisionClosureNotice,
   DecisionQuestionCancelResult,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
@@ -103,6 +105,37 @@ export const HostQuestionItemSchema = z
   })
   .strict() satisfies z.ZodType<Omit<DecisionQuestionListItem, "remoteHost" | "inbox">>;
 
+const ReplyModeSchema = z.enum(["advisory", "blocking"]);
+const ClosedReasonV2Schema = z.enum(["declined", "withdrawn", "expired", "never-published"]);
+const ClosureNoticeSchema = z
+  .object({
+    delivery: z.enum(["pending", "delivered", "uncertain", "needs-attention", "stopped"]),
+    disposition: z.enum(["fallback-due", "fallback-withheld"]).nullable(),
+  })
+  .strict() satisfies z.ZodType<DecisionClosureNotice>;
+
+/** The round facts a v3 item and a v2 content read carry beside the rest (#17943). */
+const ROUND_FIELDS = ["replyMode", "closedReason", "closureNotice"] as const;
+
+/**
+ * A v3 list item (#17943): a v2 item with its round. Each fact stays optional,
+ * as the shared type has it: one a Host left out is shown as unknown.
+ */
+export const HostQuestionItemV3Schema = HostQuestionItemSchema.extend({
+  replyMode: ReplyModeSchema.optional(),
+  closedReason: ClosedReasonV2Schema.nullable().optional(),
+  closureNotice: ClosureNoticeSchema.nullable().optional(),
+}).strict() satisfies z.ZodType<Omit<DecisionQuestionListItem, "remoteHost" | "inbox">>;
+
+type HostItem = Omit<DecisionQuestionListItem, "remoteHost" | "inbox">;
+
+/** An item as a Shell from before #17943 reads it: without the round its strict read refuses. */
+export function legacyItem(item: HostItem): HostItem {
+  const legacy: HostItem = { ...item };
+  for (const field of ROUND_FIELDS) delete legacy[field];
+  return legacy;
+}
+
 /** The owner a Host served a list to, as that owner's announcement named it. */
 const ListOwnerSchema = z
   .object({
@@ -180,6 +213,11 @@ export const HostQuestionsChangedV2PayloadSchema = HostQuestionsChangedPayloadSc
   seq: ListSeq,
 }).strict();
 
+/** A v3 list (#17943): the v2 envelope, its items read on their own as v3 ones. */
+export const HostQuestionListV3Schema = HostQuestionListV2Schema;
+/** A v3 push: the v2 push's envelope, with v3 items. */
+export const HostQuestionsChangedV3PayloadSchema = HostQuestionsChangedV2PayloadSchema;
+
 /** A v2 read of the list names nothing: the owner it serves is the session's. */
 export const HostQuestionListV2ReadSchema = z.object({}).strict();
 
@@ -202,6 +240,11 @@ export const HostQuestionReadSchema = z.discriminatedUnion("read", [
     .strict(),
 ]);
 export type HostQuestionRead = z.infer<typeof HostQuestionReadSchema>;
+
+/** A v2 read of one question's content (#17943), by reference. */
+export const HostQuestionContentV2ReadSchema = z
+  .object({ reference: QuestionReferenceSchema })
+  .strict();
 
 export const HostCancelQuestionPayloadSchema = z
   .object({ reference: QuestionReferenceSchema })
@@ -306,6 +349,27 @@ const QuestionContentSchema = z
   })
   .strict() satisfies z.ZodType<DecisionQuestionContent>;
 
+/** Content as `QUESTION_CONTENT_V2` reads it (#17943): with its round and verified plan. */
+const QuestionContentV2Schema = QuestionContentSchema.extend({
+  closedReason: ClosedReasonV2Schema.nullable(),
+  replyMode: ReplyModeSchema.optional(),
+  plannedFallback: z.string().max(LIMITS.plannedFallbackChars).nullable().optional(),
+  closureNotice: ClosureNoticeSchema.nullable().optional(),
+}).strict() satisfies z.ZodType<DecisionQuestionContent>;
+
+/**
+ * Content as a Shell from before #17943 reads it over `QUESTIONS`: without
+ * its round and plan, and a question that was never published closed for no
+ * reason it knows, as it read one before.
+ */
+export function legacyContent(question: DecisionQuestionContent): DecisionQuestionContent {
+  const { replyMode: _mode, plannedFallback: _plan, closureNotice: _notice, ...rest } = question;
+  return {
+    ...rest,
+    closedReason: question.closedReason === "never-published" ? null : question.closedReason,
+  };
+}
+
 const Off = z.object({ result: z.literal("off") }).strict();
 const NotRunning = z.object({ result: z.literal("not-running") }).strict();
 const NotFound = z.object({ result: z.literal("not-found") }).strict();
@@ -313,6 +377,15 @@ const Unreadable = z.object({ result: z.literal("unreadable") }).strict();
 
 export const HostQuestionContentResultSchema = z.discriminatedUnion("result", [
   z.object({ result: z.literal("read"), question: QuestionContentSchema }).strict(),
+  Off,
+  NotRunning,
+  NotFound,
+  Unreadable,
+]) satisfies z.ZodType<DecisionQuestionContentResult>;
+
+/** What `QUESTION_CONTENT_V2` answers (#17943). */
+export const HostQuestionContentV2ResultSchema = z.discriminatedUnion("result", [
+  z.object({ result: z.literal("read"), question: QuestionContentV2Schema }).strict(),
   Off,
   NotRunning,
   NotFound,

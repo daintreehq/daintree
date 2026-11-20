@@ -68,6 +68,23 @@ export const DecisionsLinkMethod = {
    * that read the list with `QUESTION_LIST_V2`, also when only an ask moved.
    */
   QUESTIONS_CHANGED_V2: "decisions.questionsChanged.v2",
+  /**
+   * Shell → Host (#17943): `QUESTION_LIST_V2` whose items also carry their
+   * round: its mode, why it closed without an answer, and how far its closing
+   * notice got. A Host from before it answers UNSUPPORTED, and is read with
+   * `QUESTION_LIST_V2` instead: those items are strict, so a field an older
+   * Shell doesn't know would fail them.
+   */
+  QUESTION_LIST_V3: "decisions.questionList.v3",
+  /** Host → Shell (#17943): `QUESTIONS_CHANGED_V2` with v3 items, to a Shell that read v3. */
+  QUESTIONS_CHANGED_V3: "decisions.questionsChanged.v3",
+  /**
+   * Shell → Host (#17943): one question's content as `QUESTIONS` reads it,
+   * with its round and the plan its advisory round states. A Host from before
+   * it answers UNSUPPORTED, and is read with `QUESTIONS` instead, whose
+   * content is strict.
+   */
+  QUESTION_CONTENT_V2: "decisions.questionContent.v2",
 } as const;
 
 /**
@@ -85,6 +102,9 @@ export const DECISIONS_LINK_METHOD_LOCALITY = {
   [DecisionsLinkMethod.QUESTIONS_CHANGED]: "shell",
   [DecisionsLinkMethod.QUESTION_LIST_V2]: "host",
   [DecisionsLinkMethod.QUESTIONS_CHANGED_V2]: "shell",
+  [DecisionsLinkMethod.QUESTION_LIST_V3]: "host",
+  [DecisionsLinkMethod.QUESTIONS_CHANGED_V3]: "shell",
+  [DecisionsLinkMethod.QUESTION_CONTENT_V2]: "host",
 } as const satisfies Record<
   (typeof DecisionsLinkMethod)[keyof typeof DecisionsLinkMethod],
   "host" | "shell"
