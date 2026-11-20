@@ -783,7 +783,7 @@ describe("a question that never reached the relay (0.9.0, #17939)", () => {
   });
 
   it.each([
-    // Its advisory form lets a stated plan go ahead, which this Daintree doesn't offer yet (#17940).
+    // Its advisory form lets a stated plan go ahead, which this Daintree's sink doesn't type yet (#17941).
     ["its advisory form", notice(unpublished(true))],
     ["an authorisation", notice(unpublished().replace("authorised: no", "authorised: yes"))],
     ["a person's", notice(unpublished().replace("source: system", "source: human"))],

@@ -9,6 +9,7 @@ import type {
   DecisionsSettings,
   DecisionsWorkflowGate,
 } from "../../../shared/types/decisions.js";
+import type { DecisionsRole } from "./DecisionsService.js";
 
 export const DESIGN_REVIEW_FINAL_GATE_ID = "design-review/final";
 
@@ -47,15 +48,35 @@ export type PolicySettings = Pick<
 >;
 
 /**
- * The policy an enabled lifetime asks every question under: the trusted
- * gates, the proxy allowlist and the default expiry as saved. The registry
- * copies each gate, so nothing holding the definitions above can change one
- * after registration.
+ * Whether agents on a lifetime of `role` may ask for advice (protocol
+ * section 21): a question with a finite deadline and a plan the agent states,
+ * which it may carry out at its own discretion if nobody answers by then. The
+ * owner's may, for work its agent could already do on its own: the library
+ * refuses advice under any gate, the origin's or one the agent names,
+ * registered or not, and for an approval, so `design-review/final` and every
+ * other gate always wait for a decision. A Remote Host's stays blocking until
+ * it records and settles its own deadlines (#17942). Neither proxy consent
+ * nor the involvement preference enters into it: an advisory question still
+ * needs the answer its requirement resolves to, and its deadline answers and
+ * approves nothing. A bridge signs one only when the host also delivers its
+ * outcome (`DAINTREE_DELIVERS_ADVISORY_OUTCOMES`), and the relay and one of
+ * the person's phones show it.
  */
-export function createTrustedPolicy(settings: PolicySettings): PolicyRegistry {
+export function allowsAdvisoryQuestions(role: DecisionsRole): boolean {
+  return role === "owner";
+}
+
+/**
+ * The policy a lifetime of `role` asks every question under: the trusted
+ * gates, the proxy allowlist and the default expiry as saved, and whether its
+ * agents may ask for advice. The registry copies each gate, so nothing
+ * holding the definitions above can change one after registration.
+ */
+export function createTrustedPolicy(settings: PolicySettings, role: DecisionsRole): PolicyRegistry {
   const policy = new PolicyRegistry({
     proxyAllowlisted: settings.proxyAllowlisted,
     defaultQuestionExpiryMs: settings.defaultQuestionExpiryMs,
+    advisoryQuestions: allowsAdvisoryQuestions(role),
   });
   for (const gate of TRUSTED_WORKFLOW_GATES) policy.register(gate);
   return policy;

@@ -29,7 +29,7 @@ import {
 } from "./paneSnapshots.js";
 import type { RelayFetch } from "./relayCheck.js";
 import { DaintreeRelayClient } from "./relayFeatures.js";
-import { relayRequests } from "./relayIdentity.js";
+import { relayRequests, type RelayRequests } from "./relayIdentity.js";
 import {
   ObservedSocket,
   RetiredAttemptError,
@@ -94,6 +94,12 @@ export interface QuestionSource {
   readonly lock?: BridgeLock;
   /** The lifetime's attachments, the ones every attempt's bridge asks with; none refuses them. */
   readonly attachments?: QuestionAttachments;
+  /**
+   * Whether the lifetime delivers advisory outcomes, which every bridge over
+   * its store is given as `advisoryDeadlines` (`RelayConnectionOptions`); off
+   * unless said.
+   */
+  readonly advisoryDeadlines?: boolean;
 }
 
 /** What a lifetime's attempts take from its decision model. */
@@ -159,6 +165,16 @@ export interface RelayConnectionOptions {
    * stay stored and untyped.
    */
   delivery?: AnswerDeliveryDeps;
+  /**
+   * The lifetime's delivery types an advisory question's outcome into the pane
+   * that asked (protocol section 21), so every bridge over its store, each
+   * attempt's, the one between attempts and delivery's own, is given
+   * `advisoryDeadlines`: it then signs advice the trusted policy allows, and
+   * reads and types its outcome alike. Only with `delivery`: without it, or
+   * when delivery couldn't start, no outcome is typed, so no bridge is given
+   * it. Off unless said.
+   */
+  advisoryDeadlines?: boolean;
   /**
    * Terminal snapshots of the panes that asked (#16230), through every
    * attempt's bridge for as long as the connection lasts. With them each
@@ -306,6 +322,11 @@ export class RelayConnection {
   /** Aborts the lifetime's own requests: delivery's reports to the relay. */
   private readonly lifetime = new AbortController();
   private readonly rotations: KeyRotations;
+  /**
+   * `advisoryDeadlines` for every bridge the connection makes
+   * (`RelayConnectionOptions`), settled before questions can be asked.
+   */
+  private advisoryDeadlines = false;
 
   constructor(options: RelayConnectionOptions) {
     this.o = options;
@@ -472,6 +493,12 @@ export class RelayConnection {
       this.halt({ state: "not-connected", problem: "other-relay" });
       return;
     }
+    // Made before the identity is: no attempt starts, and no question is
+    // asked, before it's settled whether a lifetime whose delivery couldn't
+    // start, and so types no advisory outcome, gives its bridges one.
+    const deliveryRequests = await this.deliveryRequests();
+    if (this.ended) return;
+    this.advisoryDeadlines = this.o.advisoryDeadlines === true && deliveryRequests !== null;
     this.identity = identity;
     this.o.onQuestionsReady?.({
       identity: () => (this.ended ? null : this.identity),
@@ -483,9 +510,10 @@ export class RelayConnection {
       policy: this.o.policy,
       lock: this.lock,
       ...(this.o.attachments ? { attachments: this.o.attachments } : {}),
+      advisoryDeadlines: this.advisoryDeadlines,
     });
     if (this.ended) return;
-    await this.startDelivery(identity);
+    this.startDelivery(identity, deliveryRequests);
     if (this.ended) return;
     this.watchers.push(
       (this.o.watchResume ?? watchResume)(() => this.reconnectNow()),
@@ -524,24 +552,27 @@ export class RelayConnection {
     return true;
   }
 
-  /**
-   * Delivery runs for the connection's lifetime, not an attempt's, so an
-   * answer already stored is typed while the relay is out of reach.
-   */
-  private async startDelivery(identity: Identity): Promise<void> {
-    const deps = this.o.delivery;
-    if (!deps) return;
-    let requests: Awaited<ReturnType<typeof relayRequests>>;
+  /** Delivery's way to the relay; null without delivery, or when none could be made. */
+  private async deliveryRequests(): Promise<RelayRequests | null> {
+    if (!this.o.delivery) return null;
     try {
-      requests = await relayRequests(this.o.relay.relayOrigin, {
+      return await relayRequests(this.o.relay.relayOrigin, {
         fetchImpl: this.o.fetchImpl,
         signal: this.lifetime.signal,
       });
     } catch {
       console.warn("[Decisions] Answers can't be delivered: no way to reach the relay was made");
-      return;
+      return null;
     }
-    if (this.ended) return;
+  }
+
+  /**
+   * Delivery runs for the connection's lifetime, not an attempt's, so an
+   * answer already stored is typed while the relay is out of reach.
+   */
+  private startDelivery(identity: Identity, requests: RelayRequests | null): void {
+    const deps = this.o.delivery;
+    if (!deps || requests === null) return;
     const delivery = new AnswerDelivery({
       deps,
       identity,
@@ -549,6 +580,8 @@ export class RelayConnection {
       keys: this.o.keys,
       ...(this.o.phoneImages ? { phoneImages: this.o.phoneImages } : {}),
       lock: this.lock,
+      policy: this.o.policy,
+      advisoryDeadlines: this.advisoryDeadlines,
       // Reports are retried on every pass while they fail, so each is tried once.
       client: new DaintreeRelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
       onKeysUnusable: () => this.halt({ state: "not-connected", problem: "keys" }),
@@ -611,6 +644,7 @@ export class RelayConnection {
         // Its inbox stores the person's follow-ups; the lifetime's delivery types them.
         followUps: true,
         policy: this.o.policy,
+        advisoryDeadlines: this.advisoryDeadlines,
         ...(this.o.attachments
           ? { resolver: this.o.attachments.resolver, spool: this.o.attachments.spool }
           : {}),

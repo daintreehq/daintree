@@ -24,12 +24,16 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * relay's to advertise in `/info`, never a desktop's to declare: presence
  * (#17240) is reported only to a relay that lists it. Setting the involvement
  * preference from this computer (#17237) has no token of its own: it rides
- * `involvement-v1`. A 0.9.0 bridge asks to declare `advisory-deadlines-v1`
- * only once its host delivers advisory outcomes (`advisoryDeadlines`, off
- * here), so it joins with the work that types and enforces them (#17940,
- * #17941). `agent-stopped-push-v1`, like presence, is a relay's to
- * advertise: the owner desktop asks for that push (#17319) only of a relay
- * that lists it.
+ * `involvement-v1`. `advisory-deadlines-v1` says three things by who
+ * declares it: in a relay's `/info`, that it takes advisory creates; on a
+ * phone's ticket, that it shows the deadline and the plan; on a desktop's,
+ * that its host delivers advisory outcomes to its agents. The relay checks no
+ * desktop declaration when it takes an advisory create, so the owner's trusted
+ * policy allows advice (#17940) while a 0.9.0 bridge given `advisoryDeadlines`
+ * still has its declaration cut here: it joins with the work that types the
+ * advisory notice (#17941), per runtime when a Remote Host's differs (#17942).
+ * `agent-stopped-push-v1`, like presence, is a relay's to advertise: the owner
+ * desktop asks for that push (#17319) only of a relay that lists it.
  */
 export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "thread-messages-v1",
@@ -41,6 +45,18 @@ export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "person-declines-v1",
   "owner-desktop-declines-v1",
 ];
+
+/**
+ * Whether this Daintree delivers an advisory question's outcome to the agent
+ * that asked it (protocol section 21): the host support a bridge needs before
+ * it signs one (`BridgeOptions.advisoryDeadlines`). Off until the terminal
+ * sink parses and types the advisory notice (#17941): a bridge given it types
+ * an advisory round's unanswered expiry as that notice, which this sink still
+ * refuses, so the agent that asked would be left waiting. Until then an
+ * advisory ask is refused `host-unsupported` before anything is stored, and
+ * the agent can ask again for a decision.
+ */
+export const DAINTREE_DELIVERS_ADVISORY_OUTCOMES: boolean = false;
 
 function declared(features: readonly ProtocolFeature[]): ProtocolFeature[] {
   return features.filter((feature) => DAINTREE_PROTOCOL_FEATURES.includes(feature));

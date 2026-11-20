@@ -196,6 +196,8 @@ export class QuestionBridge extends DecisionsBridge {
       policy: options.source.policy,
       sink: holdingTerminalSink,
       pumpIntervalMs: 0,
+      // As the attempts are given it, so a question reads the same here as on a live attempt.
+      advisoryDeadlines: options.source.advisoryDeadlines === true,
       ...(attachments ? { resolver: attachments.resolver, spool: attachments.spool } : {}),
     });
     this.question = options;
