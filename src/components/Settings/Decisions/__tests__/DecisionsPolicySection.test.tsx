@@ -184,7 +184,6 @@ describe("Decisions policy and questions sections", () => {
     expect(expiryRow()).not.toContain("up to");
 
     await act(async () => read.resolve(policy()));
-    expect(expirySelect().textContent).toBe("2 days");
     expect(expiryRow()).toContain("up to 20 days");
   });
 

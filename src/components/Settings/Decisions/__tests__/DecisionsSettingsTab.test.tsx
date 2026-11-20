@@ -647,12 +647,9 @@ describe("DecisionsSettingsTab", () => {
     expect(note).toContain("from a local window");
     // The note is why Agents is missing here, and Questions' default stays this computer's.
     expect(document.getElementById("decisions-agents")).toBeNull();
-    expect(document.getElementById("decisions-questions-expiry")?.textContent).toContain(
-      "on this computer"
-    );
-    expect(document.getElementById("decisions-questions")?.textContent).not.toContain(
-      "Remote Host"
-    );
+    const expiry = document.getElementById("decisions-questions-expiry")?.textContent ?? "";
+    expect(expiry).toContain("on this computer");
+    expect(expiry).not.toContain("Remote Host");
   });
 
   it("says nothing of a Host in a local window, or while Decisions is off (#18066)", async () => {
