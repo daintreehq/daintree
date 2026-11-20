@@ -1368,6 +1368,91 @@ describe("RelayConnection", () => {
     }
   );
 
+  it("has lifetime delivery read the current attempt's ledger, its own between attempts, and hear from that attempt alone (#17941)", async () => {
+    const bridges: DecisionsBridge[] = [];
+    const start = DecisionsBridge.prototype.start;
+    vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(function (
+      this: DecisionsBridge,
+      ...args: Parameters<DecisionsBridge["start"]>
+    ) {
+      bridges.push(this);
+      return start.apply(this, args);
+    });
+    type Ledger = { ledgerUnsettled(id: string): Promise<"unapplied" | "reading" | null> };
+    let source: QuestionSource | null = null;
+    const h = await harness({
+      overrides: {
+        advisoryDeadlines: true,
+        delivery: deliveryDeps().deps,
+        onQuestionsReady: (ready) => (source = ready),
+      },
+    });
+    try {
+      h.connection.start();
+      const first = await connectLive(h);
+      const delivery = h.connection.getDelivery()!;
+      const owner = (delivery as unknown as { owner: Ledger }).owner;
+      const attemptLedger = vi
+        .spyOn(bridges[0] as unknown as Ledger, "ledgerUnsettled")
+        .mockResolvedValue("unapplied");
+      await expect(owner.ledgerUnsettled("q1")).resolves.toBe("unapplied");
+      expect(attemptLedger).toHaveBeenCalledWith("q1");
+      attemptLedger.mockResolvedValue(null);
+      await expect(owner.ledgerUnsettled("q1")).resolves.toBeNull();
+
+      // get_decision, on the attempt or between attempts, waits on delivery's own clock.
+      const holds = vi.spyOn(delivery, "ledgerHolds").mockResolvedValue(true);
+      await expect(bridges[0].delivery.ledgerHolds("q1", { start: false })).resolves.toBe(true);
+      const between = new QuestionBridge({
+        source: source as unknown as QuestionSource,
+        isCurrent: () => true,
+      });
+      await expect(between.delivery.ledgerHolds("q1")).resolves.toBe(true);
+      expect(holds.mock.calls).toEqual([
+        ["q1", { start: false }],
+        ["q1", undefined],
+      ]);
+      holds.mockRestore();
+
+      // The attempt's read wakes delivery's notices that waited for it.
+      let held = true;
+      Object.defineProperty(delivery, "replayHeld", { configurable: true, get: () => held });
+      const request = vi.spyOn(delivery, "request");
+      expect(bridges[0].delivery.replayHeld).toBe(true);
+      await bridges[0].delivery.drain();
+      expect(request).toHaveBeenCalledTimes(1);
+
+      // Between attempts, delivery's own bridge answers: it has read nothing of the ledger.
+      // A read the attempt began before it ended says nothing once it has.
+      let release!: (state: null) => void;
+      attemptLedger.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+      const late = owner.ledgerUnsettled("q2");
+      first.drop(1006);
+      await h.status("reconnecting");
+      release(null);
+      await expect(late).resolves.toBe("reading");
+      attemptLedger.mockClear();
+      await expect(owner.ledgerUnsettled("q1")).resolves.toBe("reading");
+      expect(attemptLedger).not.toHaveBeenCalled();
+      // The attempt that ended speaks for delivery no more.
+      expect(bridges[0].delivery.replayHeld).toBe(false);
+      await bridges[0].delivery.drain();
+      expect(request).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS);
+      await connectLive(h, 1);
+      const nextLedger = vi
+        .spyOn(bridges[1] as unknown as Ledger, "ledgerUnsettled")
+        .mockResolvedValue(null);
+      await expect(owner.ledgerUnsettled("q1")).resolves.toBeNull();
+      expect(nextLedger).toHaveBeenCalledWith("q1");
+      expect(attemptLedger).not.toHaveBeenCalled();
+      held = false;
+    } finally {
+      await h.connection.stop();
+    }
+  });
+
   it("gives no bridge advisoryDeadlines when the lifetime's delivery couldn't start (#17940)", async () => {
     const bridges: DecisionsBridge[] = [];
     const start = DecisionsBridge.prototype.start;

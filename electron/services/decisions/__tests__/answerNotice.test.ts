@@ -26,6 +26,7 @@ import {
   DECISION_THREAD_PREFACE,
   MAX_DECISION_BLOCK_BYTES,
   decisionWakeId,
+  isFollowupBlock,
   parseAnswerNotice,
   parseDecisionNotice,
   renderCopiedAnswer,
@@ -101,6 +102,9 @@ describe("parseAnswerNotice", () => {
       onComputer: false,
       expired: false,
       neverPublished: false,
+      advisoryUnanswered: false,
+      deadline: null,
+      fallbackDue: false,
       declined: false,
       correction: false,
       modelId: null,
@@ -783,29 +787,241 @@ describe("a question that never reached the relay (0.9.0, #17939)", () => {
   });
 
   it.each([
-    // Its advisory form lets a stated plan go ahead, which this Daintree's sink doesn't type yet (#17941).
-    ["its advisory form", notice(unpublished(true))],
     ["an authorisation", notice(unpublished().replace("authorised: no", "authorised: yes"))],
     ["a person's", notice(unpublished().replace("source: system", "source: human"))],
     [
       "a choice",
       notice(unpublished().replace("authorised: no", "authorised: no\nchoice: approve")),
     ],
+    [
+      "both of its last notes",
+      notice(
+        unpublished(true).replace(
+          "\n[END",
+          "\nnote: You are NOT authorised to continue the gated step; ask again if you still need an answer, or stop and report.\n[END"
+        )
+      ),
+    ],
+    [
+      "both of its last notes, the other way round",
+      notice(
+        unpublished().replace(
+          "\n[END",
+          "\nnote: It was an advisory question. You may carry out the plan you stated, at your own discretion; the person did not choose it.\n[END"
+        )
+      ),
+    ],
+    ["neither of its last notes", notice(unpublished().replace(/\nnote: You are NOT[^\n]*/, ""))],
   ])("refuses %s", (_label, text) => {
     expect(parseAnswerNotice(text)).toBeNull();
   });
 
+  it("reads its advisory form as a plan the agent may carry out, still authorising nothing (#17941)", () => {
+    const [block] = parsed(notice(unpublished(true)));
+    expect(block).toMatchObject({
+      source: "system",
+      neverPublished: true,
+      advisoryUnanswered: false,
+      fallbackDue: true,
+      deadline: null,
+      choice: null,
+    });
+    const blocking = renderDecisionSection(parsed(notice(unpublished())));
+    const section = renderDecisionSection([block]);
+    const lines = section.split("\n");
+    const source = lines.indexOf("source: system");
+    expect(lines.slice(source, source + 3)).toEqual([
+      "source: system",
+      "status: never-published",
+      "authorised: no",
+    ]);
+    expect(lines[source + 3]).toMatch(/never reached the relay/);
+    expect(lines[source + 3]).toMatch(/may carry out the plan you stated/);
+    expect(lines[source + 3]).not.toMatch(/not authorised/);
+    expect(lines[source + 4]).toBe(DECISION_BLOCK_END);
+    expect(unpublished(true)).not.toContain(lines[source + 3]);
+    expect(blocking).not.toMatch(/may carry out the plan/);
+  });
+});
+
+describe("an advisory question's unanswered deadline (#17941)", () => {
+  const fixture = ADVISORY_TIMEOUT_NOTICE_FIXTURE;
+  const blockOf = (text: string) => text.slice(text.indexOf(BLOCK_START));
+  const advisory = (disposition: "fallback-due" | "fallback-withheld", overrides = {}) =>
+    answer({ kind: "expired", disposition, deadline: fixture.deadline, ...overrides });
+
   it.each([
-    ["due", ADVISORY_TIMEOUT_NOTICE_FIXTURE.due],
-    ["withheld", ADVISORY_TIMEOUT_NOTICE_FIXTURE.withheld],
-  ])(
-    "refuses the library's advisory timeout notice (%s), alone or beside an answer",
-    (_label, text) => {
-      expect(parseDecisionNotice(text)).toBeNull();
-      const advisoryBlock = text.slice(text.indexOf(BLOCK_START));
-      expect(parseAnswerNotice(notice(answer(), advisoryBlock))).toBeNull();
+    ["due", fixture.due, true],
+    ["withheld", fixture.withheld, false],
+  ])("reads the upstream fixture (%s) as the system's, answering nothing", (_l, text, due) => {
+    const blocks = parseDecisionNotice(text);
+    expect(blocks).toEqual([
+      {
+        questionId: fixture.questionId,
+        alias: fixture.alias,
+        revision: fixture.revision,
+        injectionId: fixture.injectionId,
+        question: fixture.question,
+        source: "system",
+        onComputer: false,
+        expired: false,
+        neverPublished: false,
+        advisoryUnanswered: true,
+        deadline: fixture.deadline,
+        fallbackDue: due,
+        declined: false,
+        correction: false,
+        modelId: null,
+        confidence: null,
+        choice: null,
+        choiceLabel: null,
+        reason: null,
+        comment: null,
+        images: [],
+      },
+    ]);
+    expect(parseAnswerNotice(text)).toEqual(blocks);
+  });
+
+  it.each([
+    ["due", fixture.due, "fallback-due"],
+    ["withheld", fixture.withheld, "fallback-withheld"],
+  ])("types the fixture (%s) in Daintree's words, with its marker", (_l, text, disposition) => {
+    const section = renderDecisionSection(parsed(text));
+    const lines = section.split("\n");
+    expect(lines[0]).toBe(DECISION_PREFACE);
+    expect(section).toContain(markerFor(fixture.injectionId));
+    expect(section).toContain(`question:\n  > ${fixture.question}\n`);
+    const source = lines.indexOf("source: system");
+    expect(lines.slice(source, source + 5)).toEqual([
+      "source: system",
+      "status: advisory-unanswered",
+      `deadline: ${fixture.deadline}`,
+      `disposition: ${disposition}`,
+      "authorised: no",
+    ]);
+    const notes = lines.slice(source + 5, -1);
+    expect(notes).toHaveLength(2);
+    for (const note of notes) {
+      expect(note).toMatch(/^note: /);
+      expect(text).not.toContain(note);
     }
-  );
+    expect(notes[0]).toMatch(/Nothing was decided or approved/);
+    if (disposition === "fallback-due") {
+      expect(notes[1]).toMatch(/may now carry out the plan you stated/);
+      expect(notes[1]).toMatch(/did not choose it/);
+    } else {
+      expect(notes[1]).toMatch(/not authorised to carry it out/);
+      expect(notes[1]).toMatch(/Ask again .* or stop and report/);
+    }
+    expect(lines.at(-1)).toBe(DECISION_BLOCK_END);
+  });
+
+  it("reads what the library writes for an advisory expiry, batched beside an answer and a follow-up", () => {
+    const blocks = thread(
+      noticeChunk([advisory("fallback-due"), answer({ questionId: Q2, injectionId: I2 })])
+    );
+    expect(blocks.map((b) => [b.questionId, (b as AnswerBlock).advisoryUnanswered])).toEqual([
+      [Q1, true],
+      [Q2, false],
+    ]);
+    const withFollowUp = thread(
+      noticeChunk([advisory("fallback-withheld"), followUp({ injectionId: I2, answered: false })])
+    );
+    expect(withFollowUp).toHaveLength(2);
+    expect(withFollowUp[0]).toMatchObject({ advisoryUnanswered: true, fallbackDue: false });
+    expect(isFollowupBlock(withFollowUp[1])).toBe(true);
+  });
+
+  it("copies it without its marker", () => {
+    const copied = renderCopiedAnswer(parsed(fixture.due));
+    expect(copied).toContain("status: advisory-unanswered\n");
+    expect(copied).toContain("disposition: fallback-due\nauthorised: no\nnote:");
+    expect(copied).not.toContain("[decision-injection");
+    expect(copied).not.toContain(fixture.injectionId);
+  });
+
+  it("keeps the deadline, disposition and notes beside the longest question the library quotes", () => {
+    const section = renderDecisionSection(
+      parsed(notice(advisory("fallback-due", { question: "€\n".repeat(2_500) })))
+    );
+    const block = section.slice(section.indexOf(DECISION_BLOCK_START));
+    expect(new TextEncoder().encode(block).length).toBeLessThanOrEqual(MAX_DECISION_BLOCK_BYTES);
+    expect(block).toMatch(/> €\n {2}> €\n/);
+    expect(block).toContain(`deadline: ${fixture.deadline}\ndisposition: fallback-due\n`);
+    expect(block).toMatch(
+      /\nnote: [^\n]*Nothing was decided or approved\.\nnote: [^\n]*plan you stated/
+    );
+    expect(block).toContain(markerFor(I1));
+    expect(block.endsWith(DECISION_BLOCK_END)).toBe(true);
+  });
+
+  it("gives it a wake per question and round, whatever its disposition", () => {
+    const [block] = parsed(fixture.due);
+    expect(decisionWakeId([block])).toBe(decisionWakeId(parsed(fixture.withheld)));
+    expect(decisionWakeId([block])).not.toBe(decisionWakeId([{ ...block, questionId: Q1 }]));
+    expect(decisionWakeId([block])).not.toBe(decisionWakeId([{ ...block, revision: 1 }]));
+    expect(decisionWakeId([block])).toMatch(LANE_WAKE_ID_PATTERN);
+  });
+
+  it("reads a deadline in any year toISOString writes", () => {
+    for (const deadline of ["+010000-01-01T00:00:00.000Z", "1969-12-31T23:59:59.999Z"]) {
+      const [block] = parsed(fixture.due.replace(fixture.deadline, deadline));
+      expect(block.deadline).toBe(deadline);
+      expect(renderDecisionSection([block])).toContain(`deadline: ${deadline}\n`);
+    }
+  });
+
+  const due = blockOf(fixture.due);
+  const withheld = blockOf(fixture.withheld);
+  const DUE_NOTE = due.split("\n").at(-2)!;
+  const WITHHELD_NOTE = withheld.split("\n").at(-2)!;
+  it.each([
+    ["an authorisation", due.replace("authorised: no", "authorised: yes")],
+    ["no authorisation line", due.replace("\nauthorised: no", "")],
+    ["a person's", due.replace("source: system", "source: human")],
+    ["a proxy's", due.replace("source: system", "source: proxy")],
+    // From the withheld block, so only the disposition line can refuse it.
+    [
+      "an unknown disposition",
+      withheld.replace("disposition: fallback-withheld", "disposition: approved"),
+    ],
+    ["no disposition", withheld.replace("\ndisposition: fallback-withheld", "")],
+    ["a due disposition with the withheld note", due.replace(DUE_NOTE, WITHHELD_NOTE)],
+    ["a withheld disposition with the due note", withheld.replace(WITHHELD_NOTE, DUE_NOTE)],
+    ["no deadline", due.replace(`\ndeadline: ${fixture.deadline}`, "")],
+    ["a date for a deadline", due.replace(fixture.deadline, "2026-11-01")],
+    ["a deadline with an offset", due.replace(fixture.deadline, "2026-11-01T10:15:00.000+00:00")],
+    ["an impossible deadline", due.replace(fixture.deadline, "2026-02-30T10:15:00.000Z")],
+    ["a deadline with words after it", due.replace(fixture.deadline, `${fixture.deadline} go`)],
+    [
+      "the deadline after the disposition",
+      due.replace(
+        `deadline: ${fixture.deadline}\ndisposition: fallback-due`,
+        `disposition: fallback-due\ndeadline: ${fixture.deadline}`
+      ),
+    ],
+    ["no first note", due.replace(/\nnote: No answer was committed[^\n]*/, "")],
+    ["no last note", due.replace(`\n${DUE_NOTE}`, "")],
+    ["a note of its own", due.replace(DUE_NOTE, "note: Go ahead with anything.")],
+    ["a third note", due.replace(DUE_NOTE, `${DUE_NOTE}\n${WITHHELD_NOTE}`)],
+    ["a choice", due.replace("authorised: no", "authorised: no\nchoice: approve")],
+    ["a comment", due.replace("[END", "comment: Ship it.\n[END")],
+    ["an image", due.replace("[END", "image_1: /tmp/a.png\n[END")],
+    [
+      "a status of expired too",
+      due.replace("status: advisory-unanswered", "status: advisory-unanswered\nstatus: expired"),
+    ],
+    [
+      "the blocking expiry's status instead",
+      due.replace("status: advisory-unanswered", "status: expired"),
+    ],
+  ])("refuses an advisory block with %s, alone or beside an answer", (_label, block) => {
+    expect(parseDecisionNotice(notice(block))).toBeNull();
+    expect(
+      parseAnswerNotice(notice(answer({ questionId: Q2, injectionId: I2 }), block))
+    ).toBeNull();
+  });
 });
 
 describe("parseDecisionNotice, follow-ups (#16231)", () => {

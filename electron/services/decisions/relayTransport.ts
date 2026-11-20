@@ -142,6 +142,15 @@ export const holdingTerminalSink: TerminalSink = {
   hasMarker: async () => false,
 };
 
+/** The lifetime's delivery, as a socket attempt's inert engine reports to it. */
+export interface LifetimeDelivery {
+  /** An advisory notice waits for the ledger (#17941). */
+  readonly replayHeld: boolean;
+  request(): void;
+  /** Whether an advisory notice would wait for the ledger, on the lifetime engine's clock. */
+  ledgerHolds(questionId: string, opts?: { start?: boolean }): Promise<boolean>;
+}
+
 /**
  * Makes a socket attempt's delivery engine inert, as the lifetime's delivery
  * types every answer (#16017). From 0.9.0 the bridge reopens delivery a stop
@@ -149,13 +158,30 @@ export const holdingTerminalSink: TerminalSink = {
  * `stopped` no longer holds: its drain does nothing instead, reading no rows
  * and reporting no receipts. Its inbox waits for a closure notice being typed
  * before it applies a reopen; the lifetime's engine is the one typing it, so
- * the attempt asks that one.
+ * the attempt asks that one. An advisory notice of the lifetime's waits for
+ * the ledger the attempt reads (#17941): the attempt sees that wait as its
+ * own, so once its read settles, its drain asks the lifetime's delivery to
+ * try again, without waiting for it. Whether a notice waits, as `get_decision`
+ * reads it, is the lifetime engine's answer on its own clock, so the two never
+ * disagree. `lifetime` is null once the attempt has ended.
  */
 export function inertAttemptDelivery(
   engine: DeliveryEngine,
-  closureWrite: (questionId: string) => Promise<void> | null
+  closureWrite: (questionId: string) => Promise<void> | null,
+  lifetime: () => LifetimeDelivery | null = () => null
 ): void {
-  engine.drain = async () => ({ delivered: 0, deferred: 0, needsAttention: 0, uncertain: 0 });
+  engine.drain = async () => {
+    const delivery = lifetime();
+    if (delivery?.replayHeld === true) delivery.request();
+    return { delivered: 0, deferred: 0, needsAttention: 0, uncertain: 0 };
+  };
+  Object.defineProperty(engine, "replayHeld", {
+    configurable: true,
+    get: () => lifetime()?.replayHeld === true,
+  });
+  const ownHolds = engine.ledgerHolds.bind(engine);
+  engine.ledgerHolds = (questionId, opts) =>
+    (lifetime() ?? { ledgerHolds: ownHolds }).ledgerHolds(questionId, opts);
   engine.closureWrite = closureWrite;
 }
 

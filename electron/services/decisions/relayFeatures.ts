@@ -27,11 +27,11 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * `involvement-v1`. `advisory-deadlines-v1` says three things by who
  * declares it: in a relay's `/info`, that it takes advisory creates; on a
  * phone's ticket, that it shows the deadline and the plan; on a desktop's,
- * that its host delivers advisory outcomes to its agents. The relay checks no
- * desktop declaration when it takes an advisory create, so the owner's trusted
- * policy allows advice (#17940) while a 0.9.0 bridge given `advisoryDeadlines`
- * still has its declaration cut here: it joins with the work that types the
- * advisory notice (#17941), per runtime when a Remote Host's differs (#17942).
+ * that its host delivers advisory outcomes to its agents. It joins with the
+ * work that types the advisory notice into the pane that asked (#17941), and
+ * only a bridge given `advisoryDeadlines` asks to declare it: the owner's,
+ * once its delivery runs. A Remote Host's bridge isn't given it until the
+ * Host settles its own deadlines (#17942), so it never declares it.
  * `agent-stopped-push-v1`, like presence, is a relay's to advertise: the owner
  * desktop asks for that push (#17319) only of a relay that lists it.
  */
@@ -44,19 +44,19 @@ export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "owner-desktop-messages-v1",
   "person-declines-v1",
   "owner-desktop-declines-v1",
+  "advisory-deadlines-v1",
 ];
 
 /**
  * Whether this Daintree delivers an advisory question's outcome to the agent
  * that asked it (protocol section 21): the host support a bridge needs before
- * it signs one (`BridgeOptions.advisoryDeadlines`). Off until the terminal
- * sink parses and types the advisory notice (#17941): a bridge given it types
- * an advisory round's unanswered expiry as that notice, which this sink still
- * refuses, so the agent that asked would be left waiting. Until then an
- * advisory ask is refused `host-unsupported` before anything is stored, and
- * the agent can ask again for a decision.
+ * it signs one (`BridgeOptions.advisoryDeadlines`). The terminal sink reads
+ * and types the advisory notice, a reopen or deletion stored for its question
+ * keeps it off a pane it hasn't reached yet, and it goes only to the run that
+ * asked or a resume of its session (#17941). Given to the owner's lifetimes
+ * alone (`DecisionsService`), and only once their delivery runs.
  */
-export const DAINTREE_DELIVERS_ADVISORY_OUTCOMES: boolean = false;
+export const DAINTREE_DELIVERS_ADVISORY_OUTCOMES: boolean = true;
 
 function declared(features: readonly ProtocolFeature[]): ProtocolFeature[] {
   return features.filter((feature) => DAINTREE_PROTOCOL_FEATURES.includes(feature));

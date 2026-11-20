@@ -101,6 +101,12 @@ export interface QuestionSource {
    * unless said.
    */
   readonly advisoryDeadlines?: boolean;
+  /**
+   * Whether an advisory notice would wait for the ledger, as the lifetime's
+   * delivery holds it (#17941): what `get_decision` reads between attempts,
+   * so it never disagrees with what is typed. Null while no delivery runs.
+   */
+  ledgerHolds?(questionId: string, opts?: { start?: boolean }): Promise<boolean> | null;
 }
 
 /** What a lifetime's attempts take from its decision model. */
@@ -512,6 +518,7 @@ export class RelayConnection {
       lock: this.lock,
       ...(this.o.attachments ? { attachments: this.o.attachments } : {}),
       advisoryDeadlines: this.advisoryDeadlines,
+      ledgerHolds: (questionId, opts) => this.delivery?.ledgerHolds(questionId, opts) ?? null,
     });
     if (this.ended) return;
     this.startDelivery(identity, deliveryRequests);
@@ -583,6 +590,10 @@ export class RelayConnection {
       lock: this.lock,
       policy: this.o.policy,
       advisoryDeadlines: this.advisoryDeadlines,
+      ledger: () => {
+        const current = this.current;
+        return current !== null && !current.retired ? current.bridge : null;
+      },
       // Reports are retried on every pass while they fail, so each is tried once.
       client: new DaintreeRelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
       onKeysUnusable: () => this.halt({ state: "not-connected", problem: "keys" }),
@@ -670,7 +681,8 @@ export class RelayConnection {
       // crashed ones each time an attempt starts.
       inertAttemptDelivery(
         bridge.delivery,
-        (questionId) => this.delivery?.closureWrite(questionId) ?? null
+        (questionId) => this.delivery?.closureWrite(questionId) ?? null,
+        () => (attempt.retired ? null : this.delivery)
       );
       // Its inbox appends answers to the rows delivery marks delivered.
       bridge.ctx.lock = this.lock;

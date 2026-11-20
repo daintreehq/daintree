@@ -21,10 +21,13 @@ import {
 import {
   blockKey,
   decisionWakeId,
+  isFollowupBlock,
   parseDecisionNotice,
   renderDecisionSection,
+  type DecisionBlock,
 } from "./answerNotice.js";
 import {
+  DECISION_SUPERSEDED,
   createDecisionWake,
   decisionHold,
   identityMismatch,
@@ -49,6 +52,12 @@ export interface DaintreeTerminalSinkDeps extends DecisionWakeSources {
   getPtyClient(): DecisionSinkPtyClient | null;
   /** The listener hold's wake queue (#15999), which takes wakes with the MCP server off. */
   queueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
+  /**
+   * Whether a reopen of one of these questions waits for the closure notice
+   * being written for it (#17941), asked synchronously before the line goes
+   * out: the attempt then ends untyped, so the reopen applies first.
+   */
+  closureSuperseded?(questionIds: readonly string[]): boolean;
 }
 
 type Observed =
@@ -77,6 +86,16 @@ const MARKER_ID = /^[A-Za-z0-9_-]{8,80}$/;
 const WRAP_NOISE = /[\s─-▟⎿⏺|>›❯•●◦·]/gu;
 
 const IN_FLIGHT: InjectResult = { outcome: "held", reason: "attempt-in-flight" };
+const SUPERSEDED: InjectResult = { outcome: "held", reason: DECISION_SUPERSEDED };
+
+/** The questions whose block in a notice closed a round without an answer: what a reopen waits on. */
+function closureQuestions(blocks: readonly DecisionBlock[]): string[] {
+  return blocks.flatMap((block) =>
+    !isFollowupBlock(block) && (block.expired || block.advisoryUnanswered || block.declined)
+      ? [block.questionId]
+      : []
+  );
+}
 
 /**
  * The Decisions library's `TerminalSink` over Daintree's wake engine
@@ -122,12 +141,17 @@ export class DaintreeTerminalSink implements TerminalSink {
     const keys = blocks.map(blockKey);
     const early = this.joinOrRefuse(id, target, injectionIds, keys);
     if (early !== null) return early;
+    const closures = closureQuestions(blocks);
+    const superseded = () =>
+      closures.length > 0 && this.deps.closureSuperseded?.(closures) === true;
 
     const observed = await this.observe(target);
     // Another attempt may have queued these blocks while the pane was read,
     // and its wake can still type them whatever this read saw.
     const raced = this.joinOrRefuse(id, target, injectionIds, keys);
     if (raced !== null) return raced;
+    // A reopen came while the pane was read: nothing is queued, so it applies now.
+    if (superseded()) return SUPERSEDED;
     if (observed.state !== "alive") return { outcome: "unavailable", reason: observed.state };
     const projectId = observed.info.projectId;
     if (projectId === undefined) return { outcome: "held", reason: "unreadable" };
@@ -152,12 +176,21 @@ export class DaintreeTerminalSink implements TerminalSink {
     const wake = createDecisionWake(
       this.deps,
       target,
-      { id, text: renderDecisionSection(blocks) },
+      { id, text: renderDecisionSection(blocks), superseded, closure: closures.length > 0 },
       (outcome, evidence) => {
         // A hold is the engine still waiting on the pane; the line may yet go out.
         if (outcome.kind === "held") return;
-        this.resultFor(target, outcome, evidence).then(finish, () =>
-          finish({ outcome: "ambiguous", reason: "report-failed" })
+        // Ended untyped some other way (its pane closing, the hold let go) once it stood superseded:
+        // still the engine's to rebuild, never a refused write to resume or report.
+        const untyped = (result: InjectResult) =>
+          result.outcome === "unavailable" && superseded() ? SUPERSEDED : result;
+        if (outcome.kind === "unavailable" && superseded()) {
+          finish(SUPERSEDED);
+          return;
+        }
+        this.resultFor(target, outcome, evidence).then(
+          (result) => finish(untyped(result)),
+          () => finish({ outcome: "ambiguous", reason: "report-failed" })
         );
       }
     );
@@ -238,6 +271,9 @@ export class DaintreeTerminalSink implements TerminalSink {
       case "ambiguous":
         return { outcome: "ambiguous", reason: outcome.reason };
       case "unavailable": {
+        // Ended untyped for a reopen, whatever the pane is now: the whole chunk
+        // goes back to the engine, which rebuilds it once the reopen applies.
+        if (outcome.reason === DECISION_SUPERSEDED) return SUPERSEDED;
         if (UNAVAILABLE_REASONS.has(outcome.reason)) {
           return { outcome: "unavailable", reason: outcome.reason as UnavailableReason };
         }
