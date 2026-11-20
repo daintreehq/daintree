@@ -1,16 +1,23 @@
-import { parseAnswers, type QuestionRow } from "@daintreehq/decisions-client";
+import {
+  isPendingMessage,
+  parseAnswers,
+  parseMessages,
+  type QuestionRow,
+} from "@daintreehq/decisions-client";
 import {
   answerNeedsAttention,
   heldFollowUps,
   heldTimeoutNotice,
-  isHandled,
+  reasonOf,
   type HandledAnswers,
 } from "./attentionList.js";
 import { replyModeOfRow } from "./questionRound.js";
+import { replyRequestMessage, standingOf } from "./questionList.js";
 import { deliverySubject } from "../../../shared/utils/decisionsDeliveryReasons.js";
 import type {
   DecisionDeliveryStatus,
   PaneDecisionAttention,
+  PaneDecisionQuestion,
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
 import type { RunDecisionAttention } from "../runAnswerAttentionSource.js";
@@ -25,23 +32,52 @@ export type AnswerAttentionPublisher = (counts: ReadonlyMap<string, RunDecisionA
 
 type PaneContent = Omit<PaneDecisionState, "revision">;
 
+/**
+ * The questions with a withdrawal or the person's decline queued on this
+ * machine for the relay (#18052), by question id: read from the outbox, so
+ * every view sees one at once, whichever view started it.
+ */
+export type PendingClosings = ReadonlyMap<string, NonNullable<PaneDecisionQuestion["closing"]>>;
+
+/** A withdrawal or decline queued in the outbox, as the store reads it (#18052). */
+export interface QueuedClosing {
+  questionId: string;
+  closing: NonNullable<PaneDecisionQuestion["closing"]>;
+  /** The round a decline was signed for; null for a withdrawal, signed against whatever round it finds. */
+  revision: number | null;
+}
+
+/**
+ * What each question has queued for it, from `queued` against the rows. A
+ * decline closes only the round it was signed for, so one for a round since
+ * replaced marks nothing; a question this machine holds no row for (a Remote
+ * Host's, declined here) keeps its decline. A withdrawal outranks a decline.
+ */
+export function closingsFor(
+  rows: readonly QuestionRow[],
+  queued: readonly QueuedClosing[]
+): PendingClosings {
+  if (queued.length === 0) return new Map();
+  const revisions = new Map(rows.map((row) => [row.question_id, row.question_revision]));
+  const closings = new Map<string, NonNullable<PaneDecisionQuestion["closing"]>>();
+  for (const { questionId, closing, revision } of queued) {
+    if (closing === "withdrawing") {
+      closings.set(questionId, closing);
+      continue;
+    }
+    const current = revisions.get(questionId);
+    const sameRound = current === undefined || revision === null || revision === current;
+    if (sameRound && !closings.has(questionId)) closings.set(questionId, closing);
+  }
+  return closings;
+}
+
 export interface ProjectedPane {
   projectId: string;
   content: PaneContent;
 }
 
 type AttentionStatus = PaneDecisionAttention["deliveryStatus"];
-
-/**
- * The library's codes are short identifiers (`pane_gone`, `inject_ambiguous`).
- * Anything else is passed on as `unspecified` rather than trimmed into shape,
- * so free text can never reach a view through this field.
- */
-const REASON_CODE = /^[a-z0-9_.-]{1,48}$/;
-
-export function reasonOf(code: string | null): string {
-  return typeof code === "string" && REASON_CODE.test(code) ? code : "unspecified";
-}
 
 function isAttention(status: DecisionDeliveryStatus): status is AttentionStatus {
   return status === "needs-attention" || status === "delivery-uncertain";
@@ -66,16 +102,25 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  *   yet delivered, the same test the delivery engine uses. A person's decline
  *   (#17234) isn't one: they chose not to answer, so the pane drops the
  *   question even while its notice waits to be typed.
+ * - **Reply requested:** answered, and its agent asked for a reply the person
+ *   hasn't given (#18052).
+ * - **Follow-up waiting:** a follow-up of the person's received and not yet
+ *   typed (#18052), on a question with nothing of an answer left to type and
+ *   nothing needing a person, open or answered.
  *
- * Imported history is never delivered and shows nowhere, and what a person
- * marked handled, or a question over without an answer whose notice stopped
- * (#18021), adds nothing. Rows are taken in question order, and a pane
- * belongs to the project of its newest question, settled or not, so settling
- * that question never moves the pane back.
+ * A request for a reply, and which questions wait on the person, are read as
+ * the list of every question reads them (`standingOf`), so the chip and the
+ * inbox never disagree. Imported history is never delivered and shows nowhere, and what a
+ * person marked handled, or a question over without an answer whose notice
+ * stopped (#18021), adds no warning. Rows are taken in question order, and a
+ * pane belongs to the project of its newest question, settled or not, so
+ * settling that question never moves the pane back. `closings` marks the open
+ * questions a withdrawal or decline is under way for.
  */
 export function projectPaneDecisionStates(
   rows: readonly QuestionRow[],
-  handled: HandledAnswers = new Map()
+  handled: HandledAnswers = new Map(),
+  closings: PendingClosings = new Map()
 ): Map<string, ProjectedPane> {
   const sorted = [...rows].filter((row) => !row.history_only).sort(byAlias);
   const projectOf = new Map<string, string>();
@@ -89,7 +134,7 @@ export function projectPaneDecisionStates(
   for (const row of sorted) {
     const paneId = row.origin.pane_id;
     const projectId = projectOf.get(paneId);
-    if (!paneId || !projectId || isHandled(row, handled)) continue;
+    if (!paneId || !projectId) continue;
 
     const deliveryStatus: DecisionDeliveryStatus = row.delivery_status;
     const open = row.local_status === "queued" || row.local_status === "open";
@@ -97,13 +142,23 @@ export function projectPaneDecisionStates(
     // A handled answer's status is past needing a person; its follow-ups may not be.
     const answerHeld = isAttention(deliveryStatus) && answerNeedsAttention(row, handled);
     const attention = answerHeld || held.length > 0;
+    const standing = standingOf(row, handled);
+    // What waits on the person comes first, as the list shows it.
+    const reply =
+      standing.kind === "waiting" && standing.reason === "reply" ? replyRequestMessage(row) : null;
     const pending =
-      attention || isAttention(deliveryStatus)
+      attention || reply !== null || isAttention(deliveryStatus)
         ? []
         : parseAnswers(row.answers_json).filter(
             (entry) => entry.deliver && !entry.delivered && entry.kind !== "declined"
           );
-    if (!open && !attention && pending.length === 0) continue;
+    // Typed in whatever the question's standing, an open one's too; an answer still to type stands for it.
+    const followUp =
+      !attention &&
+      reply === null &&
+      pending.length === 0 &&
+      parseMessages(row.messages_json).some(isPendingMessage);
+    if (!open && !attention && reply === null && pending.length === 0 && !followUp) continue;
 
     let pane = panes.get(paneId);
     if (!pane) {
@@ -113,6 +168,7 @@ export function projectPaneDecisionStates(
 
     const { question_id: questionId, alias } = row;
     if (row.local_status === "queued" || row.local_status === "open") {
+      const closing = closings.get(questionId);
       pane.content.openQuestions.push({
         questionId,
         alias,
@@ -120,8 +176,17 @@ export function projectPaneDecisionStates(
         askedAt: row.origin_created_at,
         expiresAt: row.expires_at ?? null,
         replyMode: replyModeOfRow(row, parseAnswers(row.answers_json)),
+        ...(closing !== undefined ? { closing } : {}),
       });
     }
+    if (reply !== null) {
+      (pane.content.replyRequests ??= []).push({
+        questionId,
+        alias,
+        requestedAt: reply.created_at,
+      });
+    }
+    if (followUp) (pane.content.waitingFollowUps ??= []).push({ questionId, alias });
     if (attention) {
       const uncertain =
         (answerHeld && deliveryStatus === "delivery-uncertain") ||
@@ -194,17 +259,19 @@ export class PaneDecisionStates {
 
   /**
    * Replaces every pane's state with what these rows show, `handled` the
-   * answers a person marked handled, pushing only the panes that changed.
-   * `questions` counts each terminal's questions open in Needs you that the
-   * person hasn't cleared, for the fleet alone: pane chrome doesn't show it.
+   * answers a person marked handled and `closings` the withdrawals and
+   * declines queued, pushing only the panes that changed. `questions` counts
+   * each terminal's questions open in Needs you that the person hasn't
+   * cleared, for the fleet alone: pane chrome doesn't show it.
    */
   replace(
     rows: readonly QuestionRow[],
     handled: HandledAnswers = new Map(),
-    questions: ReadonlyMap<string, number> = new Map()
+    questions: ReadonlyMap<string, number> = new Map(),
+    closings: PendingClosings = new Map()
   ): void {
     this.questions = questions;
-    const next = projectPaneDecisionStates(rows, handled);
+    const next = projectPaneDecisionStates(rows, handled, closings);
     for (const [terminalId, held] of [...this.panes]) {
       if (next.get(terminalId)?.projectId === held.projectId) continue;
       this.panes.delete(terminalId);

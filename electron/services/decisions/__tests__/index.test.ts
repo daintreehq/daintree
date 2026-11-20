@@ -592,6 +592,7 @@ import {
   verifyRecoveryKit,
 } from "../index.js";
 import type { AnswerDelivery } from "../answerDelivery.js";
+import type { QuestionInboxFacts } from "../DecisionsService.js";
 import type {
   DecisionQuestionCancelResult,
   DecisionQuestionImagePartResult,
@@ -869,6 +870,68 @@ describe("Decisions entry", () => {
       ]);
       // A Remote Host's window reads which Hosts' questions are listed (#18049).
       expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio", "lab"] });
+
+      // A withdrawal or decline queued here shows on this computer's question and a Host's,
+      // which only this computer signs a decline for, while each is still open (#18052).
+      const queuedOwn: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000003", "2026-11-02T10:07:00.000Z"),
+        standing: { kind: "queued" },
+      };
+      const answered: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000002", "2026-11-02T10:06:00.000Z"),
+        standing: { kind: "to-type" },
+      };
+      const replying: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000004", "2026-11-02T10:08:00.000Z"),
+        standing: { kind: "waiting", reason: "reply" },
+      };
+      const listWith = publish as (
+        questions: DecisionQuestionListItem[],
+        listing: boolean,
+        inbox: QuestionInboxFacts
+      ) => void;
+      const facts = (closings: QuestionInboxFacts["closings"]): QuestionInboxFacts => ({
+        asks: new Map(),
+        marks: new Map(),
+        closings,
+      });
+      const mine = [own, answered, queuedOwn, replying];
+      listWith(mine, true, facts(new Map()));
+      const revision = getDecisionQuestionList().revision;
+      statusView.send.mockClear();
+      // The same questions, only what is queued for them changing: every window hears it.
+      listWith(
+        mine,
+        true,
+        facts(
+          new Map([
+            [own.reference.questionId, "withdrawing"],
+            [answered.reference.questionId, "withdrawing"],
+            [queuedOwn.reference.questionId, "declining"],
+            [replying.reference.questionId, "declining"],
+            [theirs.reference.questionId, "declining"],
+          ])
+        )
+      );
+      expect(getDecisionQuestionList().revision).toBeGreaterThan(revision);
+      expect(listPushes()).toHaveLength(1);
+      const closingOf = (list: DecisionQuestionList) =>
+        list.questions.map((question) => [question.reference.questionId, question.closing ?? null]);
+      expect(closingOf((listPushes()[0]![1] as { payload: DecisionQuestionList }).payload)).toEqual(
+        [
+          [theirs.reference.questionId, "declining"],
+          [lab.reference.questionId, null],
+          [own.reference.questionId, "withdrawing"],
+          [answered.reference.questionId, null],
+          [queuedOwn.reference.questionId, "declining"],
+          [replying.reference.questionId, null],
+          [theirsLater.reference.questionId, null],
+        ]
+      );
+      publish([own]);
+      expect(getDecisionQuestionList().questions.some((question) => "closing" in question)).toBe(
+        false
+      );
 
       // The Host's link goes: its questions stay, as not connected, and every window hears it.
       statusView.send.mockClear();

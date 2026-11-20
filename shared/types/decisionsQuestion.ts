@@ -475,6 +475,13 @@ export interface DecisionQuestionListItem {
   /** What delivery stopped on while it needs a person (#17235); null otherwise. */
   stall: DecisionQuestionStall | null;
   /**
+   * A withdrawal (`withdrawing`) or the person's decline (`declining`) this
+   * computer has queued for the relay and the question hasn't closed for yet
+   * (#18052), whichever window started it. Only this computer's list carries
+   * it, never a Host's own: a decline of a Host's question is signed here.
+   */
+  closing?: "withdrawing" | "declining";
+  /**
    * The enrolled Remote Host that asked (#17230), by the id and name this
    * computer's host list gives it, and whether this computer has a link to it
    * now; absent for this computer's own questions. A Host that isn't

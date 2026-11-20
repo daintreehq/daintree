@@ -819,6 +819,33 @@ export interface PaneDecisionQuestion {
   expiresAt: string | null;
   /** Advisory while its round only offers advice; absent from a Host from before it (#18054). */
   replyMode?: "advisory" | "blocking";
+  /**
+   * A withdrawal (`withdrawing`) or the person's decline (`declining`)
+   * started on the machine that owns the pane and not yet confirmed by the
+   * relay (#18052), whichever view it was started from; absent otherwise,
+   * and from a Host from before it.
+   */
+  closing?: "withdrawing" | "declining";
+}
+
+/**
+ * An answered question whose agent asked the person for a reply they haven't
+ * given yet (#18052): back in Needs you, and answered on the thread.
+ */
+export interface PaneDecisionReplyRequest {
+  questionId: string;
+  alias: number;
+  /** When the agent asked for the reply, ISO 8601 as recorded. */
+  requestedAt: string;
+}
+
+/**
+ * A follow-up from the person, received for the pane and not yet typed into
+ * it (#18052), on a question with no answer of its own still to type.
+ */
+export interface PaneDecisionFollowUp {
+  questionId: string;
+  alias: number;
 }
 
 /** Something received for the pane that has not been typed into it yet. */
@@ -862,6 +889,14 @@ export interface PaneDecisionState {
   openQuestions: PaneDecisionQuestion[];
   waitingAnswers: PaneDecisionWaiting[];
   needsAttention: PaneDecisionAttention[];
+  /**
+   * Its answered questions waiting on the person's reply (#18052). Omitted
+   * when there are none, and by a Host from before it: a list of its own,
+   * so an older view never offers to dismiss an answered question.
+   */
+  replyRequests?: PaneDecisionReplyRequest[];
+  /** The person's follow-ups waiting to be typed in, one per question (#18052); omitted as `replyRequests` is. */
+  waitingFollowUps?: PaneDecisionFollowUp[];
   /**
    * Increases with every change, so a late snapshot never overwrites a newer
    * push. Never behind the sender's wall clock in ms, so a restarted Host's

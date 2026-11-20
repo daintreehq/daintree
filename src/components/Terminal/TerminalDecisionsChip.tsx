@@ -16,7 +16,7 @@ import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { useDecisionsOn } from "@/hooks/useDecisionsOn";
-import { usePaneClearedQuestions } from "@/hooks/useDecisionsWaitingCount";
+import { usePaneClearedQuestions, usePaneClosings } from "@/hooks/useDecisionsWaitingCount";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { cn } from "@/lib/utils";
 import {
@@ -82,6 +82,25 @@ export function usePaneDecisionState(terminalId: string, on: boolean): PaneDecis
 }
 
 const ATTENTION_KINDS = new Set<DecisionItem["kind"]>(["attention", "uncertain"]);
+
+/** Rows that can sit beside a question's own row: a follow-up typing in, or a stall. */
+const BESIDE_KINDS = new Set<DecisionItem["kind"]>(["follow-up", "attention", "uncertain"]);
+
+/**
+ * Each row's key: its question's, so a focused row survives its status
+ * changing, and for a follow-up or stall beside the question's own row
+ * (#18052), its question's with its kind.
+ */
+function rowKeys(items: readonly DecisionItem[]): string[] {
+  const own = new Set(
+    items.filter((item) => !BESIDE_KINDS.has(item.kind)).map((item) => item.questionId)
+  );
+  return items.map((item) =>
+    BESIDE_KINDS.has(item.kind) && own.has(item.questionId)
+      ? `${item.questionId}:${item.kind}`
+      : item.questionId
+  );
+}
 
 /** The IPC read takes at most this many ids at once. */
 const SUMMARY_BATCH = 64;
@@ -319,8 +338,14 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
     open || deadlines.some((deadline) => deadline !== null),
     open
   );
-  // Only a pane with a question still out joins the list that says which were cleared.
-  const cleared = usePaneClearedQuestions(terminalId, (state?.openQuestions.length ?? 0) > 0);
+  // Only a pane with a question still out, or waiting on a reply, joins the list
+  // that says which were cleared, and which this computer is closing (#18052).
+  const out = (state?.openQuestions.length ?? 0) > 0;
+  const cleared = usePaneClearedQuestions(
+    terminalId,
+    out || (state?.replyRequests?.length ?? 0) > 0
+  );
+  const closings = usePaneClosings(terminalId, out);
   // Every pane header mounts this chip, so only one with something to say reads the drafts.
   const watchDrafts = readsPaneWait(state, nowMs);
   const hasDraft = useTerminalInputStore(
@@ -347,13 +372,21 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
     dismissingQuestionIds(store.records, terminalId)
   );
   const dismissing = new Set(dismissingIds === "" ? [] : dismissingIds.split("\u0000"));
+  // Withdrawals and declines queued here from any window (#18052): a decline of
+  // a Remote Host's question is signed here, so its pane state never says.
+  const withdrawing = new Set(cancelling);
+  for (const [questionId, closing] of closings) {
+    if (closing === "withdrawing") withdrawing.add(questionId);
+    else dismissing.add(questionId);
+  }
   const [cancel, setCancel] = useState<{ target: DecisionCancelTarget; open: boolean } | null>(
     null
   );
   const chipRef = useRef<HTMLButtonElement>(null);
   const items =
-    state === null ? [] : decisionItems(state, wait, cancelling, dismissing, { nowMs, cleared });
+    state === null ? [] : decisionItems(state, wait, withdrawing, dismissing, { nowMs, cleared });
   const questionIds = items.map((item) => item.questionId);
+  const keys = rowKeys(items);
   const lines = useQuestionLines(terminalId, questionIds, open);
 
   // Outside the popover and the chip, so neither closing nor the last row going takes it away.
@@ -486,9 +519,9 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
               className="flex max-h-80 flex-col divide-y divide-divider overflow-y-auto"
               aria-label="Questions"
             >
-              {items.map((item) => (
+              {items.map((item, index) => (
                 <DecisionRow
-                  key={item.questionId}
+                  key={keys[index]}
                   item={item}
                   line={lines.get(item.questionId) ?? null}
                   nowMs={nowMs}

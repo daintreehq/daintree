@@ -16,6 +16,7 @@ import {
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { withDiskRecovery } from "../persistence/db.js";
 import { logWarn } from "../../utils/logger.js";
+import type { QueuedClosing } from "./paneDecisionState.js";
 import {
   noticeAttemptOf,
   noticeTrailOf,
@@ -821,6 +822,27 @@ export class DaintreeLocalStore implements LocalStore {
         ) as OutboxRecord[]
       ).map(outboxFrom)
     );
+  }
+
+  /**
+   * Every withdrawal and decline of the person's queued for the relay
+   * (#18052), retrying or not: the question's id, which, and for a decline
+   * the round it was signed for. Never anything else of a payload.
+   */
+  pendingClosings(): Promise<QueuedClosing[]> {
+    return this.enqueue("read", () => {
+      const rows = this.st(
+        `SELECT question_id, kind,
+           CASE WHEN kind = 'owner-decline'
+             THEN json_extract(payload, '$.signed.record.expected_revision') END AS revision
+         FROM decisions_outbox WHERE kind IN ('cancel', 'owner-decline')`
+      ).all() as { question_id: string; kind: string; revision: unknown }[];
+      return rows.map(({ question_id: questionId, kind, revision }) => ({
+        questionId,
+        closing: kind === "cancel" ? ("withdrawing" as const) : ("declining" as const),
+        revision: kind !== "cancel" && Number.isSafeInteger(revision) ? Number(revision) : null,
+      }));
+    });
   }
 
   insertEvent(ev: InboundEvent): Promise<boolean> {

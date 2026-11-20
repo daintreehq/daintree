@@ -1583,3 +1583,220 @@ describe("TerminalDecisionsChip, as its questions step down (#18053)", () => {
     expect(chip().textContent).toBe("2 questions");
   });
 });
+
+describe("TerminalDecisionsChip, what waits on the person (#18052)", () => {
+  function listed(
+    questionId: string,
+    over: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    return {
+      reference: { hostId: "host_studio", projectId: "project-1", terminalId: "t1", questionId },
+      alias: 42,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-02T10:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+      ...over,
+    };
+  }
+
+  const REPLY_REQUEST = { questionId: "q42", alias: 42, requestedAt: "2026-11-02T10:30:00.000Z" };
+
+  it("stays on the pane while the agent waits on the person's reply, and while the reply goes in", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({ openQuestions: [], replyRequests: [REPLY_REQUEST] })
+    );
+    useTerminalInputStore.setState({ draftInputs: new Map([["project-a:t1", "a draft here"]]) });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    const chip = await screen.findByTestId("terminal-decisions-chip");
+    expect(chip.textContent).toContain("q-42 wants a reply");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Question q-42 is waiting for your reply, here or on your phone"
+    );
+    // Read against the list too, which says whether the person cleared the request.
+    await waitFor(() => expect(listQuestions).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(chip);
+    const row = await screen.findByTestId("terminal-decisions-row");
+    expect(row.textContent).toContain("Waiting for your reply, here or on your phone");
+    expect(screen.queryByTestId("terminal-decisions-dismiss")).toBeNull();
+    expect(screen.getByTestId("popover-content").textContent).toContain(
+      "Follow-ups are typed in here once the draft here is sent or cleared"
+    );
+    fireEvent.click(row);
+    expect(useDecisionsQuestionViewStore.getState().request?.questions).toEqual([
+      { scope: "pane", terminalId: "t1", questionId: "q42" },
+    ]);
+
+    act(() =>
+      paneListeners[0]!(
+        paneState({
+          openQuestions: [],
+          waitingFollowUps: [{ questionId: "q42", alias: 42 }],
+          revision: 2,
+        })
+      )
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 delivering");
+
+    act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 3 })));
+    expect(screen.queryByTestId("terminal-decisions-chip")).toBeNull();
+  });
+
+  it("steps a request for a reply the person cleared from Needs you down to cleared", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({ openQuestions: [], replyRequests: [REPLY_REQUEST] })
+    );
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [
+        listed("q42", {
+          standing: { kind: "waiting", reason: "reply" },
+          replyRequest: "agent-1",
+          inbox: { ask: "agent-1", seen: true, cleared: true },
+        }),
+      ],
+    });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 cleared")
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").getAttribute("aria-label")).toBe(
+      "Question q-42 was cleared on this computer"
+    );
+
+    // Asking again, at a request nobody cleared: it waits on the person once more.
+    act(() =>
+      listListeners[0]!({
+        revision: 2,
+        questions: [
+          listed("q42", {
+            standing: { kind: "waiting", reason: "reply" },
+            replyRequest: "agent-2",
+            inbox: { ask: "agent-2", seen: false, cleared: false },
+          }),
+        ],
+      })
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain(
+      "q-42 wants a reply"
+    );
+  });
+
+  it("lists a follow-up beside its open question, and keeps the question's row as the follow-up goes in", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    getPaneState.mockResolvedValue(
+      paneState({ waitingFollowUps: [{ questionId: "q42", alias: 42 }] })
+    );
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    const chip = await screen.findByTestId("terminal-decisions-chip");
+    expect(chip.textContent).toContain("q-42 delivering");
+    fireEvent.click(chip);
+    const rows = await screen.findAllByTestId("terminal-decisions-row");
+    expect(rows.map((row) => row.getAttribute("data-question-id"))).toEqual(["q42", "q42"]);
+    const asking = rows.find((row) => row.textContent?.includes("Waiting for an answer"));
+    expect(asking).toBeDefined();
+    expect(screen.getAllByTestId("terminal-decisions-dismiss")).toHaveLength(1);
+
+    act(() => paneListeners[0]!(paneState({ revision: 2 })));
+    // The same row, so focus on it isn't lost to a remount.
+    expect(screen.getAllByTestId("terminal-decisions-row")).toEqual([asking]);
+
+    // Withdrawn from another view: the row says so in place, with no Decline.
+    const [question] = paneState().openQuestions;
+    act(() =>
+      paneListeners[0]!(
+        paneState({ openQuestions: [{ ...question!, closing: "withdrawing" }], revision: 3 })
+      )
+    );
+    expect(screen.getAllByTestId("terminal-decisions-row")).toEqual([asking]);
+    expect(asking!.textContent).toContain("Withdrawing");
+    expect(screen.queryByTestId("terminal-decisions-dismiss")).toBeNull();
+  });
+
+  it("shows a withdrawal the pane's state names, with no dialog of its own", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    const chip = await screen.findByTestId("terminal-decisions-chip");
+    expect(chip.textContent).not.toContain("withdrawing");
+
+    const [question] = paneState().openQuestions;
+    act(() =>
+      paneListeners[0]!(
+        paneState({ openQuestions: [{ ...question!, closing: "withdrawing" }], revision: 2 })
+      )
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 withdrawing");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(cancelQuestion).not.toHaveBeenCalled();
+    // Refused by the relay: the question waits again.
+    act(() => paneListeners[0]!(paneState({ revision: 3 })));
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("withdrawing");
+  });
+
+  it("shows a decline or withdrawal this computer queued from any window, from its list of questions", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [listed("q42", { closing: "declining" })],
+    });
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 declining")
+    );
+    expect(listQuestions).toHaveBeenCalledTimes(1);
+
+    act(() =>
+      listListeners[0]!({ revision: 2, questions: [listed("q42", { closing: "withdrawing" })] })
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain("q-42 withdrawing");
+
+    // Another question's decline names nothing here; this one's going lets the chip wait again.
+    act(() =>
+      listListeners[0]!({ revision: 3, questions: [listed("q43", { closing: "declining" })] })
+    );
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toMatch(
+      /declining|withdrawing/
+    );
+
+    // Nothing left out for an answer: the list is no longer watched.
+    act(() => paneListeners[0]!(paneState({ openQuestions: [], revision: 2 })));
+    expect(listListeners).toHaveLength(0);
+  });
+
+  it("shows this computer's decline of a Remote Host's question in that Host's window only", async () => {
+    getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+    const host = { hostId: "build-box", name: "Build box", connected: true };
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [listed("q42", { closing: "declining", remoteHost: host })],
+    });
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    try {
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      await waitFor(() =>
+        expect(screen.getByTestId("terminal-decisions-chip").textContent).toContain(
+          "q-42 declining"
+        )
+      );
+    } finally {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    }
+    cleanup();
+
+    // In this computer's own window, a local pane with the same id isn't the Host's.
+    render(<TerminalDecisionsChip terminalId="t1" />);
+    await waitFor(() => expect(listQuestions).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(screen.getByTestId("terminal-decisions-chip").textContent).not.toContain("declining");
+  });
+});

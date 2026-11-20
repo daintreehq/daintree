@@ -31,6 +31,7 @@ import {
   useDecisionsStoppedCount,
   useDecisionsWaitingCount,
   usePaneClearedQuestions,
+  usePaneClosings,
 } from "../useDecisionsWaitingCount";
 
 const seen: number[] = [];
@@ -374,12 +375,35 @@ describe("usePaneClearedQuestions (#18053)", () => {
           asked(1, "t1", seenAsk),
           { ...asked(4, "t1", clearedAsk), standing: { kind: "queued" } },
           asked(2, "t2", undefined),
-          // A cleared mark on a question waiting for a reply isn't a question still out.
-          { ...asked(3, "t2", clearedAsk), standing: { kind: "waiting", reason: "reply" } },
+          // A request for a reply asks the person too, so its clear steps its row down (#18052).
+          {
+            ...asked(3, "t2", { ask: "agent-3", seen: true, cleared: true }),
+            standing: { kind: "waiting", reason: "reply" },
+            replyRequest: "agent-3",
+          },
+          {
+            ...asked(5, "t2", { ask: "agent-5", seen: true, cleared: false }),
+            standing: { kind: "waiting", reason: "reply" },
+            replyRequest: "agent-5",
+          },
         ],
       })
     );
     expect(lastFor("t1")).toBe("q0,q4");
+    expect(lastFor("t2")).toBe("q3");
+    // The agent asks again: main marks the new ask uncleared, and the clear goes with it.
+    act(() =>
+      watch.onList?.({
+        revision: 2,
+        questions: [
+          {
+            ...asked(3, "t2", { ask: "agent-6", seen: false, cleared: false }),
+            standing: { kind: "waiting", reason: "reply" },
+            replyRequest: "agent-6",
+          },
+        ],
+      })
+    );
     expect(lastFor("t2")).toBe("");
   });
 
@@ -642,5 +666,161 @@ describe("useDecisionsStoppedCount (#18045)", () => {
       cleanup();
       vi.useRealTimers();
     }
+  });
+});
+
+describe("usePaneClosings (#18052)", () => {
+  const read: Array<{ pane: string; closings: string }> = [];
+
+  function Chip({ terminalId, active = true }: { terminalId: string; active?: boolean }) {
+    const closings = usePaneClosings(terminalId, active);
+    read.push({
+      pane: terminalId,
+      closings: [...closings].map(([id, closing]) => `${id}:${closing}`).join(","),
+    });
+    return null;
+  }
+
+  const lastFor = (pane: string) => read.filter((entry) => entry.pane === pane).at(-1)?.closings;
+
+  function closing(
+    index: number,
+    terminalId: string,
+    kind: DecisionQuestionListItem["closing"],
+    over: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    const item = question({ kind: "waiting", reason: "open" }, index);
+    return {
+      ...item,
+      reference: { ...item.reference, terminalId },
+      ...(kind !== undefined ? { closing: kind } : {}),
+      ...over,
+    };
+  }
+
+  beforeEach(() => {
+    read.length = 0;
+    Reflect.deleteProperty(window, "__DAINTREE_HOST_ID__");
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, "__DAINTREE_HOST_ID__");
+  });
+
+  it("shares the toolbar's one list watch, and names each pane's own closings", () => {
+    render(
+      <>
+        <Probe active />
+        <Chip terminalId="t1" />
+        <Chip terminalId="t2" />
+      </>
+    );
+    expect(watch.starts).toBe(1);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [
+          closing(0, "t1", "withdrawing"),
+          closing(1, "t1", undefined),
+          closing(2, "t1", "declining"),
+          closing(3, "t2", "declining"),
+          closing(4, "t2", undefined),
+        ],
+      })
+    );
+    expect(lastFor("t1")).toBe("q0:withdrawing,q2:declining");
+    expect(lastFor("t2")).toBe("q3:declining");
+  });
+
+  it("tells a pane only when its closings change, and lets one go once the list does", () => {
+    render(<Chip terminalId="t1" />);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [closing(0, "t1", "declining"), closing(1, "t1", "withdrawing")],
+      })
+    );
+    const renders = read.length;
+    // The same closings, listed in another order beside a question with none.
+    act(() =>
+      watch.onList?.({
+        revision: 2,
+        questions: [
+          closing(2, "t1", undefined),
+          closing(1, "t1", "withdrawing"),
+          closing(0, "t1", "declining"),
+        ],
+      })
+    );
+    expect(read.length).toBe(renders);
+
+    // The same question, closed the other way: a change.
+    act(() =>
+      watch.onList?.({
+        revision: 3,
+        questions: [closing(0, "t1", "withdrawing"), closing(1, "t1", "withdrawing")],
+      })
+    );
+    expect(lastFor("t1")).toBe("q0:withdrawing,q1:withdrawing");
+
+    act(() => watch.onList?.({ revision: 4, questions: [closing(0, "t1", undefined)] }));
+    expect(lastFor("t1")).toBe("");
+  });
+
+  it("keeps a Host's question to that Host's window, never a local pane with the same id", () => {
+    const host = { hostId: "host-studio", name: "Studio", connected: true };
+    render(<Chip terminalId="t1" />);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [closing(0, "t1", "declining", { remoteHost: host })],
+      })
+    );
+    expect(lastFor("t1")).toBe("");
+    cleanup();
+
+    Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "host-studio" });
+    render(<Chip terminalId="t1" />);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [
+          closing(0, "t1", "declining", { remoteHost: host }),
+          closing(1, "t1", "withdrawing"),
+        ],
+      })
+    );
+    expect(lastFor("t1")).toBe("q0:declining");
+  });
+
+  it("reads nothing for an inactive pane while another holds the watch", () => {
+    render(
+      <>
+        <Chip terminalId="t2" />
+        <Chip terminalId="t1" active={false} />
+      </>
+    );
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [closing(0, "t1", "withdrawing"), closing(1, "t2", "declining")],
+      })
+    );
+    expect(lastFor("t2")).toBe("q1:declining");
+    expect(lastFor("t1")).toBe("");
+  });
+
+  it("joins no watch while inactive, and reads afresh after the last reader goes", () => {
+    const { rerender, unmount } = render(<Chip terminalId="t1" active={false} />);
+    expect(watch.starts).toBe(0);
+    rerender(<Chip terminalId="t1" />);
+    expect(watch.starts).toBe(1);
+    act(() => watch.onList?.({ revision: 1, questions: [closing(0, "t1", "withdrawing")] }));
+    expect(lastFor("t1")).toBe("q0:withdrawing");
+    unmount();
+    expect(watch.stop).toHaveBeenCalledTimes(1);
+
+    render(<Chip terminalId="t1" />);
+    expect(lastFor("t1")).toBe("");
   });
 });
