@@ -97,8 +97,10 @@ describe("deliveryStalled (#18028)", () => {
   const handled: DecisionQuestionStanding = { kind: "settled", outcome: "answered", handled: true };
 
   it("holds while the list says the same question's delivery needs a person, stopped or uncertain", () => {
-    expect(deliveryStalled({ reference }, { reference, standing: stopped })).toBe(true);
-    expect(deliveryStalled({ reference }, { reference, standing: uncertain })).toBe(true);
+    // The list's own copy of the reference, as a read and a list never share one.
+    const listed = { ...reference };
+    expect(deliveryStalled({ reference }, { reference: listed, standing: stopped })).toBe(true);
+    expect(deliveryStalled({ reference }, { reference: listed, standing: uncertain })).toBe(true);
   });
 
   it("ends once the list stops saying so, and holds nothing without the list", () => {

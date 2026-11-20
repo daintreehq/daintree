@@ -266,8 +266,8 @@ export function DecisionFollowUpComposer({
         <>
           <Field>
             <FieldLabel className="sr-only">{asked ? "Your reply" : "Your follow-up"}</FieldLabel>
-            {/* Never promised while what was typed in last stopped there. */}
-            {!paused && (
+            {/* Never promised while what was typed in last stopped there, deadline or not. */}
+            {!stalled && (
               <FieldDescription>
                 Typed into the terminal that asked, as sent from this computer. It never changes the
                 answer.

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { DecisionsStatus } from "@shared/types/decisions";
@@ -21,6 +21,7 @@ import type {
 import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { answerKey, useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 
@@ -784,34 +785,60 @@ describe("DecisionsInboxDialog", () => {
         stall: { answerRevision: 1, followUpIds: [], reason: "resume_timeout" },
       }
     );
-    listQuestions.mockResolvedValue({ revision: 1, questions: [stalled] });
-    open();
-    await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
-    expect(screen.getByTestId("decisions-inbox-attention").textContent).toContain(
-      "Delivery uncertain"
-    );
-    const composer = await screen.findByTestId("decision-follow-up-composer");
-    expect(composer.textContent).toMatch(/can't send a new follow-up until it's resolved/);
-    expect(screen.queryByTestId("decision-follow-up-send")).toBeNull();
-    expect(composer.textContent).not.toMatch(/Typed into the terminal that asked/);
+    listQuestions.mockResolvedValue({ revision: 1, questions: [LIST.questions[1]!, stalled] });
+    const shown = CONTENT["question-3"]!;
+    CONTENT["question-3"] = { ...shown, terminalId: "t9" };
+    const said: string[] = [];
+    const announce = useAnnouncerStore.getState().announce;
+    useAnnouncerStore.setState({ announce: (message: string) => said.push(message) });
+    onTestFinished(() => useAnnouncerStore.setState({ announce }));
+    const pausedText = () => screen.queryByTestId("decision-follow-up-paused")?.textContent ?? null;
+    try {
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      fireEvent.click(rowNamed("q-3"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+      expect(screen.getByTestId("decisions-inbox-attention").textContent).toContain(
+        "Delivery uncertain"
+      );
+      const composer = await screen.findByTestId("decision-follow-up-composer");
+      expect(pausedText()).toMatch(/can't send a new follow-up until it's resolved/);
+      expect(screen.queryByTestId("decision-follow-up-send")).toBeNull();
+      expect(composer.textContent).not.toMatch(/Typed into the terminal that asked/);
+      // Already so as it opened: shown, never announced.
+      expect(said.filter((message) => message.includes("new follow-up"))).toEqual([]);
 
-    // Marked handled: the question's own read is unchanged, the list no longer holds it.
-    push({
-      revision: 2,
-      questions: [
-        {
-          ...stalled,
-          standing: { kind: "settled", outcome: "answered", handled: true },
-          stall: null,
-        },
-      ],
-    });
-    await waitFor(() => expect(screen.queryByTestId("decision-follow-up-send")).not.toBeNull());
-    expect(screen.queryByTestId("decisions-inbox-attention")).toBeNull();
-    expect(screen.queryByTestId("decision-follow-up-paused")).toBeNull();
-    expect(screen.getByTestId("decision-follow-up-composer").textContent).toMatch(
-      /Typed into the terminal that asked/
-    );
+      // The other row's question takes a follow-up as ever: the stall is only the one it names.
+      fireEvent.click(rowNamed("q-2"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      await waitFor(() => expect(screen.queryByTestId("decision-follow-up-send")).not.toBeNull());
+      expect(pausedText()).toBeNull();
+
+      fireEvent.click(rowNamed("q-3"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+      await waitFor(() => expect(pausedText()).not.toBeNull());
+
+      // Marked handled: the question's own read is unchanged, the list no longer holds it.
+      push({
+        revision: 2,
+        questions: [
+          LIST.questions[1]!,
+          {
+            ...stalled,
+            standing: { kind: "settled", outcome: "answered", handled: true },
+            stall: null,
+          },
+        ],
+      });
+      await waitFor(() => expect(screen.queryByTestId("decision-follow-up-send")).not.toBeNull());
+      expect(screen.queryByTestId("decisions-inbox-attention")).toBeNull();
+      expect(pausedText()).toBeNull();
+      expect(screen.getByTestId("decision-follow-up-composer").textContent).toMatch(
+        /Typed into the terminal that asked/
+      );
+    } finally {
+      CONTENT["question-3"] = shown;
+    }
   });
 
   describe("a Remote Host's question while its Host is away (#17946)", () => {
