@@ -236,15 +236,15 @@ describe("built-in panel views", () => {
   // have the close prompt's Save write text that base never described (#17903).
   it("keeps a crashed file editor view's late writes off the document its retry edits", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const seen: PanelViewProps[] = [];
+    // Recorded on commit: React's dev stack capture calls a throwing view
+    // without props.
+    const mounted: NonNullable<PanelViewProps["fileDocument"]>[] = [];
     let shouldThrow = true;
-    function Editor(props: PanelViewProps) {
-      seen.push(props);
-      const { fileDocument } = props;
-      useEffect(
-        () => () => fileDocument?.setDraft("flushed on unmount", { baseRevision: "rev-a" }),
-        [fileDocument]
-      );
+    function Editor({ fileDocument }: PanelViewProps) {
+      useEffect(() => {
+        if (fileDocument) mounted.push(fileDocument);
+        return () => fileDocument?.setDraft("flushed on unmount", { baseRevision: "rev-a" });
+      }, [fileDocument]);
       // Thrown post-commit, as in the retry test below.
       useEffect(() => {
         if (shouldThrow) throw new Error("editor exploded");
@@ -279,7 +279,8 @@ describe("built-in panel views", () => {
       />
     );
     await screen.findByTestId("plugin-view-diagnostics");
-    const crashed = seen.at(-1)!;
+    expect(mounted).toHaveLength(1);
+    const crashed = mounted[0]!;
     // Its unmount cleanup's flush still reaches the document.
     expect(setDraft).toHaveBeenCalledWith("flushed on unmount", { baseRevision: "rev-a" });
     await act(async () => {
@@ -287,11 +288,9 @@ describe("built-in panel views", () => {
     });
 
     setDraft.mockClear();
-    crashed.fileDocument!.setDraft("formatted late", { baseRevision: "rev-a" });
-    crashed.fileDocument!.setConflict(true);
-    await expect(
-      crashed.fileDocument!.save("formatted late", { expectedRevision: "rev-a" })
-    ).resolves.toEqual({ status: "refused", reason: "unavailable" });
+    crashed.setDraft("formatted late", { baseRevision: "rev-a" });
+    crashed.setConflict(true);
+    await expect(crashed.save("formatted late", { expectedRevision: "rev-a" })).resolves.toEqual({ status: "refused", reason: "unavailable" });
     expect(setDraft).not.toHaveBeenCalled();
     expect(setConflict).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
@@ -299,11 +298,12 @@ describe("built-in panel views", () => {
     shouldThrow = false;
     fireEvent.click(screen.getByTestId("plugin-view-diagnostics-retry"));
     await screen.findByTestId("builtin-view");
-    const retried = seen.at(-1)!;
-    expect(retried.fileDocument).not.toBe(crashed.fileDocument);
-    retried.fileDocument!.setDraft("edited", { baseRevision: "rev-b" });
+    expect(mounted).toHaveLength(2);
+    const retried = mounted[1]!;
+    expect(retried).not.toBe(crashed);
+    retried.setDraft("edited", { baseRevision: "rev-b" });
     expect(setDraft).toHaveBeenCalledWith("edited", { baseRevision: "rev-b" });
-    expect(retried.fileDocument!.fileName).toBe("a.json");
+    expect(retried.fileName).toBe("a.json");
   });
 
   it("tells a view mounted outside the grid where it is, with one object per render", async () => {
