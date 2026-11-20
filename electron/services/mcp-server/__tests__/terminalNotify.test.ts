@@ -3093,6 +3093,7 @@ describe("decision wakes (#16015)", () => {
           kind: "settled-prompt-exact",
           agentIncarnation: 2,
           agentSessionId: "session-1",
+          agentId: "claude",
           acceptWorking: true,
         },
       }),
@@ -3146,7 +3147,12 @@ describe("decision wakes (#16015)", () => {
       expect(h.client.submitted).toEqual([
         expect.objectContaining({
           text: "Daintree Decisions: section",
-          guard: { kind: "settled-prompt-exact", acceptWorking: true, acceptQuestion: true },
+          guard: {
+            kind: "settled-prompt-exact",
+            agentId: "claude",
+            acceptWorking: true,
+            acceptQuestion: true,
+          },
         }),
       ]);
       expect(decision.outcomes[0]?.outcome).toEqual({ kind: "delivered" });
