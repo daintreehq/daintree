@@ -1,5 +1,6 @@
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { basename } from "@shared/utils/path";
+import { getTerminalTaskTitle } from "@shared/utils/terminalTitleDisplay";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import {
@@ -8,6 +9,7 @@ import {
   stallSubject,
   type DeliverySubject,
 } from "@shared/utils/decisionsDeliveryReasons";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { pluralize } from "@shared/utils/pluralize";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 import type {
@@ -401,11 +403,11 @@ export function inboxRowNote(
   }
 }
 
-/** A Remote Host's question while its Host isn't connected: as it last reported it (#17943). */
-export function staleNote(item: Pick<DecisionQuestionListItem, "remoteHost">): string | null {
-  const host = item.remoteHost;
-  return host !== undefined && !host.connected ? `${host.name} away, as last reported` : null;
-}
+/**
+ * What a Remote Host's question says while its Host isn't connected (#17943):
+ * it is as the Host last reported it. The Host itself is named with the agent.
+ */
+export const AWAY_NOTE = "Away, as last reported";
 
 /**
  * What the shown question's warning says while delivery needs a person
@@ -485,12 +487,14 @@ function sameName(a: string, b: string): boolean {
 }
 
 /**
- * Where the question was asked, as the row's quiet line names it: the project,
- * then the worktree unless it is only the project's own folder again.
+ * Where the question was asked: the worktree, then its project (#18039),
+ * dropping the worktree when it is only the project's own folder again. The
+ * worktree leads because it tells runs in one project apart, so in a narrow
+ * column a long project name gives way before it does.
  */
 export function whereFacts(project: string | null, worktree: string | null): string[] {
   if (project !== null && worktree !== null && sameName(project, worktree)) return [project];
-  return [project, worktree].filter((part) => part !== null);
+  return [worktree, project].filter((part) => part !== null);
 }
 
 /** The asking agent by its display name, else the kind it was recorded under. */
@@ -511,13 +515,97 @@ export function worktreeName(
   return folder === "" ? null : folder;
 }
 
-/** Where the question was asked, as the row names it: the agent, then its project and worktree. */
-export function originFacts(parts: {
+/** The title inputs a run of this computer's fleet carries, as main last reported them. */
+export type PaneTitleInputs = Pick<
+  FleetRunRow,
+  "title" | "titleMode" | "lastObservedTitle" | "agentId" | "launchAgentId" | "agentState" | "cwd"
+>;
+
+/**
+ * The asking pane's title as its header shows it (#18039): the person's own
+ * title; else the agent's task, after a preset's or given name when the pane
+ * has one; else the pane's title. A pane that another agent has taken over
+ * keeps only a title the person gave it, since the new agent's task would
+ * read as the asker's. Null when there is none, or when it only names the
+ * agent again, which tells two of its panes apart no better than the agent.
+ */
+export function paneTitle(run: PaneTitleInputs, agentKind: string, agent: string): string | null {
+  const mode = run.titleMode ?? "default";
+  const own = run.title?.trim() ?? "";
+  let title = own;
+  if (mode !== "user") {
+    // The agent the pane holds, as a question records its asker: detected, else launched.
+    const holds = run.agentId ?? run.launchAgentId;
+    if (holds !== undefined && holds !== agentKind) return null;
+    const task = getTerminalTaskTitle({
+      title: own,
+      titleMode: run.titleMode,
+      lastObservedTitle: run.lastObservedTitle,
+      detectedAgentId: run.agentId,
+      agentState: run.agentState,
+      cwd: run.cwd,
+    });
+    // A name that is only the agent's, or that the task already starts with, isn't said twice.
+    const named =
+      mode === "custom" &&
+      own !== "" &&
+      !same(own, agent) &&
+      !task?.toLowerCase().startsWith(own.toLowerCase());
+    if (task !== null) title = named ? `${own}: ${task}` : task;
+  }
+  return title === "" || same(title, agent) ? null : title;
+}
+
+function same(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * Who asked and where, as the list knows it: the agent; the pane by its
+ * title, when it is still open on this computer; the Remote Host that asked,
+ * and whether it is away; then the worktree and project.
+ */
+export interface QuestionOrigin {
   agent: string;
-  project: string | null;
-  worktree: string | null;
-}): string[] {
-  return [parts.agent, ...whereFacts(parts.project, parts.worktree)];
+  pane: string | null;
+  host: string | null;
+  away: boolean;
+  where: string[];
+}
+
+/**
+ * Where the question was asked, as the row's quiet line names it (#18039):
+ * the agent with its pane or Host, then a closed question's `outcome`, then
+ * the place. The line truncates from its end, so the place gives way before
+ * the asker does.
+ */
+export function originFacts(origin: QuestionOrigin, outcome: string | null = null): string[] {
+  const asker = [
+    origin.agent,
+    origin.pane !== null ? `in “${origin.pane}”` : null,
+    origin.host !== null ? `on ${origin.host}` : null,
+  ]
+    .filter((part) => part !== null)
+    .join(" ");
+  return [
+    asker,
+    ...(outcome !== null ? [outcome] : []),
+    ...(origin.away ? [AWAY_NOTE] : []),
+    ...origin.where,
+  ];
+}
+
+/**
+ * Where the question was asked, as the detail header names it: the pane, the
+ * Host, then the place. The question names the agent below it.
+ */
+export function headerFacts(origin: QuestionOrigin): string[] {
+  return [
+    ...(origin.pane !== null ? [`“${origin.pane}”`] : []),
+    ...(origin.host !== null ? [`On ${origin.host}`] : []),
+    ...(origin.away ? [AWAY_NOTE] : []),
+    ...origin.where,
+  ];
 }
 
 /** What the zero-question canvas says under its title: where a question would show up. */

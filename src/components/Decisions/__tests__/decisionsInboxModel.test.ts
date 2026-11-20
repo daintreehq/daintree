@@ -16,26 +16,30 @@ import {
   askShownIn,
   askedOnHost,
   attentionText,
+  AWAY_NOTE,
   clearText,
   closedTime,
   connectionNotice,
   groupOf,
+  headerFacts,
   inboxGroupOf,
   inboxGroups,
   inboxRowNote,
   isAttention,
   markedText,
   originFacts,
+  paneTitle,
   referenceKey,
   replyLine,
   replyLineKey,
   replyToShow,
   resolveSelection,
   seeableAsk,
-  staleNote,
   standingText,
   waitingText,
+  whereFacts,
   worktreeName,
+  type PaneTitleInputs,
 } from "../decisionsInboxModel";
 
 function item(
@@ -221,13 +225,190 @@ describe("decisionsInboxModel", () => {
     expect(worktreeName({ worktreeRoot: "" }, null)).toBeNull();
   });
 
-  it("names where a question was asked by the facts that are known, in order", () => {
-    expect(originFacts({ agent: "Claude", project: "Daintree", worktree: "main" })).toEqual([
+  it("names where a question was asked by the facts that are known, worktree before project", () => {
+    const origin = { agent: "Claude", pane: null, host: null, away: false };
+    // The worktree tells runs in one project apart, so a long project name gives way first.
+    expect(originFacts({ ...origin, where: whereFacts("Daintree", "feature-x") })).toEqual([
       "Claude",
+      "feature-x",
       "Daintree",
-      "main",
     ]);
-    expect(originFacts({ agent: "Codex", project: null, worktree: "w" })).toEqual(["Codex", "w"]);
+    expect(originFacts({ ...origin, agent: "Codex", where: whereFacts(null, "w") })).toEqual([
+      "Codex",
+      "w",
+    ]);
+    expect(whereFacts("Daintree", null)).toEqual(["Daintree"]);
+  });
+
+  describe("telling two agents in one place apart (#18039)", () => {
+    const MAIN_CHECKOUT = whereFacts("Daintree", "daintree");
+    const run = (over: Partial<PaneTitleInputs> = {}): PaneTitleInputs => ({
+      title: "Claude",
+      agentId: "claude",
+      agentState: "working",
+      cwd: "/Users/me/Projects/daintree",
+      ...over,
+    });
+    const title = (over: Partial<PaneTitleInputs> = {}) => paneTitle(run(over), "claude", "Claude");
+
+    it("names the asking pane ahead of the place, so the place gives way first", () => {
+      expect(MAIN_CHECKOUT).toEqual(["Daintree"]);
+      const facts = (pane: string) =>
+        originFacts({ agent: "Claude", pane, host: null, away: false, where: MAIN_CHECKOUT });
+      expect(facts("Index migrations")).toEqual(["Claude in “Index migrations”", "Daintree"]);
+      // Two of the same agent in the main checkout no longer read the same.
+      expect(facts("Index migrations")).not.toEqual(facts("Fix auth tests"));
+      expect(
+        originFacts({
+          agent: "Claude",
+          pane: "Index migrations",
+          host: null,
+          away: false,
+          where: whereFacts("Daintree", "feature-x"),
+        })
+      ).toEqual(["Claude in “Index migrations”", "feature-x", "Daintree"]);
+    });
+
+    it("puts a closed question's outcome after who asked, ahead of the place", () => {
+      expect(
+        originFacts(
+          {
+            agent: "Claude",
+            pane: "Index migrations",
+            host: "Mini",
+            away: true,
+            where: ["Daintree"],
+          },
+          "Expired unanswered"
+        )
+      ).toEqual([
+        "Claude in “Index migrations” on Mini",
+        "Expired unanswered",
+        AWAY_NOTE,
+        "Daintree",
+      ]);
+    });
+
+    it("names a Remote Host's question by its Host whether or not it's connected", () => {
+      const host = { agent: "Claude", pane: null, host: "Studio", where: MAIN_CHECKOUT };
+      expect(originFacts({ ...host, away: false })).toEqual(["Claude on Studio", "Daintree"]);
+      expect(originFacts({ ...host, away: true })).toEqual([
+        "Claude on Studio",
+        AWAY_NOTE,
+        "Daintree",
+      ]);
+      expect(originFacts({ ...host, host: "Mini", away: false })).toEqual([
+        "Claude on Mini",
+        "Daintree",
+      ]);
+      // A local question names no Host, and nothing says it's away.
+      expect(
+        originFacts({ agent: "Claude", pane: null, host: null, away: false, where: MAIN_CHECKOUT })
+      ).toEqual(["Claude", "Daintree"]);
+    });
+
+    it("heads the detail with the pane or the Host, then the place, leaving the agent to the question", () => {
+      expect(
+        headerFacts({
+          agent: "Claude",
+          pane: "Index migrations",
+          host: null,
+          away: false,
+          where: MAIN_CHECKOUT,
+        })
+      ).toEqual(["“Index migrations”", "Daintree"]);
+      expect(
+        headerFacts({
+          agent: "Claude",
+          pane: null,
+          host: "Studio",
+          away: true,
+          where: ["Daintree"],
+        })
+      ).toEqual(["On Studio", AWAY_NOTE, "Daintree"]);
+      expect(
+        headerFacts({ agent: "Claude", pane: null, host: "Mini", away: false, where: ["Daintree"] })
+      ).toEqual(["On Mini", "Daintree"]);
+      expect(
+        headerFacts({
+          agent: "Claude",
+          pane: null,
+          host: null,
+          away: false,
+          where: whereFacts("Daintree", "feature-x"),
+        })
+      ).toEqual(["feature-x", "Daintree"]);
+    });
+
+    it("titles the pane as its header does: the person's title, else the agent's task, else its title", () => {
+      expect(title({ title: "Backend", titleMode: "user" })).toBe("Backend");
+      // A title set by hand outranks whatever the agent says it is doing.
+      expect(
+        title({ title: "Backend", titleMode: "user", lastObservedTitle: "Fix auth tests" })
+      ).toBe("Backend");
+      expect(title({ lastObservedTitle: "Fix auth tests" })).toBe("Fix auth tests");
+      expect(title({ title: "Claude [Z.ai]", titleMode: "custom" })).toBe("Claude [Z.ai]");
+      // A preset's name stays ahead of the task, so two presets on one task still differ.
+      expect(
+        title({ title: "Claude [Z.ai]", titleMode: "custom", lastObservedTitle: "Fix flaky tests" })
+      ).toBe("Claude [Z.ai]: Fix flaky tests");
+      // Before detection the pane's own title stands, but no task it reported yet.
+      expect(
+        title({
+          agentId: undefined,
+          launchAgentId: "claude",
+          title: "Claude [Z.ai]",
+          titleMode: "custom",
+          lastObservedTitle: "Fix auth tests",
+        })
+      ).toBe("Claude [Z.ai]");
+      expect(title({ agentId: undefined, title: "Claude Opus" })).toBe("Claude Opus");
+      // A given name that is only the agent's, or that the task repeats, isn't said twice.
+      expect(
+        title({ title: "Claude", titleMode: "custom", lastObservedTitle: "Fix auth tests" })
+      ).toBe("Fix auth tests");
+      const repeated = title({
+        title: "Ops-West",
+        titleMode: "custom",
+        lastObservedTitle: "Ops-West: Fix auth",
+      });
+      expect(repeated).toMatch(/Fix auth/);
+      expect(repeated).not.toMatch(/Ops-West.*Ops-West/);
+      // An agent that has exited has no task now, whatever it last said.
+      expect(
+        title({ title: "Claude [Z.ai]", agentState: "exited", lastObservedTitle: "Fix auth tests" })
+      ).toBe("Claude [Z.ai]");
+    });
+
+    it("keeps only the person's own title for a pane another agent has taken over", () => {
+      expect(
+        title({ agentId: "codex", title: "Codex", lastObservedTitle: "Migrate billing" })
+      ).toBeNull();
+      expect(title({ agentId: "codex", title: "Claude [Z.ai]", titleMode: "custom" })).toBeNull();
+      // Launched as another agent, not yet detected.
+      expect(title({ agentId: undefined, launchAgentId: "codex", title: "Codex" })).toBeNull();
+      expect(
+        title({
+          agentId: "codex",
+          title: "Backend",
+          titleMode: "user",
+          lastObservedTitle: "Migrate billing",
+        })
+      ).toBe("Backend");
+    });
+
+    it("has no title for a pane that only names its agent, or none at all", () => {
+      expect(title()).toBeNull();
+      expect(title({ title: "  claude " })).toBeNull();
+      expect(title({ title: "Claude", titleMode: "custom" })).toBeNull();
+      expect(paneTitle(run(), "claude", " Claude ")).toBeNull();
+      // The agent naming itself is no task.
+      expect(title({ lastObservedTitle: "Claude Code" })).toBeNull();
+      expect(title({ title: undefined })).toBeNull();
+      expect(title({ title: "   ", titleMode: "user" })).toBeNull();
+      // Only the agent's own name is dropped: a title that differs by a symbol is a title.
+      expect(paneTitle(run({ title: "C++", titleMode: "user" }), "claude", "C")).toBe("C++");
+    });
   });
 
   it("tells references apart by each of their four parts", () => {
@@ -675,20 +856,6 @@ describe("seen and cleared on this computer (#17895)", () => {
       expect(inboxRowNote(item("q1", settled("expired"), { replyMode: "advisory" }))).toBe(
         standingText(settled("expired"), { replyMode: "advisory" })
       );
-    });
-
-    it("says a Remote Host's question is as last reported only while its Host is away", () => {
-      expect(staleNote(item("q1", OPEN))).toBeNull();
-      expect(
-        staleNote(
-          item("q1", OPEN, { remoteHost: { hostId: "h", name: "Studio", connected: true } })
-        )
-      ).toBeNull();
-      expect(
-        staleNote(
-          item("q1", OPEN, { remoteHost: { hostId: "h", name: "Studio", connected: false } })
-        )
-      ).toMatch(/Studio.*last reported/);
     });
 
     it("says Clear stays on this computer and declines nothing, and Restore sends nothing", () => {
