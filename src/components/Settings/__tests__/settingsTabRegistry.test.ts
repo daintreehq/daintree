@@ -19,6 +19,22 @@ describe("SETTINGS_REGISTRY", () => {
     expect(agents.needsIsActive).toBe(true);
   });
 
+  it.each([
+    ["recovery kit", "decisions-recovery-kit-save"],
+    ["recovery", "decisions-recovery-kit-save"],
+    ["rotate keys", "decisions-rotate-keys"],
+    ["encryption", "decisions-rotate-keys"],
+    ["export", "decisions-data-export"],
+  ])("indexes %s under Decisions for settings search (#18065)", (term, id) => {
+    const decisions = SETTINGS_REGISTRY.find((e) => e.id === "decisions") as LazySettingsTabEntry;
+    const hit = decisions.sections?.find((e) => e.id === id);
+    expect(hit).toBeDefined();
+    const hay = [hit!.section, hit!.title, hit!.description, ...(hit!.keywords ?? [])]
+      .join(" ")
+      .toLowerCase();
+    expect(hay).toContain(term);
+  });
+
   it("has no duplicate tab IDs", () => {
     const ids = SETTINGS_REGISTRY.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);

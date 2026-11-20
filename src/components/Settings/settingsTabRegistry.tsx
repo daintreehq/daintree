@@ -2326,6 +2326,14 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-rotate-keys",
+        section: "Encryption",
+        title: "Rotate keys",
+        description: "Replaces this computer's Decisions keys without revoking any phone or Host",
+        keywords: ["encryption", "keys", "rotate", "rotation", "key", "e2ee", "secret", "security"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-questions",
         section: "Questions",
         title: "Default question expiry",
@@ -2486,6 +2494,34 @@ export const SETTINGS_REGISTRY = [
         title: "Dictating answers",
         description: "Dictation in the phone app isn't end-to-end encrypted",
         keywords: ["voice", "dictation", "speech", "encrypted", "microphone"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-recovery-kit-save",
+        section: "Data",
+        title: "Recovery kit",
+        description:
+          "Save a file holding this computer's Decisions keys, locked with a passphrase, and verify it",
+        keywords: [
+          "recovery",
+          "recovery kit",
+          "kit",
+          "backup",
+          "restore",
+          "keys",
+          "passphrase",
+          "verify",
+          "lost",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-data-export",
+        section: "Data",
+        title: "Export decision history",
+        description:
+          "Saves every question and answer stored on this computer, with the audit log, to an encrypted file",
+        keywords: ["export", "history", "download", "audit", "log", "backup", "passphrase", "save"],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
