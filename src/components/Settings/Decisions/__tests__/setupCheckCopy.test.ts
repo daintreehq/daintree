@@ -200,5 +200,12 @@ describe("unfinishedReason", () => {
     expect(
       unfinishedReason({ ...stale, setupCheck: { checkedAt: 2, failedStep: "socket" } })
     ).toEqual({ failedStep: "socket" });
+    expect(
+      unfinishedReason({
+        ...stale,
+        recoveryKitCoverage: "unknown",
+        setupCheck: { checkedAt: 2, failedStep: null },
+      })
+    ).toBeNull();
   });
 });

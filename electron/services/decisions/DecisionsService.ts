@@ -49,7 +49,7 @@ import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js"
 import { DecisionsPhoneImages, erasePhoneImages, phoneImageRootsFile } from "./phoneImages.js";
 import { KeyRotations } from "./keyRotation.js";
 import { decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
-import { observedOwnerKeys, type ObservedOwnerKeys } from "./recoveryKit.js";
+import { observedOwnerKeys, sameOwnerKeys, type ObservedOwnerKeys } from "./recoveryKit.js";
 import {
   eraseLocalDecisionsData,
   finishInterruptedErase,
@@ -194,6 +194,16 @@ export type DecisionsStoreOpener = (
   isCancelled: () => boolean
 ) => Promise<DaintreeLocalStore | null>;
 
+/** What a key store has seen of the owner keys (#18063). */
+export interface OwnerKeysSeen {
+  /** The owner identity's relay, ids and epochs it read or wrote now; null for none, or not an owner's. */
+  keys: ObservedOwnerKeys | null;
+  /** The first owner keys it read or wrote; null until it has. */
+  first: ObservedOwnerKeys | null;
+  /** `keys` differs from what it read or wrote before, or is its first. */
+  changed: boolean;
+}
+
 export interface DecisionsServiceOptions {
   openStore?: DecisionsStoreOpener;
   /**
@@ -248,14 +258,12 @@ export interface DecisionsServiceOptions {
    */
   onDevicesChanged?: () => void;
   /**
-   * A lifetime's key store read or wrote the keys, or found none (#18063):
-   * the owner identity's relay, ids and epochs they hold (null for none, or
-   * not an owner's), and what the same store saw just before (null when it
-   * saw nothing yet, or has been let go of). Called for every read and write,
-   * in the key store's own turn, before it returns; a store let go of still
-   * reports the writes it finishes, so none is missed.
+   * A lifetime's key store read or wrote the keys, or found none (#18063).
+   * Called for every read and write, in the key store's own turn, before it
+   * returns; a store let go of still reports the writes it finishes, so none
+   * is missed.
    */
-  onOwnerKeys?: (keys: ObservedOwnerKeys | null, before: ObservedOwnerKeys | null) => void;
+  onOwnerKeys?: (seen: OwnerKeysSeen) => void;
   /** Makes the relay connection for a lifetime with a relay set up. */
   connect?: DecisionsConnectionFactory;
   /** The stored rows, for deleting them: the app database's unless a test says otherwise. */
@@ -332,11 +340,8 @@ export class DecisionsService {
   private readonly keyFilePath: () => string;
   private keyStore: SealedKeyStore | null = null;
   /** What `keyStore` last read or wrote, kept with the store it came from, and dropped with it. */
-  private ownerKeys: { from: SealedKeyStore; keys: ObservedOwnerKeys | null } | null = null;
-  private readonly onOwnerKeys: (
-    keys: ObservedOwnerKeys | null,
-    before: ObservedOwnerKeys | null
-  ) => void;
+  private ownerKeys: ({ from: SealedKeyStore } & OwnerKeysSeen) | null = null;
+  private readonly onOwnerKeys: (seen: OwnerKeysSeen) => void;
   private rotations: KeyRotations | null = null;
   /** Local data is being deleted (#16025): no key store or rotation is made until it finishes. */
   private erasing = false;
@@ -574,13 +579,17 @@ export class DecisionsService {
     // A key store made now could write the key file back after it is deleted.
     if (this.erasing) throw new Error("Decisions is deleting its data, so its keys can't be used");
     if (!this.keyStore) {
+      // Kept with the store, so one let go of still reports against what it saw.
+      let first: ObservedOwnerKeys | null = null;
+      let last: ObservedOwnerKeys | null | undefined;
       const made: SealedKeyStore = new SealedKeyStore(this.keyFilePath(), (stored) => {
         const keys = observedOwnerKeys(stored);
-        const live = this.keyStore === made;
-        const before = live && this.ownerKeys?.from === made ? this.ownerKeys.keys : null;
+        first ??= keys;
+        const seen = { keys, first, changed: last === undefined || !sameOwnerKeys(last, keys) };
+        last = keys;
         // A store let go of may still finish a write: reported, but no longer what this lifetime holds.
-        if (live) this.ownerKeys = { from: made, keys };
-        this.onOwnerKeys(keys, before);
+        if (this.keyStore === made) this.ownerKeys = { from: made, ...seen };
+        this.onOwnerKeys(seen);
       });
       this.keyStore = made;
     }
@@ -595,6 +604,12 @@ export class DecisionsService {
   getOwnerKeys(): ObservedOwnerKeys | null {
     const seen = this.ownerKeys;
     return seen !== null && seen.from === this.keyStore ? seen.keys : null;
+  }
+
+  /** The first owner keys this lifetime's key store read or wrote (#18063); null until it has. */
+  getFirstOwnerKeys(): ObservedOwnerKeys | null {
+    const seen = this.ownerKeys;
+    return seen !== null && seen.from === this.keyStore ? seen.first : null;
   }
 
   /**

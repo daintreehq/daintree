@@ -71,24 +71,24 @@ export function sameOwnerKeys(
 
 /**
  * A kit verification as it stands against the owner keys last seen (#18063),
- * `before` being what the same key store saw just before them: marked out of
+ * `first` being the first owner keys the same key store saw: marked out of
  * date once they hold a key the kit lacks or another current epoch. A
  * verification recorded before kits' epochs were held every key the keys
  * held then, and keys only ever gain epochs, so keys still on their one
- * epoch are what it covered, and keys seen to change since this run first
+ * epoch are what it covered, and keys that changed since this run first
  * read them have moved past it; anything else can't be told from here.
  * Returns `record` itself when nothing changes.
  */
 export function reconciledKit(
   record: DecisionsRecoveryKitRecord | null,
   observed: ObservedOwnerKeys | null,
-  before: ObservedOwnerKeys | null = null
+  first: ObservedOwnerKeys | null = null
 ): DecisionsRecoveryKitRecord | null {
   if (record === null || record.outOfDate || !observes(observed, record)) return record;
   const held = observed.coverage;
   if (!record.coverage) {
     // Only an earlier build records a verification without epochs, so this run's reads all came after it.
-    if (observes(before, record) && !coverageHolds(before.coverage, held)) {
+    if (observes(first, record) && !coverageHolds(first.coverage, held)) {
       return { ...record, outOfDate: true };
     }
     const firstOnly = held.epochs.length === 1 && held.epochs[0]!.epoch === held.currentEpoch;
@@ -104,9 +104,10 @@ export function reconciledKit(
  */
 export function kitStanding(
   record: DecisionsRecoveryKitRecord,
-  observed: ObservedOwnerKeys | null
+  observed: ObservedOwnerKeys | null,
+  first: ObservedOwnerKeys | null = null
 ): "current" | "out-of-date" | "unknown" {
-  const kit = reconciledKit(record, observed) ?? record;
+  const kit = reconciledKit(record, observed, first) ?? record;
   if (kit.outOfDate) return "out-of-date";
   return kit.coverage && observes(observed, kit) ? "current" : "unknown";
 }

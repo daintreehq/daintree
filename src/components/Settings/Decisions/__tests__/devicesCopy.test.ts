@@ -19,6 +19,7 @@ describe("revoke and rotate copy (#16010)", () => {
     for (const { message } of [
       describeRevokeResult({ result: "not-found" }, "Pixel"),
       describeRevokeResult({ result: "unconfirmed", origin: ORIGIN }, "Pixel"),
+      describeRotateResult({ result: "unconfirmed", origin: ORIGIN }),
       describeRotateResult({ result: "unsaved", reason: "The keychain is locked" }),
     ]) {
       expect(message).not.toMatch(/recovery kit/);

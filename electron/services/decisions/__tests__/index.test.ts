@@ -4782,6 +4782,26 @@ describe("Decisions entry", () => {
       expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
     });
 
+    it("records an earlier build's verification out of date on the next read when recording it failed", async () => {
+      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
+      keysRead(ownerKeys(2, [1, 2]));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.mocked(store.set).mockImplementationOnce(() => {
+        throw new Error("No space left on device");
+      });
+
+      // A rotation stages epoch 3.
+      keysRead(ownerKeys(2, [1, 2, 3]));
+      expect(saved.value).not.toHaveProperty("recoveryKit.outOfDate");
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCoverage: "out-of-date" });
+
+      const pushed = pushedStatuses().length;
+      keysRead(ownerKeys(2, [1, 2, 3]));
+      expect(saved.value).toMatchObject({ recoveryKit: { verifiedAt: 42, outOfDate: true } });
+      await vi.waitFor(() => expect(pushedStatuses().length).toBeGreaterThan(pushed));
+      warn.mockRestore();
+    });
+
     it("records an out-of-date kit again on the next read when recording it failed", async () => {
       await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED, coverage: AT_ONE } });
       keysRead(ownerKeys(1, [1]));

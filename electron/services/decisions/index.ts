@@ -179,6 +179,7 @@ import type {
   DecisionsPresenceDeps,
   DecisionsService,
   DecisionsSnapshotDeps,
+  OwnerKeysSeen,
 } from "./DecisionsService.js";
 import { onNotificationSettingsWritten } from "../../utils/notificationSettingsPatch.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
@@ -227,8 +228,6 @@ import {
   makeRecoveryKit,
   reconciledKit,
   recordedIdentity,
-  sameOwnerKeys,
-  type ObservedOwnerKeys,
   type RecordedIdentity,
 } from "./recoveryKit.js";
 
@@ -803,14 +802,12 @@ function recordRevocation(relay: RelayBinding): void {
  * that failed is made again by the next. The running lifetime reads no
  * `recoveryKit`, so it isn't told: that would reconnect one held back.
  */
-function ownerKeysSeen(
-  from: DecisionsService,
-  keys: ObservedOwnerKeys | null,
-  before: ObservedOwnerKeys | null
-): void {
-  if (service !== from || from.getRole() !== "owner") return;
+function ownerKeysSeen(from: DecisionsService, seen: OwnerKeysSeen): void {
+  // No role check: a write finishing as the lifetime stops reports after its
+  // settings are gone, and a Host's keys never match an owner's record.
+  if (service !== from) return;
   const current = readDecisionsSettings(store);
-  const record = reconciledKit(current.recoveryKit, keys, before);
+  const record = reconciledKit(current.recoveryKit, seen.keys, seen.first);
   let recorded = false;
   if (record !== current.recoveryKit) {
     try {
@@ -822,7 +819,7 @@ function ownerKeysSeen(
     }
   }
   // Keys are read for every connection and answer; only a change is news.
-  if (recorded || !sameOwnerKeys(before, keys)) publishStatus();
+  if (recorded || seen.changed) publishStatus();
 }
 
 /**
@@ -1120,7 +1117,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         presence: presenceDeps,
         agentStopped: agentStoppedDeps,
         onDevicesChanged: publishDevicesChanged,
-        onOwnerKeys: (keys, before) => ownerKeysSeen(next, keys, before),
+        onOwnerKeys: (seen) => ownerKeysSeen(next, seen),
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
         onQuestionPolicyChanged: publishHostRuntime,
@@ -1188,7 +1185,11 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(kit !== null
       ? {
           recoveryKitVerifiedAt: kit.verifiedAt,
-          recoveryKitCoverage: kitStanding(kit, owned?.getOwnerKeys() ?? null),
+          recoveryKitCoverage: kitStanding(
+            kit,
+            owned?.getOwnerKeys() ?? null,
+            owned?.getFirstOwnerKeys() ?? null
+          ),
         }
       : {}),
     ...(checked !== null

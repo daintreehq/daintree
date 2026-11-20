@@ -432,6 +432,10 @@ describe("a verified kit against the keys seen since (#18063)", () => {
   it("gives an earlier build's verification the epochs only of keys still on their one epoch", () => {
     const earlier = record();
     expect(reconciledKit(earlier, seen(1, [at(1)]))).toEqual({ ...earlier, ...AT_ONE });
+    expect(reconciledKit(earlier, seen(5, [at(5)]))).toEqual({
+      ...earlier,
+      coverage: cover(5, [at(5)]),
+    });
     // Rotated, or staged, at some point: whether before the verification or after can't be told.
     expect(reconciledKit(earlier, seen(2, [at(1), at(2)]))).toBe(earlier);
     expect(reconciledKit(earlier, seen(1, [at(1), at(2)]))).toBe(earlier);

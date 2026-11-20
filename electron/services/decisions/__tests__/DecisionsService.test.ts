@@ -309,7 +309,14 @@ describe("DecisionsService", () => {
 
     const epochsOf = (keys: { coverage: { epochs: Array<{ epoch: number }> } } | null) =>
       keys?.coverage.epochs.map(({ epoch }) => epoch) ?? null;
+    const reports = () =>
+      onOwnerKeys.mock.calls.map(([seen]) => [
+        epochsOf(seen.keys),
+        epochsOf(seen.first),
+        seen.changed,
+      ]);
 
+    heard(first, null);
     heard(first, owner(1, [1]));
     heard(first, owner(1, [1]));
     expect(service.getOwnerKeys()).toMatchObject({
@@ -320,29 +327,31 @@ describe("DecisionsService", () => {
     });
     heard(first, owner(1, [1, 2]));
     expect(epochsOf(service.getOwnerKeys())).toEqual([1, 2]);
-    // Every read is told, with what the store saw just before it.
-    expect(
-      onOwnerKeys.mock.calls.map(([keys, before]) => [epochsOf(keys), epochsOf(before)])
-    ).toEqual([
-      [[1], null],
-      [[1], [1]],
-      [[1, 2], [1]],
+    expect(epochsOf(service.getFirstOwnerKeys())).toEqual([1]);
+    // Every read is told, with the first owner keys the store saw and whether these differ.
+    expect(reports()).toEqual([
+      [null, null, true],
+      [[1], [1], true],
+      [[1], [1], false],
+      [[1, 2], [1], true],
     ]);
     heard(first, null);
     expect(service.getOwnerKeys()).toBeNull();
+    expect(epochsOf(service.getFirstOwnerKeys())).toEqual([1]);
 
-    // A store let go of still tells of the writes it finishes, but they aren't this lifetime's.
+    // A store let go of still tells of the writes it finishes, against what it saw, but they
+    // aren't this lifetime's.
     await service.stop();
     onOwnerKeys.mockClear();
     heard(first, owner(3, [1, 2, 3]));
-    expect(onOwnerKeys.mock.calls.map(([keys, before]) => [epochsOf(keys), before])).toEqual([
-      [[1, 2, 3], null],
-    ]);
+    expect(reports()).toEqual([[[1, 2, 3], [1], true]]);
     await service.start(on());
     const second = service.getKeyStore();
+    expect(service.getFirstOwnerKeys()).toBeNull();
     heard(second, owner(3, [1, 2, 3]));
     heard(first, owner(4, [1, 2, 3, 4]));
     expect(epochsOf(service.getOwnerKeys())).toEqual([1, 2, 3]);
+    expect(epochsOf(service.getFirstOwnerKeys())).toEqual([1, 2, 3]);
     await service.dispose();
     expect(service.getOwnerKeys()).toBeNull();
   });
