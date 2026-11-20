@@ -28,6 +28,7 @@ import {
   seeableAsk,
   staleNote,
   standingText,
+  waitingText,
   worktreeName,
 } from "../decisionsInboxModel";
 
@@ -244,15 +245,131 @@ describe("decisionsInboxModel", () => {
       }),
       item("q3", OPEN),
     ];
+    const groups = inboxGroups(ordered);
     const keyOf = (index: number) => referenceKey(ordered[index]!.reference);
     expect(resolveSelection([], null, null)).toBeNull();
-    expect(resolveSelection(ordered, null, null)).toBe(ordered[0]);
-    expect(resolveSelection(ordered, null, "t2")).toBe(ordered[1]);
-    expect(resolveSelection(ordered, null, "gone")).toBe(ordered[0]);
-    expect(resolveSelection(ordered, { key: keyOf(2), index: 0 }, "t2")).toBe(ordered[2]);
-    // Its row went: the one now at its place, or the last when it was past the end.
-    expect(resolveSelection(ordered, { key: "gone", index: 1 }, null)).toBe(ordered[1]);
-    expect(resolveSelection(ordered, { key: "gone", index: 9 }, null)).toBe(ordered[2]);
+    expect(resolveSelection(groups, null, null)).toBe(ordered[0]);
+    expect(resolveSelection(groups, null, "t2")).toBe(ordered[1]);
+    expect(resolveSelection(groups, null, "gone")).toBe(ordered[0]);
+    expect(resolveSelection(groups, { key: keyOf(2), index: 0, picked: false }, "t2")).toBe(
+      ordered[2]
+    );
+    // A picked row that went: the one now at its place, or the last when it was past the end.
+    expect(resolveSelection(groups, { key: "gone", index: 1, picked: true }, null)).toBe(
+      ordered[1]
+    );
+    expect(resolveSelection(groups, { key: "gone", index: 9, picked: true }, null)).toBe(
+      ordered[2]
+    );
+  });
+
+  describe("what the inbox opens on by itself (#18022)", () => {
+    const settled: DecisionQuestionStanding = { kind: "settled", outcome: "expired" };
+    const cleared = item("q1", OPEN, {
+      inbox: { ask: null, seen: true, cleared: true },
+      reference: { hostId: "h1", projectId: "p1", terminalId: "t1", questionId: "q1" },
+    });
+    const closed = item("q2", settled, {
+      reference: { hostId: "h1", projectId: "p1", terminalId: "t2", questionId: "q2" },
+    });
+
+    it("opens on nothing while only Cleared and History have questions", () => {
+      const groups = inboxGroups([cleared, closed]);
+      expect(groups.map((group) => group.id)).toEqual(["cleared", "history"]);
+      expect(resolveSelection(groups, null, null)).toBeNull();
+      expect(resolveSelection(groups, null, "elsewhere")).toBeNull();
+    });
+
+    it("opens on the first question of each group that still needs something, ahead of Cleared and History", () => {
+      const nowMs = Date.parse("2026-11-02T12:00:00.000Z");
+      const lead: Array<[string, DecisionQuestionListItem]> = [
+        ["needs-you", item("q3", OPEN)],
+        ["delivering", item("q3", { kind: "to-type" })],
+        ["attention", item("q3", { kind: "needs-attention", deliveryStatus: "needs-attention" })],
+        // Its deadline passed by this computer's clock.
+        ["awaiting", item("q3", OPEN, { expiresAt: "2026-11-02T11:00:00.000Z" })],
+      ];
+      for (const [group, waiting] of lead) {
+        const groups = inboxGroups([cleared, closed, waiting], nowMs);
+        expect(groups[0]!.id).toBe(group);
+        expect(resolveSelection(groups, null, null)).toBe(waiting);
+      }
+    });
+
+    it("opens on the pane's own question whatever its group", () => {
+      const waiting = item("q3", OPEN, {
+        reference: { hostId: "h1", projectId: "p1", terminalId: "t9", questionId: "q3" },
+      });
+      const groups = inboxGroups([cleared, closed, waiting]);
+      expect(resolveSelection(groups, null, "t2")).toBe(closed);
+      expect(resolveSelection(groups, null, "t1")).toBe(cleared);
+    });
+
+    it("never moves onto a Cleared or History neighbour from a question the person didn't pick", () => {
+      const groups = inboxGroups([cleared, closed]);
+      // The question it opened on by itself went: nothing takes its place.
+      expect(resolveSelection(groups, { key: "gone", index: 0, picked: false }, null)).toBeNull();
+      // One the person picked went: they were reading there, so its neighbour does.
+      expect(resolveSelection(groups, { key: "gone", index: 0, picked: true }, null)).toBe(cleared);
+      // Once it went, a fresh look still finds the pane's own.
+      expect(resolveSelection(groups, { key: "gone", index: 0, picked: false }, "t2")).toBe(closed);
+    });
+  });
+
+  describe("the line above the list while Needs you is empty (#18022)", () => {
+    const closed = item("q2", { kind: "settled", outcome: "expired" });
+    const delivering = item("q3", { kind: "to-type" });
+
+    it("says nothing waits only while Needs you is empty, seen questions counting as waiting", () => {
+      const seen = item("q1", OPEN, { inbox: { ask: null, seen: true, cleared: false } });
+      expect(waitingText(inboxGroups([seen, closed]), "connected")).toBeNull();
+      expect(waitingText(inboxGroups([delivering, closed]), "connected")).toBe(
+        "No questions waiting on you"
+      );
+      expect(waitingText(inboxGroups([closed]), "connected")).toBe("No questions waiting on you");
+    });
+
+    it("waits for Decisions' status before saying anything", () => {
+      expect(waitingText(inboxGroups([closed]), "pending")).toBeNull();
+    });
+
+    it("speaks only for the questions shown when the list can't be taken at its word", () => {
+      const unknown = waitingText(inboxGroups([closed]), "unknown");
+      expect(unknown).toMatch(/^None of the questions here wait on you\. /);
+      expect(unknown).toMatch(/status couldn't be read/);
+      // The connection notice says why it isn't connected.
+      expect(waitingText(inboxGroups([closed]), "unavailable")).toBe(
+        "None of the questions here wait on you"
+      );
+      expect(waitingText([], "unavailable")).toBe("No questions on this computer");
+      expect(waitingText([], "unknown")).toMatch(/^No questions on this computer\. /);
+    });
+
+    it("names a Remote Host that's away, wherever its questions are listed", () => {
+      const away = (name: string, questionId: string) =>
+        item(
+          questionId,
+          { kind: "settled", outcome: "answered", handled: false },
+          {
+            reference: { hostId: name, projectId: "p1", terminalId: "t1", questionId },
+            remoteHost: { hostId: name, name, connected: false },
+          }
+        );
+      const one = waitingText(
+        inboxGroups([away("Studio", "q4"), away("Studio", "q5")]),
+        "connected"
+      );
+      expect(one).toMatch(/^None of the questions here wait on you\. /);
+      expect(one).toMatch(/Studio is away, so its questions are as last reported/);
+      expect(
+        waitingText(inboxGroups([away("Studio", "q4"), away("Lab", "q5")]), "connected")
+      ).toMatch(/2 Remote Hosts are away/);
+      const back = item("q6", OPEN, {
+        inbox: { ask: null, seen: false, cleared: true },
+        remoteHost: { hostId: "Studio", name: "Studio", connected: true },
+      });
+      expect(waitingText(inboxGroups([back]), "connected")).toBe("No questions waiting on you");
+    });
   });
 
   it("says nothing about the relay while connected or before main has said", () => {

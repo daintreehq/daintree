@@ -656,8 +656,18 @@ describe("DecisionsInboxDialog", () => {
     await waitFor(() => expect(listQuestions).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.queryByTestId("decisions-inbox-empty")).toBeNull();
+    expect(screen.queryByTestId("decisions-inbox-waiting")).toBeNull();
+    // Status unknown (#18022): the list says only what it holds, rather than that nothing was asked.
     await act(async () => rejectStatus(new Error("gone")));
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-inbox-waiting").textContent).toMatch(
+        /^No questions on this computer\. .*status couldn't be read/
+      )
+    );
+    expect(screen.queryByTestId("decisions-inbox-empty")).toBeNull();
+    pushStatus({ state: "connected", relayOrigin: "https://relay.example", revision: 2 });
     await screen.findByTestId("decisions-inbox-empty");
+    expect(screen.queryByTestId("decisions-inbox-waiting")).toBeNull();
   });
 
   it("doesn't call an empty list new while the store can't be read", async () => {
@@ -1436,7 +1446,8 @@ describe("DecisionsInboxDialog", () => {
         })
       );
 
-      // With Needs you empty the button stays where the keyboard is, and does nothing.
+      // With Needs you empty the button goes (#18022), and the keyboard on it moves to the list.
+      act(() => screen.getByTestId("decisions-inbox-clear-all").focus());
       push(
         marked({ ...unmarked, cleared: true }, 3, [
           { ...second, inbox: { ...second.inbox, cleared: true } },
@@ -1445,12 +1456,14 @@ describe("DecisionsInboxDialog", () => {
       await waitFor(() =>
         expect(screen.queryByTestId("decisions-inbox-group-needs-you")).toBeNull()
       );
-      const clearAll = screen.getByTestId("decisions-inbox-clear-all");
-      expect(clearAll.getAttribute("aria-disabled")).toBe("true");
-      markQuestions.mockClear();
-      fireEvent.click(clearAll);
-      await act(async () => {});
-      expect(markQuestions.mock.calls.filter(([p]) => p.action === "clear")).toHaveLength(0);
+      expect(screen.queryByTestId("decisions-inbox-clear-all")).toBeNull();
+      expect(document.querySelector(".decisions-inbox-list-footer")).toBeNull();
+      await waitFor(() =>
+        expect(document.activeElement).toBe(rows().find((row) => row.tabIndex === 0))
+      );
+      expect(screen.getByTestId("decisions-inbox-waiting").textContent).toBe(
+        "No questions waiting on you"
+      );
     });
 
     it("draws a cleared row as set aside, not as a live ask, while a screen reader still hears it was cleared", async () => {
@@ -1549,6 +1562,199 @@ describe("DecisionsInboxDialog", () => {
       listQuestions.mockResolvedValue(marked());
       open();
       await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+    });
+  });
+
+  describe("with nothing waiting on the person (#18022)", () => {
+    const SET_ASIDE = {
+      ...item("question-5", 5, OPEN, {
+        reference: reference("question-5", { terminalId: "t5" }),
+        askedAt: "2026-11-01T09:00:00.000Z",
+      }),
+      inbox: { ask: null, seen: true, cleared: true },
+    };
+    /** A cleared question and one that closed: nothing there needs the person. */
+    const PASSIVE: DecisionQuestionList = {
+      revision: 1,
+      questions: [LIST.questions[0]!, SET_ASIDE],
+    };
+
+    it("says so above the list and opens on nothing, with the keyboard on the list", async () => {
+      listQuestions.mockResolvedValue(PASSIVE);
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(rows().map(aliasOf)).toEqual(["q-5", "q-1"]);
+      const line = await screen.findByTestId("decisions-inbox-waiting");
+      expect(line.textContent).toBe("No questions waiting on you");
+      // At the top of the list, before any group.
+      expect(screen.getByTestId("decisions-inbox-groups").querySelector("p, section")).toBe(line);
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-5")));
+      // Nothing chosen, nothing read: the pane says how to open one.
+      for (const row of rows()) expect(row.getAttribute("aria-current")).toBeNull();
+      expect(getQuestionContentByReference).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("decisions-inbox-detail-title")).toBeNull();
+      expect(screen.getByTestId("decisions-inbox-detail-empty").textContent).toMatch(
+        /Choose a question/
+      );
+      expect(screen.getByTestId("decisions-inbox-detail").getAttribute("aria-label")).toBe(
+        "Question details"
+      );
+      // Nothing to clear, so no button and no divider for it.
+      expect(screen.queryByTestId("decisions-inbox-clear-all")).toBeNull();
+
+      // Picked, it opens.
+      fireEvent.click(rowNamed("q-1"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true");
+      expect(screen.queryByTestId("decisions-inbox-detail-empty")).toBeNull();
+    });
+
+    it("lets what still needs something lead under the line, and opens on it", async () => {
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [...PASSIVE.questions, LIST.questions[2]!],
+      });
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      const groups = Array.from(
+        screen.getByTestId("decisions-inbox-groups").querySelectorAll("section")
+      ).map((section) => section.getAttribute("data-testid"));
+      expect(groups[0]).toBe("decisions-inbox-group-delivering");
+      expect(screen.getByTestId("decisions-inbox-waiting").textContent).toBe(
+        "No questions waiting on you"
+      );
+      await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+      expect(rowNamed("q-3").getAttribute("aria-current")).toBe("true");
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-3")));
+    });
+
+    it("still opens on the question of the pane that opened it, whatever its group", async () => {
+      listQuestions.mockResolvedValue(PASSIVE);
+      open({ terminalId: "t5" });
+      await waitFor(() => expect(rowNamed("q-5").getAttribute("aria-current")).toBe("true"));
+      await waitFor(() => expect(readsOf("question-5")).toBe(1));
+      expect(screen.getByTestId("decisions-inbox-detail-title").textContent).toContain("q-5");
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-5")));
+    });
+
+    it("opens a question that comes to need the person while nothing is chosen, leaving the keyboard where it is", async () => {
+      listQuestions.mockResolvedValue(PASSIVE);
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-5")));
+      push({ revision: 2, questions: [...PASSIVE.questions, LIST.questions[1]!] });
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBe("true");
+      expect(document.activeElement).toBe(rowNamed("q-5"));
+      expect(screen.queryByTestId("decisions-inbox-waiting")).toBeNull();
+    });
+
+    it("keeps a question the person picked as one comes to need them", async () => {
+      listQuestions.mockResolvedValue(PASSIVE);
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      fireEvent.click(rowNamed("q-1"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      push({ revision: 2, questions: [...PASSIVE.questions, LIST.questions[1]!] });
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true");
+      expect(shownBody()).toContain("Body of question 1");
+    });
+
+    it("never moves onto a History neighbour once the question it opened on by itself goes", async () => {
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [LIST.questions[1]!, ...PASSIVE.questions],
+      });
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      push({ revision: 2, questions: PASSIVE.questions });
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByTestId("decisions-inbox-detail-title")).toBeNull());
+      for (const row of rows()) expect(row.getAttribute("aria-current")).toBeNull();
+      expect(screen.getByTestId("decisions-inbox-detail-empty")).toBeTruthy();
+    });
+
+    it("moves the keyboard from Clear Needs you to the list once a deadline empties the group", async () => {
+      const expiresAt = new Date(Date.now() + 500).toISOString();
+      const timed = item("question-2", 2, OPEN, { askedAt: "2026-11-02T09:00:00.000Z", expiresAt });
+      listQuestions.mockResolvedValue({ revision: 1, questions: [LIST.questions[0]!, timed] });
+      open();
+      const clearAll = await screen.findByTestId("decisions-inbox-clear-all");
+      act(() => clearAll.focus());
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-group-awaiting").textContent).toContain("q-2")
+      );
+      expect(screen.queryByTestId("decisions-inbox-clear-all")).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+    });
+
+    it("leaves the keyboard where it went when Clear Needs you goes later", async () => {
+      listQuestions.mockResolvedValue(LIST);
+      open();
+      const clearAll = await screen.findByTestId("decisions-inbox-clear-all");
+      act(() => clearAll.focus());
+      act(() => screen.getByTestId("decisions-inbox-detail").focus());
+      push({ revision: 2, questions: [LIST.questions[0]!, LIST.questions[2]!] });
+      await waitFor(() => expect(screen.queryByTestId("decisions-inbox-clear-all")).toBeNull());
+      await act(async () => {});
+      expect(document.activeElement).toBe(screen.getByTestId("decisions-inbox-detail"));
+    });
+
+    it("says only what the list holds while not connected, and starts the keyboard on an empty list", async () => {
+      listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+      getStatus.mockResolvedValue({
+        state: "reconnecting",
+        relayOrigin: "https://relay.example",
+        revision: 1,
+      });
+      open();
+      await screen.findByTestId("decisions-inbox-connection");
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-waiting").textContent).toBe(
+          "No questions on this computer"
+        )
+      );
+      const list = screen.getByTestId("decisions-inbox-groups");
+      await waitFor(() => expect(document.activeElement).toBe(list));
+      expect(screen.getByTestId("decisions-inbox-detail-empty").textContent).toMatch(
+        /Question details appear here/
+      );
+
+      // Connected with nothing asked: the canvas, in the same list, which keeps the keyboard.
+      pushStatus({ state: "connected", relayOrigin: "https://relay.example", revision: 2 });
+      await screen.findByTestId("decisions-inbox-empty");
+      expect(screen.getByTestId("decisions-inbox-groups")).toBe(list);
+      expect(document.activeElement).toBe(list);
+      expect(screen.queryByTestId("decisions-inbox-detail")).toBeNull();
+    });
+
+    it("starts the keyboard on the list when nothing was ever asked", async () => {
+      listQuestions.mockResolvedValue({ revision: 1, questions: [] });
+      open();
+      await screen.findByTestId("decisions-inbox-empty");
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByTestId("decisions-inbox-groups"))
+      );
+    });
+
+    it("names a Remote Host that's away rather than calling the list clear", async () => {
+      const away = item(
+        "question-9",
+        9,
+        { kind: "settled", outcome: "answered", handled: false },
+        {
+          reference: reference("question-9", { hostId: "qhost_studio_0001" }),
+          remoteHost: { hostId: "studio", name: "Studio", connected: false },
+          settledAt: "2026-11-02T11:00:00Z",
+        }
+      );
+      listQuestions.mockResolvedValue({ revision: 1, questions: [...PASSIVE.questions, away] });
+      open();
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-inbox-waiting").textContent).toMatch(
+          /^None of the questions here wait on you\. Studio is away/
+        )
+      );
     });
   });
 

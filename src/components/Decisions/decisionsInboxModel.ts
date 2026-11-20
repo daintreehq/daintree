@@ -421,39 +421,108 @@ export function originFacts(parts: {
   return [parts.agent, ...whereFacts(parts.project, parts.worktree)];
 }
 
-/** What the inbox says above its groups, or null when nothing needs saying. */
+/** What the zero-question canvas says under its title: where a question would show up. */
 export function emptyText(groups: readonly InboxGroup[]): string | null {
   return groups.length === 0
     ? "When an agent asks for your input through Decisions, the question shows up here and on your phone."
     : null;
 }
 
-/** The question chosen in the inbox, and where it stood in the list when chosen. */
-export interface InboxChoice {
-  key: string;
-  index: number;
+/**
+ * How far the list can be taken at its word (#18022): Decisions' status not
+ * yet read, read as unknown (the read failed), not connected to its relay
+ * (the connection notice says why), or connected.
+ */
+export type InboxReach = "pending" | "unknown" | "unavailable" | "connected";
+
+/** Each Remote Host listed as away, by name, once. */
+function awayHosts(groups: readonly InboxGroup[]): string[] {
+  const names = new Set<string>();
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (item.remoteHost !== undefined && !item.remoteHost.connected) {
+        names.add(item.remoteHost.name);
+      }
+    }
+  }
+  return [...names];
 }
 
 /**
- * The question the inbox shows: the one chosen while it is still listed, else
- * the one that took its place, else the first of the pane that opened the
- * inbox, else the first listed. Null for an empty list.
+ * The quiet line at the top of the list while Needs you is empty (#18022):
+ * that nothing waits on the person, only as far as the list can say. Not
+ * connected, with status unknown, or with a Remote Host away, it speaks for
+ * the questions shown and says what it can't vouch for. Null while Needs you
+ * has a question, seen ones included, and before Decisions' status is read.
+ */
+export function waitingText(groups: readonly InboxGroup[], reach: InboxReach): string | null {
+  if (reach === "pending" || groups.some((group) => group.id === "needs-you")) return null;
+  const away = awayHosts(groups);
+  if (reach === "connected" && away.length === 0) return "No questions waiting on you";
+  const lead =
+    groups.length === 0
+      ? "No questions on this computer"
+      : "None of the questions here wait on you";
+  const reasons = [
+    // Not connected: the connection notice above says why, and what waits for it.
+    ...(reach === "unknown"
+      ? ["Decisions status couldn't be read, so newer questions may be missing."]
+      : []),
+    ...(away.length === 1
+      ? [`${away[0]} is away, so its questions are as last reported.`]
+      : away.length > 1
+        ? [
+            `${pluralize(away.length, "Remote Host")} are away, so their questions are as last reported.`,
+          ]
+        : []),
+  ];
+  return reasons.length === 0 ? lead : `${lead}. ${reasons.join(" ")}`;
+}
+
+/**
+ * The question chosen in the inbox, where it stood in the list when chosen,
+ * and whether the person picked it (a row, or Next question) rather than the
+ * inbox choosing it on opening.
+ */
+export interface InboxChoice {
+  key: string;
+  index: number;
+  picked: boolean;
+}
+
+/** The groups whose first question the inbox opens on by itself: each still needs something. */
+const AUTO_OPEN: ReadonlySet<InboxGroupId> = new Set([
+  "needs-you",
+  "awaiting",
+  "delivering",
+  "attention",
+]);
+
+/**
+ * The question the inbox shows: the one chosen while it is still listed; for
+ * one the person picked that went, the one that took its place; else the
+ * first of the pane that opened the inbox, in any group; else the first that
+ * still needs something (#18022). Null when nothing does: a Cleared or
+ * History question opens only when it's picked.
  */
 export function resolveSelection(
-  ordered: readonly DecisionQuestionListItem[],
+  groups: readonly InboxGroup[],
   chosen: InboxChoice | null,
   openerTerminalId: string | null
 ): DecisionQuestionListItem | null {
-  if (ordered.length === 0) return null;
+  const ordered = groups.flatMap((group) => group.items);
   if (chosen !== null) {
     const kept = ordered.find((item) => referenceKey(item.reference) === chosen.key);
-    return kept ?? ordered[Math.min(chosen.index, ordered.length - 1)]!;
+    if (kept !== undefined) return kept;
+    if (chosen.picked && ordered.length > 0) {
+      return ordered[Math.min(chosen.index, ordered.length - 1)]!;
+    }
   }
   if (openerTerminalId !== null) {
     const own = ordered.find((item) => item.reference.terminalId === openerTerminalId);
     if (own !== undefined) return own;
   }
-  return ordered[0]!;
+  return groups.find((group) => AUTO_OPEN.has(group.id))?.items[0] ?? null;
 }
 
 export interface ConnectionNotice {
