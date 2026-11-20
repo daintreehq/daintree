@@ -140,6 +140,8 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // When the mirror last lost output, or was created: what it reports covers
   // only the stream since.
   private continuousSince = Date.now();
+  // Bumped with every loss: two can share a millisecond, which the stamp can't tell apart.
+  private continuityBreaks = 0;
   private viewportLines: string[] = [];
   private cursorLine: string | null = null;
   private bracketedPasteMode = false;
@@ -252,6 +254,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       // is a hole in the mirror no later snapshot can be fenced across.
       this.continuityLost = true;
       this.continuousSince = Date.now();
+      this.continuityBreaks++;
       this.settleCaptures("lost");
     }
     return sent;
@@ -570,14 +573,14 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   async serializeScreen(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
     // A hold that can't reach the worker is output the screen would miss.
-    const since = this.continuousSince;
+    const breaks = this.continuityBreaks;
     if (!this.flushHeldFeed()) return null;
     const snapshot = asSnapshot(
       await this.pool.request(this.spec.terminalId, "serialize-screen")
     );
     // A slot rebuilt or a chunk dropped meanwhile left a mirror that never
     // saw some of what was fed before the request.
-    return snapshot !== null && !this.inactive() && this.continuousSince === since
+    return snapshot !== null && !this.inactive() && this.continuityBreaks === breaks
       ? snapshot
       : null;
   }
@@ -757,6 +760,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     this.settleCaptures("lost");
     this.continuityLost = true;
     this.continuousSince = Date.now();
+    this.continuityBreaks++;
     this.feedEpoch++;
     this.outstandingFeedBytes = 0;
     this.heldFeed = null;
