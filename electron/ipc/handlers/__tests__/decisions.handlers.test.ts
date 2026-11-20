@@ -7,6 +7,7 @@ import type {
   DecisionsKitExportResult,
   DecisionsKitVerifyResult,
   DecisionsKeyErasurePayload,
+  DecisionsHistoryRemoveResult,
   DecisionsLocalDeleteResult,
   DecisionsPolicy,
   DecisionsRelayCheck,
@@ -244,6 +245,10 @@ const decisionsEntry = vi.hoisted(() => ({
     result: "deleted",
     status: { state: "not-connected" },
   })),
+  removeSettledQuestions: vi.fn(async (): Promise<DecisionsHistoryRemoveResult> => ({
+    result: "removed",
+    count: 3,
+  })),
   getDecisionsPolicy: vi.fn((): DecisionsPolicy => ({
     gates: [],
     defaultQuestionExpiryMs: 1,
@@ -383,6 +388,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     exportData: decisionsEntry.exportData,
     deleteRelayData: decisionsEntry.deleteRelayData,
     deleteLocalData: decisionsEntry.deleteLocalData,
+    removeSettledQuestions: decisionsEntry.removeSettledQuestions,
     getDecisionsPolicy: decisionsEntry.getDecisionsPolicy,
     setDecisionsDefaultQuestionExpiry: decisionsEntry.setDecisionsDefaultQuestionExpiry,
     setDecisionsAgentAskHuman: decisionsEntry.setDecisionsAgentAskHuman,
@@ -569,6 +575,8 @@ const deleteLocalData = decisionsNamespace.ops.deleteLocalData.handler as unknow
 ) => Promise<DecisionsLocalDeleteResult>;
 /** A confirm that asked for the typed gate (#18064). */
 const TYPED: DecisionsKeyErasurePayload = { oneClick: false, relayOrigin: null, keys: null };
+const removeSettledQuestions = decisionsNamespace.ops.removeSettledQuestions
+  .handler as unknown as () => Promise<DecisionsHistoryRemoveResult>;
 const EXPORT: ExportDecisionsDataPayload = { passphrase: "a long export passphrase" };
 const RELAY_ORIGIN = "https://relay.example.com";
 const exportRecoveryKit = decisionsNamespace.ops.exportRecoveryKit.handler as unknown as (
@@ -684,6 +692,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_EXPORT_DATA,
   CHANNELS.DECISIONS_DELETE_RELAY_DATA,
   CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
+  CHANNELS.DECISIONS_REMOVE_SETTLED_QUESTIONS,
   CHANNELS.DECISIONS_GET_POLICY,
   CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
   CHANNELS.DECISIONS_SET_TERMINAL_SNAPSHOTS,
@@ -744,6 +753,7 @@ describe("decisions IPC", () => {
     decisionsEntry.exportData.mockClear();
     decisionsEntry.deleteRelayData.mockClear();
     decisionsEntry.deleteLocalData.mockClear();
+    decisionsEntry.removeSettledQuestions.mockClear();
     decisionsEntry.exportRecoveryKit.mockClear();
     decisionsEntry.verifyRecoveryKit.mockClear();
     dialogMock.showSaveDialog.mockClear();
@@ -1369,6 +1379,7 @@ describe("decisions IPC", () => {
         code: "PERMISSION",
       });
       await expect(deleteLocalData(TYPED)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(removeSettledQuestions()).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -1387,6 +1398,7 @@ describe("decisions IPC", () => {
       code: "CANCELLED",
     });
     await expect(deleteLocalData(TYPED)).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(removeSettledQuestions()).rejects.toMatchObject({ code: "CANCELLED" });
 
     expect(decisionsEntry.evaluated).toBe(0);
   });
@@ -2314,6 +2326,16 @@ describe("decisions IPC", () => {
       origin: RELAY_ORIGIN,
     });
     expect(decisionsEntry.deleteLocalData).toHaveBeenCalledExactlyOnceWith(confirmed);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("removes settled questions through Decisions itself once the setting is on (#18033)", async () => {
+    saved.value = { enabled: true };
+
+    await expect(removeSettledQuestions()).resolves.toEqual({ result: "removed", count: 3 });
+
+    expect(decisionsEntry.removeSettledQuestions).toHaveBeenCalledOnce();
+    expect(decisionsEntry.deleteLocalData).not.toHaveBeenCalled();
     expect(store.set).not.toHaveBeenCalled();
   });
 

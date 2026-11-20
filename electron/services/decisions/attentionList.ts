@@ -50,10 +50,22 @@ export type HandledAnswers = ReadonlyMap<string, number>;
 const QUESTION_ID = /^[A-Za-z0-9_-]{8,80}$/;
 
 export async function readHandledAnswers(store: MetaStore): Promise<Map<string, number>> {
+  let text: string | null;
+  try {
+    text = await store.getMeta(HANDLED_ANSWERS_META_KEY);
+  } catch {
+    // A record that can't be read hides nothing, as a damaged one doesn't.
+    return new Map();
+  }
+  return parseHandledAnswers(text);
+}
+
+/** The record as stored; null when there is none. */
+export function parseHandledAnswers(text: string | null): Map<string, number> {
   const handled = new Map<string, number>();
   let parsed: unknown;
   try {
-    parsed = JSON.parse((await store.getMeta(HANDLED_ANSWERS_META_KEY)) ?? "{}");
+    parsed = JSON.parse(text ?? "{}");
   } catch {
     // A damaged record hides nothing: every answer that needs a person shows.
     return handled;

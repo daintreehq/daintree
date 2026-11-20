@@ -28,13 +28,15 @@ const loads = vi.hoisted(() => ({
   closing: null as Promise<void> | null,
   // While set, opening a store waits for it, holding a start partway.
   opening: null as Promise<void> | null,
+  // The questions the next removal of settled history takes (#18033).
+  removable: [] as string[],
   // Why the stores stopped writing; null while they write.
   faultReason: null as "disk-pressure" | "disk-full" | "storage-busy" | "storage-fault" | null,
   // While set, every store opened holds these rows and meta, and a meta write commits (#17895).
   persisted: null as null | {
     rows: unknown[];
     meta: Map<string, string>;
-    commits: Set<() => void>;
+    commits: Set<(commit: { questions: Set<string>; meta: Set<string> }) => void>;
   },
 }));
 const broadcast = vi.hoisted(() => vi.fn());
@@ -462,20 +464,31 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
           const persisted = loads.persisted;
           return {
             close: () => loads.closing ?? Promise.resolve(),
-            onCommit: (listener: () => void) => {
+            onCommit: (
+              listener: (commit: { questions: Set<string>; meta: Set<string> }) => void
+            ) => {
               persisted?.commits.add(listener);
               return () => persisted?.commits.delete(listener);
             },
             onQuestionDeleted: () => () => {},
             onFault: () => () => {},
             faultReason: () => loads.faultReason,
+            removeSettledQuestions: async () => loads.removable.splice(0),
             listQuestions: async () => persisted?.rows ?? [],
+            getQuestions: async (ids: Iterable<string>) => {
+              const wanted = new Set(ids);
+              return ((persisted?.rows ?? []) as Array<{ question_id: string }>).filter((r) =>
+                wanted.has(r.question_id)
+              );
+            },
             ...(persisted
               ? {
                   getMeta: async (key: string) => persisted.meta.get(key) ?? null,
                   setMeta: async (key: string, value: string) => {
                     persisted.meta.set(key, value);
-                    for (const listener of [...persisted.commits]) listener();
+                    for (const listener of [...persisted.commits]) {
+                      listener({ questions: new Set(), meta: new Set([key]) });
+                    }
                   },
                 }
               : notificationRecord.readable
@@ -547,6 +560,7 @@ import {
   decisionsHostRuntimeFor,
   decisionsLaunchPort,
   deleteLocalData,
+  removeSettledQuestions,
   deleteRelayData,
   disconnectRelay,
   exportData,
@@ -664,6 +678,7 @@ describe("Decisions entry", () => {
     loads.closing = null;
     loads.opening = null;
     loads.faultReason = null;
+    loads.removable = [];
     toastAudience.present = true;
     vi.mocked(store.set).mockClear();
     broadcast.mockClear();
@@ -4665,6 +4680,27 @@ describe("Decisions entry", () => {
         })
       ).resolves.toEqual({ result: "cancelled" });
       expect(existsSync(exportTarget())).toBe(false);
+    });
+
+    it("drops an archive read before settled questions were removed while the dialog was open (#18033)", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      dataRuns.buildArchive.mockResolvedValue({ archive: ARCHIVE });
+      const removingThenPicking = async () => {
+        await expect(removeSettledQuestions()).resolves.toMatchObject({ result: "removed" });
+        return exportTarget();
+      };
+
+      loads.removable = ["q_settled"];
+      await expect(exportData({ passphrase: PASSPHRASE }, removingThenPicking)).resolves.toEqual({
+        result: "cancelled",
+      });
+      expect(existsSync(exportTarget())).toBe(false);
+      // A removal that took nothing changed nothing the archive holds.
+      await expect(
+        exportData({ passphrase: PASSPHRASE }, removingThenPicking)
+      ).resolves.toMatchObject({ result: "saved" });
+      rmSync(exportTarget(), { force: true });
     });
 
     it("holds a local deletion asked for mid-write until the archive is written", async () => {

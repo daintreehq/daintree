@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { DecisionLearner, PolicyRegistry, QuestionRow } from "@daintreehq/decisions-client";
 import type {
+  DecisionsHistoryRemoveResult,
   DecisionsSettings,
   DecisionsStatus,
   DecisionsStatusEvent,
@@ -31,6 +32,7 @@ import type { AnswerDelivery, AnswerDeliveryDeps } from "./answerDelivery.js";
 import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
 import { DecisionsAttachments } from "./attachmentSpool.js";
 import {
+  HANDLED_ANSWERS_META_KEY,
   readHandledAnswers,
   withoutHandled,
   type HandledAnswers,
@@ -66,12 +68,18 @@ import {
   type QueuedClosing,
 } from "./paneDecisionState.js";
 import type { PaneSnapshotSources } from "./paneSnapshots.js";
-import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
-import { asksAboutAsker, projectDecisionQuestions, questionAsks } from "./questionList.js";
+import { QuestionRowsFeed } from "./questionFeed.js";
+import {
+  asksAboutAsker,
+  projectDecisionQuestions,
+  questionAsks,
+  type QuestionListMemo,
+} from "./questionList.js";
 import { AskerPresence, type AskerPresenceSources } from "./askerPresence.js";
 import type { AdvisoryHost } from "./questionRound.js";
 import type { DecisionsHostQuestionPolicy } from "../../../shared/types/decisionsHosts.js";
 import {
+  QUESTION_MARKS_META_KEY,
   readQuestionMarks,
   unclearedQuestionsByTerminal,
   type QuestionMarks,
@@ -201,6 +209,23 @@ export function relayBindingOf(settings: DecisionsSettings | null): RelayBinding
     installationId: settings.installationId,
     deviceId: settings.deviceId,
   };
+}
+
+/** What removing settled history did, and which of this machine's questions it removed. */
+export interface RemovedHistory {
+  result: DecisionsHistoryRemoveResult;
+  hostId: string | null;
+  questionIds: readonly string[];
+}
+
+/** The meta the feed reads beside the rows: a commit writing one feeds what is held again. */
+const FEED_META_KEYS = [HANDLED_ANSWERS_META_KEY, QUESTION_MARKS_META_KEY] as const;
+
+/** Why the store refused a removal: its own refusal while disk space is critical, else the database's. */
+function removalRefusal(error: unknown): "disk-pressure" | "storage" | null {
+  const refusal = error as { name?: unknown; reason?: unknown } | null;
+  if (refusal?.name !== "DecisionsStoreUnavailableError") return null;
+  return refusal.reason === "disk-pressure" ? "disk-pressure" : "storage";
 }
 
 function bindingKey(relay: RelayBinding): string {
@@ -397,6 +422,15 @@ export class DecisionsService {
   private feed: QuestionRowsFeed | null = null;
   /** Counts the fleet's open questions again when the next one's deadline passes. */
   private questionDeadline: ReturnType<typeof setTimeout> | null = null;
+  /** The list items projected from the feed's rows, which it keeps while they don't change. */
+  private readonly listMemo: QuestionListMemo = new WeakMap();
+  /**
+   * The questions a person's answer, decline or follow-up is on its way to
+   * the outbox for, by how many: removing history leaves them be (#18033).
+   */
+  private readonly personWork = new Map<string, number>();
+  /** Counts the removals of settled history that took anything, so an export read before one is never written. */
+  private historyRemovals = 0;
   /** The desktop notifications for the store being fed, while it is an owner's. */
   private notifications: QuestionNotifications | null = null;
   private offCommit: (() => void) | null = null;
@@ -622,7 +656,7 @@ export class DecisionsService {
       // What the old id counted raises no run meanwhile, however long the read takes.
       this.disarmQuestionDeadline();
       this.panes.setQuestions(new Map());
-      void this.feed?.refresh();
+      void this.feed?.refresh([]);
     }
   }
 
@@ -781,7 +815,9 @@ export class DecisionsService {
       return Promise.resolve({ result: "not-running" });
     }
     if (this.role !== "owner") return Promise.resolve({ result: "refused", reason: "not-owner" });
-    return questions.answerForPerson(payload, this.settings?.hostId ?? null);
+    return this.withPersonWork(payload.reference.questionId, () =>
+      questions.answerForPerson(payload, this.settings?.hostId ?? null)
+    );
   }
 
   /** Where a person's answer stands, by the id it was submitted with (#17101). */
@@ -804,7 +840,9 @@ export class DecisionsService {
       return Promise.resolve({ result: "not-running" });
     }
     if (this.role !== "owner") return Promise.resolve({ result: "refused", reason: "not-owner" });
-    return questions.declineForPerson(payload, this.settings?.hostId ?? null);
+    return this.withPersonWork(payload.reference.questionId, () =>
+      questions.declineForPerson(payload, this.settings?.hostId ?? null)
+    );
   }
 
   /** Where a person's decline stands, by the id it was submitted with (#17239). */
@@ -828,7 +866,9 @@ export class DecisionsService {
       return Promise.resolve({ result: "not-running" });
     }
     if (this.role !== "owner") return Promise.resolve({ result: "refused", reason: "not-owner" });
-    return questions.followUpForPerson(payload, this.settings?.hostId ?? null);
+    return this.withPersonWork(payload.reference.questionId, () =>
+      questions.followUpForPerson(payload, this.settings?.hostId ?? null)
+    );
   }
 
   /** Where a person's follow-up stands, by the id it was submitted with (#17238). */
@@ -902,7 +942,8 @@ export class DecisionsService {
       handled,
       hostId,
       this.advisoryHost(),
-      presence === null ? undefined : (origin) => presence.lookup(origin)
+      presence === null ? undefined : (origin) => presence.lookup(origin),
+      this.listMemo
     );
     if (presence !== null) {
       const asking = new Set(
@@ -1135,7 +1176,7 @@ export class DecisionsService {
       const hostChanged = this.settings?.hostId !== settings.hostId;
       this.role = role;
       this.settings = settings;
-      if (hostChanged) void this.feed?.refresh();
+      if (hostChanged) void this.feed?.refresh([]);
       this.applyPolicy(settings);
       this.paused = false;
       // There is no relay identity until a relay is claimed or restored, and no
@@ -1261,6 +1302,68 @@ export class DecisionsService {
       }
       return outcome;
     });
+  }
+
+  /**
+   * Removes this computer's settled questions from its history (#18033):
+   * those its list shows under History that nothing still works on, in one
+   * write to the open store, which stays open. The connection, the keys, the
+   * relay record, the enrolled Hosts and the decision model stay as they
+   * are, and nothing is sent anywhere. Under the lifetime's lock when a
+   * connection runs, so no answer, follow-up or delivery reads a question
+   * between its check and its write. Only an owner's lifetime, while on.
+   */
+  removeSettledQuestions(): Promise<RemovedHistory> {
+    return this.enqueue(async (): Promise<RemovedHistory> => {
+      if (this.disposed || this.settings === null) {
+        throw new Error("Decisions is off, so its history can't be removed");
+      }
+      if (this.role !== "owner")
+        throw new Error("Only the owner computer's history can be removed");
+      const store = this.store;
+      const hostId = this.settings.hostId ?? null;
+      const none = (result: DecisionsHistoryRemoveResult): RemovedHistory => ({
+        result,
+        hostId,
+        questionIds: [],
+      });
+      if (store === null) return none({ result: "failed", reason: "store-unavailable" });
+      // With no host id nothing is listed, so nothing is in History.
+      if (hostId === null) return none({ result: "removed", count: 0 });
+      const remove = () =>
+        store.removeSettledQuestions(hostId, () => new Set(this.personWork.keys()));
+      const lock = this.questionSource?.lock;
+      let removed: string[];
+      try {
+        removed = await (lock ? lock.run(remove) : remove());
+      } catch (error) {
+        const reason = removalRefusal(error);
+        if (reason === null) throw error;
+        return none({ result: "failed", reason });
+      }
+      if (removed.length > 0) {
+        this.historyRemovals += 1;
+        // Their phone images go with them; one on a drive out of reach goes with a later sweep.
+        void this.phoneImages?.sweep();
+      }
+      return { result: { result: "removed", count: removed.length }, hostId, questionIds: removed };
+    });
+  }
+
+  /** Counts the removals of settled history that took anything, for as long as this service runs. */
+  getHistoryRemovals(): number {
+    return this.historyRemovals;
+  }
+
+  /** Runs a person's answer, decline or follow-up with its question held back from removal until it settles. */
+  private withPersonWork<T>(questionId: string, run: () => Promise<T>): Promise<T> {
+    this.personWork.set(questionId, (this.personWork.get(questionId) ?? 0) + 1);
+    const release = () => {
+      const left = (this.personWork.get(questionId) ?? 1) - 1;
+      if (left > 0) this.personWork.set(questionId, left);
+      else this.personWork.delete(questionId);
+    };
+    return run().finally(release);
   }
 
   /**
@@ -1414,7 +1517,7 @@ export class DecisionsService {
     connection = this.connect({
       relay: wanted,
       role: role === "host" ? "desktop-host" : "owner-desktop",
-      store: observeQuestionWrites(store, () => void feed?.refresh()),
+      store,
       keys: this.getKeyStore(),
       rotations: this.getKeyRotations(),
       onDevicesChanged: () => {
@@ -1448,7 +1551,7 @@ export class DecisionsService {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks, nor settle advice.
         if (status.state === "not-connected" || status.state === "revoked") {
-          this.questionSource = null;
+          this.forgetQuestionSource();
           this.closeQuestions();
           this.settleQuestions();
         }
@@ -1460,7 +1563,7 @@ export class DecisionsService {
         const reported = this.getQuestionPolicy()?.advisoryQuestions;
         this.questionSource = source;
         // Listed before the connection settled advisory delivery: again if it isn't what was assumed.
-        if (this.advisoryHost().outcomes !== listed.outcomes) void feed?.refresh();
+        if (this.advisoryHost().outcomes !== listed.outcomes) void feed?.refresh([]);
         // Reported as taking no advice until settled: told again, as no status change need follow.
         if (this.getQuestionPolicy()?.advisoryQuestions !== reported) {
           this.onQuestionPolicyChanged();
@@ -1566,11 +1669,24 @@ export class DecisionsService {
     this.onModelChanged();
   }
 
+  /**
+   * No connection takes questions any more. What an advisory question's
+   * untyped notice would be falls back to what the lifetime was configured
+   * with, so the list is shown again when that differs from what the
+   * connection had settled.
+   */
+  private forgetQuestionSource(): void {
+    if (this.questionSource === null) return;
+    const listed = this.advisoryHost().outcomes;
+    this.questionSource = null;
+    if (this.advisoryHost().outcomes !== listed) void this.feed?.refresh([]);
+  }
+
   private dropConnection(): void {
     const connection = this.connection;
     this.connection = null;
     this.connectionKey = null;
-    this.questionSource = null;
+    this.forgetQuestionSource();
     this.closeQuestions();
     this.settleQuestions();
     const stopped = connection?.stop();
@@ -1691,12 +1807,21 @@ export class DecisionsService {
             }
           )
         : null;
+    const readMeta = async (): Promise<void> => {
+      handled = await readHandledAnswers(store);
+      if (owner) marks = await readQuestionMarks(store).catch(() => marks);
+      queued = await readQueuedClosings(store).catch(() => queued);
+    };
     const feed = new QuestionRowsFeed(
-      async () => {
-        handled = await readHandledAnswers(store);
-        if (owner) marks = await readQuestionMarks(store).catch(() => marks);
-        queued = await readQueuedClosings(store).catch(() => queued);
-        return store.listQuestions();
+      {
+        all: async () => {
+          await readMeta();
+          return store.listQuestions();
+        },
+        some: async (ids) => {
+          await readMeta();
+          return store.getQuestions(ids);
+        },
       },
       (rows) => {
         const closings = closingsFor(rows, queued);
@@ -1708,7 +1833,14 @@ export class DecisionsService {
     );
     this.feed = feed;
     this.askers = presence;
-    this.offCommit = store.onCommit(() => void feed.refresh());
+    // Only the questions a commit wrote are read again; one that wrote neither rows nor what the
+    // feed reads beside them (the cursor, the audit log, an answer's send) reads nothing. A
+    // queued withdrawal or decline names its question, so its closing is read again (#18052).
+    this.offCommit = store.onCommit((commit) => {
+      if (commit.questions.size > 0 || FEED_META_KEYS.some((key) => commit.meta.has(key))) {
+        void feed.refresh(commit.questions);
+      }
+    });
     const first = feed.refresh();
     const notifyQuestions = this.notifyQuestions;
     if (notifyQuestions !== null && this.role === "owner") {

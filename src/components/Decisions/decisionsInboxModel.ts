@@ -294,6 +294,35 @@ export function inboxGroups(
   });
 }
 
+/** How many History rows the inbox shows at first, and how many more each ask for older ones shows (#18033). */
+export const HISTORY_PAGE = 64;
+
+/**
+ * The groups as the list shows them: History, newest first, cut to its
+ * first `shown` rows, so a long history mounts and reads a page of rows
+ * rather than every past question (#18033). The question `keep` names (the
+ * one selected) stays in view however far down it is, after the rows shown,
+ * on its own. `hidden` is how many History rows are left out, and `next` the
+ * newest of them: the first row showing more brings in.
+ */
+export function shownGroups(
+  groups: readonly InboxGroup[],
+  shown: number,
+  keep: DecisionQuestionListItem | null
+): { groups: InboxGroup[]; hidden: number; next: DecisionQuestionListItem | null } {
+  let hidden = 0;
+  let next: DecisionQuestionListItem | null = null;
+  const cut = groups.map((group) => {
+    if (group.id !== "history" || group.items.length <= shown) return group;
+    const head = group.items.slice(0, shown);
+    const kept = keep !== null && group.items.indexOf(keep) >= shown ? [keep] : [];
+    hidden = group.items.length - head.length - kept.length;
+    next = group.items.slice(shown).find((item) => item !== keep) ?? null;
+    return { ...group, items: [...head, ...kept] };
+  });
+  return { groups: cut, hidden, next };
+}
+
 /** Names the question wherever it is read from. */
 export function referenceKey(reference: DecisionQuestionReference): string {
   return [reference.hostId, reference.projectId, reference.terminalId, reference.questionId].join(

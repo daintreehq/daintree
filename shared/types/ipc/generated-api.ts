@@ -632,6 +632,9 @@ export interface GeneratedElectronAPI {
     reassignAnswer(
       ...args: IpcInvokeMap["decisions:reassign-answer"]["args"]
     ): Promise<IpcInvokeMap["decisions:reassign-answer"]["result"]>;
+    removeSettledQuestions(
+      ...args: IpcInvokeMap["decisions:remove-settled-questions"]["args"]
+    ): Promise<IpcInvokeMap["decisions:remove-settled-questions"]["result"]>;
     reportComposerDrafts(
       ...args: IpcInvokeMap["decisions:report-composer-drafts"]["args"]
     ): Promise<IpcInvokeMap["decisions:report-composer-drafts"]["result"]>;

@@ -33,6 +33,7 @@ import type {
   DecisionsExportResult,
   DecisionsKitExportResult,
   DecisionsKitVerifyResult,
+  DecisionsHistoryRemoveResult,
   DecisionsLocalDeleteResult,
   DecisionsPairingApproveResult,
   DecisionsPairingDeclineResult,
@@ -1075,6 +1076,15 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.deleteLocalData(payload);
+      }
+    ),
+    removeSettledQuestions: op(
+      CHANNELS.DECISIONS_REMOVE_SETTLED_QUESTIONS,
+      async (): Promise<DecisionsHistoryRemoveResult> => {
+        refuseWhileOff("remove its settled questions");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.removeSettledQuestions();
       }
     ),
     // The trusted gates (#16013) and the default question expiry (#16122).

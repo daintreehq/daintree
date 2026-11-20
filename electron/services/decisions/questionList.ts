@@ -50,47 +50,22 @@ export function projectDecisionQuestions(
   handled: HandledAnswers,
   hostId: string | null,
   advisory: AdvisoryHost = NO_ADVISORY_HOST,
-  askerFor?: (origin: QuestionRow["origin"]) => DecisionAskerPresence | undefined
+  askerFor?: (origin: QuestionRow["origin"]) => DecisionAskerPresence | undefined,
+  memo?: QuestionListMemo
 ): DecisionQuestionListItem[] {
   if (hostId === null) return [];
   return rows
-    .filter(
-      (row) =>
-        !row.history_only &&
-        row.origin.host_id === hostId &&
-        row.origin.project_id !== "" &&
-        row.origin.pane_id !== ""
-    )
+    .filter((row) => listedHere(row, hostId))
     .sort(byAlias)
     .map((row) => {
-      const { origin } = row;
-      const standing = standingOf(row, handled);
-      const round = roundOf(row, undefined, advisory);
-      const asker = asksAboutAsker(standing) ? askerFor?.(origin) : undefined;
-      return {
-        reference: {
-          hostId,
-          projectId: origin.project_id,
-          terminalId: origin.pane_id,
-          questionId: row.question_id,
-        },
-        alias: row.alias,
-        agentKind: origin.agent_kind,
-        projectLabel: origin.project_label?.trim() || null,
-        worktreeId: origin.worktree_id,
-        worktreeRoot: origin.worktree_root,
-        requirement: row.requirement,
-        askedAt: row.origin_created_at,
-        expiresAt: row.expires_at ?? null,
-        replyMode: round.replyMode,
-        closedReason: round.closedReason,
-        closureNotice: round.closureNotice,
-        settledAt: standing.kind === "settled" ? settledAt(row, standing.outcome) : null,
-        standing,
-        replyRequest: replyRequestOf(row),
-        stall: stallOf(row, handled),
-        ...(asker !== undefined ? { asker } : {}),
-      };
+      if (memo === undefined) return projectQuestion(row, handled, hostId, advisory, askerFor);
+      // A row object is replaced whenever its row changes, so only what it is read with can differ.
+      const key = `${hostId}\u0000${handled.get(row.question_id) ?? ""}\u0000${advisory.outcomes}\u0000${advisory.allowed}`;
+      const held = memo.get(row);
+      if (held?.key === key && sameAsker(held.item, row.origin, askerFor)) return held.item;
+      const item = projectQuestion(row, handled, hostId, advisory, askerFor);
+      memo.set(row, { key, item });
+      return item;
     });
 }
 
@@ -101,6 +76,93 @@ export function projectDecisionQuestions(
  */
 export function asksAboutAsker(standing: DecisionQuestionStanding): boolean {
   return (standing.kind === "waiting" && standing.reason === "open") || standing.kind === "queued";
+}
+
+/** Whether what is observed of the run that asked is still what `item` carries. */
+function sameAsker(
+  item: DecisionQuestionListItem,
+  origin: QuestionRow["origin"],
+  askerFor: ((origin: QuestionRow["origin"]) => DecisionAskerPresence | undefined) | undefined
+): boolean {
+  const now = asksAboutAsker(item.standing) ? askerFor?.(origin) : undefined;
+  const was = item.asker;
+  if (now === undefined || was === undefined) return now === was;
+  return now.target === was.target && now.directory === was.directory && now.resume === was.resume;
+}
+
+/**
+ * The list items already projected, by the row object they were projected
+ * from, so a feed that keeps its unchanged rows' objects projects only the
+ * rows that changed. Entries go with their rows.
+ */
+export type QuestionListMemo = WeakMap<
+  QuestionRow,
+  { key: string; item: DecisionQuestionListItem }
+>;
+
+/** Whether this computer's list shows the row: its own, asked from a project's terminal, not imported. */
+function listedHere(row: QuestionRow, hostId: string): boolean {
+  return (
+    !row.history_only &&
+    row.origin.host_id === hostId &&
+    row.origin.project_id !== "" &&
+    row.origin.pane_id !== ""
+  );
+}
+
+/**
+ * Whether removing settled history (#18033) takes the row: this computer's
+ * list shows it under History (settled, or never sent), and no answer or
+ * notice is still marked to be typed in. The store vetoes what it alone can
+ * see: a queued send, an injection not yet settled, a follow-up still owed,
+ * an event not yet applied.
+ */
+export function removableFromHistory(
+  row: QuestionRow,
+  handled: HandledAnswers,
+  hostId: string
+): boolean {
+  if (!listedHere(row, hostId)) return false;
+  const standing = standingOf(row, handled);
+  if (standing.kind !== "settled" && standing.kind !== "send-failed") return false;
+  return pendingEntries(row).length === 0;
+}
+
+function projectQuestion(
+  row: QuestionRow,
+  handled: HandledAnswers,
+  hostId: string,
+  advisory: AdvisoryHost,
+  askerFor: ((origin: QuestionRow["origin"]) => DecisionAskerPresence | undefined) | undefined
+): DecisionQuestionListItem {
+  const { origin } = row;
+  const standing = standingOf(row, handled);
+  const round = roundOf(row, undefined, advisory);
+  const asker = asksAboutAsker(standing) ? askerFor?.(origin) : undefined;
+  return {
+    reference: {
+      hostId,
+      projectId: origin.project_id,
+      terminalId: origin.pane_id,
+      questionId: row.question_id,
+    },
+    alias: row.alias,
+    agentKind: origin.agent_kind,
+    projectLabel: origin.project_label?.trim() || null,
+    worktreeId: origin.worktree_id,
+    worktreeRoot: origin.worktree_root,
+    requirement: row.requirement,
+    askedAt: row.origin_created_at,
+    expiresAt: row.expires_at ?? null,
+    replyMode: round.replyMode,
+    closedReason: round.closedReason,
+    closureNotice: round.closureNotice,
+    settledAt: standing.kind === "settled" ? settledAt(row, standing.outcome) : null,
+    standing,
+    replyRequest: replyRequestOf(row),
+    stall: stallOf(row, handled),
+    ...(asker !== undefined ? { asker } : {}),
+  };
 }
 
 /**

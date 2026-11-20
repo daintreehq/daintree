@@ -10,21 +10,25 @@ import { DecisionsRecoveryKit } from "./DecisionsRecoveryKit";
 import { DecisionsExportDialog } from "./DecisionsExportDialog";
 import { DecisionsDeleteRelayDialog } from "./DecisionsDeleteRelayDialog";
 import { DecisionsDeleteLocalDialog } from "./DecisionsDeleteLocalDialog";
+import { DecisionsRemoveHistoryDialog } from "./DecisionsRemoveHistoryDialog";
 import { useDecisionsData, type DecisionsDataOutcome } from "./useDecisionsData";
 import { useLinkedDisclosure } from "./useLinkedDisclosure";
 import {
   describeExportResult,
+  describeHistoryRemoveResult,
   describeLocalDeleteResult,
   describeRelayDeleteResult,
 } from "./decisionsDataCopy";
 import type { RelayObservation } from "./relayCheckCopy";
 
-type OpenDialog = "export" | "delete-relay" | "delete-local" | null;
+type OpenDialog = "export" | "remove-history" | "delete-relay" | "delete-local" | null;
 
 function describeOutcome(outcome: DecisionsDataOutcome): RelayObservation | null {
   switch (outcome.action) {
     case "export":
       return describeExportResult(outcome.result);
+    case "remove-history":
+      return describeHistoryRemoveResult(outcome.result);
     case "delete-relay":
       return describeRelayDeleteResult(outcome.result);
     case "delete-local":
@@ -36,9 +40,10 @@ function describeOutcome(outcome: DecisionsDataOutcome): RelayObservation | null
  * Data: once a relay is set up, its recovery kit to save and verify at any
  * time (#16007); what's sent and where, the same list the consent dialog
  * showed, folded away until asked for, with the note on dictating answers
- * beside it; then exporting the decision history and deleting the relay's
- * stored content or this computer's Decisions data (#16025). Each action says what main
- * observed it do, on its own row; the deletions sit last, apart.
+ * beside it; then exporting the decision history, removing this computer's
+ * settled questions (#18033) and deleting the relay's stored content or this
+ * computer's Decisions data (#16025). Each action says what main observed it
+ * do, on its own row; the removal and the deletions sit last, apart.
  */
 export function DecisionsDataSection({
   status,
@@ -98,13 +103,15 @@ export function DecisionsDataSection({
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {data.pending === "export"
           ? "Exporting the decision history…"
-          : data.pending === "delete-relay"
-            ? "Deleting the relay's data…"
-            : data.pending === "delete-local"
-              ? "Deleting this computer's Decisions data…"
-              : observation
-                ? `${observation.label}. ${observation.detail}`
-                : ""}
+          : data.pending === "remove-history"
+            ? "Removing settled questions…"
+            : data.pending === "delete-relay"
+              ? "Deleting the relay's data…"
+              : data.pending === "delete-local"
+                ? "Deleting this computer's Decisions data…"
+                : observation
+                  ? `${observation.label}. ${observation.detail}`
+                  : ""}
       </span>
       {relayOrigin !== null && (
         <DecisionsRecoveryKit
@@ -177,6 +184,26 @@ export function DecisionsDataSection({
         )}
       </SettingsGroup>
       <SettingsGroup>
+        <SettingsRow
+          id="decisions-data-remove-history"
+          label="Remove settled questions"
+          description="Removes the questions in History whose deliveries are finished from this computer, with their answers. Open questions, keys, the relay and enrolled Hosts stay."
+          disabled={busy}
+          control={({ descriptionId, disabled }) => (
+            <Button
+              variant="ghost-danger"
+              size="sm"
+              disabled={disabled}
+              aria-describedby={descriptionId}
+              onClick={() => {
+                data.reset();
+                setOpen("remove-history");
+              }}
+            >
+              Remove settled questions
+            </Button>
+          )}
+        />
         {relayOrigin !== null && (
           <SettingsRow
             id="decisions-data-delete-relay"
@@ -227,6 +254,15 @@ export function DecisionsDataSection({
         onCancel={close}
         onExport={(passphrase) => {
           data.exportHistory(passphrase).then(finish, () => {});
+        }}
+      />
+      <DecisionsRemoveHistoryDialog
+        isOpen={open === "remove-history"}
+        removing={data.pending === "remove-history"}
+        error={errorFor("remove-history")}
+        onCancel={close}
+        onConfirm={() => {
+          data.removeSettledQuestions().then(finish, () => {});
         }}
       />
       {relayOrigin !== null && (

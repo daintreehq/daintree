@@ -58,6 +58,7 @@ import {
   scopedQuestions,
   scopeOffered,
   seeableAsk,
+  shownGroups,
   shownItems,
   standingText,
   waitingText,
@@ -163,6 +164,47 @@ describe("decisionsInboxModel", () => {
       "q3",
       "q4",
     ]);
+  });
+
+  it("shows History a page at a time from the newest, keeping the question selected in view (#18033)", () => {
+    const history = Array.from({ length: 10 }, (_, i) =>
+      item(
+        `h${i + 1}`,
+        { kind: "settled", outcome: "expired" },
+        {
+          settledAt: `2026-11-02T10:${String(i).padStart(2, "0")}:00.000Z`,
+        }
+      )
+    );
+    const groups = inboxGroups([item("q1", OPEN), ...history]);
+    const ids = (shown: ReturnType<typeof shownGroups>) =>
+      shown.groups.map((group) => group.items.map((entry) => entry.reference.questionId));
+
+    const page = shownGroups(groups, 3, null);
+    // Every open question stays; History keeps its newest three.
+    expect(ids(page)).toEqual([["q1"], ["h10", "h9", "h8"]]);
+    expect(page.hidden).toBe(7);
+
+    expect(page.next?.reference.questionId).toBe("h7");
+
+    // A question selected further down stays in view on its own, after the page: never the
+    // rows between, however far down it is.
+    const middle = groups[1]!.items.find((entry) => entry.reference.questionId === "h4")!;
+    const kept = shownGroups(groups, 3, middle);
+    expect(ids(kept)).toEqual([["q1"], ["h10", "h9", "h8", "h4"]]);
+    expect(kept.hidden).toBe(6);
+    expect(kept.next?.reference.questionId).toBe("h7");
+    // One already on the page stays where it is.
+    expect(ids(shownGroups(groups, 3, groups[1]!.items[1]!))).toEqual(ids(page));
+    // Selected as the next older one, the row after it is next.
+    const following = groups[1]!.items[3]!;
+    expect(shownGroups(groups, 3, following).next?.reference.questionId).toBe("h6");
+
+    // The oldest row alone left out is the next one.
+    expect(shownGroups(groups, 9, null)).toMatchObject({ hidden: 1 });
+    expect(shownGroups(groups, 9, null).next?.reference.questionId).toBe("h1");
+
+    expect(shownGroups(groups, 50, null)).toEqual({ groups, hidden: 0, next: null });
   });
 
   it("lists nothing for an empty list", () => {

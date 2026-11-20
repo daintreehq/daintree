@@ -68,6 +68,7 @@ import {
   type DecisionsKitExportResult,
   type DecisionsKitVerifyResult,
   type DecisionsKeyErasurePayload,
+  type DecisionsHistoryRemoveResult,
   type DecisionsLocalDeleteResult,
   type DecisionsPairingApproveResult,
   type DecisionsPairingDeclineResult,
@@ -2424,18 +2425,24 @@ export async function exportData(
   }
   const prepared = await serialize(
     async (): Promise<
-      | { archive: DecisionsArchive; running: DecisionsService; from: DaintreeLocalStore }
+      | {
+          archive: DecisionsArchive;
+          running: DecisionsService;
+          from: DaintreeLocalStore;
+          removals: number;
+        }
       | { failure: DecisionsExportResult }
     > => {
       const { service: running, keys } = await setupKeys();
       const localStore = running.getStore();
       if (!localStore) return { failure: { result: "store-unavailable" } };
+      const removals = running.getHistoryRemovals();
       const built = await buildDecisionsArchive({
         store: localStore,
         keys,
         passphrase: payload.passphrase,
       });
-      return "failure" in built ? built : { ...built, running, from: localStore };
+      return "failure" in built ? built : { ...built, running, from: localStore, removals };
     }
   );
   if ("failure" in prepared) return prepared.failure;
@@ -2445,8 +2452,15 @@ export async function exportData(
   // Back behind the transitions, so no deletion runs between the check and the write.
   return serialize(async (): Promise<DecisionsExportResult> => {
     // The store it was read from has closed (turned off, even if on again
-    // since; local data deleted; quit): the history it holds may be gone.
-    if (shutDown || prepared.running.getStore() !== prepared.from) return { result: "cancelled" };
+    // since; local data deleted; quit), or settled questions were removed
+    // from it (#18033): the history it holds may be gone.
+    if (
+      shutDown ||
+      prepared.running.getStore() !== prepared.from ||
+      prepared.running.getHistoryRemovals() !== prepared.removals
+    ) {
+      return { result: "cancelled" };
+    }
     try {
       await resilientAtomicWriteFile(path, archive.text, "utf-8", { mode: 0o600 });
     } catch {
@@ -2492,6 +2506,24 @@ export function deleteRelayData(
     } finally {
       setups.delete(controller);
     }
+  });
+}
+
+/**
+ * Removes this computer's settled questions from its decision history
+ * (#18033), behind the switch's transitions like a deletion, from the open
+ * store. Open questions, stopped deliveries and anything still to be sent or
+ * typed stay, as do the keys, the relay record and enrolled Hosts. Nothing
+ * is sent anywhere.
+ */
+export function removeSettledQuestions(): Promise<DecisionsHistoryRemoveResult> {
+  return serialize(async () => {
+    const removed = await (await runningService()).removeSettledQuestions();
+    // Their notification claims go too, or they would be kept, and written, for good.
+    if (removed.hostId !== null && removed.questionIds.length > 0) {
+      questionNotifier?.forget(removed.hostId, new Set(removed.questionIds));
+    }
+    return removed.result;
   });
 }
 
