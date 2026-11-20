@@ -785,7 +785,10 @@ describe("a question that never reached the relay (0.9.0, #17939)", () => {
     ["its advisory form", notice(unpublished(true))],
     ["an authorisation", notice(unpublished().replace("authorised: no", "authorised: yes"))],
     ["a person's", notice(unpublished().replace("source: system", "source: human"))],
-    ["a choice", notice(unpublished().replace("authorised: no", "authorised: no\nchoice: approve"))],
+    [
+      "a choice",
+      notice(unpublished().replace("authorised: no", "authorised: no\nchoice: approve")),
+    ],
   ])("refuses %s", (_label, text) => {
     expect(parseAnswerNotice(text)).toBeNull();
   });
@@ -793,11 +796,14 @@ describe("a question that never reached the relay (0.9.0, #17939)", () => {
   it.each([
     ["due", ADVISORY_TIMEOUT_NOTICE_FIXTURE.due],
     ["withheld", ADVISORY_TIMEOUT_NOTICE_FIXTURE.withheld],
-  ])("refuses the library's advisory timeout notice (%s), alone or beside an answer", (_label, text) => {
-    expect(parseDecisionNotice(text)).toBeNull();
-    const advisoryBlock = text.slice(text.indexOf(BLOCK_START));
-    expect(parseAnswerNotice(notice(answer(), advisoryBlock))).toBeNull();
-  });
+  ])(
+    "refuses the library's advisory timeout notice (%s), alone or beside an answer",
+    (_label, text) => {
+      expect(parseDecisionNotice(text)).toBeNull();
+      const advisoryBlock = text.slice(text.indexOf(BLOCK_START));
+      expect(parseAnswerNotice(notice(answer(), advisoryBlock))).toBeNull();
+    }
+  );
 });
 
 describe("parseDecisionNotice, follow-ups (#16231)", () => {

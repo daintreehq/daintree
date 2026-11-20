@@ -2160,7 +2160,10 @@ describe("get_involvement over a connection (#17228)", () => {
         isCurrent: () => true,
       });
 
-      await bridge.registerQuestion({ origin: QUESTION_ORIGIN, input: { question: "Still asking?" } });
+      await bridge.registerQuestion({
+        origin: QUESTION_ORIGIN,
+        input: { question: "Still asking?" },
+      });
       await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
       expect(h.statuses.at(-1)?.state).toBe("connected");
       // An ordinary question's envelope binds only what a 0.8.0 reader's strict AAD allows.

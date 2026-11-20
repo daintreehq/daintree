@@ -448,7 +448,10 @@ describe("/mcp/decisions (#16011)", () => {
     expect(row.alias).toBe(1);
     expect(Date.parse(row.expires_at!) - before).toBeGreaterThanOrEqual(15 * 60_000 - 1_000);
     expect(Date.parse(row.expires_at!) - Date.now()).toBeLessThanOrEqual(15 * 60_000);
-    expect(asked.structuredContent).toMatchObject({ reply_mode: "blocking", expires_at: row.expires_at });
+    expect(asked.structuredContent).toMatchObject({
+      reply_mode: "blocking",
+      expires_at: row.expires_at,
+    });
 
     const read = await call(port, "pane-token-pane-a", "get_decision", {
       question_id: row.question_id,

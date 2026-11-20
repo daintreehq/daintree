@@ -1751,10 +1751,9 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     expect(typedChoices(terminals.submitted[0]!.text)).toEqual(["a"]);
 
     const store = new DaintreeLocalStore(sqlite);
-    await vi.waitFor(
-      async () => expect(await store.getMeta("rounds-reconciled")).not.toBeNull(),
-      { timeout: 15_000 }
-    );
+    await vi.waitFor(async () => expect(await store.getMeta("rounds-reconciled")).not.toBeNull(), {
+      timeout: 15_000,
+    });
     expect(await store.getMeta(STORE_FORMAT_KEY)).toBe(String(STORE_FORMAT));
     expect(await store.getQuestion("q_reopened_0001")).toMatchObject({
       local_status: "open",

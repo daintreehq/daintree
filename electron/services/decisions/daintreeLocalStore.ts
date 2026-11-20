@@ -855,8 +855,7 @@ export class DaintreeLocalStore implements LocalStore {
    */
   checkFormat(): void {
     const row = this.st("SELECT value FROM decisions_meta WHERE key = ?").get(STORE_FORMAT_KEY) as
-      | { value: unknown }
-      | undefined;
+      { value: unknown } | undefined;
     checkStoreFormat(row?.value);
   }
 

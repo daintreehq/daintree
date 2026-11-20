@@ -49,15 +49,18 @@ describe("openDecisionsLocalStore", () => {
   it.each([
     ["a newer client's format", String(STORE_FORMAT + 1)],
     ["a marker that is no format", "two"],
-  ])("refuses a store holding %s, before anything reads it (0.9.0, #17939)", async (_label, raw) => {
-    const prepare = vi.fn(() => ({
-      get: (key: string) => (key === STORE_FORMAT_KEY ? { value: raw } : undefined),
-    }));
-    db.getSharedSqlite.mockReturnValue({ prepare });
+  ])(
+    "refuses a store holding %s, before anything reads it (0.9.0, #17939)",
+    async (_label, raw) => {
+      const prepare = vi.fn(() => ({
+        get: (key: string) => (key === STORE_FORMAT_KEY ? { value: raw } : undefined),
+      }));
+      db.getSharedSqlite.mockReturnValue({ prepare });
 
-    await expect(openDecisionsLocalStore(() => false)).rejects.toBeInstanceOf(StoreFormatError);
-    expect(prepare).toHaveBeenCalledTimes(1);
-  });
+      await expect(openDecisionsLocalStore(() => false)).rejects.toBeInstanceOf(StoreFormatError);
+      expect(prepare).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it.each([
     ["no marker, as 0.8.0 left it", undefined],
