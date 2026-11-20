@@ -331,15 +331,15 @@ export interface DecisionQuestionPane {
 /**
  * Reading a question's asking pane (#18037), never shared off the machine
  * that owns it but to this computer. `closed`: the pane no longer holds the
- * run that asked. `reassigned`: a person sent the answer to another terminal,
- * so the run that asked isn't known any more. `unreadable`: nothing could say
+ * run that asked. `moved`: the answer was moved to another terminal, by a
+ * person or a resume, so the run that asked isn't known any more. `unreadable`: nothing could say
  * what the pane holds now. `needs-update`: the Remote Host that asked is too
  * old to read it. The rest as a content read's.
  */
 export type DecisionQuestionPaneResult =
   | { result: "read"; reference: DecisionQuestionReference; pane: DecisionQuestionPane }
   | { result: "closed" }
-  | { result: "reassigned" }
+  | { result: "moved" }
   | { result: "unreadable" }
   | { result: "not-found" }
   | { result: "off" }

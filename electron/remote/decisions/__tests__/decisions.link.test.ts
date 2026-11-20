@@ -1832,10 +1832,6 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
       observedAt: "2026-11-20T10:00:00.000Z",
     };
 
-    it("is asked of the Host", () => {
-      expect(DECISIONS_LINK_METHOD_LOCALITY[DecisionsLinkMethod.QUESTION_PANE]).toBe("host");
-    });
-
     it("reads it on the Host with terminal snapshots off, and takes none about another pane", async () => {
       const { host, client } = await pair();
       const decisions = questionHost();
@@ -1860,6 +1856,7 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
 
       // Another pane's, another project's, or another question's read is refused.
       for (const other of [
+        { ...reference, hostId: "qhost_other_0001" },
         { ...reference, terminalId: "pane-other" },
         { ...reference, projectId: "project-other" },
         { ...reference, questionId: "q_host_other_01" },
@@ -1894,7 +1891,7 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
         value: { result: "closed" },
       });
       expect(decisions.reads.every((read) => read.read === "pane")).toBe(true);
-      expect(decisions.reads).toHaveLength(11);
+      expect(decisions.reads).toHaveLength(12);
     });
 
     it("serves nothing of a pane to a Shell whose owner didn't enroll it", async () => {
@@ -1926,6 +1923,8 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
         asks: [],
         seq: 1,
       }));
+      const legacy = vi.fn(() => ({ result: "off" }));
+      host.registerCallHandler(DecisionsLinkMethod.QUESTIONS, z.unknown(), legacy);
       const shell = shellOf([STUDIO]);
       shell.open(HOST, client);
       await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
@@ -1933,6 +1932,8 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
       expect(
         await shell.client.readHostQuestion(QHOST, { read: "pane", reference: item(1).reference })
       ).toEqual({ ok: false, failure: "needs-update" });
+      // No older method reads a pane: none is tried in its place.
+      expect(legacy).not.toHaveBeenCalled();
     });
   });
 

@@ -27,6 +27,33 @@ const WAITING_FOR: Record<WaitingReason, string> = {
   error: "on an error",
 };
 
+/**
+ * A short word for the live region on how a read came out, so a screen reader
+ * hears it without the terminal's lines, which stay in their own labelled box.
+ */
+function outcomeText(read: PaneRead | null): string {
+  if (read === null || read.state === "reading") return "";
+  if (read.state === "failed") return "The terminal couldn't be read";
+  switch (read.result.result) {
+    case "read":
+      return "Recent terminal output read";
+    case "closed":
+      return "Terminal closed";
+    case "moved":
+      return "The answer was moved to another terminal";
+    case "needs-update":
+      return "The Remote Host needs updating";
+    case "host-not-connected":
+      return "The Remote Host isn't connected";
+    case "off":
+    case "not-running":
+      return "Decisions isn't running";
+    case "unreadable":
+    case "not-found":
+      return "The terminal couldn't be read";
+  }
+}
+
 function isAgentState(state: string): state is AgentState {
   return Object.hasOwn(STATE_LABELS, state);
 }
@@ -57,6 +84,7 @@ export function DecisionAskingPane({ reference }: { reference: DecisionQuestionR
   const [read, setRead] = useState<PaneRead | null>(null);
   // Rises with each read and each collapse, so only the newest read lands, and none after a collapse.
   const turn = useRef(0);
+  const refreshRef = useRef<HTMLButtonElement>(null);
   const bodyId = useId();
 
   useEffect(
@@ -97,6 +125,11 @@ export function DecisionAskingPane({ reference }: { reference: DecisionQuestionR
   const refresh = () => {
     if (!reading) readPane(shown);
   };
+  // A Retry goes with the result it sat in: the keyboard waits on Refresh, which stays.
+  const retry = () => {
+    refreshRef.current?.focus({ preventScroll: true });
+    refresh();
+  };
 
   return (
     <section
@@ -122,6 +155,7 @@ export function DecisionAskingPane({ reference }: { reference: DecisionQuestionR
         </Button>
         {open && (
           <Button
+            ref={refreshRef}
             variant="ghost"
             size="xs"
             aria-disabled={reading || undefined}
@@ -136,19 +170,24 @@ export function DecisionAskingPane({ reference }: { reference: DecisionQuestionR
       </div>
       {open && (
         <div id={bodyId} className="flex w-full flex-col gap-2">
-          {read?.state === "failed" ? (
-            <Unreadable onRetry={refresh} />
-          ) : shown !== null ? (
-            <PaneResult result={shown} onRetry={refresh} />
+          {/* A skeleton once shown keeps its floor, rather than tearing down in the frame it came. */}
+          {showSkeleton ? (
+            <Skeleton label="Reading the terminal" className="flex flex-col gap-2">
+              <SkeletonBone className="h-3 w-1/3" />
+              <SkeletonBone className="h-24 w-full" />
+            </Skeleton>
+          ) : read?.state === "failed" ? (
+            <Unreadable onRetry={retry} />
           ) : (
-            showSkeleton && (
-              <Skeleton label="Reading the terminal" className="flex flex-col gap-2">
-                <SkeletonBone className="h-3 w-1/3" />
-                <SkeletonBone className="h-24 w-full" />
-              </Skeleton>
-            )
+            shown !== null && <PaneResult result={shown} onRetry={retry} />
           )}
         </div>
+      )}
+      {/* Mounted while open, so each outcome is announced as it changes. */}
+      {open && (
+        <p role="status" className="sr-only">
+          {outcomeText(read)}
+        </p>
       )}
     </section>
   );
@@ -166,10 +205,10 @@ function PaneResult({
       return <PaneView pane={result.pane} />;
     case "closed":
       return <Note testId="decision-asking-pane-closed">Terminal closed</Note>;
-    case "reassigned":
+    case "moved":
       return (
-        <Note testId="decision-asking-pane-reassigned">
-          The answer was sent to another terminal, so the one that asked can&apos;t be shown
+        <Note testId="decision-asking-pane-moved">
+          The answer was moved to another terminal, so the one that asked can&apos;t be shown
         </Note>
       );
     case "needs-update":
@@ -269,11 +308,7 @@ function PaneView({ pane }: { pane: DecisionQuestionPane }) {
 
 function Note({ children, testId }: { children: ReactNode; testId: string }) {
   return (
-    <p
-      role="status"
-      className="text-xs text-text-secondary [text-wrap:pretty]"
-      data-testid={testId}
-    >
+    <p className="text-xs text-text-secondary [text-wrap:pretty]" data-testid={testId}>
       {children}
     </p>
   );

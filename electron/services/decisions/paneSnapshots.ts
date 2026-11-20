@@ -192,7 +192,11 @@ function verdict(
   if (mismatch === "unreadable" || mismatch === "host-offline") return "unreadable";
   if (mismatch !== null) return "gone";
   // Main still holds the run's generation, so a record that didn't come back is a read that failed.
-  return info === null ? "unreadable" : "current";
+  if (info === null) return "unreadable";
+  // Another agent seen in the same live pane is another run, though nothing respawned it.
+  const agent = info.detectedAgentId ?? info.launchAgentId;
+  if (agent !== undefined && agent !== origin.agent_kind) return "gone";
+  return "current";
 }
 
 /**

@@ -561,7 +561,7 @@ export const HostQuestionPaneResultSchema = z.discriminatedUnion("result", [
     })
     .strict(),
   z.object({ result: z.literal("closed") }).strict(),
-  z.object({ result: z.literal("reassigned") }).strict(),
+  z.object({ result: z.literal("moved") }).strict(),
   Off,
   NotRunning,
   NotFound,

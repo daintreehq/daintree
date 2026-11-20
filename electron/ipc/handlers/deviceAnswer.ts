@@ -674,7 +674,9 @@ export const decisionsNamespace = defineIpcNamespace({
         if (!decisionsOn()) return { result: "off" };
         const decisions = await loadDecisions();
         if (!decisions) return { result: "not-running" };
-        return decisions.getDecisionQuestionPaneByReference(payload);
+        const read = await decisions.getDecisionQuestionPaneByReference(payload);
+        // Turned off while it was out, here or on a Host: none of the terminal reaches the window.
+        return decisionsOn() ? read : { result: "off" };
       }
     ),
     getQuestionImageByReference: opValidated(

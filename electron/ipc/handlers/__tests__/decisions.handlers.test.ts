@@ -1098,6 +1098,9 @@ describe("decisions IPC", () => {
     sealDecisionsModule();
     const ctx = { projectId: "project-1" };
 
+    await expect(getQuestionPaneByReference({ reference: REFERENCE })).resolves.toEqual({
+      result: "not-running",
+    });
     await expect(
       getQuestionContent(ctx, { terminalId: "pane-a", questionId: QUESTION_ID })
     ).resolves.toEqual({ result: "not-running" });
@@ -1720,6 +1723,28 @@ describe("decisions IPC", () => {
       decisionsEntry.actOnHostAttention.mockResolvedValueOnce(acted);
       await expect(hostAttention(request)).resolves.toBe(acted);
       expect(decisionsEntry.actOnHostAttention).toHaveBeenCalledExactlyOnceWith(request);
+    });
+
+    it("hands no terminal output to the window once Decisions is turned off under the read (#18037)", async () => {
+      saved.value = { enabled: true };
+      decisionsEntry.getDecisionQuestionPaneByReference.mockImplementationOnce(async () => {
+        saved.value = { enabled: false };
+        return {
+          result: "read",
+          reference: REFERENCE,
+          pane: {
+            agentState: "waiting",
+            waitingReason: null,
+            paneTitle: "Claude",
+            lines: ["secret plan"],
+            observedAt: "2026-11-20T10:00:00.000Z",
+          },
+        };
+      });
+
+      await expect(getQuestionPaneByReference({ reference: REFERENCE })).resolves.toEqual({
+        result: "off",
+      });
     });
 
     it("hands the person's marks to Decisions once on, as they were sent (#17895)", async () => {

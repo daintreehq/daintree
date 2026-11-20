@@ -3,9 +3,6 @@ import type { DecisionQuestionPaneResult } from "../../../shared/types/decisions
 import type { DecisionIdentitySources } from "./decisionWake.js";
 import { readAskers, type PaneSnapshotPtyClient } from "./paneSnapshots.js";
 
-/** What a person sending an answer to another terminal records on its row. */
-export const REASSIGNED_STRATEGY = "reassigned";
-
 /**
  * The pane that asked `row` (#18037), read on this machine for a person at
  * this computer or at the owner's that enrolled it: only while it holds the
@@ -19,8 +16,10 @@ export async function readQuestionPane(
   row: QuestionRow,
   now: () => number = Date.now
 ): Promise<DecisionQuestionPaneResult> {
-  // The origin now names the run the answer was sent to, which never asked it.
-  if (row.agent_resume_strategy === REASSIGNED_STRATEGY) return { result: "reassigned" };
+  // Delivery rebinds the origin to wherever the answer goes: a terminal a person chose, or a
+  // resume, which may follow such a choice and overwrite it. Either way it no longer names
+  // the run that asked, and nothing kept says which run that was.
+  if ((row.agent_resume_strategy ?? null) !== null) return { result: "moved" };
   if (client === null) return { result: "unreadable" };
   const { origin } = row;
   try {

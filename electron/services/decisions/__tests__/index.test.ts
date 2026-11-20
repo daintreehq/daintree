@@ -2007,7 +2007,9 @@ describe("Decisions entry", () => {
 
       it("reads the asking pane only on the machine that owns it, with terminal snapshots off (#18037)", async () => {
         const own = { result: "closed" } as const;
-        const questionPane = vi.fn(async () => own);
+        const questionPane = vi.fn(
+          async (_scope: unknown, _questionId: string, _getPtyClient: () => unknown) => own
+        );
         const current = await running({ questionPane });
         expect(terminalSnapshotsAllowed()).toBe(false);
         let outcome: HostCallOutcome<unknown> = { ok: true, value: { result: "unreadable" } };
@@ -2024,6 +2026,8 @@ describe("Decisions entry", () => {
             OWN.questionId,
             expect.any(Function)
           );
+          // The screen is read through main's own pty client.
+          expect(questionPane.mock.calls[0]![2]()).toBe(mcpRefs.ptyClient);
 
           await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
             { result: "unreadable" }

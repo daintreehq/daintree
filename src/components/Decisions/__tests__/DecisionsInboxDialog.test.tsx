@@ -509,8 +509,25 @@ describe("DecisionsInboxDialog", () => {
         "Pane of question-2"
       );
 
+      getQuestionPaneByReference.mockImplementationOnce(async ({ reference }) => ({
+        result: "read",
+        reference,
+        pane: {
+          agentState: "working",
+          waitingReason: null,
+          paneTitle: "Pane, later",
+          lines: ["Applying the change"],
+          observedAt: "2026-11-20T10:01:00.000Z",
+        },
+      }));
       fireEvent.click(screen.getByTestId("decision-asking-pane-refresh"));
-      await waitFor(() => expect(paneReads()).toHaveLength(2));
+      await waitFor(() =>
+        expect(screen.getByTestId("decision-asking-pane-lines").textContent).toBe(
+          "Applying the change"
+        )
+      );
+      expect(screen.getByTestId("decision-asking-pane-state").textContent).toBe("Agent working");
+      expect(paneReads()).toEqual([reference("question-2"), reference("question-2")]);
 
       // Collapsing drops what was read; opening again reads afresh.
       fireEvent.click(toggle());
@@ -538,12 +555,20 @@ describe("DecisionsInboxDialog", () => {
       fireEvent.click(screen.getByTestId("decision-asking-pane-refresh"));
       await waitFor(() => screen.getByTestId("decision-asking-pane-needs-update"));
 
+      getQuestionPaneByReference.mockResolvedValueOnce({ result: "moved" });
+      fireEvent.click(screen.getByTestId("decision-asking-pane-refresh"));
+      await waitFor(() => screen.getByTestId("decision-asking-pane-moved"));
+
       getQuestionPaneByReference.mockRejectedValueOnce(new Error("link went"));
       fireEvent.click(screen.getByTestId("decision-asking-pane-refresh"));
       const failed = await vi.waitFor(() => screen.getByTestId("decision-asking-pane-unreadable"));
-      fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+      const retry = within(failed).getByRole("button", { name: "Retry" });
+      act(() => retry.focus());
+      fireEvent.click(retry);
+      // The Retry goes with the failure; the keyboard waits on Refresh.
+      expect(document.activeElement).toBe(screen.getByTestId("decision-asking-pane-refresh"));
       await waitFor(() => screen.getByTestId("decision-asking-pane-lines"));
-      expect(paneReads()).toHaveLength(5);
+      expect(paneReads()).toHaveLength(6);
     });
 
     it("starts collapsed for each question chosen, and never shows a read of the one before", async () => {
@@ -558,6 +583,7 @@ describe("DecisionsInboxDialog", () => {
       fireEvent.click(rows()[2]!);
       await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
       expect(toggle().getAttribute("aria-expanded")).toBe("false");
+      expect(paneReads()).toEqual([reference("question-2")]);
       await act(async () =>
         resolveFirst({
           result: "read",

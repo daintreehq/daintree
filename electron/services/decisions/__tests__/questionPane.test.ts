@@ -69,12 +69,13 @@ class FakePane {
   reads = 0;
   recordReads = 0;
   failRead = false;
+  isExited: boolean | undefined = undefined;
 
   readonly client: PaneSnapshotPtyClient = {
     getTerminalProjectId: () => this.record.projectId,
     getTerminalAsync: (async () => {
       this.recordReads++;
-      return { ...this.record };
+      return { ...this.record, isExited: this.isExited };
     }) as never,
     getSerializedStateAsync: (async () => {
       this.reads++;
@@ -101,7 +102,7 @@ describe("readQuestionPane", () => {
   it("reads the run that asked: its observed state, title and screen, as of the read", async () => {
     const pane = new FakePane();
 
-    expect(await read(pane, row({ local_status: "answered" }))).toEqual({
+    expect(await read(pane, row({ local_status: "human-answered" }))).toEqual({
       result: "read",
       reference: {
         hostId: HOST,
@@ -116,6 +117,20 @@ describe("readQuestionPane", () => {
         lines: ["Which option?", "1. Keep", "2. Drop"],
         observedAt: "2026-11-20T10:00:00.000Z",
       },
+    });
+  });
+
+  it("names what the pane showed once read, not what it showed before", async () => {
+    const pane = new FakePane();
+    pane.duringRead = () => {
+      pane.record.lastObservedTitle = "Pick a database";
+      pane.record.waitingReason = "approval";
+    };
+
+    const result = await read(pane);
+    expect(result).toMatchObject({
+      result: "read",
+      pane: { paneTitle: "Claude: Pick a database", waitingReason: "approval" },
     });
   });
 
@@ -172,28 +187,46 @@ describe("readQuestionPane", () => {
     expect(await read(pane)).toEqual({ result: "closed" });
   });
 
-  it("says closed for a pane that exited", async () => {
+  it("says closed for a pane that exited, by its generation or its own record", async () => {
     const pane = new FakePane();
     pane.generation = null;
+    expect(await read(pane)).toEqual({ result: "closed" });
+
+    const exited = new FakePane();
+    exited.isExited = true;
+    expect(await read(exited)).toEqual({ result: "closed" });
+    expect(exited.reads).toBe(0);
+  });
+
+  it("says closed, reading no screen, once another agent shows in the same live pane", async () => {
+    const pane = new FakePane();
+    pane.record.detectedAgentId = "codex";
+    pane.screen = "the other agent's screen";
+
+    expect(await read(pane)).toEqual({ result: "closed" });
+    expect(pane.reads).toBe(0);
+  });
+
+  it("says closed, never the screen it read, for an agent swapped in while being read", async () => {
+    const pane = new FakePane();
+    pane.screen = "maybe the other agent's screen";
+    pane.duringRead = () => {
+      pane.record.detectedAgentId = "codex";
+    };
 
     expect(await read(pane)).toEqual({ result: "closed" });
   });
 
-  it("reads nothing of a question whose answer a person sent to another terminal", async () => {
-    const pane = new FakePane();
+  it("reads nothing once delivery moved the answer to another terminal, by a person or a resume", async () => {
+    for (const strategy of ["reassigned", "adapter:claude", "sink"]) {
+      const pane = new FakePane();
 
-    expect(await read(pane, row({ agent_resume_strategy: "reassigned" }))).toEqual({
-      result: "reassigned",
-    });
-    expect(pane.recordReads).toBe(0);
-    expect(pane.reads).toBe(0);
-  });
-
-  it("still reads a run resumed in its own worktree", async () => {
-    const pane = new FakePane();
-
-    const result = await read(pane, row({ agent_resume_strategy: "adapter:claude" }));
-    expect(result.result).toBe("read");
+      expect(await read(pane, row({ agent_resume_strategy: strategy }))).toEqual({
+        result: "moved",
+      });
+      expect(pane.recordReads).toBe(0);
+      expect(pane.reads).toBe(0);
+    }
   });
 
   it("says unreadable with no pty client, and when the screen read fails", async () => {

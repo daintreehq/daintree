@@ -96,7 +96,7 @@ import type { AdvisoryHost } from "./questionRound.js";
 import { closedReasonOf } from "./questionClosed.js";
 import { DaintreeTerminalSink, type DaintreeTerminalSinkDeps } from "./daintreeTerminalSink.js";
 import type { PaneSnapshotPtyClient } from "./paneSnapshots.js";
-import { REASSIGNED_STRATEGY, readQuestionPane } from "./questionPane.js";
+import { readQuestionPane } from "./questionPane.js";
 import { RetiredAttemptError, retireable, type BridgeLock } from "./relayTransport.js";
 
 /** A hold on the wake engine's queue (#15999), which takes wakes with the MCP server off. */
@@ -1103,7 +1103,7 @@ export class AnswerDelivery {
       await this.store.updateQuestion(questionId, {
         ...(await this.retryPatch(row)),
         origin,
-        agent_resume_strategy: REASSIGNED_STRATEGY,
+        agent_resume_strategy: "reassigned",
       });
       await this.owner.ctx.audit.log({
         event: "delivery.reassigned",
