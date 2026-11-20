@@ -86,7 +86,7 @@ The check proves one round trip at the time it ran. It doesn't prove that every 
 
 ### 7. Choose the agents that can ask you
 
-Under **Agents**, switch on each agent you want to ask you. Every agent starts off, after an update too, and Daintree never switches one on by itself. A change applies from that agent's next launch: an agent already running keeps what it launched with. While a relay is set up and no agent is switched on for this computer's launches, Connection keeps **Setup isn't finished** up, saying so, and **Choose agents** takes you to **Agents**. Searching Settings for `agents`, `ask_human` or an agent's name finds the section too. [Agents](#agents) lists which agents are supported.
+Under **Agents**, switch on each agent you want to ask you. Every agent starts off, after an update too, and Daintree never switches one on by itself. A change applies from that agent's next launch: an agent already running keeps what it launched with. While a relay is set up and no agent is switched on for this computer's launches, Connection keeps **Setup isn't finished** up, saying so, and **Choose agents** takes you to **Agents**. Searching Settings for `agents`, `ask_human` or a supported built-in agent's name, such as `claude` or `codex`, finds the section too. [Agents](#agents) lists which agents are supported.
 
 ### Updating the relay
 
