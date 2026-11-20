@@ -93,7 +93,11 @@ export function DecisionsInvolvementSection({
       {/* Announced once when a save settles. Kept mounted to announce; out of the footer's rhythm while it says nothing. */}
       <div role="status" className="empty:-mt-2">
         {notice !== null && (
-          <Callout severity={notice.severity} size="compact" data-testid="decisions-involvement-notice">
+          <Callout
+            severity={notice.severity}
+            size="compact"
+            data-testid="decisions-involvement-notice"
+          >
             {notice.text}
           </Callout>
         )}

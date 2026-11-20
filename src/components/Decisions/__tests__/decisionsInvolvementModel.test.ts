@@ -135,7 +135,11 @@ describe("decisionsInvolvementModel", () => {
       expect(sameDraft(temporary, { ...temporary, temporaryMode: "recommend" })).toBe(false);
       // Typing the same minute back drops the end's seconds: a different end.
       expect(
-        sameDraft(temporary, { ...temporary, until: localDateTime(Date.parse(until)), keptUntil: null })
+        sameDraft(temporary, {
+          ...temporary,
+          until: localDateTime(Date.parse(until)),
+          keptUntil: null,
+        })
       ).toBe(false);
 
       const permanent = draftFrom(available(), NOW);
