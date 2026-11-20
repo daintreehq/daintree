@@ -6,9 +6,12 @@ import type {
   DecisionsTimeoutNotice,
 } from "@shared/types/decisionsAttention";
 import {
+  deliveryAttentionText,
   deliveryReasonText,
   deliverySubject,
+  deliverySubjectOf,
   deliverySubjectPlural,
+  deliveryUncertainText,
   type DeliverySubject,
 } from "@shared/utils/decisionsDeliveryReasons";
 
@@ -25,6 +28,12 @@ import {
  * uses too (#17235).
  */
 export const reasonText = deliveryReasonText;
+
+/**
+ * What opens the list of answers needing attention, wherever it is offered:
+ * the pane's chip, the inbox and Canopy (#18054).
+ */
+export const REVIEW_ATTENTION_LABEL = "Review answers";
 
 export function aliasLabel(alias: number): string {
   return `q-${alias}`;
@@ -53,27 +62,11 @@ function isNotice(subject: AttentionSubject): boolean {
   return subject.startsWith("timeout notice");
 }
 
-function capitalized(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-const UNCERTAIN_STATUS: Record<AttentionSubject, string> = {
-  answer: "This answer may or may not have been delivered",
-  "follow-up": "This follow-up may or may not have been delivered",
-  "follow-ups": "These follow-ups may or may not have been delivered",
-  "answer and follow-up": "This answer or its follow-up may or may not have been delivered",
-  "answer and follow-ups": "This answer or its follow-ups may or may not have been delivered",
-  "timeout notice": "This timeout notice may or may not have been delivered",
-  "timeout notice and follow-up":
-    "This timeout notice or its follow-up may or may not have been delivered",
-  "timeout notice and follow-ups":
-    "This timeout notice or its follow-ups may or may not have been delivered",
-};
-
 export function statusText(item: Pick<DecisionsAttentionItem, "status"> & SubjectFields): string {
   const subject = subjectOf(item);
-  if (item.status === "delivery-uncertain") return UNCERTAIN_STATUS[subject];
-  return `${capitalized(subject)} ${isPlural(subject) ? "need" : "needs"} attention`;
+  return item.status === "delivery-uncertain"
+    ? deliveryUncertainText(subject, true)
+    : deliveryAttentionText(subject);
 }
 
 /**
@@ -385,7 +378,7 @@ export function outcomeText(
         : "follow-up"
       : asked;
   const q = aliasLabel(alias);
-  const what = `${capitalized(subject)} ${isNotice(subject) ? "for" : "to"} ${q}`;
+  const what = deliverySubjectOf(subject, q);
   const plural = isPlural(subject);
   const needs = plural ? "need" : "needs";
   switch (outcome.result) {

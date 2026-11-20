@@ -59,8 +59,20 @@ describe("projectPaneDecisionStates", () => {
     ]);
 
     expect(state?.needsAttention).toEqual([
-      { questionId: qid(1), alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
-      { questionId: qid(2), alias: 2, deliveryStatus: "delivery-uncertain", reason: "pane_gone" },
+      {
+        questionId: qid(1),
+        alias: 1,
+        deliveryStatus: "needs-attention",
+        reason: "pane_gone",
+        subject: "follow-up",
+      },
+      {
+        questionId: qid(2),
+        alias: 2,
+        deliveryStatus: "delivery-uncertain",
+        reason: "pane_gone",
+        subject: "follow-ups",
+      },
     ]);
     expect(state?.waitingAnswers).toEqual([]);
     expect(JSON.stringify(state)).not.toContain(SECRET);
@@ -78,15 +90,22 @@ describe("projectPaneDecisionStates", () => {
     expect(
       projectPaneDecisionStates([refused], handled).get("pane-a")?.content.needsAttention
     ).toEqual([
-      { questionId: qid(1), alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
+      {
+        questionId: qid(1),
+        alias: 1,
+        deliveryStatus: "needs-attention",
+        reason: "pane_gone",
+        subject: "follow-up",
+      },
     ]);
-    // Not handled, the answer's own status and code show.
+    // Not handled, the answer's own status and code show, and it is named with the follow-up.
     expect(projectPaneDecisionStates([refused]).get("pane-a")?.content.needsAttention).toEqual([
       {
         questionId: qid(1),
         alias: 1,
         deliveryStatus: "delivery-uncertain",
         reason: "unknown_option",
+        subject: "answer and follow-up",
       },
     ]);
   });
@@ -100,13 +119,21 @@ describe("projectPaneDecisionStates", () => {
     expect(state).toEqual({
       terminalId: "pane-a",
       openQuestions: [
-        { questionId: qid(1), alias: 1, status: "queued", askedAt: askedAt(1), expiresAt: null },
+        {
+          questionId: qid(1),
+          alias: 1,
+          status: "queued",
+          askedAt: askedAt(1),
+          expiresAt: null,
+          replyMode: "blocking",
+        },
         {
           questionId: qid(2),
           alias: 2,
           status: "open",
           askedAt: askedAt(2),
           expiresAt: "2026-11-02T10:00:00.000Z",
+          replyMode: "blocking",
         },
       ],
       waitingAnswers: [],
@@ -353,12 +380,19 @@ describe("projectPaneDecisionStates", () => {
     ]);
 
     expect(state?.needsAttention).toEqual([
-      { questionId: qid(1), alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
+      {
+        questionId: qid(1),
+        alias: 1,
+        deliveryStatus: "needs-attention",
+        reason: "pane_gone",
+        subject: "answer",
+      },
       {
         questionId: qid(2),
         alias: 2,
         deliveryStatus: "delivery-uncertain",
         reason: "crash_unreconciled",
+        subject: "answer",
       },
     ]);
     expect(state?.waitingAnswers).toEqual([]);
@@ -376,8 +410,43 @@ describe("projectPaneDecisionStates", () => {
         alias: 1,
         deliveryStatus: "needs-attention",
         reason: "choice_required",
+        subject: "answer",
       },
     ]);
+  });
+
+  it("names a timeout notice that stopped, alone or with a follow-up, as the list and the notification do (#18054)", () => {
+    const stopped = {
+      local_status: "expired" as const,
+      delivery_status: "needs-attention" as const,
+      error_code: "pane_gone",
+      answers_json: answers({ kind: "expired", action: "expire", source: "system", sealed: null }),
+    };
+    const state = only([
+      row(1, stopped),
+      row(2, {
+        ...stopped,
+        messages_json: messages({
+          delivery: { status: "needs-attention", error_code: "pane_gone" },
+        }),
+      }),
+    ]);
+
+    expect(state?.needsAttention.map(({ alias, subject }) => ({ alias, subject }))).toEqual([
+      { alias: 1, subject: "timeout notice" },
+      { alias: 2, subject: "timeout notice and follow-up" },
+    ]);
+  });
+
+  it("carries an advisory round's mode on its open question (#18054)", () => {
+    const state = only([
+      row(1, {
+        content_sealed: JSON.stringify({ aad: { revision: 0, reply_mode: "advisory" } }),
+        question_revision: 0,
+      }),
+    ]);
+
+    expect(state?.openQuestions.map((question) => question.replyMode)).toEqual(["advisory"]);
   });
 
   it.each([
@@ -493,13 +562,26 @@ describe("projectPaneDecisionStates", () => {
     expect(panes.get("pane-a")?.content).toEqual({
       terminalId: "pane-a",
       openQuestions: [
-        { questionId: qid(1), alias: 1, status: "open", askedAt: askedAt(1), expiresAt: null },
+        {
+          questionId: qid(1),
+          alias: 1,
+          status: "open",
+          askedAt: askedAt(1),
+          expiresAt: null,
+          replyMode: "blocking",
+        },
       ],
       waitingAnswers: [
         { questionId: qid(2), alias: 2, kind: "answer", deliveryStatus: "desktop-received" },
       ],
       needsAttention: [
-        { questionId: qid(3), alias: 3, deliveryStatus: "needs-attention", reason: "unspecified" },
+        {
+          questionId: qid(3),
+          alias: 3,
+          deliveryStatus: "needs-attention",
+          reason: "unspecified",
+          subject: "answer",
+        },
       ],
     });
     expect(JSON.stringify([...panes.values()])).not.toContain("SECRET");

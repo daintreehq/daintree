@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  deliveryAttentionText,
   deliveryReasonText,
   deliverySubject,
+  deliverySubjectOf,
   deliverySubjectPlural,
+  deliveryUncertainText,
 } from "../decisionsDeliveryReasons.js";
 
 describe("decisionsDeliveryReasons", () => {
@@ -46,5 +49,44 @@ describe("decisionsDeliveryReasons", () => {
     expect(deliveryReasonText("pane_gone", "timeout notice")).toBe(
       "The terminal that asked was closed."
     );
+  });
+
+  it("words a stopped delivery for the pane's own terminal without changing what it says (#18054)", () => {
+    expect(deliveryReasonText("relaunched", "answer", "here")).toBe(
+      "This terminal was relaunched after the question was asked."
+    );
+    expect(deliveryReasonText("inject_rejected", "follow-up", "here")).toBe(
+      "This terminal refused the follow-up."
+    );
+    expect(deliveryReasonText("session_mismatch", "answer", "here")).toBe(
+      "A different agent session is running here now."
+    );
+    // Words that name no terminal read the same from either side.
+    expect(deliveryReasonText("resume_ended", "answer", "here")).toBe(
+      deliveryReasonText("resume_ended")
+    );
+    expect(deliveryReasonText("message_unreadable", "follow-up", "here")).toBe(
+      "The follow-up couldn't be decrypted on this computer."
+    );
+  });
+
+  it("names what stopped as a status line, with its verb agreeing", () => {
+    expect(deliveryAttentionText("answer")).toBe("Answer needs attention");
+    expect(deliveryAttentionText("follow-ups")).toBe("Follow-ups need attention");
+    expect(deliveryAttentionText("timeout notice and follow-up")).toBe(
+      "Timeout notice and follow-up need attention"
+    );
+    expect(deliveryUncertainText("answer")).toBe("Answer may or may not have been delivered");
+    expect(deliveryUncertainText("answer and follow-ups")).toBe(
+      "Answer or its follow-ups may or may not have been delivered"
+    );
+    expect(deliveryUncertainText("follow-ups", true)).toBe(
+      "These follow-ups may or may not have been delivered"
+    );
+    expect(deliveryUncertainText("timeout notice and follow-up", true)).toBe(
+      "This timeout notice or its follow-up may or may not have been delivered"
+    );
+    expect(deliverySubjectOf("answer", "q-3")).toBe("Answer to q-3");
+    expect(deliverySubjectOf("timeout notice", "q-3")).toBe("Timeout notice for q-3");
   });
 });

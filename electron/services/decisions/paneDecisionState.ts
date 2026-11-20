@@ -2,9 +2,12 @@ import { parseAnswers, type QuestionRow } from "@daintreehq/decisions-client";
 import {
   answerNeedsAttention,
   heldFollowUps,
+  heldTimeoutNotice,
   isHandled,
   type HandledAnswers,
 } from "./attentionList.js";
+import { replyModeOfRow } from "./questionRound.js";
+import { deliverySubject } from "../../../shared/utils/decisionsDeliveryReasons.js";
 import type {
   DecisionDeliveryStatus,
   PaneDecisionAttention,
@@ -112,6 +115,7 @@ export function projectPaneDecisionStates(
         status: row.local_status,
         askedAt: row.origin_created_at,
         expiresAt: row.expires_at ?? null,
+        replyMode: replyModeOfRow(row, parseAnswers(row.answers_json)),
       });
     }
     if (attention) {
@@ -123,6 +127,12 @@ export function projectPaneDecisionStates(
         alias,
         deliveryStatus: uncertain ? "delivery-uncertain" : "needs-attention",
         reason: reasonOf(answerHeld ? row.error_code : (held[0]!.delivery?.error_code ?? null)),
+        // A timeout notice stands in the answer's place, as the list and the notification name it.
+        subject: deliverySubject(
+          answerHeld,
+          held.length,
+          answerHeld && heldTimeoutNotice(row) !== null
+        ),
       });
     } else if (pending.length > 0 && !isAttention(deliveryStatus)) {
       pane.content.waitingAnswers.push({

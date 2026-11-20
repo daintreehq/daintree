@@ -1,4 +1,5 @@
 import { useRef, type ReactNode } from "react";
+import { REVIEW_ATTENTION_LABEL } from "@/components/Decisions/decisionsAttentionModel";
 import {
   AGENT_SNOOZE_DURATION_OPTIONS,
   AGENT_SNOOZE_LABEL,
@@ -120,7 +121,7 @@ export function CanopyRowMenu({
               };
             }}
           >
-            Review answers…
+            {REVIEW_ATTENTION_LABEL}…
           </ContextMenuItem>
         )}
         {/* On click rather than select, so a Cmd/Ctrl-click keeps its modifier;

@@ -563,6 +563,20 @@ describe("TerminalDecisionsChip", () => {
       }
     });
 
+    it("says a uniform waiting list's status once, above its rows, and keeps a lone question's on its row (#18054)", async () => {
+      getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+      getPaneState.mockResolvedValue(twoQuestions);
+      render(<TerminalDecisionsChip terminalId="t1" />);
+      fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+      const shared = await screen.findByTestId("terminal-decisions-shared-status");
+      expect(shared.textContent).toBe("Waiting for an answer, here or on your phone");
+      for (const row of screen.getAllByTestId("terminal-decisions-row")) {
+        expect(row.textContent).not.toContain("Waiting for an answer");
+      }
+      // The instruction the status already gave isn't repeated in a footer.
+      expect(screen.queryByText("Open a question to answer it here")).toBeNull();
+    });
+
     it("keeps a row named by alias when its line can't be read", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       getQuestionSummaries.mockResolvedValue({

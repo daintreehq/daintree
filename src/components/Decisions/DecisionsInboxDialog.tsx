@@ -58,9 +58,10 @@ import type {
 import { DecisionCancelDialog } from "./DecisionCancelDialog";
 import { DecisionsInvolvementSection } from "./DecisionsInvolvementSection";
 import { DecisionQuestionReadView } from "./DecisionQuestionReader";
-import { asksByDeadline, deadlineMs, remainingText, replyByText } from "./decisionDeadline";
+import { asksByDeadline, deadlineMs, expiryText } from "./decisionDeadline";
 import { useDecisionsClock } from "./useDecisionsClock";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { REVIEW_ATTENTION_LABEL } from "./decisionsAttentionModel";
 import { aliasLabel } from "./decisionQuestionModel";
 import { referencedQuestion, type DecisionQuestionTarget } from "./decisionQuestionTarget";
 import {
@@ -408,13 +409,7 @@ function InboxRow({
   // Within a day: when, in this computer's time, and how long is left (#17943).
   const expiry =
     deadline !== null && nowMs !== null && expiresSoon(item, nowMs)
-      ? [
-          item.replyMode === "advisory" ? "Advisory" : null,
-          replyByText(deadline, nowMs),
-          remainingText(deadline, nowMs),
-        ]
-          .filter((part) => part !== null)
-          .join(" · ")
+      ? expiryText(deadline, nowMs, item.replyMode)
       : null;
   const stale = staleNote(item);
   const closed = isClosed(item.standing);
@@ -1296,7 +1291,7 @@ export function DecisionsInboxDialog() {
                               }
                               data-testid="decisions-inbox-review-attention"
                             >
-                              Resolve delivery
+                              {REVIEW_ATTENTION_LABEL}
                             </Button>
                           ) : undefined
                         }

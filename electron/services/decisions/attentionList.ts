@@ -25,6 +25,12 @@ import {
   sanitizeAnswerText,
   type DecisionBlock,
 } from "./answerNotice.js";
+import {
+  NO_ADVISORY_HOST,
+  timeoutNoticeOf,
+  type AdvisoryHost,
+  type TimeoutNotice,
+} from "./questionRound.js";
 
 /**
  * The answers a person has marked handled (#16020), by question, at the
@@ -259,6 +265,22 @@ export function withoutHandled(
 ): QuestionRow[] {
   // A stopped decline is handled with nothing marked, so every read filters.
   return rows.filter((row) => !isHandled(row, handled));
+}
+
+/**
+ * The current round's timeout notice when it is what of the answer needs a
+ * person (#17944): still to be typed, its typing stopped or possibly done.
+ * Null for a notice of a round since replaced, which is never typed again.
+ */
+export function heldTimeoutNotice(
+  row: QuestionRow,
+  host: AdvisoryHost = NO_ADVISORY_HOST
+): TimeoutNotice | null {
+  const notice = timeoutNoticeOf(row, parseAnswers(row.answers_json), host);
+  if (notice === null) return null;
+  if (notice.delivery !== "needs-attention" && notice.delivery !== "uncertain") return null;
+  if (!pendingEntries(row).some((entry) => entry.entry_id === notice.entryId)) return null;
+  return notice;
 }
 
 /** What would be typed in, the delivery engine's own test: marked for delivery and not yet delivered. */
