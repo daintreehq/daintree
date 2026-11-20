@@ -930,7 +930,8 @@ describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
 
   function unavailable(element: HTMLElement): boolean {
     return (
-      element.getAttribute("aria-disabled") === "true" || (element as HTMLButtonElement).disabled
+      element.getAttribute("aria-disabled") === "true" ||
+      (element instanceof HTMLButtonElement && element.disabled)
     );
   }
 

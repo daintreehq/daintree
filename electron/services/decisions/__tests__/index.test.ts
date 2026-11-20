@@ -3375,7 +3375,10 @@ describe("Decisions entry", () => {
       expect(saved.value).toMatchObject({ ...RELAY });
       // Every window hears the kit no longer covers the keys, so the dialog asks for the address.
       await vi.waitFor(() =>
-        expect(pushedStatuses().at(-1)).toMatchObject({ keysStored: true, recoveryKitVerifiedAt: 9 })
+        expect(pushedStatuses().at(-1)).toMatchObject({
+          keysStored: true,
+          recoveryKitVerifiedAt: 9,
+        })
       );
       expect(pushedStatuses().at(-1)).not.toHaveProperty("recoveryKitCurrent");
 
@@ -4338,7 +4341,10 @@ describe("Decisions entry", () => {
       storedRows.count = 3;
       storedRows.failErase = true;
 
-      await expect(deleteLocalData(TYPED)).resolves.toEqual({ result: "failed", reason: "storage" });
+      await expect(deleteLocalData(TYPED)).resolves.toEqual({
+        result: "failed",
+        reason: "storage",
+      });
 
       expect(storedRows.count).toBe(3);
       expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");

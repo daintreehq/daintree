@@ -1402,7 +1402,10 @@ describe("decisions IPC", () => {
   });
 
   it("takes how a key erasure was confirmed, and nothing else (#18064)", () => {
-    for (const op of [decisionsNamespace.ops.disconnectRelay, decisionsNamespace.ops.deleteLocalData]) {
+    for (const op of [
+      decisionsNamespace.ops.disconnectRelay,
+      decisionsNamespace.ops.deleteLocalData,
+    ]) {
       const schema = op.schema as SafeParse;
       expect(schema.safeParse({ oneClick: true }).success).toBe(true);
       expect(schema.safeParse({ oneClick: false }).success).toBe(true);
