@@ -1063,8 +1063,17 @@ describe("declining an agent's reply request (#18030)", () => {
     return screen.getByTestId("decision-follow-up-decline");
   }
 
+  /**
+   * A press focuses the button in Chromium but not in jsdom, and the composer keeps its field
+   * through a stall only for a person who was in it (#18104).
+   */
+  function press(button: HTMLElement) {
+    act(() => button.focus());
+    fireEvent.click(button);
+  }
+
   async function confirmOpen() {
-    fireEvent.click(declineButton());
+    press(declineButton());
     await screen.findByText(TITLE);
   }
 
@@ -1170,7 +1179,7 @@ describe("declining an agent's reply request (#18030)", () => {
     expect(declineButton().getAttribute("aria-describedby")).toBe(
       screen.getByTestId("decision-follow-up-paused").id
     );
-    fireEvent.click(declineButton());
+    press(declineButton());
     await act(async () => {});
     expect(screen.queryByText(TITLE)).toBeNull();
     expect(sendFollowUp).not.toHaveBeenCalled();
