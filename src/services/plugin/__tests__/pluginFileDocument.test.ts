@@ -791,6 +791,37 @@ describe("pluginFileDocument (#13809)", () => {
     expect(handle.document.getDraftBaseRevision()).toBe(REV_A);
   });
 
+  it("keeps a draft the view flushes after its host released the record, for the next view", async () => {
+    const handle = openPluginFileDocument(target());
+    const release = handle.retain();
+    // The host's cleanup runs first and releases the clean record; the view's
+    // own cleanup then flushes its debounced draft.
+    release();
+    handle.document.setDraft("flushed", { baseRevision: REV_A });
+    await Promise.resolve();
+
+    const next = openPluginFileDocument(target());
+    next.retain();
+    expect(next.document.getDraft()).toBe("flushed");
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "flushed",
+    });
+  });
+
+  it("ignores a released view's call in the same turn once a newer record holds the panel", () => {
+    const old = openPluginFileDocument(target());
+    old.retain()();
+    const fresh = openPluginFileDocument(target());
+    fresh.retain();
+    fresh.document.setDraft("newer", { baseRevision: REV_B });
+
+    old.document.setDraft("late", { baseRevision: REV_A });
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      draftText: "newer",
+    });
+  });
+
   it("still publishes a handle mounted again after a newer record took the panel's key", () => {
     const first = openPluginFileDocument(target());
     const releaseFirst = first.retain();
@@ -826,7 +857,8 @@ describe("pluginFileDocument (#13809)", () => {
     handle.retain();
     handle.document.setDraft("first", { baseRevision: REV_A });
     handle.document.onDidChange((change) => {
-      if (change.reason === "discarded") handle.document.setDraft("again", { baseRevision: REV_A });
+      if (change.reason !== "discarded") return;
+      queueMicrotask(() => handle.document.setDraft("again", { baseRevision: REV_A }));
     });
     await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.discard()).rejects.toThrow();
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({

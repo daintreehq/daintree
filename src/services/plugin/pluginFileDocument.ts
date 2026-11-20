@@ -99,7 +99,14 @@ function recordKey(panelId: string, filePath: string): string {
   return `${panelId}\u0000${filePath}`;
 }
 
+/** Released, unmounted and replaced: no longer the panel's document. */
+function superseded(record: DocumentRecord): boolean {
+  const owner = records.get(record.key);
+  return record.mounts === 0 && owner !== undefined && owner !== record;
+}
+
 function publish(record: DocumentRecord): void {
+  if (superseded(record)) return;
   const store = useFileDocumentStore.getState();
   if (record.mounts === 0 && record.draft === null && record.pending === 0) {
     // No draft and nobody editing: the document is released. Only this
@@ -128,6 +135,10 @@ function publish(record: DocumentRecord): void {
     },
   };
   record.projection = projection;
+  // React runs a deleted host's cleanup before its view's, so a view's unmount
+  // flush lands after the release: the record takes the panel back, and the
+  // next view for this file restores the draft.
+  if (!records.has(record.key)) records.set(record.key, record);
   store.setFileDocument(record.panelId, projection);
 }
 
@@ -381,7 +392,7 @@ function createDocument(
     getDraft: () => record.draft,
     getDraftBaseRevision: () => (record.draft === null ? null : record.revision),
     setDraft: (text: string | null, options?: { baseRevision?: string }) => {
-      if (readOnly || view.gone) return;
+      if (readOnly || view.gone || superseded(record)) return;
       const next = typeof text === "string" ? text : null;
       if (next === record.draft) return;
       if (next === null) {
@@ -400,7 +411,8 @@ function createDocument(
       publish(record);
     },
     setConflict: (conflict: boolean) => {
-      if (readOnly || view.gone || record.viewConflict === Boolean(conflict)) return;
+      if (readOnly || view.gone || superseded(record)) return;
+      if (record.viewConflict === Boolean(conflict)) return;
       record.viewConflict = Boolean(conflict);
       publish(record);
     },
