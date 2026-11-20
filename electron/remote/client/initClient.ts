@@ -16,6 +16,7 @@ import {
 import { CHANNELS } from "../../ipc/channels.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { store } from "../../store.js";
+import { isAgentUsageTrackingEnabled } from "../../services/agentUsage/AgentUsageTracking.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import {
   discardFromAllProjectHistories,
@@ -934,6 +935,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       platform:
         process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
       assistantSlots: MAX_ASSISTANT_SLOTS,
+      // Read for each HELLO: present, it tells a host to wait for this Shell's word on open (#17981).
+      get agentUsage() {
+        return isAgentUsageTrackingEnabled();
+      },
     },
     views: createViewSink(hostForView),
     reverseRequests: answerReverseRequest,

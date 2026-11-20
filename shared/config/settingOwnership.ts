@@ -132,6 +132,9 @@ export const SETTING_CATALOG = {
       agentSettings: hostGlobalOrProject,
       // The toolbar is this screen's, so which agents it pins is too (#14702).
       agentToolbarPins: device,
+      // Whether this screen shows agent usage, and asks its hosts for it (#17981).
+      // A host's own switch decides whether that host reads it at all.
+      agentUsageTrackingEnabled: device,
       // Which events alert, when they escalate, quiet hours, and how they reach this
       // person are about whoever is at this screen, not the host doing the work. The
       // host still detects the events; a Shell's own choices decide which of them

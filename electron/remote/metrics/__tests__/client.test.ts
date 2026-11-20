@@ -1184,6 +1184,49 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("keeps no host's usage while tracking is off, and drops what it held when turned off (#17981)", () => {
+    let tracking = true;
+    const h = harness([descriptor("studio-01")], { agentUsageTracking: () => tracking });
+    h.client.start();
+    const reading = {
+      agentId: "codex" as const,
+      accountNames: ["Work"],
+      isDefault: false,
+      windowDurationMins: 300,
+      usedPercent: 40,
+      resetsAt: null,
+      observedAt: 1,
+    };
+    h.client.record("studio-01", { ...summary(0), agentUsage: [reading] });
+    h.client.record("studio-01", { ...summary(1), agentUsage: [reading] });
+    const held = h.client.latest("studio-01")!;
+    expect(held.agentUsage).toEqual([reading]);
+
+    tracking = false;
+    h.client.forgetAgentUsage();
+    expect(h.client.latest("studio-01")).toBe(held);
+    expect(held).not.toHaveProperty("agentUsage");
+    // Every summary held, not only the newest.
+    expect(h.client.getSnapshots()[0]!.history).toHaveLength(2);
+    expect(h.client.getSnapshots()[0]!.history.some((s) => "agentUsage" in s)).toBe(false);
+    // A host from before the switch keeps sending it; none of it is kept or passed on.
+    h.client.record("studio-01", { ...summary(2), agentUsage: [reading] });
+    expect(h.client.latest("studio-01")).not.toHaveProperty("agentUsage");
+    expect(
+      h.client
+        .getSnapshots()
+        .flatMap((s) => s.history)
+        .some((s) => "agentUsage" in s)
+    ).toBe(false);
+    const last = h.emitted.at(-1) as { summary?: object };
+    expect(last.summary).not.toHaveProperty("agentUsage");
+
+    tracking = true;
+    h.client.record("studio-01", { ...summary(3), agentUsage: [reading] });
+    expect(h.client.latest("studio-01")?.agentUsage).toEqual([reading]);
+    h.client.dispose();
+  });
+
   it("forgets a host's history ahead of the host list, and still drops a later address change", () => {
     const h = harness([descriptor("studio-01"), descriptor("studio-02")]);
     h.client.start();

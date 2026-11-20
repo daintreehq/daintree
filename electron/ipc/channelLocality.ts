@@ -79,7 +79,10 @@ export const CHANNEL_LOCALITY = {
   // This machine's agents plus every linked host's (#17318): one set per Shell,
   // whichever host a window shows.
   "agent-usage:changed": "shell",
+  "agent-usage:get-tracking": "shell",
   "agent-usage:set-following": "shell",
+  "agent-usage:set-tracking": "shell",
+  "agent-usage:tracking-changed": "shell",
   "app-agent:confirmation-response": "host",
   "app-agent:dispatch-action-response": "host",
   "app-agent:get-config": "host",

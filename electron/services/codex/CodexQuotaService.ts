@@ -65,7 +65,18 @@ interface HomeReading {
 interface HomeCacheEntry {
   cached: HomeReading | null;
   inFlight: Promise<HomeReading> | null;
+  /**
+   * Whether some caller of `inFlight` must have its answer. One only a
+   * background watch is waiting on is dropped before it starts once that
+   * watch stops wanting it (#17981).
+   */
+  needed: boolean;
+  /** The background callers of `inFlight`: it's still wanted while any of them wants it. */
+  wantedBy: Array<() => boolean>;
 }
+
+/** What a dropped background read rejects with; never reaches a caller that needed the answer. */
+class QuotaReadDropped extends Error {}
 
 /** Keyed by realpath'd home, never by preset: presets sharing a home share a reading. */
 let cacheByHome = new Map<string, HomeCacheEntry>();
@@ -225,7 +236,11 @@ async function readAccountEmail(call: CodexAppServerCall): Promise<string | null
 }
 
 /** `codexHome` undefined means main's own env, exactly as before presets were read. */
-async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReading> {
+/** `dropIfUnwanted` throws {@link QuotaReadDropped} for a background read nobody wants any more. */
+async function fetchCodexQuota(
+  codexHome: string | undefined,
+  dropIfUnwanted?: () => void
+): Promise<HomeReading> {
   // Held outside the session: if the deadline lands during the optional account
   // read, the quota that already arrived is still the answer.
   let quota: { raw: unknown; fetchedAt: number } | null = null;
@@ -244,7 +259,10 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
         const email = accountId ? await readAccountEmail(call) : null;
         return { raw, accountId, email };
       },
-      codexHome === undefined ? {} : { codexHome }
+      {
+        ...(codexHome === undefined ? {} : { codexHome }),
+        ...(dropIfUnwanted ? { beforeSpawn: dropIfUnwanted } : {}),
+      }
     );
     const result = normalizeCodexRateLimits(raw, Date.now());
     const answered = quota as { raw: unknown; fetchedAt: number } | null;
@@ -254,6 +272,7 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
       evidence: toCodexLimitEvidence(raw, requestedAt, answered?.fetchedAt ?? Date.now()),
     };
   } catch (error) {
+    if (error instanceof QuotaReadDropped) throw error;
     const answered = quota as { raw: unknown; fetchedAt: number } | null;
     if (answered) {
       return {
@@ -262,6 +281,9 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
         evidence: toCodexLimitEvidence(answered.raw, requestedAt, answered.fetchedAt),
       };
     }
+    // A read nobody wants any more, that never got an answer (its slot timed
+    // out, say), is dropped rather than cached as a failure.
+    dropIfUnwanted?.();
     return {
       result: { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() },
       identity: null,
@@ -270,14 +292,21 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
   }
 }
 
+/**
+ * `stillWanted` marks a background read: asked again when its turn in this
+ * queue comes and just before Codex would be spawned for it, it is dropped
+ * there if false and nobody that needs the answer has joined it, so it
+ * neither holds the queue nor starts Codex. Absent, the caller needs the answer.
+ */
 function readHome(
   home: string,
   codexHome: string | undefined,
-  force: boolean
+  force: boolean,
+  stillWanted?: () => boolean
 ): Promise<HomeReading> {
   let entry = cacheByHome.get(home);
   if (!entry) {
-    entry = { cached: null, inFlight: null };
+    entry = { cached: null, inFlight: null, needed: false, wantedBy: [] };
     cacheByHome.set(home, entry);
   }
   const { cached } = entry;
@@ -286,16 +315,36 @@ function readHome(
     if (Date.now() - cached.result.fetchedAt < ttl) return Promise.resolve(cached);
   }
   // A refresh still joins a read already in flight rather than queueing a second.
-  if (entry.inFlight) return entry.inFlight;
+  if (entry.inFlight) {
+    // A watch started again joins the stopped one's read and keeps it wanted.
+    if (stillWanted) entry.wantedBy.push(stillWanted);
+    else entry.needed = true;
+    return entry.inFlight;
+  }
   const owner = entry;
-  const request = enqueue(() => fetchCodexQuota(codexHome)).then((result) => {
+  owner.needed = !stillWanted;
+  owner.wantedBy = stillWanted ? [stillWanted] : [];
+  const dropIfUnwanted = stillWanted
+    ? () => {
+        if (!owner.needed && !owner.wantedBy.some((wanted) => wanted())) {
+          throw new QuotaReadDropped();
+        }
+      }
+    : undefined;
+  const request = enqueue(async () => {
+    dropIfUnwanted?.();
+    return fetchCodexQuota(codexHome, dropIfUnwanted);
+  }).then((result) => {
     owner.cached = result;
     return result;
   });
   owner.inFlight = request;
-  void request.finally(() => {
-    if (owner.inFlight === request) owner.inFlight = null;
-  });
+  request
+    .finally(() => {
+      if (owner.inFlight === request) owner.inFlight = null;
+    })
+    // A dropped read rejects only for the background callers awaiting it.
+    .catch(() => {});
   return request;
 }
 
@@ -325,8 +374,13 @@ async function unreadableReason(
  * path computed from it; every other home, the agent-wide one included, is
  * named the way a pane's env names it.
  */
-function readTarget(target: CodexQuotaProfileTarget, homeKey: string, force: boolean) {
-  return readHome(homeKey, target.inheritsMainEnv ? undefined : target.home, force);
+function readTarget(
+  target: CodexQuotaProfileTarget,
+  homeKey: string,
+  force: boolean,
+  stillWanted?: () => boolean
+) {
+  return readHome(homeKey, target.inheritsMainEnv ? undefined : target.home, force, stillWanted);
 }
 
 async function readDefaultHome(force: boolean): Promise<CodexQuotaResult> {
@@ -500,7 +554,9 @@ export interface CodexHomeQuota {
  * Never rejects.
  */
 export async function readCodexQuotaForHomes(
-  homes: ReadonlyMap<string, string>
+  homes: ReadonlyMap<string, string>,
+  /** Asked as each home's read reaches the queue: false drops it, and that home is left out. */
+  stillWanted?: () => boolean
 ): Promise<CodexHomeQuota[]> {
   if (homes.size === 0) return [];
   const profiles = await foldBySameDirectory(resolveCodexQuotaProfiles(await readCodexSettings()));
@@ -517,7 +573,13 @@ export async function readCodexQuotaForHomes(
   const readings: CodexHomeQuota[] = [];
   for (const target of [...profiles, ...unnamed]) {
     if (!homes.has(target.homeKey) || (await unreadableReason(target))) continue;
-    const { result } = await readTarget(target, target.homeKey, false);
+    let result: CodexQuotaResult;
+    try {
+      ({ result } = await readTarget(target, target.homeKey, false, stillWanted));
+    } catch (error) {
+      if (error instanceof QuotaReadDropped) continue;
+      throw error;
+    }
     readings.push({
       homeKey: target.homeKey,
       isDefault: target.isDefault,

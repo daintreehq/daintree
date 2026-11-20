@@ -96,6 +96,11 @@ export interface HostMetricsClientOptions {
    * inbox only, or announced. Announced when absent.
    */
   waitingPolicy?(): "silent" | "quiet" | "announce";
+  /**
+   * Whether this machine tracks agent usage (#17981). While it doesn't, no
+   * host's usage readings are kept or passed on, whatever a host sends. On when absent.
+   */
+  agentUsageTracking?(): boolean;
   /** This machine's fleet and worktree reads, for the "local" host. */
   local: {
     listFleetTargets(): Promise<HostFleetTargetList>;
@@ -321,6 +326,16 @@ export class HostMetricsClient {
     this.rings.delete(hostId);
   }
 
+  /**
+   * Tracking was turned off (#17981): drop every usage reading held from the
+   * hosts. Each summary stays the same object, so its receipt and link stay with it.
+   */
+  forgetAgentUsage(): void {
+    for (const ring of this.rings.values()) {
+      for (const summary of ring) delete summary.agentUsage;
+    }
+  }
+
   /** When a summary this client holds arrived, and what its frame proved about its age (#14462). */
   receiptOf(summary: HostMetricsSummary): SummaryReceipt | null {
     return this.receipts.get(summary) ?? null;
@@ -534,6 +549,8 @@ export class HostMetricsClient {
     const at = (this.options.clock ?? stampNow)();
     const { timing, ...summary } = frame;
     const stamped: HostMetricsSummary = { ...summary, hostId };
+    // A host from before #17981 sends usage whatever this machine wants.
+    if (this.options.agentUsageTracking?.() === false) delete stamped.agentUsage;
     this.receipts.set(
       stamped,
       receiveSummary(timing, (nonce) => session?.pingSentAt(nonce) ?? null, at)

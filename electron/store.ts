@@ -306,6 +306,11 @@ export interface StoreSchema {
    * `electron/services/agentToolbarPins.ts`.
    */
   agentToolbarPins?: Record<string, boolean>;
+  /**
+   * This machine's agent usage tracking switch (#17981); absent reads as on.
+   * See `electron/services/agentUsage/AgentUsageTracking.ts`.
+   */
+  agentUsageTrackingEnabled?: boolean;
   /** Sounds imported on this device, by id; the WAVs live under `<userData>/sounds/custom/`. */
   customNotificationSounds?: CustomNotificationSound[];
   notificationSettings: {

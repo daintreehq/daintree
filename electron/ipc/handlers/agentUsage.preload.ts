@@ -2,6 +2,8 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const AGENT_USAGE_METHOD_CHANNELS = {
   setFollowing: "agent-usage:set-following",
+  getTracking: "agent-usage:get-tracking",
+  setTracking: "agent-usage:set-tracking",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof AGENT_USAGE_METHOD_CHANNELS;

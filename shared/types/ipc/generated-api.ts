@@ -81,9 +81,15 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["agent-toolbar-pins:set"]["result"]>;
   };
   agentUsage: {
+    getTracking(
+      ...args: IpcInvokeMap["agent-usage:get-tracking"]["args"]
+    ): Promise<IpcInvokeMap["agent-usage:get-tracking"]["result"]>;
     setFollowing(
       ...args: IpcInvokeMap["agent-usage:set-following"]["args"]
     ): Promise<IpcInvokeMap["agent-usage:set-following"]["result"]>;
+    setTracking(
+      ...args: IpcInvokeMap["agent-usage:set-tracking"]["args"]
+    ): Promise<IpcInvokeMap["agent-usage:set-tracking"]["result"]>;
   };
   app: {
     getVersionInfo(

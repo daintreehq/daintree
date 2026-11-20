@@ -1,12 +1,22 @@
 import { z } from "zod";
-import { defineIpcNamespace, opValidated } from "../define.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { getAgentUsageReadouts } from "../../services/agentUsage/AgentUsageReadouts.js";
+import {
+  isAgentUsageTrackingEnabled,
+  onAgentUsageTrackingChanged,
+  readAgentUsageTracking,
+  setAgentUsageTracking,
+} from "../../services/agentUsage/AgentUsageTracking.js";
 import { AGENT_USAGE_METHOD_CHANNELS } from "./agentUsage.preload.js";
-import type { AgentUsageSnapshot } from "../../../shared/types/ipc/agentUsage.js";
+import type {
+  AgentUsageSnapshot,
+  AgentUsageTrackingSnapshot,
+} from "../../../shared/types/ipc/agentUsage.js";
 
 const setFollowingSchema = z.object({ following: z.boolean() }).strict();
+const setTrackingSchema = z.object({ enabled: z.boolean() }).strict();
 
 /** Each following view's watch for going away without saying so, by WebContents id. */
 const followers = new Map<number, () => void>();
@@ -26,7 +36,8 @@ function stopFollowing(webContentsId: number): void {
  */
 function startFollowing(ctx: IpcContext): AgentUsageSnapshot | null {
   const sender = ctx.event?.sender;
-  if (!sender) return null;
+  // With tracking off nothing is watched, whoever asks (#17981).
+  if (!sender || !isAgentUsageTrackingEnabled()) return null;
   const id = sender.id;
   if (!followers.has(id)) {
     const onGone = () => stopFollowing(id);
@@ -74,13 +85,33 @@ export const agentUsageNamespace = defineIpcNamespace({
       },
       { withContext: true }
     ),
+    /** This machine's tracking switch (#17981), pushed on `agent-usage:tracking-changed`. */
+    getTracking: op(
+      AGENT_USAGE_METHOD_CHANNELS.getTracking,
+      async (): Promise<AgentUsageTrackingSnapshot> => readAgentUsageTracking()
+    ),
+    setTracking: opValidated(
+      AGENT_USAGE_METHOD_CHANNELS.setTracking,
+      setTrackingSchema,
+      async (payload: { enabled: boolean }): Promise<AgentUsageTrackingSnapshot> =>
+        setAgentUsageTracking(payload.enabled)
+    ),
   },
 });
 
+function stopAllFollowing(): void {
+  for (const webContentsId of [...followers.keys()]) stopFollowing(webContentsId);
+}
+
 export function registerAgentUsageHandlers(): () => void {
   const unregister = agentUsageNamespace.register();
+  // Off takes every view's demand at once, before any of them hears of it.
+  const offTracking = onAgentUsageTrackingChanged((enabled) => {
+    if (!enabled) stopAllFollowing();
+  });
   return () => {
+    offTracking();
     unregister();
-    for (const webContentsId of [...followers.keys()]) stopFollowing(webContentsId);
+    stopAllFollowing();
   };
 }
