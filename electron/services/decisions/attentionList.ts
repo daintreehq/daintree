@@ -307,8 +307,9 @@ function stripMarkdown(raw: string): string {
     raw.trim().replace(/\t/g, " ").slice(0, LINE_SCAN_CHARS),
     LINE_SCAN_CHARS
   );
-  if (/^(?:[-*_=]\s*){1,}$/.test(line) && /^(?:=+|(?:[-*_]\s*){3,})$/.test(line)) return "";
-  line = line.replace(/^\s{0,3}(?:>\s*)+/, "").replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+/, "");
+  line = unquote(line);
+  if (/^(?:=+|(?:[-*_]\s*){3,})$/.test(line)) return "";
+  line = line.replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+/, "");
   const heading = /^\s*#{1,6}(?:\s+|$)/.test(line);
   line = line.replace(/^\s*#{1,6}(?:\s+|$)/, "");
   if (heading) line = line.replace(/\s+#+\s*$/, "");
@@ -321,10 +322,18 @@ function stripMarkdown(raw: string): string {
   return (out + stripInline(line.slice(last))).trim();
 }
 
-/** Whether a line opens or closes a fenced code block (a fence closed on its own line is inline code). */
-function isFenceLine(raw: string): boolean {
-  const line = raw.trim();
-  return /^(?:`{3,}|~{3,})/.test(line) && !/^(`{3,}).*[^`]\1(?!`)/.test(line);
+function unquote(line: string): string {
+  return line.replace(/^\s{0,3}(?:>\s*)+/, "");
+}
+
+/** The fence a line opens or closes, when it is one: a fence closed on its own line is inline code. */
+function fenceOf(raw: string): { char: string; length: number; bare: boolean } | null {
+  const line = unquote(raw.slice(0, LINE_SCAN_CHARS)).trim();
+  const marker = /^(?:`{3,}|~{3,})/.exec(line)?.[0];
+  if (marker === undefined) return null;
+  const rest = line.slice(marker.length);
+  if (marker[0] === "`" && rest.includes(marker)) return null;
+  return { char: marker[0]!, length: marker.length, bare: rest.trim() === "" };
 }
 
 function isGenericHeading(text: string): boolean {
@@ -334,18 +343,29 @@ function isGenericHeading(text: string): boolean {
 /** One line of a question, as data: Markdown syntax and controls gone, cut to fit a row. */
 export function questionLine(question: string): string | null {
   const lines = question.split(/\r\n?|\n|\u2028|\u2029/);
-  // An opened fence that never closes is not a block: its text counts as the question's.
-  const fences = lines.filter(isFenceLine).length;
-  const skipFenced = fences % 2 === 0;
-  let first: string | undefined;
-  let fenced = false;
+  // A fence that never closes is not a block: its text counts as the question's.
+  const inside: boolean[] = [];
+  let open: { char: string; length: number } | null = null;
+  let opened = 0;
   for (const raw of lines) {
-    if (raw.trim() === "") continue;
-    if (isFenceLine(raw)) {
-      fenced = !fenced;
-      continue;
+    const fence = fenceOf(raw);
+    if (open === null) {
+      inside.push(fence !== null);
+      if (fence !== null) {
+        open = fence;
+        opened = inside.length - 1;
+      }
+    } else {
+      inside.push(true);
+      if (fence !== null && fence.bare && fence.char === open.char && fence.length >= open.length) {
+        open = null;
+      }
     }
-    if (fenced && skipFenced) continue;
+  }
+  if (open !== null) inside.fill(false, opened + 1);
+  let first: string | undefined;
+  for (const [index, raw] of lines.entries()) {
+    if (inside[index] || raw.trim() === "" || fenceOf(raw) !== null) continue;
     const text = sanitizeAnswerText(stripMarkdown(raw), QUESTION_CHARS);
     if (text === "") continue;
     first ??= text;

@@ -571,6 +571,15 @@ describe("questionLine", () => {
     expect(questionLine("Context\nSummary\nBackground")).toBe("Context");
   });
 
+  it("handles mismatched fences, quoted rules and long fence runs", () => {
+    expect(questionLine("```\nShould we deploy?\n~~~")).toBe("Should we deploy?");
+    expect(questionLine("> ---\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("> ```bash\n> npm i\n> ```\nShould we deploy?")).toBe("Should we deploy?");
+    const start = Date.now();
+    questionLine(`Go?\n${"`".repeat(8000)}`);
+    expect(Date.now() - start).toBeLessThan(100);
+  });
+
   it("gives way from a generic heading to the first substantive line", () => {
     expect(questionLine("## Context\n\nShould the cache be cleared?")).toBe(
       "Should the cache be cleared?"
