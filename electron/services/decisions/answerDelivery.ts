@@ -411,6 +411,8 @@ function runKey(o: QuestionOrigin): string {
     o.agent_incarnation,
     o.agent_session_id,
     o.worktree_id,
+    // Located against the asker's kind (#18116), so two kinds never share a reading.
+    o.agent_kind,
   ]);
 }
 
@@ -480,6 +482,7 @@ export class AnswerDelivery {
       ...(deps.hasComposerDraft ? { hasComposerDraft: deps.hasComposerDraft } : {}),
       queueWake: (pane, projectId, wake) => this.queueWake(pane, projectId, wake),
       closureSuperseded: (questionIds) => this.closureSuperseded(questionIds),
+      originOf: async (questionId) => (await this.store.getQuestion(questionId))?.origin ?? null,
       ...(deps.now ? { now: deps.now } : {}),
     });
     this.resume = deps.resume
@@ -1786,7 +1789,7 @@ export class AnswerDelivery {
       if (where.state === "alive" && where.target) {
         const found = this.o.deps.diagnostics?.handles(where.target.paneId)
           ? await this.routed.hasMarker(where.target, intent.injection_id)
-          : await this.sink.readMarker(where.target, intent.injection_id);
+          : await this.sink.readMarker(where.target, intent.injection_id, typedInto.agent_kind);
         if (found === null && !giveUp) {
           complete = false;
           continue;

@@ -35,6 +35,7 @@ import { DaintreeTerminalSink, type DecisionSinkPtyClient } from "../daintreeTer
 const HOST = "host-own-01";
 const PANE = "pane-1";
 const Q1 = "0190f0aa11112222333344445555aaaa";
+const Q2 = "0190f0aa11112222333344445555cccc";
 const I1 = "0190f0aa11112222333344445555bbbb";
 const I2 = "0190f0aa11112222333344445555dddd";
 
@@ -145,6 +146,11 @@ function setup() {
   /** Questions a reopen waits on (#17941), and every set of questions the sink asked about. */
   const reopened = new Set<string>();
   const askedAbout: string[][] = [];
+  /** Each question's origin as the store holds it (#18116). */
+  const origins = new Map<string, QuestionOrigin | Error>([
+    [Q1, ORIGIN],
+    [Q2, ORIGIN],
+  ]);
   const sink = new DaintreeTerminalSink({
     hostId: () => identity.hostId,
     principalFor: (paneId) => (paneId === PANE ? identity.principal : null),
@@ -158,11 +164,20 @@ function setup() {
       queued.push(wake);
       scope.enqueueWake(pane, projectId, wake);
     },
+    originOf: async (questionId) => {
+      const origin = origins.get(questionId);
+      if (origin instanceof Error) throw origin;
+      return origin ?? null;
+    },
   });
   client.terminals.set(PANE, atPrompt());
   client.generations.set(PANE, 7);
   const patch = (fields: Partial<NotifyTerminalInfo>) =>
     client.terminals.set(PANE, { ...client.terminals.get(PANE)!, ...fields });
+  /** Every question asked by an agent of `kind` in the same run. */
+  const askedBy = (kind: string) => {
+    for (const id of [Q1, Q2]) origins.set(id, { ...ORIGIN, agent_kind: kind });
+  };
   return {
     client,
     service,
@@ -174,6 +189,8 @@ function setup() {
     drafts,
     reopened,
     askedAbout,
+    origins,
+    askedBy,
   };
 }
 
@@ -289,10 +306,34 @@ describe("DaintreeTerminalSink", () => {
         },
         "host-offline",
       ],
+      [
+        "relaunched, for another agent kind in the same run (#18116)",
+        (h: Harness): unknown => h.patch({ detectedAgentId: "codex" }),
+        "relaunched",
+      ],
+      [
+        "relaunched, for another agent kind in a pane launched as the asker (#18116)",
+        (h: Harness): unknown => h.patch({ launchAgentId: "claude", detectedAgentId: "codex" }),
+        "relaunched",
+      ],
     ] as const)("reports %s", async (_label, change, state) => {
       const h = setup();
       change(h);
       await expect(h.sink.locate(ORIGIN)).resolves.toEqual({ state });
+    });
+
+    it("finds a launched asker before and after its kind is detected, and a plugin asker a built-in is credited for (#18116)", async () => {
+      const h = setup();
+      h.patch({ launchAgentId: "claude", detectedAgentId: undefined });
+      await expect(h.sink.locate(ORIGIN)).resolves.toEqual({ state: "alive", target: TARGET });
+      h.patch({ detectedAgentId: "claude" });
+      await expect(h.sink.locate(ORIGIN)).resolves.toEqual({ state: "alive", target: TARGET });
+
+      h.patch({ launchAgentId: "acme-agent", detectedAgentId: "claude" });
+      await expect(h.sink.locate({ ...ORIGIN, agent_kind: "acme-agent" })).resolves.toEqual({
+        state: "alive",
+        target: TARGET,
+      });
     });
   });
 
@@ -374,6 +415,7 @@ describe("DaintreeTerminalSink", () => {
 
     it("holds a follow-up while a CLI that can't queue works, and types it once settled at the prompt", async () => {
       const h = setup();
+      h.askedBy("gemini");
       h.patch({
         agentState: "working",
         lastStateChange: Date.now() - 30_000,
@@ -497,6 +539,7 @@ describe("DaintreeTerminalSink", () => {
             kind: "settled-prompt-exact",
             agentIncarnation: 0,
             agentSessionId: "session-1",
+            agentId: "claude",
             acceptWorking: true,
           },
         },
@@ -561,6 +604,7 @@ describe("DaintreeTerminalSink", () => {
 
     it("never types into a running turn of a CLI that can't queue", async () => {
       const h = setup();
+      h.askedBy("gemini");
       h.patch({
         agentState: "working",
         lastStateChange: Date.now() - 30_000,
@@ -621,6 +665,117 @@ describe("DaintreeTerminalSink", () => {
       expect(h.client.submitted).toEqual([]);
     });
 
+    describe("another agent kind in the same run (#18116)", () => {
+      /** A question asked before its session was known: nothing but the kind tells the runs apart. */
+      const SESSIONLESS: QuestionOrigin = { ...ORIGIN, agent_session_id: null };
+      const SESSIONLESS_TARGET = targetOf(SESSIONLESS);
+
+      function sessionless() {
+        const h = setup();
+        h.origins.set(Q1, SESSIONLESS);
+        h.origins.set(Q2, SESSIONLESS);
+        h.patch({ agentSessionId: undefined });
+        return h;
+      }
+
+      it("never types an answer into a pane another kind of agent took, and reports the run relaunched", async () => {
+        const h = sessionless();
+        h.patch({ detectedAgentId: "codex" });
+        const result = track(h.sink.inject(SESSIONLESS_TARGET, notice(), I1));
+        await vi.advanceTimersByTimeAsync(5_000);
+        await flushLine();
+        expect(result.value).toEqual({ outcome: "unavailable", reason: "relaunched" });
+        expect(h.queued).toHaveLength(0);
+        expect(h.client.submitted).toEqual([]);
+      });
+
+      it("ends an answer queued behind a draft once another kind of agent takes the pane, untyped", async () => {
+        const h = sessionless();
+        h.drafts.add(PANE);
+        const result = track(h.sink.inject(SESSIONLESS_TARGET, notice(), I1));
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(result.settled).toBe(false);
+        expect(h.queued).toHaveLength(1);
+
+        h.patch({ detectedAgentId: "codex" });
+        h.drafts.clear();
+        await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS + 1_000);
+        await flushLine();
+        expect(result.value).toEqual({ outcome: "unavailable", reason: "relaunched" });
+        expect(h.client.submitted).toEqual([]);
+      });
+
+      it("types for an agent launched as the asker once detection names it, pinning that kind for the host", async () => {
+        const h = sessionless();
+        h.patch({ launchAgentId: "claude", detectedAgentId: undefined });
+        const result = track(h.sink.inject(SESSIONLESS_TARGET, notice(), I1));
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(h.client.submitted).toEqual([]);
+        expect(result.settled).toBe(false);
+
+        h.patch({ detectedAgentId: "claude" });
+        await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS + 1_000);
+        await flushLine();
+        expect(h.client.submitted).toHaveLength(1);
+        expect(h.client.submitted[0].guard).toMatchObject({ agentId: "claude" });
+        expect(result.value).toMatchObject({ outcome: "delivered" });
+      });
+
+      it("types for a plugin asker that detection credits to a built-in", async () => {
+        const h = sessionless();
+        h.origins.set(Q1, { ...SESSIONLESS, agent_kind: "acme-agent" });
+        h.patch({ launchAgentId: "acme-agent", detectedAgentId: "claude" });
+        const result = track(h.sink.inject(SESSIONLESS_TARGET, notice(), I1));
+        await flushLine();
+        expect(h.client.submitted).toHaveLength(1);
+        expect(result.value).toMatchObject({ outcome: "delivered" });
+      });
+
+      it("hands a batch back to be rebuilt when another kind took the pane for only some of its questions", async () => {
+        const h = sessionless();
+        h.origins.set(Q2, { ...SESSIONLESS, agent_kind: "acme-agent" });
+        const batch = () => notice({}, { questionId: Q2, injectionId: I2 });
+
+        h.patch({ detectedAgentId: "codex" });
+        await expect(h.sink.inject(SESSIONLESS_TARGET, batch(), I1)).resolves.toEqual({
+          outcome: "held",
+          reason: "asker-changed",
+        });
+        expect(h.queued).toHaveLength(0);
+
+        // The same swap once the batch waits in the queue.
+        h.patch({ detectedAgentId: "claude" });
+        h.drafts.add(PANE);
+        const queued = track(h.sink.inject(SESSIONLESS_TARGET, batch(), I1));
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(h.queued).toHaveLength(1);
+        h.patch({ detectedAgentId: "codex" });
+        h.drafts.clear();
+        await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS + 1_000);
+        await flushLine();
+        expect(queued.value).toEqual({ outcome: "held", reason: "asker-changed" });
+        expect(h.client.submitted).toEqual([]);
+      });
+    });
+
+    it.each([
+      ["moved to another pane", (h: Harness) => h.origins.set(Q1, { ...ORIGIN, pane_id: "pane-2" })],
+      ["no longer in the store", (h: Harness) => h.origins.delete(Q1)],
+      ["unreadable", (h: Harness) => h.origins.set(Q1, new Error("busy"))],
+    ])(
+      "hands back a chunk whose question's origin is %s, with nothing queued (#18116)",
+      async (_label, change) => {
+        const h = setup();
+        change(h);
+        await expect(h.sink.inject(TARGET, notice(), I1)).resolves.toEqual({
+          outcome: "held",
+          reason: "origin-moved",
+        });
+        expect(h.queued).toHaveLength(0);
+        expect(h.client.submitted).toEqual([]);
+      }
+    );
+
     it("reports a line the host didn't write as ambiguous", async () => {
       const h = setup();
       h.client.linePhase = "cancelled";
@@ -657,7 +812,6 @@ describe("DaintreeTerminalSink", () => {
     it("holds overlapping answers and another target's attempt, and delivers a chunk whole", async () => {
       const h = setup();
       h.patch({ agentState: "working" });
-      const Q2 = "0190f0aa11112222333344445555cccc";
       const chunk = track(
         h.sink.inject(TARGET, notice({}, { questionId: Q2, injectionId: I2 }), I1)
       );
@@ -741,7 +895,6 @@ describe("DaintreeTerminalSink", () => {
   });
 
   describe("inject, closures a reopen waits for (#17941)", () => {
-    const Q2 = "0190f0aa11112222333344445555cccc";
     const DEADLINE = "2026-11-01T10:15:00.000Z";
     const advisory = (disposition: "fallback-due" | "fallback-withheld" = "fallback-due") =>
       notice({ kind: "expired", disposition, deadline: DEADLINE, revision: 0 });
@@ -777,12 +930,14 @@ describe("DaintreeTerminalSink", () => {
       // A CLI that can't take a line mid-turn: the engine holds it.
       [
         "a turn its CLI can't take a line in",
-        (h: Harness) =>
+        (h: Harness) => {
+          h.askedBy("gemini");
           h.patch({
             agentState: "working",
             lastStateChange: Date.now(),
             detectedAgentId: "gemini",
-          }),
+          });
+        },
       ],
     ])("ends a closure held behind %s once its bound passes, untyped", async (_label, holdPane) => {
       const h = setup();
@@ -946,6 +1101,23 @@ describe("DaintreeTerminalSink", () => {
 
       h.identity.principal = "principal-2";
       await expect(h.sink.hasMarker(TARGET, I1)).resolves.toBe(false);
+    });
+
+    it("reads no marker on a run another kind of agent took, before or during the read (#18116)", async () => {
+      const h = setup();
+      h.client.screens.set(PANE, `${markerFor(I1)}\r\n❯ \r\n`);
+      await expect(h.sink.readMarker(TARGET, I1, "claude")).resolves.toBe(true);
+
+      h.patch({ detectedAgentId: "codex" });
+      await expect(h.sink.readMarker(TARGET, I1, "claude")).resolves.toBeNull();
+
+      h.patch({ detectedAgentId: "claude" });
+      const read = h.client.getSerializedStateAsync.bind(h.client);
+      h.client.getSerializedStateAsync = async (id: string) => {
+        h.patch({ detectedAgentId: "codex" });
+        return read(id);
+      };
+      await expect(h.sink.readMarker(TARGET, I1, "claude")).resolves.toBeNull();
     });
   });
 });

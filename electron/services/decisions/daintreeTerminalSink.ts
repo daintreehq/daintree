@@ -27,7 +27,9 @@ import {
   type DecisionBlock,
 } from "./answerNotice.js";
 import {
+  DECISION_ASKER_CHANGED,
   DECISION_SUPERSEDED,
+  askerReplaced,
   createDecisionWake,
   decisionHold,
   identityMismatch,
@@ -58,6 +60,11 @@ export interface DaintreeTerminalSinkDeps extends DecisionWakeSources {
    * out: the attempt then ends untyped, so the reopen applies first.
    */
   closureSuperseded?(questionIds: readonly string[]): boolean;
+  /**
+   * The question's origin as the store holds it now, or null for one it no
+   * longer has: whose agent kind an injection is checked against (#18116).
+   */
+  originOf(questionId: string): Promise<QuestionOrigin | null>;
 }
 
 type Observed =
@@ -87,6 +94,8 @@ const WRAP_NOISE = /[\s─-▟⎿⏺|>›❯•●◦·]/gu;
 
 const IN_FLIGHT: InjectResult = { outcome: "held", reason: "attempt-in-flight" };
 const SUPERSEDED: InjectResult = { outcome: "held", reason: DECISION_SUPERSEDED };
+const ASKER_CHANGED: InjectResult = { outcome: "held", reason: DECISION_ASKER_CHANGED };
+const ORIGIN_MOVED: InjectResult = { outcome: "held", reason: "origin-moved" };
 
 /** The questions whose block in a notice closed a round without an answer: what a reopen waits on. */
 function closureQuestions(blocks: readonly DecisionBlock[]): string[] {
@@ -102,7 +111,8 @@ function closureQuestions(blocks: readonly DecisionBlock[]): string[] {
  * (#16015). An answer, or a follow-up the person sent after it (#16231), is
  * typed only into the exact run that asked (host,
  * pane, launch generation, ownership principal, agent incarnation, agent
- * session, worktree), through the pane's notice line and its gate, and an
+ * session, worktree, and the agent kind each question's stored origin names),
+ * through the pane's notice line and its gate, and an
  * injection resolves only once the engine knows what became of the line:
  * delivered on the host's `pty_written` record, never on queueing.
  *
@@ -117,7 +127,7 @@ export class DaintreeTerminalSink implements TerminalSink {
   constructor(private readonly deps: DaintreeTerminalSinkDeps) {}
 
   async locate(origin: QuestionOrigin): Promise<LocateResult> {
-    const observed = await this.observe(targetOf(origin));
+    const observed = await this.observe(targetOf(origin), [origin.agent_kind]);
     return observed.state === "alive"
       ? { state: "alive", target: observed.target }
       : { state: observed.state };
@@ -145,14 +155,27 @@ export class DaintreeTerminalSink implements TerminalSink {
     const superseded = () =>
       closures.length > 0 && this.deps.closureSuperseded?.(closures) === true;
 
-    const observed = await this.observe(target);
+    const [askerKinds, observed] = await Promise.all([
+      this.askerKindsOf(blocks, target),
+      this.observe(target),
+    ]);
     // Another attempt may have queued these blocks while the pane was read,
     // and its wake can still type them whatever this read saw.
     const raced = this.joinOrRefuse(id, target, injectionIds, keys);
     if (raced !== null) return raced;
     // A reopen came while the pane was read: nothing is queued, so it applies now.
     if (superseded()) return SUPERSEDED;
+    // A question moved to another run since the engine read it: it builds the chunk again.
+    if (askerKinds === null) return ORIGIN_MOVED;
     if (observed.state !== "alive") return { outcome: "unavailable", reason: observed.state };
+    // Another agent kind took the pane (#18116). When it did for only some of
+    // the questions, each is located on its own.
+    const replaced = askerKinds.filter((kind) => askerReplaced(kind, observed.info)).length;
+    if (replaced > 0) {
+      return replaced === askerKinds.length
+        ? { outcome: "unavailable", reason: "relaunched" }
+        : ASKER_CHANGED;
+    }
     const projectId = observed.info.projectId;
     if (projectId === undefined) return { outcome: "held", reason: "unreadable" };
 
@@ -176,7 +199,13 @@ export class DaintreeTerminalSink implements TerminalSink {
     const wake = createDecisionWake(
       this.deps,
       target,
-      { id, text: renderDecisionSection(blocks), superseded, closure: closures.length > 0 },
+      {
+        id,
+        text: renderDecisionSection(blocks),
+        askerKinds,
+        superseded,
+        closure: closures.length > 0,
+      },
       (outcome, evidence) => {
         // A hold is the engine still waiting on the pane; the line may yet go out.
         if (outcome.kind === "held") return;
@@ -188,7 +217,7 @@ export class DaintreeTerminalSink implements TerminalSink {
           finish(SUPERSEDED);
           return;
         }
-        this.resultFor(target, outcome, evidence).then(
+        this.resultFor(target, askerKinds, outcome, evidence).then(
           (result) => finish(untyped(result)),
           () => finish({ outcome: "ambiguous", reason: "report-failed" })
         );
@@ -222,10 +251,17 @@ export class DaintreeTerminalSink implements TerminalSink {
    * As `hasMarker`, telling a screen that couldn't be read (null) from one
    * read without the marker (false): the run was there a moment ago, so a
    * read that failed or a run that changed since says nothing either way.
+   * `askerKind` is the agent kind the question's origin names, which the run
+   * must still hold before and after the screen is read (#18116).
    */
-  async readMarker(target: TerminalTarget, injectionId: string): Promise<boolean | null> {
+  async readMarker(
+    target: TerminalTarget,
+    injectionId: string,
+    askerKind?: string
+  ): Promise<boolean | null> {
     if (!MARKER_ID.test(injectionId)) return false;
-    const observed = await this.observe(target);
+    const askerKinds = askerKind === undefined ? [] : [askerKind];
+    const observed = await this.observe(target, askerKinds);
     if (observed.state !== "alive") return null;
     const client = this.deps.getPtyClient();
     if (client?.getSerializedStateAsync === undefined) return false;
@@ -237,10 +273,35 @@ export class DaintreeTerminalSink implements TerminalSink {
       return null;
     }
     // The pty client answers a read that failed with nothing.
-    if (data === undefined || identityMismatch(this.deps, target) !== null) return null;
+    if (data === undefined) return null;
+    // The run may have changed while the screen was read, its agent kind with it.
+    if ((await this.observe(target, askerKinds)).state !== "alive") return null;
     const screen = tailCapturedOutput(data, MARKER_SEARCH_ROWS, true).content;
     // The id is random hex, so it is found whole even across a wrapped row.
     return screen.replace(WRAP_NOISE, "").includes(injectionId);
+  }
+
+  /**
+   * The distinct agent kinds that asked `blocks`' questions, as the store
+   * holds their origins now; null when one is gone, unreadable, or names
+   * another run than `target`.
+   */
+  private async askerKindsOf(
+    blocks: readonly DecisionBlock[],
+    target: TerminalTarget
+  ): Promise<string[] | null> {
+    const kinds = new Set<string>();
+    for (const questionId of new Set(blocks.map((block) => block.questionId))) {
+      let origin: QuestionOrigin | null;
+      try {
+        origin = await this.deps.originOf(questionId);
+      } catch {
+        return null;
+      }
+      if (origin === null || !sameTarget(targetOf(origin), target)) return null;
+      kinds.add(origin.agent_kind);
+    }
+    return [...kinds];
   }
 
   /** The joined attempt's result, a refusal for overlapping blocks, or null to go ahead. */
@@ -261,6 +322,7 @@ export class DaintreeTerminalSink implements TerminalSink {
 
   private async resultFor(
     target: TerminalTarget,
+    askerKinds: readonly string[],
     outcome: Exclude<LaneWakeOutcome, { kind: "held" }>,
     evidence: LaneWakeEvidence | undefined
   ): Promise<InjectResult> {
@@ -279,8 +341,9 @@ export class DaintreeTerminalSink implements TerminalSink {
           return { outcome: "unavailable", reason: outcome.reason as UnavailableReason };
         }
         // Ended untyped for the engine's own reasons (stopped, expired, the
-        // server or the hold gone): the pane as it is now says where it goes.
-        const observed = await this.observe(target);
+        // server or the hold gone), or for another agent kind in place of
+        // only some of its askers: the pane as it is now says where it goes.
+        const observed = await this.observe(target, askerKinds);
         return observed.state === "alive"
           ? { outcome: "held", reason: outcome.reason }
           : { outcome: "unavailable", reason: observed.state };
@@ -288,8 +351,11 @@ export class DaintreeTerminalSink implements TerminalSink {
     }
   }
 
-  /** The pane, if it is still exactly the run `target` names. */
-  private async observe(target: TerminalTarget): Promise<Observed> {
+  /** The pane, if it is still exactly the run `target` names, held by an agent of `askerKinds`. */
+  private async observe(
+    target: TerminalTarget,
+    askerKinds: readonly string[] = []
+  ): Promise<Observed> {
     const before = identityMismatch(this.deps, target);
     if (before === "unreadable") return { state: "host-offline" };
     if (before !== null) return { state: before };
@@ -304,7 +370,7 @@ export class DaintreeTerminalSink implements TerminalSink {
     }
     if (info === null) return { state: "gone" };
     // Checked again against the record: the run may have changed while it was read.
-    const mismatch = identityMismatch(this.deps, target, info);
+    const mismatch = identityMismatch(this.deps, target, info, askerKinds);
     if (mismatch === "unreadable") return { state: "host-offline" };
     if (mismatch !== null) return { state: mismatch };
     return { state: "alive", target: { ...target }, info };

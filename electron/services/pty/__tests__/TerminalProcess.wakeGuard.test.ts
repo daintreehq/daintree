@@ -64,6 +64,7 @@ interface Internals {
     lastOwnedPromptInput?: { owner: string; at: number };
     lastForeignPromptInputAt?: number;
     detectedAgentId?: string;
+    launchAgentId?: string;
     agentIncarnation?: number;
     agentSessionId?: string;
     updateInstalled?: { observedAt: number; namesRestart: boolean };
@@ -835,6 +836,55 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
     ],
   ])("refuses an answer once the PTY holds %s", async (_label, meanwhile) => {
     await expect(queuedAnswer(meanwhile)).resolves.toBe("cancelled");
+  });
+
+  /**
+   * An answer for the claude run main read, queued behind a person's prompt
+   * while the pane is `before`; the pane becomes `after` (incarnation,
+   * principal and generation untouched) before that turn settles (#18116).
+   */
+  async function queuedAcrossKinds(
+    before: Partial<Internals["terminalInfo"]>,
+    after: Partial<Internals["terminalInfo"]>
+  ) {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { agentIncarnation: 0 }, before);
+    terminal.submit("a person's prompt");
+    terminal.submit("answer", "tok-1", undefined, {
+      ...EXACT,
+      agentIncarnation: 0,
+      agentId: "claude",
+    });
+    Object.assign(info(terminal), after, {
+      agentState: "waiting",
+      waitingReason: "prompt",
+      lastStateChange: Date.now() + 1_000,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    return terminal.getSubmission("tok-1")?.phase;
+  }
+
+  it("refuses an answer once another agent kind holds the PTY, though nothing respawned (#18116)", async () => {
+    await expect(queuedAcrossKinds({}, { detectedAgentId: "codex" })).resolves.toBe("cancelled");
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).not.toContain("answer");
+    await expect(
+      queuedAcrossKinds(
+        { launchAgentId: "claude", detectedAgentId: undefined },
+        { detectedAgentId: "codex" }
+      )
+    ).resolves.toBe("cancelled");
+  });
+
+  it("types an answer for the same agent kind, and for a launched agent first detected as that kind (#18116)", async () => {
+    await expect(queuedAcrossKinds({}, {})).resolves.toBe("pty_written");
+    await expect(
+      queuedAcrossKinds(
+        { launchAgentId: "claude", detectedAgentId: undefined },
+        { detectedAgentId: "claude" }
+      )
+    ).resolves.toBe("pty_written");
   });
 
   it("refuses an answer for a run the PTY no longer held when the line arrived", async () => {

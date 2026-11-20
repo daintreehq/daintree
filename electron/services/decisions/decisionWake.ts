@@ -1,4 +1,5 @@
 import type { TerminalTarget } from "@daintreehq/decisions-client";
+import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry.js";
 import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
 import {
   decisionGateOptionsFor,
@@ -44,6 +45,14 @@ export interface DecisionWakeSources extends DecisionIdentitySources {
  * sink tells it apart from any reading of the pane.
  */
 export const DECISION_SUPERSEDED = "superseded";
+
+/**
+ * Why a wake ends untyped when another agent kind now holds the pane, but
+ * not for every question it carries (#18116): never a library
+ * `UnavailableReason`, so the sink hands the chunk back to be rebuilt and
+ * each question is located on its own.
+ */
+export const DECISION_ASKER_CHANGED = "asker-changed";
 
 /**
  * The longest a closure notice waits in the wake queue for its pane (#17941):
@@ -95,6 +104,8 @@ export type DecisionTerminalInfo = Pick<
   | "agentIncarnation"
   | "agentSessionId"
   | "worktreeId"
+  | "detectedAgentId"
+  | "launchAgentId"
 >;
 
 /** The worktree id a question's origin carries for a pane in no worktree. */
@@ -106,16 +117,34 @@ export function incarnationOf(info: Pick<NotifyTerminalInfo, "agentIncarnation">
 }
 
 /**
+ * Whether another agent holds the pane than `askerKind`, the kind that asked
+ * (#18116): detection can hand a live PTY to another agent without a respawn,
+ * so its incarnation stays the same. A plugin agent's own id can name a
+ * process detection credits to a built-in, so only a built-in asker is
+ * compared, and a pane whose agent isn't known yet is no evidence of a swap.
+ */
+export function askerReplaced(
+  askerKind: string,
+  info: Pick<NotifyTerminalInfo, "detectedAgentId" | "launchAgentId">
+): boolean {
+  const agent = info.detectedAgentId ?? info.launchAgentId;
+  return agent !== undefined && agent !== askerKind && Object.hasOwn(AGENT_REGISTRY, askerKind);
+}
+
+/**
  * Whether the pane is still exactly the run `target` names. Without `info`
  * only what main holds synchronously is checked (host, ownership principal,
  * live generation); with it, the record's own run identity too. A changed
  * principal or incarnation is a relaunch, checked before the generation that
- * a relaunch also changes. `unreadable`: there is no pty client to ask.
+ * a relaunch also changes, and so is another agent kind in place of every
+ * one of `askerKinds` (`askerReplaced`). `unreadable`: there is no pty client
+ * to ask.
  */
 export function identityMismatch(
   sources: DecisionIdentitySources,
   target: TerminalTarget,
-  info?: DecisionTerminalInfo
+  info?: DecisionTerminalInfo,
+  askerKinds: readonly string[] = []
 ): IdentityMismatch | "unreadable" | null {
   const hostId = sources.hostId();
   if (hostId === null || hostId !== target.hostId) return "host-offline";
@@ -130,6 +159,13 @@ export function identityMismatch(
   }
   if (sources.principalFor(target.paneId) !== target.ownershipPrincipal) return "relaunched";
   if (info !== undefined && incarnationOf(info) !== target.agentIncarnation) return "relaunched";
+  if (
+    info !== undefined &&
+    askerKinds.length > 0 &&
+    askerKinds.every((kind) => askerReplaced(kind, info))
+  ) {
+    return "relaunched";
+  }
   const client = sources.getPtyClient();
   if (client === null) return "unreadable";
   const generation = target.terminalGeneration;
@@ -161,7 +197,8 @@ export function identityMismatch(
  * `decisionWakeId`), so a second attempt queued before the first goes out
  * joins it. Right before typing, with the record the attempt just read, it
  * checks the run is the one that asked and that the composer is empty
- * (`decisionHold`), which the engine's own gate doesn't know about. A
+ * (`decisionHold`), which the engine's own gate doesn't know about, and
+ * that no agent kind in `askerKinds` was replaced by another (#18116). A
  * section whose `superseded` says a reopen waits for it ends untyped first,
  * whatever the pane: a line already on its way is never taken back. A
  * `closure` section (an expiry, advisory or not, or a decline) waits for its
@@ -171,16 +208,27 @@ export function identityMismatch(
 export function createDecisionWake(
   sources: DecisionWakeSources,
   target: TerminalTarget,
-  section: { id: string; text: string; superseded?: () => boolean; closure?: boolean },
+  section: {
+    id: string;
+    text: string;
+    /** The agent kinds that asked the questions it carries. */
+    askerKinds?: readonly string[];
+    superseded?: () => boolean;
+    closure?: boolean;
+  },
   report: (outcome: LaneWakeOutcome, evidence?: LaneWakeEvidence) => void
 ): LaneWake {
+  const askerKinds = section.askerKinds ?? [];
   const recheck = (info?: NotifyTerminalInfo): LaneWakeCheck => {
     if (section.superseded?.() === true)
       return { kind: "unavailable", reason: DECISION_SUPERSEDED };
-    const mismatch = identityMismatch(sources, target, info);
+    const mismatch = identityMismatch(sources, target, info, askerKinds);
     if (mismatch === "unreadable") return { kind: "held", reason: "unreadable" };
     if (mismatch !== null) return { kind: "unavailable", reason: mismatch };
     if (info === undefined) return { kind: "ready" };
+    if (askerKinds.some((kind) => askerReplaced(kind, info))) {
+      return { kind: "unavailable", reason: DECISION_ASKER_CHANGED };
+    }
     const hold = decisionHold(
       info,
       sources.hasComposerDraft?.(target.paneId) === true,
