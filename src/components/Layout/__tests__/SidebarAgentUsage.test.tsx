@@ -220,6 +220,16 @@ describe("SidebarAgentUsage", () => {
     expect(container.querySelector("[data-sidebar-agent-usage]")).toBeNull();
   });
 
+  it("lets a newer push with none of its host's readings overtake an older seed that had one", async () => {
+    showHost("studio-03");
+    let resolveSeed!: (snapshot: AgentUsageSnapshot) => void;
+    installBridge(() => new Promise((resolve) => (resolveSeed = resolve)));
+    const { container } = await renderUsage();
+    act(() => pushed!({ readouts: [codex(95)], revision: 2 }));
+    await act(async () => resolveSeed({ readouts: [codex(40, STUDIO)], revision: 1 }));
+    expect(container.querySelector("[data-sidebar-agent-usage]")).toBeNull();
+  });
+
   it("never picks between two machines' readings that carry the same login name", async () => {
     const login = { isDefault: true, defaultLoginName: "Personal" };
     const readouts = [
