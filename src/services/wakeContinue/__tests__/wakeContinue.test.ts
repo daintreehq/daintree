@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRequestOptions } from "@/services/agentRequests";
+import type { DeliveryState } from "@/services/agentRequests/deliveryState";
 
 const getOutputActivity = vi.hoisted(() => vi.fn());
 vi.mock("@/clients/terminalClient", () => ({ terminalClient: { getOutputActivity } }));
 
 const deliveries = vi.hoisted(
-  () => [] as Array<{ options: AgentRequestOptions; settle: () => void }>
+  () =>
+    [] as Array<{
+      options: AgentRequestOptions;
+      settle: (state?: DeliveryState) => void;
+    }>
 );
 const cancelAgentRequests = vi.hoisted(() => vi.fn());
 vi.mock("@/services/agentRequests", async (importOriginal) => ({
@@ -15,8 +20,8 @@ vi.mock("@/services/agentRequests", async (importOriginal) => ({
     new Promise<void>((resolve) => {
       deliveries.push({
         options,
-        settle: () => {
-          options.onState({ id: "r", state: { status: "sent" }, title: "", terminalId: null });
+        settle: (state = { status: "sent" }) => {
+          options.onState({ id: "r", state, title: "", terminalId: null });
           resolve();
         },
       });
@@ -277,9 +282,28 @@ describe("sendWakeContinueNotes", () => {
       useTerminalInputStore.getState().setDraftInput("a", "", "p1");
       const offer = useWakeContinueStore.getState().offer!;
       expect(offer.phase).toBe("done");
+      expect(offer.entries[0]?.skippedAs).toBe("drafted");
     });
 
-    it("holds the clear until the review dialog closes", async () => {
+    it("keeps the report up for an unconfirmed or partial write", async () => {
+      for (const state of [
+        { status: "unconfirmed" },
+        { status: "failed", message: "cut off", partial: true },
+      ] as DeliveryState[]) {
+        deliveries.length = 0;
+        setPane("a");
+        publishWakeCandidates("p1", [candidate("a")]);
+        const run = sendWakeContinueNotes("Keep going");
+        await vi.advanceTimersByTimeAsync(SETTLE);
+        deliveries[0]!.settle(state);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await run;
+        expect(useWakeContinueStore.getState().offer?.phase).toBe("done");
+        dismissWakeContinue();
+      }
+    });
+
+    it("keeps the report up when the user is reading it", async () => {
       setPane("a");
       publishWakeCandidates("p1", [candidate("a")]);
       const run = sendWakeContinueNotes("Keep going");
@@ -289,7 +313,19 @@ describe("sendWakeContinueNotes", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await run;
       expect(useWakeContinueStore.getState().offer?.phase).toBe("done");
-      useWakeContinueStore.getState().setDialogOpen(false);
+    });
+
+    it("clears after a send that skipped a pane with a draft", async () => {
+      setPane("a");
+      setPane("b");
+      publishWakeCandidates("p1", [candidate("a"), candidate("b")]);
+      useTerminalInputStore.getState().setDraftInput("b", "typed", "p1");
+      const run = sendWakeContinueNotes("Keep going");
+      await vi.advanceTimersByTimeAsync(SETTLE);
+      useTerminalInputStore.getState().setDraftInput("b", "", "p1");
+      deliveries[0]!.settle();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await run;
       expect(useWakeContinueStore.getState().offer).toBeNull();
     });
   });
