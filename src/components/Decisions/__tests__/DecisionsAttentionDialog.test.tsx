@@ -44,6 +44,7 @@ function makeItem(
       agentName: "Claude",
       paneId: `pane-${alias}`,
       paneTitle: `Pane ${alias}`,
+      otherHost: null,
     },
     answer: {
       source: "human",
@@ -53,9 +54,11 @@ function makeItem(
       answeredAt: "2026-11-01T09:30:00.000Z",
     },
     answerUnavailable: null,
+    notice: null,
     followUps: [],
     canResume: true,
     canReassign: true,
+    token: `token-${alias}`,
     ...over,
   };
 }
@@ -200,7 +203,11 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
       fireEvent.click(within(asking).getByRole("button", { name: "Mark handled" }));
 
       await waitFor(() => expect(markAnswerHandled).toHaveBeenCalledTimes(1));
-      expect(markAnswerHandled).toHaveBeenCalledWith({ questionId: `qid-${alias}` });
+      // The token the item was read with goes too, so main refuses a question that changed since.
+      expect(markAnswerHandled).toHaveBeenCalledWith({
+        questionId: `qid-${alias}`,
+        expected: `token-${alias}`,
+      });
       await listedRows(2);
       await confirmGone();
 
@@ -255,7 +262,9 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
     fireEvent.click(markButton(3));
 
     expect(confirm()).toBeNull();
-    await waitFor(() => expect(markAnswerHandled).toHaveBeenCalledWith({ questionId: "qid-3" }));
+    await waitFor(() =>
+      expect(markAnswerHandled).toHaveBeenCalledWith({ questionId: "qid-3", expected: "token-3" })
+    );
     await listedRows(1);
     expect(screen.getByTestId("decisions-attention-outcome").textContent).toContain(
       "Answer to q-3 marked handled"
@@ -349,6 +358,173 @@ function menuRows(): string[] {
     .getAllByRole("menuitem")
     .map((row) => row.textContent ?? "");
 }
+
+describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
+  /** Past the list's 300 ms debounce, so a read it would make has started. */
+  const PAST_REFRESH_DEBOUNCE_MS = 400;
+
+  /** Listeners on the question list every window gets, by the event's name. */
+  let events: Map<string, Set<(payload: unknown) => void>>;
+  let revision = 0;
+
+  /** The question list every window gets, holding these questions as needing a person. */
+  function questionsChanged(...held: string[]) {
+    revision += 1;
+    const list = {
+      revision,
+      questions: held.map((questionId) => ({
+        reference: { hostId: "host-1", projectId: "project-1", terminalId: "pane", questionId },
+        standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+        stall: { answerRevision: 0, followUpIds: [], reason: "pane_gone" },
+      })),
+    };
+    act(() => {
+      for (const callback of events.get("decisions:questions-changed") ?? []) callback(list);
+    });
+  }
+
+  const NOTICE: DecisionsAttentionItem["notice"] = {
+    kind: "expired",
+    revision: 0,
+    deadline: "2026-11-01T09:45:00.000Z",
+    delivery: "needs-attention",
+    disposition: "fallback-due",
+  };
+
+  function noticeItem(alias: number, over: Partial<DecisionsAttentionItem> = {}) {
+    return makeItem(alias, { answer: null, notice: NOTICE, canReassign: false, ...over });
+  }
+
+  beforeEach(() => {
+    listed = [];
+    events = new Map();
+    listAttention.mockReset();
+    markAnswerHandled.mockReset();
+    listAttention.mockImplementation(async () => ({ result: "listed", items: listed }));
+    Object.defineProperty(window, "electron", {
+      value: {
+        decisions: { listAttention, markAnswerHandled, listAnswerDestinations },
+        terminal: { onDecisionState: () => () => {} },
+        events: {
+          on: (name: string, callback: (payload: unknown) => void) => {
+            const named = events.get(name) ?? new Set();
+            named.add(callback);
+            events.set(name, named);
+            return () => named.delete(callback);
+          },
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    useDecisionsAttentionStore.setState({
+      isOpen: true,
+      request: { terminalId: null, returnFocusTo: null, seq: 1 },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("names the notice, says how the question ended apart from how far typing it got, and offers only its own session", async () => {
+    listed = [noticeItem(3)];
+    render(tree(true));
+    await listedRows(1);
+    const row = screen.getByTestId("decisions-attention-item");
+
+    expect(row.textContent).toContain("Timeout notice needs attention.");
+    expect(row.textContent).toContain("The terminal that asked was closed.");
+    expect(row.textContent).toContain("Timeout notice, not typed in");
+    expect(row.textContent).toContain("Its deadline passed without an answer.");
+    expect(row.textContent).toContain(
+      "The notice says the agent may go ahead with its stated plan."
+    );
+    expect(row.textContent).not.toContain("No answer is waiting");
+    expect(within(row).getByRole("button", { name: "Try resume for q-3" })).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: /Choose destination/ })).toBeNull();
+    expect(within(row).queryByRole("button", { name: /^Copy/ })).toBeNull();
+  });
+
+  it("says a possibly typed notice may or may not have been delivered, and what it may have said", async () => {
+    listed = [
+      noticeItem(3, {
+        status: "delivery-uncertain",
+        reason: "crash_unreconciled",
+        notice: { ...NOTICE, delivery: "delivery-uncertain" },
+        canResume: false,
+      }),
+    ];
+    render(tree(true));
+    await listedRows(1);
+    const row = screen.getByTestId("decisions-attention-item");
+
+    expect(row.textContent).toContain("This timeout notice may or may not have been delivered.");
+    expect(row.textContent).toContain("Daintree stopped while typing it in");
+    expect(row.textContent).toContain("Timeout notice, may or may not have been typed in");
+    expect(row.textContent).not.toMatch(/told the agent|went ahead/);
+    expect(within(row).queryByRole("button", { name: /Try resume/ })).toBeNull();
+  });
+
+  it("drops a notice another window handled once the question list changes, though no pane here moved", async () => {
+    listed = [noticeItem(3), makeItem(4)];
+    render(tree(true));
+    await listedRows(2);
+    expect(events.get("decisions:questions-changed")?.size).toBe(1);
+
+    questionsChanged("qid-3", "qid-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    // A list change that leaves what needs a person the same reads nothing more.
+    questionsChanged("qid-3", "qid-4");
+    await new Promise((resolve) => setTimeout(resolve, PAST_REFRESH_DEBOUNCE_MS));
+    expect(listAttention).toHaveBeenCalledTimes(2);
+
+    // Handled in another window: main's list no longer holds it, and only the question list says so here.
+    listed = [makeItem(4)];
+    questionsChanged("qid-4");
+    await listedRows(1);
+    expect(screen.getByTestId("decisions-attention-item").getAttribute("data-question-id")).toBe(
+      "qid-4"
+    );
+  });
+
+  it("drops a Mark handled confirmation once another window handled the notice, and marks nothing", async () => {
+    listed = [noticeItem(3), makeItem(4)];
+    render(tree(true));
+    await listedRows(2);
+    const asking = await ask(3);
+    expect(within(asking).getByText(/Its timeout notice leaves this list/)).toBeTruthy();
+
+    listed = [makeItem(4)];
+    questionsChanged("qid-4");
+    await listedRows(1);
+    await confirmGone();
+    expect(markAnswerHandled).not.toHaveBeenCalled();
+  });
+
+  it("drops a confirmation once the question shows something new, though it is still listed", async () => {
+    listed = [noticeItem(3)];
+    render(tree(true));
+    await listedRows(1);
+    await ask(3);
+
+    // Reopened and timed out again: the same question, a later round's notice.
+    // Main mints a new token for what the question asks now.
+    listed = [noticeItem(3, { notice: { ...NOTICE, revision: 1 }, token: "token-3-round-1" })];
+    questionsChanged("qid-3", "round-1");
+    await confirmGone();
+    expect(markAnswerHandled).not.toHaveBeenCalled();
+    expect(screen.getAllByTestId("decisions-attention-item")).toHaveLength(1);
+  });
+
+  it("stops following the question list once closed", async () => {
+    listed = [noticeItem(3)];
+    const { rerender } = render(tree(true));
+    await listedRows(1);
+    useDecisionsAttentionStore.setState({ isOpen: false });
+    rerender(tree(false));
+    await waitFor(() => expect(events.get("decisions:questions-changed")?.size ?? 0).toBe(0));
+  });
+});
 
 describe("DecisionsAttentionDialog: Choose destination (#17560)", () => {
   beforeEach(() => {

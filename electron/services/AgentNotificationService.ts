@@ -41,6 +41,7 @@ import type {
 import {
   deliveryReasonText,
   deliverySubject,
+  deliverySubjectPlural,
 } from "../../shared/utils/decisionsDeliveryReasons.js";
 
 /** A view on a remote Shell owns it: that Shell presents it, sound included. */
@@ -69,6 +70,22 @@ function decisionQuestionSource(question: DecisionQuestionListItem): {
       question.projectLabel ??
       projectStore.getProjectById(question.reference.projectId)?.name?.trim(),
   };
+}
+
+/**
+ * Whether what delivery stopped on in a question's answer slot is the notice
+ * that its deadline closed it (#17944), as its round reports: expired, or
+ * never published, with that notice stopped or possibly typed. A Host from
+ * before #17943 reports neither, and its stall reads as an answer's.
+ */
+function stalledOnTimeoutNotice(question: DecisionQuestionListItem): boolean {
+  const reason = question.closedReason;
+  const delivery = question.closureNotice?.delivery;
+  return (
+    question.stall?.answerRevision != null &&
+    (reason === "expired" || reason === "never-published") &&
+    (delivery === "needs-attention" || delivery === "uncertain")
+  );
 }
 
 const COMPLETION_DEBOUNCE_MS = 2000;
@@ -1454,26 +1471,35 @@ class AgentNotificationService {
   }
 
   /**
-   * Delivery stopped on a Decisions answer, or a follow-up after it, and a
-   * person decides what happens to it (#17235): one native notification
-   * giving the reason in the words the list of answers needing attention
-   * uses, under the same settings as a question's own. A click opens that list.
+   * Delivery stopped on a Decisions answer, a timeout notice in its place
+   * (#17944), or a follow-up after either, and a person decides what happens
+   * to it (#17235): one native notification giving the reason in the words
+   * the list of answers needing attention uses, under the same settings as a
+   * question's own, naming the Host that asked when it isn't this computer.
+   * Never the question's words or the agent's plan. A click opens that list,
+   * or for a Host's question, which only its Host's list holds, the question.
    */
   notifyDecisionStall(question: DecisionQuestionListItem, key: string): void {
-    const { reference, stall, standing } = question;
+    const { reference, stall, standing, remoteHost } = question;
     if (stall === null) return;
     const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
     if (settings.enabled === false) return;
     this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
     const { agent, project } = decisionQuestionSource(question);
-    const subject = deliverySubject(stall.answerRevision !== null, stall.followUpIds.length);
-    const plural = subject !== "answer" && subject !== "follow-up";
+    const notice = stalledOnTimeoutNotice(question);
+    const subject = deliverySubject(
+      stall.answerRevision !== null,
+      stall.followUpIds.length,
+      notice
+    );
+    const plural = deliverySubjectPlural(subject);
     const uncertain =
       standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";
     const what =
       `${subject.charAt(0).toUpperCase()}${subject.slice(1)}` +
-      (agent ? ` to ${agent}` : "") +
-      (project ? ` in ${project}` : "");
+      (agent ? ` ${notice ? "for" : "to"} ${agent}` : "") +
+      (project ? ` in ${project}` : "") +
+      (remoteHost ? ` on ${remoteHost.name}` : "");
     notificationService.showNativeNotification(
       uncertain
         ? `${what} may or may not have been delivered`
@@ -1484,7 +1510,10 @@ class AgentNotificationService {
         silent: true,
         category: "waiting",
         replaceKey: decisionQuestionReplaceKey(key),
-        onClick: () => notificationService.openDecisionAttention(reference),
+        onClick: () =>
+          remoteHost
+            ? notificationService.openDecisionQuestion(reference)
+            : notificationService.openDecisionAttention(reference),
       }
     );
   }

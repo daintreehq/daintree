@@ -2270,6 +2270,293 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
   );
 });
 
+describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944)", () => {
+  const entryOf = async (h: ReturnType<typeof setup>, id = Q1) =>
+    parseAnswers((await h.question(id))!.answers_json)[0]!;
+  const settledAttempt = () => ({ ledger: { attempt: true, state: null } });
+  /** The notice's trail as the store recorded it, oldest first. */
+  const trail = async (h: ReturnType<typeof setup>) =>
+    (await h.store.listAudit(500))
+      .filter((e) => e.event === "notice.trail")
+      .map((e) => ({ step: e.result, ...e.detail }));
+  const admittedWrite = (h: ReturnType<typeof setup>, questionId: string) =>
+    (
+      h.delivery as unknown as { engine: { closureWrite(id: string): Promise<void> | null } }
+    ).engine.closureWrite(questionId);
+
+  /** The run's launch generation moves on once its write is admitted: the sink refuses it, and a person decides. */
+  async function refusedWrite(h: ReturnType<typeof setup>): Promise<void> {
+    h.delivery.start();
+    await until(() => admittedWrite(h, Q1) !== null, 1_500);
+    h.client.generations.set(PANE, 8);
+    h.patch({ launchGeneration: 8 });
+    await until(async () => (await h.question(Q1))?.delivery_status === "needs-attention", 60_000);
+  }
+
+  it("lists the notice in the answer's place with its round, deadline and plan, and nothing to copy or move", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+    await refusedWrite(h);
+
+    const [item] = await h.delivery.attentionItems();
+    expect(item).toMatchObject({
+      questionId: Q1,
+      status: "needs-attention",
+      answer: null,
+      answerUnavailable: null,
+      notice: {
+        kind: "expired",
+        revision: 0,
+        deadline: DEADLINE,
+        delivery: "needs-attention",
+        disposition: "fallback-due",
+      },
+      canReassign: false,
+    });
+    expect(item!.origin).toMatchObject({ paneId: PANE, otherHost: null });
+    await expect(h.delivery.copiedAnswer(Q1)).resolves.toBeNull();
+    expect(h.client.submitted).toEqual([]);
+    // The sink refused the write it had admitted: nothing was typed, and a person decides.
+    expect(await trail(h)).toMatchObject([
+      { step: "attempted" },
+      { step: "untyped" },
+      { step: "needs-attention", refused: "admitted-write" },
+    ]);
+    await stopped(h.delivery);
+  });
+
+  it("says a notice the lifetime's policy no longer allows would be typed withheld", async () => {
+    const h = setup({ advisory: { ...settledAttempt(), allowed: false }, listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1, {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
+    const [item] = await h.delivery.attentionItems();
+    expect(item?.notice?.disposition).toBe("fallback-withheld");
+    await stopped(h.delivery);
+  });
+
+  it("keeps a notice held behind a draft out of attention, and trails each attempt until it is typed (deferred wake)", async () => {
+    const h = setup({ advisory: settledAttempt() });
+    // Open, then closed by its deadline as the inbox applies an expiry: the closing is observed.
+    await advisoryExpired(h.store, Q1, 1, { local_status: "open", answers_json: "[]" });
+    await h.store.updateQuestion(Q1, {
+      local_status: "expired",
+      delivery_status: "desktop-received",
+      answers_json: serializeAnswers([
+        {
+          entry_id: `expired-${Q1}`,
+          kind: "expired",
+          action: "expire",
+          revision: 0,
+          source: "system",
+          advisory_disposition: "fallback-due",
+          correction: false,
+          created_at: DEADLINE,
+          event_seq: 9,
+          deliver: true,
+          delivered: false,
+          sealed: null,
+        },
+      ]),
+    });
+    const putIntent = h.store.putIntent.bind(h.store);
+    let first = true;
+    h.store.putIntent = async (intent) => {
+      await putIntent(intent);
+      if (first && intent.question_id === Q1) {
+        first = false;
+        h.drafts.add(PANE);
+      }
+    };
+
+    h.delivery.start();
+    await until(async () => (await h.store.openIntents()).length === 1);
+    const [held] = await h.store.openIntents();
+    await until(async () => (await h.store.getIntent(held.injection_id))?.state === "abandoned");
+    expect(h.client.submitted).toEqual([]);
+    // Waiting for its composer is no one's to decide: no attention, no stall.
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    expect((await h.question(Q1))?.delivery_status).not.toMatch(/needs-attention|uncertain/);
+
+    h.drafts.clear();
+    h.signal("composer");
+    await until(async () => (await entryOf(h)).delivered, 10_000);
+    expect(h.client.submitted).toHaveLength(1);
+    const typed = (await entryOf(h)).injection_id;
+    expect(await trail(h)).toMatchObject([
+      { step: "observed", kind: "expired", revision: 0, deadline: DEADLINE, plan: "fallback-due" },
+      { step: "attempted", attempt: held.injection_id, revision: 0, deadline: DEADLINE },
+      { step: "untyped", attempt: held.injection_id, pane: PANE },
+      { step: "attempted", attempt: typed },
+      { step: "delivered", attempt: typed },
+    ]);
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await stopped(h.delivery);
+  });
+
+  it("after a restart that can't tell whether the notice went in, lists it uncertain, never types it again, and lets a person handle it", async () => {
+    // The run's own session, so recovery reads its screen for the marker and finds none.
+    const h = setup({ advisory: settledAttempt(), listTerminals: true, resume: {} });
+    await advisoryExpired(h.store, Q1, 1, { last_injection_id: CRASHED });
+    await h.store.putIntent(intent(CRASHED, Q1, { answer_revision: 0 }));
+    h.client.screens.set(PANE, "❯ \r\n");
+
+    h.delivery.start();
+    await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
+    const [item] = await h.delivery.attentionItems();
+    expect(item).toMatchObject({
+      status: "delivery-uncertain",
+      reason: "crash_unreconciled",
+      notice: { delivery: "delivery-uncertain", disposition: "fallback-due" },
+      canResume: false,
+      canReassign: false,
+    });
+    await expect(h.delivery.resumeAnswer(Q1)).resolves.toEqual({
+      result: "refused",
+      reason: "uncertain",
+    });
+
+    await expect(h.delivery.markHandled(Q1)).resolves.toEqual({ result: "handled" });
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    h.signal("settled");
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toEqual([]);
+    expect(h.launches).toEqual([]);
+    expect(await trail(h)).toMatchObject([
+      { step: "attempted", attempt: CRASHED },
+      { step: "uncertain", reason: "crash_unreconciled", attempt: CRASHED },
+    ]);
+    await stopped(h.delivery);
+  });
+
+  it("records no untyped attempt when a reopen releases an uncertain notice's write, and lists nothing", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1, { last_injection_id: CRASHED });
+    await h.store.putIntent(intent(CRASHED, Q1, { answer_revision: 0 }));
+    h.client.screens.set(PANE, "❯ \r\n");
+    h.delivery.start();
+    await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
+
+    // As the 0.9.0 inbox applies a reopen: the uncertain write is released, then the round moves on.
+    await h.delivery.lock.run(async () => {
+      await h.store.updateIntent(CRASHED, { state: "abandoned", updated_at: Date.now() });
+      const row = (await h.question(Q1))!;
+      await h.store.updateQuestion(Q1, {
+        question_revision: 1,
+        local_status: "open",
+        expires_at: "2026-11-01T12:00:00.000Z",
+        delivery_status: "desktop-received",
+        error_code: null,
+        answers_json: serializeAnswers(
+          parseAnswers(row.answers_json).map((e) => ({ ...e, deliver: false }))
+        ),
+      });
+    });
+    expect((await trail(h)).map((t) => t.step)).toEqual(["attempted", "uncertain", "superseded"]);
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    expect(h.client.submitted).toEqual([]);
+    await stopped(h.delivery);
+  });
+
+  it("leaves no stall behind when a reopen replaces a notice that needed a person", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+    await refusedWrite(h);
+    expect(await h.delivery.attentionItems()).toHaveLength(1);
+
+    // The 0.9.0 inbox withdraws the notice and keeps the row's stopped status.
+    await h.delivery.lock.run(async () => {
+      const row = (await h.question(Q1))!;
+      await h.store.updateQuestion(Q1, {
+        question_revision: 1,
+        local_status: "open",
+        expires_at: "2026-11-01T12:00:00.000Z",
+        answers_json: serializeAnswers(
+          parseAnswers(row.answers_json).map((e) => ({ ...e, deliver: false }))
+        ),
+      });
+    });
+    expect((await h.question(Q1))?.delivery_status).toBe("needs-attention");
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await expect(h.delivery.markHandled(Q1)).resolves.toEqual({ result: "resolved" });
+    await stopped(h.delivery);
+  });
+
+  it("resolves the notice once when two windows mark it handled together", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+    await refusedWrite(h);
+
+    const results = await Promise.all([h.delivery.markHandled(Q1), h.delivery.markHandled(Q1)]);
+    expect(results.map((r) => r.result).sort()).toEqual(["handled", "resolved"]);
+    const handled = (await h.store.listAudit(500)).filter((e) => e.event === "delivery.handled");
+    expect(handled).toHaveLength(1);
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    expect((await trail(h)).map((t) => t.step)).toEqual([
+      "attempted",
+      "untyped",
+      "needs-attention",
+      "stopped",
+    ]);
+    expect(h.client.submitted).toEqual([]);
+    await stopped(h.delivery);
+  });
+
+  it("refuses to handle or move a notice once it asks something else than the person confirmed", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+    await refusedWrite(h);
+    const [read] = await h.delivery.attentionItems();
+    expect(read!.token).toMatch(/^[0-9a-f]{64}$/);
+
+    // Another window moved it to another run, and it stopped there for the same reason.
+    await h.store.updateQuestion(Q1, { origin: { ...ORIGIN, pane_id: "pane-2" } });
+    await expect(h.delivery.markHandled(Q1, read!.token)).resolves.toEqual({
+      result: "refused",
+      reason: "changed",
+    });
+    await expect(h.delivery.reassignAnswer(Q1, PANE, read!.token)).resolves.toEqual({
+      result: "refused",
+      reason: "changed",
+    });
+    expect(await h.delivery.attentionItems()).toHaveLength(1);
+    expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.handled")).toBe(false);
+
+    const [now] = await h.delivery.attentionItems();
+    expect(now!.token).not.toBe(read!.token);
+    await expect(h.delivery.markHandled(Q1, now!.token)).resolves.toEqual({ result: "handled" });
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await stopped(h.delivery);
+  });
+
+  it("calls a retried notice a reopen replaced before it was typed resolved, never delivered or waiting", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+    await refusedWrite(h);
+    h.client.generations.set(PANE, 7);
+    h.patch({ launchGeneration: 7 });
+    // The person's phone reopens the question in the same lock turn the retry is written in.
+    const update = h.store.updateQuestion.bind(h.store);
+    h.store.updateQuestion = async (id, patch) => {
+      const next = await update(id, patch);
+      if (id === Q1 && patch.delivery_status === "desktop-received") {
+        return update(id, {
+          question_revision: 1,
+          local_status: "open",
+          expires_at: "2026-11-01T12:00:00.000Z",
+        });
+      }
+      return next;
+    };
+
+    await expect(h.delivery.resumeAnswer(Q1)).resolves.toEqual({ result: "resolved" });
+    expect(h.client.submitted).toEqual([]);
+    expect((await trail(h)).map((t) => t.step)).toContain("superseded");
+    await stopped(h.delivery);
+  });
+});
+
 describe("AnswerDelivery, a person's decline (#17234)", () => {
   const declineOf = async (h: ReturnType<typeof setup>) =>
     parseAnswers((await h.question(Q1))!.answers_json)[0]!;

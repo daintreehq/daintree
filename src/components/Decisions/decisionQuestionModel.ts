@@ -71,8 +71,9 @@ export function planHeading(status: DecisionQuestionStatus): string {
 
 const NOTICE_NAME: Record<"declined" | "expired" | "never-published", string> = {
   declined: "Your decline",
-  expired: "The expiry notice",
-  "never-published": "The notice that it was never sent",
+  // Both close a round at its deadline: the list and the notification call it the same (#17944).
+  expired: "The timeout notice",
+  "never-published": "The timeout notice",
 };
 
 const NOTICE_DELIVERY: Record<DecisionClosureNotice["delivery"], string> = {
@@ -96,14 +97,21 @@ export function closureNoticeText(
   const reason = question.closedReason;
   if (notice == null || reason === null || reason === "withdrawn") return null;
   const delivery = `${NOTICE_NAME[reason]} ${NOTICE_DELIVERY[notice.delivery]}.`;
-  switch (notice.disposition) {
-    case "fallback-due":
-      return `${delivery} It tells the agent it may go ahead with its plan.`;
-    case "fallback-withheld":
-      return `${delivery} It doesn't clear the agent to go ahead with its plan.`;
-    default:
-      return delivery;
-  }
+  const plan = noticePlan(notice);
+  return plan === null ? delivery : `${delivery} ${plan}`;
+}
+
+/**
+ * What an advisory notice says of the plan (#17944): its words, apart from
+ * how far it got, which the sentence before says. Typed in is only that the
+ * terminal took it, never that the agent read it or went ahead; one that will
+ * never be typed says nothing of the plan.
+ */
+function noticePlan(notice: DecisionClosureNotice): string | null {
+  if (notice.disposition === null || notice.delivery === "stopped") return null;
+  return notice.disposition === "fallback-due"
+    ? "It says the agent may go ahead with its plan."
+    : "It says the agent isn't cleared to go ahead with its plan.";
 }
 
 const REQUIREMENT_TEXT: Record<DecisionsRequirement, string> = {

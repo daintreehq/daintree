@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseAnswers } from "@daintreehq/decisions-client";
-import { PLAN_REFUSED, roundOf, verifiedPlan } from "../questionRound.js";
+import { PLAN_REFUSED, roundOf, timeoutNoticeOf, verifiedPlan } from "../questionRound.js";
 import { DECLINE, answers, row } from "./questionRows.js";
 
 /** An envelope as the publisher stores it: only its clear AAD is read here. */
@@ -273,5 +273,112 @@ describe("verifiedPlan (#17943)", () => {
     expect(
       verifiedPlan(answeredInRound, parseAnswers(answeredInRound.answers_json), content())
     ).toBe("Use the existing fixture");
+  });
+});
+
+describe("an advisory notice as the lifetime reading it stands (#17944)", () => {
+  const OWNER = { outcomes: true, allowed: true };
+  const expired = (entry: object = {}) =>
+    row(1, {
+      question_revision: 0,
+      content_sealed: ADVISORY,
+      local_status: "expired",
+      answers_json: answers({ ...EXPIRY, revision: 0, ...entry }),
+    });
+
+  it("says an untyped notice lets the plan go ahead while the lifetime still allows it, and never upgrades one", () => {
+    const due = expired({ advisory_disposition: "fallback-due" });
+    expect(roundOf(due, undefined, OWNER).closureNotice?.disposition).toBe("fallback-due");
+    // The policy no longer allows advice, or outcomes aren't delivered: it would be typed withheld.
+    expect(
+      roundOf(due, undefined, { outcomes: true, allowed: false }).closureNotice?.disposition
+    ).toBe("fallback-withheld");
+    expect(
+      roundOf(due, undefined, { outcomes: false, allowed: true }).closureNotice?.disposition
+    ).toBe("fallback-withheld");
+    // Recorded withheld stays withheld, whatever the lifetime allows.
+    expect(
+      roundOf(expired({ advisory_disposition: "fallback-withheld" }), undefined, OWNER)
+        .closureNotice?.disposition
+    ).toBe("fallback-withheld");
+    // Typed: it keeps what it said, whatever the lifetime allows now.
+    expect(
+      roundOf(expired({ advisory_disposition: "fallback-due", delivered: true }), undefined, {
+        outcomes: false,
+        allowed: false,
+      }).closureNotice?.disposition
+    ).toBe("fallback-due");
+  });
+
+  it("names the timeout notice with its round and deadline, and never a decline or a replaced round's", () => {
+    expect(
+      timeoutNoticeOf(
+        expired({ advisory_disposition: "fallback-due", created_at: "2026-11-01T09:45:00.000Z" }),
+        undefined,
+        OWNER
+      )
+    ).toEqual({
+      kind: "expired",
+      revision: 0,
+      deadline: "2026-11-01T09:45:00.000Z",
+      entryId: "expiry-1",
+      delivery: "pending",
+      disposition: "fallback-due",
+    });
+    const unpublished = row(1, {
+      question_revision: 0,
+      content_sealed: ADVISORY,
+      local_status: "publish-failed",
+      expires_at: "2026-11-01T09:30:00.000Z",
+      delivery_status: "needs-attention",
+      answers_json: answers({
+        entry_id: "unpublished-1",
+        kind: "unpublished",
+        action: "expire",
+        source: "system",
+        revision: 0,
+        sealed: null,
+      }),
+    });
+    expect(timeoutNoticeOf(unpublished)).toMatchObject({
+      kind: "never-published",
+      deadline: "2026-11-01T09:30:00.000Z",
+      delivery: "needs-attention",
+    });
+    // Untyped with its plan due: typed now, or as an uncertain write may already have, it says the same.
+    const due = {
+      ...unpublished,
+      answers_json: answers({
+        entry_id: "unpublished-1",
+        kind: "unpublished",
+        action: "expire",
+        source: "system",
+        revision: 0,
+        sealed: null,
+        fallback_due: true,
+      }),
+    };
+    expect(timeoutNoticeOf(due, undefined, OWNER)?.disposition).toBe("fallback-due");
+    expect(timeoutNoticeOf(due)?.disposition).toBeNull();
+    // A possibly typed advisory expiry keeps what it may have said, whatever the lifetime allows now.
+    expect(
+      roundOf(
+        expired({ advisory_disposition: "fallback-due", uncertain_injection_id: "inj-1" }),
+        undefined,
+        { outcomes: false, allowed: false }
+      ).closureNotice?.disposition
+    ).toBe("fallback-due");
+    const declined = row(1, {
+      local_status: "cancelled",
+      answers_json: answers({ ...DECLINE, revision: 1 }),
+    });
+    expect(timeoutNoticeOf(declined)).toBeNull();
+    const reopened = row(1, {
+      question_revision: 1,
+      local_status: "open",
+      answers_json: answers({ ...EXPIRY, revision: 0 }),
+    });
+    expect(timeoutNoticeOf(reopened)).toBeNull();
+    expect(timeoutNoticeOf({ ...expired(), history_only: true })).toBeNull();
   });
 });

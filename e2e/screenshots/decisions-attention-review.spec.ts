@@ -438,6 +438,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         agentName: "Codex",
         paneId: "pane-gone-36",
         paneTitle: null,
+        otherHost: null,
       },
       answer: {
         source: "human",
@@ -447,9 +448,11 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         answeredAt: iso(9 * 3_600_000),
       },
       answerUnavailable: null,
+      notice: null,
       followUps: [],
       canResume: false,
       canReassign: true,
+      token: "token",
     },
     {
       questionId: "qid-att-38-token",
@@ -467,6 +470,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         agentName: "Claude",
         paneId: panes.asker,
         paneTitle: ASKER_TITLE,
+        otherHost: null,
       },
       answer: {
         source: "human",
@@ -476,9 +480,11 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         answeredAt: iso(40 * 60_000),
       },
       answerUnavailable: null,
+      notice: null,
       followUps: [],
       canResume: true,
       canReassign: true,
+      token: "token",
     },
     {
       questionId: "qid-att-39-queue",
@@ -496,6 +502,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         agentName: "Claude",
         paneId: panes.other,
         paneTitle: OTHER_TITLE,
+        otherHost: null,
       },
       answer: {
         source: "human",
@@ -505,9 +512,11 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         answeredAt: iso(18 * 60_000),
       },
       answerUnavailable: null,
+      notice: null,
       followUps: [],
       canResume: false,
       canReassign: false,
+      token: "token",
     },
     {
       questionId: "qid-att-40-unread",
@@ -525,12 +534,15 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         agentName: "Claude",
         paneId: "pane-gone-40",
         paneTitle: null,
+        otherHost: null,
       },
       answer: null,
       answerUnavailable: "unreadable",
+      notice: null,
       followUps: [],
       canResume: false,
       canReassign: false,
+      token: "token",
     },
   ];
 }

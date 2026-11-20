@@ -148,12 +148,23 @@ export const decisionsClient = {
     window.electron.decisions.listAnswerDestinations(questionId),
 
   /** Sends the answer to the pane the person confirmed; recorded in the audit trail. */
-  reassignAnswer: (questionId: string, terminalId: string): Promise<DecisionsAnswerOutcome> =>
-    window.electron.decisions.reassignAnswer({ questionId, terminalId }),
+  reassignAnswer: (
+    questionId: string,
+    terminalId: string,
+    expected?: string
+  ): Promise<DecisionsAnswerOutcome> =>
+    window.electron.decisions.reassignAnswer({
+      questionId,
+      terminalId,
+      ...(expected !== undefined ? { expected } : {}),
+    }),
 
   /** The person dealt with it: it leaves the list and is never typed in. */
-  markAnswerHandled: (questionId: string): Promise<DecisionsAnswerOutcome> =>
-    window.electron.decisions.markAnswerHandled({ questionId }),
+  markAnswerHandled: (questionId: string, expected?: string): Promise<DecisionsAnswerOutcome> =>
+    window.electron.decisions.markAnswerHandled({
+      questionId,
+      ...(expected !== undefined ? { expected } : {}),
+    }),
 
   /** This view's whole set of hybrid-input draft keys; an answer waits behind a draft (#16282). */
   reportComposerDrafts: (keys: string[]): Promise<void> =>

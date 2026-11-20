@@ -1,6 +1,8 @@
 import {
   answeredOn,
+  closureInForce,
   formatAnswerNotice,
+  isClosure,
   formatFollowupNotice,
   messageSentOn,
   noticeChunk,
@@ -14,6 +16,7 @@ import {
   type StoredMessage,
 } from "@daintreehq/decisions-client";
 import type { PhoneImageReference } from "@daintreehq/decisions-protocol";
+import { createHash } from "node:crypto";
 import type { DecisionsAnswerPreview } from "../../../shared/types/decisionsAttention.js";
 import {
   parseDecisionNotice,
@@ -121,8 +124,44 @@ export function answerNeedsAttention(row: QuestionRow, handled: HandledAnswers):
   return (
     needsAttention(row) &&
     declineOf(row) === undefined &&
+    !stoppedOnReplacedClosure(row) &&
     handled.get(row.question_id) !== answerRevision(row)
   );
+}
+
+/**
+ * Codes for an answer the question can't take: never a closure notice's, so a
+ * stall with one is an answer's, whatever entries the row holds.
+ */
+const ANSWER_CODES: ReadonlySet<string> = new Set([
+  "answer_unreadable",
+  "answer_unknown_kind",
+  "answer_unknown_source",
+  "choice_required",
+  "text_not_allowed",
+  "too_many_choices",
+  "unknown_option",
+  "proxy_forbidden",
+]);
+
+/**
+ * Typing stopped on a closure notice whose round a reopen has since replaced
+ * (#17944): the library withdraws the notice but leaves the row's stopped
+ * status, and nothing of the answer waits to be typed any more, so there is
+ * nothing for a person to decide. Only while every entry of the newest round
+ * the row records is such a notice, untyped, and the code is no answer's. A
+ * possibly typed write keeps the question uncertain until the library
+ * releases it.
+ */
+export function stoppedOnReplacedClosure(row: QuestionRow): boolean {
+  if (row.delivery_status !== "needs-attention" || pendingEntries(row).length > 0) return false;
+  if (row.error_code !== null && ANSWER_CODES.has(row.error_code)) return false;
+  const entries = parseAnswers(row.answers_json);
+  if (entries.length === 0) return false;
+  const newest = Math.max(...entries.map((entry) => entry.revision));
+  return entries
+    .filter((entry) => entry.revision === newest)
+    .every((entry) => isClosure(entry) && !entry.delivered && !closureInForce(entry, row));
 }
 
 /** Its answer or a follow-up after it needs a person. */
@@ -133,8 +172,35 @@ export function threadNeedsAttention(row: QuestionRow, handled: HandledAnswers):
 /** Its answer is handled, and no follow-up needs a person either. */
 export function isHandled(row: QuestionRow, handled: HandledAnswers): boolean {
   return (
-    needsAttention(row) && !answerNeedsAttention(row, handled) && heldFollowUps(row).length === 0
+    needsAttention(row) &&
+    // A reopened question whose old notice stopped is open again, not handled: it stays in every feed.
+    !stoppedOnReplacedClosure(row) &&
+    !answerNeedsAttention(row, handled) &&
+    heldFollowUps(row).length === 0
   );
+}
+
+/**
+ * What a person is asked about `row` now, as an opaque fixed-length digest
+ * of ids and states only (#17944): the answer revision, every entry still to
+ * be typed, the held follow-ups, the delivery status, the round, and the run
+ * it goes to. An action confirmed against one token is refused once the row
+ * asks something else, so a confirmation shown before a correction, a new
+ * follow-up, a replaced round or a move from another window never acts on
+ * what the person didn't see.
+ */
+export function attentionToken(row: QuestionRow, handled: HandledAnswers): string {
+  const answerHeld = answerNeedsAttention(row, handled);
+  const { origin } = row;
+  const asked = JSON.stringify([
+    answerHeld ? answerRevision(row) : null,
+    answerHeld ? pendingEntries(row).map((entry) => entry.entry_id) : [],
+    heldFollowUps(row).map((message) => [message.message_id, message.delivery?.status ?? null]),
+    row.delivery_status,
+    row.question_revision,
+    [origin.host_id, origin.pane_id, origin.terminal_generation, origin.agent_incarnation],
+  ]);
+  return createHash("sha256").update(asked).digest("hex");
 }
 
 /** The rows as panes, Canopy and the list see them: without what a person marked handled. */

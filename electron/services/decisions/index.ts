@@ -847,6 +847,10 @@ const deliveryDeps: DecisionsDeliveryDeps = {
       return projectStore.getProjectById(projectId)?.name ?? null;
     },
     listTerminals: async () => (await getPtyClient()?.getAllTerminalsAsync()) ?? [],
+    hostName: (hostId) =>
+      getDecisionsHostsPort()
+        ?.hostQuestions()
+        .find((host) => host.questionHostId === hostId)?.name ?? null,
   },
 };
 
@@ -1215,7 +1219,7 @@ export function reassignDecisionsAnswer(
   payload: ReassignDecisionsAnswerPayload
 ): Promise<DecisionsAnswerOutcome> {
   return whileDelivering(
-    (delivery) => delivery.reassignAnswer(payload.questionId, payload.terminalId),
+    (delivery) => delivery.reassignAnswer(payload.questionId, payload.terminalId, payload.expected),
     NOT_RUNNING
   );
 }
@@ -1223,7 +1227,10 @@ export function reassignDecisionsAnswer(
 export function markDecisionsAnswerHandled(
   payload: MarkDecisionsAnswerHandledPayload
 ): Promise<DecisionsAnswerOutcome> {
-  return whileDelivering((delivery) => delivery.markHandled(payload.questionId), NOT_RUNNING);
+  return whileDelivering(
+    (delivery) => delivery.markHandled(payload.questionId, payload.expected),
+    NOT_RUNNING
+  );
 }
 
 const NOT_RUNNING: DecisionsAnswerOutcome = { result: "refused", reason: "not-running" };

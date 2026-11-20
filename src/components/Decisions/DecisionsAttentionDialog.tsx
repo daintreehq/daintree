@@ -26,6 +26,7 @@ import { worktreeDisplayName } from "@/utils/recipeScope";
 import { pluralize } from "@/lib/pluralize";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeSnapshot } from "@shared/types";
+import type { DecisionQuestionList } from "@shared/types/decisionsQuestion";
 import type {
   DecisionsAnswerDestination,
   DecisionsAnswerDestinations,
@@ -33,6 +34,7 @@ import type {
   DecisionsAttentionItem,
   DecisionsAttentionList,
   DecisionsFollowUpPreview,
+  DecisionsTimeoutNotice,
 } from "@shared/types/decisionsAttention";
 import {
   EMPTY_DESCRIPTION,
@@ -41,6 +43,7 @@ import {
   STILL_WORKING,
   agentLabel,
   aliasLabel,
+  attentionFingerprint,
   canCopy,
   copyLabel,
   destinationDetail,
@@ -50,12 +53,16 @@ import {
   handledNeedsConfirm,
   leavesList,
   missingAnswerText,
+  noticeDeliveryText,
+  noticeOutcomeText,
+  noticePlanText,
   originParts,
   outcomeSeverity,
   outcomeText,
   paneName,
   reasonText,
   remainingText,
+  sameAttention,
   statusText,
   subjectOf,
   toLines,
@@ -183,6 +190,30 @@ function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
           {expanded ? "Show less" : "Show full answer"}
         </Button>
       )}
+    </figure>
+  );
+}
+
+/**
+ * The notice that the question's deadline closed it (#17944): how the question
+ * ended, and what typing the notice says of the agent's plan, apart from the
+ * status line above, which says how far typing it got.
+ */
+function NoticePreview({ notice }: { notice: DecisionsTimeoutNotice }) {
+  const plan = noticePlanText(notice);
+  return (
+    <figure className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
+      <figcaption className="text-2xs text-text-secondary">
+        Timeout notice, {noticeDeliveryText(notice)}
+        {notice.deadline !== null && (
+          <>
+            {" "}
+            <FactSeparator /> <TimeAgo timestamp={notice.deadline} prefix="deadline " />
+          </>
+        )}
+      </figcaption>
+      <p className="text-xs text-text-primary [text-wrap:pretty]">{noticeOutcomeText(notice)}</p>
+      {plan !== null && <p className="text-xs text-text-secondary [text-wrap:pretty]">{plan}</p>}
     </figure>
   );
 }
@@ -343,6 +374,7 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
           {reason !== null && ` ${reason}`}
         </span>
       </p>
+      {item.notice !== null && <NoticePreview notice={item.notice} />}
       <AnswerPreview item={item} />
       {item.followUps.map((followUp) => (
         <FollowUpPreview key={followUp.messageId} followUp={followUp} alias={alias} />
@@ -560,22 +592,41 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     setHandling(null);
   }, [isOpen]);
 
-  // Panes' Decisions state changes whenever an answer moves; read again once a burst settles.
+  // Panes' Decisions state changes whenever an answer moves, but reaches only
+  // their project's window; the question list reaches every window here, so
+  // one handled or delivered from another leaves this one too (#17944). Read
+  // again once a burst of either settles.
   useEffect(() => {
     if (!isOpen) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let off: (() => void) | null = null;
-    try {
-      off = decisionsClient.onPaneState(() => {
-        if (timer !== null) clearTimeout(timer);
-        timer = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
-      });
-    } catch {
-      off = null;
+    const changed = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
+    };
+    // The question list changes for every question here and on every Host;
+    // only a change to what needs a person is a reason to read this list.
+    let seen: string | null = null;
+    const listChanged = (latest: DecisionQuestionList) => {
+      const next = attentionFingerprint(latest.questions);
+      if (next === seen) return;
+      seen = next;
+      changed();
+    };
+    const offs: (() => void)[] = [];
+    const subscriptions = [
+      () => decisionsClient.onPaneState(changed),
+      () => decisionsClient.onQuestionsChanged(listChanged),
+    ];
+    for (const subscribe of subscriptions) {
+      try {
+        offs.push(subscribe());
+      } catch {
+        // A bridge without the event leaves the other, and the list's own reads.
+      }
     }
     return () => {
       if (timer !== null) clearTimeout(timer);
-      off?.();
+      for (const off of offs) off();
     };
   }, [isOpen, refresh]);
 
@@ -642,6 +693,17 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     return undefined;
   }, [isOpen, loadError, readFor, request]);
 
+  // A confirmation asks about the item as it was read: once the list no longer
+  // shows it so (handled in another window, its round replaced, delivered),
+  // the confirmation goes rather than act on whatever the question holds now.
+  useEffect(() => {
+    if (list === null) return;
+    const stillShown = (asked: DecisionsAttentionItem) =>
+      items.some((item) => sameAttention(item, asked));
+    if (handling !== null && !stillShown(handling)) setHandling(null);
+    if (move !== null && !stillShown(move.item)) setMove(null);
+  }, [items, list, handling, move]);
+
   // An item that left took the focus with it: the next one's first action
   // gets it, else the one before, else the list's own place in the dialog.
   useEffect(() => {
@@ -705,8 +767,9 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     };
   };
 
+  // The item's token goes with it: main refuses once the question asks something else (#17944).
   const markHandled = (item: DecisionsAttentionItem) =>
-    void run(item, "handled", () => decisionsClient.markAnswerHandled(item.questionId));
+    void run(item, "handled", () => decisionsClient.markAnswerHandled(item.questionId, item.token));
 
   const confirmHandled = () => {
     if (handling === null) return;
@@ -720,7 +783,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     const { item, destination } = move;
     setMove(null);
     void run(item, "reassign", () =>
-      decisionsClient.reassignAnswer(item.questionId, destination.terminalId)
+      decisionsClient.reassignAnswer(item.questionId, destination.terminalId, item.token)
     );
   };
 
