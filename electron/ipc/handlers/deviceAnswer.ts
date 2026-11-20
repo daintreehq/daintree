@@ -314,10 +314,14 @@ const questionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
 /** An attention item's token, as main minted it: a SHA-256 digest of ids and states. */
 const attentionTokenSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
+/** A destination's run as main listed it: a SHA-256 digest of the pane's run identity. */
+const destinationRunSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
 const reassignAnswerSchema = z
   .object({
     questionId: questionIdSchema,
     terminalId: z.string().min(1).max(256),
+    run: destinationRunSchema,
     expected: attentionTokenSchema.optional(),
   })
   .strict();

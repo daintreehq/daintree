@@ -884,6 +884,7 @@ const deliveryDeps: DecisionsDeliveryDeps = {
       return projectStore.getProjectById(projectId)?.name ?? null;
     },
     listTerminals: async () => (await getPtyClient()?.getAllTerminalsAsync()) ?? [],
+    getTerminal: async (terminalId) => (await getPtyClient()?.getTerminalAsync(terminalId)) ?? null,
     hostName: (hostId) =>
       getDecisionsHostsPort()
         ?.hostQuestions()
@@ -1264,7 +1265,12 @@ export function reassignDecisionsAnswer(
   payload: ReassignDecisionsAnswerPayload
 ): Promise<DecisionsAnswerOutcome> {
   return whileDelivering(
-    (delivery) => delivery.reassignAnswer(payload.questionId, payload.terminalId, payload.expected),
+    (delivery) =>
+      delivery.reassignAnswer(
+        payload.questionId,
+        { terminalId: payload.terminalId, run: payload.run },
+        payload.expected
+      ),
     NOT_RUNNING
   );
 }

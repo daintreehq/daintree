@@ -8,6 +8,7 @@ import type {
   DecisionsAnswerOutcome,
   DecisionsAttentionItem,
   DecisionsAttentionList,
+  ReassignDecisionsAnswerPayload,
 } from "@shared/types/decisionsAttention";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
@@ -21,6 +22,8 @@ const markAnswerHandled =
   vi.fn<(payload: { questionId: string }) => Promise<DecisionsAnswerOutcome>>();
 const listAnswerDestinations =
   vi.fn<(questionId: string) => Promise<DecisionsAnswerDestinations>>();
+const reassignAnswer =
+  vi.fn<(payload: ReassignDecisionsAnswerPayload) => Promise<DecisionsAnswerOutcome>>();
 
 /** The list as main would read it now; actions change it before the next read. */
 let listed: DecisionsAttentionItem[] = [];
@@ -128,7 +131,7 @@ async function ask(alias: number): Promise<HTMLElement> {
 function stubElectron() {
   Object.defineProperty(window, "electron", {
     value: {
-      decisions: { listAttention, markAnswerHandled, listAnswerDestinations },
+      decisions: { listAttention, markAnswerHandled, listAnswerDestinations, reassignAnswer },
       terminal: { onDecisionState: () => () => {} },
     },
     configurable: true,
@@ -329,6 +332,7 @@ function destination(
 ): DecisionsAnswerDestination {
   return {
     terminalId,
+    run: `run-${terminalId}`,
     title,
     agentId: "claude",
     agentName: "Claude",
@@ -667,6 +671,71 @@ describe("DecisionsAttentionDialog: where and when a moved answer goes (#18056)"
       expect(body).not.toMatch(never);
     }
   );
+
+  it("sends the run it listed with the move, keeps the answer when that terminal runs another agent now, and sends the fresh run when chosen again (#18093)", async () => {
+    const before = "a1".repeat(32);
+    const after = "b2".repeat(32);
+    listAnswerDestinations
+      .mockResolvedValueOnce({
+        result: "listed",
+        destinations: [destination("pane-8", "Queueing agent", { run: before })],
+      })
+      .mockResolvedValueOnce({
+        result: "listed",
+        destinations: [destination("pane-8", "Queueing agent", { run: after })],
+      });
+    reassignAnswer
+      .mockReset()
+      .mockResolvedValueOnce({ result: "refused", reason: "destination-changed" })
+      .mockImplementationOnce(async ({ questionId }) => {
+        listed = listed.filter((item) => item.questionId !== questionId);
+        return { result: "delivered", terminalId: "pane-8", title: "Queueing agent" };
+      });
+    render(tree(true));
+    await listedRows(1);
+    await openDestinations(3);
+    await waitFor(() => expect(menuRows()[0]).toContain("Queueing agent"));
+    const reads = listAttention.mock.calls.length;
+
+    fireEvent.click(
+      within(await choose("Queueing agent")).getByRole("button", { name: "Send answer" })
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-attention-outcome").textContent).toContain(
+        "That terminal is running another agent now, so q-3's answer wasn't sent"
+      )
+    );
+    expect(reassignAnswer).toHaveBeenCalledExactlyOnceWith({
+      questionId: "qid-3",
+      terminalId: "pane-8",
+      run: before,
+      expected: "token-3",
+    });
+    // The list was read again after the refusal, and still holds the answer.
+    await waitFor(() => expect(listAttention.mock.calls.length).toBeGreaterThan(reads));
+    await listedRows(1);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Send q-3/ })).toBeNull());
+
+    // Chosen again, the menu reads the running agents afresh and sends the run it lists now.
+    await openDestinations(3);
+    await waitFor(() => expect(listAnswerDestinations).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(menuRows()[0]).toContain("Queueing agent"));
+    fireEvent.click(
+      within(await choose("Queueing agent")).getByRole("button", { name: "Send answer" })
+    );
+    await waitFor(() => expect(reassignAnswer).toHaveBeenCalledTimes(2));
+    expect(reassignAnswer.mock.calls[1]![0]).toEqual({
+      questionId: "qid-3",
+      terminalId: "pane-8",
+      run: after,
+      expected: "token-3",
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("decisions-attention-outcome").textContent).toContain(
+        "Answer to q-3 typed into “Queueing agent”"
+      )
+    );
+  });
 
   it("sets other projects' agents apart from the asking project's, each project under its own name", async () => {
     listAnswerDestinations.mockResolvedValue({

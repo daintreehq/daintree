@@ -1,5 +1,6 @@
 import type { DecisionsStatus, PaneDecisionState } from "@shared/types/decisions";
 import type {
+  DecisionsAnswerDestination,
   DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionList,
@@ -148,15 +149,19 @@ export const decisionsClient = {
   listAnswerDestinations: (questionId: string): Promise<DecisionsAnswerDestinations> =>
     window.electron.decisions.listAnswerDestinations(questionId),
 
-  /** Sends the answer to the pane the person confirmed; recorded in the audit trail. */
+  /**
+   * Sends the answer to the destination the person confirmed, as listed:
+   * refused once its pane runs another agent. Recorded in the audit trail.
+   */
   reassignAnswer: (
     questionId: string,
-    terminalId: string,
+    destination: Pick<DecisionsAnswerDestination, "terminalId" | "run">,
     expected?: string
   ): Promise<DecisionsAnswerOutcome> =>
     window.electron.decisions.reassignAnswer({
       questionId,
-      terminalId,
+      terminalId: destination.terminalId,
+      run: destination.run,
       ...(expected !== undefined ? { expected } : {}),
     }),
 
