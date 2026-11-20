@@ -2927,12 +2927,41 @@ describe("restorePanelsPhase — moved panes and recovery holds (#12434)", () =>
     await restorePanelsPhase([movedPane("a", { agentSessionId: "sess-a" })], ctx);
 
     const held = argsById(ctx).get("a");
+    expect(ctx.rereadWorktrees).toHaveBeenCalledTimes(1);
     expect(held?.coldLaunch).toEqual({ cwd: "/repo", awaitingDestination: true });
     expect(held?.worktreeId).toBe("/worktrees/task-a");
     expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
   });
 
-  it("starts a pane inside its own filing without waiting on any list (#11234)", async () => {
+  it("places a pane the second look can't place where that look can see it (#18009)", async () => {
+    // Its destination was deleted while the app was closed; the first answer
+    // was empty, the second lists only the checkout it began in.
+    const ctx = makeContext({
+      worktreesPromise: Promise.resolve([]),
+      rereadWorktrees: vi.fn(async () => [worktree("/repo")]),
+    });
+
+    await restorePanelsPhase([movedPane("a", { agentSessionId: "sess-a" })], ctx);
+
+    const held = argsById(ctx).get("a");
+    expect(held?.coldLaunch).toEqual({ cwd: "/repo", awaitingDestination: true });
+    expect(held?.worktreeId).toBe("/repo");
+  });
+
+  it("starts a pane at its filing's root without looking again (#11234)", async () => {
+    const rereadWorktrees = vi.fn(async () => null);
+    const ctx = makeContext({ worktreesPromise: Promise.resolve([]), rereadWorktrees });
+
+    await restorePanelsPhase(
+      [movedPane("a", { cwd: "/worktrees/task-a", agentSessionId: "sess-a" })],
+      ctx
+    );
+
+    expect(argsById(ctx).get("a")?.coldLaunch).toEqual({ cwd: "/worktrees/task-a" });
+    expect(rereadWorktrees).not.toHaveBeenCalled();
+  });
+
+  it("starts a pane in a subdirectory of its filing where it was when no list comes", async () => {
     const rereadWorktrees = vi.fn(async () => null);
     const ctx = makeContext({ worktreesPromise: Promise.resolve([]), rereadWorktrees });
 
@@ -2941,8 +2970,8 @@ describe("restorePanelsPhase — moved panes and recovery holds (#12434)", () =>
       ctx
     );
 
+    expect(rereadWorktrees).toHaveBeenCalledTimes(1);
     expect(argsById(ctx).get("a")?.coldLaunch).toEqual({ cwd: "/worktrees/task-a/web" });
-    expect(rereadWorktrees).not.toHaveBeenCalled();
   });
 
   it("changes nothing in a workspace that can't have worktrees", async () => {

@@ -9,7 +9,11 @@ import {
 } from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
-import { RESUME_UNAVAILABLE_MESSAGE, resumeSessionIntoPanel } from "@/services/agentResume";
+import {
+  bringResumedPaneForward,
+  RESUME_UNAVAILABLE_MESSAGE,
+  resumeSessionIntoPanel,
+} from "@/services/agentResume";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
@@ -258,21 +262,29 @@ export function registerTerminalSpawnActions(
         // wherever a move has filed it (#18009), and shares one launch with any
         // other resume of it in flight. A person pressing this is taken to that
         // pane; a headless caller only gets it back.
+        const showWorktree = isForegroundDispatch(ctx.dispatchSource)
+          ? (worktreeId: string) => {
+              const selection = useWorktreeSelectionStore.getState();
+              if (worktreeId !== selection.activeWorktreeId) {
+                selection.selectWorktree(worktreeId, { source: "user" });
+              }
+            }
+          : undefined;
         try {
-          await resumeSessionIntoPanel(
+          const resumed = await resumeSessionIntoPanel(
             session,
             { cwd, worktreeId: activeWorktreeId },
-            {
-              showWorktree: isForegroundDispatch(ctx.dispatchSource)
-                ? (worktreeId) => {
-                    const selection = useWorktreeSelectionStore.getState();
-                    if (worktreeId !== selection.activeWorktreeId) {
-                      selection.selectWorktree(worktreeId, { source: "user" });
-                    }
-                  }
-                : undefined,
-            }
+            { showWorktree }
           );
+          // Joined someone else's launch, its callbacks never ran here; a
+          // worktree chosen meanwhile is a newer choice, and stands.
+          const selectedNow = useWorktreeSelectionStore.getState().activeWorktreeId;
+          if (
+            showWorktree &&
+            (selectedNow === activeWorktreeId || selectedNow === resumed.worktreeId)
+          ) {
+            bringResumedPaneForward(resumed, showWorktree);
+          }
         } catch (error) {
           // A record its agent can no longer resume reopens nothing, quietly,
           // as an empty journal does.

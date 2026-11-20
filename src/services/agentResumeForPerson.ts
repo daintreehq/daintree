@@ -2,7 +2,11 @@ import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { resolveResumeLaunchTarget } from "@/utils/resumeLaunch";
-import { resumeSessionIntoPanel, type ResumeSessionOutcome } from "./agentResume";
+import {
+  bringResumedPaneForward,
+  resumeSessionIntoPanel,
+  type ResumeSessionOutcome,
+} from "./agentResume";
 
 /** The session's recorded worktree is not among this view's: there is nowhere to resume it. */
 export class ResumeWorktreeGoneError extends Error {
@@ -76,12 +80,11 @@ export async function resumeSessionForPerson(
   });
   // Again after the fact, because the callbacks are the STARTER's: a person
   // joining a resume an agent already started never reaches them, and would
-  // otherwise be left with the pane in another worktree. A selection moved
-  // elsewhere meanwhile is a newer choice, and stands.
+  // otherwise be left with the pane in another worktree, or parked. A
+  // selection moved elsewhere meanwhile is a newer choice, and stands.
   const selectedNow = useWorktreeSelectionStore.getState().activeWorktreeId;
-  const paneWorktreeId = resumed.worktreeId ?? undefined;
-  if (selectedNow === selectedAtStart || selectedNow === paneWorktreeId) {
-    showWorktree(paneWorktreeId);
+  if (selectedNow === selectedAtStart || selectedNow === resumed.worktreeId) {
+    bringResumedPaneForward(resumed, showWorktree);
   }
   return resumed;
 }

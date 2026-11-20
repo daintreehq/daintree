@@ -344,7 +344,7 @@ export function RestoreRecoveryGate({
                   variant="ghost"
                   onClick={() => confirmDestination(panelId, filedWorktreePath)}
                 >
-                  Run in this worktree
+                  Use this worktree
                 </Button>
               )}
               <Button

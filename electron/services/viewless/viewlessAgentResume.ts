@@ -165,13 +165,16 @@ export async function resumeAgentSessionAsPane(
   const pending = inFlight.get(key);
   if (pending) {
     const joined = await pending.run;
+    const otherTarget =
+      pending.request.worktreeId !== request.worktreeId ||
+      pending.request.agentId !== request.agentId ||
+      pending.request.cwd !== request.cwd;
+    // The pane another target's call launched is, to this call, one that was
+    // already holding the session.
+    if (joined.status === "launched" && otherTarget) return existingPane(project.id, joined);
     const refusedOnlyItsCaller =
       joined.status === "refused" &&
-      (joined.reason === "cancelled" ||
-        joined.reason === "not-authorized" ||
-        pending.request.worktreeId !== request.worktreeId ||
-        pending.request.agentId !== request.agentId ||
-        pending.request.cwd !== request.cwd);
+      (joined.reason === "cancelled" || joined.reason === "not-authorized" || otherTarget);
     if (!refusedOnlyItsCaller || request.signal?.aborted) return joined;
     // Abandoned by its own caller, or refused to it, not this one: launch again once it has gone.
     if (inFlight.get(key) === pending) inFlight.delete(key);

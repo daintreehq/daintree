@@ -759,7 +759,14 @@ describe("resumeAgentSessionAsPane", () => {
     ]);
 
     expect(spawns(invoke)).toHaveLength(1);
-    expect(second).toEqual(first);
+    expect(first).toMatchObject({ status: "launched", worktreeId: WORKTREE.id });
+    // To the call aimed elsewhere, that pane was already holding the session.
+    expect(second).toEqual({
+      status: "existing",
+      projectId: PROJECT.id,
+      worktreeId: WORKTREE.id,
+      terminalId: (first as { terminalId: string }).terminalId,
+    });
   });
 
   it("gives a joiner its own try when the launch it joined was refused for another target", async () => {

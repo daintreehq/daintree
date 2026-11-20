@@ -80,8 +80,14 @@ vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => panelSta
 vi.mock("@/store/storeAccessors", () => ({
   getWorktreeSelectionSnapshot: () => ({ activeWorktreeId: selection.activeWorktreeId }),
 }));
+// Panes an open spawn batch has committed but not yet appended to `panelIds`.
+const pendingBatchIds = vi.hoisted(() => ({ ids: [] as string[] }));
+vi.mock("@/store/slices/panelRegistry/hydrationBatch", () => ({
+  getPendingBatchIds: () => pendingBatchIds.ids,
+}));
 
 import {
+  bringResumedPaneForward,
   buildResumePanelOptions,
   findLiveResumePanelId,
   reconcileResumeLaunchFlags,
@@ -120,6 +126,7 @@ beforeEach(() => {
   setPanels();
   addPanelMock.mockResolvedValue("term-new");
   selection.activeWorktreeId = "wt-1";
+  pendingBatchIds.ids = [];
 });
 
 function pane(id: string, overrides: Record<string, unknown> = {}) {
@@ -436,6 +443,54 @@ describe("findLiveResumePanelId", () => {
     setPanels(pane("term-1", { worktreeId: undefined }));
     expect(findLiveResumePanelId("s-1")).toBe("term-1");
   });
+
+  it("passes over panes that don't hold the session to the one that does", () => {
+    setPanels(
+      pane("term-other", { agentSessionId: "s-2" }),
+      pane("term-trash", { location: "trash" }),
+      pane("term-shell", { agentState: "exited" }),
+      pane("term-holder", { worktreeId: "wt-3" })
+    );
+    expect(findLiveResumePanelId("s-1")).toBe("term-holder");
+  });
+
+  it("ignores a pane whose agent quit back to its shell, though it still names the session", () => {
+    setPanels(pane("term-1", { worktreeId: "wt-2", agentState: "exited" }));
+    expect(findLiveResumePanelId("s-1")).toBeNull();
+  });
+
+  it("finds a pane a spawn batch is still holding back from the panel order", () => {
+    setPanels();
+    panelState.panelsById = { "term-batched": pane("term-batched", { worktreeId: "wt-2" }) };
+    pendingBatchIds.ids = ["term-batched"];
+    expect(findLiveResumePanelId("s-1")).toBe("term-batched");
+  });
+});
+
+describe("bringResumedPaneForward", () => {
+  it("shows the pane's own worktree, then restores and focuses it", () => {
+    const order: string[] = [];
+    setPanels(pane("term-9", { worktreeId: "wt-2", location: "background" }));
+    restoreBackgroundTerminalMock.mockImplementation(() => order.push("restore"));
+    activateTerminalMock.mockImplementation(() => order.push("activate"));
+    // Reported as filed elsewhere: where it is filed now is what counts.
+    bringResumedPaneForward(
+      { terminalId: "term-9", outcome: "created", worktreeId: "wt-1" },
+      (id) => order.push(`show:${id}`)
+    );
+    expect(order).toEqual(["show:wt-2", "restore", "activate"]);
+  });
+
+  it("does nothing for a pane that has gone", () => {
+    setPanels();
+    const show = vi.fn();
+    bringResumedPaneForward(
+      { terminalId: "term-gone", outcome: "created", worktreeId: "wt-2" },
+      show
+    );
+    expect(show).not.toHaveBeenCalled();
+    expect(activateTerminalMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("resumeSessionIntoPanel", () => {
@@ -482,6 +537,7 @@ describe("resumeSessionIntoPanel", () => {
       worktreeId: "wt-2",
     });
     expect(addPanelMock).not.toHaveBeenCalled();
+    expect(activateTerminalMock).not.toHaveBeenCalled();
   });
 
   it("leaves a headless caller's view alone when the live pane is in another worktree", async () => {
@@ -509,16 +565,61 @@ describe("resumeSessionIntoPanel", () => {
     // Its own worktree, not the record's, and restored without being refiled.
     expect(order).toEqual(["show:wt-2", "restore", "activate"]);
     expect(restoreBackgroundTerminalMock).toHaveBeenCalledWith("term-moved");
+    expect(activateTerminalMock).toHaveBeenCalledWith("term-moved");
+  });
+
+  it("leaves a headless caller's view alone for a pane filed under no worktree", async () => {
+    setPanels(pane("term-loose", { worktreeId: undefined, location: "background" }));
+    const result = await resumeSessionIntoPanel(baseSession, target);
+    expect(result).toMatchObject({ terminalId: "term-loose", worktreeId: null });
+    expect(activateTerminalMock).not.toHaveBeenCalled();
+    expect(restoreBackgroundTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a joiner try under its own checks when the starter's own checks refused", async () => {
+    // The joiner joins synchronously; the starter's check runs a tick later.
+    const starter = resumeSessionIntoPanel(baseSession, target, {
+      validateSpawn: () => {
+        throw new Error("not from the worktree it named");
+      },
+    });
+    const joiner = resumeSessionIntoPanel(baseSession, { cwd: "/other", worktreeId: "wt-2" });
+
+    await expect(starter).rejects.toThrow("not from the worktree it named");
+    await expect(joiner).resolves.toMatchObject({ terminalId: "term-new", outcome: "created" });
+    expect(addPanelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares any other failure with a joiner rather than launching again", async () => {
+    addPanelMock.mockResolvedValueOnce(null);
+    const starter = resumeSessionIntoPanel(baseSession, target);
+    const joiner = resumeSessionIntoPanel(baseSession, target);
+    await expect(starter).rejects.toThrow(/closed before it finished opening/i);
+    await expect(joiner).rejects.toThrow(/closed before it finished opening/i);
+    expect(addPanelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports where the new pane is filed once it opens", async () => {
+    // Moved while `addPanel` awaited its PTY prewarm.
+    addPanelMock.mockImplementationOnce(async () => {
+      setPanels(pane("term-new", { worktreeId: "wt-2" }));
+      return "term-new";
+    });
+    const result = await resumeSessionIntoPanel(baseSession, target);
+    expect(result).toEqual({ terminalId: "term-new", outcome: "created", worktreeId: "wt-2" });
   });
 
   it("runs the spawn-only checks for a new launch and never for a live pane", async () => {
     const validateSpawn = vi.fn(() => {
       throw new Error("refused for a new launch");
     });
-    await expect(resumeSessionIntoPanel(baseSession, target, { validateSpawn })).rejects.toThrow(
-      "refused for a new launch"
-    );
+    const onBeforeSpawn = vi.fn();
+    await expect(
+      resumeSessionIntoPanel(baseSession, target, { validateSpawn, onBeforeSpawn })
+    ).rejects.toThrow("refused for a new launch");
     expect(addPanelMock).not.toHaveBeenCalled();
+    // A refused launch moves nothing.
+    expect(onBeforeSpawn).not.toHaveBeenCalled();
 
     validateSpawn.mockClear();
     setPanels(pane("term-moved", { worktreeId: "wt-2" }));

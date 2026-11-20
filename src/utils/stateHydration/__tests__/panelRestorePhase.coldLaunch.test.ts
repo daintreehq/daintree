@@ -357,6 +357,7 @@ describe("cold restore of moved Codex panes (#12434)", () => {
 
     const args = byId.get("a");
     expect(args?.command).toContain("resume sess-a");
+    expect(args?.worktreeId).toBe("/worktrees/task-a");
     expect(args?.cwd).toBe("/worktrees/task-a");
     expect(args?.conversationCwd).toBe("/repo");
     expect(args?.restoreRecovery).toBeUndefined();

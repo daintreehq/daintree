@@ -261,7 +261,7 @@ describe("RestoreRecoveryGate (#12434)", () => {
 
     expect(screen.getByRole("heading", { name: "Choose where this panel runs" })).toBeTruthy();
     // Nothing lists the worktree it is filed under, so it can't be offered.
-    expect(screen.queryByRole("button", { name: "Run in this worktree" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use this worktree" })).toBeNull();
     expect(screen.queryByText("Runs in")).toBeNull();
     expect(screen.queryByRole("button", { name: "Start new session" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
@@ -308,7 +308,7 @@ describe("RestoreRecoveryGate (#12434)", () => {
       </WorktreeStoreContext>
     );
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Run in this worktree" }));
+      fireEvent.click(screen.getByRole("button", { name: "Use this worktree" }));
     });
 
     expect(held("p-1").cwd).toBe("/worktrees/task-a");
@@ -342,7 +342,7 @@ describe("RestoreRecoveryGate (#12434)", () => {
       </WorktreeStoreContext>
     );
 
-    expect(screen.queryByRole("button", { name: "Run in this worktree" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use this worktree" })).toBeNull();
     expect(screen.getByRole("button", { name: "Keep original folder" })).toBeTruthy();
   });
 

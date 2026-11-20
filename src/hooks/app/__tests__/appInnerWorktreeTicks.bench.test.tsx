@@ -46,7 +46,10 @@ const resumeSessionIntoPanel = vi.hoisted(() =>
     }
   )
 );
-vi.mock("@/services/agentResume", () => ({ resumeSessionIntoPanel }));
+vi.mock("@/services/agentResume", () => ({
+  resumeSessionIntoPanel,
+  bringResumedPaneForward: vi.fn(),
+}));
 
 // Every other bridge namespace the palette hooks touch on mount: listeners hand
 // back an unsubscribe, requests resolve empty.
@@ -341,6 +344,8 @@ describe("AppInner worktree-tick re-renders", () => {
     });
     expect(host().resumeSession).toBe(resume);
     await act(() => resume(session));
+    expect(spawned).toHaveBeenCalledTimes(1);
+    expect(spawned).toHaveBeenCalledWith({ cwd: "/repo/wt-new", worktreeId: "wt-new" });
     expect(resumeSessionIntoPanel).toHaveBeenCalledWith(
       session,
       { cwd: "/repo/wt-new", worktreeId: "wt-new" },

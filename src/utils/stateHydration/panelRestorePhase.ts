@@ -1152,6 +1152,10 @@ export async function restorePanelsPhase(
      * starts, and where its conversation lives (#12434). Only the respawn path
      * asks: a surviving PTY is already running wherever it is running.
      */
+    // The list a second look found when the first wasn't ready (#18009), so
+    // the panes it places are seen where it says, not kept under filings only
+    // the empty first answer couldn't disprove.
+    let rereadList: WorktreeState[] | null = null;
     const resolveColdLaunch = async (
       saved: TerminalState
     ): Promise<NonNullable<BuildArgsForRespawnOptions["coldLaunch"]>> => {
@@ -1179,13 +1183,16 @@ export async function restorePanelsPhase(
         ? resolveColdLaunchTarget({ ...saved, conversationCwd }, await worktreesPromise)
         : { kind: "unchanged" };
       if (target.kind === "unconfirmed") {
-        // The list wasn't ready and this pane runs outside the worktree it is
-        // filed under: a move only the list can confirm (#18009). Ask again;
-        // a list that still doesn't come leaves it held below.
-        target = resolveColdLaunchTarget(
-          { ...saved, conversationCwd },
-          (await rereadWorktrees?.()) ?? null
-        );
+        // The list wasn't ready and only it can say where this pane belongs
+        // (#18009). Ask again; a list that still doesn't come holds a pane
+        // running outside its filing, and starts one inside it where it was.
+        const reread = (await rereadWorktrees?.()) ?? null;
+        if (reread !== null && reread.length > 0) rereadList = reread;
+        const confirmed = resolveColdLaunchTarget({ ...saved, conversationCwd }, reread);
+        target =
+          confirmed.kind === "unconfirmed" && !confirmed.holdIfUnknown
+            ? { kind: "unchanged" }
+            : confirmed;
       }
       if (target.kind === "destination-unavailable" || target.kind === "unconfirmed") {
         // Nothing runs until the user picks, and the folder the conversation
@@ -1488,10 +1495,11 @@ export async function restorePanelsPhase(
                   // or be swept up as an orphan — so place it under the worktree
                   // its folder is in, or the main one. Placement only: where it
                   // runs is still the user's call.
-                  const known = await getKnownWorktreeIds();
+                  const placementList = rereadList ?? (await worktreesPromise);
+                  const known = buildWorktreeMoveContext(placementList)?.knownIds ?? null;
                   const filing = respawnArgs.worktreeId;
                   if (known !== null && (filing === undefined || !known.has(filing))) {
-                    const list = (await worktreesPromise) ?? [];
+                    const list = placementList ?? [];
                     const visible =
                       findLaunchRoot(respawnArgs.cwd, list) ??
                       list.find((worktree) => worktree.isMainWorktree)?.id ??

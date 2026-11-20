@@ -15,6 +15,7 @@ import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
+import { getPendingBatchIds } from "@/store/slices/panelRegistry/hydrationBatch";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 
 /**
@@ -159,6 +160,13 @@ export interface ResumeSessionOutcome {
 const inFlightResumes = new Map<string, Promise<ResumeSessionOutcome>>();
 
 /**
+ * Errors a caller's own `validateSpawn` threw. A resume that joins another
+ * caller's launch shares its result, but not a refusal only that caller's
+ * checks made: the joiner's own checks may allow the launch.
+ */
+const callerRefusals = new WeakSet<object>();
+
+/**
  * The id of a live pane already carrying `sessionId`, wherever it is filed.
  *
  * Not scoped by worktree: a live move refiles a pane without touching its
@@ -166,19 +174,23 @@ const inFlightResumes = new Map<string, Promise<ResumeSessionOutcome>>();
  * resume that only looked inside its own target launched a second agent on
  * the transcript (#18009). Trashed panels are pending cleanup and dialog
  * panels are ephemeral modal content — neither is a pane the caller can be
- * handed. Background panels ARE eligible: a hibernated mirror still owns the
+ * handed. A pane whose agent quit back to its shell no longer runs the
+ * conversation, though it keeps naming it, as main's own scan reads it.
+ * Background panels ARE eligible: a hibernated mirror still owns the
  * transcript, so spawning a second resume beside it is the duplicate this
- * guards against.
+ * guards against. Panes an open spawn batch is still holding back from
+ * `panelIds` are real panes, so they are read too.
  */
 export function findLiveResumePanelId(sessionId: string): string | null {
   const panelStore = usePanelStore.getState();
-  const found = panelStore.panelIds.find((id) => {
+  const found = [...panelStore.panelIds, ...getPendingBatchIds()].find((id) => {
     const panel = panelStore.panelsById[id];
     return (
       panel !== undefined &&
       isPtyPanel(panel) &&
       panel.location !== "trash" &&
       panel.location !== "dialog" &&
+      panel.agentState !== "exited" &&
       panel.agentSessionId === sessionId
     );
   });
@@ -192,20 +204,22 @@ function filedWorktreeId(terminalId: string): string | null {
 /**
  * Bring the pane already carrying the session forward, if the caller may.
  *
- * A pane filed under another worktree than the active one is only revealed
- * through `showWorktree`, which selects that worktree first. Without it — an
- * agent or plugin caller — the pane is handed back untouched: activating it
- * could follow focus into its worktree and move the person's view.
+ * A pane filed under another worktree than the active one — or under none
+ * while one is active — is only revealed through `showWorktree`, which selects
+ * its worktree first. Without it — an agent or plugin caller — the pane is
+ * handed back untouched: activating it could follow focus into its worktree and
+ * move the person's view.
  */
 function revealExistingPane(
   terminalId: string,
   showWorktree: ((worktreeId: string) => void) | undefined
 ): void {
+  if (!Object.hasOwn(usePanelStore.getState().panelsById, terminalId)) return;
   const holderWorktreeId = filedWorktreeId(terminalId);
   const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
-  if (holderWorktreeId !== null && holderWorktreeId !== activeWorktreeId) {
+  if (holderWorktreeId !== activeWorktreeId) {
     if (!showWorktree) return;
-    showWorktree(holderWorktreeId);
+    if (holderWorktreeId !== null) showWorktree(holderWorktreeId);
   }
   const panelStore = usePanelStore.getState();
   // A backgrounded pane is hidden, not closed. `activateTerminal` moves
@@ -222,6 +236,20 @@ function revealExistingPane(
     panelStore.restoreBackgroundTerminal(terminalId);
   }
   usePanelStore.getState().activateTerminal(terminalId);
+}
+
+/**
+ * Bring a resumed pane on screen for a person: its worktree selected, restored
+ * if parked, and focused. For a foreground caller to run after the resume
+ * settles, because only the caller that STARTS a launch gets its callbacks run
+ * inside it: one that joined it would otherwise be left looking elsewhere. The
+ * caller decides first whether a newer navigation should stand.
+ */
+export function bringResumedPaneForward(
+  resumed: ResumeSessionOutcome,
+  showWorktree: (worktreeId: string) => void
+): void {
+  revealExistingPane(resumed.terminalId, showWorktree);
 }
 
 /**
@@ -250,23 +278,36 @@ function revealExistingPane(
  * under another worktree is brought on screen; absent, it is only reported.
  *
  * Only the caller that STARTS a resume gets its callbacks run; one that joins an
- * in-flight resume shares the result without re-running side effects. So a
- * human clicking a session an agent is already resuming would get the agent's
- * placement — which is why the human surface also reveals the pane after
- * awaiting, rather than relying on these callbacks alone.
+ * in-flight resume shares the result without re-running side effects — except
+ * a refusal by the starter's own `validateSpawn`, after which the joiner tries
+ * once under its own checks. So a human clicking a session an agent is already
+ * resuming would get the agent's placement — which is why foreground callers
+ * also bring the pane forward after awaiting ({@link bringResumedPaneForward}),
+ * rather than relying on these callbacks alone.
  *
  * @throws when `validateSpawn` refuses, when the record has no buildable resume
  *   command ({@link RESUME_UNAVAILABLE_MESSAGE}), or when the panel is gone by
  *   the time `addPanel` settles. Never resolves with a fabricated id.
  */
-export async function resumeSessionIntoPanel(
+export function resumeSessionIntoPanel(
   session: AgentSessionRecord,
   target: { cwd: string; worktreeId?: string },
-  options: {
-    onBeforeSpawn?: () => void;
-    showWorktree?: (worktreeId: string) => void;
-    validateSpawn?: () => void;
-  } = {}
+  options: ResumeSessionOptions = {}
+): Promise<ResumeSessionOutcome> {
+  return resumeSession(session, target, options, false);
+}
+
+interface ResumeSessionOptions {
+  onBeforeSpawn?: () => void;
+  showWorktree?: (worktreeId: string) => void;
+  validateSpawn?: () => void;
+}
+
+async function resumeSession(
+  session: AgentSessionRecord,
+  target: { cwd: string; worktreeId?: string },
+  options: ResumeSessionOptions,
+  retried: boolean
 ): Promise<ResumeSessionOutcome> {
   const answerFromLivePane = (): ResumeSessionOutcome | null => {
     const existingId = findLiveResumePanelId(session.sessionId);
@@ -284,7 +325,18 @@ export async function resumeSessionIntoPanel(
 
   const inFlightKey = session.sessionId;
   const pending = inFlightResumes.get(inFlightKey);
-  if (pending) return pending;
+  if (pending) {
+    try {
+      return await pending;
+    } catch (error) {
+      // Refused by the starter's own checks, which aren't this caller's: try
+      // under its own, once, after that launch has gone.
+      if (retried || typeof error !== "object" || error === null) throw error;
+      if (!callerRefusals.has(error)) throw error;
+      if (inFlightResumes.get(inFlightKey) === pending) inFlightResumes.delete(inFlightKey);
+      return resumeSession(session, target, options, true);
+    }
+  }
 
   // Register BEFORE running any of the work. An async function body runs
   // synchronously up to its first await, so building the promise first would
@@ -297,7 +349,12 @@ export async function resumeSessionIntoPanel(
     begin = resolve;
   });
   const run = gate.then(async (): Promise<ResumeSessionOutcome> => {
-    options.validateSpawn?.();
+    try {
+      options.validateSpawn?.();
+    } catch (error) {
+      if (typeof error === "object" && error !== null) callerRefusals.add(error);
+      throw error;
+    }
     options.onBeforeSpawn?.();
     const panelOptions = buildResumePanelOptions(
       session,
@@ -316,7 +373,14 @@ export async function resumeSessionIntoPanel(
     if (!terminalId) {
       throw new Error("Resume started but its terminal was closed before it finished opening.");
     }
-    return { terminalId, outcome: "created", worktreeId: target.worktreeId ?? null };
+    // Where the pane is filed now: a move while `addPanel` awaited its PTY
+    // prewarm has already refiled it.
+    const created = usePanelStore.getState().panelsById[terminalId];
+    return {
+      terminalId,
+      outcome: "created",
+      worktreeId: created ? (created.worktreeId ?? null) : (target.worktreeId ?? null),
+    };
   });
 
   inFlightResumes.set(inFlightKey, run);

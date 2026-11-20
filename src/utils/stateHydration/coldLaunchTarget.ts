@@ -18,10 +18,13 @@
  *   the list does have, or restore already relaunched it away from the folder
  *   its conversation began in. Absence is not proof of deletion, which is
  *   exactly why the answer is to ask rather than to fall back.
- * - `unconfirmed`: the list isn't ready (#11234) and the pane runs outside the
- *   worktree it is filed under, which only the list can tell apart from a
- *   move. Starting it in its saved folder would be guessing against the filing
- *   (#18009): look again, and ask if the list still doesn't come.
+ * - `unconfirmed`: the list isn't ready (#11234) and only it can tell where the
+ *   pane belongs (#18009): look again. A pane running outside the worktree it
+ *   is filed under is held if the list still doesn't come (`holdIfUnknown`),
+ *   since starting it in its saved folder would be guessing against the
+ *   filing. One in a subdirectory of its filing is most likely just that, but
+ *   a nested worktree moved back to its parent looks the same without a list,
+ *   so it waits for the second look too, and starts where it was without one.
  *
  * `worktreeId` is the list's own spelling of the filing whenever one matched,
  * so a filing saved under another spelling of the same path isn't mistaken for
@@ -31,7 +34,7 @@ export type ColdLaunchTarget =
   | { kind: "unchanged"; worktreeId?: string }
   | { kind: "moved"; cwd: string; worktreeId: string }
   | { kind: "destination-unavailable" }
-  | { kind: "unconfirmed" };
+  | { kind: "unconfirmed"; holdIfUnknown: boolean };
 
 const UNCHANGED: ColdLaunchTarget = { kind: "unchanged" };
 
@@ -105,7 +108,8 @@ export function resolveColdLaunchTarget(
   const { cwd, worktreeId } = saved;
   if (!cwd || !worktreeId) return UNCHANGED;
   if (!worktrees || worktrees.length === 0) {
-    return isWithinDirectory(cwd, worktreeId) ? UNCHANGED : { kind: "unconfirmed" };
+    if (isSameDirectory(cwd, worktreeId)) return UNCHANGED;
+    return { kind: "unconfirmed", holdIfUnknown: !isWithinDirectory(cwd, worktreeId) };
   }
 
   const launchRootId = findLaunchRoot(cwd, worktrees);
@@ -134,18 +138,46 @@ export function isSameDirectory(a: string, b: string): boolean {
 export const WORKTREE_REREAD_DELAYS_MS: readonly number[] = [250, 500, 1000];
 
 /**
+ * The most the second look may take altogether, reads included: a read can
+ * wait seconds on a host that isn't ready, and the panes waiting on it hold
+ * their restore batch until it answers.
+ */
+export const WORKTREE_REREAD_BUDGET_MS = 3000;
+
+/**
  * Read the worktree list again until one comes back, for panes whose filing
- * only a list can confirm. Bounded, so a list that never comes leaves those
- * panes held instead of stalling restore: `null` when none came.
+ * only a list can confirm. Bounded in attempts and in time, so a list that
+ * never comes settles those panes instead of stalling restore: `null` when
+ * none came.
  */
 export async function rereadWorktreeList<T>(
   read: () => Promise<{ worktrees: readonly T[] } | null | undefined>,
-  delaysMs: readonly number[] = WORKTREE_REREAD_DELAYS_MS
+  delaysMs: readonly number[] = WORKTREE_REREAD_DELAYS_MS,
+  budgetMs: number = WORKTREE_REREAD_BUDGET_MS
 ): Promise<T[] | null> {
+  const deadline = Date.now() + budgetMs;
   for (const ms of delaysMs) {
+    if (Date.now() + ms >= deadline) break;
     await new Promise<void>((resolve) => setTimeout(resolve, ms));
-    const status = await read().catch(() => null);
+    const status = await settleBy(read(), deadline);
     if (status && status.worktrees.length > 0) return [...status.worktrees];
   }
   return null;
+}
+
+/** `pending`'s value, or null once it rejects or `deadline` passes first. */
+function settleBy<T>(pending: Promise<T>, deadline: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+    pending.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      }
+    );
+  });
 }

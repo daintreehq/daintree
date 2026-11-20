@@ -102,21 +102,42 @@ describe("resolveColdLaunchTarget (#12434)", () => {
     // Only the list can tell a move from a directory the user chose, so this is
     // neither relocated nor started where it was saved.
     const saved = { cwd: "/repo", worktreeId: "/worktrees/task-a" };
-    expect(resolveColdLaunchTarget(saved, [])).toEqual({ kind: "unconfirmed" });
-    expect(resolveColdLaunchTarget(saved, null)).toEqual({ kind: "unconfirmed" });
-    expect(resolveColdLaunchTarget(saved, undefined)).toEqual({ kind: "unconfirmed" });
-  });
-
-  it("needs no list for a pane that runs inside the worktree it is filed under (#11234)", () => {
-    for (const cwd of ["/worktrees/task-a", "/worktrees/task-a/", "/worktrees/task-a/web"]) {
-      expect(resolveColdLaunchTarget({ cwd, worktreeId: "/worktrees/task-a" }, [])).toEqual({
-        kind: "unchanged",
+    for (const unknown of [[], null, undefined]) {
+      expect(resolveColdLaunchTarget(saved, unknown)).toEqual({
+        kind: "unconfirmed",
+        holdIfUnknown: true,
       });
     }
     // A sibling sharing the name's prefix is another directory.
     expect(
       resolveColdLaunchTarget({ cwd: "/worktrees/task-ab", worktreeId: "/worktrees/task-a" }, null)
-    ).toEqual({ kind: "unconfirmed" });
+    ).toEqual({ kind: "unconfirmed", holdIfUnknown: true });
+  });
+
+  it("looks again for a subdirectory of the filing, but never holds it for want of a list", () => {
+    // It may be a nested worktree the pane was moved out of, which only the list shows.
+    for (const unknown of [[], null, undefined]) {
+      expect(
+        resolveColdLaunchTarget({ cwd: "/repo/.worktrees/task-c", worktreeId: "/repo" }, unknown)
+      ).toEqual({ kind: "unconfirmed", holdIfUnknown: false });
+    }
+    // With the list, the nested worktree is the launch root and the move shows.
+    expect(
+      resolveColdLaunchTarget({ cwd: "/repo/.worktrees/task-c", worktreeId: "/repo" }, [
+        { id: "/repo", path: "/repo" },
+        { id: "/repo/.worktrees/task-c", path: "/repo/.worktrees/task-c" },
+      ])
+    ).toEqual({ kind: "moved", cwd: "/repo", worktreeId: "/repo" });
+  });
+
+  it("needs no list for a pane that runs at the root it is filed under (#11234)", () => {
+    for (const unknown of [[], null, undefined]) {
+      for (const cwd of ["/worktrees/task-a", "/worktrees/task-a/"]) {
+        expect(resolveColdLaunchTarget({ cwd, worktreeId: "/worktrees/task-a" }, unknown)).toEqual({
+          kind: "unchanged",
+        });
+      }
+    }
   });
 
   it("leaves a pane with no filing or no directory alone", () => {
@@ -197,6 +218,19 @@ describe("rereadWorktreeList (#18009)", () => {
     await vi.advanceTimersByTimeAsync(200);
     await expect(result).resolves.toEqual([{ id: "/repo" }]);
     expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops waiting on a read that outlasts the budget", async () => {
+    vi.useFakeTimers();
+    // A host that never answers.
+    const read = vi.fn(() => new Promise<{ worktrees: { id: string }[] }>(() => {}));
+    const result = rereadWorktreeList(read, [100, 200, 400], 1000);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("gives up with null once its attempts are spent, failed reads included", async () => {

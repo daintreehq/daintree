@@ -3,7 +3,7 @@
 // (#14268). Nothing here may import agentActions.ts at runtime.
 import type { ActionCallbacks, LaunchDecline } from "../actionTypes";
 import { requireExplicitWorktreeForAgentDispatch, requireWorktreeId } from "./locationArgs";
-import { resumeSessionIntoPanel } from "@/services/agentResume";
+import { bringResumedPaneForward, resumeSessionIntoPanel } from "@/services/agentResume";
 import { resolveResumeLaunchTarget } from "@/utils/resumeLaunch";
 import { inferWorktreeIdFromCwd } from "@/utils/worktreePaths";
 import { isForegroundDispatch } from "./dispatchSource";
@@ -895,6 +895,7 @@ export const agentActionRuns = {
           }
         }
       : undefined;
+    const selectedAtStart = useWorktreeSelectionStore.getState().activeWorktreeId;
     const resumed = await resumeSessionIntoPanel(record, target, {
       validateSpawn: () => {
         if (spawnRefusal !== null) throw new Error(spawnRefusal);
@@ -902,6 +903,12 @@ export const agentActionRuns = {
       onBeforeSpawn: showWorktree && (() => showWorktree(target.worktreeId)),
       showWorktree,
     });
+    // A foreground caller that joined someone else's launch never ran its own
+    // callbacks; a worktree chosen meanwhile is a newer choice, and stands.
+    const selectedNow = useWorktreeSelectionStore.getState().activeWorktreeId;
+    if (showWorktree && (selectedNow === selectedAtStart || selectedNow === resumed.worktreeId)) {
+      bringResumedPaneForward(resumed, showWorktree);
+    }
 
     return {
       terminalId: resumed.terminalId,

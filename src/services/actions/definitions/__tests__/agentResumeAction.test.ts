@@ -43,7 +43,11 @@ vi.mock("@/store/projectStore", () => ({ useProjectStore: { getState: vi.fn(() =
 vi.mock("@/store/projectStatsStore", () => ({ useProjectStatsStore: { getState: vi.fn() } }));
 vi.mock("@/config/agents", () => agentRegistryMock);
 vi.mock("@/store/storeAccessors", () => worktreeIndexMock);
-vi.mock("@/services/agentResume", () => ({ resumeSessionIntoPanel: resumeMock }));
+const bringForwardMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/agentResume", () => ({
+  resumeSessionIntoPanel: resumeMock,
+  bringResumedPaneForward: bringForwardMock,
+}));
 vi.mock("@/clients/userAgentRegistryClient", () => ({
   userAgentRegistryClient: clientsMock.userAgentRegistryClient,
 }));
@@ -270,9 +274,12 @@ describe("agentSessionHistory.resume — launch target", () => {
   it("does not move the user's view on an agent dispatch", async () => {
     await run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx);
     // The hooks are what would switch worktrees, before a spawn or to a live
-    // pane filed elsewhere; agents pass neither.
+    // pane filed elsewhere; agents pass neither, and nothing is brought forward.
+    expect(resumeMock).toHaveBeenCalledTimes(1);
     expect(resumeMock.mock.calls[0]?.[2]?.onBeforeSpawn).toBeUndefined();
     expect(resumeMock.mock.calls[0]?.[2]?.showWorktree).toBeUndefined();
+    expect(bringForwardMock).not.toHaveBeenCalled();
+    expect(selectWorktreeMock).not.toHaveBeenCalled();
   });
 
   it("does not move the user's view on a plugin dispatch either", async () => {
@@ -292,11 +299,30 @@ describe("agentSessionHistory.resume — launch target", () => {
   });
 
   it("lets a foreground dispatch bring a live pane's own worktree on screen", async () => {
+    resumeMock.mockResolvedValue({
+      terminalId: "term-moved",
+      outcome: "activatedExisting",
+      worktreeId: WT_B,
+    });
     await run({ worktreeId: WT_A, sessionId: "sess-1" }, { ...agentCtx, dispatchSource: "user" });
     const showWorktree = resumeMock.mock.calls[0]?.[2]?.showWorktree as
       ((worktreeId: string) => void) | undefined;
     showWorktree?.(WT_B);
     expect(selectWorktreeMock).toHaveBeenCalledWith(WT_B, { source: "user" });
+    // And again after settling, for a launch this call only joined.
+    expect(bringForwardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalId: "term-moved", worktreeId: WT_B }),
+      showWorktree
+    );
+  });
+
+  it("refuses a record recorded in another worktree with no directory to compare", async () => {
+    // Nothing but the worktree id says where it ran.
+    listMock.mockResolvedValue([record({ worktreeId: WT_A, cwd: undefined })]);
+    await expect(run({ worktreeId: WT_B, sessionId: "sess-1" }, agentCtx)).rejects.toThrow(
+      /different worktree/i
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });
 

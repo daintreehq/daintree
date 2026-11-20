@@ -46,8 +46,10 @@ vi.mock("@/services/terminal/crossWorktreeMove", () => ({
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStoreOrNull: getCurrentViewStoreOrNullMock,
 }));
+const bringResumedPaneForwardMock = vi.hoisted(() => vi.fn());
 vi.mock("@/services/agentResume", () => ({
   resumeSessionIntoPanel: resumeSessionIntoPanelMock,
+  bringResumedPaneForward: bringResumedPaneForwardMock,
   RESUME_UNAVAILABLE_MESSAGE: RESUME_UNAVAILABLE,
 }));
 vi.mock("@/store/worktreeStore", () => ({
@@ -576,6 +578,7 @@ describe("terminal.reopenLast journal fallback", () => {
     expect(listAgentSessionsMock).toHaveBeenCalledWith("wt-1");
     // The shared resume hands back a live pane already carrying the session,
     // wherever it is filed (#18009), instead of a second agent beside it.
+    expect(resumeSessionIntoPanelMock).toHaveBeenCalledTimes(1);
     expect(resumeSessionIntoPanelMock).toHaveBeenCalledWith(
       session,
       { cwd: "/cwd", worktreeId: "wt-1" },
@@ -586,6 +589,8 @@ describe("terminal.reopenLast journal fallback", () => {
   it("takes a person to the worktree a live pane of the session is filed under", async () => {
     setPanelState({ panels: [], restoreLastTrashed: vi.fn().mockReturnValue(false) });
     listAgentSessionsMock.mockResolvedValue([session]);
+    const moved = { terminalId: "p-moved", outcome: "activatedExisting", worktreeId: "wt-2" };
+    resumeSessionIntoPanelMock.mockResolvedValue(moved);
     const run = setupActions();
 
     await run("terminal.reopenLast", undefined, { dispatchSource: "keybinding" });
@@ -596,6 +601,8 @@ describe("terminal.reopenLast journal fallback", () => {
     expect(options.showWorktree).toBeTypeOf("function");
     options.showWorktree?.("wt-2");
     expect(selectWorktreeMock).toHaveBeenCalledWith("wt-2", { source: "user" });
+    // Brought forward after settling too, for a launch this press only joined.
+    expect(bringResumedPaneForwardMock).toHaveBeenCalledWith(moved, options.showWorktree);
   });
 
   it("never moves the view for a headless dispatch", async () => {
@@ -607,6 +614,8 @@ describe("terminal.reopenLast journal fallback", () => {
 
     const options = resumeSessionIntoPanelMock.mock.calls[0]?.[2] as { showWorktree?: unknown };
     expect(options.showWorktree).toBeUndefined();
+    expect(bringResumedPaneForwardMock).not.toHaveBeenCalled();
+    expect(selectWorktreeMock).not.toHaveBeenCalled();
   });
 
   it("no-ops when there is no active worktree (never picks a global record)", async () => {
