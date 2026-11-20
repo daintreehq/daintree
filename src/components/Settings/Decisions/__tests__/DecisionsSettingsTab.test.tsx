@@ -636,13 +636,27 @@ describe("DecisionsSettingsTab", () => {
     remote.hostName = "build-box";
     getStatus.mockResolvedValue({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN });
     checkRelay.mockReturnValue(new Promise(() => {}));
+    // This computer's own default, which the Host's seven days mustn't replace.
+    window.electron.decisions.getPolicy = async () => ({
+      gates: [],
+      defaultQuestionExpiryMs: 3 * 24 * 60 * 60_000,
+      maxQuestionExpiryMs: 30 * 24 * 60 * 60_000,
+      askHumanAgents: [],
+      revision: 0,
+    });
     await renderTab();
+    expect(document.body.textContent?.split("These settings are saved on")).toHaveLength(2);
+    expect((await screen.findByRole("combobox", { name: "Default expiry" })).textContent).toBe(
+      "3 days"
+    );
 
     const notes = screen.getAllByTestId("decisions-remote-window-note");
     expect(notes).toHaveLength(1);
     const note = notes[0]!.textContent ?? "";
     expect(note).toMatch(/^These settings are saved on this (Mac|PC|machine)\./);
-    expect(note).toContain("On build-box, once it's enrolled, every agent that supports ask_human");
+    expect(note).toMatch(
+      /On build-box, once this (Mac|PC|machine) enrolls it, every agent that supports ask_human gets it,/
+    );
     expect(note).toContain("a question waits 7 days unless its agent sets a time");
     expect(note).toContain("from a local window");
     // The note is why Agents is missing here, and Questions' default stays this computer's.

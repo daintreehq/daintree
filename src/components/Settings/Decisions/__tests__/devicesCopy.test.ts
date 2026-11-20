@@ -16,6 +16,8 @@ describe("revoke and rotate copy (#16010)", () => {
     ];
     for (const message of messages) expect(message).not.toMatch(/seal/i);
     expect(messages[0]).toContain("encrypted for each device that remains");
+    expect(messages[1]).toContain("encrypted for each paired device");
+    expect(messages[2]).toContain("wasn't given a new key and nothing was changed");
   });
 
   it("finishes a revocation the relay took, or one for a device it no longer lists", () => {

@@ -328,6 +328,10 @@ describe("DecisionsAgentsSection (#16012)", () => {
       expect(notice()).toBeNull();
       expect(namesUnder("Supported")).toEqual(namesOf(["claude", "codex"]));
       expect(container.textContent).not.toMatch(/once a relay is connected/);
+      expect(container.textContent).toContain(
+        "Agents you switch on can ask you with ask_human from their next launch"
+      );
+      expect(container.textContent).not.toMatch(/off until/);
     }
   });
 

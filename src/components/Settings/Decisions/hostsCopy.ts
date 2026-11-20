@@ -15,12 +15,13 @@ export const AUTO_ENROLL_SUBTITLE =
 
 /**
  * A remote window's one note on whose settings these are (#18066): every
- * Decisions setting is this computer's, while an enrolled Host gives
- * `ask_human` to every supported agent launched there, whatever this
- * computer's Agents switches say, and asks under its own default expiry.
+ * Decisions setting is this computer's, while a Host this computer enrolled
+ * gives `ask_human` to every supported agent launched there, whatever this
+ * computer's Agents switches say, and asks under its own default expiry. A
+ * Host with a Decisions setup of its own runs under that instead.
  */
 export function remoteWindowText(hostName: string, device: string): string {
-  return `These settings are saved on ${device}. On ${hostName}, once it's enrolled, every agent that supports ask_human gets it, and a question waits ${questionWaitText(HOST_DEFAULT_QUESTION_EXPIRY_MS)} unless its agent sets a time. Choose which agents on ${device} can ask from a local window.`;
+  return `These settings are saved on ${device}. On ${hostName}, once ${device} enrolls it, every agent that supports ask_human gets it, and a question waits ${questionWaitText(HOST_DEFAULT_QUESTION_EXPIRY_MS)} unless its agent sets a time. Choose which agents on ${device} can ask from a local window.`;
 }
 
 /** A Remote Host device the relay lists that no Host this computer knows claims (#16222). */

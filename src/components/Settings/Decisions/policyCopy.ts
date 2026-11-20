@@ -47,7 +47,7 @@ export function questionExpiryText(
   policy: Pick<DecisionsPolicy, "maxQuestionExpiryMs"> | null
 ): string {
   const max = policy?.maxQuestionExpiryMs ?? null;
-  const limit = max === null ? "" : ` An agent can ask for up to ${questionWaitText(max)}.`;
+  const limit = max === null ? "" : ` An agent's own time is capped at ${questionWaitText(max)}.`;
   return `Applies when an agent on this computer sets no time.${limit} An expired question authorises nothing.`;
 }
 

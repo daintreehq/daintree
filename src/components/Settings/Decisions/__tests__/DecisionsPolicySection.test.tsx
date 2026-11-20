@@ -181,23 +181,23 @@ describe("Decisions policy and questions sections", () => {
     getPolicy.mockReturnValue(read.promise);
     await renderSections();
     expect(expiryRow()).toContain("authorises nothing");
-    expect(expiryRow()).not.toContain("up to");
+    expect(expiryRow()).not.toContain("capped");
 
     await act(async () => read.resolve(policy()));
-    expect(expiryRow()).toContain("up to 20 days");
+    expect(expiryRow()).toContain("capped at 20 days");
   });
 
   it("follows another window's change when main pushes, and never goes back to an older read", async () => {
-    getPolicy.mockResolvedValueOnce(policy({ revision: 2 }));
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 3 * DAY, revision: 2 }));
     await renderSections();
-    expect(expirySelect().textContent).toBe("2 days");
+    expect(expirySelect().textContent).toBe("3 days");
 
     getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 60 * 60_000, revision: 3 }));
     await statusPushed();
     expect(expirySelect().textContent).toBe("1 hour");
 
     // A push whose read answers with an older revision changes nothing.
-    getPolicy.mockResolvedValueOnce(policy({ revision: 1 }));
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 3 * DAY, revision: 1 }));
     await statusPushed();
     expect(expirySelect().textContent).toBe("1 hour");
   });
@@ -217,7 +217,7 @@ describe("Decisions policy and questions sections", () => {
     expect(expirySelect().textContent).toBe("Never");
     expect(expirySelect().disabled).toBe(true);
     // The description stays on what main holds until it has saved the change.
-    expect(expiryRow()).toContain("up to 30 days");
+    expect(expiryRow()).toContain("capped at 30 days");
 
     await act(async () =>
       save.resolve(
@@ -227,7 +227,7 @@ describe("Decisions policy and questions sections", () => {
     expect(expirySelect().textContent).toBe("Never");
     expect(expirySelect().disabled).toBe(false);
     expect(expiryRow()).toContain("authorises nothing");
-    expect(expiryRow()).not.toContain("up to");
+    expect(expiryRow()).not.toContain("capped");
     expect(resetExpiry()).not.toBeNull();
   });
 
@@ -295,7 +295,7 @@ describe("Decisions policy and questions sections", () => {
     expect(screen.queryByText("Couldn't read who may answer")).toBeNull();
     expect(screen.queryByText("Couldn't read how long questions wait")).toBeNull();
     expect(screen.getByRole("group", { name: "Workflow gates" })).toBeTruthy();
-    expect(expiryRow()).toContain("up to 20 days");
+    expect(expiryRow()).toContain("capped at 20 days");
   });
 });
 
@@ -562,7 +562,7 @@ describe("policy copy", () => {
 
   it("says where the default applies and how long an agent can ask for, never the default the select shows (#18066)", () => {
     expect(questionExpiryText({ maxQuestionExpiryMs: 20 * DAY })).toBe(
-      "Applies when an agent on this computer sets no time. An agent can ask for up to 20 days. An expired question authorises nothing."
+      "Applies when an agent on this computer sets no time. An agent's own time is capped at 20 days. An expired question authorises nothing."
     );
     // Under Never, or before main has said, there is no limit to name.
     for (const read of [{ maxQuestionExpiryMs: null }, null]) {
