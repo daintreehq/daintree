@@ -145,3 +145,20 @@ export function unreviewedAttachments(
 ): DecisionQuestionAttachment[] {
   return attachments.filter((attachment) => !wasReviewed(attachment, reviewed));
 }
+
+/**
+ * The images this view couldn't show, as they stand: each failed load, by the
+ * digest the question lists it under. A retry takes one off until it fails again.
+ */
+export function unshownImages(
+  attachments: readonly DecisionQuestionAttachment[],
+  loads: Readonly<Record<string, QuestionImageLoad>>
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    attachments.flatMap((attachment) =>
+      loads[attachment.attachmentId]?.status === "failed"
+        ? [[attachment.attachmentId, attachment.sha256]]
+        : []
+    )
+  );
+}
