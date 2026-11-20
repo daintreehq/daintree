@@ -185,4 +185,45 @@ describe("agent incarnation across a same-pty relaunch", () => {
 
     expect(observed).toEqual([{ launchGeneration: 4, agentIncarnation: 1 }]);
   });
+
+  it("leaves a launched agent's first prompt to be seen, and awaits each new run's (#18014)", () => {
+    const terminal = { ...terminalInfo(), promptUnseen: true as const };
+    const h = host(terminal);
+    const codexRunning: DetectionResult = {
+      ...claudeRunning,
+      agentType: "codex",
+      processIconId: "codex",
+      processName: "codex",
+    };
+
+    // Detection confirming the launch hint keeps whatever its run has shown.
+    delete terminal.promptUnseen;
+    handleAgentDetection(h, claudeRunning, SPAWNED_AT);
+    expect(terminal.promptUnseen).toBeUndefined();
+
+    // Another agent takes the pane: what was seen at the old prompt was the old agent's.
+    handleAgentDetection(h, codexRunning, SPAWNED_AT);
+    expect(terminal.promptUnseen).toBe(true);
+
+    // Quit and relaunched in the same shell: a new run.
+    delete terminal.promptUnseen;
+    handleAgentDetection(h, backAtShell, SPAWNED_AT);
+    handleAgentDetection(h, claudeRunning, SPAWNED_AT);
+    expect(terminal.promptUnseen).toBe(true);
+  });
+
+  it("awaits the first prompt of an agent started by hand in a plain shell (#18014)", () => {
+    const terminal = {
+      ...terminalInfo(),
+      launchAgentId: undefined,
+      agentState: undefined,
+      analysisEnabled: false,
+    } as unknown as TerminalInfo;
+    const h = { ...host(terminal), hasActivityMonitor: false };
+
+    handleAgentDetection(h, claudeRunning, SPAWNED_AT);
+
+    expect(terminal.agentState).toBe("idle");
+    expect(terminal.promptUnseen).toBe(true);
+  });
 });

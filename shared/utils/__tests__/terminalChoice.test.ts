@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  endsOnDrawnChoiceDialog,
   endsOnFooteredChoice,
   listChoices,
   parseChoiceList,
@@ -550,5 +551,89 @@ describe("endsOnFooteredChoice (#16209)", () => {
         FOOTER
       )
     ).toBe(false);
+  });
+});
+
+describe("endsOnDrawnChoiceDialog (#18014)", () => {
+  /** A fresh pane, `rows` tall, with `drawn` at its top: the rest is blank. */
+  const pane = (drawn: string[], rows = 40) => [
+    ...drawn,
+    ...Array.from({ length: rows - drawn.length }, () => ""),
+  ];
+  const TRUST = [
+    "Accessing workspace:",
+    "",
+    " /repo/wt-1",
+    "",
+    " Quick safety check: Is this a project you created or one you trust?",
+    "",
+    " ❯ 1. Yes, I trust this folder",
+    "   2. No, exit",
+    "",
+    " Enter to confirm · Esc to cancel",
+  ];
+
+  it("reads Claude's trust prompt at the top of a fresh pane as a dialog, numbered or not", () => {
+    expect(endsOnDrawnChoiceDialog(pane(TRUST))).toBe(true);
+    const unnumbered = [
+      " Claude Code'll be able to read, edit, and execute files here.",
+      "",
+      " ❯ No, exit",
+      "   Yes, I trust this folder",
+      "",
+      " Enter to confirm · Esc to cancel",
+    ];
+    expect(endsOnDrawnChoiceDialog(pane(unnumbered))).toBe(true);
+  });
+
+  it("reads another startup selector as a dialog, by its structure alone", () => {
+    const theme = [
+      " Let's get started.",
+      "",
+      " Choose the text style that looks best with your terminal",
+      "",
+      " ❯ 1. Dark mode ✔",
+      "   2. Light mode",
+      "   3. Dark mode (colorblind-friendly)",
+    ];
+    expect(endsOnDrawnChoiceDialog(pane(theme))).toBe(true);
+    // Codex names its keys without a verb the unnumbered form needs.
+    expect(
+      endsOnDrawnChoiceDialog(
+        pane(["› 1. Trust and continue", "  2. Quit", "", "  enter continue · esc quit"])
+      )
+    ).toBe(true);
+    const footered = ["❯ Keep auto (1m tokens)", "  Autocompact at ‹ 400k › tokens", "↑/↓ choose"];
+    expect(endsOnDrawnChoiceDialog(pane(footered), [/^\s*↑\/↓\s/])).toBe(true);
+  });
+
+  it("counts an option that names a key as an option, not the dialog's hint", () => {
+    const approval = [
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No, and tell Claude what to do differently (esc)",
+    ];
+    expect(endsOnDrawnChoiceDialog(pane(approval))).toBe(true);
+  });
+
+  it("never counts a dialog left above later output", () => {
+    // The fake Claude prints its ready line under the trust prompt it was answered at.
+    expect(endsOnDrawnChoiceDialog(pane([...TRUST, "FAKE_CLAUDE_READY"]))).toBe(false);
+    expect(
+      endsOnDrawnChoiceDialog(
+        pane([" ❯ No, exit", "   Yes, I trust this folder", "", " Esc to cancel", "Resuming…"])
+      )
+    ).toBe(false);
+  });
+
+  it("never counts an input box, an unnamed hint or an empty pane", () => {
+    const composer = ["─".repeat(40), "❯ ", "─".repeat(40), "  ? for shortcuts"];
+    expect(endsOnDrawnChoiceDialog(pane(composer))).toBe(false);
+    expect(endsOnDrawnChoiceDialog(pane(["› ", "", "  100% context left"]))).toBe(false);
+    // An unnumbered highlight needs a hint naming what its keys do.
+    expect(endsOnDrawnChoiceDialog(pane(["> quoted line", "  more prose", "", " esc"]))).toBe(
+      false
+    );
+    expect(endsOnDrawnChoiceDialog(pane([]))).toBe(false);
   });
 });
