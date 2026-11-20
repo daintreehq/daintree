@@ -353,6 +353,9 @@ function menuRows(): string[] {
 }
 
 describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
+  /** Past the list's 300 ms debounce, so a read it would make has started. */
+  const PAST_REFRESH_DEBOUNCE_MS = 400;
+
   /** Listeners on the question list every window gets, by the event's name. */
   let events: Map<string, Set<(payload: unknown) => void>>;
   let revision = 0;
@@ -465,7 +468,7 @@ describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
     await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
     // A list change that leaves what needs a person the same reads nothing more.
     questionsChanged("qid-3", "qid-4");
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await new Promise((resolve) => setTimeout(resolve, PAST_REFRESH_DEBOUNCE_MS));
     expect(listAttention).toHaveBeenCalledTimes(2);
 
     // Handled in another window: main's list no longer holds it, and only the question list says so here.

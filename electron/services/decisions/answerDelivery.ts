@@ -1172,13 +1172,11 @@ export class AnswerDelivery {
   }
 
   private otherHostOf(hostId: string): { hostId: string; name: string | null } {
-    let name: string | null = null;
     try {
-      name = this.o.deps.labels?.hostName?.(hostId)?.trim() || null;
+      return { hostId, name: this.o.deps.labels?.hostName?.(hostId)?.trim() || null };
     } catch {
-      name = null;
+      return { hostId, name: null };
     }
-    return { hostId, name };
   }
 
   private ownHostId(origin: QuestionOrigin): boolean {
