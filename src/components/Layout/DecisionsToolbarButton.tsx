@@ -5,7 +5,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
-import { useDecisionsStoppedCount, useDecisionsWaitingCount } from "@/hooks/useDecisionsWaitingCount";
+import {
+  useDecisionsStoppedCount,
+  useDecisionsWaitingCount,
+} from "@/hooks/useDecisionsWaitingCount";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { agentStateDotColor } from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";

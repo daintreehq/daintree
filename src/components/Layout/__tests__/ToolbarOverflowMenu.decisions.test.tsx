@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
  * The Decisions inbox button folded into `…` (#17236) keeps what it says on
- * the strip: the questions waiting on the person, in the trigger's name and on
- * its row, standing down while the inbox is open, and its row opens the inbox.
+ * the strip: the questions waiting on the person and the deliveries stopped
+ * (#18045), in the trigger's name and on its row, standing down while the
+ * inbox is open, and its row opens the inbox.
  */
 import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,16 +19,19 @@ vi.mock("../LinksLauncher", () => ({ LinksLauncherOverflowItems: () => null }));
 const { OverflowMenu } = await import("../ToolbarOverflowMenu");
 const { useDecisionsInboxStore } = await import("@/store/decisionsInboxStore");
 
-function renderMenu(decisionsWaitingCount: number, openInbox = vi.fn()) {
+function renderMenu(decisionsWaitingCount: number, openInbox = vi.fn(), decisionsStoppedCount = 0) {
   const utils = render(
     <OverflowMenu
       overflowIds={["decisions-inbox"]}
       side="right"
-      severity={decisionsWaitingCount > 0 ? "waiting" : null}
+      severity={
+        decisionsWaitingCount > 0 ? "waiting" : decisionsStoppedCount > 0 ? "warning" : null
+      }
       errorCount={0}
       notificationUnreadCount={0}
       canopyUrgentCount={0}
       decisionsWaitingCount={decisionsWaitingCount}
+      decisionsStoppedCount={decisionsStoppedCount}
       agentObservations={[]}
       agentAttentionStates={new Map()}
       canCopyTree={false}
@@ -91,6 +95,46 @@ describe("the Decisions inbox button in the overflow menu", () => {
     const menu = await openMenu(utils);
     const row = within(menu).getByRole("menuitem", { name: /^Decisions inbox/ });
     expect(row.textContent).toBe("Decisions inbox");
+  });
+
+  it("warns of a stopped delivery with no count of its own (#18045)", async () => {
+    const utils = renderMenu(0, vi.fn(), 1);
+    expect(utils.trigger.getAttribute("aria-label")).toBe(
+      "More toolbar items — 1 hidden, 1 delivery stopped"
+    );
+    const menu = await openMenu(utils);
+    const row = within(menu).getByRole("menuitem", {
+      name: /^Decisions inbox\s*— 1 delivery stopped$/,
+    });
+    const pips = row.querySelectorAll(".toolbar-menu-pip");
+    expect([...pips].map((pip) => pip.getAttribute("data-badge-color"))).toEqual(["warning"]);
+    // A warning, not another number: nothing trails the label.
+    expect(row.textContent).toBe("Decisions inbox — 1 delivery stopped");
+  });
+
+  it("marks both on the row's glyph when questions wait and a delivery stopped", async () => {
+    const utils = renderMenu(2, vi.fn(), 3);
+    expect(utils.trigger.getAttribute("aria-label")).toBe(
+      "More toolbar items — 1 hidden, 2 questions waiting, 3 deliveries stopped"
+    );
+    const menu = await openMenu(utils);
+    const row = within(menu).getByRole("menuitem", {
+      name: /^Decisions inbox\s*— 2 questions waiting, 3 deliveries stopped$/,
+    });
+    const pips = [...row.querySelectorAll(".toolbar-menu-pip")];
+    expect(pips.map((pip) => pip.getAttribute("data-pip"))).toEqual(["waiting", null]);
+    expect(pips[1]!.getAttribute("data-badge-color")).toBe("warning");
+    // The count is the questions' alone.
+    expect(row.lastElementChild?.textContent).toBe("2");
+  });
+
+  it("stands the warning down while the inbox is open", async () => {
+    useDecisionsInboxStore.setState({ isOpen: true });
+    const utils = renderMenu(0, vi.fn(), 1);
+    expect(utils.trigger.getAttribute("aria-label")).toBe("More toolbar items — 1 hidden");
+    const menu = await openMenu(utils);
+    const row = within(menu).getByRole("menuitem", { name: /^Decisions inbox/ });
+    expect(row.querySelector(".toolbar-menu-pip")).toBeNull();
   });
 
   it("opens the inbox from its row", async () => {

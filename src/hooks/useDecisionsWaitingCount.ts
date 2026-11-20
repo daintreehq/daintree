@@ -8,7 +8,7 @@ import type {
   DecisionQuestionList,
   DecisionQuestionStanding,
 } from "@shared/types/decisionsQuestion";
-import { deliveryNeedsPerson, isWaitingOnPerson } from "@shared/utils/decisionWaiting";
+import { isWaitingOnPerson, stoppedDeliveries } from "@shared/utils/decisionWaiting";
 
 /**
  * How many of this computer's questions wait on the person, and how many
@@ -100,7 +100,7 @@ function recount(): void {
   const now = Date.now();
   set(
     latest.questions.filter((item) => isWaitingOnPerson(item, now)).length,
-    latest.questions.filter((item) => deliveryNeedsPerson(item.standing)).length
+    latest.questions.reduce((sum, item) => sum + stoppedDeliveries(item), 0)
   );
   // Only a deadline passing changes the count: no timer for the minutes ticking down.
   const next = nextAskDeadline(latest.questions, now);

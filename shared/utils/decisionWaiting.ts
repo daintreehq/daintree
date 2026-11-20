@@ -1,5 +1,6 @@
 import type {
   DecisionQuestionInbox,
+  DecisionQuestionStall,
   DecisionQuestionStanding,
 } from "../types/decisionsQuestion.js";
 import { deadlineElapsed } from "./decisionDeadline.js";
@@ -46,6 +47,23 @@ export function isWaitingOnPerson(
  */
 export function deliveryNeedsPerson(standing: DecisionQuestionStanding): boolean {
   return standing.kind === "needs-attention";
+}
+
+/**
+ * How many deliveries stopped on the question: its answer and each of the
+ * person's follow-ups the stall names. At least one while it needs attention,
+ * since a list without the detail (a Remote Host from before it) still holds
+ * a stop.
+ */
+export function stoppedDeliveries(item: {
+  standing: DecisionQuestionStanding;
+  stall?: DecisionQuestionStall | null;
+}): number {
+  if (!deliveryNeedsPerson(item.standing)) return 0;
+  const stall = item.stall ?? null;
+  const named =
+    stall === null ? 0 : (stall.answerRevision === null ? 0 : 1) + stall.followUpIds.length;
+  return Math.max(named, 1);
 }
 
 /**

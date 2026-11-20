@@ -3,7 +3,8 @@
  * The Decisions inbox button (#17236) through the real Toolbar: absent while
  * Decisions is off or not yet known, and while the person has hidden it, and
  * in none of those does it read any question; on, it counts those waiting on
- * the person, in a Remote Host's window too (#18049).
+ * the person, in a Remote Host's window too (#18049), and warns of deliveries
+ * stopped.
  */
 import "../__preview__/toolbarShims";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -228,7 +229,10 @@ describe("Toolbar's Decisions inbox button", () => {
       { kind: "settled", outcome: "answered", handled: false }
     );
     const button = inboxButton()!;
-    expect(button.getAttribute("aria-label")).toBe("Decisions inbox — 3 questions waiting");
+    // The stopped delivery is named apart and never joins the count (#18045).
+    expect(button.getAttribute("aria-label")).toBe(
+      "Decisions inbox — 3 questions waiting, 1 delivery stopped"
+    );
     const badge = button.querySelector(".toolbar-count")!;
     expect(badge.getAttribute("data-visible")).toBe("true");
     expect(badge.textContent).toBe("3");
@@ -246,6 +250,51 @@ describe("Toolbar's Decisions inbox button", () => {
     expect(inboxButton()!.querySelector(".toolbar-count")!.getAttribute("data-visible")).toBe(
       "false"
     );
+  });
+
+  it("warns while a delivery stopped on the person's answer, apart from the count (#18045)", async () => {
+    await mount();
+    await reportStatus("connected");
+    const warning = inboxButton()!.querySelector('[data-testid="decisions-stopped-badge"]')!;
+    expect(warning.getAttribute("data-visible")).toBe("false");
+
+    // Nothing to answer, only a delivery stopped: the warning without a count.
+    await listQuestions(
+      1,
+      { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      { kind: "to-type" }
+    );
+    expect(inboxButton()!.getAttribute("aria-label")).toBe("Decisions inbox — 1 delivery stopped");
+    expect(warning.getAttribute("data-visible")).toBe("true");
+    expect(inboxButton()!.querySelector(".toolbar-count")!.getAttribute("data-visible")).toBe(
+      "false"
+    );
+
+    // Both: the count says the questions, the warning the deliveries, and the name says both.
+    await listQuestions(
+      2,
+      { kind: "waiting", reason: "open" },
+      { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      { kind: "needs-attention", deliveryStatus: "delivery-uncertain" }
+    );
+    expect(inboxButton()!.getAttribute("aria-label")).toBe(
+      "Decisions inbox — 1 question waiting, 2 deliveries stopped"
+    );
+    expect(inboxButton()!.querySelector(".toolbar-count")!.textContent).toBe("1");
+    expect(warning.getAttribute("data-visible")).toBe("true");
+
+    // Open, the inbox shows them itself, and both marks stand down.
+    act(() => useDecisionsInboxStore.setState({ isOpen: true }));
+    try {
+      await settle();
+      expect(warning.getAttribute("data-visible")).toBe("false");
+      expect(inboxButton()!.querySelector(".toolbar-count")!.getAttribute("data-visible")).toBe(
+        "false"
+      );
+    } finally {
+      cleanup();
+      useDecisionsInboxStore.setState({ isOpen: false });
+    }
   });
 
   it("opens the inbox through its action, which the switch the toolbar holds lets run", async () => {

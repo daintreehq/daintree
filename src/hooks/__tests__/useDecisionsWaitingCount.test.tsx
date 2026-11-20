@@ -25,14 +25,25 @@ vi.mock("@/clients/decisionsClient", () => ({
   },
 }));
 
-import { isWaitingOnPerson } from "@shared/utils/decisionWaiting";
+import { deliveryNeedsPerson, isWaitingOnPerson } from "@shared/utils/decisionWaiting";
 import { groupOf } from "@/components/Decisions/decisionsInboxModel";
-import { usePaneClearedQuestions, useDecisionsWaitingCount } from "../useDecisionsWaitingCount";
+import {
+  useDecisionsStoppedCount,
+  useDecisionsWaitingCount,
+  usePaneClearedQuestions,
+} from "../useDecisionsWaitingCount";
 
 const seen: number[] = [];
 
 function Probe({ active }: { active: boolean }) {
   seen.push(useDecisionsWaitingCount(active));
+  return null;
+}
+
+const stoppedSeen: number[] = [];
+
+function StoppedProbe({ active }: { active: boolean }) {
+  stoppedSeen.push(useDecisionsStoppedCount(active));
   return null;
 }
 
@@ -59,6 +70,7 @@ const list = (revision: number, ...standings: DecisionQuestionStanding[]) =>
 
 beforeEach(() => {
   seen.length = 0;
+  stoppedSeen.length = 0;
   watch.onList = null;
   watch.starts = 0;
   watch.stop.mockClear();
@@ -110,6 +122,14 @@ describe("isWaitingOnPerson against the inbox (#18046)", () => {
       { kind: "settled", outcome: "declined" },
     ],
   };
+
+  it("marks exactly the standings the inbox lists under Needs attention as stopped deliveries (#18045)", () => {
+    for (const standing of Object.values(BY_KIND).flat()) {
+      expect(deliveryNeedsPerson(standing), JSON.stringify(standing)).toBe(
+        groupOf(standing) === "attention"
+      );
+    }
+  });
 
   it("counts exactly the standings the inbox lists under Needs you, as main's title and Dock count does", () => {
     for (const standing of Object.values(BY_KIND).flat()) {
@@ -459,5 +479,168 @@ describe("usePaneClearedQuestions (#18053)", () => {
     // The next reader reads afresh rather than a list nobody kept up.
     render(<Chip terminalId="t1" />);
     expect(lastFor("t1")).toBe("");
+  });
+});
+
+describe("useDecisionsStoppedCount (#18045)", () => {
+  const stopped: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "needs-attention",
+  };
+  const uncertain: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "delivery-uncertain",
+  };
+
+  it("reads nothing while inactive", () => {
+    render(<StoppedProbe active={false} />);
+    expect(watch.starts).toBe(0);
+    expect(stoppedSeen.at(-1)).toBe(0);
+  });
+
+  it("counts the deliveries stopped on the person's answers, apart from the questions waiting", () => {
+    render(
+      <>
+        <Probe active />
+        <StoppedProbe active />
+      </>
+    );
+    list(1, { kind: "waiting", reason: "open" }, stopped, uncertain, { kind: "to-type" });
+    expect(seen.at(-1)).toBe(1);
+    expect(stoppedSeen.at(-1)).toBe(2);
+
+    // The person decided what happens to one: it settles and leaves the count.
+    list(2, { kind: "waiting", reason: "open" }, uncertain, {
+      kind: "settled",
+      outcome: "answered",
+      handled: true,
+    });
+    expect(seen.at(-1)).toBe(1);
+    expect(stoppedSeen.at(-1)).toBe(1);
+
+    // Nothing left to answer, the delivery still stopped: it stays.
+    list(3, uncertain);
+    expect(seen.at(-1)).toBe(0);
+    expect(stoppedSeen.at(-1)).toBe(1);
+  });
+
+  it("lets the last stop go while the question to answer stays", () => {
+    render(
+      <>
+        <Probe active />
+        <StoppedProbe active />
+      </>
+    );
+    const ask = question({ kind: "waiting", reason: "open" }, 0);
+    const stop = question(stopped, 1);
+    act(() => watch.onList?.({ revision: 1, questions: [ask, stop] }));
+    expect([seen.at(-1), stoppedSeen.at(-1)]).toEqual([1, 1]);
+    const handled: DecisionQuestionStanding = {
+      kind: "settled",
+      outcome: "answered",
+      handled: true,
+    };
+    act(() => watch.onList?.({ revision: 2, questions: [ask, { ...stop, standing: handled }] }));
+    expect([seen.at(-1), stoppedSeen.at(-1)]).toEqual([1, 0]);
+  });
+
+  it("waits on no deadline for a stopped delivery alone", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse("2026-11-20T14:00:00.000Z"));
+      render(<StoppedProbe active />);
+      act(() =>
+        watch.onList?.({
+          revision: 1,
+          questions: [{ ...question(stopped, 0), expiresAt: "2026-11-20T15:00:00.000Z" }],
+        })
+      );
+      expect(stoppedSeen.at(-1)).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts each delivery the stall names: an answer and the person's follow-ups", () => {
+    render(<StoppedProbe active />);
+    act(() =>
+      watch.onList?.({
+        revision: 1,
+        questions: [
+          {
+            ...question(stopped, 0),
+            stall: { answerRevision: 0, followUpIds: ["f1", "f2"], reason: "pane_gone" },
+          },
+          {
+            ...question(stopped, 1),
+            stall: { answerRevision: null, followUpIds: ["f3"], reason: "pane_gone" },
+          },
+          // A Host's list from before the detail: one stop all the same.
+          {
+            ...question(uncertain, 2),
+            reference: { hostId: "studio", projectId: "p1", terminalId: "t1", questionId: "h1" },
+            remoteHost: { hostId: "studio", name: "Studio", connected: false },
+            stall: null,
+          },
+        ],
+      })
+    );
+    expect(stoppedSeen.at(-1)).toBe(5);
+  });
+
+  it("shares the one list watch with the waiting count", () => {
+    const { unmount } = render(
+      <>
+        <Probe active />
+        <StoppedProbe active />
+      </>
+    );
+    expect(watch.starts).toBe(1);
+    unmount();
+    expect(watch.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets the count when nobody watches, so the next reader starts at zero", () => {
+    const { unmount } = render(<StoppedProbe active />);
+    list(1, stopped);
+    expect(stoppedSeen.at(-1)).toBe(1);
+    unmount();
+
+    render(<StoppedProbe active />);
+    expect(stoppedSeen.at(-1)).toBe(0);
+  });
+
+  it("keeps a stopped delivery counted as its question's deadline passes", () => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.parse("2026-11-20T14:00:00.000Z");
+      vi.setSystemTime(start);
+      render(
+        <>
+          <Probe active />
+          <StoppedProbe active />
+        </>
+      );
+      const soon = new Date(start + 60_000).toISOString();
+      act(() =>
+        watch.onList?.({
+          revision: 1,
+          questions: [
+            { ...question({ kind: "waiting", reason: "open" }, 0), expiresAt: soon },
+            { ...question(stopped, 1), expiresAt: soon },
+          ],
+        })
+      );
+      expect([seen.at(-1), stoppedSeen.at(-1)]).toEqual([1, 1]);
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect([seen.at(-1), stoppedSeen.at(-1)]).toEqual([0, 1]);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 });

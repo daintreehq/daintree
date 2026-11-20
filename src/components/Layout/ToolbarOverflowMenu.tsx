@@ -285,9 +285,7 @@ export function OverflowMenu({
       return { pip: "waiting", spoken: `${canopyUrgentCount} urgent` };
     }
     if (id === "decisions-inbox" && !decisionsInboxOpen) {
-      const spoken = decisionsObservations(decisionsWaitingCount, decisionsStoppedCount).join(
-        ", "
-      );
+      const spoken = decisionsObservations(decisionsWaitingCount, decisionsStoppedCount).join(", ");
       if (decisionsWaitingCount > 0) {
         return { pip: "waiting", spoken, alsoWarning: decisionsStoppedCount > 0 };
       }
