@@ -11,6 +11,7 @@ import {
   closureNoticeText,
   emptyEntryText,
   planHeading,
+  preparationFacts,
   positionText,
   questionStatusText,
   replyModeText,
@@ -164,6 +165,36 @@ describe("decisionQuestionModel", () => {
   it("gives a position only when there is more than one question", () => {
     expect(positionText(0, 1)).toBeNull();
     expect(positionText(1, 3)).toBe("2 of 3");
+  });
+
+  describe("the agent's preparation (#18042)", () => {
+    const OUTCOMES = ["agreed", "split", "not-run"] as const;
+
+    it("names each outcome apart, beside the same count", () => {
+      const facts = OUTCOMES.map((outcome) => preparationFacts({ agentsConsulted: 2, outcome }));
+      expect(new Set(facts.map(([consulted]) => consulted)).size).toBe(1);
+      expect(new Set(facts.map(([, outcome]) => outcome)).size).toBe(OUTCOMES.length);
+    });
+
+    it("counts the other agents the agent says it consulted, one apart from many", () => {
+      for (const count of [2, 5, 64]) {
+        const [consulted] = preparationFacts({ agentsConsulted: count, outcome: "agreed" });
+        expect(consulted).toMatch(new RegExp(`(^|\\D)${count} other agents\\b`));
+      }
+      const [one] = preparationFacts({ agentsConsulted: 1, outcome: "agreed" });
+      expect(one).toMatch(/(^|\D)1 other agent\b/);
+      expect(one).not.toMatch(/agents/);
+    });
+
+    it("says none were consulted without a count, whatever the outcome", () => {
+      for (const outcome of OUTCOMES) {
+        const [consulted, said] = preparationFacts({ agentsConsulted: 0, outcome });
+        expect(consulted).not.toMatch(/\d/);
+        expect(consulted).not.toBe(preparationFacts({ agentsConsulted: 2, outcome })[0]);
+        // The outcome is the agent's, kept beside a count that may disagree with it.
+        expect(said).toBe(preparationFacts({ agentsConsulted: 2, outcome })[1]);
+      }
+    });
   });
 
   describe("rounds and closing notices (#17943)", () => {

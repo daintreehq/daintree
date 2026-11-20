@@ -238,6 +238,7 @@ describe("readQuestionContent", () => {
         closedReason: null,
         replyMode: "blocking",
         plannedFallback: null,
+        preparation: null,
         closureNotice: null,
         deliveryStatus: "terminal-delivered",
         attachments: [
@@ -505,6 +506,68 @@ describe("readQuestionContent", () => {
     const plain = await readQuestionContent(ctx(), blocking, NO_ADVISORY_HOST);
     if (plain.result !== "read") throw new Error(plain.result);
     expect(plain.question).toMatchObject({ replyMode: "blocking", plannedFallback: null });
+  });
+
+  it("carries the agent's account of how it prepared the question (#18042)", async () => {
+    const row = await question({
+      ...CONTENT,
+      preparation: {
+        preference_revision: 4,
+        agents_consulted: 2,
+        outcome: "split",
+        summary: "Codex preferred Redis for the cache; Gemini held out for Postgres.",
+      },
+    });
+
+    const read = await readQuestionContent(ctx(), row, NO_ADVISORY_HOST);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question.preparation).toEqual({
+      agentsConsulted: 2,
+      outcome: "split",
+      summary: "Codex preferred Redis for the cache; Gemini held out for Postgres.",
+    });
+  });
+
+  it("reads no preparation where the agent gave none or the protocol drops it, and no summary where it gave none (#18042)", async () => {
+    const none = await readQuestionContent(ctx(), await question(CONTENT), NO_ADVISORY_HOST);
+    if (none.result !== "read") throw new Error(none.result);
+    expect(none.question.preparation).toBeNull();
+
+    const blank = await readQuestionContent(
+      ctx(),
+      await question({
+        ...CONTENT,
+        preparation: { agents_consulted: 0, outcome: "not-run", summary: "  " },
+      }),
+      NO_ADVISORY_HOST
+    );
+    if (blank.result !== "read") throw new Error(blank.result);
+    expect(blank.question.preparation).toEqual({
+      agentsConsulted: 0,
+      outcome: "not-run",
+      summary: null,
+    });
+
+    const unsummarised = await readQuestionContent(
+      ctx(),
+      await question({ ...CONTENT, preparation: { agents_consulted: 3, outcome: "agreed" } }),
+      NO_ADVISORY_HOST
+    );
+    if (unsummarised.result !== "read") throw new Error(unsummarised.result);
+    expect(unsummarised.question.preparation).toEqual({
+      agentsConsulted: 3,
+      outcome: "agreed",
+      summary: null,
+    });
+
+    // Malformed preparation is caught by the content parse: the question still reads, without it.
+    const malformed = await readQuestionContent(
+      ctx(),
+      await question({ ...CONTENT, preparation: { agents_consulted: 2, outcome: "maybe" } }),
+      NO_ADVISORY_HOST
+    );
+    if (malformed.result !== "read") throw new Error(malformed.result);
+    expect(malformed.question.preparation).toBeNull();
   });
 
   it("won't show advisory content the protocol refuses (#17943)", async () => {

@@ -38,6 +38,7 @@ import {
 } from "../linkMethods.js";
 import {
   HostQuestionContentResultSchema,
+  HostQuestionContentV2ResultSchema,
   HostQuestionItemSchema,
   HostQuestionListV2Schema,
   HostQuestionsChangedV2PayloadSchema,
@@ -2718,6 +2719,181 @@ describe("an enrolled Host's questions over its link (#17230)", () => {
     );
     const count = (method: string) => calls.mock.calls.filter(([m]) => m === method).length;
     expect(count(DecisionsLinkMethod.QUESTION_LIST_V3)).toBe(1);
+    expect(count(DecisionsLinkMethod.QUESTION_CONTENT_V3)).toBe(1);
     expect(count(DecisionsLinkMethod.QUESTION_CONTENT_V2)).toBe(1);
+  });
+
+  /** Content as a Host from #18042 reads it: with the agent's account of its preparation. */
+  function preparedContent(reference: DecisionQuestionReference): DecisionQuestionContent {
+    return {
+      ...roundContent(reference),
+      preparation: {
+        agentsConsulted: 2,
+        outcome: "split",
+        summary: "Codex preferred Redis; Gemini held out for Postgres.",
+      },
+    };
+  }
+
+  it("carries the agent's preparation when both sides read it (#18042)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [roundItem(1)] });
+    decisions.answerWith((read) =>
+      read.read === "content" ? { result: "read", question: preparedContent(read.reference) } : null
+    );
+    serveQuestions(host, decisions);
+    const calls = vi.spyOn(client, "call");
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+    const read = await shell.client.readHostQuestion(QHOST, {
+      read: "content",
+      reference: item(1).reference,
+    });
+    expect(read?.ok && read.value.result === "read" ? read.value.question : read).toEqual(
+      preparedContent(item(1).reference)
+    );
+    expect(
+      calls.mock.calls.filter(([method]) => method === DecisionsLinkMethod.QUESTION_CONTENT_V2)
+    ).toHaveLength(0);
+  });
+
+  it("tells a Shell from before #18042 its content without the preparation, even none (#18042)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [roundItem(1), roundItem(2)] });
+    decisions.answerWith((read) =>
+      read.read !== "content"
+        ? null
+        : {
+            result: "read",
+            question:
+              read.reference.questionId === item(1).reference.questionId
+                ? preparedContent(read.reference)
+                : { ...roundContent(read.reference), preparation: null },
+          }
+    );
+    serveQuestions(host, decisions);
+    await client.call(DecisionsLinkMethod.OWNER_STATE_V2, OWNER);
+
+    for (const n of [1, 2]) {
+      // A strict v2 read refuses any field it doesn't know, a null one included.
+      const v2 = HostQuestionContentV2ResultSchema.parse(
+        await client.call(DecisionsLinkMethod.QUESTION_CONTENT_V2, { reference: item(n).reference })
+      );
+      expect(v2).toEqual({ result: "read", question: roundContent(item(n).reference) });
+
+      const v1 = HostQuestionContentResultSchema.parse(
+        await client.call(DecisionsLinkMethod.QUESTIONS, {
+          read: "content",
+          reference: item(n).reference,
+        })
+      );
+      if (v1.result !== "read") throw new Error(v1.result);
+      expect("preparation" in v1.question).toBe(false);
+      expect(v1.question.questionId).toBe(item(n).reference.questionId);
+    }
+  });
+
+  it("reads a Host from before #18042 with its round but no preparation, asking for it once per link", async () => {
+    const { host, client } = await pair();
+    host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+      runtime: RUNNING,
+    }));
+    host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V3, z.unknown(), () => ({
+      hostId: QHOST,
+      owner: SERVED,
+      questions: [roundItem(1)],
+      asks: [],
+      seq: 1,
+    }));
+    host.registerCallHandler(DecisionsLinkMethod.QUESTION_CONTENT_V2, z.unknown(), (read) => ({
+      result: "read",
+      question: roundContent((read as { reference: DecisionQuestionReference }).reference),
+    }));
+    const calls = vi.spyOn(client, "call");
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+    for (let i = 0; i < 2; i += 1) {
+      const read = await shell.client.readHostQuestion(QHOST, {
+        read: "content",
+        reference: item(1).reference,
+      });
+      expect(read?.ok && read.value.result === "read" ? read.value.question : read).toEqual(
+        roundContent(item(1).reference)
+      );
+    }
+    const count = (method: string) => calls.mock.calls.filter(([m]) => m === method).length;
+    expect(count(DecisionsLinkMethod.QUESTION_CONTENT_V3)).toBe(1);
+    expect(count(DecisionsLinkMethod.QUESTION_CONTENT_V2)).toBe(2);
+  });
+
+  it("never takes a refused v3 read for an older Host, so later reads keep their preparation (#18042)", async () => {
+    const { host, client } = await pair();
+    host.registerCallHandler(DecisionsLinkMethod.OWNER_STATE_V2, z.unknown(), () => ({
+      runtime: RUNNING,
+    }));
+    host.registerCallHandler(DecisionsLinkMethod.QUESTION_LIST_V3, z.unknown(), () => ({
+      hostId: QHOST,
+      owner: SERVED,
+      questions: [roundItem(1)],
+      asks: [],
+      seq: 1,
+    }));
+    // A Host that knows the method but refuses this payload answers VALIDATION.
+    host.registerCallHandler(
+      DecisionsLinkMethod.QUESTION_CONTENT_V3,
+      z.object({ never: z.string() }).strict(),
+      () => null
+    );
+    const v2 = vi.fn(() => ({ result: "read", question: roundContent(item(1).reference) }));
+    host.registerCallHandler(DecisionsLinkMethod.QUESTION_CONTENT_V2, z.unknown(), v2);
+    const calls = vi.spyOn(client, "call");
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+    for (let i = 0; i < 2; i += 1) {
+      const read = await shell.client.readHostQuestion(QHOST, {
+        read: "content",
+        reference: item(1).reference,
+      });
+      expect(read).toEqual({ ok: false, failure: "needs-update" });
+    }
+    expect(
+      calls.mock.calls.filter(([method]) => method === DecisionsLinkMethod.QUESTION_CONTENT_V3)
+    ).toHaveLength(2);
+    expect(v2).not.toHaveBeenCalled();
+  });
+
+  it("refuses a v3 read whose preparation is out of the protocol's bounds (#18042)", async () => {
+    const { host, client } = await pair();
+    const decisions = questionHost();
+    decisions.set({ hostId: QHOST, questions: [roundItem(1)] });
+    decisions.answerWith((read) =>
+      read.read === "content"
+        ? {
+            result: "read",
+            question: {
+              ...roundContent(read.reference),
+              preparation: { agentsConsulted: 65, outcome: "agreed", summary: null },
+            },
+          }
+        : null
+    );
+    serveQuestions(host, decisions);
+    const shell = shellOf([STUDIO]);
+    shell.open(HOST, client);
+    await vi.waitFor(() => expect(shell.client.hostQuestions()).toHaveLength(1));
+
+    const read = await shell.client.readHostQuestion(QHOST, {
+      read: "content",
+      reference: item(1).reference,
+    });
+    expect(read).toEqual({ ok: false, failure: "unexpected-answer" });
   });
 });

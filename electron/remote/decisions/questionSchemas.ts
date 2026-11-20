@@ -2,6 +2,7 @@ import { z } from "zod";
 import { LIMITS } from "@daintreehq/decisions-protocol";
 import type {
   DecisionClosureNotice,
+  DecisionPreparation,
   DecisionQuestionCancelResult,
   DecisionQuestionContent,
   DecisionQuestionContentResult,
@@ -384,13 +385,41 @@ const QuestionContentV2Schema = QuestionContentSchema.extend({
     { message: "an advisory round states its plan" }
   ) satisfies z.ZodType<DecisionQuestionContent>;
 
+const PreparationSchema = z
+  .object({
+    agentsConsulted: Count.max(LIMITS.preparationAgentsMax),
+    outcome: z.enum(["agreed", "split", "not-run"]),
+    summary: z.string().max(LIMITS.preparationSummaryChars).nullable(),
+  })
+  .strict() satisfies z.ZodType<DecisionPreparation>;
+
+/** Content as `QUESTION_CONTENT_V3` reads it (#18042): v2's, with the agent's preparation. */
+const QuestionContentV3Schema = QuestionContentV2Schema.safeExtend({
+  preparation: PreparationSchema.nullable().optional(),
+}).strict() satisfies z.ZodType<DecisionQuestionContent>;
+
+/**
+ * Content as a Shell from before #18042 reads it over `QUESTION_CONTENT_V2`:
+ * without the agent's preparation, which its strict read refuses even as null.
+ */
+export function v2Content(question: DecisionQuestionContent): DecisionQuestionContent {
+  const { preparation: _preparation, ...rest } = question;
+  return rest;
+}
+
 /**
  * Content as a Shell from before #17943 reads it over `QUESTIONS`: without
- * its round and plan, and a question that was never published closed for no
- * reason it knows, as it read one before.
+ * its round, plan and preparation, and a question that was never published
+ * closed for no reason it knows, as it read one before.
  */
 export function legacyContent(question: DecisionQuestionContent): DecisionQuestionContent {
-  const { replyMode: _mode, plannedFallback: _plan, closureNotice: _notice, ...rest } = question;
+  const {
+    replyMode: _mode,
+    plannedFallback: _plan,
+    closureNotice: _notice,
+    preparation: _preparation,
+    ...rest
+  } = question;
   return {
     ...rest,
     closedReason: question.closedReason === "never-published" ? null : question.closedReason,
@@ -418,6 +447,15 @@ export const HostQuestionContentResultSchema = z.discriminatedUnion("result", [
 /** What `QUESTION_CONTENT_V2` answers (#17943). */
 export const HostQuestionContentV2ResultSchema = z.discriminatedUnion("result", [
   z.object({ result: z.literal("read"), question: QuestionContentV2Schema }).strict(),
+  Off,
+  NotRunning,
+  NotFound,
+  Unreadable,
+]) satisfies z.ZodType<DecisionQuestionContentResult>;
+
+/** What `QUESTION_CONTENT_V3` answers (#18042). */
+export const HostQuestionContentV3ResultSchema = z.discriminatedUnion("result", [
+  z.object({ result: z.literal("read"), question: QuestionContentV3Schema }).strict(),
   Off,
   NotRunning,
   NotFound,

@@ -42,6 +42,7 @@ import {
   type HostQuestionListPayload,
   type HostQuestionListV2Payload,
   type HostQuestionRead,
+  v2Content,
 } from "./questionSchemas.js";
 
 /** One attached Shell's session; the session itself is what pending keys are bound to. */
@@ -514,10 +515,14 @@ export function installDecisionsHostWith(
       : answer;
   };
 
-  /** One question's content with its round (#17943), for the owner that enrolled this Host only. */
+  /**
+   * One question's content with its round (#17943), and with v3 the agent's
+   * preparation (#18042), for the owner that enrolled this Host only.
+   */
   const readQuestionContentV2 = async (
     session: LinkSession,
-    reference: DecisionQuestionReference
+    reference: DecisionQuestionReference,
+    v3 = false
   ): Promise<DecisionQuestionContentResult> => {
     if (disposed || !session.isOpen) throw new Error("This Host stopped serving Shells");
     if (!servesQuestions(session)) return OFF;
@@ -528,7 +533,11 @@ export function installDecisionsHostWith(
       read: "content",
       reference,
     })) as DecisionQuestionContentResult;
-    return servesQuestions(session) ? answer : OFF;
+    if (!servesQuestions(session)) return OFF;
+    // Content read as v2 is a Shell's from before #18042, whose strict read takes only that.
+    return !v3 && answer.result === "read"
+      ? { ...answer, question: v2Content(answer.question) }
+      : answer;
   };
 
   /**
@@ -626,6 +635,13 @@ export function installDecisionsHostWith(
           ({ reference }) => readQuestionContentV2(session, reference)
         )
       : () => {};
+    const offQuestionContentV3 = runtime
+      ? session.registerCallHandler(
+          DecisionsLinkMethod.QUESTION_CONTENT_V3,
+          HostQuestionContentV2ReadSchema,
+          ({ reference }) => readQuestionContentV2(session, reference, true)
+        )
+      : () => {};
     const offCancelQuestion = runtime
       ? session.registerCallHandler(
           DecisionsLinkMethod.CANCEL_QUESTION,
@@ -643,6 +659,7 @@ export function installDecisionsHostWith(
       offQuestionListV2();
       offQuestionListV3();
       offQuestionContentV2();
+      offQuestionContentV3();
       offCancelQuestion();
       offClose();
       unregisters.delete(unregister);
