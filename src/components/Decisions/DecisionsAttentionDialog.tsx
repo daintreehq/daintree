@@ -1007,7 +1007,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     const { item, destination } = move;
     setMove(null);
     void run(item, "reassign", () =>
-      decisionsClient.reassignAnswer(item.questionId, destination.terminalId, item.token)
+      decisionsClient.reassignAnswer(item.questionId, destination, item.token)
     );
   };
 

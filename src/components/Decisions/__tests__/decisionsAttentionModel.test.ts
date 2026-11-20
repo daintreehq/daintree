@@ -17,11 +17,13 @@ import {
   handledConfirmTitle,
   handledNeedsConfirm,
   hasFullerQuestion,
+  leavesList,
   moveConfirmBody,
   noticeDeliveryText,
   noticeOutcomeText,
   noticePlanText,
   originParts,
+  outcomeSeverity,
   outcomeText,
   reasonText,
   remainingText,
@@ -162,6 +164,18 @@ describe("follow-ups in the needs-attention list (#16231)", () => {
     );
     // An answer alone reads as it always has.
     expect(outcomeText(4, delivered)).toBe("Answer to q-4 typed into “Claude”");
+  });
+
+  it("says a chosen terminal now runs another agent and keeps the item for another choice (#18093)", () => {
+    const changed = { result: "refused", reason: "destination-changed" } as const;
+    expect(outcomeText(7, changed)).toBe(
+      "That terminal is running another agent now, so q-7's answer wasn't sent"
+    );
+    expect(outcomeText(7, changed, "answer and follow-ups")).toBe(
+      "That terminal is running another agent now, so q-7's answer and follow-ups weren't sent"
+    );
+    expect(leavesList(changed)).toBe(false);
+    expect(outcomeSeverity(changed)).toBe("warning");
   });
 });
 
@@ -419,6 +433,7 @@ describe("Choose destination's menu and confirmation (#18056)", () => {
   ): DecisionsAnswerDestination {
     return {
       terminalId,
+      run: `run-${terminalId}`,
       title: terminalId,
       agentId: "claude",
       agentName: "Claude",

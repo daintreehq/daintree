@@ -178,6 +178,12 @@ export type DecisionsAttentionList =
 /** A pane an answer could be typed into instead: an agent running here now. */
 export interface DecisionsAnswerDestination {
   terminalId: string;
+  /**
+   * The agent's run in that pane as listed, an opaque token (#18093): sent
+   * back with Choose destination, so main refuses the move as
+   * `destination-changed` once another agent runs there.
+   */
+  run: string;
   title: string;
   agentId: string;
   agentName: string | null;
@@ -206,6 +212,8 @@ export interface ReassignDecisionsAnswerPayload {
   questionId: string;
   /** The pane the person confirmed. */
   terminalId: string;
+  /** The destination's `run` as listed; refused as `destination-changed` once another agent runs there. */
+  run: string;
   /** The item's `token` as the person saw it; refused as `changed` once it no longer holds. */
   expected?: string;
 }
@@ -261,6 +269,8 @@ export type DecisionsAnswerOutcome =
         | "no-answer"
         /** The chosen pane closed, or isn't running an agent Daintree can type into. */
         | "destination-gone"
+        /** The chosen pane runs another agent than the one listed (#18093): nothing was typed. */
+        | "destination-changed"
         /**
          * The question asked for advice and is still in that round (#17941): only
          * the agent that asked it, or a resume of its session, takes its outcome.

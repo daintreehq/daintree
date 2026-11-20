@@ -88,6 +88,8 @@ const RESUMED = "terminal-resumed-1";
 const Q1 = "0190f0aa11112222333344445555aa01";
 const Q2 = "0190f0aa11112222333344445555aa02";
 const CRASHED = "0190f0aa11112222333344445555cc01";
+// The asking pane with a run no listing gave: every move of it here is refused before its run is read.
+const UNLISTED = { terminalId: PANE, run: "0".repeat(64) };
 
 const ORIGIN: QuestionOrigin = {
   host_id: HOST,
@@ -483,6 +485,10 @@ function setup(
                 const list = [...client.terminals].map(([id, info]) => ({ ...info, id }));
                 await options.whileListing?.();
                 return list;
+              },
+              getTerminal: async (id: string) => {
+                const info = client.terminals.get(id);
+                return info === undefined ? null : { ...info, id };
               },
             },
           }
@@ -2120,14 +2126,14 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     expect((await entryOf(h)).write_refused).toBe(true);
     // The notice alone is over with its question (#18021): no one is asked about it.
     expect(await h.delivery.attentionItems()).toEqual([]);
-    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({ result: "resolved" });
+    await expect(h.delivery.reassignAnswer(Q1, UNLISTED)).resolves.toEqual({ result: "resolved" });
 
     // With the person's follow-up that stopped too, the two go only to the run that asked.
     await followUpStoppedToo(h.store);
     const [item] = await h.delivery.attentionItems();
     expect(item).toMatchObject({ questionId: Q1, canReassign: false });
     await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
-    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({
+    await expect(h.delivery.reassignAnswer(Q1, UNLISTED)).resolves.toEqual({
       result: "refused",
       reason: "asker-only",
     });
@@ -2232,7 +2238,7 @@ describe("AnswerDelivery, an advisory question's unanswered deadline (#17941)", 
     });
     // It never reached the relay, so no follow-up can join it: it is no one's to move.
     expect(await h.delivery.attentionItems()).toEqual([]);
-    await expect(h.delivery.reassignAnswer(Q1, PANE)).resolves.toEqual({ result: "resolved" });
+    await expect(h.delivery.reassignAnswer(Q1, UNLISTED)).resolves.toEqual({ result: "resolved" });
     await expect(h.delivery.answerDestinations(Q1)).resolves.toEqual({ result: "unavailable" });
     expect((await h.question(Q1))?.origin).toEqual(ORIGIN);
     await stopped(h.delivery);
@@ -2629,7 +2635,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
       result: "refused",
       reason: "changed",
     });
-    await expect(h.delivery.reassignAnswer(Q1, PANE, read!.token)).resolves.toEqual({
+    await expect(h.delivery.reassignAnswer(Q1, UNLISTED, read!.token)).resolves.toEqual({
       result: "refused",
       reason: "changed",
     });
@@ -3347,7 +3353,7 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
       canReassign: false,
     });
     expect(await h.delivery.resumeAnswer(Q1)).toEqual({ result: "refused", reason: "uncertain" });
-    expect(await h.delivery.reassignAnswer(Q1, PANE)).toEqual({
+    expect(await h.delivery.reassignAnswer(Q1, UNLISTED)).toEqual({
       result: "refused",
       reason: "uncertain",
     });
@@ -3630,12 +3636,139 @@ describe("AnswerDelivery, choosing where a stopped answer goes (#18056)", () => 
 
       h.delivery.start();
       let outcome: unknown = null;
-      void h.delivery.reassignAnswer(Q1, "pane-chosen").then((result) => (outcome = result));
+      void h.delivery.reassignAnswer(Q1, chosen!).then((result) => (outcome = result));
       await until(() => outcome !== null);
       expect(outcome).toMatchObject({ result: "waiting", terminalId: "pane-chosen", waitsFor });
       expect(h.client.submitted).toEqual([]);
     }
   );
+
+  it("types the answer into the listed pane whose agent is still the one listed", async () => {
+    const h = setup({ listTerminals: true });
+    await stalled(h);
+    live(h, "pane-chosen", { title: "Chosen" });
+    const chosen = await listedAs(h, "pane-chosen");
+
+    h.delivery.start();
+    expect(await settled(h.delivery.reassignAnswer(Q1, chosen))).toEqual({
+      result: "delivered",
+      terminalId: "pane-chosen",
+      title: "Chosen",
+    });
+    expect(h.client.submitted.map((line) => line.id)).toEqual(["pane-chosen"]);
+    expect((await h.question(Q1))?.origin).toMatchObject({
+      pane_id: "pane-chosen",
+      ownership_principal: "principal-pane-chosen",
+    });
+    await stopped(h.delivery);
+  });
+
+  /** The pane as `answerDestinations` listed it. */
+  async function listedAs(h: ReturnType<typeof setup>, id: string) {
+    const listed = await h.delivery.answerDestinations(Q1);
+    const found =
+      listed.result === "listed" ? listed.destinations.find((d) => d.terminalId === id) : undefined;
+    expect(found).toBeDefined();
+    return found!;
+  }
+
+  /** What `action` resolves with, moving the clock while delivery holds its lock. */
+  async function settled<T>(action: Promise<T>): Promise<T> {
+    let outcome: { value: T } | null = null;
+    void action.then((value) => (outcome = { value }));
+    await until(() => outcome !== null);
+    return outcome!.value;
+  }
+
+  it.each([
+    { how: "another agent started in the same launch", run: { agentIncarnation: 1 } },
+    {
+      how: "the pane relaunched",
+      run: { launchGeneration: 8 },
+      generation: 8,
+      principal: "principal-relaunched",
+    },
+    { how: "its Decisions principal was reissued", run: {}, principal: "principal-reissued" },
+    { how: "another kind of agent is detected", run: { detectedAgentId: "codex" } },
+  ])(
+    "refuses a listed pane once $how, typing nothing and leaving the answer where it was (#18093)",
+    async ({ run, generation, principal }) => {
+      const h = setup({ listTerminals: true });
+      await stalled(h);
+      live(h, "pane-chosen", { title: "Chosen" });
+      const chosen = await listedAs(h, "pane-chosen");
+      const before = await h.question(Q1);
+
+      // The replacement is still a run an answer could be typed into: it lists, with a new run.
+      h.client.terminals.set("pane-chosen", {
+        ...h.client.terminals.get("pane-chosen")!,
+        ...run,
+      });
+      if (generation !== undefined) h.client.generations.set("pane-chosen", generation);
+      if (principal !== undefined) h.principals.set("pane-chosen", principal);
+      const relisted = await listedAs(h, "pane-chosen");
+      expect(relisted.run).not.toBe(chosen.run);
+
+      h.delivery.start();
+      expect(await settled(h.delivery.reassignAnswer(Q1, chosen))).toEqual({
+        result: "refused",
+        reason: "destination-changed",
+      });
+      await advance(DELIVERY_CHECK_INTERVAL_MS + DELIVERY_SETTLE_MS);
+      expect(h.client.submitted).toEqual([]);
+      const after = await h.question(Q1);
+      expect(after?.origin).toEqual(before?.origin);
+      expect(after?.delivery_status).toBe("needs-attention");
+      expect(after?.agent_resume_strategy).toBe(before?.agent_resume_strategy);
+      expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.reassigned")).toBe(
+        false
+      );
+
+      // Chosen again from a fresh list, the new run takes it.
+      expect(await settled(h.delivery.reassignAnswer(Q1, relisted))).toMatchObject({
+        result: "delivered",
+        terminalId: "pane-chosen",
+      });
+      await stopped(h.delivery);
+    }
+  );
+
+  it("refuses a pane replaced while the move waited for delivery's turn", async () => {
+    const h = setup({ listTerminals: true });
+    await stalled(h);
+    live(h, "pane-chosen", { title: "Chosen" });
+    const chosen = await listedAs(h, "pane-chosen");
+    const before = await h.question(Q1);
+
+    // Delivery's lock is busy; the pane's agent is replaced before the move takes its turn.
+    let release!: () => void;
+    const busy = h.delivery.lock.run(() => new Promise<void>((done) => (release = done)));
+    const moving = h.delivery.reassignAnswer(Q1, chosen);
+    await advance(100);
+    h.client.terminals.set("pane-chosen", {
+      ...h.client.terminals.get("pane-chosen")!,
+      agentIncarnation: 1,
+    });
+    release();
+    await busy;
+
+    expect(await settled(moving)).toEqual({ result: "refused", reason: "destination-changed" });
+    expect((await h.question(Q1))?.origin).toEqual(before?.origin);
+    expect(h.client.submitted).toEqual([]);
+  });
+
+  it("refuses a run token that names a different pane than the one confirmed", async () => {
+    const h = setup({ listTerminals: true });
+    await stalled(h);
+    live(h, "pane-chosen", { title: "Chosen" });
+    live(h, "pane-other", { title: "Other" });
+    const other = await listedAs(h, "pane-other");
+
+    await expect(
+      h.delivery.reassignAnswer(Q1, { terminalId: "pane-chosen", run: other.run })
+    ).resolves.toEqual({ result: "refused", reason: "destination-changed" });
+    expect((await h.question(Q1))?.origin.pane_id).toBe(PANE);
+  });
 });
 
 describe("AnswerDelivery, the whole question in the needs-attention list (#18055)", () => {

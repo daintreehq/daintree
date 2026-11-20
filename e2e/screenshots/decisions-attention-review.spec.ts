@@ -578,6 +578,7 @@ function seedDestinations(panes: Panes, featureId: string): DecisionsAnswerDesti
   return [
     {
       terminalId: panes.asker,
+      run: "1".repeat(64),
       title: ASKER_TITLE,
       agentId: "claude",
       agentName: "Claude",
@@ -590,6 +591,7 @@ function seedDestinations(panes: Panes, featureId: string): DecisionsAnswerDesti
     },
     {
       terminalId: panes.other,
+      run: "2".repeat(64),
       title: OTHER_TITLE,
       agentId: "claude",
       agentName: "Claude",

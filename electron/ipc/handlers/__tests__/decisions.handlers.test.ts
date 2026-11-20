@@ -1498,6 +1498,24 @@ describe("decisions IPC", () => {
     }
   });
 
+  it("takes a move only with the destination's run as main listed it (#18093)", () => {
+    const schema = decisionsNamespace.ops.reassignAnswer.schema as SafeParse;
+    const move = { questionId: QUESTION_ID, terminalId: "pane-2", run: "b".repeat(64) };
+    expect(schema.safeParse(move).success).toBe(true);
+    expect(schema.safeParse({ ...move, expected: "c".repeat(64) }).success).toBe(true);
+    const { run: _run, ...withoutRun } = move;
+    for (const bad of [
+      withoutRun,
+      { ...move, run: "" },
+      { ...move, run: "B".repeat(64) },
+      { ...move, run: "b".repeat(63) },
+      { ...move, run: "b".repeat(65) },
+      { ...move, run: 7 },
+    ]) {
+      expect(schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it("asks Decisions itself for a pane's state once the setting is on", async () => {
     saved.value = { enabled: true };
     const state: PaneDecisionState = {

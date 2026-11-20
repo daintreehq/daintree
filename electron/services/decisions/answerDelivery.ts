@@ -31,6 +31,7 @@ import {
   type TerminalSink,
 } from "@daintreehq/decisions-client";
 import { ADVISORY_ROUND_REVISION, type PhoneImageReference } from "@daintreehq/decisions-protocol";
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
@@ -164,6 +165,8 @@ export interface AttentionLabelDeps {
   projectName(projectId: string): Promise<string | null>;
   /** Every pane the pty host holds now. */
   listTerminals(): Promise<AttentionTerminal[]>;
+  /** One pane, asked of only the host that holds it; null when it holds none by that id. */
+  getTerminal(terminalId: string): Promise<AttentionTerminal | null>;
   /** An enrolled Remote Host's name, by the id its questions carry; null for one this computer doesn't know. */
   hostName?(hostId: string): string | null;
 }
@@ -338,6 +341,32 @@ function sameRun(a: QuestionOrigin, b: QuestionOrigin): boolean {
     a.ownership_principal === b.ownership_principal &&
     a.agent_kind === b.agent_kind
   );
+}
+
+/** A pane's run as delivery would record it: what `sameRun` compares. */
+interface PaneRun {
+  hostId: string;
+  generation: number;
+  principal: string;
+  incarnation: string;
+  agentId: string;
+}
+
+/**
+ * An opaque token of the run in `paneId` (#18093): listed with a destination
+ * and sent back with the move, so a pane whose agent was replaced in between
+ * is refused. A digest, so the principal never reaches the renderer.
+ */
+function runTokenOf(paneId: string, run: PaneRun): string {
+  const key = JSON.stringify([
+    run.hostId,
+    paneId,
+    run.generation,
+    run.principal,
+    run.incarnation,
+    run.agentId,
+  ]);
+  return createHash("sha256").update(key).digest("hex");
 }
 
 function runKey(o: QuestionOrigin): string {
@@ -812,7 +841,8 @@ export class AnswerDelivery {
     const destinations: DecisionsAnswerDestination[] = [];
     const projects = new Map<string, string | null>();
     for (const terminal of await this.terminals()) {
-      if (this.runOf(terminal) === null) continue;
+      const run = this.runOf(terminal);
+      if (run === null) continue;
       const projectId = terminal.projectId!;
       if (!projects.has(projectId)) {
         projects.set(
@@ -823,6 +853,7 @@ export class AnswerDelivery {
       const agentId = (terminal.detectedAgentId ?? terminal.launchAgentId)!;
       destinations.push({
         terminalId: terminal.id,
+        run: runTokenOf(terminal.id, run),
         title: terminal.title?.trim() || (agentNameOf(agentId) ?? agentId),
         agentId,
         agentName: agentNameOf(agentId),
@@ -851,19 +882,16 @@ export class AnswerDelivery {
    * audit trail with both panes, and it is typed in there through the usual
    * gate: never while that agent is working. Refused in a question's
    * advisory round (#17941): only the run that stated the plan, or a resume
-   * of its session, takes what is typed for it.
+   * of its session, takes what is typed for it. Refused too once the pane
+   * runs another agent than `to.run`, its run as listed (#18093): the person
+   * confirmed that agent, not the pane.
    */
   async reassignAnswer(
     questionId: string,
-    terminalId: string,
+    to: Pick<DecisionsAnswerDestination, "terminalId" | "run">,
     expected?: string
   ): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
-    const terminal = (await this.terminals()).find((candidate) => candidate.id === terminalId);
-    const run = terminal === undefined ? null : this.runOf(terminal);
-    if (terminal === undefined || run === null) {
-      return { result: "refused", reason: "destination-gone" };
-    }
     const refused = await this.lock.run(async () => {
       const row = await this.store.getQuestion(questionId);
       const early = await this.actionable(row);
@@ -873,6 +901,15 @@ export class AnswerDelivery {
       }
       if (inAdvisoryRound(row))
         return { result: "refused" as const, reason: "asker-only" as const };
+      // Read under the lock, so a run replaced while it waited is refused, not recorded.
+      const terminal = await this.terminal(to.terminalId);
+      const run = terminal === undefined ? null : this.runOf(terminal);
+      if (terminal === undefined || run === null) {
+        return { result: "refused" as const, reason: "destination-gone" as const };
+      }
+      if (runTokenOf(terminal.id, run) !== to.run) {
+        return { result: "refused" as const, reason: "destination-changed" as const };
+      }
       const origin: QuestionOrigin = {
         ...row.origin,
         host_id: run.hostId,
@@ -1156,18 +1193,22 @@ export class AnswerDelivery {
     }
   }
 
+  /** One pane, asked of its own host only, so a stalled other host holds nothing up. */
+  private async terminal(terminalId: string): Promise<AttentionTerminal | undefined> {
+    try {
+      const found = await this.o.deps.labels?.getTerminal(terminalId);
+      return found?.id === terminalId ? found : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * The run in `terminal` an answer could be typed into: an agent running
    * here now, holding a Decisions principal, every part of its identity
    * observed. Null for anything else.
    */
-  private runOf(terminal: AttentionTerminal): {
-    hostId: string;
-    generation: number;
-    principal: string;
-    incarnation: string;
-    agentId: string;
-  } | null {
+  private runOf(terminal: AttentionTerminal): PaneRun | null {
     if (terminal.isAssistantTerminal === true) return null;
     if (
       terminal.isExited === true ||
