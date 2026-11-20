@@ -91,23 +91,34 @@ export function runText(run: DecisionsModelRun, startedAt: string): string {
   return `Replaying ${pluralize(run.historyCount, "past answer")} through ${label} since ${startedAt}, which sends them to ${providerText(run.adapter)}. It goes on if you close Settings.`;
 }
 
-/** What answers automatically now, as main observes it. */
+/** Which questions an automatic answer may reach, and how it shows. */
+export const AUTOMATIC_ANSWER_SCOPE =
+  "Only questions whose agent allows a proxy answer, never one only you can answer, and each answer is labelled as a proxy's.";
+
+/**
+ * What answers automatically now, as main observes it (#18062): main arms the
+ * model only once the person has chosen a confidence under Answer
+ * automatically, so a threshold saved before that choice reads as nothing
+ * answering, with the choice that changes it.
+ */
 export function answeringText(
-  model: Pick<DecisionsModelState, "answeringFrom" | "adapter">,
-  proxyAllowlisted: boolean
+  model: Pick<DecisionsModelState, "answeringFrom" | "adapter" | "evaluation">
 ): string {
   if (model.answeringFrom === null || model.adapter === null) {
-    return "The model doesn't answer anything. Every question waits for you.";
+    const next =
+      model.evaluation === null
+        ? "Evaluate the model against your answers, then choose a confidence under Answer automatically to let it answer in your place."
+        : model.evaluation.thresholds.length === 0
+          ? "Evaluate again once you've answered more questions from your phone."
+          : "Choose a confidence under Answer automatically to let it answer in your place.";
+    return `The model doesn't answer anything, so every question waits for you. ${next}`;
   }
   const { label } = MODEL_ADAPTERS[model.adapter];
   const from =
     model.answeringFrom === 0
       ? "at any confidence"
       : `when its confidence is ${confidenceText(model.answeringFrom)} or higher`;
-  const scope = proxyAllowlisted
-    ? "Only questions whose agent allows a proxy answer, and never a gate only you can answer."
-    : "Only questions whose gate allows a proxy answer. Questions without a gate still need you while Allow proxy answers is off under Policy.";
-  return `Answers in your place through ${label} ${from}, labelled as a proxy's answer. ${scope}`;
+  return `Answers in your place through ${label} ${from}. ${AUTOMATIC_ANSWER_SCOPE}`;
 }
 
 /** The library's reasons for giving no answer, in words; an unknown code is shown as it is. */

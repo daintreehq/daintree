@@ -26,9 +26,12 @@ export interface DecisionsSettings {
    */
   hostId: string | null;
   /**
-   * Whether a question with no trusted workflow gate may accept a proxy
-   * answer (the client library's `proxyAllowlisted`). Off unless the person
-   * turns it on.
+   * Whether the person chose to let the decision model answer in their place
+   * (#18062): set by choosing a confidence under Answer automatically, and
+   * cleared by choosing not to. The model arms only with it, and a question
+   * with no trusted workflow gate may take a proxy answer (the client
+   * library's `proxyAllowlisted`) only while the model is armed. Off unless
+   * the person chooses.
    */
   proxyAllowlisted: boolean;
   /**
@@ -401,8 +404,6 @@ export interface DecisionsWorkflowGate {
 /** The rules questions are asked under on this computer, as main applies them. */
 export interface DecisionsPolicy {
   gates: DecisionsWorkflowGate[];
-  /** Whether a question without a registered gate may accept a proxy answer, when its agent allows one. */
-  proxyAllowlisted: boolean;
   /**
    * How long a question with no origin gate waits when its agent sets no
    * expiry, in ms, or null for no expiry: the saved setting, as the library's

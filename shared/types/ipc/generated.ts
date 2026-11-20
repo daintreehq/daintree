@@ -1124,10 +1124,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisionsModel.js").SetDecisionsModelThresholdPayload];
     result: import("../decisionsModel.js").DecisionsModelState;
   };
-  "decisions:set-proxy-allowlisted": {
-    args: [allowed: boolean];
-    result: import("../decisions.js").DecisionsPolicy;
-  };
   "decisions:set-terminal-snapshots": {
     args: [payload: import("../decisions.js").SetDecisionsTerminalSnapshotsPayload];
     result: import("../decisions.js").DecisionsStatus;

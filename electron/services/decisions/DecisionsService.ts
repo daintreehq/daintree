@@ -344,7 +344,7 @@ export class DecisionsService {
   /**
    * The trusted policy for this enabled lifetime. One registry serves every
    * bridge the lifetime runs, attempt after attempt, so a change to the proxy
-   * allowlist reaches the running bridge without a reconnect.
+   * allowlist or the expiry reaches the running bridge without a reconnect.
    */
   private policy: PolicyRegistry | null = null;
   private readonly openQuestions: NonNullable<DecisionsServiceOptions["openQuestions"]> | null;
@@ -1377,11 +1377,29 @@ export class DecisionsService {
   private applyPolicy(settings: DecisionsSettings): void {
     if (!this.policy) {
       // A lifetime of the other role ends first and drops its policy, so the role never changes in place.
-      this.policy = createTrustedPolicy(settings);
+      this.policy = createTrustedPolicy({
+        defaultQuestionExpiryMs: settings.defaultQuestionExpiryMs,
+        proxyAllowlisted: this.proxyArmed(),
+      });
       return;
     }
-    this.policy.proxyAllowlisted = settings.proxyAllowlisted;
+    this.policy.proxyAllowlisted = this.proxyArmed();
     this.policy.defaultQuestionExpiryMs = settings.defaultQuestionExpiryMs;
+  }
+
+  /**
+   * Whether the decision model is armed to answer (#18062). A question with no
+   * gate takes the agent's requested level only while it is: one asked while
+   * it isn't is recorded as the person's, and stays theirs if the model arms
+   * before the relay has it.
+   */
+  private proxyArmed(): boolean {
+    return this.model?.proxy() != null;
+  }
+
+  /** Brings the policy's proxy allowlist to whether the model is armed now. */
+  private syncProxyPolicy(): void {
+    if (this.policy) this.policy.proxyAllowlisted = this.proxyArmed();
   }
 
   /**
@@ -1401,7 +1419,11 @@ export class DecisionsService {
     if (this.model === null && this.clearingModel) return;
     this.model ??= new DecisionModelRuntime({
       files: decisionModelFiles(this.keyFilePath()),
-      onProxyChanged: () => this.connection?.modelChanged?.(),
+      // The policy first, so the connection's new proxy is asked only questions it allows.
+      onProxyChanged: () => {
+        this.syncProxyPolicy();
+        this.connection?.modelChanged?.();
+      },
       onChanged: this.onModelChanged,
       ...this.modelOptions,
     });
@@ -1417,6 +1439,8 @@ export class DecisionsService {
   private async closeModel(): Promise<void> {
     const model = this.model;
     this.model = null;
+    // Closing disarms without telling the connection, so the policy is told here.
+    this.syncProxyPolicy();
     if (model === null) return;
     await model.close();
     this.onModelChanged();

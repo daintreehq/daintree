@@ -1676,10 +1676,9 @@ export const CHANNELS = {
   DECISIONS_EXPORT_DATA: "decisions:export-data",
   DECISIONS_DELETE_RELAY_DATA: "decisions:delete-relay-data",
   DECISIONS_DELETE_LOCAL_DATA: "decisions:delete-local-data",
-  // The trusted workflow gates, read-only, the proxy allowlist (#16013) and
-  // the default question expiry (#16122).
+  // The trusted workflow gates, read-only (#16013), and the default question
+  // expiry (#16122). Automatic answers are the decision model's (#18062).
   DECISIONS_GET_POLICY: "decisions:get-policy",
-  DECISIONS_SET_PROXY_ALLOWLISTED: "decisions:set-proxy-allowlisted",
   DECISIONS_SET_DEFAULT_QUESTION_EXPIRY: "decisions:set-default-question-expiry",
   DECISIONS_SET_AGENT_ASK_HUMAN: "decisions:set-agent-ask-human",
   // Whether the phone may show the asking pane's title, state and last lines (#16228).

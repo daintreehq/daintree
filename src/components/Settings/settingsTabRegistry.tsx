@@ -2442,12 +2442,21 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
-        id: "decisions-proxy-allowlist",
-        section: "Policy",
-        title: "Allow proxy answers",
+        id: "decisions-model",
+        section: "Decision model",
+        title: "Answer automatically",
         description:
-          "Whether a question without a registered workflow gate may accept a decision model's answer",
-        keywords: ["proxy", "allowlist", "decision model", "automatic", "answer", "policy"],
+          "Lets the decision model answer in your place once it's evaluated, labelled as a proxy's answer and never for a question only you can answer",
+        keywords: [
+          "proxy",
+          "allowlist",
+          "decision model",
+          "automatic",
+          "auto-answer",
+          "answer",
+          "threshold",
+          "confidence",
+        ],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {

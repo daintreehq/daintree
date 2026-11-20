@@ -91,8 +91,14 @@ export interface DecisionModelEvaluation {
   autoAnswerThreshold: number | null;
 }
 
-/** The model's preferences as the setting holds them. */
-export type DecisionModelPreferences = Pick<DecisionsSettings, "modelLearning" | "modelAdapter">;
+/**
+ * The model's preferences as the setting holds them, with whether the person
+ * chose to let it answer in their place (#18062).
+ */
+export type DecisionModelPreferences = Pick<
+  DecisionsSettings,
+  "modelLearning" | "modelAdapter" | "proxyAllowlisted"
+>;
 
 export interface DecisionModelRuntimeOptions {
   files: DecisionModelFiles;
@@ -394,9 +400,11 @@ interface Armed {
 /**
  * The decision model for one owner lifetime (#16026): its history, open only
  * while learning is on, and the proxy, armed only once learning is on, a CLI
- * is chosen, that CLI's evaluation is stored and the threshold the person
- * chose after it is one the evaluation supports. Nothing here runs while it
- * isn't armed: no question goes to the CLI just to be declined.
+ * is chosen, that CLI's evaluation is stored, the threshold the person chose
+ * after it is one the evaluation supports, and the setting says they chose
+ * to let it answer (#18062): a threshold stored before that choice existed
+ * stays unarmed. Nothing here runs while it isn't armed: no question goes to
+ * the CLI just to be declined.
  *
  * The bridge offers the learner every answer a person gives from a phone
  * (never a proxy's, nor a person's confirmation of one), and the history
@@ -423,7 +431,13 @@ export class DecisionModelRuntime {
   private queue: Promise<unknown> = Promise.resolve();
   private closed = false;
   /** The preferences last taken, which a cleared history opens again under. */
-  private preferences: DecisionModelPreferences = { modelLearning: false, modelAdapter: null };
+  private preferences: DecisionModelPreferences = {
+    modelLearning: false,
+    modelAdapter: null,
+    proxyAllowlisted: false,
+  };
+  /** Whether the person lets it answer, as last asked; never from preferences queued before. */
+  private consented = false;
   /** The evaluation Settings started, while it runs. */
   private run: { info: DecisionsModelRun; controller: AbortController } | null = null;
   private lastRun: DecisionsModelRunEnd | null = null;
@@ -449,8 +463,15 @@ export class DecisionModelRuntime {
     return evaluation !== null && evaluation.adapter === this.model?.adapter ? evaluation : null;
   }
 
-  /** Takes the setting's preferences, in order with every other change. */
+  /**
+   * Takes the setting's preferences, in order with every other change, except
+   * whether the person lets it answer, which is taken at once: a withdrawal
+   * disarms before a change queued ahead of it finishes, and nothing queued
+   * from before can arm it again.
+   */
   update(preferences: DecisionModelPreferences): Promise<void> {
+    this.consented = preferences.proxyAllowlisted;
+    if (!this.consented) this.disarm(true);
     return this.enqueue(() => this.apply(preferences));
   }
 
@@ -672,8 +693,8 @@ export class DecisionModelRuntime {
 
   private async apply(preferences: DecisionModelPreferences): Promise<void> {
     if (this.closed) return;
-    const { modelLearning, modelAdapter } = preferences;
-    this.preferences = { modelLearning, modelAdapter };
+    const { modelLearning, modelAdapter, proxyAllowlisted } = preferences;
+    this.preferences = { modelLearning, modelAdapter, proxyAllowlisted };
     this.learning = modelLearning;
     if (!modelLearning) {
       this.disarm(true);
@@ -732,6 +753,7 @@ export class DecisionModelRuntime {
     }
     const authorised =
       !this.closed &&
+      this.consented &&
       this.learning &&
       this.history !== null &&
       model !== null &&

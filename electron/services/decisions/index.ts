@@ -2493,14 +2493,14 @@ export async function declinePairing(pairingId: string): Promise<DecisionsPairin
   return devices instanceof OwnerDevices ? devices.decline(pairingId) : devices;
 }
 
-/** The rules questions are asked under (#16013): the trusted gates, and the proxy allowlist as saved. */
+/** The rules questions are asked under (#16013): the trusted gates and the default expiry. */
 export function getDecisionsPolicy(): DecisionsPolicy {
   return decisionsPolicyOf(readDecisionsSettings(store), policyRevision);
 }
 
 /**
  * Saves one field of the policy over the setting as it stands when its turn
- * comes, so a save of the other field queued meanwhile is kept. The running
+ * comes, so a save of another field queued meanwhile is kept. The running
  * lifetime's policy changes in place, so the next question is asked under it;
  * questions already asked keep what they were asked with.
  */
@@ -2516,11 +2516,6 @@ function savePolicy(change: Partial<PolicySettings>): Promise<DecisionsPolicy> {
     publishStatus();
     return decisionsPolicyOf(saved, policyRevision);
   });
-}
-
-/** Lets questions with no workflow gate accept a proxy answer, or stops them. */
-export function setDecisionsProxyAllowlisted(allowed: boolean): Promise<DecisionsPolicy> {
-  return savePolicy({ proxyAllowlisted: allowed });
 }
 
 /**
@@ -2696,8 +2691,24 @@ export function cancelDecisionsModelEvaluation(
 }
 
 /**
+ * Saves whether the person lets the decision model answer in their place
+ * (#18062) over the setting as it stands now, since a relay revocation can be
+ * written outside the transitions and an older read would undo it. The
+ * running model takes a withdrawal at once.
+ */
+function saveAnswerConsent(allowed: boolean): void {
+  const current = readDecisionsSettings(store);
+  if (current.proxyAllowlisted === allowed) return;
+  service?.updateSettings(writeDecisionsSettings(store, { ...current, proxyAllowlisted: allowed }));
+}
+
+/**
  * Chooses the confidence the model answers automatically from, for the
- * evaluation it was chosen from, or stops automatic answers with null.
+ * evaluation it was chosen from, or stops automatic answers with null. It is
+ * the one choice that lets the model answer in the person's place (#18062):
+ * a confidence also lets a question without a gate take a proxy answer while
+ * the model is armed, and null withdraws that. A threshold saved before this
+ * choice existed stays unarmed until the person chooses again.
  */
 export function setDecisionsModelThreshold(
   payload: SetDecisionsModelThresholdPayload
@@ -2720,6 +2731,17 @@ export function setDecisionsModelThreshold(
         message: "That confidence isn't one the evaluation supports answering from",
       });
     }
+    if (payload.threshold === null) {
+      // Withdrawn first, so the model stops answering even if the file can't be written.
+      try {
+        saveAnswerConsent(false);
+      } catch (error) {
+        console.warn(
+          "[Decisions] Automatic answers weren't withdrawn in the setting:",
+          error instanceof Error ? error.name : typeof error
+        );
+      }
+    }
     try {
       await model.setAutoAnswerThreshold(payload.threshold, payload.evaluatedAt);
     } catch (error) {
@@ -2738,6 +2760,23 @@ export function setDecisionsModelThreshold(
         code: "INTERNAL",
         message: "The choice couldn't be saved. Try again.",
       });
+    }
+    if (payload.threshold !== null) {
+      // After the threshold, so the model arms only at the confidence just chosen.
+      if (shutDown || !readDecisionsSettings(store).enabled) throw setupRefused();
+      try {
+        saveAnswerConsent(true);
+      } catch (error) {
+        console.warn(
+          "[Decisions] Automatic answers weren't allowed in the setting:",
+          error instanceof Error ? error.name : typeof error
+        );
+        throw new AppError({
+          code: "INTERNAL",
+          message: "The choice couldn't be saved. Try again.",
+        });
+      }
+      await model.settled();
     }
     return getDecisionsModel();
   });
