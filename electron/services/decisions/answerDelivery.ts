@@ -127,8 +127,10 @@ export interface DiagnosticTerminals {
 }
 
 /** What delivery needs from the rest of main; the lazy entry supplies the real ones. */
-export interface AnswerDeliveryDeps
-  extends Omit<DaintreeTerminalSinkDeps, "queueWake" | "now" | "originOf"> {
+export interface AnswerDeliveryDeps extends Omit<
+  DaintreeTerminalSinkDeps,
+  "queueWake" | "now" | "originOf"
+> {
   /** Takes a hold on the wake engine. Called before the first delivery, and again after a failure. */
   holdWakes(): DecisionWakeHold | Promise<DecisionWakeHold>;
   /** Calls `onPane` on each pane signal; returns the unsubscribe. */
