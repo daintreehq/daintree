@@ -742,6 +742,45 @@ describe("AnswerDelivery", () => {
     await stopped(h.delivery);
   });
 
+  it("types the notice of a question that never reached the relay, and reports no answer for it (0.9.0, #17939)", async () => {
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve");
+    // As 0.9.0's publisher settles a create whose deadline passed before it was ever sent.
+    await h.store.updateQuestion(Q1, {
+      local_status: "publish-failed",
+      question_revision: 0,
+      error_code: "never_published",
+      answers_json: serializeAnswers([
+        {
+          entry_id: `unpublished-${Q1}`,
+          kind: "unpublished",
+          action: "expire",
+          revision: 0,
+          source: "system",
+          correction: false,
+          created_at: "2026-11-01T09:00:00.000Z",
+          deliver: true,
+          delivered: false,
+          sealed: null,
+        },
+      ]),
+    });
+
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1);
+    const typed = h.client.submitted[0].text;
+    expect(typed).toContain("source: system\nstatus: never-published\nauthorised: no\nnote:");
+    expect(typed).not.toMatch(/^(choice|source: human)/m);
+    await until(async () =>
+      parseAnswers((await h.question(Q1))!.answers_json).every((entry) => entry.delivered)
+    );
+    // Typed once, and never reported to the relay as an answer delivered.
+    await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
+    expect(h.client.submitted).toHaveLength(1);
+    expect(h.terminalReports()).toEqual([]);
+    await stopped(h.delivery);
+  });
+
   it("types a setup check's answer into its diagnostic terminal alone, never into an agent's pane", async () => {
     const diagnostics = new SetupDiagnostics();
     const terminal = diagnostics.open(HOST, () => {});
@@ -1961,7 +2000,10 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
       const h = setup();
       await answered(h.store, Q1, 1, "approve");
       const [entry] = parseAnswers((await h.question(Q1))!.answers_json);
+      // An expiry's notice is typed only while its round's question stays expired (0.9.0's `closureInForce`).
       await h.store.updateQuestion(Q1, {
+        local_status: "expired",
+        question_revision: 0,
         answers_json: serializeAnswers([
           { ...entry, kind: "expired", action: "expire", revision: 0 },
         ]),

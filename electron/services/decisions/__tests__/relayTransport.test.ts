@@ -1,10 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DecisionsBridge,
+  MemoryKeyStore,
   MemoryLocalStore,
+  loadIdentity,
   type QuestionOrigin,
   type QuestionRow,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
+import {
+  generateDeviceKeys,
+  generateEpochKeyBytes,
+  serializeDeviceKeys,
+} from "@daintreehq/decisions-crypto";
+import { bytesToBase64Url } from "@daintreehq/decisions-protocol";
 
 vi.mock("electron", () => ({
   net: { isOnline: () => true },
@@ -16,6 +25,7 @@ import {
   ObservedSocket,
   RetiredAttemptError,
   holdingTerminalSink,
+  inertAttemptDelivery,
   isRelaySocketUrl,
   retireable,
   socketBridgeStore,
@@ -142,6 +152,56 @@ describe("holdingTerminalSink", () => {
       reason: "socket-attempt",
     });
     expect(await holdingTerminalSink.hasMarker(located.target!, "inj-1")).toBe(false);
+  });
+});
+
+describe("inertAttemptDelivery", () => {
+  async function attemptBridge(store: MemoryLocalStore): Promise<DecisionsBridge> {
+    const keys = new MemoryKeyStore();
+    await keys.save({
+      v: 1,
+      config: {
+        relayOrigin: "https://decisions.example.workers.dev",
+        installationId: "inst_12345678",
+        deviceId: "dev_12345678",
+        label: "Test desktop",
+      },
+      keys: await serializeDeviceKeys(await generateDeviceKeys(true)),
+      epochs: [{ epoch: 1, raw: bytesToBase64Url(generateEpochKeyBytes()) }],
+      currentEpoch: 1,
+    });
+    return new DecisionsBridge({
+      identity: await loadIdentity(keys),
+      store,
+      sink: holdingTerminalSink,
+      pumpIntervalMs: 0,
+    });
+  }
+
+  it("drains nothing once its bridge reopens delivery, and asks the lifetime about closure writes", async () => {
+    const store = new MemoryLocalStore();
+    const listed = vi.spyOn(store, "listQuestions");
+    const reopened = await attemptBridge(store);
+    // As 0.9.0's start leaves it: a reopened engine reads every row, and reports receipts, before any pane.
+    reopened.delivery.stopped = false;
+    await reopened.delivery.drain();
+    expect(listed).toHaveBeenCalled();
+    listed.mockClear();
+
+    const attempt = await attemptBridge(store);
+    const writing = Promise.resolve();
+    inertAttemptDelivery(attempt.delivery, (id) => (id === "q1" ? writing : null));
+    attempt.delivery.stopped = false;
+
+    expect(await attempt.delivery.drain()).toEqual({
+      delivered: 0,
+      deferred: 0,
+      needsAttention: 0,
+      uncertain: 0,
+    });
+    expect(listed).not.toHaveBeenCalled();
+    expect(attempt.delivery.closureWrite("q1")).toBe(writing);
+    expect(attempt.delivery.closureWrite("q2")).toBeNull();
   });
 });
 

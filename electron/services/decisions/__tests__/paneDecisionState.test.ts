@@ -191,6 +191,25 @@ describe("projectPaneDecisionStates", () => {
     ]);
   });
 
+  it("never names the notice of a question that never reached the relay an answer (0.9.0, #17939)", () => {
+    const state = only([
+      row(1, {
+        local_status: "publish-failed",
+        error_code: "never_published",
+        answers_json: answers({
+          kind: "unpublished",
+          action: "expire",
+          source: "system",
+          sealed: null,
+        }),
+      }),
+    ]);
+
+    expect(state?.waitingAnswers.map(({ alias, kind }) => ({ alias, kind }))).toEqual([
+      { alias: 1, kind: "expired" },
+    ]);
+  });
+
   it("drops a question the person declined, whether its notice waits, was typed or stopped (#17234)", () => {
     const declined = { local_status: "cancelled" as const, answers_json: answers(DECLINE) };
     const state = only([

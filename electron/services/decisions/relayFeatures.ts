@@ -24,7 +24,12 @@ import type { EventsPage, ProtocolFeature } from "@daintreehq/decisions-protocol
  * relay's to advertise in `/info`, never a desktop's to declare: presence
  * (#17240) is reported only to a relay that lists it. Setting the involvement
  * preference from this computer (#17237) has no token of its own: it rides
- * `involvement-v1`.
+ * `involvement-v1`. A 0.9.0 bridge asks to declare `advisory-deadlines-v1`
+ * only once its host delivers advisory outcomes (`advisoryDeadlines`, off
+ * here), so it joins with the work that types and enforces them (#17940,
+ * #17941). `agent-stopped-push-v1`, like presence, is a relay's to
+ * advertise: the owner desktop asks for that push (#17319) only of a relay
+ * that lists it.
  */
 export const DAINTREE_PROTOCOL_FEATURES: readonly ProtocolFeature[] = [
   "thread-messages-v1",
@@ -50,14 +55,16 @@ export class DaintreeRelayClient extends RelayClient {
   override events(
     after: number,
     limit?: number,
-    features: readonly ProtocolFeature[] = []
+    features: readonly ProtocolFeature[] = [],
+    opts?: Parameters<RelayClient["events"]>[3]
   ): Promise<EventsPage> {
-    return super.events(after, limit, declared(features));
+    return super.events(after, limit, declared(features), opts);
   }
 
   override socketTicket(
-    features: readonly ProtocolFeature[] = []
+    features: readonly ProtocolFeature[] = [],
+    opts?: Parameters<RelayClient["socketTicket"]>[1]
   ): ReturnType<RelayClient["socketTicket"]> {
-    return super.socketTicket(declared(features));
+    return super.socketTicket(declared(features), opts);
   }
 }

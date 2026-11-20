@@ -377,6 +377,31 @@ describe("readQuestionContent", () => {
     expect(thread[6]).toEqual({ type: "expired", entryId: "entry-e", sentAt: expired.created_at });
   });
 
+  it("shows no answer for a question that never reached the relay, only its status (0.9.0, #17939)", async () => {
+    const unpublished: AnswerEntry = {
+      entry_id: "unpublished-1",
+      kind: "unpublished",
+      action: "expire",
+      revision: 0,
+      source: "system",
+      correction: false,
+      created_at: "2026-11-01T11:00:00.000Z",
+      deliver: true,
+      delivered: false,
+      sealed: null,
+    };
+    const row = await question(CONTENT, {
+      local_status: "publish-failed",
+      error_code: "never_published",
+      answers_json: serializeAnswers([unpublished]),
+    });
+
+    const read = await readQuestionContent(ctx(), row);
+    if (read.result !== "read") throw new Error(read.result);
+    expect(read.question).toMatchObject({ status: "publish-failed", closedReason: null });
+    expect(read.question.thread).toEqual([]);
+  });
+
   it("names the revision it read, and tells a person's answer on the computer from a phone's (#17101)", async () => {
     const onPhone = await answer(
       { entry_id: "entry-1", signer_role: "phone", event_seq: 2 },

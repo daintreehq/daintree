@@ -33,6 +33,7 @@ import {
   ObservedSocket,
   RetiredAttemptError,
   chromiumWebSocket,
+  inertAttemptDelivery,
   holdingTerminalSink,
   isRelaySocketUrl,
   newBridgeLock,
@@ -68,8 +69,6 @@ export type RelayConnectionStatus =
 export type RelayConnectionStore = LocalStore & {
   isFaulted?(): boolean;
   hasPendingDelivery?(): Promise<boolean>;
-  /** Marks a question's pending create as possibly published, atomically, if it has one (#16014). */
-  markCreateMaybePublished?(questionId: string): Promise<boolean>;
 };
 
 /**
@@ -604,7 +603,10 @@ export class RelayConnection {
       // Answers are typed by the lifetime's delivery. An attempt's own engine
       // would stop with its socket, and reconcile the lifetime's injections as
       // crashed ones each time an attempt starts.
-      bridge.delivery.stopped = true;
+      inertAttemptDelivery(
+        bridge.delivery,
+        (questionId) => this.delivery?.closureWrite(questionId) ?? null
+      );
       // Its inbox appends answers to the rows delivery marks delivered.
       bridge.ctx.lock = this.lock;
       attempt.bridge = bridge;

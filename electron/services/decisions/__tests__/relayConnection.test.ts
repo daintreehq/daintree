@@ -8,6 +8,9 @@ import {
   INVOLVEMENT_META,
   MemoryKeyStore,
   MemoryLocalStore,
+  STORE_FORMAT,
+  STORE_FORMAT_KEY,
+  hostRef,
   loadIdentity,
   type KeyStore,
   type ProxyEngine,
@@ -15,6 +18,7 @@ import {
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
 import {
+  buildSignedAction,
   buildSignedInvolvement,
   exportPublicKey,
   generateDeviceKeys,
@@ -29,6 +33,7 @@ import { pendingRotationOf } from "../keyRotation.js";
 import { PRESENCE_TICK_MS, type PresenceWatchers } from "../desktopPresence.js";
 import type { UserPresence } from "../../userPresence.js";
 import {
+  EventData,
   bytesToBase64Url,
   type DeviceCert,
   type InvolvementRecord,
@@ -77,6 +82,7 @@ import { createTrustedPolicy } from "../workflowGates.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { QuestionBridge } from "../questionBridge.js";
 import type { QuestionSource } from "../relayConnection.js";
+import { DAINTREE_PROTOCOL_FEATURES } from "../relayFeatures.js";
 
 const RELAY: RelayBinding = {
   relayOrigin: "https://decisions.example.workers.dev",
@@ -1247,7 +1253,24 @@ describe("RelayConnection", () => {
     // The same lock delivery holds, handed to agents' questions before either ran (#17101).
     expect(h.connection.getDelivery()!.lock).toBe(bridges[0].ctx.lock);
     expect((source as unknown as QuestionSource).lock).toBe(bridges[0].ctx.lock);
-    expect(bridges.every((bridge) => bridge.delivery.stopped)).toBe(true);
+    // A reopen waits on the closure notice the lifetime's engine is typing, never the attempt's own.
+    const writing = Promise.resolve();
+    const closureWrite = vi
+      .spyOn(h.connection.getDelivery()!, "closureWrite")
+      .mockImplementation((id) => (id === "q1" ? writing : null));
+    for (const bridge of bridges) expect(bridge.delivery.closureWrite("q1")).toBe(writing);
+    expect(closureWrite).toHaveBeenCalledTimes(bridges.length);
+    // Started, each attempt's own engine still types nothing: draining it reads no row (#17939).
+    const listed = vi.spyOn(h.store, "listQuestions");
+    for (const bridge of bridges) {
+      expect(await bridge.delivery.drain()).toEqual({
+        delivered: 0,
+        deferred: 0,
+        needsAttention: 0,
+        uncertain: 0,
+      });
+    }
+    expect(listed).not.toHaveBeenCalled();
     await h.connection.stop();
   });
 
@@ -1285,6 +1308,77 @@ describe("RelayConnection", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("starts on a store a 0.8.0 bridge left with a reopened question open, stamping it and running 0.9.0's repair (#17939)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-migrated-"));
+    const migrations = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../persistence/migrations"
+    );
+    try {
+      const sqlite = openDb(path.join(dir, "app.db"), migrations).sqlite;
+      const store = new DaintreeLocalStore(sqlite);
+      const deadline = "2026-12-01T00:00:00.000Z";
+      // As 0.8.0 left it: reopened into round 1, with no format marked and no repair recorded.
+      await store.commitNewQuestion(
+        {
+          question_id: "q_reopened_0001",
+          alias: await store.nextAlias(),
+          origin: QUESTION_ORIGIN,
+          requirement: "human-required",
+          question_revision: 1,
+          remote_event_seq: 4,
+          origin_created_at: "2026-11-01T00:00:00.000Z",
+          expires_at: deadline,
+          local_status: "open",
+          delivery_status: "relay-queued",
+          last_injection_id: null,
+          last_attempt_at: null,
+          agent_resume_strategy: null,
+          error_code: null,
+          content_sealed: '{"sealed":1}',
+          answers_json: "[]",
+          messages_json: "[]",
+          history_only: false,
+          delivered_revision: 0,
+          attachment_digests: [],
+        },
+        {
+          id: "o1",
+          kind: "create",
+          question_id: "q_reopened_0001",
+          payload: {},
+          attempts: 0,
+          next_attempt_at: 0,
+          created_at: 0,
+          last_error: null,
+        }
+      );
+      await store.deleteOutbox("o1");
+      expect(await store.getMeta(STORE_FORMAT_KEY)).toBeNull();
+      const history = vi.spyOn(store, "processedEventsOfType");
+
+      const h = await harness({ store });
+      h.connection.start();
+      const socket = await connectLive(h);
+      socket.event(1);
+      await socket.waitFor((frame) => frame.t === "ack" && frame.seq === 1);
+
+      await vi.waitFor(async () => expect(await store.getMeta("rounds-reconciled")).not.toBeNull());
+      expect(history).toHaveBeenCalledWith("decision.reopened");
+      expect(await store.getMeta(STORE_FORMAT_KEY)).toBe(String(STORE_FORMAT));
+      expect(await store.getQuestion("q_reopened_0001")).toMatchObject({
+        local_status: "open",
+        question_revision: 1,
+        expires_at: deadline,
+      });
+      h.connection.stop();
+      await store.close();
+      sqlite.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uploads, after the app starts again, what an upload cut short left spooled, from the ciphertext alone", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-attachments-"));
     const migrations = path.resolve(
@@ -2031,6 +2125,192 @@ describe("get_involvement over a connection (#17228)", () => {
     for (const api of hostApis) expect(api).not.toHaveBeenCalled();
     expect(relay.requests).not.toContain("PUT /api/v1/presence");
     expect(relay.requests).not.toContain("PUT /api/v1/involvement");
+  });
+
+  // Every feature a 0.8.0 relay can advertise, and the two 0.9.0 adds.
+  const releasedBy080 = [
+    "thread-messages-v1",
+    "phone-images-v1",
+    "pane-snapshots-v1",
+    "owner-desktop-answers-v1",
+    "involvement-v1",
+    "person-declines-v1",
+    "owner-desktop-messages-v1",
+    "owner-desktop-declines-v1",
+    "presence-v1",
+  ];
+  it.each([
+    ["a 0.8.0 relay", releasedBy080],
+    ["a 0.9.0 relay", [...releasedBy080, "advisory-deadlines-v1", "agent-stopped-push-v1"]],
+  ])(
+    "asks through %s as it did on 0.8.0, declaring and asking for nothing 0.9.0 added (#17939)",
+    async (_label, advertised) => {
+      const relay = await relayWithPreference();
+      relay.advertise(advertised);
+      const created: Array<{ question: { envelope: { aad: Record<string, unknown> } } }> = [];
+      const wrapFetch =
+        (fetchImpl: RelayFetch): RelayFetch =>
+        (url, init) => {
+          if (new URL(url).pathname === "/api/v1/questions" && init.method === "POST") {
+            created.push(JSON.parse(String(init.body)) as (typeof created)[number]);
+          }
+          return relay.wrapFetch(fetchImpl)(url, init);
+        };
+      const push = vi.spyOn(DecisionsBridge.prototype, "requestAgentStoppedPush");
+      let source: QuestionSource | null = null;
+      const h = await harness({
+        wrapFetch,
+        overrides: { onQuestionsReady: (ready) => (source = ready) },
+      });
+      teardown.push(() => h.connection.stop());
+      h.connection.start();
+      await connectLive(h);
+      const bridge = new QuestionBridge({
+        source: source as unknown as QuestionSource,
+        isCurrent: () => true,
+      });
+
+      await bridge.registerQuestion({
+        origin: QUESTION_ORIGIN,
+        input: { question: "Still asking?" },
+      });
+      await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
+      expect(h.statuses.at(-1)?.state).toBe("connected");
+      // An ordinary question's envelope binds only what a 0.8.0 reader's strict AAD allows.
+      expect(Object.keys(created[0]!.question.envelope.aad).sort()).toEqual([
+        "installation_id",
+        "question_id",
+        "record_type",
+        "revision",
+        "sender_device_id",
+      ]);
+      expect(relay.declared.length).toBeGreaterThan(0);
+      for (const features of relay.declared) {
+        for (const feature of (features as string[] | undefined) ?? []) {
+          expect(DAINTREE_PROTOCOL_FEATURES).toContain(feature);
+        }
+      }
+      expect(relay.declared.flat()).toContain("owner-desktop-declines-v1");
+      expect(relay.declared.flat()).not.toContain("advisory-deadlines-v1");
+      expect(push).not.toHaveBeenCalled();
+      expect(relay.requests).not.toContain("POST /api/v1/push/agent-stopped");
+    }
+  );
+
+  it("repairs a reopened question's deadline from the signed reopen a 0.8.0 bridge kept but didn't apply (#17939)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-repair-"));
+    const migrations = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../persistence/migrations"
+    );
+    try {
+      const relay = await relayWithPreference();
+      const sqlite = openDb(path.join(dir, "app.db"), migrations).sqlite;
+      const store = new DaintreeLocalStore(sqlite);
+      const questionId = "q_reopened_0002";
+      const earlier = "2026-11-25T00:00:00.000Z";
+      const reopenedUntil = "2026-12-20T00:00:00.000Z";
+      // As 0.8.0 left it: the reopen applied to status and round, the first round's deadline kept.
+      await store.commitNewQuestion(
+        {
+          question_id: questionId,
+          alias: await store.nextAlias(),
+          origin: QUESTION_ORIGIN,
+          requirement: "human-required",
+          question_revision: 1,
+          remote_event_seq: 7,
+          origin_created_at: "2026-11-01T00:00:00.000Z",
+          expires_at: earlier,
+          local_status: "open",
+          delivery_status: "relay-queued",
+          last_injection_id: null,
+          last_attempt_at: null,
+          agent_resume_strategy: null,
+          error_code: null,
+          content_sealed: '{"sealed":1}',
+          answers_json: "[]",
+          messages_json: "[]",
+          history_only: false,
+          delivered_revision: 0,
+          attachment_digests: [],
+        },
+        {
+          id: "o2",
+          kind: "create",
+          question_id: questionId,
+          payload: {},
+          attempts: 0,
+          next_attempt_at: 0,
+          created_at: 0,
+          last_error: null,
+        }
+      );
+      await store.deleteOutbox("o2");
+      const owner = await loadIdentity(
+        await (async () => {
+          const keys = new MemoryKeyStore();
+          await keys.save(identity);
+          return keys;
+        })()
+      );
+      const signed = await buildSignedAction({
+        installationId: RELAY.installationId,
+        questionId,
+        action: "reopen",
+        signerDeviceId: RELAY.deviceId,
+        signingKey: owner.keys.signing.privateKey,
+        expectedRevision: 0,
+        expiresAt: reopenedUntil,
+      });
+      const reopen = {
+        protocol_version: 1,
+        seq: 7,
+        event_id: "evt_00000007",
+        event_type: "decision.reopened",
+        occurred_at: "2026-11-20T00:00:00.000Z",
+        question_id: questionId,
+        question_revision: 1,
+        origin_device_id: RELAY.deviceId,
+        data: EventData.action.parse({
+          action: "reopen",
+          record: signed.record,
+          envelope: signed.envelope,
+          provenance: null,
+          status: "open",
+          revision: 1,
+          target_host_id: await hostRef(QUESTION_ORIGIN.host_id),
+          deliverable: false,
+        }),
+      };
+      await store.insertEvent({
+        seq: 7,
+        event_id: reopen.event_id,
+        event_type: reopen.event_type,
+        json: JSON.stringify(reopen),
+        received_at: 1,
+        processed_at: null,
+      });
+      await store.markEventProcessed(7, 2);
+      await store.setMeta("cursor", "7");
+
+      const h = await harness({ store, wrapFetch: relay.wrapFetch });
+      h.connection.start();
+      const socket = await connectLive(h);
+      socket.event(8);
+      await socket.waitFor((frame) => frame.t === "ack" && frame.seq === 8);
+
+      await vi.waitFor(async () => expect(await store.getMeta("rounds-reconciled")).not.toBeNull());
+      expect(await store.getQuestion(questionId)).toMatchObject({
+        local_status: "open",
+        question_revision: 1,
+        expires_at: reopenedUntil,
+      });
+      h.connection.stop();
+      await store.close();
+      sqlite.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("answers from the verified copy a 0.7.0 Daintree kept, and still refuses an older record against it (#17433)", async () => {

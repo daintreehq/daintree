@@ -49,6 +49,12 @@ export interface AnswerBlock {
   /** A `system` block: the question expired without an answer. */
   expired: boolean;
   /**
+   * A `system` block from 0.9.0: the question's deadline passed before this
+   * computer could send it to the relay, so no answer was recorded and it
+   * authorises nothing.
+   */
+  neverPublished: boolean;
+  /**
    * The person declined to answer from their phone or tablet (#17234): a
    * `human` block that carries no answer and authorises nothing.
    */
@@ -122,6 +128,8 @@ const EXPIRED_NOTE =
   "note: The question expired without an answer. You are not authorised to continue the gated step: ask again, or stop and report.";
 const DECLINED_NOTE =
   "note: The person chose not to answer this question. Nothing was decided or approved: stop waiting for it, and don't continue the gated step.";
+const NEVER_PUBLISHED_NOTE =
+  "note: This question never reached the relay: its deadline passed before this computer could send it, so it never reached the person's phone, no answer was recorded, and nothing was decided or approved. You are not authorised to continue the gated step: ask again if you still need an answer, or stop and report.";
 
 // The library's own fixed lines, which are all a `note:` may say.
 const LIBRARY_PROXY_NOTE =
@@ -136,6 +144,11 @@ const LIBRARY_EXPIRED_NOTE =
   "note: The question expired without an answer. You are NOT authorised to continue the gated step; re-ask or stop and report.";
 const LIBRARY_DECLINED_NOTE =
   "note: The person declined to answer this question. Nothing was decided or approved; stop waiting for it and do not continue the gated step.";
+const LIBRARY_NEVER_PUBLISHED_NOTE =
+  "note: This question never reached the relay: its deadline passed before this computer could publish it, so it never reached the person's phone and no answer to it was recorded. Nothing was decided or approved.";
+/** The blocking form's last line; the advisory form's instead lets a stated plan go ahead, which needs #17940. */
+const LIBRARY_NEVER_PUBLISHED_BLOCKING_NOTE =
+  "note: You are NOT authorised to continue the gated step; ask again if you still need an answer, or stop and report.";
 
 /** Question and injection ids as the library mints them: hex, never free text. */
 const ID = /^[A-Za-z0-9_-]{8,80}$/;
@@ -332,6 +345,7 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
     source: "human",
     onComputer: false,
     expired: false,
+    neverPublished: false,
     declined: false,
     correction: false,
     modelId: null,
@@ -344,15 +358,24 @@ function parseBlock(cursor: Cursor): AnswerBlock | null {
   };
 
   if (source === "system") {
-    if (
-      !cursor.takeExact("status: expired") ||
-      !cursor.takeExact("authorised: no") ||
-      !cursor.takeExact(LIBRARY_EXPIRED_NOTE)
-    ) {
+    if (cursor.takeExact("status: expired")) {
+      if (!cursor.takeExact("authorised: no") || !cursor.takeExact(LIBRARY_EXPIRED_NOTE)) {
+        return null;
+      }
+      block.expired = true;
+    } else if (cursor.takeExact("status: never-published")) {
+      if (
+        !cursor.takeExact("authorised: no") ||
+        !cursor.takeExact(LIBRARY_NEVER_PUBLISHED_NOTE) ||
+        !cursor.takeExact(LIBRARY_NEVER_PUBLISHED_BLOCKING_NOTE)
+      ) {
+        return null;
+      }
+      block.neverPublished = true;
+    } else {
       return null;
     }
     block.source = "system";
-    block.expired = true;
   } else if (source === "human" && cursor.takeExact("status: declined")) {
     // A decline is the person's, and says only that: no choice, words or images follow.
     if (!cursor.takeExact("authorised: no") || !cursor.takeExact(LIBRARY_DECLINED_NOTE)) {
@@ -529,6 +552,8 @@ function renderBlock(block: AnswerBlock, marked = true): string {
   }
   if (block.expired) {
     lines.push("source: system", "status: expired", "authorised: no", EXPIRED_NOTE);
+  } else if (block.neverPublished) {
+    lines.push("source: system", "status: never-published", "authorised: no", NEVER_PUBLISHED_NOTE);
   } else if (block.declined) {
     lines.push("source: human", "status: declined", "authorised: no", DECLINED_NOTE);
   } else {

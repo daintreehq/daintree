@@ -61,7 +61,7 @@ async function clients() {
 }
 
 describe("DaintreeRelayClient (#16229)", () => {
-  // Every feature a 0.8.0 bridge can ask to declare, follow-ups and snapshots included.
+  // Every feature a 0.9.0 bridge Daintree runs can ask to declare, follow-ups and snapshots included.
   const asked: readonly ProtocolFeature[] = bridgeFeatures({
     followUps: true,
     snapshots: { onRefresh: () => {} },
@@ -121,10 +121,48 @@ describe("DaintreeRelayClient (#16229)", () => {
     for (const features of declared) expect([...features].sort()).toEqual([...asked].sort());
   });
 
+  it("cuts advisory deadlines, which a 0.9.0 bridge asks to declare once its host delivers advisory outcomes (#17940)", async () => {
+    const { sent, daintree } = await clients();
+    const advisory = bridgeFeatures({
+      followUps: true,
+      snapshots: { onRefresh: () => {} },
+      advisoryDeadlines: true,
+    });
+    expect(advisory).toContain("advisory-deadlines-v1");
+
+    await daintree.events(5, 10, advisory);
+    await daintree.socketTicket(advisory);
+
+    expect(sent[0]!.url.searchParams.get("features")!.split(",")).toEqual(
+      [...asked].sort((a, b) => a.localeCompare(b))
+    );
+    expect((sent[1]!.body as { features: string[] }).features).not.toContain(
+      "advisory-deadlines-v1"
+    );
+  });
+
+  it("passes each call's options on, so a caller's abort stops the request", async () => {
+    const { sent, daintree } = await clients();
+    const aborted = AbortSignal.abort();
+
+    await expect(daintree.events(0, 10, asked, { signal: aborted })).rejects.toThrow();
+    await expect(daintree.socketTicket(asked, { signal: aborted })).rejects.toThrow();
+    expect(sent).toEqual([]);
+
+    await daintree.events(0, 10, asked, { signal: new AbortController().signal });
+    expect(sent).toHaveLength(1);
+  });
+
   it("declares nothing for a feature a later bridge asks for that Daintree doesn't handle", async () => {
     const { sent, daintree } = await clients();
-    // Presence is the relay's to advertise, never a desktop's (#17240); the voice note is one no release has.
-    const later: ProtocolFeature[] = ["presence-v1", "voice-notes-v1" as ProtocolFeature];
+    // Presence and the agent-stopped push are the relay's to advertise, never a desktop's (#17240, #17319);
+    // the voice note is one no release has.
+    const later: ProtocolFeature[] = [
+      "presence-v1",
+      "agent-stopped-push-v1",
+      "advisory-deadlines-v1",
+      "voice-notes-v1" as ProtocolFeature,
+    ];
 
     await daintree.events(5, 10, later);
     await daintree.socketTicket(later);

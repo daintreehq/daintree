@@ -4,7 +4,9 @@ import type { DecisionsRows } from "./localData.js";
 /**
  * Opens the Decisions store over the shared app database. Null when the
  * lifetime that asked has ended meanwhile: quitting must never reopen a
- * database shutdown is about to close, or already has.
+ * database shutdown is about to close, or already has. Rejects with
+ * `StoreFormatError` for a store a newer Decisions client wrote, before
+ * anything reads it, so the lifetime starts nothing on it.
  */
 export async function openDecisionsLocalStore(
   isCancelled: () => boolean
@@ -17,7 +19,9 @@ export async function openDecisionsLocalStore(
   getSharedDb();
   const sqlite = getSharedSqlite();
   if (!sqlite) throw new Error("The app database isn't open");
-  return new DaintreeLocalStore(sqlite);
+  const store = new DaintreeLocalStore(sqlite);
+  store.checkFormat();
+  return store;
 }
 
 /** The Decisions rows in the shared app database, for deleting them (#16025). */

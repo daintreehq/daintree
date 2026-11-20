@@ -234,7 +234,6 @@ export class QuestionBridge extends DecisionsBridge {
     if (live === null) return super.cancelQuestion(questionId, asker);
     // The library checks the question is this pane's before anything is touched.
     await live.getDecision(questionId, asker);
-    await this.keepCreate(questionId);
     return live.cancelQuestion(questionId, asker);
   }
 
@@ -265,7 +264,6 @@ export class QuestionBridge extends DecisionsBridge {
       if (live === null) {
         await super.cancelQuestion(questionId);
       } else {
-        await this.keepCreate(questionId);
         await live.cancelQuestion(questionId);
       }
       // What the store records once the request is in: dropped here, or a
@@ -802,29 +800,6 @@ export class QuestionBridge extends DecisionsBridge {
     if (pane.agent_session_id === null) return pane;
     const row = await this.question.source.store.getQuestion(questionId);
     return row?.origin.agent_session_id === null ? { ...pane, agent_session_id: null } : pane;
-  }
-
-  /**
-   * A live attempt's flush may already hold this question's create in hand,
-   * and would send it even after the library's cancel drops it as never
-   * published, bringing the question back. So a cancel while an attempt runs
-   * keeps the create, marked as possibly published, and the library queues a
-   * real cancel to follow it. The mark is set in place: a flush uploading the
-   * question's attachments rewrites the create as it goes, and a copy read
-   * here and written back would undo its progress, or put back a create it
-   * had just finished. The store keeps the mark across those rewrites.
-   */
-  private async keepCreate(questionId: string): Promise<void> {
-    const store = this.question.source.store;
-    if (store.markCreateMaybePublished) {
-      await store.markCreateMaybePublished(questionId);
-      return;
-    }
-    const create = (await store.outboxFor(questionId)).find((item) => item.kind === "create");
-    const payload = create?.payload;
-    if (create === undefined || typeof payload !== "object" || payload === null) return;
-    if ((payload as { maybePublished?: unknown }).maybePublished === true) return;
-    await store.putOutbox({ ...create, payload: { ...payload, maybePublished: true } });
   }
 
   /**

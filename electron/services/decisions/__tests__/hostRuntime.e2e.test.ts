@@ -13,6 +13,8 @@ import {
   MemoryLocalStore,
   MemoryPendingHostStore,
   PolicyRegistry,
+  STORE_FORMAT,
+  STORE_FORMAT_KEY,
   type KeyStore,
   acceptHostEnrollment,
   createHostRequest,
@@ -1686,6 +1688,78 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
     // Everything the relay was asked was signed by the Host's own device: the owner signed nothing.
     const signers = new Set(relay.requests.map((request) => request.deviceId));
     expect(signers).toEqual(new Set([host.config.deviceId]));
+  }, 60_000);
+
+  it("starts on a store 0.8.0 left with a reopened question open, repairs it, and still asks and types answers (#17939)", async () => {
+    const deadline = "2026-12-01T00:00:00.000Z";
+    const left = new DaintreeLocalStore(sqlite);
+    // As a 0.8.0 Host left it: reopened into round 1, with no format marked and no repair recorded.
+    await left.commitNewQuestion(
+      {
+        question_id: "q_reopened_0001",
+        alias: await left.nextAlias(),
+        origin: {
+          host_id: "host_studio_0001",
+          pane_id: "pane-2",
+          terminal_generation: 1,
+          ownership_principal: "principal-2",
+          agent_incarnation: "0",
+          agent_kind: "claude",
+          agent_session_id: null,
+          project_id: "project-1",
+          worktree_id: "wt-1",
+          worktree_root: dir,
+          workflow_gate_id: null,
+        },
+        requirement: "human-required",
+        question_revision: 1,
+        remote_event_seq: null,
+        origin_created_at: "2026-11-01T00:00:00.000Z",
+        expires_at: deadline,
+        local_status: "open",
+        delivery_status: "relay-queued",
+        last_injection_id: null,
+        last_attempt_at: null,
+        agent_resume_strategy: null,
+        error_code: null,
+        content_sealed: '{"sealed":1}',
+        answers_json: "[]",
+        messages_json: "[]",
+        history_only: false,
+        delivered_revision: 0,
+        attachment_digests: [],
+      },
+      {
+        id: "o1",
+        kind: "create",
+        question_id: "q_reopened_0001",
+        payload: {},
+        attempts: 0,
+        next_attempt_at: 0,
+        created_at: 0,
+        last_error: null,
+      }
+    );
+    await left.deleteOutbox("o1");
+    await left.close();
+
+    const { owner, phone, relay, terminals, listener } = await startHost();
+    const asked = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
+    await vi.waitFor(() => expect(relay.questions.has(asked)).toBe(true), { timeout: 15_000 });
+    await phoneAnswers(relay, owner, phone, asked, "a");
+    await vi.waitFor(() => expect(terminals.submitted).toHaveLength(1), { timeout: 15_000 });
+    expect(typedChoices(terminals.submitted[0]!.text)).toEqual(["a"]);
+
+    const store = new DaintreeLocalStore(sqlite);
+    await vi.waitFor(async () => expect(await store.getMeta("rounds-reconciled")).not.toBeNull(), {
+      timeout: 15_000,
+    });
+    expect(await store.getMeta(STORE_FORMAT_KEY)).toBe(String(STORE_FORMAT));
+    expect(await store.getQuestion("q_reopened_0001")).toMatchObject({
+      local_status: "open",
+      question_revision: 1,
+      expires_at: deadline,
+    });
   }, 60_000);
 
   // A 0.4.0 relay sends thread messages only to a desktop that declared them (#16229); Daintree

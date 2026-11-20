@@ -1129,48 +1129,21 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.hasPendingDelivery()).toBe(waiting);
   });
 
-  it("keeps a create's possibly-published mark across a rewrite from a copy read before it", async () => {
+  it("writes a create back as the publisher gives it, so a claim it withdraws stays withdrawn", async () => {
     const store = new DaintreeLocalStore(sqlite);
-    const create = { ...item("o1", "q1"), payload: { signed: 1, attachments: [], uploaded: [] } };
-    await store.commitNewQuestion(row("q1", 1), create);
-    await store.putOutbox({ ...item("o2", "q1"), kind: "cancel", payload: {} });
+    const claimed = { signed: 1, attachments: [], uploaded: ["a1"], maybePublished: true };
+    await store.commitNewQuestion(row("q1", 1), { ...item("o1", "q1"), payload: claimed });
 
-    // Submitted together, as a cancel and an upload's progress write can be: the
-    // rewrite must read the mark when it commits, not when it was asked for.
-    const [marked] = await Promise.all([
-      store.markCreateMaybePublished("q1"),
-      store.putOutbox({ ...create, payload: { signed: 1, attachments: [], uploaded: ["a1"] } }),
-    ]);
-    expect(marked).toBe(true);
-    await store.putOutbox({ ...item("o2", "q1"), kind: "cancel", payload: { n: 2 } });
+    // 0.9.0's publisher unclaims a create the relay showed it never took, before it closes the question.
+    const { maybePublished: _claim, ...unsent } = claimed;
+    await store.putOutbox({ ...item("o1", "q1"), payload: unsent });
 
-    const [kept, cancel] = await store.outboxFor("q1");
-    expect(kept.payload).toEqual({
-      signed: 1,
-      attachments: [],
-      uploaded: ["a1"],
-      maybePublished: true,
-    });
-    expect(cancel.payload).toEqual({ n: 2 });
-  });
+    const [create] = await store.outboxFor("q1");
+    expect(create.payload).toEqual({ signed: 1, attachments: [], uploaded: ["a1"] });
 
-  it("marks a create in place, keeping its upload progress and retry time, and never puts one back", async () => {
-    const store = new DaintreeLocalStore(sqlite);
-    const payload = { signed: 1, attachments: [{ attachment_id: "a1" }], uploaded: ["a1"] };
-    await store.commitNewQuestion(row("q1", 1), { ...item("o1", "q1"), payload });
-    await store.recordOutboxFailure("o1", "network_error", 40);
-
-    expect(await store.markCreateMaybePublished("q1")).toBe(true);
-    const [marked] = await store.outboxFor("q1");
-    expect(marked).toMatchObject({
-      payload: { ...payload, maybePublished: true },
-      attempts: 1,
-      next_attempt_at: 40,
-    });
-
-    await store.deleteOutbox("o1");
-    expect(await store.markCreateMaybePublished("q1")).toBe(false);
-    expect(await store.outboxFor("q1")).toEqual([]);
+    // And a claim it makes stays, so a cancel from another bridge sends a real cancel after it.
+    await store.putOutbox({ ...item("o1", "q1"), payload: claimed });
+    expect((await store.outboxFor("q1"))[0].payload).toEqual(claimed);
   });
 
   it("keeps a cancelled question cancelled when a stale flush reports its create refused", async () => {
