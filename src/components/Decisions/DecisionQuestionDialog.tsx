@@ -227,7 +227,13 @@ export function DecisionQuestionDialog() {
         </AppDialog.Header>
         <AppDialog.Body resetScrollKey={key ?? undefined}>
           <div ref={bodyRef} data-testid="decision-question-body">
-            <DecisionQuestionReadView reader={reader} target={target} active={isOpen} followUps />
+            <DecisionQuestionReadView
+              reader={reader}
+              target={target}
+              active={isOpen}
+              followUps
+              listed={listed}
+            />
           </div>
         </AppDialog.Body>
         {reader.cancellable && (

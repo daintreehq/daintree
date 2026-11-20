@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { LIMITS } from "@daintreehq/decisions-protocol";
 import type {
+  DecisionQuestionReference,
+  DecisionQuestionStanding,
   DecisionQuestionStatus,
   DecisionThreadAnswer,
   DecisionThreadEntry,
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
 import {
+  deliveryStalled,
   FOLLOW_UP_TEXT_BYTES,
   followUpAttemptText,
   followUpProgressText,
@@ -73,6 +76,44 @@ describe("takesFollowUp (#17238)", () => {
     );
     // The answer deadline says nothing about the thread once it was answered.
     expect(takesFollowUp({ status: "human-answered", expiresAt: past }, NOW)).toBe(true);
+  });
+});
+
+describe("deliveryStalled (#18028)", () => {
+  const reference: DecisionQuestionReference = {
+    hostId: "host_1",
+    projectId: "project-a",
+    terminalId: "t1",
+    questionId: "q1",
+  };
+  const stopped: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "needs-attention",
+  };
+  const uncertain: DecisionQuestionStanding = {
+    kind: "needs-attention",
+    deliveryStatus: "delivery-uncertain",
+  };
+  const handled: DecisionQuestionStanding = { kind: "settled", outcome: "answered", handled: true };
+
+  it("holds while the list says the same question's delivery needs a person, stopped or uncertain", () => {
+    expect(deliveryStalled({ reference }, { reference, standing: stopped })).toBe(true);
+    expect(deliveryStalled({ reference }, { reference, standing: uncertain })).toBe(true);
+  });
+
+  it("ends once the list stops saying so, and holds nothing without the list", () => {
+    expect(deliveryStalled({ reference }, { reference, standing: handled })).toBe(false);
+    expect(deliveryStalled({ reference }, { reference, standing: { kind: "to-type" } })).toBe(
+      false
+    );
+    expect(deliveryStalled({ reference }, null)).toBe(false);
+  });
+
+  it("never takes another question's stall, even one with the same id on another machine", () => {
+    const elsewhere = { ...reference, hostId: "host_2" };
+    expect(deliveryStalled({ reference }, { reference: elsewhere, standing: stopped })).toBe(false);
+    const another = { ...reference, questionId: "q2" };
+    expect(deliveryStalled({ reference }, { reference: another, standing: stopped })).toBe(false);
   });
 });
 

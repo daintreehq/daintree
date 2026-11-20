@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { PaneDecisionState } from "@shared/types/decisions";
 import type {
@@ -7,11 +7,14 @@ import type {
   DecisionQuestionContent,
   DecisionQuestionContentResult,
   DecisionQuestionFollowUpResult,
+  DecisionQuestionList,
+  DecisionQuestionStanding,
   DecisionThreadMessage,
   SendDecisionFollowUpPayload,
 } from "@shared/types/decisionsQuestion";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { isMac } from "@/lib/platform";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsFollowUpStore } from "@/store/decisionsFollowUpStore";
 import { useDecisionsImageReviewStore } from "@/store/decisionsImageReviewStore";
@@ -41,7 +44,9 @@ const sendFollowUp =
 const getFollowUpResult =
   vi.fn<(payload: { messageId: string }) => Promise<DecisionFollowUpResultRead>>();
 const answerQuestion = vi.fn();
+const listQuestions = vi.fn<() => Promise<DecisionQuestionList>>();
 let paneListeners: Array<(state: PaneDecisionState) => void> = [];
+let listListeners: Array<(list: DecisionQuestionList) => void> = [];
 
 /** A question a Remote Host asked: the reference names that Host, and a follow-up names it so. */
 const REFERENCE = { hostId: "host_studio", projectId: "project-1", terminalId: "t1" };
@@ -126,6 +131,49 @@ async function move(next: DecisionQuestionContent) {
   await act(async () => pushPane());
 }
 
+/** Delivery stopped on q1's answer and nobody has resolved it. */
+const STALLED: DecisionQuestionStanding = {
+  kind: "needs-attention",
+  deliveryStatus: "needs-attention",
+};
+
+/** The same answer once the person marked it handled: its own delivery status stays as it was. */
+const HANDLED: DecisionQuestionStanding = { kind: "settled", outcome: "answered", handled: true };
+
+/** This computer's list, holding q1 as `standing` says. */
+function listOf(standing: DecisionQuestionStanding, revision: number): DecisionQuestionList {
+  return {
+    revision,
+    questions: [
+      {
+        reference: { ...REFERENCE, questionId: "q1" },
+        alias: 7,
+        agentKind: "claude",
+        projectLabel: null,
+        worktreeId: "w1",
+        worktreeRoot: "/repos/alpha",
+        requirement: "human-required",
+        askedAt: "2026-11-02T10:00:00.000Z",
+        expiresAt: null,
+        settledAt: null,
+        standing,
+        replyRequest: null,
+        stall:
+          standing.kind === "needs-attention"
+            ? { answerRevision: 1, followUpIds: [], reason: "pane_gone" }
+            : null,
+      },
+    ],
+  };
+}
+
+async function pushList(list: DecisionQuestionList) {
+  listQuestions.mockResolvedValue(list);
+  await act(async () => {
+    for (const listener of [...listListeners]) listener(list);
+  });
+}
+
 async function openOn(...ids: string[]) {
   act(() => useDecisionsQuestionViewStore.getState().open("t1", ids, ids[0]!));
   const composer = await screen.findByTestId("decision-follow-up-composer");
@@ -153,10 +201,21 @@ function notice() {
   return screen.getByTestId("decision-follow-up-notice").textContent ?? "";
 }
 
+/** The composer's promise that a follow-up is typed into the asking terminal. */
+function promised() {
+  return screen.queryByText(/Typed into the terminal that asked/) !== null;
+}
+
+function paused() {
+  return screen.queryByTestId("decision-follow-up-paused")?.textContent ?? null;
+}
+
 beforeEach(() => {
   decisionsOn = true;
   paneListeners = [];
+  listListeners = [];
   questions = { q1: question("q1") };
+  listQuestions.mockReset().mockResolvedValue({ revision: 1, questions: [] });
   useDecisionsQuestionViewStore.setState({ isOpen: false, request: null });
   useDecisionsAnswerStore.getState().clear();
   useDecisionsFollowUpStore.getState().clear();
@@ -181,8 +240,18 @@ beforeEach(() => {
       getAnswerResult: async () => ({ result: "not-found" }),
       getQuestionImage: () => new Promise(() => {}),
       getQuestionSummaries: async () => ({ result: "not-running" }),
+      listQuestions,
+      markQuestions: async () => ({ result: "marked", marked: 0 }),
     },
-    events: { on: () => () => {} },
+    events: {
+      on: (name: string, callback: (list: DecisionQuestionList) => void) => {
+        if (name !== "decisions:questions-changed") return () => {};
+        listListeners.push(callback);
+        return () => {
+          listListeners = listListeners.filter((listener) => listener !== callback);
+        };
+      },
+    },
     terminal: {
       onDecisionState: (callback: (state: PaneDecisionState) => void) => {
         paneListeners.push(callback);
@@ -700,6 +769,139 @@ describe("following up a question from the view (#17238)", () => {
 
     expect(sendFollowUp).not.toHaveBeenCalled();
     expect(useDecisionsFollowUpStore.getState().records).toEqual({});
+  });
+});
+
+describe("following up while the answer's delivery is stopped (#18028)", () => {
+  const ANSWERED_STALLED = () =>
+    question("q1", { status: "human-answered", deliveryStatus: "needs-attention" });
+
+  it("offers no new follow-up while the stall is unresolved, and offers it again once it's marked handled", async () => {
+    questions = { q1: ANSWERED_STALLED() };
+    listQuestions.mockResolvedValue(listOf(STALLED, 1));
+    act(() => useDecisionsQuestionViewStore.getState().open("t1", ["q1"], "q1"));
+    await screen.findByTestId("decision-question-content");
+
+    // Nothing written here yet: no box and no Send, only why.
+    await waitFor(() => expect(paused()).toMatch(/can't send a new follow-up until it's resolved/));
+    expect(screen.queryByTestId("decision-follow-up-text")).toBeNull();
+    expect(screen.queryByTestId("decision-follow-up-send")).toBeNull();
+    expect(promised()).toBe(false);
+
+    // Marked handled: the question's own delivery status still says it stopped, the list doesn't.
+    await pushList(listOf(HANDLED, 2));
+    await waitFor(() => expect(screen.queryByTestId("decision-follow-up-text")).not.toBeNull());
+    expect(paused()).toBeNull();
+    expect(promised()).toBe(true);
+    write("Carry on without it.");
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(sendFollowUp).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(status()).toBe("Follow-up sent"));
+  });
+
+  it("keeps a draft in progress when the stall arrives, sends nothing while it stands, and sends it once resolved", async () => {
+    questions = { q1: question("q1", { status: "human-answered" }) };
+    await openOn("q1");
+    act(() => box().focus());
+    write("Use the staging bucket.");
+    const field = box();
+    const announce = vi.fn();
+    const original = useAnnouncerStore.getState().announce;
+    useAnnouncerStore.setState({ announce });
+    onTestFinished(() => useAnnouncerStore.setState({ announce: original }));
+
+    // The list says so before any read of the question does.
+    await pushList(listOf(STALLED, 2));
+    await waitFor(() => expect(paused()).not.toBeNull());
+    expect(promised()).toBe(false);
+    expect(announce).toHaveBeenCalledWith(paused());
+    questions = { q1: ANSWERED_STALLED() };
+    await move(ANSWERED_STALLED());
+
+    // The words, and focus, stay where they were, still the person's to change.
+    expect(screen.getByTestId("decision-follow-up-text")).toBe(field);
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe("Use the staging bucket.");
+    expect(field.readOnly).toBe(false);
+    write("Use the staging bucket, please.");
+    expect(box().value).toBe("Use the staging bucket, please.");
+    expect(sendButton().getAttribute("aria-disabled")).toBe("true");
+    // The disabled Send says why.
+    const describedBy = sendButton().getAttribute("aria-describedby") ?? "";
+    expect(describedBy.split(" ")).toContain(screen.getByTestId("decision-follow-up-paused").id);
+    fireEvent.click(sendButton());
+    fireEvent.keyDown(box(), {
+      key: "Enter",
+      ...(isMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    expect(sendFollowUp).not.toHaveBeenCalled();
+
+    await pushList(listOf(HANDLED, 3));
+    await waitFor(() => expect(sendButton().getAttribute("aria-disabled")).toBeNull());
+    expect(promised()).toBe(true);
+    expect(sendButton().getAttribute("aria-describedby")).toBeNull();
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(sendFollowUp).toHaveBeenCalledTimes(1));
+    expect(sendFollowUp.mock.calls[0]![0].text).toBe("Use the staging bucket, please.");
+  });
+
+  it("never lets go of a follow-up whose fate is unknown when the stall arrives, and its Retry still sends it", async () => {
+    questions = { q1: question("q1", { status: "human-answered" }) };
+    sendFollowUp.mockRejectedValue(new Error("link dropped"));
+    await openOn("q1");
+    write("Is the backfill done?");
+    fireEvent.click(sendButton());
+    await waitFor(() =>
+      expect(status()).toContain("Couldn't confirm whether your follow-up was sent.")
+    );
+    const [lost] = sendFollowUp.mock.calls.map(([payload]) => payload);
+
+    await pushList(listOf(STALLED, 2));
+    await waitFor(() => expect(paused()).not.toBeNull());
+    questions = { q1: ANSWERED_STALLED() };
+    await move(ANSWERED_STALLED());
+    expect(box().value).toBe("Is the backfill done?");
+    expect(status()).toContain("Couldn't confirm whether your follow-up was sent.");
+
+    sendFollowUp.mockReset().mockImplementation(async (payload) => ({
+      result: "submitted",
+      messageId: payload.messageId,
+      outcome: { status: "sent" },
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(status()).toBe("Follow-up sent"));
+    expect(sendFollowUp).toHaveBeenCalledTimes(1);
+    expect(sendFollowUp.mock.calls[0]![0]).toEqual(lost);
+  });
+
+  it("still says a failed attempt sent nothing when the stall arrives over it", async () => {
+    questions = { q1: question("q1", { status: "human-answered" }) };
+    sendFollowUp.mockResolvedValueOnce({ result: "refused", reason: "not-owner" });
+    await openOn("q1");
+    write("Hold off.");
+    fireEvent.click(sendButton());
+    await waitFor(() =>
+      expect(notice()).toBe("This computer doesn't sign follow-ups for you, so nothing was sent.")
+    );
+
+    await pushList(listOf(STALLED, 2));
+    await waitFor(() => expect(paused()).not.toBeNull());
+    expect(notice()).toBe("This computer doesn't sign follow-ups for you, so nothing was sent.");
+    expect(box().value).toBe("Hold off.");
+  });
+
+  it("follows the list's stall, not the question's delivery status, which Mark handled leaves as it was", async () => {
+    questions = { q1: ANSWERED_STALLED() };
+    listQuestions.mockResolvedValue(listOf(HANDLED, 1));
+    await openOn("q1");
+    await act(async () => {});
+
+    expect(screen.getByTestId("decision-follow-up-text")).toBeTruthy();
+    expect(promised()).toBe(true);
+    expect(sendButton().getAttribute("aria-disabled")).toBe("true");
+    write("Carry on.");
+    expect(sendButton().getAttribute("aria-disabled")).toBeNull();
   });
 });
 

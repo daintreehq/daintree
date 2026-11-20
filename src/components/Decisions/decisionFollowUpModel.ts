@@ -2,6 +2,7 @@ import type { FollowUpHold, FollowUpPhase, FollowUpRefusal } from "@/store/decis
 import type {
   DecisionFollowUpOutcome,
   DecisionQuestionContent,
+  DecisionQuestionListItem,
   DecisionThreadMessage,
 } from "@shared/types/decisionsQuestion";
 import { formatTextExcess, isAnswerable, textBytes } from "./decisionComposeModel";
@@ -33,6 +34,25 @@ export function takesFollowUp(
     default:
       return false;
   }
+}
+
+/**
+ * Whether typing into the asking terminal stopped on this question and nobody
+ * has resolved it (#18028), as this computer's list says of the same
+ * question: a follow-up sent now would only wait behind what stopped. The
+ * list's standing, never the question's own delivery status, which Mark
+ * handled leaves as it was. Never a reason to drop a follow-up already on its
+ * way: `takesFollowUp` alone decides that.
+ */
+export function deliveryStalled(
+  question: Pick<DecisionQuestionContent, "reference">,
+  listed: Pick<DecisionQuestionListItem, "reference" | "standing"> | null
+): boolean {
+  if (listed === null || listed.standing.kind !== "needs-attention") return false;
+  return (
+    listed.reference.hostId === question.reference.hostId &&
+    listed.reference.questionId === question.reference.questionId
+  );
 }
 
 /**

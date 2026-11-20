@@ -774,6 +774,46 @@ describe("DecisionsInboxDialog", () => {
     expect(screen.queryByTestId("decisions-inbox-dismiss")).toBeNull();
   });
 
+  it("offers no new follow-up under the shown answer's delivery warning, and offers it again once it's marked handled (#18028)", async () => {
+    const stalled = item(
+      "question-3",
+      3,
+      { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
+      {
+        reference: reference("question-3", { projectId: "project-b", terminalId: "t9" }),
+        stall: { answerRevision: 1, followUpIds: [], reason: "resume_timeout" },
+      }
+    );
+    listQuestions.mockResolvedValue({ revision: 1, questions: [stalled] });
+    open();
+    await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+    expect(screen.getByTestId("decisions-inbox-attention").textContent).toContain(
+      "Delivery uncertain"
+    );
+    const composer = await screen.findByTestId("decision-follow-up-composer");
+    expect(composer.textContent).toMatch(/can't send a new follow-up until it's resolved/);
+    expect(screen.queryByTestId("decision-follow-up-send")).toBeNull();
+    expect(composer.textContent).not.toMatch(/Typed into the terminal that asked/);
+
+    // Marked handled: the question's own read is unchanged, the list no longer holds it.
+    push({
+      revision: 2,
+      questions: [
+        {
+          ...stalled,
+          standing: { kind: "settled", outcome: "answered", handled: true },
+          stall: null,
+        },
+      ],
+    });
+    await waitFor(() => expect(screen.queryByTestId("decision-follow-up-send")).not.toBeNull());
+    expect(screen.queryByTestId("decisions-inbox-attention")).toBeNull();
+    expect(screen.queryByTestId("decision-follow-up-paused")).toBeNull();
+    expect(screen.getByTestId("decision-follow-up-composer").textContent).toMatch(
+      /Typed into the terminal that asked/
+    );
+  });
+
   describe("a Remote Host's question while its Host is away (#17946)", () => {
     const AWAY_REFERENCE = reference("question-9", { hostId: "qhost_studio_0001" });
     const AWAY = {
