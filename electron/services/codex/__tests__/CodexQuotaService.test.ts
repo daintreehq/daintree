@@ -936,18 +936,19 @@ describe("readCodexHomeLimitEvidence (#17906)", () => {
   });
 
   it("asks the pane's own home, stamped with when the request went out and came back", async () => {
-    runSession.mockImplementation(
-      async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
-        expect(options.codexHome).toBe(realpathSync(home));
-        // Queued behind other work: the request leaves later than the caller asked.
-        vi.setSystemTime(1_000_500);
-        return run(async () => {
-          vi.setSystemTime(1_002_000);
-          return { rateLimits: { primary: FIVE_HOURS } };
-        });
-      }
-    );
+    runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) => {
+      // Queued behind other work: the request leaves later than the caller asked.
+      vi.setSystemTime(1_000_500);
+      return run(async () => {
+        vi.setSystemTime(1_002_000);
+        return { rateLimits: { primary: FIVE_HOURS } };
+      });
+    });
     const evidence = await readCodexHomeLimitEvidence(home);
+    expect(runSession).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ codexHome: realpathSync.native(home) })
+    );
     expect(evidence).toMatchObject({ requestedAt: 1_000_500, receivedAt: 1_002_000 });
     expect(evidence?.buckets[0]?.windows).toEqual([
       { usedPercent: 42.4, resetsAt: 1_700_000_000_000 },
@@ -956,7 +957,8 @@ describe("readCodexHomeLimitEvidence (#17906)", () => {
 
   it("asks anew every time, never taking or leaving a cached reading", async () => {
     respondWith(() => ({ rateLimits: { primary: FIVE_HOURS } }));
-    const homes = new Map([[await canonicalCodexHomeKey(realpathSync(home)), realpathSync(home)]]);
+    const physicalHome = realpathSync.native(home);
+    const homes = new Map([[await canonicalCodexHomeKey(physicalHome), physicalHome]]);
     await readCodexQuotaForHomes(homes);
     await readCodexHomeLimitEvidence(home);
     await readCodexHomeLimitEvidence(home);
@@ -977,7 +979,7 @@ describe("readCodexHomeLimitEvidence (#17906)", () => {
       }
     );
     await readCodexHomeLimitEvidence(link);
-    expect(asked).toEqual([realpathSync(home)]);
+    expect(asked).toEqual([realpathSync.native(home)]);
   });
 
   it("keeps the evidence when the session dies during the account read", async () => {

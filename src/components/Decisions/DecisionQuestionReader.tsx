@@ -262,7 +262,7 @@ function QuestionBody({
         <div
           id={headingId}
           tabIndex={-1}
-          className="rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent-primary"
+          className="rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
         >
           <DecisionMarkdown
             text={question.question}

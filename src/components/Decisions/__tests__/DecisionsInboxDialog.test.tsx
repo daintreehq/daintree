@@ -528,12 +528,13 @@ describe("DecisionsInboxDialog", () => {
   it("leaves the keyboard where it went when a row it left moves later", async () => {
     open();
     await waitFor(() => expect(rows()).toHaveLength(3));
-    act(() => rowNamed("q-2").focus());
+    await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
     act(() => rowNamed("q-2").blur());
     // The blur's own turn has passed before the list moves.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    expect(document.activeElement).toBe(document.body);
     push({
       revision: 2,
       questions: [
@@ -545,7 +546,7 @@ describe("DecisionsInboxDialog", () => {
     await waitFor(() =>
       expect(screen.getByTestId("decisions-inbox-group-delivering").textContent).toContain("q-2")
     );
-    expect(document.activeElement).not.toBe(rowNamed("q-2"));
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("says when no relay is connected, and nothing once one is", async () => {

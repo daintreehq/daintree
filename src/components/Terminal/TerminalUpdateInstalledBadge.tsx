@@ -1,7 +1,7 @@
 import { CircleArrowUp } from "@/components/icons";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
 import {
   HEADER_CHIP_CLASS,
@@ -52,7 +52,8 @@ function UpdateInstalledChip({ observation }: { observation: UpdateInstalledObse
       <TooltipContent side="bottom" className="max-w-xs">
         <div className="flex flex-col gap-0.5">
           <span className="font-medium">
-            Claude Code showed “Update installed” {formatTimeAgo(observation.observedAt, now)}
+            Claude Code showed “Update installed”{" "}
+            <TimeAgo timestamp={observation.observedAt} now={now} />
           </span>
           {observation.namesRestart && <span>The footer named /restart</span>}
         </div>
