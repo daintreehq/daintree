@@ -225,6 +225,13 @@ describe("composeVerdict", () => {
         ],
       ],
       [
+        "its own word for Reject",
+        [
+          { id: "approve", label: "Approve", description: null },
+          { id: "reject", label: "Decline", description: null },
+        ],
+      ],
+      [
         "a Reject it describes",
         [
           { id: "approve", label: "Approve", description: null },

@@ -434,6 +434,9 @@ describe("DecisionQuestionDialog images (#17100)", () => {
     // The viewer showed the image that was replaced, so it goes with it.
     await waitFor(() => expect(screen.queryByTestId("decision-image-viewer")).toBeNull());
     await screen.findByRole("button", { name: "Open Reference image 3" });
+    // Checked against the digest the question lists now, not the one it listed before.
+    await screen.findByRole("button", { name: "Open Before image 1" });
+    expect(screen.queryByTestId("decision-question-image-failed")).toBeNull();
     expect(revokeObjectURL.mock.calls.map(([url]) => url).sort()).toEqual(first.sort());
     expect(
       getQuestionImage.mock.calls.filter(
