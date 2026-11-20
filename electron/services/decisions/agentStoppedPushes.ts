@@ -20,11 +20,12 @@ export const AGENT_STOPPED_SETTLE_MS = 2_000;
  */
 export const AGENT_STOPPED_COOLDOWN_MS = LIMITS.agentStoppedPushWindowMs + 1_000;
 /**
- * How long after waking stops aren't admitted: a stop from before the sleep
- * can still be on its way from the PTY host, and would reach the phone as
- * late as the sleep was long.
+ * How long after waking stops aren't admitted: main waits two seconds before
+ * resuming the terminals, which then resume 50 ms apart and have their held
+ * output read, so a stop from before the sleep can still be observed then and
+ * would reach the phone as late as the sleep was long.
  */
-export const AGENT_STOPPED_WAKE_GRACE_MS = 2_000;
+export const AGENT_STOPPED_WAKE_GRACE_MS = 15_000;
 
 const STOPPED_STATES = new Set(["completed", "exited"]);
 
@@ -88,6 +89,12 @@ export class AgentStoppedPushes {
    */
   private lastSentAt = -Infinity;
   private asleep = false;
+  /**
+   * Bumped by whatever calls off a request already asked for (a stop, the
+   * person seen back, sleep), so one still waiting on the relay's features is
+   * never sent, even if all is as it was by the time they answer.
+   */
+  private epoch = 0;
   /** Nothing is admitted before this, after waking. */
   private admitFrom = -Infinity;
   private readonly now: () => number;
@@ -114,6 +121,7 @@ export class AgentStoppedPushes {
       // Asleep, a batch would go out on waking, however late.
       watch.onSuspend(() => {
         this.asleep = true;
+        this.epoch += 1;
         this.drop();
       }),
       watch.onResume(() => {
@@ -121,7 +129,9 @@ export class AgentStoppedPushes {
         this.admitFrom = this.now() + AGENT_STOPPED_WAKE_GRACE_MS;
       }),
       watch.onChange(() => {
-        if (this.pending.size > 0 && this.o.presence() !== "away") this.drop();
+        if (this.o.presence() === "away") return;
+        this.epoch += 1;
+        this.drop();
       }),
     ];
   }
@@ -129,6 +139,7 @@ export class AgentStoppedPushes {
   stop(): void {
     for (const off of this.offs.splice(0)) off();
     this.asleep = false;
+    this.epoch += 1;
     this.drop();
   }
 
@@ -204,7 +215,9 @@ export class AgentStoppedPushes {
     const count = this.pending.size;
     this.drop();
     // Turned off, back at the desk or in quiet hours while the relay's features are read: nothing is sent.
-    const stillDue = () => this.offs.length > 0 && !this.asleep && this.due();
+    const epoch = this.epoch;
+    const stillDue = () =>
+      epoch === this.epoch && this.offs.length > 0 && !this.asleep && this.due();
     let request: Promise<AgentStoppedPushResult> | null;
     try {
       request = this.o.send(stillDue);

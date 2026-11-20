@@ -273,12 +273,61 @@ describe("AgentStoppedPushes", () => {
     expect(h.stillDue()).toBe(false);
     h.allow(true);
     expect(h.stillDue()).toBe(true);
-    h.suspend();
+    h.setPresence("unknown");
     expect(h.stillDue()).toBe(false);
-    h.resume();
+    h.setPresence("away");
     expect(h.stillDue()).toBe(true);
     h.pushes.stop();
-    expect(h.stillDue()).toBe(false);
+  });
+
+  it.each([
+    [
+      "turned off and on again",
+      (h: ReturnType<typeof harness>) => {
+        h.allow(false);
+        h.pushes.update();
+        h.allow(true);
+        h.pushes.update();
+      },
+    ],
+    [
+      "the person seen back and gone again",
+      (h: ReturnType<typeof harness>) => {
+        h.setPresence("present");
+        h.change();
+        h.setPresence("away");
+      },
+    ],
+    [
+      "a sleep and a wake",
+      (h: ReturnType<typeof harness>) => {
+        h.suspend();
+        h.resume();
+      },
+    ],
+  ])(
+    "never sends a request already asked for once it's been called off: %s",
+    async (_name, callOff) => {
+      const h = harness();
+      h.pushes.update();
+      h.stop("a");
+      await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+      expect(h.send).toHaveBeenCalledTimes(1);
+      expect(h.stillDue()).toBe(true);
+      callOff(h);
+      expect(h.stillDue()).toBe(false);
+      h.pushes.stop();
+    }
+  );
+
+  it("keeps a request asked for through a change that still reads away", async () => {
+    const h = harness();
+    h.pushes.update();
+    h.stop("a");
+    await vi.advanceTimersByTimeAsync(AGENT_STOPPED_BATCH_MS);
+    h.change();
+    expect(h.stillDue()).toBe(true);
+    h.pushes.stop();
   });
 
   it("keeps the batch through a change that still reads away", () => {
