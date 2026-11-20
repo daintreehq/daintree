@@ -255,7 +255,9 @@ const exportDataSchema = z.object({ passphrase: z.string().min(1).max(1024) }).s
 const deleteRelayDataSchema = z.object({ origin: z.string().max(2048) }).strict();
 
 // How the person confirmed erasing the keys (#18064); main rechecks a one-click confirm.
-const keyErasureSchema = z.object({ oneClick: z.boolean() }).strict();
+const keyErasureSchema = z
+  .object({ oneClick: z.boolean(), relayOrigin: z.string().max(2048).nullable() })
+  .strict();
 
 const startRelayRemovalSchema = z
   .object({

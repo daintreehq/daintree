@@ -362,7 +362,7 @@ export function DecisionsConnectionSection({
   };
 
   const confirmDisconnect = (oneClick: boolean) => {
-    identity.disconnect(oneClick).then(
+    identity.disconnect({ oneClick, relayOrigin: savedOrigin }).then(
       (done) => {
         if (done) setDisconnectOpen(false);
       },

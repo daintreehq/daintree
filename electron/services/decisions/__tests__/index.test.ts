@@ -3406,6 +3406,25 @@ describe("Decisions entry", () => {
       expect(existsSync(keyFile.path)).toBe(true);
     });
 
+    it("removes nothing for a confirmation that named another relay than the one recorded now (#18064)", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+
+      // A second window disconnected and set up another relay while this one's dialog was open.
+      await expect(
+        disconnectRelay({ oneClick: false, relayOrigin: "https://other.example.workers.dev" })
+      ).rejects.toMatchObject({ code: "FILE_CHANGED_SINCE_REVIEW" });
+      await expect(deleteLocalData({ oneClick: false, relayOrigin: null })).rejects.toMatchObject({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+      });
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+      expect(saved.value).toMatchObject({ ...RELAY });
+
+      await disconnectRelay({ oneClick: false, relayOrigin: RELAY.relayOrigin });
+      expect(existsSync(keyFile.path)).toBe(false);
+    });
+
     it("reports keys stored on this computer from the file alone", async () => {
       saved.value = { enabled: true };
       await startDecisionsIfEnabled();
@@ -4321,6 +4340,20 @@ describe("Decisions entry", () => {
       });
       expect(existsSync(keyFile.path)).toBe(false);
       expect(storedRows.count).toBe(0);
+    });
+
+    it("counts keys an interrupted deletion set aside, which it would put back first (#18064)", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(`${keyFile.path}.erasing`, "sealed");
+      storedRows.count = 3;
+
+      await expect(deleteLocalData({ oneClick: true })).resolves.toEqual({
+        result: "failed",
+        reason: "keys-changed",
+      });
+      expect(readFileSync(`${keyFile.path}.erasing`, "utf8")).toBe("sealed");
+      expect(storedRows.count).toBe(3);
     });
 
     it("deletes on a one-click confirm when there are no keys to lose (#18064)", async () => {

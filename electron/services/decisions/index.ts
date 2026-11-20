@@ -207,7 +207,7 @@ import { OwnerDevices } from "./pairing.js";
 import type { RelayBinding } from "./relayConnection.js";
 import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
 import { deleteDecisionsRelayData } from "./relayData.js";
-import type { LocalEraseOutcome } from "./localData.js";
+import { erasingKeyFilePath, type LocalEraseOutcome } from "./localData.js";
 import {
   claimDecisionsRelay,
   restoreDecisionsIdentity,
@@ -2043,10 +2043,15 @@ function stillRecords(record: RemovedRelayRecord): boolean {
  * that can't be removed leave the setting as it was. A one-click confirm
  * removes nothing while the keys hold one no current kit covers (#18064).
  */
-export async function disconnectRelay(
-  payload: DecisionsKeyErasurePayload
-): Promise<DecisionsStatus> {
-  return (await disconnectRecorded(null, payload.oneClick))!;
+/**
+ * How an erasure of the keys was confirmed (#18064). Settings always names
+ * the relay it showed; with none named, the erasure isn't bound to one.
+ */
+type KeyErasure = Pick<DecisionsKeyErasurePayload, "oneClick"> &
+  Partial<Pick<DecisionsKeyErasurePayload, "relayOrigin">>;
+
+export async function disconnectRelay(payload: KeyErasure): Promise<DecisionsStatus> {
+  return (await disconnectRecorded(null, payload.oneClick, payload.relayOrigin))!;
 }
 
 /**
@@ -2055,10 +2060,24 @@ export async function disconnectRelay(
  * version (#18064).
  */
 async function keysCoveredOrAbsent(running: DecisionsService): Promise<boolean> {
-  const version = await keyFileVersion(running.getKeyFilePath()).catch(() => undefined);
+  const path = running.getKeyFilePath();
+  const read = (at: string) => keyFileVersion(at).catch(() => undefined);
+  // Keys an interrupted deletion set aside come back before that deletion finishes.
+  let version = await read(path);
+  if (version === null) version = await read(erasingKeyFilePath(path));
   if (version === null) return true;
   const verified = readDecisionsSettings(store).recoveryKit?.keys;
   return version !== undefined && verified !== undefined && version === verified;
+}
+
+/** Another relay is recorded than the one the person confirmed for (#18064). */
+function relayChangedSinceConfirm(expected: string | null | undefined): AppError | null {
+  if (expected === undefined || readDecisionsSettings(store).relayOrigin === expected) return null;
+  return new AppError({
+    code: "FILE_CHANGED_SINCE_REVIEW",
+    message:
+      "The relay set up on this computer changed after you confirmed, so nothing was removed.",
+  });
 }
 
 function keysChangedSinceConfirm(): AppError {
@@ -2077,13 +2096,16 @@ function keysChangedSinceConfirm(): AppError {
  */
 function disconnectRecorded(
   only: RemovedRelayRecord | null,
-  oneClick: boolean
+  oneClick: boolean,
+  confirmedFor?: string | null
 ): Promise<DecisionsStatus | null> {
   if (only !== null && !stillRecords(only)) return Promise.resolve(null);
   cancelKitExports();
   const checkStopped = endSetupCheck();
   return serialize(async () => {
     if (only !== null && !stillRecords(only)) return null;
+    const changed = relayChangedSinceConfirm(confirmedFor);
+    if (changed) throw changed;
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
     hostEnroller.forget();
@@ -2224,16 +2246,15 @@ export function deleteRelayData(
  * one-click confirm deletes nothing while the key file holds keys no current
  * kit covers (#18064).
  */
-export async function deleteLocalData(
-  payload: DecisionsKeyErasurePayload
-): Promise<DecisionsLocalDeleteResult> {
-  return (await deleteLocalDataOf(null, payload.oneClick))!;
+export async function deleteLocalData(payload: KeyErasure): Promise<DecisionsLocalDeleteResult> {
+  return (await deleteLocalDataOf(null, payload.oneClick, payload.relayOrigin))!;
 }
 
 /** Deletes local data, or with `only` set, only while the setting still records that identity (null otherwise). */
 function deleteLocalDataOf(
   only: RemovedRelayRecord | null,
-  oneClick: boolean
+  oneClick: boolean,
+  confirmedFor?: string | null
 ): Promise<DecisionsLocalDeleteResult | null> {
   if (only !== null && !stillRecords(only)) return Promise.resolve(null);
   // Before the queue, as a disconnect does: a kit of keys being erased is never written.
@@ -2241,6 +2262,8 @@ function deleteLocalDataOf(
   const checkStopped = endSetupCheck();
   return serialize(async () => {
     if (only !== null && !stillRecords(only)) return null;
+    const changed = relayChangedSinceConfirm(confirmedFor);
+    if (changed) throw changed;
     let outcome: LocalEraseOutcome;
     // Its terminal closes and its question is cancelled in the store before the rows go.
     await checkStopped;
@@ -2254,6 +2277,8 @@ function deleteLocalDataOf(
         oneClick ? () => keysCoveredOrAbsent(running) : undefined
       );
     } finally {
+      // A device read while it ran may hold the key store it closed; the next one makes its own.
+      forgetOwnerDevices();
       // The relay record and the keys may have gone, which every window shows.
       publishStatus();
     }

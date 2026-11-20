@@ -221,7 +221,7 @@ export function DecisionsDataSection({
         error={errorFor("delete-local")}
         onCancel={close}
         onConfirm={(oneClick) => {
-          data.deleteLocalData(oneClick).then(finish, () => {});
+          data.deleteLocalData({ oneClick, relayOrigin }).then(finish, () => {});
         }}
       />
     </SettingsSection>

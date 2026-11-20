@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
   DecisionsExportResult,
+  DecisionsKeyErasurePayload,
   DecisionsLocalDeleteResult,
   DecisionsRelayDeleteResult,
   DecisionsStatus,
@@ -24,8 +25,8 @@ export interface UseDecisionsDataResult {
   /** Each resolves true once main answered, whatever it observed; false when it couldn't (see `error`). */
   exportHistory(passphrase: string): Promise<boolean>;
   deleteRelayData(origin: string): Promise<boolean>;
-  /** `oneClick`: no typed gate was asked, so main deletes nothing while uncovered keys are stored (#18064). */
-  deleteLocalData(oneClick: boolean): Promise<boolean>;
+  /** How it was confirmed, which main checks still holds before deleting anything (#18064). */
+  deleteLocalData(confirmed: DecisionsKeyErasurePayload): Promise<boolean>;
   /** Forgets the last outcome; an action already sent still finishes in main. */
   reset(): void;
 }
@@ -105,10 +106,10 @@ export function useDecisionsData(
         .then((result) => ({ action: "delete-relay" as const, result }))
     );
 
-  const deleteLocalData = (oneClick: boolean) =>
+  const deleteLocalData = (confirmed: DecisionsKeyErasurePayload) =>
     run("delete-local", () =>
       window.electron.decisions
-        .deleteLocalData({ oneClick })
+        .deleteLocalData(confirmed)
         .then((result) => ({ action: "delete-local" as const, result }))
     );
 

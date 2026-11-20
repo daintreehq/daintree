@@ -557,7 +557,7 @@ const deleteLocalData = decisionsNamespace.ops.deleteLocalData.handler as unknow
   payload?: DecisionsKeyErasurePayload
 ) => Promise<DecisionsLocalDeleteResult>;
 /** A confirm that asked for the typed gate (#18064). */
-const TYPED: DecisionsKeyErasurePayload = { oneClick: false };
+const TYPED: DecisionsKeyErasurePayload = { oneClick: false, relayOrigin: null };
 const EXPORT: ExportDecisionsDataPayload = { passphrase: "a long export passphrase" };
 const RELAY_ORIGIN = "https://relay.example.com";
 const exportRecoveryKit = decisionsNamespace.ops.exportRecoveryKit.handler as unknown as (
@@ -1407,9 +1407,16 @@ describe("decisions IPC", () => {
       decisionsNamespace.ops.deleteLocalData,
     ]) {
       const schema = op.schema as SafeParse;
-      expect(schema.safeParse({ oneClick: true }).success).toBe(true);
-      expect(schema.safeParse({ oneClick: false }).success).toBe(true);
-      for (const value of [undefined, {}, { oneClick: "yes" }, { oneClick: true, origin: "x" }]) {
+      expect(schema.safeParse({ oneClick: true, relayOrigin: RELAY_ORIGIN }).success).toBe(true);
+      expect(schema.safeParse({ oneClick: false, relayOrigin: null }).success).toBe(true);
+      for (const value of [
+        undefined,
+        {},
+        { oneClick: true },
+        { oneClick: "yes", relayOrigin: null },
+        { oneClick: true, relayOrigin: 42 },
+        { oneClick: true, relayOrigin: null, origin: "x" },
+      ]) {
         expect(schema.safeParse(value).success, JSON.stringify(value)).toBe(false);
       }
     }
@@ -2123,12 +2130,13 @@ describe("decisions IPC", () => {
 
     await expect(claimRelay(CLAIM)).resolves.toMatchObject({ result: "saved" });
     await expect(restoreIdentity(RESTORE)).resolves.toMatchObject({ result: "saved" });
-    await expect(disconnectRelay({ oneClick: true })).resolves.toEqual({ state: "not-connected" });
+    const confirmed = { oneClick: true, relayOrigin: RELAY_ORIGIN };
+    await expect(disconnectRelay(confirmed)).resolves.toEqual({ state: "not-connected" });
 
     expect(decisionsEntry.claimRelay).toHaveBeenCalledExactlyOnceWith(CLAIM);
     expect(decisionsEntry.restoreIdentity).toHaveBeenCalledExactlyOnceWith(RESTORE);
     // How the person confirmed reaches main, which rechecks a one-click confirm (#18064).
-    expect(decisionsEntry.disconnectRelay).toHaveBeenCalledExactlyOnceWith({ oneClick: true });
+    expect(decisionsEntry.disconnectRelay).toHaveBeenCalledExactlyOnceWith(confirmed);
     expect(store.set).not.toHaveBeenCalled();
   });
 
@@ -2185,12 +2193,13 @@ describe("decisions IPC", () => {
     await expect(deleteRelayData({ origin: RELAY_ORIGIN })).resolves.toMatchObject({
       result: "deleted",
     });
-    await expect(deleteLocalData({ oneClick: true })).resolves.toMatchObject({ result: "deleted" });
+    const confirmed = { oneClick: true, relayOrigin: null };
+    await expect(deleteLocalData(confirmed)).resolves.toMatchObject({ result: "deleted" });
 
     expect(decisionsEntry.deleteRelayData).toHaveBeenCalledExactlyOnceWith({
       origin: RELAY_ORIGIN,
     });
-    expect(decisionsEntry.deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true });
+    expect(decisionsEntry.deleteLocalData).toHaveBeenCalledExactlyOnceWith(confirmed);
     expect(store.set).not.toHaveBeenCalled();
   });
 

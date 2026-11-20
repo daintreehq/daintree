@@ -703,6 +703,12 @@ export type DecisionsRelayDeleteResult =
  */
 export interface DecisionsKeyErasurePayload {
   oneClick: boolean;
+  /**
+   * The relay the confirmation named, null for none. Main erases nothing once
+   * another is recorded, as when a second window disconnected and set one up
+   * while this one's dialog was open.
+   */
+  relayOrigin: string | null;
 }
 
 /**

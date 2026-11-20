@@ -877,7 +877,10 @@ describe("DecisionsConnectionSection disconnect focus", () => {
       });
 
       // Main rechecks a one-click confirm against the keys as they are when its turn comes (#18064).
-      expect(disconnectRelay).toHaveBeenCalledExactlyOnceWith({ oneClick: typed === null });
+      expect(disconnectRelay).toHaveBeenCalledExactlyOnceWith({
+        oneClick: typed === null,
+        relayOrigin: initial.relayOrigin ?? null,
+      });
       await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(screen.queryByRole("button", { name: label })).toBeNull();
       await vi.waitFor(() => expect(document.activeElement).toBe(urlField()));

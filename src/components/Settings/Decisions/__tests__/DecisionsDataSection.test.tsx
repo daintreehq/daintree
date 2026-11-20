@@ -357,7 +357,7 @@ describe("DecisionsDataSection", () => {
       fireEvent.click(within(confirmDialog).getByRole("button", { name: "Delete local data" }));
     });
 
-    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true });
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true, relayOrigin: ORIGIN });
     expect(onChanged).toHaveBeenCalledExactlyOnceWith(status);
     await gone("alertdialog");
     expect(
@@ -402,7 +402,10 @@ describe("DecisionsDataSection", () => {
         fireEvent.click(confirm());
       });
 
-      expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: false });
+      expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
+        oneClick: false,
+        relayOrigin: status.relayOrigin ?? null,
+      });
     }
   );
 
@@ -418,7 +421,7 @@ describe("DecisionsDataSection", () => {
       );
     });
 
-    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true });
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({ oneClick: true, relayOrigin: null });
     // Main's status is read afresh, so the next confirm shows the keys and the gate.
     expect(onChanged).toHaveBeenCalledExactlyOnceWith(null);
     const row = document.getElementById("decisions-data-outcome")!;

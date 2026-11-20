@@ -4,6 +4,7 @@ import type {
   ClaimDecisionsRelayPayload,
   ClaimDeployedDecisionsRelayPayload,
   DecisionsConnectResult,
+  DecisionsKeyErasurePayload,
   DecisionsRelayCheck,
   DecisionsStatus,
   RestoreDecisionsIdentityPayload,
@@ -28,8 +29,8 @@ export interface UseRelayIdentityResult {
   claimDeployed(payload: ClaimDeployedDecisionsRelayPayload): void;
   restore(payload: RestoreDecisionsIdentityPayload): void;
   /** Resolves true once the identity is removed; false when it wasn't (see `error`). */
-  /** `oneClick`: no typed gate was asked, so main removes nothing unless a current kit still covers the keys (#18064). */
-  disconnect(oneClick: boolean): Promise<boolean>;
+  /** How it was confirmed, which main checks still holds before removing anything (#18064). */
+  disconnect(confirmed: DecisionsKeyErasurePayload): Promise<boolean>;
   /** Forgets the last outcome; a change already sent still finishes in main. */
   reset(): void;
 }
@@ -111,8 +112,8 @@ export function useRelayIdentity(
     void run("restore", () => window.electron.decisions.restoreIdentity(payload));
   };
 
-  const disconnect = (oneClick: boolean) =>
-    run("disconnect", () => window.electron.decisions.disconnectRelay({ oneClick }));
+  const disconnect = (confirmed: DecisionsKeyErasurePayload) =>
+    run("disconnect", () => window.electron.decisions.disconnectRelay(confirmed));
 
   const reset = () => {
     generation.current += 1;
