@@ -1,5 +1,5 @@
 import {
-  DecisionsBridge,
+  type DecisionsBridge,
   RelayClient,
   RelayError,
   loadIdentity,
@@ -31,6 +31,7 @@ import type { RelayFetch } from "./relayCheck.js";
 import { DaintreeRelayClient } from "./relayFeatures.js";
 import { relayRequests, type RelayRequests } from "./relayIdentity.js";
 import {
+  AttemptBridge,
   ObservedSocket,
   RetiredAttemptError,
   chromiumWebSocket,
@@ -633,7 +634,7 @@ export class RelayConnection {
       const settled = await this.settleKeys(attempt, client);
       if (attempt.retired) return;
       const snapshots = this.snapshots;
-      bridge = new DecisionsBridge({
+      bridge = new AttemptBridge({
         identity: settled,
         keyStore: this.bridgeKeys(attempt, retireable(this.keys, retired)),
         store: this.watchedStore(

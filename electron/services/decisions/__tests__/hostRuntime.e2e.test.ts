@@ -1026,19 +1026,20 @@ async function publishedToRelay(relay: FakeRelay, questionIds: string[]): Promis
 /**
  * The machine's store, able to hold its pump just after the pump has
  * published a question and read the outbox again to find it empty: a pump
- * that has sent all it read and is still finishing.
+ * that has sent all it read and is still finishing. The hold is on the read's
+ * result, so the store goes on serving everything else.
  */
 class HeldOutboxStore extends DaintreeLocalStore {
-  private hold: { reached: () => void; released: Promise<void> } | null = null;
+  /** A pump is held here now. */
+  holding = false;
+  private hold: Promise<void> | null = null;
   private lastReadCreate = false;
 
-  /** Settles once a pump is held; `release` lets it finish. */
-  holdNextPump(): { held: Promise<void>; release: () => void } {
-    let reached!: () => void;
+  /** Holds the next such pump until `release` is called. */
+  holdNextPump(): () => void {
     let release!: () => void;
-    const held = new Promise<void>((resolve) => (reached = resolve));
-    this.hold = { reached, released: new Promise<void>((resolve) => (release = resolve)) };
-    return { held, release };
+    this.hold = new Promise<void>((resolve) => (release = resolve));
+    return release;
   }
 
   override async dueOutbox(now: number, limit: number) {
@@ -1048,8 +1049,9 @@ class HeldOutboxStore extends DaintreeLocalStore {
     this.lastReadCreate = due.some((item) => item.kind === "create");
     if (hold !== null && afterCreate && due.length === 0) {
       this.hold = null;
-      hold.reached();
-      await hold.released;
+      this.holding = true;
+      await hold;
+      this.holding = false;
     }
     return due;
   }
@@ -1962,12 +1964,20 @@ describe("Decisions on an enrolled Remote Host, with its owner's computer gone (
   // The library joins a pump asked for mid-pump to the running one, which may already have read its outbox (#18002).
   it("publishes a question asked while the Host's pump is still finishing the one before it", async () => {
     const store = new HeldOutboxStore(sqlite);
-    const { relay, listener } = await startHost({ openStore: () => store });
-    const { held, release } = store.holdNextPump();
+    const { relay, listener, service } = await startHost({ openStore: () => store });
+    // Past the replay and the pumps it started, so none of them can publish the second question for the pump held.
+    const live = service.getQuestionSource()!.live()!;
+    await vi.waitFor(() => expect(live.socket.currentState).toBe("live"), { timeout: 15_000 });
+    await live.idle();
+    const release = store.holdNextPump();
+    cleanups.push(release);
+
     const first = await askHuman(listener.port, "token-pane-1", "Which way for the parser?");
-    await held;
+    await vi.waitFor(() => expect(store.holding).toBe(true), { timeout: 15_000 });
     expect(relay.questions.has(first)).toBe(true);
     const second = await askHuman(listener.port, "token-pane-2", "Which way for the lexer?");
+    expect(relay.questions.has(second)).toBe(false);
+    expect((await store.outboxFor(second)).map((item) => item.kind)).toEqual(["create"]);
     release();
     await publishedToRelay(relay, [first, second]);
   }, 60_000);

@@ -1,6 +1,5 @@
 import { net, powerMonitor } from "electron";
 import type {
-  DecisionsBridge,
   DeliveryEngine,
   InjectResult,
   InjectionIntent,
@@ -11,7 +10,7 @@ import type {
   TerminalSink,
   WebSocketLike,
 } from "@daintreehq/decisions-client";
-import { targetOf } from "@daintreehq/decisions-client";
+import { DecisionsBridge, targetOf } from "@daintreehq/decisions-client";
 
 export type BridgeLock = DecisionsBridge["ctx"]["lock"];
 
@@ -158,6 +157,66 @@ export function inertAttemptDelivery(
 ): void {
   engine.drain = async () => ({ delivered: 0, deferred: 0, needsAttention: 0, uncertain: 0 });
   engine.closureWrite = closureWrite;
+}
+
+const noop = (): void => {};
+
+/**
+ * A pump asked for while one runs, run once more after it. The library joins
+ * such a call to the pass in flight, which may already have read its outbox:
+ * a question committed then would reach the relay only on the next pump, 30 s
+ * later (#18002). Every call made meanwhile shares the one pass after it,
+ * which waits on the pass in flight alone, never on the advisory read the
+ * library runs beside it. A call made once that pass has started queues
+ * another.
+ */
+export class TrailingPump {
+  private queued: Promise<void> | null = null;
+
+  constructor(
+    private readonly pass: () => Promise<void>,
+    private readonly inFlight: () => Promise<unknown> | null
+  ) {}
+
+  run(): Promise<void> {
+    const running = this.inFlight();
+    const joined = this.pass();
+    if (running === null) return joined;
+    this.queued ??= running.then(noop, noop).then(() => {
+      this.queued = null;
+      return this.pass();
+    });
+    return Promise.all([joined, this.queued]).then(noop);
+  }
+
+  /** Settles once a pass already queued has run; never rejects. */
+  settled(): Promise<void> {
+    return (this.queued ?? Promise.resolve()).then(noop, noop);
+  }
+}
+
+/**
+ * A socket attempt's bridge, whose pump never joins a pass that may already
+ * have read past what the call was made for (`TrailingPump`). The library's
+ * own calls, from an ask, a cancel, a thread post and the end of a replay,
+ * reach the override too. A library without the pass where this reads it
+ * pumps as the library does.
+ */
+export class AttemptBridge extends DecisionsBridge {
+  private trailing: TrailingPump | undefined;
+
+  override pump(): Promise<void> {
+    this.trailing ??= new TrailingPump(
+      () => super.pump(),
+      () => (this as unknown as { pumping?: Promise<unknown> | null }).pumping ?? null
+    );
+    return this.trailing.run();
+  }
+
+  override async idle(): Promise<void> {
+    await this.trailing?.settled();
+    await super.idle();
+  }
 }
 
 /**
