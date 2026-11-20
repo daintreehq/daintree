@@ -16,11 +16,22 @@ import type { DecisionQuestionTarget } from "./decisionQuestionTarget";
 import { imagesKey } from "./questionImageLoader";
 import {
   choiceLabels,
+  closureNoticeText,
   emptyEntryText,
+  planHeading,
   questionStatusText,
+  replyModeText,
   requirementText,
   threadEntryHeading,
 } from "./decisionQuestionModel";
+import {
+  clockText,
+  contentDeadlineElapsed,
+  deadlineMs,
+  remainingText,
+  replyByText,
+} from "./decisionDeadline";
+import { useDecisionsClock } from "./useDecisionsClock";
 import type { DecisionQuestionReader, QuestionRead } from "./useDecisionQuestionReader";
 
 const UNAVAILABLE: Record<Exclude<QuestionRead["result"], "read">, string> = {
@@ -34,11 +45,10 @@ const UNAVAILABLE: Record<Exclude<QuestionRead["result"], "read">, string> = {
   failed: "The question couldn't be read.",
 };
 
-/** "Due", as the Decisions app on the phone says it, until it passes. */
-function ExpiryText({ expiresAt }: { expiresAt: string }) {
-  const ms = Date.parse(expiresAt);
-  if (Number.isNaN(ms)) return null;
-  const relative = formatRelativeTime(ms);
+/** When an expired question's deadline passed, with the exact time one hover away. */
+function ExpiredAt({ expiresAt, nowMs }: { expiresAt: string; nowMs: number }) {
+  const ms = deadlineMs(expiresAt);
+  if (ms === null) return null;
   return (
     <time
       dateTime={expiresAt}
@@ -46,8 +56,72 @@ function ExpiryText({ expiresAt }: { expiresAt: string }) {
       className="inline-flex items-center gap-1"
     >
       <Clock className="size-3 shrink-0" aria-hidden="true" />
-      {ms > Date.now() ? `Due ${relative}` : `Expired ${relative}`}
+      {`Expired ${formatRelativeTime(ms, nowMs)}`}
     </time>
+  );
+}
+
+/**
+ * The deadline of a question still asking (#17943): its mode, when to reply by
+ * in this computer's time, and how long is left; or, once this computer's
+ * clock has passed it, that nothing has confirmed how it closed yet. Never a
+ * live region: the minutes ticking down are read on demand, never announced.
+ */
+function DeadlineLine({ question, nowMs }: { question: DecisionQuestionContent; nowMs: number }) {
+  const deadline = deadlineMs(question.expiresAt);
+  if (deadline === null || question.expiresAt === null) return null;
+  const mode = replyModeText(question.replyMode);
+  const elapsed = contentDeadlineElapsed(question, nowMs);
+  return (
+    <p
+      className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-primary"
+      data-testid="decision-question-deadline"
+    >
+      <Clock className="size-3 shrink-0 text-text-secondary" aria-hidden="true" />
+      {mode !== null && (
+        <>
+          <span className="font-medium" data-testid="decision-question-mode">
+            {mode}
+          </span>
+          <FactSeparator />
+        </>
+      )}
+      {elapsed ? (
+        <>
+          <time dateTime={question.expiresAt} title={new Date(deadline).toLocaleString()}>
+            Deadline passed at {clockText(deadline, nowMs)}
+          </time>
+          <FactSeparator />
+          <span>Awaiting an update</span>
+        </>
+      ) : (
+        <>
+          <time dateTime={question.expiresAt} title={new Date(deadline).toLocaleString()}>
+            {replyByText(deadline, nowMs)}
+          </time>
+          <FactSeparator />
+          <span className="tabular-nums">{remainingText(deadline, nowMs)}</span>
+        </>
+      )}
+    </p>
+  );
+}
+
+/** The plan an advisory round states, in the agent's own words, under what it means (#17943). */
+function PlannedFallback({ question }: { question: DecisionQuestionContent }) {
+  const plan = question.plannedFallback;
+  if (plan == null || question.replyMode !== "advisory") return null;
+  return (
+    <section
+      className="flex flex-col gap-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-4 py-3"
+      aria-label="The agent's plan"
+      data-testid="decision-question-plan"
+    >
+      <h3 className="text-xs font-medium text-text-secondary">{planHeading(question.status)}</h3>
+      <p className="whitespace-pre-wrap break-words text-sm text-text-primary [text-wrap:pretty]">
+        {plan}
+      </p>
+    </section>
   );
 }
 
@@ -200,35 +274,48 @@ function OfferedOptions({ question }: { question: DecisionQuestionContent }) {
 }
 
 /** What the line under the question says: only what isn't already plain from the view. */
-function QuestionFacts({ question }: { question: DecisionQuestionContent }) {
+function QuestionFacts({ question, nowMs }: { question: DecisionQuestionContent; nowMs: number }) {
   // An open question shows its composer, which says it waits; a person's
   // answer is what every question needs unless it says otherwise.
   const status = question.status === "open" ? null : questionStatusText(question);
   const requirement =
     question.requirement === "human-required" ? null : requirementText(question.requirement);
+  const notice = closureNoticeText(question);
+  const asking = question.status === "open" || question.status === "queued";
   return (
-    <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-secondary">
-      {status !== null && (
-        <>
-          <span data-testid="decision-question-status">{status}</span>
-          <FactSeparator />
-        </>
+    <>
+      {asking && <DeadlineLine question={question} nowMs={nowMs} />}
+      <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-text-secondary">
+        {status !== null && (
+          <>
+            <span data-testid="decision-question-status">{status}</span>
+            <FactSeparator />
+          </>
+        )}
+        {requirement !== null && (
+          <>
+            <span data-testid="decision-question-requirement">{requirement}</span>
+            <FactSeparator />
+          </>
+        )}
+        <TimeAgo timestamp={question.askedAt} prefix="Asked " />
+        {/* Only an expiry: a question still asking says its deadline above, and one closed another way is over. */}
+        {question.expiresAt !== null && question.status === "expired" && (
+          <>
+            <FactSeparator />
+            <ExpiredAt expiresAt={question.expiresAt} nowMs={nowMs} />
+          </>
+        )}
+      </p>
+      {notice !== null && (
+        <p
+          className="text-xs text-text-secondary [text-wrap:pretty]"
+          data-testid="decision-question-notice"
+        >
+          {notice}
+        </p>
       )}
-      {requirement !== null && (
-        <>
-          <span data-testid="decision-question-requirement">{requirement}</span>
-          <FactSeparator />
-        </>
-      )}
-      <TimeAgo timestamp={question.askedAt} prefix="Asked " />
-      {/* A declined question is over, whatever its deadline would have said. */}
-      {question.expiresAt !== null && question.closedReason !== "declined" && (
-        <>
-          <FactSeparator />
-          <ExpiryText expiresAt={question.expiresAt} />
-        </>
-      )}
-    </p>
+    </>
   );
 }
 
@@ -253,6 +340,13 @@ function QuestionBody({
   sendNote: string | null;
   eyebrow: React.ReactNode;
 }) {
+  // Moved on only when the deadline line would read differently, or the clock jumped.
+  const nowMs = useDecisionsClock(
+    question.status === "open" || question.status === "queued" || question.status === "expired"
+      ? [question.expiresAt]
+      : [],
+    active
+  );
   return (
     <div className="flex flex-col gap-6" data-testid="decision-question-content">
       <div className="flex flex-col gap-2">
@@ -270,8 +364,9 @@ function QuestionBody({
             className="font-medium leading-snug"
           />
         </div>
-        <QuestionFacts question={question} />
+        <QuestionFacts question={question} nowMs={nowMs} />
       </div>
+      <PlannedFallback question={question} />
       {question.context !== null && (
         <section
           className="flex flex-col gap-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-4 py-3"

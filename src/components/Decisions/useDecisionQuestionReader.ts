@@ -15,6 +15,7 @@ import type {
   DecisionQuestionContent,
   DecisionQuestionContentResult,
   DecisionQuestionReference,
+  DecisionReplyMode,
 } from "@shared/types/decisionsQuestion";
 import { useAnswerComposerMode, type AnswerComposerMode } from "./DecisionAnswerComposer";
 import {
@@ -123,6 +124,8 @@ export interface DismissalSubject {
   status: DecisionQuestionContent["status"];
   /** When it was last read (epoch ms) while its Host is away; null when read just now. */
   lastReadAt: number | null;
+  /** The mode of the round at `revision` (#17943), as read with it; null where that read didn't say. */
+  replyMode: DecisionReplyMode | null;
 }
 
 export interface DecisionQuestionReader {
@@ -267,6 +270,7 @@ export function useDecisionQuestionReader(
           alias: question.alias,
           status: question.status,
           lastReadAt: null,
+          replyMode: question.replyMode ?? null,
         }
       : lastRead !== null && target?.scope === "reference"
         ? {
@@ -275,6 +279,7 @@ export function useDecisionQuestionReader(
             alias: lastRead.alias,
             status: "open",
             lastReadAt: lastRead.readAt,
+            replyMode: null,
           }
         : null;
   const answerMode = useAnswerComposerMode(question);
@@ -411,6 +416,7 @@ export function useQuestionCancel(
         line: null,
         revision: subject.revision,
         lastReadAt: subject.lastReadAt,
+        replyMode: subject.replyMode,
       },
       open: true,
       mode,

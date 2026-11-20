@@ -316,13 +316,24 @@ describe("answering a question from the view (#17102)", () => {
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 
-  it("sends nothing past the question's expiry, even before the store records it", async () => {
+  it("keeps a draft, locked, past the question's deadline, and sends nothing before the store records it (#17943)", async () => {
     questions.q1 = question("q1", { expiresAt: new Date(Date.now() + 300).toISOString() });
     await openOn("q1");
     fireEvent.click(option("Ship it"));
+    const notice = await screen.findByTestId("decision-answer-notice", {}, { timeout: 2_000 });
+    // Only the clock says it passed: the draft stays where it was written, unsendable.
+    expect(notice.textContent).toMatch(/deadline has passed/);
+    expect(screen.queryByTestId("decision-answer-composer")).not.toBeNull();
+    expect(option("Ship it").checked).toBe(true);
+    expect(send().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(send());
+    fireEvent.keyDown(option("Ship it"), { key: "Enter", ctrlKey: true, metaKey: true });
+    expect(answerQuestion).not.toHaveBeenCalled();
+
+    // Once the store records the expiry, the form goes and says so.
+    await move(question("q1", { status: "expired", expiresAt: questions.q1.expiresAt }));
     await waitFor(() => expect(screen.queryByTestId("decision-answer-composer")).toBeNull());
     expect(status()).toMatch(/expired/);
-    expect(answerQuestion).not.toHaveBeenCalled();
   });
 
   it("asks for the changed question to be reviewed before an answer goes", async () => {

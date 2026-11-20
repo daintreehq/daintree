@@ -19,6 +19,8 @@ import {
 import { readUserPresence, type UserPresence } from "./userPresence.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { onProjectPresenceChanged } from "../window/projectPresenceChanges.js";
+import { deadlineElapsed, nextAskDeadline } from "../../shared/utils/decisionDeadline.js";
+import { getSystemSleepService } from "./SystemSleepService.js";
 import type {
   DecisionQuestionList,
   DecisionQuestionReference,
@@ -199,6 +201,10 @@ class NotificationService {
   /** This service lifetime's watch of the question list; a stale import finds it replaced. */
   private questionWatch: object | null = null;
   private offDecisionQuestions: (() => void) | null = null;
+  /** The last list, counted again as a deadline passes or the machine wakes (#17943). */
+  private latestQuestions: DecisionQuestionList | null = null;
+  private questionDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  private offQuestionWake: (() => void) | null = null;
   /** Held only while a question waits, since only then does where projects are open move a count. */
   private offProjectPresence: (() => void) | null = null;
   private presenceRecountPending = false;
@@ -327,6 +333,10 @@ class NotificationService {
         this.offDecisionQuestions = onDecisionQuestionsChanged((list) =>
           this.noteDecisionQuestions(list)
         );
+        // A timer armed before a sleep fires late, since its clock stops while asleep.
+        this.offQuestionWake = getSystemSleepService().onWake(() =>
+          this.recountDecisionQuestions()
+        );
         this.noteDecisionQuestions(getDecisionQuestionList());
       },
       (err) => console.warn("[NotificationService] failed to load the question list:", err)
@@ -339,10 +349,16 @@ class NotificationService {
    * the agent's side only, and counts no more until it asks something new.
    */
   private noteDecisionQuestions(list: DecisionQuestionList): void {
+    this.latestQuestions = list;
+    const now = Date.now();
+    // Armed before anything can return early: a reopen can move a deadline and keep the same panes.
+    this.armQuestionDeadline(list, now);
     const panes = new Map<string, string>();
     for (const question of list.questions) {
       if (question.standing.kind !== "waiting") continue;
       if (question.inbox?.seen === true || question.inbox?.cleared === true) continue;
+      // Past its deadline by the clock (#17943): it can't be answered, whatever the store says yet.
+      if (deadlineElapsed(question, now)) continue;
       const { projectId, terminalId } = question.reference;
       panes.set(paneKey(projectId, terminalId), projectId);
     }
@@ -353,6 +369,28 @@ class NotificationService {
     this.questionPanes = panes;
     this.watchProjectPresence(panes.size > 0);
     this.applyNotifications();
+  }
+
+  /** Counts the last list again: a deadline passed, or the machine woke. */
+  private recountDecisionQuestions(): void {
+    if (this.latestQuestions !== null) this.noteDecisionQuestions(this.latestQuestions);
+  }
+
+  /** Waits for the next deadline that would take a question out of the count. */
+  private armQuestionDeadline(list: DecisionQuestionList, now: number): void {
+    if (this.questionDeadlineTimer !== null) clearTimeout(this.questionDeadlineTimer);
+    this.questionDeadlineTimer = null;
+    const next = nextAskDeadline(list.questions, now);
+    if (next === null) return;
+    // setTimeout fires at once past a signed 32-bit delay: a far deadline is waited out in chunks.
+    this.questionDeadlineTimer = setTimeout(
+      () => {
+        this.questionDeadlineTimer = null;
+        this.recountDecisionQuestions();
+      },
+      Math.min(next - now, 2_147_483_647)
+    );
+    this.questionDeadlineTimer.unref?.();
   }
 
   /**
@@ -1044,6 +1082,11 @@ class NotificationService {
     this.questionWatch = null;
     this.offDecisionQuestions?.();
     this.offDecisionQuestions = null;
+    this.offQuestionWake?.();
+    this.offQuestionWake = null;
+    if (this.questionDeadlineTimer !== null) clearTimeout(this.questionDeadlineTimer);
+    this.questionDeadlineTimer = null;
+    this.latestQuestions = null;
     this.watchProjectPresence(false);
     this.questionPanes = new Map();
 

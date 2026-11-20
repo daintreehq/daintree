@@ -33,6 +33,7 @@ import {
 } from "./decisionComposeModel";
 import { DecisionMarkdown } from "./DecisionMarkdown";
 import { questionOf, type DecisionQuestionTarget } from "./decisionQuestionTarget";
+import { useDeadlineClock } from "./useDecisionsClock";
 
 /** A place focus is sent to when what held it goes; never tabbed to. */
 const FOCUS_TARGET =
@@ -43,27 +44,13 @@ const QUEUED_READ_MS = 2_000;
 
 const STALE_TEXT = "This question changed. Review the update before sending.";
 
-/** The longest a browser timer waits; a later expiry is checked again after this. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
-
 /**
- * The time, moved on when the question's expiry passes, so an answer is never
- * offered past it while the question waits for the store to record it.
+ * Said while only this computer's clock has the deadline passed (#17943): the
+ * draft stays where it was written, but can't be sent, until the store says
+ * how the question closed (or a reopen takes it again).
  */
-function useExpiryClock(expiresAt: string | null): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (expiresAt === null) return;
-    const at = Date.parse(expiresAt);
-    // Nothing left to wait for once a render has seen it pass. One that passed
-    // between the render and here still moves the clock, at once.
-    if (Number.isNaN(at) || now >= at) return;
-    const delay = Math.max(0, at - Date.now()) + 1;
-    const timer = setTimeout(() => setNow(Date.now()), Math.min(delay, MAX_TIMER_MS));
-    return () => clearTimeout(timer);
-  }, [expiresAt, now]);
-  return now;
-}
+const ELAPSED_TEXT =
+  "The deadline has passed, so this can't be sent. Your draft stays here while Daintree waits to hear how the question closed.";
 
 /**
  * What the view shows of the person's answer to this question:
@@ -95,6 +82,9 @@ export function answerComposerMode(
   if (isDeclineCommitted(record)) return "none";
   if (isAnswerable(question, nowMs)) return "form";
   const writing = record.draft !== null || record.hold !== null || submission !== null;
+  // Only the clock says it passed (#17943): a draft stays in its form, unsendable, rather than
+  // vanish from under the person, until the store records how the question closed.
+  if (writing && (question.status === "open" || question.status === "queued")) return "form";
   return writing ? "closed" : "none";
 }
 
@@ -112,7 +102,7 @@ export function useAnswerComposerMode(
   question: DecisionQuestionContent | null
 ): AnswerComposerMode {
   const record = useAnswerRecord(question === null ? "" : answerKey(question.reference));
-  const now = useExpiryClock(question?.expiresAt ?? null);
+  const now = useDeadlineClock(question?.expiresAt ?? null);
   return question === null ? "none" : answerComposerMode(record, question, now);
 }
 
@@ -133,21 +123,24 @@ export function DecisionAnswerComposer({
   const announce = useAnnouncerStore((state) => state.announce);
   const { terminalId, questionId } = questionOf(target);
   const reviewed = useReviewedImages(terminalId, questionId);
-  const now = useExpiryClock(question.expiresAt);
+  const now = useDeadlineClock(question.expiresAt);
   const mode = answerComposerMode(record, question, now);
+  // Its form kept for a draft past the deadline: locked, as a stale one is.
+  const elapsed = mode === "form" && !isAnswerable(question, now);
   const shape = composeShape(question);
   const draft: AnswerDraft = record.draft ?? {
     revision: question.revision,
     selected: null,
     text: "",
   };
-  const stale = mode === "form" && draft.revision !== question.revision;
+  const stale = mode === "form" && !elapsed && draft.revision !== question.revision;
+  const locked = stale || elapsed;
   const verdict = composeVerdict({
     question,
     draft,
     reviewed,
     stale,
-    closed: mode !== "form",
+    closed: mode !== "form" || elapsed,
   });
   const chosen = chosenOption(question, draft);
   const ready = verdict.canSend && canStartAnswer(record);
@@ -202,9 +195,11 @@ export function DecisionAnswerComposer({
   const closed = mode === "closed" ? (attempt ?? closedText(question.status)) : null;
   const notice =
     mode === "form"
-      ? stale
-        ? null
-        : (attempt ?? (record.hold !== null ? holdText(record.hold) : null))
+      ? elapsed
+        ? ELAPSED_TEXT
+        : stale
+          ? null
+          : (attempt ?? (record.hold !== null ? holdText(record.hold) : null))
       : null;
   const spoken = progress ?? closed ?? (stale ? STALE_TEXT : notice);
 
@@ -369,7 +364,7 @@ export function DecisionAnswerComposer({
                   ) : undefined
                 }
                 // An approval decides on its images, so its choices wait until each is opened.
-                disabled={imagesFirst || stale}
+                disabled={imagesFirst || locked}
                 testId="decision-answer-option"
               />
             ))}
@@ -412,7 +407,7 @@ export function DecisionAnswerComposer({
                 shape.textIsAnswer ? "min-h-28" : "min-h-16"
               )}
               value={draft.text}
-              readOnly={stale}
+              readOnly={locked}
               aria-keyshortcuts={shortcut}
               onChange={(event) => edit({ text: event.target.value })}
               data-testid="decision-answer-text"

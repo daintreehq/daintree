@@ -1,20 +1,29 @@
 import { useSyncExternalStore } from "react";
 import { decisionsClient } from "@/clients/decisionsClient";
+import { deadlineElapsed, nextAskDeadline } from "@/components/Decisions/decisionDeadline";
 import { groupOf } from "@/components/Decisions/decisionsInboxModel";
-import type { DecisionQuestionListItem } from "@shared/types/decisionsQuestion";
+import { onClockJump } from "@/components/Decisions/useDecisionsClock";
+import type {
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+} from "@shared/types/decisionsQuestion";
 
 /**
  * A question waits on the person while it can be answered and they haven't
  * seen or cleared what it asks now (#17895): the inbox's "Needs you" group,
- * less what they've already looked at or set aside on this computer.
+ * less what they've already looked at or set aside on this computer, and,
+ * given the time, less one whose deadline has passed by this computer's
+ * clock (#17943), which can't be answered any more.
  */
 export function isWaitingOnPerson(
-  item: Pick<DecisionQuestionListItem, "standing" | "inbox">
+  item: Pick<DecisionQuestionListItem, "standing" | "inbox" | "expiresAt">,
+  nowMs: number | null = null
 ): boolean {
   return (
     groupOf(item.standing) === "needs-you" &&
     item.inbox?.seen !== true &&
-    item.inbox?.cleared !== true
+    item.inbox?.cleared !== true &&
+    (nowMs === null || !deadlineElapsed(item, nowMs))
   );
 }
 
@@ -26,12 +35,32 @@ export function isWaitingOnPerson(
 let count = 0;
 let holders = 0;
 let stopWatch: (() => void) | null = null;
+/** The last list watched, counted again as a deadline passes or the clock jumps. */
+let latest: DecisionQuestionList | null = null;
+let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+let stopJumps: (() => void) | null = null;
 const listeners = new Set<() => void>();
+
+/** setTimeout fires at once past a signed 32-bit delay, so a far deadline is waited out in chunks. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 function set(next: number): void {
   if (next === count) return;
   count = next;
   for (const notify of [...listeners]) notify();
+}
+
+/** Counts the latest list against the clock now, and waits for the next deadline to pass. */
+function recount(): void {
+  clearTimeout(deadlineTimer);
+  deadlineTimer = undefined;
+  if (latest === null) return;
+  const now = Date.now();
+  set(latest.questions.filter((item) => isWaitingOnPerson(item, now)).length);
+  // Only a deadline passing changes the count: no timer for the minutes ticking down.
+  const next = nextAskDeadline(latest.questions, now);
+  if (next === null) return;
+  deadlineTimer = setTimeout(recount, Math.min(next - now, MAX_TIMEOUT_MS));
 }
 
 function subscribe(listener: () => void): () => void {
@@ -40,12 +69,14 @@ function subscribe(listener: () => void): () => void {
   if (holders === 1) {
     // The toolbar must never come down with a bridge that is missing or throws.
     try {
-      stopWatch = decisionsClient.watchQuestions((list) =>
-        set(list.questions.filter(isWaitingOnPerson).length)
-      );
+      stopWatch = decisionsClient.watchQuestions((list) => {
+        latest = list;
+        recount();
+      });
     } catch {
       stopWatch = null;
     }
+    stopJumps = onClockJump(recount);
   }
   return () => {
     listeners.delete(listener);
@@ -53,6 +84,11 @@ function subscribe(listener: () => void): () => void {
     if (holders > 0) return;
     stopWatch?.();
     stopWatch = null;
+    stopJumps?.();
+    stopJumps = null;
+    clearTimeout(deadlineTimer);
+    deadlineTimer = undefined;
+    latest = null;
     // The next watcher reads afresh rather than showing a count nobody kept up.
     count = 0;
   };
