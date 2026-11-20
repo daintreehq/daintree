@@ -22,7 +22,12 @@ import {
   keychainSessionFailure,
   SECRET_STORAGE_TIMEOUT_MS,
 } from "../../osKeychain.js";
-import { DecisionsKeyStoreError, KeyFileChangedError, SealedKeyStore } from "../keyStore.js";
+import {
+  DecisionsKeyStoreError,
+  KeyFileChangedError,
+  keyFileVersion,
+  SealedKeyStore,
+} from "../keyStore.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const filesystemPlatform = process.platform;
@@ -221,6 +226,32 @@ describe("SealedKeyStore", () => {
     const loaded = await store.load();
     expect(loaded?.currentEpoch).toBe(2);
     expect(loaded?.epochs.map((epoch) => epoch.epoch)).toEqual([1, 2]);
+  });
+
+  it("versions the file by what it holds, opening nothing (#18064)", async () => {
+    const store = new SealedKeyStore(file);
+    await expect(store.version()).resolves.toBeNull();
+    await expect(keyFileVersion(file)).resolves.toBeNull();
+
+    keyed("v10");
+    await store.save(identity());
+    safeStorageMock.decryptStringAsync.mockClear();
+    const first = await store.version();
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    await expect(keyFileVersion(file)).resolves.toBe(first);
+
+    const rotated = identity({
+      epochs: [...identity().epochs, { epoch: 3, raw: "EPOCH-THREE-SENTINEL" }],
+    });
+    await store.save(rotated);
+    safeStorageMock.decryptStringAsync.mockClear();
+    const second = await store.version();
+    expect(second).toMatch(/^[0-9a-f]{64}$/);
+    expect(second).not.toBe(first);
+    expect(safeStorageMock.decryptStringAsync).not.toHaveBeenCalled();
+
+    await store.clear();
+    await expect(store.version()).resolves.toBeNull();
   });
 
   it("reads a missing file as no keys without asking the keychain, even a locked one", async () => {

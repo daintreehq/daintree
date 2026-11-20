@@ -404,6 +404,21 @@ describe("sanitizeDecisionsSettings", () => {
     }
   });
 
+  it("keeps the key file version a kit was verified against only in the form it is written (#18064)", () => {
+    const recoveryKit = verified.recoveryKit!;
+    const keys = "a".repeat(64);
+    expect(
+      sanitizeDecisionsSettings({ ...verified, recoveryKit: { ...recoveryKit, keys } }).recoveryKit
+    ).toEqual({ ...recoveryKit, keys });
+    for (const bad of ["", "A".repeat(64), "a".repeat(63), 42, null]) {
+      expect(
+        sanitizeDecisionsSettings({ ...verified, recoveryKit: { ...recoveryKit, keys: bad } })
+          .recoveryKit,
+        String(bad)
+      ).toEqual(recoveryKit);
+    }
+  });
+
   it("keeps a recovery kit verification only for the identity the setting records", () => {
     const recoveryKit = verified.recoveryKit!;
     expect(sanitizeDecisionsSettings(verified).recoveryKit).toEqual(recoveryKit);

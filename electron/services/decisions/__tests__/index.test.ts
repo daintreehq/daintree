@@ -7,6 +7,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,6 +61,11 @@ vi.mock("electron", () => ({
 
 // The key file each service uses, in a directory of the test's own.
 const keyFile = vi.hoisted(() => ({ path: "" }));
+
+/** The key file version `keyFileVersion` gives for this content. */
+function versionOf(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 // Claim and restore are relayIdentity's; here only how the entry runs them.
 const setupRuns = vi.hoisted(() => ({ claim: vi.fn(), restore: vi.fn() }));
 vi.mock("../relayIdentity.js", () => ({
@@ -3211,9 +3217,41 @@ describe("Decisions entry", () => {
           relayOrigin: CLAIMED.relayOrigin,
           installationId: CLAIMED.installationId,
           deviceId: CLAIMED.deviceId,
+          // The kept keys, unchanged across the restore, are what its kit holds (#18064).
+          keys: versionOf("sealed"),
         },
       });
-      expect(result).toMatchObject({ status: { recoveryKitVerifiedAt: verifiedAt } });
+      expect(result).toMatchObject({
+        status: { recoveryKitVerifiedAt: verifiedAt, recoveryKitCurrent: true },
+      });
+    });
+
+    it("records a restore's kit as current for the keys it saved to an empty file, and not for keys changed under it (#18064)", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      setupRuns.restore.mockImplementation(async () => {
+        writeFileSync(keyFile.path, "sealed from the kit");
+        return { identity: CLAIMED, kitVerified: true };
+      });
+      const restore = () =>
+        restoreIdentity({
+          url: "https://relay.example.com",
+          kit: "{}",
+          passphrase: "correct horse battery staple",
+        });
+
+      await expect(restore()).resolves.toMatchObject({ status: { recoveryKitCurrent: true } });
+      expect(saved.value).toMatchObject({
+        recoveryKit: { keys: versionOf("sealed from the kit") },
+      });
+
+      // Keys already here that changed while the restore ran aren't what its kit was checked against.
+      saved.value = { enabled: true };
+      writeFileSync(keyFile.path, "sealed before");
+      const result = await restore();
+      expect(result).toMatchObject({ result: "saved" });
+      expect(result).not.toHaveProperty("status.recoveryKitCurrent");
+      expect((saved.value as { recoveryKit: object }).recoveryKit).not.toHaveProperty("keys");
     });
 
     it("records a restored identity the same way", async () => {
@@ -4638,7 +4676,12 @@ describe("Decisions entry", () => {
         PASSPHRASE
       );
       const record = (saved.value as { recoveryKit: { verifiedAt: number } }).recoveryKit;
-      expect(record).toEqual({ verifiedAt: expect.any(Number), ...RECORDED });
+      // Recorded with the version of the key file the kit was checked against (#18064).
+      expect(record).toEqual({
+        verifiedAt: expect.any(Number),
+        ...RECORDED,
+        keys: versionOf("sealed"),
+      });
       expect(result).toEqual({
         result: "verified",
         status: {
@@ -4647,6 +4690,7 @@ describe("Decisions entry", () => {
           consentedAt: 5,
           keysStored: true,
           recoveryKitVerifiedAt: record.verifiedAt,
+          recoveryKitCurrent: true,
           revision: expect.any(Number),
         },
       });
@@ -4656,6 +4700,50 @@ describe("Decisions entry", () => {
         expect(pushedStatuses().at(-1)).toMatchObject({ recoveryKitVerifiedAt: record.verifiedAt })
       );
       expect(JSON.stringify(saved.value)).not.toContain(PASSPHRASE);
+    });
+
+    it("reads a verified kit as no longer current once the key file changes, keeping when it was verified (#18064)", async () => {
+      await setUp();
+      kitRuns.check.mockResolvedValue({ verified: RECORDED });
+      await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCurrent: true });
+
+      // A rotation seals a new key into the file.
+      writeFileSync(keyFile.path, "sealed with a new epoch");
+      const status = await getDecisionsStatus();
+      expect(status).not.toHaveProperty("recoveryKitCurrent");
+      expect(status).toHaveProperty("recoveryKitVerifiedAt");
+
+      // A setting restored from an older copy still names the old version, which the file doesn't hold.
+      writeFileSync(keyFile.path, "sealed");
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCurrent: true });
+      rmSync(keyFile.path);
+      expect(await getDecisionsStatus()).not.toHaveProperty("recoveryKitCurrent");
+    });
+
+    it("reads a verification from before the keys' version was recorded as not current (#18064)", async () => {
+      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
+
+      const status = await getDecisionsStatus();
+      expect(status).toMatchObject({ recoveryKitVerifiedAt: 42 });
+      expect(status).not.toHaveProperty("recoveryKitCurrent");
+    });
+
+    it("records a verification without the keys' version when the key file changed while the kit was checked (#18064)", async () => {
+      await setUp();
+      kitRuns.check.mockImplementation(async () => {
+        writeFileSync(keyFile.path, "rotated while checking");
+        return { verified: RECORDED };
+      });
+
+      const result = await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+
+      expect((saved.value as { recoveryKit: object }).recoveryKit).toEqual({
+        verifiedAt: expect.any(Number),
+        ...RECORDED,
+      });
+      expect(result).toMatchObject({ result: "verified" });
+      expect(result).not.toHaveProperty("status.recoveryKitCurrent");
     });
 
     it("keeps an earlier verification when a later kit is refused", async () => {
