@@ -45,7 +45,13 @@ export function DecisionsInvolvementSection({
   statusRevision,
 }: DecisionsInvolvementSectionProps) {
   const headingId = useId();
-  const involvement = useInvolvementPreference({ active, opening, statusRevision });
+  // Last in the dialog, so a focusable footer would let Tab out of its trap: the dialog takes it.
+  const involvement = useInvolvementPreference({
+    active,
+    opening,
+    statusRevision,
+    fallback: "dialog",
+  });
   const { load, read, now, draft, notice } = involvement;
   const editing = draft !== null;
   const stale = read !== null && read.preference.stale;
@@ -55,8 +61,6 @@ export function DecisionsInvolvementSection({
   return (
     <section
       ref={involvement.sectionRef}
-      // The keyboard's last resort once a save settles with nothing here left to take it.
-      tabIndex={-1}
       aria-labelledby={headingId}
       // Bounded, so an open form on a short window scrolls here rather than pushing Save out of the dialog.
       // One quiet line under the queue: a preference set now and then, never a rival to the questions.

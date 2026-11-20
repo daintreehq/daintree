@@ -167,6 +167,7 @@ describe("DecisionsInvolvementSection", () => {
     expect(mode.textContent).toContain("Ask while exploring until");
     expect(mode.textContent).not.toContain("then");
     expect(mode.querySelector("time")?.getAttribute("datetime")).toBe(until);
+    expect(mode.querySelector("time")?.textContent).toMatch(/\d/);
     fireEvent.click(byId("decisions-involvement-change"));
     expect(text("decisions-involvement-mode")).toContain(
       "then bring a recommendation, consulting 4 other agents"
@@ -374,8 +375,8 @@ describe("DecisionsInvolvementSection", () => {
     // A change from the revision the pending one replaces would only be refused: none is offered.
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
     await settle();
-    // Nothing here can take it while the change is in flight, so the section itself holds it.
-    expect(document.activeElement).toBe(byId("decisions-involvement"));
+    // Nothing here can take it while the change is in flight, so the dialog's surface holds it.
+    expect(document.activeElement).toBe(screen.getByRole("dialog"));
     expect(setInvolvement).toHaveBeenCalledTimes(1);
 
     pending.resolve({ result: "conflict", latestRevision: null });
@@ -521,8 +522,8 @@ describe("DecisionsInvolvementSection", () => {
     expect(text("decisions-involvement-read-only")).toContain("0.8.0");
     expect(text("decisions-involvement-notice")).toContain("wasn't saved");
     expect(screen.queryByTestId("decisions-involvement-change")).toBeNull();
-    // Nothing to press is left, so the keyboard waits on the section, inside the dialog's focus trap.
-    expect(document.activeElement).toBe(byId("decisions-involvement"));
+    // Nothing to press is left, so the keyboard waits on the dialog, inside its focus trap.
+    expect(document.activeElement).toBe(screen.getByRole("dialog"));
 
     view.rerender({ opening: 2 });
     await settle();
@@ -636,6 +637,37 @@ describe("DecisionsInvolvementSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await settle();
     expect(text("decisions-involvement-mode")).toBe("Bring a recommendation");
+    expect(screen.queryByTestId("decisions-involvement-failed")).toBeNull();
+  });
+
+  it("moves the keyboard from Change to the form's first field as it opens", async () => {
+    show();
+    await settle();
+
+    act(() => byId("decisions-involvement-change").focus());
+    fireEvent.click(byId("decisions-involvement-change"));
+    await settle();
+    // The selected mode is the group's one stop.
+    expect(document.activeElement).toBe(byId("decisions-involvement-normal-mode-recommend"));
+  });
+
+  it("leaves the keyboard where the person moved it when a change settles", async () => {
+    show();
+    await settle();
+    const pending = deferred<DecisionsInvolvementSaveResult>();
+    setInvolvement.mockReturnValueOnce(pending.promise);
+
+    fireEvent.click(byId("decisions-involvement-change"));
+    fireEvent.click(byId("decisions-involvement-save"));
+    await settle();
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    act(() => elsewhere.focus());
+    pending.resolve({ result: "saved", revision: 4 });
+    await settle();
+
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
   });
 
   it("reads nothing while inactive", async () => {

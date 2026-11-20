@@ -37,6 +37,18 @@ export type InvolvementLoad =
 
 const LOADING: InvolvementLoad = { state: "loading" };
 
+/** A read settled as a value, null when it fails, a bridge that throws rather than rejects included. */
+function readInvolvement(): Promise<DecisionsInvolvementRead | null> {
+  try {
+    return decisionsClient.getInvolvement().then(
+      (value) => value,
+      () => null
+    );
+  } catch {
+    return Promise.resolve(null);
+  }
+}
+
 /**
  * The preference while `active`, as this opening read it, read again every
  * few seconds while the window is visible, whenever `statusRevision` moves,
@@ -61,14 +73,8 @@ function useInvolvementRead(
     const read = async () => {
       if (reading) return;
       reading = true;
-      // Settled as a value, not thrown: a read that fails keeps the last good one. Started inside
-      // the chain so a bridge that throws rather than rejects is a failed read too.
-      const result = await Promise.resolve()
-        .then(() => decisionsClient.getInvolvement())
-        .then(
-          (value) => value,
-          () => null
-        );
+      // Settled as a value, not thrown: a read that fails keeps the last good one.
+      const result = await readInvolvement();
       reading = false;
       if (stopped) return;
       const at = Date.now();
@@ -109,16 +115,29 @@ interface Edit {
   first: boolean;
 }
 
+/** The focusable surface of the dialog holding the section: `AppDialog` names its backdrop and focuses the surface inside. */
+function dialogSurface(section: HTMLElement | null): HTMLElement | null {
+  const dialog = section?.closest<HTMLElement>('[role="dialog"], [role="alertdialog"]') ?? null;
+  if (dialog === null) return null;
+  return dialog.hasAttribute("tabindex")
+    ? dialog
+    : dialog.querySelector<HTMLElement>(':scope > [tabindex="-1"]');
+}
+
 /**
  * Whether the keyboard is nowhere the person put it on purpose: on the page,
- * on a surface holding the section (a dialog's own), or inside the section.
+ * on the dialog's own surface, or inside the section. A panel or list the
+ * person moved to holds it, even one the section sits in.
  */
 function keyboardIsFree(section: HTMLElement | null): boolean {
   const focused = document.activeElement;
   if (focused === null || focused === document.body) return true;
   if (section === null) return false;
-  return section.contains(focused) || focused.contains(section);
+  return section.contains(focused) || focused === dialogSurface(section);
 }
+
+// A radio group's one stop is its selected option; the others are reached by arrow keys.
+const FIRST_FIELD = 'input:not(:disabled), button:not(:disabled):not([tabindex="-1"])';
 
 export interface InvolvementPreferenceOptions {
   /** Shown and Decisions is on: nothing is read otherwise. */
@@ -127,6 +146,14 @@ export interface InvolvementPreferenceOptions {
   opening: number;
   /** Decisions' status revision: a change in the connection reads the preference again. */
   statusRevision: number | null;
+  /**
+   * Where the keyboard goes once a save settles or the form is put away and Change isn't there to
+   * take it: the dialog's surface, where Tab stays in its trap, or the section (`tabIndex={-1}`),
+   * which keeps the person's place on a page.
+   */
+  fallback: "dialog" | "section";
+  /** Something around it is changing (Decisions turning on or off): nothing is started or sent. */
+  locked?: boolean;
 }
 
 export interface InvolvementPreference {
@@ -154,7 +181,7 @@ export interface InvolvementPreference {
   changeUntil: (until: string) => void;
   cancel: () => void;
   save: () => Promise<void>;
-  /** A focusable surface (`tabIndex={-1}`) holding everything below: the keyboard's last resort. */
+  /** The element holding everything below; with the `section` fallback, focusable (`tabIndex={-1}`). */
   sectionRef: RefObject<HTMLElement | null>;
   changeRef: RefObject<HTMLButtonElement | null>;
   formRef: RefObject<HTMLFormElement | null>;
@@ -172,6 +199,8 @@ export function useInvolvementPreference({
   active,
   opening,
   statusRevision,
+  fallback,
+  locked = false,
 }: InvolvementPreferenceOptions): InvolvementPreference {
   const sectionRef = useRef<HTMLElement>(null);
   const changeRef = useRef<HTMLButtonElement>(null);
@@ -185,6 +214,12 @@ export function useInvolvementPreference({
   // end, and reads again. A draft's own end wakes its check the same way.
   const [flippedAt, setFlippedAt] = useState(0);
   const now = Math.max(at, flippedAt);
+  // Shown again after a while hidden, the clock moves to now before any read lands: a read that
+  // stalls or fails would otherwise keep a temporary mode that ended meanwhile, and time its end
+  // from the old clock.
+  useEffect(() => {
+    if (active) setFlippedAt(Date.now());
+  }, [active]);
   const flipIn = preference === null ? null : msUntilChange(preference, now);
   useEffect(() => {
     if (!active || flipIn === null) return;
@@ -225,6 +260,7 @@ export function useInvolvementPreference({
     read.preference.revision < behind.revision &&
     now - behind.at < BEHIND_WAIT_MS;
   const [handoff, setHandoff] = useState(0);
+  const [opened, setOpened] = useState(0);
 
   const readOnly = read === null ? null : readOnlyText(read, refusedByRelay);
   const canEdit = read !== null && readOnly === null && !waiting;
@@ -247,16 +283,25 @@ export function useInvolvementPreference({
     return scheduleFlip(end - Date.now(), () => setFlippedAt(Date.now()));
   }, [draftEnd, now]);
 
-  // Once a save settles or the form is put away, the keyboard goes to Change, else the section.
+  // Once a save settles or the form is put away, the keyboard goes to Change, else the fallback.
   useEffect(() => {
     if (handoff === 0 || !activeRef.current) return;
+    const section = sectionRef.current;
+    if (!keyboardIsFree(section)) return;
+    (changeRef.current ?? (fallback === "dialog" ? dialogSurface(section) : section))?.focus();
+  }, [handoff, fallback]);
+
+  // Change goes as the form opens, so the keyboard it held moves on to the form's first field.
+  useEffect(() => {
+    if (opened === 0 || !activeRef.current) return;
     if (!keyboardIsFree(sectionRef.current)) return;
-    (changeRef.current ?? sectionRef.current)?.focus();
-  }, [handoff]);
+    formRef.current?.querySelector<HTMLElement>(FIRST_FIELD)?.focus();
+  }, [opened]);
 
   const startEditing = () => {
-    if (read === null) return;
+    if (read === null || locked) return;
     setNotice(null);
+    setOpened((n) => n + 1);
     const draft = draftFrom(read.preference, Date.now());
     setEditing({
       opening,
@@ -278,7 +323,7 @@ export function useInvolvementPreference({
   };
 
   const save = async () => {
-    if (edit === null || busy || !canEdit) return;
+    if (edit === null || busy || !canEdit || locked) return;
     // Checked again at the moment of saving: an end that has passed since the last read shows now.
     const checkedAt = Date.now();
     if (draftIssue(edit.draft, checkedAt) !== null) {
@@ -326,7 +371,7 @@ export function useInvolvementPreference({
     readOnly,
     waiting,
     canEdit,
-    canStart: canEdit && edit === null && !busy,
+    canStart: canEdit && edit === null && !busy && !locked,
     startEditing,
     change,
     changeUntil: (until) => change({ until, keptUntil: null }),

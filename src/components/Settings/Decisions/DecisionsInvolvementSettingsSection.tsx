@@ -9,6 +9,10 @@ import { SettingsCheckbox } from "@/components/Settings/SettingsCheckbox";
 import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
+import {
+  useHoldSettingsDeepLink,
+  useSettingsDeepLink,
+} from "@/components/Settings/settingsDeepLink";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import {
@@ -41,6 +45,8 @@ interface DecisionsInvolvementSettingsSectionProps {
   active: boolean;
   /** Decisions' status revision: a change in the connection reads the preference again. */
   statusRevision: number | null;
+  /** The Decisions switch is changing, so nothing behind it is. */
+  locked: boolean;
 }
 
 /**
@@ -52,13 +58,19 @@ interface DecisionsInvolvementSettingsSectionProps {
 export function DecisionsInvolvementSettingsSection({
   active,
   statusRevision,
+  locked,
 }: DecisionsInvolvementSettingsSectionProps) {
   const involvement = useInvolvementPreference({
     active,
     opening: SETTINGS_OPENING,
     statusRevision,
+    fallback: "section",
+    locked,
   });
   const { load, read, now, notice } = involvement;
+  // A search result for this section lands once the read has settled, so Change is there to take the keyboard.
+  const link = useSettingsDeepLink();
+  useHoldSettingsDeepLink(link.sectionId === INVOLVEMENT_SECTION_ID && load.state === "loading");
 
   return (
     <SettingsSection title="Involvement" id={INVOLVEMENT_SECTION_ID}>
@@ -96,7 +108,9 @@ export function DecisionsInvolvementSettingsSection({
               ) : undefined
             }
           />
-          {involvement.draft !== null && <Editor involvement={involvement} now={now} />}
+          {involvement.draft !== null && (
+            <Editor involvement={involvement} now={now} locked={locked} />
+          )}
         </SettingsGroup>
         {/* Announced once when a save settles. Kept mounted to announce; out of the gap while it says nothing. */}
         <div role="status" className="empty:-mt-3">
@@ -136,7 +150,15 @@ function Current({ involvement }: { involvement: InvolvementPreference }) {
   );
 }
 
-function Editor({ involvement, now }: { involvement: InvolvementPreference; now: number }) {
+function Editor({
+  involvement,
+  now,
+  locked,
+}: {
+  involvement: InvolvementPreference;
+  now: number;
+  locked: boolean;
+}) {
   const draft = involvement.draft;
   if (draft === null) return null;
   const issue = draftIssue(draft, now);
@@ -150,7 +172,7 @@ function Editor({ involvement, now }: { involvement: InvolvementPreference; now:
       onSubmit={(event) => {
         event.preventDefault();
         // Save is disabled while nothing changed; Enter in a field reaches here regardless.
-        if (involvement.dirty) void involvement.save();
+        if (involvement.dirty && !locked) void involvement.save();
       }}
       data-testid="decisions-involvement-editor"
     >
@@ -186,7 +208,7 @@ function Editor({ involvement, now }: { involvement: InvolvementPreference; now:
           onChange={(temporary) => involvement.change({ temporary })}
           disabled={saving}
         />
-        <SettingsDependents disabled={!draft.temporary}>
+        <SettingsDependents disabled={!draft.temporary} reason="Turn on For a while to choose them">
           <SettingsPresetGroup
             label="Mode for a while"
             options={MODE_OPTIONS}
@@ -218,7 +240,7 @@ function Editor({ involvement, now }: { involvement: InvolvementPreference; now:
           variant="contrast"
           size="sm"
           loading={saving}
-          disabled={!involvement.dirty}
+          disabled={!involvement.dirty || locked}
           aria-disabled={issue !== null || undefined}
           data-testid="decisions-involvement-save"
         >

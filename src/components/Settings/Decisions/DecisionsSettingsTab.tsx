@@ -187,6 +187,7 @@ export function DecisionsSettingsTab({
       <DecisionsInvolvementSettingsSection
         active={isActive}
         statusRevision={status.revision ?? null}
+        locked={pending !== null}
       />
       <DecisionsQuestionsSection
         policy={policy}

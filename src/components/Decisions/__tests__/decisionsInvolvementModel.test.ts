@@ -114,6 +114,15 @@ describe("decisionsInvolvementModel", () => {
   });
 
   it("names why none is in force in a few words for one line, and in a sentence otherwise", () => {
+    const reasons = [
+      "not-set",
+      "not-synced",
+      "unsupported",
+      "signer-revoked",
+      "device-revoked",
+    ] as const;
+    // Each reason keeps its own words when shortened.
+    expect(new Set(reasons.map(unavailableLabel)).size).toBe(reasons.length);
     for (const reason of [
       "not-set",
       "not-synced",
@@ -143,6 +152,7 @@ describe("decisionsInvolvementModel", () => {
       ).toBe(false);
 
       const permanent = draftFrom(available(), NOW);
+      expect(sameDraft(permanent, { ...permanent, normalMode: "involve-early" })).toBe(false);
       // A temporary mode's fields mean nothing while it is off.
       expect(sameDraft(permanent, { ...permanent, temporaryMode: "recommend", until: "" })).toBe(
         true
