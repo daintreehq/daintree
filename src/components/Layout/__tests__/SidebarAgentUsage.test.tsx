@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AgentUsageReadout, AgentUsageSnapshot } from "@shared/types/ipc/agentUsage";
 
 const { dispatch, view } = vi.hoisted(() => ({
@@ -19,6 +19,8 @@ vi.mock("@/lib/viewCacheState", () => ({
   },
 }));
 
+import ClaudeIcon from "@/components/icons/brands/ClaudeIcon";
+import CodexIcon from "@/components/icons/brands/CodexIcon";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AGENT_USAGE_EXPANDED_KEY, setAgentUsageExpanded } from "../agentUsageExpanded";
 import { SidebarAgentUsage } from "../SidebarAgentUsage";
@@ -355,15 +357,30 @@ describe("SidebarAgentUsage", () => {
         expect(row.querySelectorAll("svg")).toHaveLength(1);
         expect(row.textContent).toMatch(/^\d+% · resets \S/);
       }
-      // Claude's mark and Codex's are different drawings.
-      expect(codexRow!.querySelector("svg")!.innerHTML).not.toBe(
-        claudeRow!.querySelector("svg")!.innerHTML
-      );
+      // Each row wears its own agent's mark, not just a different one.
+      const drawing = (root: Element) => root.querySelector("svg path")!.getAttribute("d");
+      expect(drawing(codexRow!)).toBe(drawing(render(<CodexIcon />).container));
+      expect(drawing(claudeRow!)).toBe(drawing(render(<ClaudeIcon />).container));
+      expect(drawing(codexRow!)).not.toBe(drawing(claudeRow!));
       expect(claudeRow!.textContent).not.toMatch(/Claude|Home|ago/);
       const label = claudeRow!.getAttribute("aria-label")!;
       expect(label).toMatch(/^Claude 85% · Home · resets /);
       expect(label).toMatch(/Home · default login\./);
       expect(label).toMatch(/Printed in a terminal 12m ago\. Open account quota$/);
+    });
+
+    it("keeps the login, machine and age a row leaves out in its tooltip", async () => {
+      showHost("studio-03");
+      installBridge([
+        claude({ statement: "used", usedPercent: 30, defaultLoginName: "Home" }, STUDIO),
+      ]);
+      const { container } = await renderUsage();
+      fireEvent.focus(rows(container)[0]!);
+      const tip = (await screen.findAllByRole("tooltip"))[0]!;
+      expect(tip.textContent).toMatch(/Claude/);
+      expect(tip.textContent).toMatch(/Home · default login on studio-03/);
+      expect(tip.textContent).toMatch(/Printed in a terminal 12m ago/);
+      expect(tip.textContent).toMatch(/Open account quota/);
     });
 
     it("folds to its header alone on one click, and opens again on the next", async () => {
@@ -398,24 +415,31 @@ describe("SidebarAgentUsage", () => {
       expect(toggle.querySelector("svg.lucide-triangle-alert")).not.toBeNull();
       expect(described(toggle)).toBe("An agent is near or at its usage limit");
       expect(container.textContent).not.toMatch(/\d+%/);
-      // The name never changes with the state.
-      expect(toggle.textContent).toMatch(/^Usage/);
+      // The name never changes with the state; the warning only describes it.
+      const folded = toggle.getAttribute("aria-label");
+      expect(folded).toBeTruthy();
+      expect(folded).not.toMatch(/\d|limit/i);
       fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-label")).toBe(folded);
       expect(toggle.hasAttribute("data-attention")).toBe(false);
       expect(toggle.hasAttribute("aria-describedby")).toBe(false);
     });
 
     it("takes the warning tone folded when Claude Code said the limit is near or reached", async () => {
-      installBridge([claude()]);
+      const quiet = claude({ statement: "used", usedPercent: 79 });
+      installBridge([quiet]);
       const { container } = await renderUsage();
       fireEvent.click(header(container));
-      expect(header(container).hasAttribute("data-attention")).toBe(true);
-      act(() => pushed!({ readouts: [claude({ statement: "reached" })], revision: 2 }));
-      expect(header(container).hasAttribute("data-attention")).toBe(true);
-      act(() =>
-        pushed!({ readouts: [claude({ statement: "used", usedPercent: 79 })], revision: 3 })
-      );
       expect(header(container).hasAttribute("data-attention")).toBe(false);
+      let revision = 1;
+      for (const statement of ["approaching", "reached"] as const) {
+        act(() =>
+          pushed!({ readouts: [claude({ statement, usedPercent: null })], revision: ++revision })
+        );
+        expect(header(container).hasAttribute("data-attention")).toBe(true);
+        act(() => pushed!({ readouts: [quiet], revision: ++revision }));
+        expect(header(container).hasAttribute("data-attention")).toBe(false);
+      }
     });
 
     it("stays plain folded while every reading is under the threshold", async () => {
@@ -438,13 +462,25 @@ describe("SidebarAgentUsage", () => {
     });
 
     it("drops the folded warning at the warned reading's reset, with no new snapshot", async () => {
-      const resetsAt = Date.now() + RESET_IN_MS;
-      installBridge([codex(95, {}, { resetsAt }), codex(70, {}, { windowDurationMins: 10080 })]);
-      const { container } = await renderUsage();
-      fireEvent.click(header(container));
-      expect(header(container).hasAttribute("data-attention")).toBe(true);
-      await act(() => new Promise((resolve) => setTimeout(resolve, PAST_RESET_MS)));
-      expect(header(container).hasAttribute("data-attention")).toBe(false);
+      // Only the clock and the reset's own timer are faked; the bridge's promises stay real.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        const resetsAt = Date.now() + 30_000;
+        installBridge([codex(95, {}, { resetsAt }), codex(70, {}, { windowDurationMins: 10080 })]);
+        const { container } = await renderUsage();
+        fireEvent.click(header(container));
+        expect(header(container).hasAttribute("data-attention")).toBe(true);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(29_000);
+        });
+        expect(header(container).hasAttribute("data-attention")).toBe(true);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        expect(header(container).hasAttribute("data-attention")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("leaves no section folded when nothing has a reading, and returns folded when one does", async () => {
@@ -475,12 +511,28 @@ describe("SidebarAgentUsage", () => {
         expect(localStorage.getItem(AGENT_USAGE_EXPANDED_KEY)).toBe("true");
       });
 
-      it("follows another window's change, and starts folded when another window folded it", async () => {
+      it("starts folded when a previous session left it folded", async () => {
+        // The stored key is the contract with earlier sessions, so it is spelled out here.
+        localStorage.setItem("daintree_agent_usage_expanded", "false");
+        installBridge([codex(30)]);
+        const { container } = await renderUsage();
+        expect(header(container).getAttribute("aria-expanded")).toBe("false");
+        expect(rows(container)).toHaveLength(0);
+      });
+
+      it("follows another window's change", async () => {
         installBridge([codex(30)]);
         const { container } = await renderUsage();
         localStorage.setItem(AGENT_USAGE_EXPANDED_KEY, "false");
         act(() => {
-          window.dispatchEvent(new StorageEvent("storage", { key: AGENT_USAGE_EXPANDED_KEY }));
+          window.dispatchEvent(
+            new StorageEvent("storage", {
+              key: AGENT_USAGE_EXPANDED_KEY,
+              oldValue: "true",
+              newValue: "false",
+              storageArea: localStorage,
+            })
+          );
         });
         expect(header(container).getAttribute("aria-expanded")).toBe("false");
         expect(rows(container)).toHaveLength(0);

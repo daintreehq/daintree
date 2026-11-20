@@ -62,6 +62,7 @@ export function SidebarAgentUsage() {
         type="button"
         data-sidebar-agent-usage-toggle=""
         data-attention={warning ? "" : undefined}
+        aria-label="Usage"
         aria-expanded={expanded}
         aria-controls={listId}
         aria-describedby={warning ? warningId : undefined}
@@ -90,7 +91,7 @@ export function SidebarAgentUsage() {
         </span>
         {warning && (
           <>
-            {/* The toggle's name stays "Usage" folded or open; the warning describes it. */}
+            {/* The toggle's name stays "Usage" folded or open (the label pins it); the warning describes it. */}
             <span id={warningId} className="sr-only">
               An agent is near or at its usage limit
             </span>

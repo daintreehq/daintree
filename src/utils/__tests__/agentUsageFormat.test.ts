@@ -4,6 +4,7 @@ import type {
   ClaudeAgentUsageReading,
   CodexAgentUsageReading,
 } from "@shared/types/ipc/agentUsage";
+import { formatResetClock } from "../agentAccountHeadroom";
 import { describeAgentUsage } from "../agentUsageFormat";
 
 const NOW = new Date(2026, 10, 18, 12, 0, 0).getTime();
@@ -180,7 +181,7 @@ describe("describeAgentUsage", () => {
       "Claude",
       NOW
     );
-    expect(named.row).toMatch(/^40% · resets \S/);
+    expect(named.row).toBe(`40% · resets ${formatResetClock(resetsAt, NOW)}`);
     expect(named.row).not.toMatch(/Claude|Home|Personal|Studio/);
     expect(named.text).toMatch(/^Claude 40% · Home, Personal · Studio · resets /);
     expect(describeAgentUsage(codex(), "Codex", NOW).row).toBe("82%");
@@ -192,9 +193,10 @@ describe("describeAgentUsage", () => {
     expect(row(claude({ statement: "approaching", usedPercent: null }))).toBe("Near limit");
     expect(row(claude({ statement: "reached", usedPercent: null }))).toBe("Limit reached");
     expect(row(claude({ statement: "over", usedPercent: 90 }))).toBe("Over 90%");
+    expect(row(claude({ statement: "over", usedPercent: 93.8 }))).toBe("Over 93%");
     expect(row(codex({ observedAt: NOW - 20 * 60_000 }))).toBe("82% · stale");
-    expect(row(codex({ observedAt: NOW - 20 * 60_000, resetsAt }))).toMatch(
-      /^82% · stale · resets \S/
+    expect(row(codex({ observedAt: NOW - 20 * 60_000, resetsAt }))).toBe(
+      `82% · stale · resets ${formatResetClock(resetsAt, NOW)}`
     );
     // The window stays in the text and the detail the row drops it from.
     const approaching = describeAgentUsage(
