@@ -4,7 +4,7 @@ import { DecisionsDevicesSection } from "./DecisionsDevicesSection";
 import { currentRotateButton, DecisionsEncryptionSection } from "./DecisionsEncryptionSection";
 import { DecisionsHostsSection } from "./DecisionsHostsSection";
 import { DecisionsRevokeDeviceDialog } from "./DecisionsRevokeDeviceDialog";
-import { useDecisionsDevices } from "./useDecisionsDevices";
+import type { UseDecisionsDevicesResult } from "./useDecisionsDevices";
 import { type DecisionsRevokeTarget, useDecisionsKeyActions } from "./useDecisionsKeyActions";
 
 /**
@@ -14,15 +14,19 @@ import { type DecisionsRevokeTarget, useDecisionsKeyActions } from "./useDecisio
  * confirmation, since revoking a phone or a Host is the same key rotation
  * (#16010, #16021). The list is read again on Refresh, after a pairing or a
  * key change, when main says the devices changed, when the window regains
- * focus, and when the set of enrolled Hosts changes.
+ * focus, and when the set of enrolled Hosts changes. The read is the tab's,
+ * which Connection's facts share.
  */
 export function DecisionsDevicesAndHosts({
   status,
+  devicesRead,
   locked = false,
   pairFocusRequest = 0,
   onPairFocused,
 }: {
   status: DecisionsStatus;
+  /** The relay's device list, read while a relay is set up. */
+  devicesRead: UseDecisionsDevicesResult;
   /** The switch is changing, so nothing here should start. */
   locked?: boolean;
   /** Above zero, and bumped, to land on Pair a phone once it shows (#16200). */
@@ -31,7 +35,6 @@ export function DecisionsDevicesAndHosts({
   onPairFocused?: () => void;
 }) {
   const relaySetUp = status.relayOrigin !== undefined;
-  const devicesRead = useDecisionsDevices(relaySetUp);
   const keyActions = useDecisionsKeyActions(devicesRead.reload);
   const [revokeTarget, setRevokeTarget] = useState<DecisionsRevokeTarget | null>(null);
   const [revokeFinished, setRevokeFinished] = useState(false);

@@ -67,9 +67,13 @@ export function protocolRange({
 /**
  * What a check saw, in words: the observation itself, never what it implies
  * about agents. Null for an address that was never sent, whose words belong
- * on the field.
+ * on the field. `setUpHere` is a check of the relay this computer claimed or
+ * restored, whose claim is this computer's own, not one met while setting up.
  */
-export function describeRelayCheck(check: DecisionsRelayCheck): RelayObservation | null {
+export function describeRelayCheck(
+  check: DecisionsRelayCheck,
+  setUpHere = false
+): RelayObservation | null {
   if (check.result === "invalid-url") return null;
   const host = hostOf(check.origin);
   switch (check.result) {
@@ -117,18 +121,31 @@ export function describeRelayCheck(check: DecisionsRelayCheck): RelayObservation
           "Nobody has claimed it, and it can't be claimed until CLAIM_SECRET is set on the Worker in your Cloudflare account",
       };
     case "unclaimed":
-      return {
-        severity: "success",
-        label: `${host} is ready to claim`,
-        detail:
-          "A Decisions relay nobody has claimed yet. Claiming it takes the claim secret set when it was deployed.",
-      };
+      return setUpHere
+        ? {
+            severity: "warning",
+            label: `${host} reports no owner`,
+            detail:
+              "It's the relay this computer is set up with, but it answered as one nobody has claimed",
+          }
+        : {
+            severity: "success",
+            label: `${host} is ready to claim`,
+            detail:
+              "A Decisions relay nobody has claimed yet. Claiming it takes the claim secret set when it was deployed.",
+          };
     case "claimed":
-      return {
-        severity: "info",
-        label: `${host} is claimed`,
-        detail: "A Decisions relay that already has an owner. A relay is claimed only once.",
-      };
+      return setUpHere
+        ? {
+            severity: "success",
+            label: `${host} answered as a Decisions relay`,
+            detail: "It's claimed, and it's the relay this computer is set up with",
+          }
+        : {
+            severity: "info",
+            label: `${host} is claimed`,
+            detail: "A Decisions relay that already has an owner. A relay is claimed only once.",
+          };
   }
 }
 

@@ -10,7 +10,17 @@ import type {
 } from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { DecisionsHost, DecisionsHostsResult } from "@shared/types/decisionsHosts";
-import { DecisionsDevicesAndHosts } from "../DecisionsDevicesAndHosts";
+import type { ComponentProps } from "react";
+import { DecisionsDevicesAndHosts as DevicesAndHosts } from "../DecisionsDevicesAndHosts";
+import { useDecisionsDevices } from "../useDecisionsDevices";
+
+/** As the tab mounts it: with the tab's own read of the devices while a relay is set up. */
+function DecisionsDevicesAndHosts(
+  props: Omit<ComponentProps<typeof DevicesAndHosts>, "devicesRead">
+) {
+  const devicesRead = useDecisionsDevices(props.status.relayOrigin ?? null);
+  return <DevicesAndHosts {...props} devicesRead={devicesRead} />;
+}
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const STATUS: DecisionsStatus = { state: "connected", relayOrigin: ORIGIN };

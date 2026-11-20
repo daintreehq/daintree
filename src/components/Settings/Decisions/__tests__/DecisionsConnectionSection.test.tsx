@@ -256,6 +256,10 @@ describe("DecisionsConnectionSection relay check", () => {
     const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
     await act(async () => {});
     expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    // Nothing was wrong, so the check made on opening added nothing to the page (#18059).
+    expect(document.getElementById("decisions-relay-check")).toBeNull();
+    expect(document.getElementById("decisions-relay-versions")).toBeNull();
+    expect(checkButton("Check")).toBeTruthy();
 
     await act(async () => {
       view.rerender(
@@ -271,12 +275,17 @@ describe("DecisionsConnectionSection relay check", () => {
     const other = "https://other.example.workers.dev";
     const second = deferred<DecisionsRelayCheck>();
     checkRelay
-      .mockResolvedValueOnce({ result: "claimed", origin: ORIGIN, compatibility: SAME })
+      .mockResolvedValueOnce({
+        result: "unreachable",
+        origin: ORIGIN,
+        endpoint: "health",
+        reason: "dns",
+      })
       .mockReturnValueOnce(second.promise);
 
     const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
     await act(async () => {});
-    expect(screen.getByText("decisions.example.workers.dev is claimed")).toBeTruthy();
+    expect(screen.getByText("Couldn't reach decisions.example.workers.dev")).toBeTruthy();
 
     await act(async () => {
       view.rerender(
@@ -285,13 +294,13 @@ describe("DecisionsConnectionSection relay check", () => {
         </TooltipProvider>
       );
     });
-    expect(screen.queryByText("decisions.example.workers.dev is claimed")).toBeNull();
+    expect(screen.queryByText("Couldn't reach decisions.example.workers.dev")).toBeNull();
     expect(checkRelay).toHaveBeenLastCalledWith(other);
 
     await act(async () => {
-      second.resolve({ result: "claimed", origin: other, compatibility: SAME });
+      second.resolve({ result: "unreachable", origin: other, endpoint: "health", reason: "dns" });
     });
-    expect(screen.getByText("other.example.workers.dev is claimed")).toBeTruthy();
+    expect(screen.getByText("Couldn't reach other.example.workers.dev")).toBeTruthy();
   });
 
   it("starts nothing while the switch is changing", async () => {
@@ -330,18 +339,275 @@ describe("DecisionsConnectionSection relay check", () => {
     });
 
     expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    // The versions moved apart, which is worth a row; the relay answering as itself isn't.
+    expect(document.getElementById("decisions-relay-check")).toBeNull();
     expect(screen.getByText("The relay is behind Daintree")).toBeTruthy();
+    // Still asking and answering: information, not a warning.
+    const versions = document.getElementById("decisions-relay-versions")!;
     expect(
-      screen.getByText(
+      within(versions).getByText(
         /The relay runs 0\.0\.9, protocol 1\. Daintree expects 0\.1\.0, protocol 1\. Both speak protocol 1, so questions and answers work\./
       )
     ).toBeTruthy();
-    // Still asking and answering: information, not a warning.
-    const versions = document.getElementById("decisions-relay-versions")!;
     expect(versions.querySelector("[data-severity-glyph]")?.classList.contains("lucide-info")).toBe(
       true
     );
     expect(checkButton("Check again")).toBeTruthy();
+  });
+
+  it("shows the whole check of the relay set up here on Check, without calling it someone else's", async () => {
+    const asked = deferred<DecisionsRelayCheck>();
+    checkRelay
+      .mockResolvedValueOnce({
+        result: "claimed",
+        origin: ORIGIN,
+        compatibility: {
+          relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.0.9" },
+          daintree: SAME.daintree,
+          diverges: true,
+        },
+      })
+      .mockReturnValueOnce(asked.promise);
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+    expect(document.getElementById("decisions-relay-check")).toBeNull();
+    expect(screen.getByText("The relay is behind Daintree")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(checkButton("Check again"));
+    });
+    const regions = () => screen.getAllByRole("status").map((region) => region.textContent ?? "");
+    expect(regions()).toContain("Checking the relay…");
+    expect(checkButton("Check again").getAttribute("aria-busy")).toBe("true");
+    await act(async () => {
+      asked.resolve({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+    });
+
+    expect(checkRelay).toHaveBeenCalledTimes(2);
+    const row = document.getElementById("decisions-relay-check")!;
+    expect(row.textContent).toContain(
+      "decisions.example.workers.dev answered as a Decisions relay"
+    );
+    expect(row.textContent).toContain("the relay this computer is set up with");
+    expect(row.textContent).not.toMatch(/already has an owner|is claimed/);
+    // What the person asked for, not what the check on opening saw.
+    expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+    expect(screen.queryByText("The relay is behind Daintree")).toBeNull();
+    expect(checkButton("Check again")).toBeTruthy();
+  });
+
+  it("says a version mismatch found on opening when it's the only row it adds", async () => {
+    checkRelay.mockResolvedValue({
+      result: "claimed",
+      origin: ORIGIN,
+      compatibility: {
+        relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.2.0" },
+        daintree: SAME.daintree,
+        diverges: true,
+      },
+    });
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    expect(document.getElementById("decisions-relay-check")).toBeNull();
+    expect(screen.getByText("The relay is newer than Daintree")).toBeTruthy();
+    const announced = screen
+      .getAllByRole("status")
+      .some((region) => region.textContent?.startsWith("The relay is newer than Daintree."));
+    expect(announced).toBe(true);
+  });
+
+  it("keeps a failed check the person asked for while the connection comes back and checks again", async () => {
+    const retry = deferred<DecisionsRelayCheck>();
+    checkRelay
+      .mockResolvedValueOnce({ result: "claimed", origin: ORIGIN, compatibility: SAME })
+      .mockRejectedValueOnce(new Error("Turn on Decisions to check a relay"))
+      .mockReturnValueOnce(retry.promise);
+    const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(checkButton("Check"));
+    });
+    const failed = () => document.getElementById("decisions-relay-url")!.textContent ?? "";
+    expect(failed()).toContain("Couldn't check the relay. Turn on Decisions");
+
+    const rerender = (status: DecisionsStatus) =>
+      view.rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={status} />
+        </TooltipProvider>
+      );
+    await act(async () => rerender({ state: "reconnecting", relayOrigin: ORIGIN }));
+    await act(async () => rerender({ state: "connected", relayOrigin: ORIGIN }));
+    expect(checkRelay).toHaveBeenCalledTimes(3);
+    expect(failed()).toContain("Couldn't check the relay. Turn on Decisions");
+    expect(checkButton("Check again")).toBeTruthy();
+
+    await act(async () => {
+      retry.resolve({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+    });
+    expect(failed()).not.toContain("Couldn't check the relay");
+    // The person asked about this relay, so its answer shows in full.
+    expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+  });
+
+  it("adds a row on opening only for what's wrong, and says it", async () => {
+    checkRelay.mockResolvedValue({
+      result: "unreachable",
+      origin: ORIGIN,
+      endpoint: "health",
+      reason: "timeout",
+    });
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    const row = document.getElementById("decisions-relay-check")!;
+    expect(within(row).getByText("Couldn't reach decisions.example.workers.dev")).toBeTruthy();
+    expect(within(row).getByText("It didn't answer in time")).toBeTruthy();
+    const announced = screen
+      .getAllByRole("status")
+      .map((region) => region.textContent ?? "")
+      .some((text) => text.startsWith("Couldn't reach decisions.example.workers.dev"));
+    expect(announced).toBe(true);
+    expect(checkButton("Check again")).toBeTruthy();
+  });
+
+  it("warns on opening when the relay set up here reports no owner", async () => {
+    checkRelay.mockResolvedValue({ result: "unclaimed", origin: ORIGIN, compatibility: SAME });
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    const row = document.getElementById("decisions-relay-check")!;
+    expect(within(row).getByText("decisions.example.workers.dev reports no owner")).toBeTruthy();
+    expect(row.textContent).toContain("it answered as one nobody has claimed");
+    expect(
+      row.querySelector("[data-severity-glyph]")?.classList.contains("lucide-triangle-alert")
+    ).toBe(true);
+    expect(row.textContent).not.toMatch(/ready to claim/);
+    expect(document.getElementById("decisions-relay-versions")).toBeNull();
+  });
+
+  it("says nothing while it checks on opening, or once it found nothing wrong", async () => {
+    const pending = deferred<DecisionsRelayCheck>();
+    checkRelay.mockReturnValue(pending.promise);
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    const regions = () => screen.getAllByRole("status").map((region) => region.textContent ?? "");
+    expect(regions()).not.toContain("Checking the relay…");
+    expect(checkButton("Check").getAttribute("aria-busy")).not.toBe("true");
+
+    await act(async () => {
+      pending.resolve({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+    });
+    expect(regions().filter((text) => text !== "")).toEqual([
+      "Connected to decisions.example.workers.dev",
+    ]);
+  });
+
+  it("lets a check the person asked for win over the one made on opening, whichever answers last", async () => {
+    const opening = deferred<DecisionsRelayCheck>();
+    const asked = deferred<DecisionsRelayCheck>();
+    checkRelay.mockReturnValueOnce(opening.promise).mockReturnValueOnce(asked.promise);
+    const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(checkButton("Check"));
+    });
+    // The connection drops and comes back while the asked-for check is out: it isn't replaced.
+    const rerender = (status: DecisionsStatus) =>
+      view.rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={status} />
+        </TooltipProvider>
+      );
+    await act(async () => rerender({ state: "reconnecting", relayOrigin: ORIGIN }));
+    await act(async () => rerender({ state: "connected", relayOrigin: ORIGIN }));
+    expect(checkRelay).toHaveBeenCalledTimes(2);
+
+    // The opening's answer arrives first and is dropped: the asked-for check is still out.
+    await act(async () => {
+      opening.resolve({ result: "unreachable", origin: ORIGIN, endpoint: "health", reason: "dns" });
+    });
+    expect(screen.queryByText("Couldn't reach decisions.example.workers.dev")).toBeNull();
+    expect(checkButton("Check").getAttribute("aria-busy")).toBe("true");
+
+    await act(async () => {
+      asked.resolve({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+    });
+
+    expect(
+      screen.getByText("decisions.example.workers.dev answered as a Decisions relay")
+    ).toBeTruthy();
+    expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+    expect(screen.queryByText("Couldn't reach decisions.example.workers.dev")).toBeNull();
+  });
+
+  it("keeps the whole check the person asked for when the connection comes back and checks again", async () => {
+    checkRelay
+      .mockResolvedValueOnce({ result: "claimed", origin: ORIGIN, compatibility: SAME })
+      .mockResolvedValueOnce({ result: "claimed", origin: ORIGIN, compatibility: SAME })
+      .mockResolvedValueOnce({
+        result: "claimed",
+        origin: ORIGIN,
+        compatibility: {
+          relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.1" },
+          daintree: SAME.daintree,
+          diverges: true,
+        },
+      });
+    const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(checkButton("Check"));
+    });
+    expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+
+    const rerender = (status: DecisionsStatus) =>
+      view.rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={status} />
+        </TooltipProvider>
+      );
+    await act(async () => rerender({ state: "reconnecting", relayOrigin: ORIGIN }));
+    await act(async () => rerender({ state: "connected", relayOrigin: ORIGIN }));
+
+    expect(checkRelay).toHaveBeenCalledTimes(3);
+    // The new answer, in full: the relay row stays, and the versions say what changed.
+    expect(screen.getByText("The relay is newer than Daintree")).toBeTruthy();
+    expect(screen.queryByText("Relay and Daintree versions match")).toBeNull();
+    expect(document.getElementById("decisions-relay-check")).toBeTruthy();
+  });
+
+  it("shows what was observed about the rest of Decisions under the status, only while connected", () => {
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    const facts = <span>2 phones with notifications</span>;
+    const view = render(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={{ state: "connected", relayOrigin: ORIGIN }}
+          facts={facts}
+        />
+      </TooltipProvider>
+    );
+    const statusRow = () => document.getElementById("decisions-connection-status")!;
+    expect(within(statusRow()).getByText("2 phones with notifications")).toBeTruthy();
+    // Not part of what the status announces.
+    expect(screen.getAllByRole("status")[0]!.textContent).toBe(
+      "Connected to decisions.example.workers.dev"
+    );
+
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={{ state: "reconnecting", relayOrigin: ORIGIN }}
+          facts={facts}
+        />
+      </TooltipProvider>
+    );
+    expect(within(statusRow()).queryByText("2 phones with notifications")).toBeNull();
+    expect(statusRow().textContent).toContain("The connection closed");
   });
 
   it("checks a saved relay that isn't connected only when asked", async () => {

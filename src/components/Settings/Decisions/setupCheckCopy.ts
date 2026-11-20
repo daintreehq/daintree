@@ -51,7 +51,8 @@ const OBSERVED: {
 } = {
   relay: (relay) => {
     if (relay.result === "unexpected") return UNEXPECTED;
-    const words = describeRelayCheck(relay);
+    // A setup check always checks the relay set up here.
+    const words = describeRelayCheck(relay, true);
     return words ? `${words.label}. ${words.detail}` : UNEXPECTED;
   },
   claim: (claim) => {

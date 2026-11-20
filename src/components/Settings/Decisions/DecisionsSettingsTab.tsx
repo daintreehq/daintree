@@ -9,6 +9,8 @@ import { useDecisionsModel } from "./useDecisionsModel";
 import { DecisionsConsentDialog } from "./DecisionsConsentDialog";
 import { DecisionsConnectionSection, kitUnverified } from "./DecisionsConnectionSection";
 import { DecisionsDevicesAndHosts } from "./DecisionsDevicesAndHosts";
+import { DecisionsStatusFacts } from "./DecisionsStatusFacts";
+import { useDecisionsDevices } from "./useDecisionsDevices";
 import { DecisionsAgentsSection } from "./DecisionsAgentsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
@@ -70,6 +72,8 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   // One read for the sections it feeds, so one Retry recovers them all.
   const policy = useDecisionsPolicy(on);
   const model = useDecisionsModel(on);
+  // One read of the relay's devices, for Devices and Remote Hosts and for Connection's facts.
+  const devicesRead = useDecisionsDevices(on ? (status.relayOrigin ?? null) : null);
   const enabled = pending?.enabled ?? on;
   const locked = status === null || pending !== null;
 
@@ -128,9 +132,11 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onClose={onClose}
             onFinishSetup={askForKit}
             onPairPhone={askForPairing}
+            facts={<DecisionsStatusFacts devices={devicesRead} policy={policy} />}
           />
           <DecisionsDevicesAndHosts
             status={status}
+            devicesRead={devicesRead}
             locked={pending !== null}
             pairFocusRequest={pairFocusRequest}
             onPairFocused={() => setPairFocusRequest(0)}

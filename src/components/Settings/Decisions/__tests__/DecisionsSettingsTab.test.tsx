@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import type {
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
+  DecisionsDevicesResult,
   DecisionsKitVerifyResult,
   DecisionsRelayCheck,
   DecisionsStatus,
@@ -30,6 +31,7 @@ function pushStatus(status: DecisionsStatus): void {
 }
 const verifyRecoveryKit =
   vi.fn<(payload: VerifyDecisionsRecoveryKitPayload) => Promise<DecisionsKitVerifyResult>>();
+const listDevices = vi.fn<() => Promise<DecisionsDevicesResult>>();
 
 function kitPassphraseField(): HTMLInputElement | null {
   return document.querySelector<HTMLInputElement>(
@@ -53,6 +55,8 @@ describe("DecisionsSettingsTab", () => {
     checkRelay.mockReset();
     claimRelay.mockReset();
     verifyRecoveryKit.mockReset();
+    listDevices.mockReset();
+    listDevices.mockReturnValue(new Promise(() => {}));
     Object.defineProperty(window, "electron", {
       value: {
         decisions: {
@@ -61,8 +65,9 @@ describe("DecisionsSettingsTab", () => {
           checkRelay,
           claimRelay,
           verifyRecoveryKit,
-          // The Devices, Remote Hosts, Policy, decision model, setup check and Questions reads, which these tests leave unanswered.
-          listDevices: () => new Promise(() => {}),
+          listDevices,
+          // The Remote Hosts, Policy, decision model, setup check, Questions and question list reads, which these tests leave unanswered.
+          listQuestions: () => new Promise(() => {}),
           listHosts: () => new Promise(() => {}),
           getPolicy: () => new Promise(() => {}),
           getModel: () => new Promise(() => {}),
@@ -357,6 +362,80 @@ describe("DecisionsSettingsTab", () => {
       })
     );
     expect(notice()?.textContent).toMatch(/The relay isn't connected/);
+  });
+
+  it("says under the connected status what it saw of the rest of Decisions, from the one read of the devices (#18059)", async () => {
+    getStatus.mockResolvedValue({ state: "connected", consentedAt: 1, relayOrigin: ORIGIN });
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    listDevices.mockResolvedValue({
+      result: "listed",
+      devices: [
+        {
+          deviceId: "dev_pixel",
+          label: "Pixel 9",
+          role: "phone",
+          pairedAt: "2026-10-30T00:00:00.000Z",
+          lastSeenAt: null,
+          pushEnabled: true,
+        },
+      ],
+    });
+    await renderTab();
+
+    const status = document.getElementById("decisions-connection-status")!;
+    expect(status.textContent).toContain("Connected to decisions.example.workers.dev");
+    expect(within(status).getByTestId("decisions-status-facts").textContent).toBe(
+      "1 phone with notifications · Reading agents… · Reading questions…"
+    );
+    // Devices lists the same read rather than asking the relay again.
+    expect(await screen.findByText("Pixel 9")).toBeTruthy();
+    expect(listDevices).toHaveBeenCalledOnce();
+  });
+
+  it("never shows one relay's phones for another, and reads none while off (#18059)", async () => {
+    getStatus.mockResolvedValue({
+      state: "connected",
+      consentedAt: 1,
+      relayOrigin: ORIGIN,
+      revision: 1,
+    });
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    listDevices
+      .mockResolvedValueOnce({
+        result: "listed",
+        devices: [
+          {
+            deviceId: "dev_pixel",
+            label: "Pixel 9",
+            role: "phone",
+            pairedAt: "2026-10-30T00:00:00.000Z",
+            lastSeenAt: null,
+            pushEnabled: true,
+          },
+        ],
+      })
+      .mockReturnValueOnce(new Promise(() => {}));
+    await renderTab();
+    const facts = () => screen.getByTestId("decisions-status-facts").textContent ?? "";
+    expect(facts()).toMatch(/^1 phone with notifications · /);
+
+    await act(async () =>
+      pushStatus({
+        state: "connected",
+        consentedAt: 1,
+        relayOrigin: "https://other.example.workers.dev",
+        revision: 2,
+      })
+    );
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    expect(facts()).toMatch(/^Reading phones… · /);
+    expect(screen.queryByText("Pixel 9")).toBeNull();
+
+    // Off keeps the relay recorded, but nothing is shown that would read its devices.
+    await act(async () =>
+      pushStatus({ state: "off", consentedAt: 1, relayOrigin: ORIGIN, revision: 3 })
+    );
+    expect(listDevices).toHaveBeenCalledTimes(2);
   });
 
   it("closes Settings before it opens the inbox (#17231)", async () => {
