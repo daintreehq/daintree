@@ -153,6 +153,8 @@ describe("DecisionsStatusFacts (#18059)", () => {
 
     expect(facts()).toMatch(/^1 phone with notifications · 1 agent switched on · Last question /);
     expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(lastAsked);
+    // One line that clips in a narrow window, so its title carries all of it.
+    expect(screen.getByTestId("decisions-status-facts").title).toBe(facts());
   });
 
   it("counts the phones and tablets the relay can notify, nothing else", async () => {
@@ -170,6 +172,10 @@ describe("DecisionsStatusFacts (#18059)", () => {
 
     await renderFacts(devicesRead([PHONE, { ...PHONE, deviceId: "dev_other" }]));
     expect(facts()).toMatch(/^2 phones with notifications · /);
+    cleanup();
+
+    await renderFacts(devicesRead([{ ...PHONE, deviceId: "dev_ipad", role: "tablet" }]));
+    expect(facts()).toMatch(/^1 device with notifications · /);
     cleanup();
 
     // A tablet the relay can't notify doesn't change what the notified ones are called.
@@ -230,7 +236,12 @@ describe("DecisionsStatusFacts (#18059)", () => {
     const newest = "2026-11-20T10:00:00.000Z";
     listQuestions.mockResolvedValue({
       revision: 1,
-      questions: [asked(newest), asked("2026-11-19T10:00:00.000Z"), asked("not a time")],
+      questions: [
+        asked("2026-11-19T10:00:00.000Z"),
+        asked(newest),
+        asked("2026-11-19T11:00:00.000Z"),
+        asked("not a time"),
+      ],
     });
     await renderFacts();
     expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(newest);
@@ -238,6 +249,9 @@ describe("DecisionsStatusFacts (#18059)", () => {
     const later = "2026-11-20T11:00:00.000Z";
     act(() => push({ revision: 2, questions: [asked(newest), asked(later)] }));
     expect(document.querySelector("time")?.getAttribute("dateTime")).toBe(later);
+
+    act(() => push({ revision: 3, questions: [] }));
+    expect(facts()).toMatch(/ · No questions yet$/);
   });
 
   it("says a list it couldn't read, until a push brings one", async () => {
@@ -254,7 +268,10 @@ describe("DecisionsStatusFacts (#18059)", () => {
   });
 
   it("tells a list of questions with no readable time apart from an empty one", async () => {
-    listQuestions.mockResolvedValue({ revision: 1, questions: [asked("not a time")] });
+    listQuestions.mockResolvedValue({
+      revision: 1,
+      questions: [asked("not a time"), asked("nor this")],
+    });
     await renderFacts();
     expect(facts()).toMatch(/ · Last question time unknown$/);
   });

@@ -174,6 +174,7 @@ describe("relay check copy", () => {
 
     // Typed into the field: someone else's claim, or one to make.
     expect(describeRelayCheck(claimed)).toMatchObject({
+      severity: "info",
       label: "relay.example.com is claimed",
       detail: expect.stringMatching(/already has an owner/),
     });

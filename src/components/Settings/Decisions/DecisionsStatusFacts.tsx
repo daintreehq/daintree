@@ -4,6 +4,7 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { pluralize } from "@/lib/pluralize";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { DecisionQuestionListItem } from "@shared/types/decisionsQuestion";
 import { useDecisionsAgentSupport } from "./DecisionsAgentsSection";
@@ -72,16 +73,14 @@ function agentsFact(
   return on === 0 ? "No agents switched on" : `${pluralize(on, "agent")} switched on`;
 }
 
-function questionFact(latest: LatestDecisionQuestion): ReactNode {
+function questionFact(latest: LatestDecisionQuestion): string | number {
   switch (latest.state) {
     case "reading":
       return "Reading questions…";
     case "failed":
       return "Questions couldn't be read";
     case "read":
-      if (latest.askedAt !== null) {
-        return <TimeAgo timestamp={latest.askedAt} prefix="Last question " />;
-      }
+      if (latest.askedAt !== null) return latest.askedAt;
       return latest.empty ? "No questions yet" : "Last question time unknown";
   }
 }
@@ -91,7 +90,8 @@ function questionFact(latest: LatestDecisionQuestion): ReactNode {
  * is connected (#18059): phones the relay can notify, agents switched on to
  * ask, and when the last question came in. Every fact holds its place from
  * the first render, and the line never wraps, so the page doesn't move as
- * the facts arrive. A remote window's agents are the Host's, so it names none.
+ * the facts arrive; in a narrow window its tail is clipped, and the whole
+ * line is its title. A remote window's agents are the Host's, so it names none.
  */
 export function DecisionsStatusFacts({
   devices,
@@ -106,11 +106,19 @@ export function DecisionsStatusFacts({
   const remote = useRemoteHostName() !== null;
   const latest = useLatestDecisionQuestion();
 
-  const facts: ReactNode[] = [phonesFact(devices)];
-  if (!remote) facts.push(agentsFact(policy, supported, installedRead, installedError));
-  facts.push(questionFact(latest));
+  const words = [phonesFact(devices)];
+  if (!remote) words.push(agentsFact(policy, supported, installedRead, installedError));
+  const question = questionFact(latest);
+  const facts: ReactNode[] = [...words];
+  if (typeof question === "number") {
+    words.push(`Last question ${formatTimeAgo(question)}`);
+    facts.push(<TimeAgo timestamp={question} prefix="Last question " />);
+  } else {
+    words.push(question);
+    facts.push(question);
+  }
   return (
-    <span className="block truncate" data-testid="decisions-status-facts">
+    <span className="block truncate" title={words.join(" · ")} data-testid="decisions-status-facts">
       <FactRun facts={facts} />
     </span>
   );

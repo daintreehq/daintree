@@ -479,6 +479,7 @@ describe("DecisionsConnectionSection relay check", () => {
 
     const row = document.getElementById("decisions-relay-check")!;
     expect(within(row).getByText("decisions.example.workers.dev reports no owner")).toBeTruthy();
+    expect(row.textContent).toContain("it answered as one nobody has claimed");
     expect(
       row.querySelector("[data-severity-glyph]")?.classList.contains("lucide-triangle-alert")
     ).toBe(true);
