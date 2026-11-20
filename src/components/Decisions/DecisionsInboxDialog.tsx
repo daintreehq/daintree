@@ -27,6 +27,10 @@ import { FactRun } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { terminalClient } from "@/clients/terminalClient";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
@@ -50,6 +54,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { worktreeDisplayName } from "@/utils/recipeScope";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import type {
@@ -73,6 +78,7 @@ import {
   attentionText,
   CLEARED_ELAPSED_NOTE,
   CLEARED_NOTE,
+  clearAllText,
   clearText,
   connectionNotice,
   ELAPSED_NOTE,
@@ -83,6 +89,7 @@ import {
   closedTime,
   headerFacts,
   inboxRowNote,
+  inWindowProject,
   isAttention,
   isClosed,
   markedText,
@@ -93,6 +100,8 @@ import {
   replyLineKey,
   replyToShow,
   resolveSelection,
+  scopedQuestions,
+  scopeOffered,
   standingText,
   waitingText,
   whereFacts,
@@ -101,6 +110,8 @@ import {
   type InboxGroup,
   type InboxReach,
   type QuestionOrigin,
+  type InboxScope,
+  type WindowProject,
 } from "./decisionsInboxModel";
 import {
   useDecisionQuestionReader,
@@ -159,6 +170,12 @@ function revealRow(key: string): void {
       ?.scrollIntoView({ block: "nearest" });
   });
 }
+
+/** The inbox's two lists once it holds more than the window's project (#18051), named as prompt history names them. */
+const SCOPE_OPTIONS: SegmentedRadioOption<InboxScope>[] = [
+  { value: "all", label: "All projects" },
+  { value: "project", label: "This project" },
+];
 
 type ListRead =
   { state: "loading" } | { state: "failed" } | { state: "listed"; list: DecisionQuestionList };
@@ -904,8 +921,9 @@ function InboxList({
 
 /**
  * Every question this computer's Decisions holds (#17231), across its
- * projects and terminals, grouped by what it needs: the person, delivery, or
- * a decision about a stopped delivery, then history. Selecting one reads it
+ * projects and terminals, or only the window's project's once narrowed to it
+ * (#18051), grouped by what it needs: the person, delivery, or a decision
+ * about a stopped delivery, then history. Selecting one reads it
  * in full beside the list, with the question view's answer and dismissal, and
  * a way to the terminal that asked while it is still open. The words are
  * read on demand by reference and held in memory only while it is open.
@@ -927,7 +945,24 @@ export function DecisionsInboxDialog() {
     (questions ?? []).flatMap((item) => (asksByDeadline(item.standing) ? [item.expiresAt] : [])),
     active
   );
-  const groups = questions === null ? [] : inboxGroups(questions, nowMs);
+  const viewWorkspace = getViewWorkspaceId();
+  // The project this window shows, on its own Host; a scratch workspace is no project to narrow to.
+  const windowProject: WindowProject | null =
+    viewWorkspace === null || isScratchWorkspaceId(viewWorkspace)
+      ? null
+      : { hostId: currentHostId(), projectId: viewWorkspace };
+  // Each opening starts on every project, as the toolbar's count does. Once the list holds this
+  // project and another, the switch stays for the opening, so a push that empties one side never
+  // takes the switch from under the keyboard or quietly widens what Clear reaches.
+  const offered = questions !== null && scopeOffered(questions, windowProject);
+  const [scopeChoice, setScopeChoice] = useState<{ seq: number; scope: InboxScope } | null>(null);
+  const openingScope =
+    scopeChoice !== null && scopeChoice.seq === request.seq ? scopeChoice.scope : null;
+  if (openingScope === null && offered) setScopeChoice({ seq: request.seq, scope: "all" });
+  const scope: InboxScope = openingScope ?? "all";
+  const showScope = questions !== null && (offered || openingScope !== null);
+  const shown = questions === null ? null : scopedQuestions(questions, scope, windowProject);
+  const groups = shown === null ? [] : inboxGroups(shown, nowMs);
   const ordered = groups.flatMap((group) => group.items);
   const { lines, release: releaseLines } = useQuestionLines(ordered, active);
   // The list as it came, so its next change, not every render, is what asks again.
@@ -935,11 +970,14 @@ export function DecisionsInboxDialog() {
     questions ?? NO_QUESTIONS,
     active
   );
+  // Whether Clear Needs you says how far it goes: always beside the switch, which names the list
+  // shown, and otherwise once the list holds a question from outside the window's project.
+  const clearNamesReach =
+    showScope || (shown ?? []).some((item) => !inWindowProject(item, windowProject));
 
   const remote = isRemoteWindow();
   const projects = useProjectStore((state) => state.projects);
   const worktrees = useWorktreeStoreOptional((state) => state.worktrees, NO_WORKTREES);
-  const viewWorkspace = getViewWorkspaceId();
   // Every run on this computer, across its projects: what names the pane that asked (#18039).
   // Read only while open here: the fleet moves with every retitle, and a closed inbox shows none of it.
   const runs = useFleetSnapshotStore((state) =>
@@ -971,21 +1009,34 @@ export function DecisionsInboxDialog() {
   };
 
   // The question shown sticks to the one chosen, by reference, as the list moves around it.
-  const [choice, setChoice] = useState<(InboxChoice & { seq: number }) | null>(null);
+  const [choice, setChoice] = useState<(InboxChoice & { seq: number; scope: InboxScope }) | null>(
+    null
+  );
   const chosen = choice !== null && choice.seq === request.seq ? choice : null;
-  const selected = resolveSelection(groups, chosen, request.terminalId, currentHostId());
+  // A choice made in the other list keeps its question while this one shows it, but its place
+  // was in the other list: nothing here takes that place by index.
+  const sameScope = chosen !== null && chosen.scope === scope;
+  const selected = resolveSelection(
+    groups,
+    chosen === null || sameScope ? chosen : { ...chosen, picked: false },
+    request.terminalId,
+    currentHostId(),
+    windowProject
+  );
   const selectedKey = selected === null ? null : referenceKey(selected.reference);
   const selectedIndex = selected === null ? -1 : ordered.indexOf(selected);
   if (
     selectedKey !== null &&
-    (chosen === null || chosen.key !== selectedKey || chosen.index !== selectedIndex)
+    (chosen === null || !sameScope || chosen.key !== selectedKey || chosen.index !== selectedIndex)
   ) {
     // One that took a picked row's place stays picked; one the inbox opened on stays its own choice.
+    // Across a switch, only the same question stays picked.
     setChoice({
       seq: request.seq,
+      scope,
       key: selectedKey,
       index: selectedIndex,
-      picked: chosen?.picked === true,
+      picked: chosen?.picked === true && (sameScope || chosen.key === selectedKey),
     });
   } else if (selectedKey === null && chosen !== null) {
     // Gone with nothing in its place: a later list starts afresh, rather than reviving it in History.
@@ -1075,7 +1126,7 @@ export function DecisionsInboxDialog() {
   const clearHint = clearText(selectedGroup === "cleared");
   const choose = (key: string) => {
     const index = ordered.findIndex((item) => referenceKey(item.reference) === key);
-    setChoice({ seq: request.seq, key, index, picked: true });
+    setChoice({ seq: request.seq, scope, key, index, picked: true });
   };
   // Sends the keyboard into a question. The one already read takes it at once; another is
   // shown, and the keyboard waits in the pane until it's read (the effect below), since
@@ -1377,10 +1428,13 @@ export function DecisionsInboxDialog() {
   const listed = listRead.state === "listed";
   const hostsAway = listRead.state === "listed" ? (listRead.list.hostsAway ?? []) : [];
   // Only once the relay, and every Remote Host, is known to be reachable does an empty list say
-  // nothing was asked.
+  // nothing was asked; narrowed to this project, the line above the list says it has none.
   const empty =
-    listed && listReach === "connected" && hostsAway.length === 0 ? emptyText(groups) : null;
-  const waitingLine = listed && empty === null ? waitingText(groups, listReach, hostsAway) : null;
+    listed && scope === "all" && listReach === "connected" && hostsAway.length === 0
+      ? emptyText(groups)
+      : null;
+  const waitingLine =
+    listed && empty === null ? waitingText(groups, listReach, hostsAway, scope) : null;
 
   return (
     <>
@@ -1489,7 +1543,7 @@ export function DecisionsInboxDialog() {
                   onSelect={(key, index) => {
                     // A dwell that ends as the inbox closes changes nothing shown.
                     if (stillShowing(request.seq)) {
-                      setChoice({ seq: request.seq, key, index, picked: true });
+                      setChoice({ seq: request.seq, scope, key, index, picked: true });
                     }
                   }}
                   onAnswer={(key) => handOff(key, "answer")}
@@ -1497,19 +1551,32 @@ export function DecisionsInboxDialog() {
               )}
             </div>
             {/* Below the list rather than on its heading, so the dialog's first focus stays on the
-                question list. Only while Needs you has questions: the press that empties it hands
-                the keyboard to the list. */}
-            {waiting.length > 0 && (
-              <div className="decisions-inbox-list-footer flex shrink-0 items-center justify-end border-t border-divider px-3 py-2">
-                <Button
-                  ref={handBackToList}
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => markShown("clear", waiting)}
-                  data-testid="decisions-inbox-clear-all"
-                >
-                  Clear Needs you
-                </Button>
+                question list. Clear only while Needs you has questions: the press that empties it
+                hands the keyboard to the list. It clears what the list shows, and says how far. */}
+            {(showScope || waiting.length > 0) && (
+              <div className="decisions-inbox-list-footer flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t border-divider px-3 py-2">
+                {showScope && (
+                  <SegmentedRadioGroup<InboxScope>
+                    density="compact"
+                    aria-label="Questions shown"
+                    testId="decisions-inbox-scope"
+                    value={scope}
+                    onChange={(next) => setScopeChoice({ seq: request.seq, scope: next })}
+                    options={SCOPE_OPTIONS}
+                  />
+                )}
+                {waiting.length > 0 && (
+                  <Button
+                    ref={handBackToList}
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => markShown("clear", waiting)}
+                    className="ml-auto"
+                    data-testid="decisions-inbox-clear-all"
+                  >
+                    {clearAllText(scope, clearNamesReach)}
+                  </Button>
+                )}
               </div>
             )}
           </div>
