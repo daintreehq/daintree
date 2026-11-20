@@ -846,40 +846,40 @@ export const agentActionRuns = {
     // falls back to the project root or home — a different directory than the
     // one asserted, arrived at silently.
     const recordedCwd = record.cwd?.trim() ? record.cwd : undefined;
-    if (recordedCwd) {
-      // `inferWorktreeIdFromCwd` matches lexically, so a path that walks back
-      // out through `..` still carries the worktree root as its prefix and
-      // would be classified as inside it. Journal cwds come from terminals
-      // Daintree itself spawned, so this is belt-and-braces rather than a live
-      // attack path — but the cost of being wrong is launching an agent in a
-      // directory nobody asked for.
-      if (recordedCwd.split(/[\\/]/).includes("..")) {
-        throw new Error(
-          "That session's recorded directory can't be verified — it walks outside the worktree it was journaled under."
-        );
-      }
-      if (inferWorktreeIdFromCwd(recordedCwd, worktreeList) !== requestedWorktreeId) {
-        throw new Error(
-          "That session was recorded in a different directory. Resume it from the worktree it belongs to — relaunching it elsewhere would start a new conversation, not continue this one."
-        );
-      }
-    }
     const target = resolveResumeLaunchTarget(
       { worktreeId: record.worktreeId, cwd: recordedCwd },
       { defaultTerminalCwd: requestedWorktreePath, activeWorktreeId: requestedWorktreeId },
       worktreeList
     );
+    // Every refusal below is about where a NEW agent would start. A pane
+    // already running the session is handed back wherever it is filed
+    // (#18009), so these run only on the spawning path.
+    const spawnRefusal = ((): string | null => {
+      if (recordedCwd) {
+        // `inferWorktreeIdFromCwd` matches lexically, so a path that walks back
+        // out through `..` still carries the worktree root as its prefix and
+        // would be classified as inside it. Journal cwds come from terminals
+        // Daintree itself spawned, so this is belt-and-braces rather than a live
+        // attack path — but the cost of being wrong is launching an agent in a
+        // directory nobody asked for.
+        if (recordedCwd.split(/[\\/]/).includes("..")) {
+          return "That session's recorded directory can't be verified — it walks outside the worktree it was journaled under.";
+        }
+        if (inferWorktreeIdFromCwd(recordedCwd, worktreeList) !== requestedWorktreeId) {
+          return "That session was recorded in a different directory. Resume it from the worktree it belongs to — relaunching it elsewhere would start a new conversation, not continue this one.";
+        }
+      }
+      // Scope isolation. The caller asserted a worktree; if the session would
+      // launch in a different one, refuse rather than silently resuming it
+      // there — the caller's next action would be aimed at the wrong tree.
+      if ((target.worktreeId ?? null) !== requestedWorktreeId) {
+        return "That session was recorded in a different worktree. Resume it from the worktree it belongs to — it cannot be relaunched anywhere else.";
+      }
+      return null;
+    })();
 
-    // Scope isolation. The caller asserted a worktree; if the session would
-    // launch in a different one, refuse rather than silently resuming it
-    // there — the caller's next action would be aimed at the wrong tree.
-    if ((target.worktreeId ?? null) !== requestedWorktreeId) {
-      throw new Error(
-        "That session was recorded in a different worktree. Resume it from the worktree it belongs to — it cannot be relaunched anywhere else."
-      );
-    }
-
-    // Only a FOREGROUND dispatch gets `onBeforeSpawn`. An assistant- or
+    // Only a FOREGROUND dispatch moves the view: before a spawn to the session's
+    // worktree, and to the worktree a live pane is filed under. An assistant- or
     // plugin-driven resume must not yank the user's worktree selection: the
     // pane opens in its own worktree — backgrounded when that isn't the active
     // one — and the caller addresses it by the id returned here. A keybinding
@@ -887,15 +887,20 @@ export const agentActionRuns = {
     // person asked for this pane and expects to see it. `isForegroundDispatch`
     // rather than `!== "agent"`, so `"plugin"` and a missing source fall on the
     // don't-move-the-view side rather than the other way round.
+    const showWorktree = isForegroundDispatch(ctx.dispatchSource)
+      ? (worktreeId: string | undefined) => {
+          const selection = useWorktreeSelectionStore.getState();
+          if (worktreeId && worktreeId !== selection.activeWorktreeId) {
+            selection.selectWorktree(worktreeId, { source: "user" });
+          }
+        }
+      : undefined;
     const resumed = await resumeSessionIntoPanel(record, target, {
-      onBeforeSpawn: !isForegroundDispatch(ctx.dispatchSource)
-        ? undefined
-        : () => {
-            const selection = useWorktreeSelectionStore.getState();
-            if (target.worktreeId && target.worktreeId !== selection.activeWorktreeId) {
-              selection.selectWorktree(target.worktreeId, { source: "user" });
-            }
-          },
+      validateSpawn: () => {
+        if (spawnRefusal !== null) throw new Error(spawnRefusal);
+      },
+      onBeforeSpawn: showWorktree && (() => showWorktree(target.worktreeId)),
+      showWorktree,
     });
 
     return {
