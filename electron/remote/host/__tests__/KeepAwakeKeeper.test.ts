@@ -255,6 +255,26 @@ describe("KeepAwakeKeeper (#17918)", () => {
     expect(env.tokens().at(-1)).toBe(TOKEN_A);
   });
 
+  it("takes back the URL that worked when the one that replaced it runs out while its answer is awaited", async () => {
+    const env = setup();
+    await env.keeper.open();
+    const first = await env.arm();
+    env.setBusy(false);
+    await env.arm(URL_B, env.now() + 20_000);
+    env.setBusy(true);
+    // It arrives with ten seconds left; the edge's answer comes back five seconds after it expired.
+    env.answer((token) => {
+      if (token === TOKEN_B) env.advance(15_000);
+      return { status: 204, reaches: true };
+    });
+    await env.passes(1, 10_000);
+    expect(env.keeper.status()).toMatchObject({ expiresAt: first.expiresAt, problem: null });
+    env.answer(() => ({ status: 204, reaches: true }));
+    await env.passes(1, 60_000);
+    expect(env.tokens().at(-1)).toBe(TOKEN_A);
+    expect(env.keeper.status()).toMatchObject({ expiresAt: first.expiresAt, reachedAt: env.now() });
+  });
+
   it("keeps the URL that worked behind every unchecked one that came after it", async () => {
     const env = setup();
     const TOKEN_C = "tok_live_5555555555";
