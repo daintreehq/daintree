@@ -1,4 +1,5 @@
 "use strict";
+/* global process, module */
 
 /*
  * Loaded with `-r` into a Daintree an e2e spec runs on a moved clock
