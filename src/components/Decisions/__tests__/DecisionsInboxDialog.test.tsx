@@ -479,7 +479,10 @@ describe("DecisionsInboxDialog", () => {
       expect(toggle().getAttribute("aria-expanded")).toBe("false");
       expect(screen.queryByTestId("decision-asking-pane-lines")).toBeNull();
 
-      fireEvent.click(rows()[2]!);
+      // History starts folded (#18023).
+      unfold("history");
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      fireEvent.click(rowNamed("q-1"));
       await waitFor(() => expect(readsOf("question-1")).toBe(1));
       act(() => {
         for (const listener of listListeners) listener({ ...LIST, revision: 2 });
@@ -580,7 +583,10 @@ describe("DecisionsInboxDialog", () => {
       );
       fireEvent.click(toggle());
 
-      fireEvent.click(rows()[2]!);
+      // History starts folded (#18023).
+      unfold("history");
+      await waitFor(() => expect(rows()).toHaveLength(3));
+      fireEvent.click(rowNamed("q-1"));
       await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
       expect(toggle().getAttribute("aria-expanded")).toBe("false");
       expect(paneReads()).toEqual([reference("question-2")]);
