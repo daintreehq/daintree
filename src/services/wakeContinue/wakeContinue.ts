@@ -299,7 +299,36 @@ export async function sendWakeContinueNotes(note: string): Promise<void> {
     }
     await wait(SCHEDULER_POLL_MS);
   }
+  if (!owned()) return;
   useWakeContinueStore.getState().setPhase(offer.id, "done");
+  clearWhenEveryNoteWent(offer.id);
+}
+
+/**
+ * A finished send with every note in has nothing left to look at, so the offer
+ * goes by itself. Anything that needs a look (a failure, an unconfirmed write,
+ * an agent asking first) or no note at all keeps it up with its report. A
+ * review dialog the user has open keeps the report in front of them until it
+ * closes.
+ */
+function clearWhenEveryNoteWent(offerId: string): void {
+  const settledClean = () => {
+    const offer = useWakeContinueStore.getState().offer;
+    if (offer?.id !== offerId) return false;
+    const delivered = offer.entries.filter((entry) => entry.delivery !== undefined);
+    return delivered.length > 0 && delivered.every((entry) => entry.delivery?.status === "sent");
+  };
+  if (!settledClean()) return;
+  if (!useWakeContinueStore.getState().dialogOpen) {
+    dismissWakeContinue();
+    return;
+  }
+  const unsubscribe = useWakeContinueStore.subscribe((state) => {
+    if (state.offer?.id !== offerId) return unsubscribe();
+    if (state.dialogOpen) return;
+    unsubscribe();
+    dismissWakeContinue();
+  });
 }
 
 const startedAtOf = (panel: PanelInstance | undefined) =>

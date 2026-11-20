@@ -236,16 +236,62 @@ describe("sendWakeContinueNotes", () => {
       { kind: "terminal", terminalId: "a", title: "Agent a" },
     ]);
     expect(await deliveries[0]!.options.buildPrompt()).toBe("Keep going");
+    const sending = useWakeContinueStore.getState().offer!;
+    for (const id of ["b", "c", "d"]) {
+      expect(sending.entries.find((e) => e.terminalId === id)?.delivery).toBeUndefined();
+    }
     deliveries[0]!.settle();
     await vi.advanceTimersByTimeAsync(1_000);
     await run;
 
-    const offer = useWakeContinueStore.getState().offer!;
-    expect(offer.phase).toBe("done");
-    expect(offer.entries.find((e) => e.terminalId === "a")?.delivery).toEqual({ status: "sent" });
-    for (const id of ["b", "c", "d"]) {
-      expect(offer.entries.find((e) => e.terminalId === id)?.delivery).toBeUndefined();
-    }
+    // Its one note went in, so there is nothing left to look at.
+    expect(useWakeContinueStore.getState().offer).toBeNull();
+  });
+
+  describe("when sending ends", () => {
+    it("keeps the report up when a note didn't go in", async () => {
+      setPane("a");
+      setPane("b", { agentState: "working", waitingReason: "" });
+      publishWakeCandidates("p1", [candidate("a"), candidate("b")]);
+      const run = sendWakeContinueNotes("Keep going");
+      await vi.advanceTimersByTimeAsync(SETTLE);
+      deliveries[0]!.settle();
+      // The second agent never reaches its prompt.
+      usePanelStore.setState((state) => ({
+        panelsById: Object.fromEntries(
+          Object.entries(state.panelsById).filter(([id]) => id !== "b")
+        ),
+      }));
+      await vi.advanceTimersByTimeAsync(WAKE_CONTINUE_SPACING_MS + 1_000);
+      await run;
+      const offer = useWakeContinueStore.getState().offer!;
+      expect(offer.phase).toBe("done");
+      expect(offer.entries.map((e) => e.delivery?.status)).toEqual(["sent", "failed"]);
+    });
+
+    it("keeps the report up when no note went in", async () => {
+      setPane("a");
+      publishWakeCandidates("p1", [candidate("a")]);
+      useTerminalInputStore.getState().setDraftInput("a", "typed", "p1");
+      await sendWakeContinueNotes("Keep going");
+      useTerminalInputStore.getState().setDraftInput("a", "", "p1");
+      const offer = useWakeContinueStore.getState().offer!;
+      expect(offer.phase).toBe("done");
+    });
+
+    it("holds the clear until the review dialog closes", async () => {
+      setPane("a");
+      publishWakeCandidates("p1", [candidate("a")]);
+      const run = sendWakeContinueNotes("Keep going");
+      await vi.advanceTimersByTimeAsync(SETTLE);
+      useWakeContinueStore.getState().setDialogOpen(true);
+      deliveries[0]!.settle();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await run;
+      expect(useWakeContinueStore.getState().offer?.phase).toBe("done");
+      useWakeContinueStore.getState().setDialogOpen(false);
+      expect(useWakeContinueStore.getState().offer).toBeNull();
+    });
   });
 
   it("sends to a held pane the user started on its own session, not on another", async () => {
