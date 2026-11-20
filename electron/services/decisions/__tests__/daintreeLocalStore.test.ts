@@ -1990,6 +1990,20 @@ describe("DaintreeLocalStore commit changes and settled history (#18033)", () =>
     const store = new DaintreeLocalStore(sqlite);
     const answered = (id: string, alias: number, over: Partial<QuestionRow> = {}) =>
       row(id, alias, { local_status: "human-answered", answers_json: delivered(), ...over });
+    // An unrelated event about it that only mentions the id in passing isn't its echo.
+    await store.insertEvent({
+      seq: 3,
+      event_id: "e3",
+      event_type: "decision.answered",
+      json: JSON.stringify({
+        seq: 3,
+        event_type: "decision.answered",
+        question_id: "waiting-echo",
+        data: { record: { action_id: "a-other" }, note: "m-waiting" },
+      }),
+      received_at: 1,
+      processed_at: 4,
+    });
     // Another follow-up of the agent's is back; the one published last isn't.
     await stored(
       store,
@@ -2027,7 +2041,7 @@ describe("DaintreeLocalStore commit changes and settled history (#18033)", () =>
         seq: 2,
         event_type: "decision.message.posted",
         question_id: "rejected-echo",
-        data: { entry: { record: { message_id: "m-rejected" } } },
+        data: { record: { message_id: "m-rejected" } },
       }),
       received_at: 1,
       processed_at: 3,

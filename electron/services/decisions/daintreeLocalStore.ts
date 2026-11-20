@@ -528,6 +528,22 @@ function publishedMessageOf(json: string): { questionId: string; messageId: stri
   }
 }
 
+/** The action and message ids a relay event's signed record names. */
+function recordIdsOf(json: string): string[] {
+  try {
+    const record = (
+      JSON.parse(json) as {
+        data?: { record?: { action_id?: unknown; message_id?: unknown } };
+      } | null
+    )?.data?.record;
+    return [record?.action_id, record?.message_id].filter(
+      (id): id is string => typeof id === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
 /** A relay event with only what names it kept; null for one that can't be read. */
 function redactedEvent(json: string): string | null {
   try {
@@ -973,7 +989,8 @@ export class DaintreeLocalStore implements LocalStore {
        WHERE processed_at IS NOT NULL
          AND (CASE WHEN json_valid(json) THEN json_extract(json, '$.question_id') END) = ?`
     ).all(row.question_id) as Array<{ json: string }>;
-    return missing.some((echo) => !processed.some(({ json }) => json.includes(echo.id)));
+    const back = new Set(processed.flatMap(({ json }) => recordIdsOf(json)));
+    return missing.some((echo) => !back.has(echo.id));
   }
 
   /** The questions a `decision.deleted` event the inbox applied names. */

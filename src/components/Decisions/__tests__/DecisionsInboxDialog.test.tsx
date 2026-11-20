@@ -1764,6 +1764,17 @@ describe("DecisionsInboxDialog", () => {
     await waitFor(() => expect(asked().size).toBe(65));
     expect(asked().has("old-000")).toBe(false);
 
+    // The step chord at the page's last row stays on a row it can land on, never one not shown.
+    const lastShown = within(group).getAllByTestId("decisions-inbox-row").at(-1)!;
+    act(() => lastShown.focus());
+    fireEvent.keyDown(lastShown, {
+      key: "ArrowDown",
+      ...(isMac() ? { metaKey: true } : { altKey: true }),
+    });
+    await waitFor(() => expect(document.activeElement).toBe(lastShown));
+    expect(lastShown.getAttribute("aria-current")).toBe("true");
+    expect(group.querySelectorAll("li")).toHaveLength(64);
+
     fireEvent.click(within(group).getByTestId("decisions-inbox-show-older"));
     await waitFor(() => expect(group.querySelectorAll("li")).toHaveLength(128));
     // The keyboard goes on to the first of the rows it showed.
