@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
-import { NOTICE_TRAIL_EVENT, noticeTrailOf, noticeUntypedOf } from "../noticeTrail.js";
+import {
+  NOTICE_TRAIL_EVENT,
+  noticeAttemptOf,
+  noticeTrailOf,
+  noticeUntypedOf,
+} from "../noticeTrail.js";
 import { SECRET, answers, entry, row } from "./questionRows.js";
 
 const AT = "2026-11-01T10:00:00.000Z";
@@ -72,11 +77,24 @@ describe("a timeout notice's trail (#17944)", () => {
 
   it("follows each attempt and what became of it, and nothing a write didn't change", () => {
     const pending = expired();
-    const attempted = patch(pending, { last_injection_id: "inj-1" });
-    expect(noticeTrailOf(pending, attempted, AT)).toMatchObject([
-      { result: "attempted", detail: { attempt: "inj-1" } },
-    ]);
-    expect(noticeTrailOf(attempted, patch(attempted, { last_attempt_at: AT }), AT)).toEqual([]);
+    // Stored before anything touches the terminal, for the pane the intent names.
+    expect(
+      noticeAttemptOf(
+        pending,
+        { injection_id: "inj-1", message_id: null, answer_revision: 0, pane_id: "pane-b" },
+        AT
+      )
+    ).toMatchObject({ result: "attempted", detail: { attempt: "inj-1", pane: "pane-b" } });
+    expect(
+      noticeAttemptOf(
+        pending,
+        { injection_id: "inj-1", message_id: "m-1", answer_revision: 0, pane_id: "pane-a" },
+        AT
+      )
+    ).toBeNull();
+    // The row's own attempt fields describe its answers: they add nothing to the trail.
+    const attempted = patch(pending, { last_injection_id: "inj-1", last_attempt_at: AT });
+    expect(noticeTrailOf(pending, attempted, AT)).toEqual([]);
 
     const stopped = patch(attempted, {
       delivery_status: "needs-attention",
@@ -86,6 +104,11 @@ describe("a timeout notice's trail (#17944)", () => {
     expect(stop).toMatchObject({ result: "needs-attention", detail: { reason: "pane_gone" } });
     // The row's latest attempt isn't evidence of what stopped it.
     expect(stop!.detail).not.toHaveProperty("attempt");
+    // A new reason with the same state is a step of its own.
+    const relaunched = patch(stopped, { error_code: "relaunched" });
+    expect(noticeTrailOf(stopped, relaunched, AT)).toMatchObject([
+      { result: "needs-attention", detail: { reason: "relaunched" } },
+    ]);
 
     // A person tries it again: it waits to be typed once more.
     const retried = patch(stopped, { delivery_status: "desktop-received", error_code: null });
@@ -118,6 +141,61 @@ describe("a timeout notice's trail (#17944)", () => {
     });
     const handled = patch(refused, { answers_json: answers({ ...EXPIRY, deliver: false }) });
     expect(steps(noticeTrailOf(refused, handled, AT))).toEqual(["stopped"]);
+  });
+
+  it("names the attempt behind an uncertain or typed step by the notice's own mark, else the intent the write settled", () => {
+    const pending = expired({}, { last_injection_id: "inj-row" });
+    // A blocking notice keeps no attempt of its own: the intent the write settled names it.
+    const uncertain = patch(pending, {
+      delivery_status: "delivery-uncertain",
+      error_code: "crash_unreconciled",
+    });
+    expect(
+      noticeTrailOf(pending, uncertain, AT, { injection_id: "inj-settled", state: "uncertain" })
+    ).toMatchObject([{ result: "uncertain", detail: { attempt: "inj-settled" } }]);
+    const [unnamed] = noticeTrailOf(pending, uncertain, AT);
+    expect(unnamed!.detail).not.toHaveProperty("attempt");
+    // The notice's own mark wins over the intent and the row.
+    const marked = patch(uncertain, {
+      answers_json: answers({ ...EXPIRY, uncertain_injection_id: "inj-own" }),
+    });
+    expect(
+      noticeTrailOf(pending, marked, AT, { injection_id: "inj-settled", state: "uncertain" })
+    ).toMatchObject([{ detail: { attempt: "inj-own" } }]);
+    const typed = patch(pending, {
+      delivery_status: "terminal-delivered",
+      answers_json: answers({ ...EXPIRY, delivered: true }),
+    });
+    expect(
+      noticeTrailOf(pending, typed, AT, { injection_id: "inj-typed", state: "typed" })
+    ).toMatchObject([{ result: "delivered", detail: { attempt: "inj-typed" } }]);
+  });
+
+  it("trails a never-published notice with its own deadline, and copies no free text or unknown plan", () => {
+    const unpublished = open({
+      local_status: "publish-failed",
+      delivery_status: "needs-attention",
+      error_code: `could not send ${SECRET}`,
+      answers_json: answers({
+        entry_id: "unpublished-1",
+        kind: "unpublished",
+        action: "expire",
+        source: "system",
+        revision: 0,
+        sealed: null,
+        fallback_due: true,
+      }),
+    });
+    expect(noticeTrailOf(open(), unpublished, AT)).toMatchObject([
+      {
+        result: "observed",
+        detail: { kind: "never-published", deadline: DEADLINE, plan: "fallback-due" },
+      },
+      { result: "needs-attention", detail: { reason: "unspecified" } },
+    ]);
+    const odd = expired({ advisory_disposition: SECRET as never });
+    expect(noticeTrailOf(open(), odd, AT)[0]!.detail).toMatchObject({ plan: null });
+    expect(JSON.stringify(noticeTrailOf(open(), unpublished, AT))).not.toContain(SECRET);
   });
 
   it("tells an attempt held before typing, then a pane that went, from an admitted write the sink refused", () => {

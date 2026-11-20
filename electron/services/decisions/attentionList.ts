@@ -1,6 +1,8 @@
 import {
   answeredOn,
+  closureInForce,
   formatAnswerNotice,
+  isClosure,
   formatFollowupNotice,
   messageSentOn,
   noticeChunk,
@@ -121,7 +123,26 @@ export function answerNeedsAttention(row: QuestionRow, handled: HandledAnswers):
   return (
     needsAttention(row) &&
     declineOf(row) === undefined &&
+    !stoppedOnReplacedClosure(row) &&
     handled.get(row.question_id) !== answerRevision(row)
+  );
+}
+
+/**
+ * Typing stopped on a closure notice whose round a reopen has since replaced
+ * (#17944): the library withdraws the notice but leaves the row's stopped
+ * status, and nothing of the answer waits to be typed any more, so there is
+ * nothing for a person to decide. A possibly typed write keeps the question
+ * uncertain until the library releases it.
+ */
+function stoppedOnReplacedClosure(row: QuestionRow): boolean {
+  if (row.delivery_status !== "needs-attention" || pendingEntries(row).length > 0) return false;
+  let newest: AnswerEntry | undefined;
+  for (const entry of parseAnswers(row.answers_json)) {
+    if (newest === undefined || entry.revision >= newest.revision) newest = entry;
+  }
+  return (
+    newest !== undefined && isClosure(newest) && !newest.delivered && !closureInForce(newest, row)
   );
 }
 

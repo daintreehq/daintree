@@ -2338,7 +2338,28 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
 
   it("keeps a notice held behind a draft out of attention, and trails each attempt until it is typed (deferred wake)", async () => {
     const h = setup({ advisory: settledAttempt() });
-    await advisoryExpired(h.store, Q1, 1);
+    // Open, then closed by its deadline as the inbox applies an expiry: the closing is observed.
+    await advisoryExpired(h.store, Q1, 1, { local_status: "open", answers_json: "[]" });
+    await h.store.updateQuestion(Q1, {
+      local_status: "expired",
+      delivery_status: "desktop-received",
+      answers_json: serializeAnswers([
+        {
+          entry_id: `expired-${Q1}`,
+          kind: "expired",
+          action: "expire",
+          revision: 0,
+          source: "system",
+          advisory_disposition: "fallback-due",
+          correction: false,
+          created_at: DEADLINE,
+          event_seq: 9,
+          deliver: true,
+          delivered: false,
+          sealed: null,
+        },
+      ]),
+    });
     const putIntent = h.store.putIntent.bind(h.store);
     let first = true;
     h.store.putIntent = async (intent) => {
@@ -2364,6 +2385,7 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     expect(h.client.submitted).toHaveLength(1);
     const typed = (await entryOf(h)).injection_id;
     expect(await trail(h)).toMatchObject([
+      { step: "observed", kind: "expired", revision: 0, deadline: DEADLINE, plan: "fallback-due" },
       { step: "attempted", attempt: held.injection_id, revision: 0, deadline: DEADLINE },
       { step: "untyped", attempt: held.injection_id, pane: PANE },
       { step: "attempted", attempt: typed },
@@ -2374,9 +2396,9 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
   });
 
   it("after a restart that can't tell whether the notice went in, lists it uncertain, never types it again, and lets a person handle it", async () => {
+    // The run's own session, so recovery reads its screen for the marker and finds none.
     const h = setup({ advisory: settledAttempt(), listTerminals: true, resume: {} });
-    const origin = { ...ORIGIN, agent_session_id: "claude-session-9" };
-    await advisoryExpired(h.store, Q1, 1, { origin, last_injection_id: CRASHED });
+    await advisoryExpired(h.store, Q1, 1, { last_injection_id: CRASHED });
     await h.store.putIntent(intent(CRASHED, Q1, { answer_revision: 0 }));
     h.client.screens.set(PANE, "❯ \r\n");
 
@@ -2402,8 +2424,62 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     expect(h.client.submitted).toEqual([]);
     expect(h.launches).toEqual([]);
     expect(await trail(h)).toMatchObject([
+      { step: "attempted", attempt: CRASHED },
       { step: "uncertain", reason: "crash_unreconciled", attempt: CRASHED },
     ]);
+    await stopped(h.delivery);
+  });
+
+  it("records no untyped attempt when a reopen releases an uncertain notice's write, and lists nothing", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1, { last_injection_id: CRASHED });
+    await h.store.putIntent(intent(CRASHED, Q1, { answer_revision: 0 }));
+    h.client.screens.set(PANE, "❯ \r\n");
+    h.delivery.start();
+    await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
+
+    // As the 0.9.0 inbox applies a reopen: the uncertain write is released, then the round moves on.
+    await h.delivery.lock.run(async () => {
+      await h.store.updateIntent(CRASHED, { state: "abandoned", updated_at: Date.now() });
+      const row = (await h.question(Q1))!;
+      await h.store.updateQuestion(Q1, {
+        question_revision: 1,
+        local_status: "open",
+        expires_at: "2026-11-01T12:00:00.000Z",
+        delivery_status: "desktop-received",
+        error_code: null,
+        answers_json: serializeAnswers(
+          parseAnswers(row.answers_json).map((e) => ({ ...e, deliver: false }))
+        ),
+      });
+    });
+    expect((await trail(h)).map((t) => t.step)).toEqual(["attempted", "uncertain", "superseded"]);
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    expect(h.client.submitted).toEqual([]);
+    await stopped(h.delivery);
+  });
+
+  it("leaves no stall behind when a reopen replaces a notice that needed a person", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+    await refusedWrite(h);
+    expect(await h.delivery.attentionItems()).toHaveLength(1);
+
+    // The 0.9.0 inbox withdraws the notice and keeps the row's stopped status.
+    await h.delivery.lock.run(async () => {
+      const row = (await h.question(Q1))!;
+      await h.store.updateQuestion(Q1, {
+        question_revision: 1,
+        local_status: "open",
+        expires_at: "2026-11-01T12:00:00.000Z",
+        answers_json: serializeAnswers(
+          parseAnswers(row.answers_json).map((e) => ({ ...e, deliver: false }))
+        ),
+      });
+    });
+    expect((await h.question(Q1))?.delivery_status).toBe("needs-attention");
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await expect(h.delivery.markHandled(Q1)).resolves.toEqual({ result: "resolved" });
     await stopped(h.delivery);
   });
 

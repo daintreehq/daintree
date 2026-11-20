@@ -220,26 +220,36 @@ describe("decisionQuestionModel", () => {
         closedReason: "expired",
         closureNotice: { delivery: "pending", disposition: "fallback-withheld" },
       });
-      expect(due).toMatch(/It told the agent it may go ahead/);
-      expect(withheld).toMatch(/Once typed, it doesn't clear the agent/);
+      expect(due).toBe(
+        "The timeout notice was typed into the terminal. It says the agent may go ahead with its plan."
+      );
+      expect(withheld).toMatch(/It says the agent isn't cleared to go ahead/);
     });
 
-    it("never says a notice not yet typed told the agent anything (#17944)", () => {
+    it("says what a notice says of the plan apart from how far it got, never that it told the agent (#17944)", () => {
       const said = (delivery: DecisionClosureNoticeDelivery) =>
         closureNoticeText({
           closedReason: "expired",
           closureNotice: { delivery, disposition: "fallback-due" },
         });
       expect(said("needs-attention")).toBe(
-        "The expiry notice stopped before it was typed into the terminal. Once typed, it tells the agent it may go ahead with its plan."
+        "The timeout notice stopped before it was typed into the terminal. It says the agent may go ahead with its plan."
       );
-      expect(said("pending")).toMatch(/Once typed, it tells the agent/);
-      expect(said("uncertain")).toMatch(/If it reached the terminal, it told the agent/);
+      expect(said("uncertain")).toBe(
+        "The timeout notice may or may not have been typed into the terminal. It says the agent may go ahead with its plan."
+      );
       // It will never be typed: it says nothing of the plan.
-      expect(said("stopped")).toBe("The expiry notice won't be typed into the terminal.");
+      expect(said("stopped")).toBe("The timeout notice won't be typed into the terminal.");
       for (const delivery of ["pending", "needs-attention", "uncertain", "stopped"] as const) {
-        expect(said(delivery)).not.toMatch(/^.*\. It told/);
+        expect(said(delivery)).not.toMatch(/told|went ahead|carried out/);
       }
+      // A question whose deadline passed before it was ever sent closed at its deadline too.
+      expect(
+        closureNoticeText({
+          closedReason: "never-published",
+          closureNotice: { delivery: "pending", disposition: null },
+        })
+      ).toBe("The timeout notice is waiting to be typed into the terminal.");
     });
   });
 });

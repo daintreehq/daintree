@@ -71,8 +71,9 @@ export function planHeading(status: DecisionQuestionStatus): string {
 
 const NOTICE_NAME: Record<"declined" | "expired" | "never-published", string> = {
   declined: "Your decline",
-  expired: "The expiry notice",
-  "never-published": "The notice that it was never sent",
+  // Both close a round at its deadline: the list and the notification call it the same (#17944).
+  expired: "The timeout notice",
+  "never-published": "The timeout notice",
 };
 
 const NOTICE_DELIVERY: Record<DecisionClosureNotice["delivery"], string> = {
@@ -101,31 +102,16 @@ export function closureNoticeText(
 }
 
 /**
- * What an advisory notice says of the plan, in the tense of how far it got
- * (#17944): said once typed, perhaps said when its write may have reached the
- * terminal, and to be said while it waits. A notice never typed is never
- * presented as having told the agent anything.
+ * What an advisory notice says of the plan (#17944): its words, apart from
+ * how far it got, which the sentence before says. Typed in is only that the
+ * terminal took it, never that the agent read it or went ahead; one that will
+ * never be typed says nothing of the plan.
  */
 function noticePlan(notice: DecisionClosureNotice): string | null {
-  const { delivery, disposition } = notice;
-  if (disposition === null) return null;
-  const due = disposition === "fallback-due";
-  switch (delivery) {
-    case "delivered":
-      return due
-        ? "It told the agent it may go ahead with its plan."
-        : "It didn't clear the agent to go ahead with its plan.";
-    case "uncertain":
-      return due
-        ? "If it reached the terminal, it told the agent it may go ahead with its plan."
-        : "If it reached the terminal, it didn't clear the agent to go ahead with its plan.";
-    case "stopped":
-      return null;
-    default:
-      return due
-        ? "Once typed, it tells the agent it may go ahead with its plan."
-        : "Once typed, it doesn't clear the agent to go ahead with its plan.";
-  }
+  if (notice.disposition === null || notice.delivery === "stopped") return null;
+  return notice.disposition === "fallback-due"
+    ? "It says the agent may go ahead with its plan."
+    : "It says the agent isn't cleared to go ahead with its plan.";
 }
 
 const REQUIREMENT_TEXT: Record<DecisionsRequirement, string> = {

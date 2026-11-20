@@ -16,7 +16,12 @@ import {
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { withDiskRecovery } from "../persistence/db.js";
 import { logWarn } from "../../utils/logger.js";
-import { noticeTrailOf, noticeUntypedOf } from "./noticeTrail.js";
+import {
+  noticeAttemptOf,
+  noticeTrailOf,
+  noticeUntypedOf,
+  type SettledIntent,
+} from "./noticeTrail.js";
 
 /** Every table the store keeps. */
 const DECISIONS_TABLES = [
@@ -119,14 +124,16 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** A diagnostic's entries, or none when reading them failed: it never fails the write it describes. */
-function trailOf(read: () => AuditEntry[]): AuditEntry[] {
-  try {
-    return read();
-  } catch {
-    return [];
-  }
-}
+/** The question fields a timeout notice's trail reads; a patch touching none of them can't move it. */
+const TRAIL_FIELDS: readonly (keyof QuestionRow)[] = [
+  "answers_json",
+  "delivery_status",
+  "error_code",
+  "local_status",
+  "question_revision",
+  "expires_at",
+  "history_only",
+];
 
 interface QuestionRecord {
   question_id: string;
@@ -906,7 +913,15 @@ export class DaintreeLocalStore implements LocalStore {
 
   putIntent(i: InjectionIntent): Promise<void> {
     const intent = { ...i };
-    return this.enqueue("write", () => this.writeIntent(intent));
+    return this.enqueue("write", () => {
+      this.writeIntent(intent);
+      if (intent.message_id === null) {
+        this.trail(() => {
+          const attempt = noticeAttemptOf(this.readQuestion(intent.question_id), intent, nowIso());
+          return attempt === null ? [] : [attempt];
+        });
+      }
+    });
   }
 
   updateIntent(id: string, patch: Partial<InjectionIntent>): Promise<InjectionIntent | null> {
@@ -916,14 +931,13 @@ export class DaintreeLocalStore implements LocalStore {
       if (!current) return null;
       const next = { ...current, ...copy };
       this.writeIntent(next);
-      if (next.state === "abandoned" && current.state !== "abandoned") {
-        const row = this.readQuestion(next.question_id);
-        for (const trail of trailOf(() => {
-          const untyped = noticeUntypedOf(row, next, nowIso());
+      // Closed straight from being written: nothing reached the terminal. One
+      // released from `uncertain` after a reopen may have, and stays so.
+      if (next.state === "abandoned" && current.state === "intent" && next.message_id === null) {
+        this.trail(() => {
+          const untyped = noticeUntypedOf(this.readQuestion(next.question_id), next, nowIso());
           return untyped === null ? [] : [untyped];
-        })) {
-          this.writeAudit(trail);
-        }
+        });
       }
       return next;
     });
@@ -977,8 +991,9 @@ export class DaintreeLocalStore implements LocalStore {
       const questionCopy = copyQuestionPatch(questionPatch);
       return () => {
         const current = this.readIntent(intentId);
-        if (current) this.writeIntent({ ...current, ...intentCopy });
-        this.patchQuestion(questionId, questionCopy);
+        const settled = current ? { ...current, ...intentCopy } : null;
+        if (settled) this.writeIntent(settled);
+        this.patchQuestion(questionId, questionCopy, settled ?? undefined);
       };
     });
   }
@@ -993,9 +1008,22 @@ export class DaintreeLocalStore implements LocalStore {
     });
   }
 
-  /** An audit entry written inside the write that it describes (#17944). */
-  private writeAudit(e: AuditEntry): void {
-    this.st("INSERT INTO decisions_audit (at, json) VALUES (?, ?)").run(e.at, JSON.stringify(e));
+  /**
+   * Audit entries written inside the write they describe (#17944). A
+   * diagnostic never fails that write: anything but a storage fault, which
+   * fails the write anyway, leaves it without its trail.
+   */
+  private trail(read: () => AuditEntry[]): void {
+    try {
+      for (const e of read()) {
+        this.st("INSERT INTO decisions_audit (at, json) VALUES (?, ?)").run(
+          e.at,
+          JSON.stringify(e)
+        );
+      }
+    } catch (error) {
+      if (isStorageFault(error)) throw error;
+    }
   }
 
   listAudit(limit: number): Promise<AuditEntry[]> {
@@ -1257,7 +1285,11 @@ export class DaintreeLocalStore implements LocalStore {
     return r ? fromRecord(r) : null;
   }
 
-  private patchQuestion(id: string, patch: Partial<QuestionRow>): QuestionRow | null {
+  private patchQuestion(
+    id: string,
+    patch: Partial<QuestionRow>,
+    settled?: SettledIntent
+  ): QuestionRow | null {
     const current = this.readQuestion(id);
     if (!current) return null;
     const next: QuestionRow = {
@@ -1268,8 +1300,8 @@ export class DaintreeLocalStore implements LocalStore {
     };
     this.st(UPDATE_QUESTION).run(toRecord(next));
     // The notice's trail goes in the same write as the change it records.
-    for (const trail of trailOf(() => noticeTrailOf(current, next, nowIso()))) {
-      this.writeAudit(trail);
+    if (TRAIL_FIELDS.some((field) => field in patch)) {
+      this.trail(() => noticeTrailOf(current, next, nowIso(), settled));
     }
     return next;
   }

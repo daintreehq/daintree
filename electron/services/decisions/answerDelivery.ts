@@ -238,12 +238,22 @@ function inAdvisoryRound(row: QuestionRow): boolean {
   }
 }
 
-/** The closure notices a retry of `row` sends back to delivery, by entry id. */
-function closuresTried(row: QuestionRow): string[] {
-  return pendingEntries(row)
-    .filter((entry) => isClosure(entry))
-    .map((entry) => entry.entry_id);
+/** What a retry of `row` sends back to delivery: its notices (expiry, decline, never published) and held follow-ups, by id. */
+interface Tried {
+  notices: string[];
+  followUps: string[];
 }
+
+function triedOf(row: QuestionRow): Tried {
+  return {
+    notices: pendingEntries(row)
+      .filter((entry) => entry.kind !== "answer")
+      .map((entry) => entry.entry_id),
+    followUps: heldFollowUps(row).map((message) => message.message_id),
+  };
+}
+
+const NOTHING_TRIED: Tried = { notices: [], followUps: [] };
 
 export const DELIVERY_CHECK_INTERVAL_MS = 60_000;
 /** Past the wake's settle grace, so a pane that just settled reads as idle when delivery looks. */
@@ -625,8 +635,8 @@ export class AnswerDelivery {
     const pending = answerNeedsAttention(row, handled) ? await this.openPending(row) : [];
     const followUps = await this.openFollowUps(row);
     if (pending === null || followUps === null) return null;
-    // A closure notice is Daintree's to type into the run that asked, never a person's to paste (#17944).
-    const opened = pending.filter((entry) => !isClosure(entry));
+    // A notice (expiry, decline, never published) is Daintree's to type into the run that asked, never a person's to paste (#17944).
+    const opened = pending.filter((entry) => entry.kind === "answer");
     return copiedAnswerText(
       row,
       opened,
@@ -748,12 +758,12 @@ export class AnswerDelivery {
    */
   async resumeAnswer(questionId: string): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
-    let tried: string[] = [];
+    let tried = NOTHING_TRIED;
     const refused = await this.lock.run(async () => {
       const row = await this.store.getQuestion(questionId);
       const early = await this.actionable(row);
       if (early !== null || row === null) return early ?? { result: "resolved" as const };
-      tried = closuresTried(row);
+      tried = triedOf(row);
       this.resume?.allowAgain(row.origin);
       await this.store.updateQuestion(questionId, await this.retryPatch(row));
       await this.owner.ctx.audit.log({
@@ -960,14 +970,15 @@ export class AnswerDelivery {
   }
 
   /**
-   * What became of `questionId` once delivery had its go. `tried`, the closure
-   * notices the action sent back: one neither typed nor still to be typed (a
+   * What became of `questionId` once delivery had its go. `tried`, what the
+   * action sent back: a notice of it neither typed nor still to be typed (a
    * reopen replaced its round, or a person handled it meanwhile) no longer
-   * needs attention, and is never reported delivered or waiting (#17944).
+   * needs attention, and is never reported delivered, nor waiting unless
+   * something else the action sent back still waits (#17944).
    */
   private async outcomeOf(
     questionId: string,
-    tried: readonly string[] = []
+    tried: Tried = NOTHING_TRIED
   ): Promise<DecisionsAnswerOutcome> {
     const row = await this.store.getQuestion(questionId);
     if (row === null) return { result: "resolved" };
@@ -987,16 +998,22 @@ export class AnswerDelivery {
     const live = pendingEntries(row).filter(
       (entry) => !isClosure(entry) || closureInForce(entry, row)
     );
+    const undelivered = parseMessages(row.messages_json).filter(isUndeliveredMessage);
     const left = new Set(live.map((entry) => entry.entry_id));
     for (const entry of parseAnswers(row.answers_json)) {
       if (entry.delivered) left.add(entry.entry_id);
     }
-    if (tried.some((id) => !left.has(id))) return { result: "resolved" };
+    if (tried.notices.some((id) => !left.has(id))) {
+      const stillTried =
+        live.some((entry) => tried.notices.includes(entry.entry_id)) ||
+        undelivered.some((message) => tried.followUps.includes(message.message_id));
+      if (!stillTried) return { result: "resolved" };
+    }
     const terminalId = row.origin.pane_id;
     const title =
       (await this.terminals()).find((terminal) => terminal.id === terminalId)?.title?.trim() ||
       null;
-    const waiting = live.length > 0 || parseMessages(row.messages_json).some(isUndeliveredMessage);
+    const waiting = live.length > 0 || undelivered.length > 0;
     if (!waiting) return { result: "delivered", terminalId, title };
     // The run that asked is the only one it is typed into, so its agent says what it waits on.
     const queues = wakeGateOptionsFor(row.origin.agent_kind || undefined).acceptWorking === true;

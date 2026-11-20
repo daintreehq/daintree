@@ -4992,6 +4992,20 @@ describe("Decisions questions (#17232)", () => {
       expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledWith(remote.reference);
     });
 
+    it("names only the follow-up when a follow-up alone stopped beside a notice that may have been typed", () => {
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          closedReason: "expired",
+          closureNotice: { delivery: "uncertain", disposition: "fallback-due" },
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: null, followUpIds: ["m-1"], reason: "pane_gone" },
+        }),
+        "k"
+      );
+      const [[title]] = notificationServiceMock.showNativeNotification.mock.calls;
+      expect(title).toBe(`Follow-up to ${agentName()} in Daintree needs attention`);
+    });
+
     it("names the follow-up, not the notice, once the notice was typed", () => {
       agentNotificationService.notifyDecisionStall(
         question("term-1", Date.now(), {

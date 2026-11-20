@@ -191,8 +191,11 @@ function noticeDisposition(
   const said = delivery === "delivered" || delivery === "uncertain";
   if (entry.kind === "unpublished") {
     // Untyped, a notice whose plan was due may still have an uncertain write the row doesn't
-    // show (the bridge reads the store's intents for it): what it says is unknown, not withheld.
-    if (!said && entry.fallback_due === true) return null;
+    // show (the bridge reads the store's intents for it): what it says is unknown, not withheld,
+    // unless typing it now would say the plan is due too, so both histories agree.
+    if (!said && entry.fallback_due === true) {
+      return unpublishedPlanDue(entry, false, host) ? "fallback-due" : null;
+    }
     return unpublishedPlanDue(entry, said, host) ? "fallback-due" : "fallback-withheld";
   }
   const recorded = entry.advisory_disposition;

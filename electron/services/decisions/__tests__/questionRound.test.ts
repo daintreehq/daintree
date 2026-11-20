@@ -345,6 +345,29 @@ describe("an advisory notice as the lifetime reading it stands (#17944)", () => 
       deadline: "2026-11-01T09:30:00.000Z",
       delivery: "needs-attention",
     });
+    // Untyped with its plan due: typed now, or as an uncertain write may already have, it says the same.
+    const due = {
+      ...unpublished,
+      answers_json: answers({
+        entry_id: "unpublished-1",
+        kind: "unpublished",
+        action: "expire",
+        source: "system",
+        revision: 0,
+        sealed: null,
+        fallback_due: true,
+      }),
+    };
+    expect(timeoutNoticeOf(due, undefined, OWNER)?.disposition).toBe("fallback-due");
+    expect(timeoutNoticeOf(due)?.disposition).toBeNull();
+    // A possibly typed advisory expiry keeps what it may have said, whatever the lifetime allows now.
+    expect(
+      roundOf(
+        expired({ advisory_disposition: "fallback-due", uncertain_injection_id: "inj-1" }),
+        undefined,
+        { outcomes: false, allowed: false }
+      ).closureNotice?.disposition
+    ).toBe("fallback-due");
     const declined = row(1, {
       local_status: "cancelled",
       answers_json: answers({ ...DECLINE, revision: 1 }),

@@ -4,18 +4,21 @@ import type {
   DecisionsFollowUpPreview,
 } from "@shared/types/decisionsAttention";
 import {
+  attentionFingerprint,
   canCopy,
   copyLabel,
   fromLines,
   handledConfirmBody,
   handledConfirmTitle,
   handledNeedsConfirm,
+  noticeDeliveryText,
   noticeOutcomeText,
   noticePlanText,
   originParts,
   outcomeText,
   reasonText,
   remainingText,
+  sameAttention,
   statusText,
   subjectOf,
 } from "../decisionsAttentionModel";
@@ -203,24 +206,85 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
     expect(noticeOutcomeText({ kind: "never-published" })).toContain("before it reached the relay");
   });
 
-  it("says what typing it says of the plan, never that anything was carried out", () => {
+  it("says what the notice says of the plan, apart from how far it got, never that anything was carried out", () => {
     expect(noticePlanText(NOTICE)).toBe(
-      "Once typed, it tells the agent it may go ahead with its stated plan. Nothing was decided or approved."
+      "The notice says the agent may go ahead with its stated plan. Nothing was decided or approved."
     );
-    expect(noticePlanText({ ...NOTICE, delivery: "delivery-uncertain" })).toMatch(
-      /^If it reached the terminal, it told the agent/
+    expect(noticePlanText({ disposition: "fallback-withheld" })).toBe(
+      "The notice says the agent isn't cleared to go ahead with its plan."
     );
-    expect(noticePlanText({ ...NOTICE, disposition: "fallback-withheld" })).toBe(
-      "Once typed, it doesn't clear the agent to go ahead with its plan."
-    );
-    expect(noticePlanText({ ...NOTICE, disposition: null })).toBeNull();
-    for (const delivery of ["needs-attention", "delivery-uncertain"] as const) {
-      for (const disposition of ["fallback-due", "fallback-withheld"] as const) {
-        expect(noticePlanText({ delivery, disposition })).not.toMatch(
-          /went ahead|carried out|did /
-        );
-      }
+    expect(noticePlanText({ disposition: null })).toBeNull();
+    for (const disposition of ["fallback-due", "fallback-withheld"] as const) {
+      expect(noticePlanText({ disposition })).not.toMatch(/went ahead|carried out|told|did /);
     }
+    // How far it got is said once, in its own words.
+    expect(noticeDeliveryText(NOTICE)).toBe("not typed in");
+    expect(noticeDeliveryText({ delivery: "delivery-uncertain" })).toBe(
+      "may or may not have been typed in"
+    );
+  });
+
+  it("keeps a confirmation only while the list shows the question as it asked about it", () => {
+    const base = {
+      questionId: "q",
+      alias: 7,
+      status: "needs-attention" as const,
+      reason: "pane_gone",
+      question: null,
+      askedAt: "2026-11-01T09:00:00.000Z",
+      origin: {
+        projectId: "p",
+        projectName: null,
+        worktreeId: "w",
+        worktreeName: null,
+        agentId: "claude",
+        agentName: null,
+        paneId: "pane-1",
+        paneTitle: null,
+        otherHost: null,
+      },
+      answer: null,
+      answerUnavailable: null,
+      notice: NOTICE,
+      followUps: [],
+      canResume: true,
+      canReassign: false,
+    };
+    expect(sameAttention(base, { ...base, reason: "relaunched", canResume: false })).toBe(true);
+    // Its round replaced, possibly typed since, a new answer in its place, a follow-up added.
+    expect(sameAttention(base, { ...base, notice: { ...NOTICE, revision: 1 } })).toBe(false);
+    expect(
+      sameAttention(base, {
+        ...base,
+        status: "delivery-uncertain",
+        notice: { ...NOTICE, delivery: "delivery-uncertain" },
+      })
+    ).toBe(false);
+    expect(sameAttention(base, { ...base, notice: null, answer: ANSWER })).toBe(false);
+    expect(sameAttention(base, { ...base, followUps: [followUp()] })).toBe(false);
+    expect(sameAttention(base, { ...base, questionId: "other" })).toBe(false);
+  });
+
+  it("reads the question list again only for a change to what needs a person", () => {
+    const question = (questionId: string, kind: string, deliveryStatus?: string) => ({
+      reference: { hostId: "h", questionId },
+      standing: { kind, ...(deliveryStatus ? { deliveryStatus } : {}) },
+      stall:
+        kind === "needs-attention"
+          ? { answerRevision: 0, followUpIds: [], reason: "pane_gone" }
+          : null,
+    });
+    const held = attentionFingerprint([question("a", "needs-attention", "needs-attention")]);
+    expect(
+      attentionFingerprint([
+        question("a", "needs-attention", "needs-attention"),
+        question("b", "waiting"),
+      ])
+    ).toBe(held);
+    expect(attentionFingerprint([question("a", "settled")])).not.toBe(held);
+    expect(attentionFingerprint([question("a", "needs-attention", "delivery-uncertain")])).not.toBe(
+      held
+    );
   });
 
   it("copies nothing of the notice, only the follow-ups beside it", () => {

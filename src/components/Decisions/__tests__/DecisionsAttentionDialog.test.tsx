@@ -354,7 +354,24 @@ function menuRows(): string[] {
 
 describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
   /** Listeners on the question list every window gets, by the event's name. */
-  let events: Map<string, Set<() => void>>;
+  let events: Map<string, Set<(payload: unknown) => void>>;
+  let revision = 0;
+
+  /** The question list every window gets, holding these questions as needing a person. */
+  function questionsChanged(...held: string[]) {
+    revision += 1;
+    const list = {
+      revision,
+      questions: held.map((questionId) => ({
+        reference: { hostId: "host-1", projectId: "project-1", terminalId: "pane", questionId },
+        standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+        stall: { answerRevision: 0, followUpIds: [], reason: "pane_gone" },
+      })),
+    };
+    act(() => {
+      for (const callback of events.get("decisions:questions-changed") ?? []) callback(list);
+    });
+  }
 
   const NOTICE: DecisionsAttentionItem["notice"] = {
     kind: "expired",
@@ -379,7 +396,7 @@ describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
         decisions: { listAttention, markAnswerHandled, listAnswerDestinations },
         terminal: { onDecisionState: () => () => {} },
         events: {
-          on: (name: string, callback: () => void) => {
+          on: (name: string, callback: (payload: unknown) => void) => {
             const named = events.get(name) ?? new Set();
             named.add(callback);
             events.set(name, named);
@@ -407,9 +424,10 @@ describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
 
     expect(row.textContent).toContain("Timeout notice needs attention.");
     expect(row.textContent).toContain("The terminal that asked was closed.");
+    expect(row.textContent).toContain("Timeout notice, not typed in");
     expect(row.textContent).toContain("Its deadline passed without an answer.");
     expect(row.textContent).toContain(
-      "Once typed, it tells the agent it may go ahead with its stated plan."
+      "The notice says the agent may go ahead with its stated plan."
     );
     expect(row.textContent).not.toContain("No answer is waiting");
     expect(within(row).getByRole("button", { name: "Try resume for q-3" })).toBeTruthy();
@@ -431,10 +449,9 @@ describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
     const row = screen.getByTestId("decisions-attention-item");
 
     expect(row.textContent).toContain("This timeout notice may or may not have been delivered.");
-    expect(row.textContent).toContain(
-      "If it reached the terminal, it told the agent it may go ahead with its stated plan."
-    );
-    expect(row.textContent).not.toContain("Once typed");
+    expect(row.textContent).toContain("Typing it in was interrupted");
+    expect(row.textContent).toContain("Timeout notice, may or may not have been typed in");
+    expect(row.textContent).not.toMatch(/told the agent|went ahead/);
     expect(within(row).queryByRole("button", { name: /Try resume/ })).toBeNull();
   });
 
@@ -444,15 +461,48 @@ describe("DecisionsAttentionDialog: a timeout notice (#17944)", () => {
     await listedRows(2);
     expect(events.get("decisions:questions-changed")?.size).toBe(1);
 
+    questionsChanged("qid-3", "qid-4");
+    await waitFor(() => expect(listAttention).toHaveBeenCalledTimes(2));
+    // A list change that leaves what needs a person the same reads nothing more.
+    questionsChanged("qid-3", "qid-4");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(listAttention).toHaveBeenCalledTimes(2);
+
     // Handled in another window: main's list no longer holds it, and only the question list says so here.
     listed = [makeItem(4)];
-    act(() => {
-      for (const callback of events.get("decisions:questions-changed") ?? []) callback();
-    });
+    questionsChanged("qid-4");
     await listedRows(1);
     expect(screen.getByTestId("decisions-attention-item").getAttribute("data-question-id")).toBe(
       "qid-4"
     );
+  });
+
+  it("drops a Mark handled confirmation once another window handled the notice, and marks nothing", async () => {
+    listed = [noticeItem(3), makeItem(4)];
+    render(tree(true));
+    await listedRows(2);
+    const asking = await ask(3);
+    expect(within(asking).getByText(/Its timeout notice leaves this list/)).toBeTruthy();
+
+    listed = [makeItem(4)];
+    questionsChanged("qid-4");
+    await listedRows(1);
+    await confirmGone();
+    expect(markAnswerHandled).not.toHaveBeenCalled();
+  });
+
+  it("drops a confirmation once the question shows something new, though it is still listed", async () => {
+    listed = [noticeItem(3)];
+    render(tree(true));
+    await listedRows(1);
+    await ask(3);
+
+    // Reopened and timed out again: the same question, a later round's notice.
+    listed = [noticeItem(3, { notice: { ...NOTICE, revision: 1 } })];
+    questionsChanged("qid-3", "round-1");
+    await confirmGone();
+    expect(markAnswerHandled).not.toHaveBeenCalled();
+    expect(screen.getAllByTestId("decisions-attention-item")).toHaveLength(1);
   });
 
   it("stops following the question list once closed", async () => {

@@ -156,27 +156,69 @@ export function noticeOutcomeText(notice: Pick<DecisionsTimeoutNotice, "kind">):
 }
 
 /**
- * What the notice says of the agent's stated plan, for an advisory round:
- * only what typing it would say, or may have said. Never that the agent read
- * it or acted on it, and never a decision anyone made. Null for a question
- * that waited for a reply, or when it can't be told.
+ * What the notice says of the agent's stated plan, for an advisory round: its
+ * words, apart from how far typing it got. Never that the agent read it or
+ * acted on it, and never a decision anyone made. Null for a question that
+ * waited for a reply, or when it can't be told.
  */
-export function noticePlanText(
-  notice: Pick<DecisionsTimeoutNotice, "delivery" | "disposition">
-): string | null {
-  const uncertain = notice.delivery === "delivery-uncertain";
+export function noticePlanText(notice: Pick<DecisionsTimeoutNotice, "disposition">): string | null {
   switch (notice.disposition) {
     case "fallback-due":
-      return uncertain
-        ? "If it reached the terminal, it told the agent it may go ahead with its stated plan. Nothing was decided or approved."
-        : "Once typed, it tells the agent it may go ahead with its stated plan. Nothing was decided or approved.";
+      return "The notice says the agent may go ahead with its stated plan. Nothing was decided or approved.";
     case "fallback-withheld":
-      return uncertain
-        ? "If it reached the terminal, it didn't clear the agent to go ahead with its plan."
-        : "Once typed, it doesn't clear the agent to go ahead with its plan.";
+      return "The notice says the agent isn't cleared to go ahead with its plan.";
     default:
       return null;
   }
+}
+
+/** How far typing the notice got, in its own right: beside an answer or follow-ups, the status line speaks for them all. */
+export function noticeDeliveryText(notice: Pick<DecisionsTimeoutNotice, "delivery">): string {
+  return notice.delivery === "delivery-uncertain"
+    ? "may or may not have been typed in"
+    : "not typed in";
+}
+
+/**
+ * Whether two reads of a question's item ask the same of the person: the
+ * same answer, notice round and follow-ups, in the same state. A confirmation
+ * asked about one read is dropped once the list no longer shows it so.
+ */
+export function sameAttention(a: DecisionsAttentionItem, b: DecisionsAttentionItem): boolean {
+  return (
+    a.questionId === b.questionId &&
+    a.status === b.status &&
+    a.answer?.answeredAt === b.answer?.answeredAt &&
+    a.answerUnavailable === b.answerUnavailable &&
+    a.notice?.revision === b.notice?.revision &&
+    a.notice?.delivery === b.notice?.delivery &&
+    a.followUps.length === b.followUps.length &&
+    a.followUps.every((followUp, index) => followUp.messageId === b.followUps[index]?.messageId)
+  );
+}
+
+/**
+ * What of the question list bears on this list: the questions that need a
+ * person, with what delivery stopped on. A list change that leaves it the
+ * same (a new question, a Host's, a mark) is no reason to read this list again.
+ */
+export function attentionFingerprint(
+  questions: readonly {
+    reference: { hostId: string; questionId: string };
+    standing: { kind: string; deliveryStatus?: string };
+    stall: { answerRevision: number | null; followUpIds: string[]; reason: string } | null;
+  }[]
+): string {
+  return JSON.stringify(
+    questions
+      .filter((question) => question.standing.kind === "needs-attention")
+      .map((question) => [
+        question.reference.hostId,
+        question.reference.questionId,
+        question.standing.deliveryStatus ?? null,
+        question.stall,
+      ])
+  );
 }
 
 /** Why an item shows no answer: there is none waiting, or this computer can't open it. */
