@@ -391,6 +391,11 @@ export class TerminalProcess {
   private _activityTier: "active" | "background" = "active";
   private readonly textDecoder = new TextDecoder();
   private emittedBytes = 0;
+  /**
+   * Chunks read off the pty, counted before anything filters them: a chunk
+   * answered and stripped on its way to the views still reached the mirror.
+   */
+  private receivedChunks = 0;
 
   flushEventDrivenSnapshot(): void {
     this.sessionSnapshotter.flushEventDriven();
@@ -637,6 +642,8 @@ export class TerminalProcess {
         return self.writeQueue;
       },
       logWriteError: (error, context) => self.logWriteError(error, context),
+      serializeScreen: () => self.analysis.serializeScreen(),
+      outputMark: () => self.emittedBytes + self.receivedChunks,
     });
     this.ptyDataPipeline = new PtyDataPipeline({
       get terminalInfo() {
@@ -2694,6 +2701,7 @@ export class TerminalProcess {
   }
 
   private handlePtyData(ptyProcess: pty.IPty, data: string): void {
+    if (data.length > 0) this.receivedChunks++;
     this.ptyDataPipeline.handlePtyData(ptyProcess, data);
   }
 

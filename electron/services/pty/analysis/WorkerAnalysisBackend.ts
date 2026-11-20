@@ -567,6 +567,21 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     return screenOnly;
   }
 
+  async serializeScreen(): Promise<SerializedTerminalSnapshot | null> {
+    if (this.inactive()) return null;
+    // A hold that can't reach the worker is output the screen would miss.
+    const since = this.continuousSince;
+    if (!this.flushHeldFeed()) return null;
+    const snapshot = asSnapshot(
+      await this.pool.request(this.spec.terminalId, "serialize-screen")
+    );
+    // A slot rebuilt or a chunk dropped meanwhile left a mirror that never
+    // saw some of what was fed before the request.
+    return snapshot !== null && !this.inactive() && this.continuousSince === since
+      ? snapshot
+      : null;
+  }
+
   async serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive() || this.persistSuppressed) return null;
     this.flushHeldFeed();

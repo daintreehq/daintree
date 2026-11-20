@@ -302,7 +302,9 @@ export class AnalysisWorkerRuntime {
         const promise =
           msg.op === "serialize"
             ? session.serialize(msg.tailRows !== undefined ? { tailRows: msg.tailRows } : undefined)
-            : msg.op === "serialize-persistence"
+            : msg.op === "serialize-screen"
+              ? session.serializeScreen()
+              : msg.op === "serialize-persistence"
               ? session.serializeForPersistence()
               : session.captureFinalSnapshot();
         // Returned so handleMessage arms the per-terminal barrier: later
