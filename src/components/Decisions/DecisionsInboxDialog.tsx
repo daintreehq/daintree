@@ -44,6 +44,7 @@ import { actionService } from "@/services/ActionService";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -80,16 +81,18 @@ import {
   inboxGroupOf,
   inboxGroups,
   closedTime,
+  headerFacts,
   inboxRowNote,
   isAttention,
   isClosed,
   markedText,
+  originFacts,
+  paneTitle,
   referenceKey,
   replyLine,
   replyLineKey,
   replyToShow,
   resolveSelection,
-  staleNote,
   standingText,
   waitingText,
   whereFacts,
@@ -97,6 +100,7 @@ import {
   type InboxChoice,
   type InboxGroup,
   type InboxReach,
+  type QuestionOrigin,
 } from "./decisionsInboxModel";
 import {
   useDecisionQuestionReader,
@@ -163,6 +167,11 @@ const LOADING: ListRead = { state: "loading" };
 const NO_LINES: ReadonlyMap<string, string | null> = new Map();
 const NO_QUESTIONS: readonly DecisionQuestionListItem[] = [];
 const NO_WORKTREES = new Map<string, WorktreeSnapshot>();
+
+/** A pane on this computer, by the project and terminal a question names it by. */
+function paneKey(projectId: string, terminalId: string): string {
+  return `${projectId}\u0000${terminalId}`;
+}
 
 /**
  * This computer's questions while the inbox is open and Decisions is on, as
@@ -509,8 +518,7 @@ function InboxRow({
   item,
   rowKey,
   line,
-  agent,
-  where,
+  origin,
   selected,
   describedBy,
   tabStop,
@@ -523,8 +531,7 @@ function InboxRow({
   item: DecisionQuestionListItem;
   rowKey: string;
   line: string | null;
-  agent: string;
-  where: readonly string[];
+  origin: QuestionOrigin;
   selected: boolean;
   /** The list's keys, said with the row Tab lands on: the region's own description isn't read there. */
   describedBy: string | undefined;
@@ -547,7 +554,6 @@ function InboxRow({
     deadline !== null && nowMs !== null && expiresSoon(item, nowMs)
       ? expiryText(deadline, nowMs, item.replyMode)
       : null;
-  const stale = staleNote(item);
   const closed = isClosed(item.standing);
   const attention = isAttention(item.standing);
   // Set aside, not over: the title steps down like History's, the question stays open.
@@ -613,7 +619,7 @@ function InboxRow({
             </span>
           </span>
           {/* Only what sets this row apart from its group; the full sentence is for the ear.
-              A closed row's outcome leads its where-line instead, so history stays two lines. */}
+              A closed row's outcome follows who asked on its where-line instead, so history stays two lines. */}
           {((note !== null && !closed) || expiry !== null) && (
             <span
               aria-hidden="true"
@@ -646,15 +652,9 @@ function InboxRow({
             </span>
           )}
           <span className="flex h-4 min-w-0 items-center gap-3 text-xs leading-4 text-text-secondary">
-            <span className="min-w-0 flex-1 truncate">
-              <span className="sr-only">{agent}, </span>
-              <FactRun
-                facts={[
-                  ...(closed && note !== null ? [note] : []),
-                  ...(stale !== null ? [stale] : []),
-                  ...where,
-                ]}
-              />
+            {/* Who asked leads; the place, ending with the project, gives way first. */}
+            <span className="min-w-0 flex-1 truncate" data-testid="decisions-inbox-row-origin">
+              <FactRun facts={originFacts(origin, closed ? note : null)} />
             </span>
             {/* Not twice: a row whose line couldn't be read is already named by it. */}
             {line !== null && (
@@ -695,7 +695,7 @@ function InboxList({
   lines: ReadonlyMap<string, string | null>;
   /** A request for a reply's line, by `replyLineKey`, in place of its question's. */
   replyLines: ReadonlyMap<string, string | null>;
-  partsOf: (item: DecisionQuestionListItem) => { agent: string; where: string[] };
+  partsOf: (item: DecisionQuestionListItem) => QuestionOrigin;
   selectedKey: string | null;
   onSelect: (key: string, index: number) => void;
   /** Show this row's question now and take the keyboard into its answer. */
@@ -860,7 +860,6 @@ function InboxList({
             <ul className="flex flex-col">
               {group.items.map((item) => {
                 const key = referenceKey(item.reference);
-                const parts = partsOf(item);
                 const replyKey = replyLineKey(item);
                 return (
                   <InboxRow
@@ -873,8 +872,7 @@ function InboxList({
                       lines.get(key) ??
                       null
                     }
-                    agent={parts.agent}
-                    where={parts.where}
+                    origin={partsOf(item)}
                     selected={key === selectedKey}
                     describedBy={
                       (selectedKey === null ? key === roving.tabStopKey : key === selectedKey)
@@ -942,19 +940,32 @@ export function DecisionsInboxDialog() {
   const projects = useProjectStore((state) => state.projects);
   const worktrees = useWorktreeStoreOptional((state) => state.worktrees, NO_WORKTREES);
   const viewWorkspace = getViewWorkspaceId();
-  // A Remote Host window's projects are another computer's, whatever their
-  // ids, and so is a Host's question in this computer's window: it keeps the
-  // names it was asked under.
-  const partsOf = (item: DecisionQuestionListItem): { agent: string; where: string[] } => {
-    const ours = !remote && item.remoteHost === undefined;
-    const local = ours && item.reference.projectId === viewWorkspace;
+  // Every run on this computer, across its projects: what names the pane that asked (#18039).
+  // Read only while open here: the fleet moves with every retitle, and a closed inbox shows none of it.
+  const runs = useFleetSnapshotStore((state) =>
+    active && !remote ? (state.snapshot?.runs ?? null) : null
+  );
+  const runsByPane = new Map((runs ?? []).map((run) => [paneKey(run.workspaceId, run.runId), run]));
+  // A Remote Host window's projects and runs are another computer's, whatever
+  // their ids, as are a Host's own questions anywhere: those keep the names
+  // they were asked under.
+  const partsOf = (item: DecisionQuestionListItem): QuestionOrigin => {
+    const own = !remote && item.remoteHost === undefined;
+    const local = own && item.reference.projectId === viewWorkspace;
     const project =
-      (ours
+      (own
         ? projects.find((candidate) => candidate.id === item.reference.projectId)?.name
         : undefined) ?? item.projectLabel;
     const known = local ? (worktreeDisplayName(worktrees.get(item.worktreeId)) ?? null) : null;
+    const agent = agentName(item.agentKind);
+    const run = own
+      ? runsByPane.get(paneKey(item.reference.projectId, item.reference.terminalId))
+      : undefined;
     return {
-      agent: agentName(item.agentKind),
+      agent,
+      pane: run === undefined ? null : paneTitle(run, item.agentKind, agent),
+      host: item.remoteHost?.name ?? null,
+      away: item.remoteHost?.connected === false,
       where: whereFacts(project, worktreeName(item, known)),
     };
   };
@@ -1548,10 +1559,13 @@ export function DecisionsInboxDialog() {
                       >
                         Question {aliasLabel(selected.alias)}
                       </h3>
-                      {/* Where it was asked, as the Decisions app's bar names it; who asked heads the question. */}
+                      {/* The pane that asked and where, as the Decisions app's bar names it; who asked heads the question. */}
                       <p className="flex min-w-0 flex-1 items-center gap-2 text-xs text-text-secondary">
-                        <span className="min-w-0 truncate">
-                          <FactRun facts={partsOf(selected).where} />
+                        <span
+                          className="min-w-0 truncate"
+                          data-testid="decisions-inbox-detail-origin"
+                        >
+                          <FactRun facts={headerFacts(partsOf(selected))} />
                         </span>
                         <span className="shrink-0 font-mono text-2xs tabular-nums">
                           {aliasLabel(selected.alias)}

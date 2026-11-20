@@ -21,12 +21,14 @@ import type {
   MarkDecisionQuestionsPayload,
 } from "@shared/types/decisionsQuestion";
 import type { DecisionsInvolvementRead } from "@shared/types/decisionsInvolvement";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { isMac } from "@/lib/platform";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { answerKey, useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 
 let decisionsOn = true;
 const onListeners = new Set<() => void>();
@@ -60,8 +62,13 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: (select: (state: { projects: { id: string; name: string }[] }) => unknown) =>
     select({ projects: [{ id: "project-a", name: "Alpha" }] }),
 }));
+/** This view's worktrees (project A), by id; null while the view has none. */
+let localWorktrees: Map<string, { name: string; branch?: string }> | null = null;
 vi.mock("@/hooks/useWorktreeStore", () => ({
-  useWorktreeStoreOptional: (_select: unknown, fallback: unknown) => fallback,
+  useWorktreeStoreOptional: (
+    select: (state: { worktrees: NonNullable<typeof localWorktrees> }) => unknown,
+    fallback: unknown
+  ) => (localWorktrees === null ? fallback : select({ worktrees: localWorktrees })),
 }));
 
 const getAllTerminals = vi.fn<() => Promise<BackendTerminalInfo[]>>();
@@ -198,6 +205,30 @@ function waitFor(check: () => void) {
   return vi.waitFor(check, { timeout: 4000 });
 }
 
+/** This computer's runs, across its projects, as main's fleet snapshot last reported them. */
+function fleet(
+  runs: (Partial<FleetRunRow> & Pick<FleetRunRow, "runId" | "workspaceId">)[],
+  degraded = false
+) {
+  act(() => {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: runs.map((run) => ({ spawnedAt: 0, cwd: "/repos/alpha", ...run })),
+        changedAt: 0,
+        degraded,
+        lastSuccessfulAt: 0,
+      },
+    });
+  });
+}
+
+/** A row's quiet line: who asked, and where. */
+function originOf(alias: string) {
+  return (
+    rowNamed(alias).querySelector('[data-testid="decisions-inbox-row-origin"]')?.textContent ?? ""
+  );
+}
+
 function push(list: DecisionQuestionList) {
   act(() => {
     for (const listener of [...listListeners]) listener(list);
@@ -267,6 +298,8 @@ beforeEach(() => {
   decisionsOn = true;
   remote = false;
   panels = {};
+  localWorktrees = null;
+  useFleetSnapshotStore.setState({ snapshot: null });
   listListeners = [];
   statusListeners = [];
   useDecisionsInboxStore.setState({ isOpen: false, request: { terminalId: null, seq: 0 } });
@@ -387,11 +420,13 @@ describe("DecisionsInboxDialog", () => {
     expect(own.textContent).not.toContain("Alpha (as asked)");
     expect(own.textContent).toContain("feature-x");
     expect(own.textContent).toContain("Waiting for an answer");
-    // The agent is named by its mark; the dot between project and worktree is hidden from assistive technology.
+    // The agent is named in words beside its mark (#18039), and the dots between agent, project
+    // and worktree are hidden from assistive technology.
+    expect(drawnText(own)).toContain(getEffectiveAgentConfig("claude")!.name);
     const dots = Array.from(own.querySelectorAll("span")).filter(
       (span) => span.textContent?.trim() === "·"
     );
-    expect(dots).toHaveLength(1);
+    expect(dots).toHaveLength(2);
     for (const dot of dots) expect(dot.getAttribute("aria-hidden")).toBe("true");
     // Another project's question keeps the name it was asked under, and its own agent.
     const other = rowNamed("q-3");
@@ -411,6 +446,185 @@ describe("DecisionsInboxDialog", () => {
     // One read of the lines, by reference, for every row.
     expect(getQuestionSummariesByReference).toHaveBeenCalledOnce();
     expect(getQuestionSummariesByReference.mock.calls[0]![0].references).toHaveLength(3);
+  });
+
+  describe("telling two agents in one place apart (#18039)", () => {
+    const CLAUDE = getEffectiveAgentConfig("claude")!.name;
+    // Two Claude runs in the main checkout, whose folder is the project's own name.
+    const TWINS: DecisionQuestionList = {
+      revision: 1,
+      questions: [
+        item("question-2", 2, OPEN, { worktreeRoot: "/repos/alpha" }),
+        item("question-4", 4, OPEN, {
+          reference: reference("question-4", { terminalId: "t4" }),
+          worktreeRoot: "/repos/alpha",
+          askedAt: "2026-11-02T10:30:00.000Z",
+        }),
+      ],
+    };
+    const INDEXING = {
+      runId: "t1",
+      workspaceId: "project-a",
+      agentId: "claude" as const,
+      agentState: "waiting" as const,
+      title: "Index migrations",
+      titleMode: "user" as const,
+    };
+    const AUTH = {
+      runId: "t4",
+      workspaceId: "project-a",
+      agentId: "claude" as const,
+      agentState: "waiting" as const,
+      title: CLAUDE,
+      lastObservedTitle: "Fix auth tests",
+    };
+
+    function headerOrigin() {
+      return screen.getByTestId("decisions-inbox-detail-origin").textContent ?? "";
+    }
+
+    beforeEach(() => {
+      listQuestions.mockResolvedValue(TWINS);
+    });
+
+    it("names each row and the detail by the pane that asked, ahead of the project", async () => {
+      fleet([INDEXING, AUTH]);
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(originOf("q-2")).toBe(`${CLAUDE} in “Index migrations” · Alpha`);
+      expect(originOf("q-4")).toBe(`${CLAUDE} in “Fix auth tests” · Alpha`);
+      await waitFor(() => expect(headerOrigin()).toBe("“Index migrations” · Alpha"));
+      fireEvent.click(rowNamed("q-4"));
+      await waitFor(() => expect(headerOrigin()).toBe("“Fix auth tests” · Alpha"));
+
+      // A retitle reaches the row as the fleet reports it, and only that pane's.
+      fleet([{ ...INDEXING, title: "Schema backfill" }, AUTH]);
+      expect(originOf("q-2")).toBe(`${CLAUDE} in “Schema backfill” · Alpha`);
+      expect(originOf("q-4")).toBe(`${CLAUDE} in “Fix auth tests” · Alpha`);
+      // A pane no longer on this computer has no title to give.
+      fleet([{ ...INDEXING, title: "Schema backfill" }]);
+      expect(originOf("q-4")).toBe(`${CLAUDE} · Alpha`);
+      expect(headerOrigin()).toBe("Alpha");
+    });
+
+    it("titles another project's question from that project's own run", async () => {
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [
+          item("question-3", 3, OPEN, {
+            reference: reference("question-3", { projectId: "project-b", terminalId: "t9" }),
+            projectLabel: "Beta",
+          }),
+        ],
+      });
+      fleet([
+        { ...INDEXING, runId: "t8", workspaceId: "project-b", title: "Another pane" },
+        { ...INDEXING, runId: "t9", workspaceId: "project-b", title: "Billing" },
+      ]);
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(1));
+      expect(originOf("q-3")).toBe(`${CLAUDE} in “Billing” · feature-x · Beta`);
+      await waitFor(() => expect(headerOrigin()).toBe("“Billing” · feature-x · Beta"));
+    });
+
+    it("never takes a title from a run in another project or on another machine with the same id", async () => {
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [
+          TWINS.questions[0]!,
+          item("question-4", 4, OPEN, {
+            reference: reference("question-4", { hostId: "qhost_studio_0001", terminalId: "t4" }),
+            remoteHost: { hostId: "studio", name: "Studio", connected: true },
+            worktreeRoot: "/repos/alpha",
+          }),
+        ],
+      });
+      fleet([
+        { ...INDEXING, workspaceId: "project-b", title: "Elsewhere" },
+        { ...INDEXING, runId: "t4", title: "Local pane" },
+      ]);
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(originOf("q-2")).toBe(`${CLAUDE} · Alpha`);
+      expect(originOf("q-4")).toBe(`${CLAUDE} on Studio · alpha · Alpha (as asked)`);
+    });
+
+    it("keeps only a title the person gave a pane that another agent has taken over", async () => {
+      fleet([
+        {
+          ...INDEXING,
+          agentId: "codex",
+          title: "Codex",
+          titleMode: "default",
+          lastObservedTitle: "Migrate billing",
+        },
+      ]);
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(originOf("q-2")).toBe(`${CLAUDE} · Alpha`);
+      fleet([{ ...INDEXING, agentId: "codex", lastObservedTitle: "Migrate billing" }]);
+      expect(originOf("q-2")).toBe(`${CLAUDE} in “Index migrations” · Alpha`);
+    });
+
+    it("keeps a title through a fleet read that came back incomplete, and drops it once a full one has no pane", async () => {
+      fleet([INDEXING]);
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(originOf("q-2")).toBe(`${CLAUDE} in “Index migrations” · Alpha`);
+      fleet([INDEXING], true);
+      expect(originOf("q-2")).toBe(`${CLAUDE} in “Index migrations” · Alpha`);
+      fleet([]);
+      expect(originOf("q-2")).toBe(`${CLAUDE} · Alpha`);
+    });
+
+    it("puts a closed question's outcome after who asked, and says it once", async () => {
+      listQuestions.mockResolvedValue({
+        revision: 1,
+        questions: [
+          item(
+            "question-1",
+            1,
+            { kind: "settled", outcome: "expired" },
+            { worktreeRoot: "/repos/alpha", settledAt: "2026-11-02T11:00:00Z" }
+          ),
+        ],
+      });
+      fleet([INDEXING]);
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(1));
+      expect(originOf("q-1")).toBe(`${CLAUDE} in “Index migrations” · Expired unanswered · Alpha`);
+      expect(nameOf(rowNamed("q-1")).match(/Expired unanswered/g)).toHaveLength(1);
+    });
+
+    it("names a Remote Host's question by its Host whether or not it's connected, and by its own place", async () => {
+      // This view knows worktree w1 by another name: a Host's question keeps the folder it was asked in.
+      localWorktrees = new Map([["w1", { name: "alpha-local", branch: "feature/local" }]]);
+      const host = (connected: boolean) =>
+        item("question-4", 4, OPEN, {
+          reference: reference("question-4", { hostId: "qhost_studio_0001", terminalId: "t4" }),
+          remoteHost: { hostId: "studio", name: "Studio", connected },
+          askedAt: "2026-11-02T10:30:00.000Z",
+        });
+      const local = item("question-2", 2, OPEN);
+      listQuestions.mockResolvedValue({ revision: 1, questions: [local, host(true)] });
+      open();
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(originOf("q-2")).toBe(`${CLAUDE} · feature/local · Alpha`);
+      // Its project as the Host asked it, never a local one that shares its id.
+      expect(originOf("q-4")).toBe(`${CLAUDE} on Studio · feature-x · Alpha (as asked)`);
+      fireEvent.click(rowNamed("q-4"));
+      await waitFor(() => expect(headerOrigin()).toBe("On Studio · feature-x · Alpha (as asked)"));
+
+      push({ revision: 2, questions: [local, host(false)] });
+      await waitFor(() =>
+        expect(originOf("q-4")).toBe(
+          `${CLAUDE} on Studio · Away, as last reported · feature-x · Alpha (as asked)`
+        )
+      );
+      expect(headerOrigin()).toBe(
+        "On Studio · Away, as last reported · feature-x · Alpha (as asked)"
+      );
+    });
   });
 
   it("shows a History row with no close time by when it was asked, and says so (#18025)", async () => {
@@ -1613,12 +1827,25 @@ describe("DecisionsInboxDialog", () => {
     it("offers nothing in a Remote Host's window for this computer's own question, and names questions as they were asked", async () => {
       remote = true;
       panels = { t1: { location: "grid" } };
+      // The window's runs are the Host's, whatever their ids: none titles this computer's question.
+      fleet([
+        {
+          runId: "t1",
+          workspaceId: "project-a",
+          agentId: "claude",
+          title: "Host pane",
+          titleMode: "user",
+        },
+      ]);
       open();
       await screen.findByTestId("decision-question-content");
       expect(screen.queryByTestId("decisions-inbox-go-to-terminal")).toBeNull();
       expect(getAllTerminals).not.toHaveBeenCalled();
       // Its projects are another computer's, whatever their ids.
       expect(rowNamed("q-2").textContent).toContain("Alpha (as asked)");
+      expect(originOf("q-2")).toBe(
+        `${getEffectiveAgentConfig("claude")!.name} · feature-x · Alpha (as asked)`
+      );
     });
 
     describe("across machines whose ids repeat (#18049)", () => {
