@@ -21,6 +21,7 @@ import type {
   DecisionsClaimRefusal,
   DecisionsConnectResult,
   DecisionsKeyStorageFailure,
+  DecisionsKitCoverage,
   DecisionsKitRefusal,
   DecisionsRelayCheck,
   DecisionsRelayUnreachableReason,
@@ -46,12 +47,14 @@ export type SetupKeyStore = Pick<
 export type DecisionsConnectFailure = Exclude<DecisionsConnectResult, { result: "saved" }>;
 
 /**
- * A setup's end: the identity it sealed (or found sealed already), and
- * whether the recovery kit it came from holds that identity whole, or what
- * stopped it. Only a restore's kit can count; a claim has none yet.
+ * A setup's end: the identity it sealed (or found sealed already), and the
+ * epochs of the recovery kit it came from when that kit holds the identity
+ * whole (null otherwise), or what stopped it. Only a restore's kit can
+ * count; a claim has none yet.
  */
 export type RelaySetupOutcome =
-  { identity: RelayConfig; kitVerified: boolean } | { failure: DecisionsConnectFailure };
+  | { identity: RelayConfig; verifiedKit: DecisionsKitCoverage | null }
+  | { failure: DecisionsConnectFailure };
 
 export interface RelaySetupOptions {
   keys: SetupKeyStore;
@@ -320,7 +323,7 @@ export async function claimDecisionsRelay(
   if (stored && !staged) {
     // Sealed by a setup whose setting didn't save: taken up as it is.
     const same = isOwner(stored) && normalizeRelayOrigin(stored.config.relayOrigin) === origin;
-    return same ? { identity: stored.config, kitVerified: false } : failed(conflictWith(stored));
+    return same ? { identity: stored.config, verifiedKit: null } : failed(conflictWith(stored));
   }
   if (staged && normalizeRelayOrigin(staged.config.relayOrigin) !== origin) {
     return failed(conflictWith(staged));
@@ -359,7 +362,7 @@ export async function claimDecisionsRelay(
       store,
       fetch: requests.fetch,
     });
-    return { identity: identity.config, kitVerified: false };
+    return { identity: identity.config, verifiedKit: null };
   } catch (error) {
     return failed(await claimFailure(error, origin, keys, stagedBefore, stageSaved, requests));
   }
@@ -573,6 +576,29 @@ export function kitCovers(kit: StoredIdentity, held: StoredIdentity): boolean {
 }
 
 /**
+ * The epochs a stored identity holds, by number (#18063). Of keys a kit was
+ * checked against, it is what the kit was proven to hold byte for byte: an
+ * epoch only the kit held may hold a key these keys never will.
+ */
+export function kitCoverage(stored: StoredIdentity): DecisionsKitCoverage {
+  const epochs = [...new Set(stored.epochs.map((entry) => entry.epoch))].sort((a, b) => a - b);
+  return { currentEpoch: stored.currentEpoch, epochs };
+}
+
+/**
+ * A kit proven to hold `kit`'s epochs still covers keys holding `held`'s:
+ * the same current epoch, and no epoch outside it. Keys here only gain
+ * epochs, each with a key made for it, so one the kit wasn't proven to hold
+ * is one it lacks.
+ */
+export function coverageHolds(kit: DecisionsKitCoverage, held: DecisionsKitCoverage): boolean {
+  return (
+    kit.currentEpoch === held.currentEpoch &&
+    held.epochs.every((epoch) => kit.epochs.includes(epoch))
+  );
+}
+
+/**
  * Restores an owner identity from a recovery kit and seals it (#16006).
  * Everything is proven before anything is saved: the kit opens with the
  * passphrase, holds a confirmed owner identity for the relay that was
@@ -650,8 +676,16 @@ export async function restoreDecisionsIdentity(
 
   // The kit verifies only if it holds the keys kept here: a newer sealed copy
   // can hold epochs it lacks.
-  if (held) return { identity: held.config, kitVerified: kitCovers(stored, held) };
+  if (held) {
+    return {
+      identity: held.config,
+      verifiedKit: kitCovers(stored, held) ? kitCoverage(held) : null,
+    };
+  }
   const saved = await keyCall(() => keys.save(stored));
   if ("failure" in saved) return saved;
-  return { identity: stored.config, kitVerified: kitCovers(stored, stored) };
+  return {
+    identity: stored.config,
+    verifiedKit: kitCovers(stored, stored) ? kitCoverage(stored) : null,
+  };
 }

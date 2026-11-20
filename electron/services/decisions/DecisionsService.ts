@@ -49,6 +49,7 @@ import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js"
 import { DecisionsPhoneImages, erasePhoneImages, phoneImageRootsFile } from "./phoneImages.js";
 import { KeyRotations } from "./keyRotation.js";
 import { decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
+import { observedOwnerKeys, sameOwnerKeys, type ObservedOwnerKeys } from "./recoveryKit.js";
 import {
   eraseLocalDecisionsData,
   finishInterruptedErase,
@@ -246,6 +247,12 @@ export interface DecisionsServiceOptions {
    * device event in the ledger, or a pending key rotation finished (#16010).
    */
   onDevicesChanged?: () => void;
+  /**
+   * The lifetime's key store read or wrote the keys, or found none
+   * (#18063): `getOwnerKeys` says what they hold now. Called in the key
+   * store's own turn, before the read or write that found them returns.
+   */
+  onOwnerKeys?: () => void;
   /** Makes the relay connection for a lifetime with a relay set up. */
   connect?: DecisionsConnectionFactory;
   /** The stored rows, for deleting them: the app database's unless a test says otherwise. */
@@ -321,6 +328,9 @@ export class DecisionsService {
   private readonly listeners = new Set<DecisionsStatusListener>();
   private readonly keyFilePath: () => string;
   private keyStore: SealedKeyStore | null = null;
+  /** What `keyStore` last read or wrote, kept with the store it came from. */
+  private ownerKeys: { from: SealedKeyStore; keys: ObservedOwnerKeys | null } | null = null;
+  private readonly onOwnerKeys: () => void;
   private rotations: KeyRotations | null = null;
   /** Local data is being deleted (#16025): no key store or rotation is made until it finishes. */
   private erasing = false;
@@ -433,6 +443,7 @@ export class DecisionsService {
     this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
     this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
     this.onDevicesChanged = options.onDevicesChanged ?? (() => {});
+    this.onOwnerKeys = options.onOwnerKeys ?? (() => {});
     this.openRows = options.openRows ?? openDecisionsRows;
     this.forgetIdentity =
       options.forgetIdentity ??
@@ -556,8 +567,29 @@ export class DecisionsService {
     }
     // A key store made now could write the key file back after it is deleted.
     if (this.erasing) throw new Error("Decisions is deleting its data, so its keys can't be used");
-    this.keyStore ??= new SealedKeyStore(this.keyFilePath());
+    if (!this.keyStore) {
+      const made: SealedKeyStore = new SealedKeyStore(this.keyFilePath(), (stored) => {
+        // A store let go of may still finish what was asked of it.
+        if (this.keyStore !== made) return;
+        const keys = observedOwnerKeys(stored);
+        const before = this.ownerKeys?.from === made ? this.ownerKeys.keys : undefined;
+        this.ownerKeys = { from: made, keys };
+        // Keys are read for every connection and answer; only a change is news.
+        if (before === undefined || !sameOwnerKeys(before, keys)) this.onOwnerKeys();
+      });
+      this.keyStore = made;
+    }
     return this.keyStore;
+  }
+
+  /**
+   * The owner identity's relay, ids and epochs as this lifetime's key store
+   * last read or wrote them (#18063); null until it has, and for keys that
+   * aren't an owner's. Never reads the keys itself.
+   */
+  getOwnerKeys(): ObservedOwnerKeys | null {
+    const seen = this.ownerKeys;
+    return seen !== null && seen.from === this.keyStore ? seen.keys : null;
   }
 
   /**

@@ -98,6 +98,13 @@ export function formatCountdown(msLeft: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+/**
+ * A new key is in force (#18063): a kit saved before holds only the old
+ * ones, so it can't read what the relay encrypts from now on.
+ */
+const NEW_KIT_NEEDED =
+  "A recovery kit saved before now doesn't hold it: save a new one under Data, below, and verify it.";
+
 /** A reason as a sentence: some arrive without their closing period. */
 function asSentence(text: string): string {
   return /[.!?…]$/.test(text) ? text : `${text}.`;
@@ -133,7 +140,7 @@ export function describeRevokeResult(
     case "revoked":
       return {
         finished: true,
-        message: `'${label}' is revoked. The relay holds a new key, sealed to each device that remains.`,
+        message: `'${label}' is revoked. The relay holds a new key, sealed to each device that remains. ${NEW_KIT_NEEDED}`,
       };
     case "not-found":
       return { finished: true, message: `The relay no longer lists '${label}' as paired.` };
@@ -150,7 +157,7 @@ export function describeRotateResult(result: DecisionsRotateKeysResult): {
   if (result.result === "rotated") {
     return {
       finished: true,
-      message: "The relay holds a new key, sealed to each paired device.",
+      message: `The relay holds a new key, sealed to each paired device. ${NEW_KIT_NEEDED}`,
     };
   }
   return { finished: false, message: describeRotationProblem(result) };

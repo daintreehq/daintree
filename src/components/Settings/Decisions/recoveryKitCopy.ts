@@ -3,6 +3,7 @@ import type {
   DecisionsKitExportResult,
   DecisionsKitIdentityProblem,
   DecisionsKitVerifyResult,
+  DecisionsStatus,
 } from "@shared/types/decisions";
 import type { RelayObservation } from "./relayCheckCopy";
 import { KEY_STORAGE } from "./relayIdentityCopy";
@@ -107,4 +108,41 @@ export function formatVerifiedAt(at: number): string {
     month: "short",
     day: "numeric",
   });
+}
+
+/**
+ * The recovery kit's own row: whether one was verified, and how it stands
+ * against this computer's keys (#18063). `mark` names a warning to show.
+ */
+export function describeKitStanding(
+  status: Pick<DecisionsStatus, "recoveryKitVerifiedAt" | "recoveryKitCoverage">
+): { label: string; detail: string; mark?: string } {
+  const at = status.recoveryKitVerifiedAt;
+  if (at === undefined) {
+    return {
+      label: "No recovery kit verified",
+      detail:
+        "Setup needs a saved kit verified, then a setup check that passes. Without a kit or this computer's keys, nothing on the relay can be read again.",
+      mark: "Not verified",
+    };
+  }
+  const verified = `Last verified ${formatVerifiedAt(at)}.`;
+  switch (status.recoveryKitCoverage) {
+    case "current":
+      return {
+        label: "Recovery kit verified",
+        detail: `${verified} Save and verify a new kit whenever you want another copy.`,
+      };
+    case "out-of-date":
+      return {
+        label: "Recovery kit out of date",
+        detail: `${verified} This computer's keys have rotated since, so that kit can't read what the relay encrypts with the new key. Save a new kit below and verify it.`,
+        mark: "Out of date",
+      };
+    default:
+      return {
+        label: "Recovery kit last verified",
+        detail: `${verified} It hasn't been compared with the keys this computer holds now. Verify your saved kit again to check it still holds them.`,
+      };
+  }
 }

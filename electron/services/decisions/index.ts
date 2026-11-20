@@ -66,6 +66,7 @@ import {
   type DecisionsDevicesResult,
   type DecisionsExportResult,
   type DecisionsKitExportResult,
+  type DecisionsKitCoverage,
   type DecisionsKitVerifyResult,
   type DecisionsLocalDeleteResult,
   type DecisionsPairingApproveResult,
@@ -222,7 +223,9 @@ import { composerDrafts } from "../composerDrafts.js";
 import { decisionsPolicyOf, type PolicySettings } from "./workflowGates.js";
 import {
   checkRecoveryKit,
+  kitStanding,
   makeRecoveryKit,
+  reconciledKit,
   recordedIdentity,
   type RecordedIdentity,
 } from "./recoveryKit.js";
@@ -791,6 +794,28 @@ function recordRevocation(relay: RelayBinding): void {
 }
 
 /**
+ * The owner's keys were read or written (#18063): a verified kit they've
+ * moved past is recorded as out of date, so it stays so after a restart, and
+ * Settings hears of it. Runs in the key store's turn, so a verification
+ * recorded since is the one compared. The running lifetime reads no
+ * `recoveryKit`, so it isn't told: that would reconnect one held back.
+ */
+function ownerKeysSeen(from: DecisionsService): void {
+  if (shutDown || service !== from || from.getRole() !== "owner") return;
+  const current = readDecisionsSettings(store);
+  const record = reconciledKit(current.recoveryKit, from.getOwnerKeys());
+  if (record !== current.recoveryKit) {
+    try {
+      writeDecisionsSettings(store, { ...current, recoveryKit: record });
+    } catch {
+      // The status compares the keys it last saw all the same, and the next read records it.
+      console.warn("[Decisions] The recovery kit's standing couldn't be recorded in settings");
+    }
+  }
+  publishStatus();
+}
+
+/**
  * Where `/mcp/decisions` reads a pane's bearer and run from, and holds the
  * listener through. Only a Decisions bearer (#16012) gets in: a control-surface
  * bearer, a plugin grant, a help or API-key token is never one.
@@ -1085,6 +1110,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         presence: presenceDeps,
         agentStopped: agentStoppedDeps,
         onDevicesChanged: publishDevicesChanged,
+        onOwnerKeys: () => ownerKeysSeen(next),
         diagnostics: setupDiagnostics,
         onModelChanged: publishModelChanged,
         onQuestionPolicyChanged: publishHostRuntime,
@@ -1137,8 +1163,7 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
   };
   const keyFile = observed.state !== "off" && owned !== null ? await owned.hasKeyFile() : null;
   // A verification for keys known to be gone protects nothing.
-  const kitVerifiedAt =
-    settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit.verifiedAt : null;
+  const kit = settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit : null;
   // Nor does a check of them.
   const checked = settings.setupCheck !== null && keyFile !== false ? settings.setupCheck : null;
   const deploy = relayDeploys.snapshot();
@@ -1150,7 +1175,12 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
     ...(settings.holdPhonePushes ? {} : { holdPhonePushes: false }),
     ...(settings.agentStoppedPushes ? { agentStoppedPushes: true } : {}),
     ...(keyFile === true ? { keysStored: true } : {}),
-    ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
+    ...(kit !== null
+      ? {
+          recoveryKitVerifiedAt: kit.verifiedAt,
+          recoveryKitCoverage: kitStanding(kit, owned?.getOwnerKeys() ?? null),
+        }
+      : {}),
     ...(checked !== null
       ? { setupCheck: { checkedAt: checked.checkedAt, failedStep: checked.failedStep } }
       : {}),
@@ -1846,12 +1876,13 @@ async function setupKeys(): Promise<{ service: DecisionsService; keys: SetupKeyS
  * minted for this computer if it has none. The keys are saved first, so a
  * setting that fails to save leaves them for the next attempt to take up.
  * The identity is unverified unless the kit it was restored from holds it
- * whole; a claim always needs a kit saved and verified to finish (#16007).
+ * whole (`verifiedKit`, the epochs it was proven to hold); a claim always
+ * needs a kit saved and verified to finish (#16007).
  */
 function recordIdentity(
   running: DecisionsService,
   config: RelayConfig,
-  kitVerified: boolean
+  verifiedKit: DecisionsKitCoverage | null
 ): DecisionsSettings {
   const current = readDecisionsSettings(store);
   const relayOrigin = normalizeRelayOrigin(config.relayOrigin);
@@ -1867,13 +1898,17 @@ function recordIdentity(
       revokedAt: null,
       setupCheck: null,
       recoveryKit:
-        kitVerified && relayOrigin !== null
-          ? {
-              verifiedAt: Date.now(),
-              relayOrigin,
-              installationId: config.installationId,
-              deviceId: config.deviceId,
-            }
+        verifiedKit !== null && relayOrigin !== null
+          ? reconciledKit(
+              {
+                verifiedAt: Date.now(),
+                relayOrigin,
+                installationId: config.installationId,
+                deviceId: config.deviceId,
+                coverage: verifiedKit,
+              },
+              running.getOwnerKeys()
+            )
           : null,
     });
   } catch {
@@ -1910,7 +1945,7 @@ function runSetup(run: SetupRun, stillWanted?: () => boolean): Promise<Decisions
       const outcome = await run({ keys, signal: controller.signal });
       if ("failure" in outcome) return outcome.failure;
       if (shutDown) throw setupRefused();
-      recordIdentity(running, outcome.identity, outcome.kitVerified);
+      recordIdentity(running, outcome.identity, outcome.verifiedKit);
       return { result: "saved", status: await getDecisionsStatus() };
     } finally {
       setups.delete(controller);
@@ -2945,7 +2980,11 @@ export function verifyRecoveryKit(
     try {
       saved = writeDecisionsSettings(store, {
         ...current,
-        recoveryKit: { verifiedAt: Date.now(), ...checked.verified },
+        // Keys a rotation saved since the check are compared now; any saved later, when they land.
+        recoveryKit: reconciledKit(
+          { verifiedAt: Date.now(), ...checked.verified, coverage: checked.coverage },
+          running.getOwnerKeys()
+        ),
       });
     } catch {
       throw new AppError({

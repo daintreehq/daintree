@@ -327,13 +327,20 @@ function isMissing(error: unknown): boolean {
  * store's on the same file. `close` ends the store for
  * the lifetime that made it: what was already asked finishes, anything later
  * is refused.
+ *
+ * `observe`, when given, hears the keys this store read or wrote, or null
+ * once it found or left none, in the operation's own turn, so what it heard
+ * last is what the file holds as far as this store knows.
  */
 export class SealedKeyStore implements KeyStore {
   private weakConfirmed = false;
   private closed = false;
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(readonly filePath: string) {}
+  constructor(
+    readonly filePath: string,
+    private readonly observe?: (stored: StoredIdentity | null) => void
+  ) {}
 
   /**
    * What `save` would seal with right now. May show the OS keychain's prompt;
@@ -363,7 +370,9 @@ export class SealedKeyStore implements KeyStore {
   load(): Promise<StoredIdentity | null> {
     return this.enqueue(async () => {
       const envelope = await this.readEnvelope();
-      return envelope ? await openEnvelope(envelope) : null;
+      const stored = envelope ? await openEnvelope(envelope) : null;
+      this.heard(stored);
+      return stored;
     });
   }
 
@@ -408,6 +417,7 @@ export class SealedKeyStore implements KeyStore {
       await resilientAtomicWriteFile(this.filePath, JSON.stringify(envelope), "utf-8", {
         mode: OWNER_RW_FILE_MODE,
       });
+      this.heard(next);
     });
   }
 
@@ -420,6 +430,7 @@ export class SealedKeyStore implements KeyStore {
       } catch (error) {
         if (!isMissing(error)) throw error;
       }
+      this.heard(null);
     });
   }
 
@@ -440,6 +451,7 @@ export class SealedKeyStore implements KeyStore {
       } catch (error) {
         if (!isMissing(error)) throw error;
       }
+      this.heard(null);
       await syncParentDirectory(this.filePath);
       return true;
     });
@@ -449,6 +461,15 @@ export class SealedKeyStore implements KeyStore {
   async close(): Promise<void> {
     this.closed = true;
     await this.queue;
+  }
+
+  /** What an observer does with the keys never fails the read or write that found them. */
+  private heard(stored: StoredIdentity | null): void {
+    try {
+      this.observe?.(stored);
+    } catch {
+      console.warn("[Decisions] Couldn't note the keys this computer holds");
+    }
   }
 
   private async readEnvelope(): Promise<KeyFileEnvelope | null> {

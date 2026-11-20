@@ -153,6 +153,13 @@ export const DECISIONS_MODEL_ADAPTERS = ["claude", "codex", "gemini"] as const;
 
 export type DecisionsModelAdapter = (typeof DECISIONS_MODEL_ADAPTERS)[number];
 
+/** The key epochs a recovery kit was proven to hold, by number (#18063). Never a key. */
+export interface DecisionsKitCoverage {
+  currentEpoch: number;
+  /** Ascending, without repeats, and including `currentEpoch`. */
+  epochs: number[];
+}
+
 /** A verified recovery kit, recorded by the identity it held. Never the kit or its passphrase. */
 export interface DecisionsRecoveryKitRecord {
   /** Epoch ms. */
@@ -160,6 +167,16 @@ export interface DecisionsRecoveryKitRecord {
   relayOrigin: string;
   installationId: string;
   deviceId: string;
+  /**
+   * The epochs of this computer's keys the kit held, byte for byte, when it
+   * was checked; absent from a verification recorded before #18063.
+   */
+  coverage?: DecisionsKitCoverage;
+  /**
+   * This computer's keys were seen holding an epoch the kit lacks, or at
+   * another current epoch: a key rotation or revocation moved past the kit.
+   */
+  outOfDate?: true;
 }
 
 /** A finished setup check, recorded by the identity it checked: when, and the step that failed if one did. */
@@ -240,6 +257,16 @@ export interface DecisionsStatus {
    * identity, or its key file is known to be gone.
    */
   recoveryKitVerifiedAt?: number;
+  /**
+   * How the verified kit compares with this computer's keys (#18063),
+   * present with `recoveryKitVerifiedAt`: `current` while the keys read this
+   * run are ones it holds, `out-of-date` once a rotation or revocation was
+   * seen to move past it (remembered across restarts), and `unknown` until
+   * keys are read this run, or for a verification recorded before kits'
+   * epochs were whose keys have rotated. Setup reads only
+   * `recoveryKitVerifiedAt`, so an out-of-date kit holds nothing back.
+   */
+  recoveryKitCoverage?: "current" | "out-of-date" | "unknown";
   /**
    * The latest setup check that ran to the end for the relay set up here
    * (#16024). Absent until one has, or while its key file is known to be gone.

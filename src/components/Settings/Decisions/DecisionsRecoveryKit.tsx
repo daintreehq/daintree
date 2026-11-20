@@ -9,8 +9,8 @@ import { useRecoveryKit } from "./useRecoveryKit";
 import {
   MIN_KIT_PASSPHRASE_LENGTH,
   describeExportResult,
+  describeKitStanding,
   describeVerifyResult,
-  formatVerifiedAt,
 } from "./recoveryKitCopy";
 
 /** A kit is one identity, a few KiB; main refuses anything bigger. */
@@ -77,7 +77,7 @@ export function DecisionsRecoveryKit({
     if (focusRequest > 0 && !busy) focusField();
   }, [focusRequest, busy]);
 
-  const verifiedAt = status.recoveryKitVerifiedAt;
+  const standing = describeKitStanding(status);
 
   /** Every secret here goes as a request starts, whichever form sent it. */
   const clearSecrets = () => {
@@ -155,22 +155,18 @@ export function DecisionsRecoveryKit({
       </span>
       <SettingsRow
         id="decisions-recovery-kit-status"
-        label={verifiedAt !== undefined ? "Recovery kit verified" : "No recovery kit verified"}
+        label={standing.label}
         accessory={
-          verifiedAt === undefined ? (
+          standing.mark !== undefined ? (
             <SeverityMark
               severity="warning"
-              label="Not verified"
+              label={standing.mark}
               className="h-3.5 w-3.5"
               decorative
             />
           ) : undefined
         }
-        description={
-          verifiedAt !== undefined
-            ? `Last verified ${formatVerifiedAt(verifiedAt)}. Save and verify a new kit whenever you want another copy.`
-            : "Setup needs a saved kit verified, then a setup check that passes. Without a kit or this computer's keys, nothing on the relay can be read again."
-        }
+        description={standing.detail}
       />
       <SettingsRow
         id="decisions-recovery-kit-save"
