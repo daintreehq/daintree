@@ -167,6 +167,7 @@ import {
   writeDecisionsSettings,
 } from "./decisionsSettings.js";
 import type { AnswerDelivery, PaneSignal } from "./answerDelivery.js";
+import type { ReportedStop } from "./agentStoppedPushes.js";
 import type {
   DecisionsAgentStoppedDeps,
   DecisionsDeliveryDeps,
@@ -929,6 +930,60 @@ function agentStoppedPushesAllowed(): boolean {
   }
 }
 
+/**
+ * A Remote Host's agent as the agent-stopped batch names it (#17933): never
+ * one of this computer's terminal ids, which hold no NUL, nor another Host's.
+ */
+function hostStopKey(hostId: string, terminalId: string): string {
+  return `\0host\0${hostId}\0${terminalId}`;
+}
+
+function isHostStopKey(key: string): boolean {
+  return key.startsWith("\0host\0");
+}
+
+/** Host stops kept to take back if the port goes; the oldest go first, taken back as they go. */
+const MAX_HELD_HOST_STOPS = 4000;
+
+/**
+ * Hears connected Hosts' agents' stops through the Remote Hosts port, which
+ * comes and goes with Remote Hosts itself. A port withdrawn takes back every
+ * stop it passed on, as a link that ends does: none of them can be now.
+ */
+function watchHostStops(listener: (report: ReportedStop) => void): () => void {
+  let offPort: (() => void) | null = null;
+  const held = new Set<string>();
+  const release = (): void => {
+    offPort?.();
+    offPort = null;
+    for (const key of held) listener({ key, stopped: false });
+    held.clear();
+  };
+  const unwatch = watchDecisionsHostsPort((port) => {
+    release();
+    if (port === null) return;
+    offPort = port.onAgentStopChanges((hostId, change) => {
+      const key = hostStopKey(hostId, change.terminalId);
+      held.delete(key);
+      if (change.stopped) {
+        held.add(key);
+        if (held.size > MAX_HELD_HOST_STOPS) {
+          const evicted = held.values().next().value!;
+          held.delete(evicted);
+          listener({ key: evicted, stopped: false });
+        }
+      }
+      listener({ key, stopped: change.stopped });
+    });
+  });
+  return () => {
+    unwatch();
+    offPort?.();
+    offPort = null;
+    held.clear();
+  };
+}
+
 const agentStoppedDeps: DecisionsAgentStoppedDeps = {
   allowed: agentStoppedPushesAllowed,
   presence: readUserPresence,
@@ -942,6 +997,8 @@ const agentStoppedDeps: DecisionsAgentStoppedDeps = {
     }
   },
   putAside: (terminalId) => {
+    // The Host judged its own run's park and snooze, and takes the stop back if one comes later.
+    if (isHostStopKey(terminalId)) return false;
     const attention = getRunAttentionServiceRef();
     if (!attention) return false;
     return attention.getParkRecord(terminalId) !== undefined || attention.isSnoozed(terminalId);
@@ -967,6 +1024,7 @@ const agentStoppedDeps: DecisionsAgentStoppedDeps = {
     ];
     return () => offs.forEach((off) => off());
   },
+  watchReportedStops: watchHostStops,
 };
 
 // Turning desktop notifications off ends presence at once, and on starts it.

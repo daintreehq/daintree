@@ -3,7 +3,7 @@ import type { RemoteHostManager } from "../client/RemoteHostManager.js";
 import type { LinkSession } from "../link/session.js";
 import { store } from "../../store.js";
 import { sanitizeDecisionsSettings } from "../../services/decisions/decisionsSettings.js";
-import type { OwnerStateAnnouncement } from "../../types/decisionsHosts.js";
+import type { HostAgentStopChange, OwnerStateAnnouncement } from "../../types/decisionsHosts.js";
 import { setDecisionsHostsPort } from "../../window/serviceRefs.js";
 import { DecisionsHostsClient } from "./client.js";
 
@@ -13,6 +13,8 @@ export interface DecisionsHostsClientInstallDeps {
   sessionFor(hostId: string): LinkSession | null;
   /** The saved Decisions setting: the app's store unless a test says otherwise. */
   readSetting?: () => unknown;
+  /** Hosts' agents' stops (#17933), from the host summaries' client. */
+  onAgentStopChanges?(listener: (hostId: string, change: HostAgentStopChange) => void): () => void;
 }
 
 /**
@@ -52,6 +54,7 @@ export function installDecisionsHostsClient(deps: DecisionsHostsClientInstallDep
     },
     hold: (hostId) => deps.manager.hold(hostId),
     ownerState: () => ownerStateOf(readSetting()),
+    onAgentStopChanges: deps.onAgentStopChanges,
   });
   const stop = client.start();
   const unpublish = setDecisionsHostsPort(client);

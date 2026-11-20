@@ -939,6 +939,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       get agentUsage() {
         return isAgentUsageTrackingEnabled();
       },
+      // Always: whether anything here wants a host's stops is this Shell's to decide.
+      agentStopChanges: true,
     },
     views: createViewSink(hostForView),
     reverseRequests: answerReverseRequest,

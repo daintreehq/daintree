@@ -1399,8 +1399,23 @@ describe("startRemoteHosts", () => {
       registry: m.client.registry,
       manager: m.client.manager,
       sessionFor: m.client.sessionFor,
+      onAgentStopChanges: expect.any(Function),
     });
     expect(decisionsHosts.installDecisionsHost).not.toHaveBeenCalled();
+
+    // Hosts' agents' stops come from the summaries' client, read when Decisions asks (#17933).
+    const [deps] = decisionsHosts.installDecisionsHostsClient.mock.calls[0] as [
+      { onAgentStopChanges(listener: () => void): () => void },
+    ];
+    const listener = vi.fn();
+    expect(() => deps.onAgentStopChanges(listener)()).not.toThrow();
+    const offStops = vi.fn();
+    const onAgentStopChanges = vi.fn((_l: unknown) => offStops);
+    const offMetrics = registerRemoteService("hostMetrics", { onAgentStopChanges } as never);
+    deps.onAgentStopChanges(listener)();
+    expect(onAgentStopChanges).toHaveBeenCalledWith(listener);
+    expect(offStops).toHaveBeenCalledTimes(1);
+    offMetrics();
 
     const hostMode = getRemoteService("hostMode")!;
     await hostMode.startListening();

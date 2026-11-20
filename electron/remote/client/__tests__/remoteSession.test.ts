@@ -1564,6 +1564,7 @@ describe("remote session wiring", () => {
         terminalIds: [],
       }),
       onAgentWaiting: () => () => {},
+      onAgentStopChanges: () => () => {},
       notificationSettings: () => ({
         enabled: true,
         waitingEnabled: true,

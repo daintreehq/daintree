@@ -370,6 +370,9 @@ function startClient(options: StartRemoteHostsOptions): void {
       registry: client.registry,
       manager: client.manager,
       sessionFor: client.sessionFor,
+      // A host's agents stopping, for the owner's phone (#17933): only links already up.
+      onAgentStopChanges: (listener) =>
+        getRemoteService("hostMetrics")?.onAgentStopChanges(listener) ?? (() => {}),
     })
   );
   // Dictation into a host's pane reads the pane's context from that host (#14782).

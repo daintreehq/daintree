@@ -174,7 +174,7 @@ export function DecisionsQuestionsSection({
         <SettingsSwitchCard
           id="decisions-agent-stopped-pushes"
           title="Notify my phone when an agent stops"
-          subtitle="While you're away and outside quiet hours, your relay tells your phone only that an agent on this computer stopped, never which one"
+          subtitle="While you're away and outside quiet hours, your relay tells your phone only that an agent stopped, never which one. That covers this computer and the Remote Hosts it's connected to: one with a project open here, or with its notifications turned on."
           isEnabled={stopped.enabled}
           onChange={() => {
             if (!stoppedLocked) void stopped.set(!stopped.enabled);

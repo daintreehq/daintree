@@ -91,6 +91,11 @@ export interface LinkClientInfo {
    * reading usage for it. Absent from older Shells, which always want it.
    */
   agentUsage?: boolean;
+  /**
+   * This Shell reads `host.agent-stop-changed` (#17933), so the host may send
+   * it its agents' stops. Absent from older Shells, which are sent none.
+   */
+  agentStopChanges?: boolean;
 }
 
 export interface HelloMessage {

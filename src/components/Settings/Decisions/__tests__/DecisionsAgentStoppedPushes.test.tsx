@@ -97,6 +97,13 @@ describe("Decisions agent-stopped pushes switch (#17319)", () => {
     for (const promise of ["While you're away", "outside quiet hours", "never which one"]) {
       expect(described, promise).toContain(promise);
     }
+    // Which Hosts can report a stop: only those this computer is connected to (#17933).
+    for (const scope of [
+      "this computer and the Remote Hosts it's connected to",
+      "one with a project open here, or with its notifications turned on",
+    ]) {
+      expect(described, scope).toContain(scope);
+    }
   });
 
   it("turns on with one click, without a dialog, and off from its reset", async () => {
