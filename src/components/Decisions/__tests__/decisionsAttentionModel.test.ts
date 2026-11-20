@@ -310,6 +310,23 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
     expect(outcomeText(7, { result: "refused", reason: "uncertain" }, "timeout notice")).toBe(
       "Timeout notice for q-7 may already have been typed in, so it isn't typed again"
     );
+    expect(outcomeText(7, { result: "refused", reason: "changed" }, "timeout notice")).toBe(
+      "q-7 changed after this list was read, so nothing was done"
+    );
+    // The notice sent with them was replaced: only the follow-ups still wait.
+    expect(
+      outcomeText(
+        7,
+        {
+          result: "waiting",
+          terminalId: "p",
+          title: null,
+          waitsFor: "prompt",
+          followUpsOnly: true,
+        },
+        "timeout notice and follow-ups"
+      )
+    ).toBe("Follow-ups to q-7 go to its terminal, typed in at the agent's next prompt");
   });
 
   it("offers in Mark handled's confirmation only what a notice has", () => {

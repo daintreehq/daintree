@@ -767,8 +767,9 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     };
   };
 
+  // The item's token goes with it: main refuses once the question asks something else (#17944).
   const markHandled = (item: DecisionsAttentionItem) =>
-    void run(item, "handled", () => decisionsClient.markAnswerHandled(item.questionId));
+    void run(item, "handled", () => decisionsClient.markAnswerHandled(item.questionId, item.token));
 
   const confirmHandled = () => {
     if (handling === null) return;
@@ -782,7 +783,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     const { item, destination } = move;
     setMove(null);
     void run(item, "reassign", () =>
-      decisionsClient.reassignAnswer(item.questionId, destination.terminalId)
+      decisionsClient.reassignAnswer(item.questionId, destination.terminalId, item.token)
     );
   };
 

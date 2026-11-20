@@ -11,6 +11,7 @@ import {
   HANDLED_ANSWERS_META_KEY,
   answerNeedsAttention,
   answerPreviewOf,
+  attentionToken,
   copiedAnswerText,
   heldFollowUps,
   isHandled,
@@ -23,7 +24,7 @@ import {
   withoutHandled,
 } from "../attentionList.js";
 import { DECISION_BLOCK_START, DECISION_FOLLOWUP_START } from "../answerNotice.js";
-import { DECLINE, entry, message, messages, row as baseRow } from "./questionRows.js";
+import { DECLINE, SECRET, entry, message, messages, row as baseRow } from "./questionRows.js";
 
 /**
  * A question id as the library mints it: long enough for the id pattern the
@@ -245,6 +246,90 @@ describe("follow-ups that need a person (#16231)", () => {
     expect(new TextEncoder().encode(text!).length).toBeGreaterThan(64_000);
     expect(text!.split(DECISION_FOLLOWUP_START)).toHaveLength(17);
     expect(text).toContain("text: 15: é");
+  });
+});
+
+describe("a notice a reopen replaced (#17944)", () => {
+  /** An expiry of round 1 that stopped, then a reopen to round 2 that withdrew it, its status left as it was. */
+  const reopened = (over: Partial<QuestionRow> = {}) =>
+    row(1, {
+      question_revision: 2,
+      local_status: "open",
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      answers_json: serializeAnswers([
+        entry({ entry_id: "a-1", revision: 1, delivered: true }),
+        entry({
+          entry_id: "x-1",
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          revision: 1,
+          sealed: null,
+          deliver: false,
+        }),
+      ]),
+      ...over,
+    });
+
+  it("leaves no stall for a person, and keeps the open question in every feed", () => {
+    const rows = [reopened()];
+    // Every entry of the newest round isn't a replaced closure: an answer there was typed.
+    expect(answerNeedsAttention(rows[0]!, new Map())).toBe(true);
+    const closureOnly = reopened({
+      answers_json: serializeAnswers([
+        entry({ entry_id: "a-0", revision: 0, delivered: true }),
+        entry({
+          entry_id: "x-1",
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          revision: 1,
+          sealed: null,
+          deliver: false,
+        }),
+      ]),
+    });
+    expect(answerNeedsAttention(closureOnly, new Map())).toBe(false);
+    expect(threadNeedsAttention(closureOnly, new Map())).toBe(false);
+    expect(isHandled(closureOnly, new Map())).toBe(false);
+    expect(withoutHandled([closureOnly], new Map())).toEqual([closureOnly]);
+  });
+
+  it("still shows a stall an answer the new round couldn't take caused", () => {
+    const rejected = reopened({
+      error_code: "unknown_option",
+      answers_json: serializeAnswers([
+        entry({
+          entry_id: "x-1",
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          revision: 1,
+          sealed: null,
+          deliver: false,
+        }),
+      ]),
+    });
+    expect(answerNeedsAttention(rejected, new Map())).toBe(true);
+  });
+
+  it("gives a confirmation's token ids and states only, and a new one once the row asks something else", () => {
+    const held = attention(1);
+    const token = attentionToken(held, new Map());
+    expect(token).not.toContain(SECRET);
+    expect(attentionToken({ ...held, error_code: "relaunched" }, new Map())).toBe(token);
+    const corrected = {
+      ...held,
+      answers_json: serializeAnswers([
+        entry({ revision: 1, delivered: true }),
+        entry({ entry_id: "entry-2", revision: 2, correction: true }),
+      ]),
+    };
+    expect(attentionToken(corrected, new Map())).not.toBe(token);
+    expect(attentionToken({ ...held, delivery_status: "delivery-uncertain" }, new Map())).not.toBe(
+      token
+    );
   });
 });
 

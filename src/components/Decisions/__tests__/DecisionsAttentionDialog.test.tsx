@@ -58,6 +58,7 @@ function makeItem(
     followUps: [],
     canResume: true,
     canReassign: true,
+    token: `token-${alias}`,
     ...over,
   };
 }
@@ -202,7 +203,11 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
       fireEvent.click(within(asking).getByRole("button", { name: "Mark handled" }));
 
       await waitFor(() => expect(markAnswerHandled).toHaveBeenCalledTimes(1));
-      expect(markAnswerHandled).toHaveBeenCalledWith({ questionId: `qid-${alias}` });
+      // The token the item was read with goes too, so main refuses a question that changed since.
+      expect(markAnswerHandled).toHaveBeenCalledWith({
+        questionId: `qid-${alias}`,
+        expected: `token-${alias}`,
+      });
       await listedRows(2);
       await confirmGone();
 
@@ -257,7 +262,9 @@ describe("DecisionsAttentionDialog: Mark handled (#16638)", () => {
     fireEvent.click(markButton(3));
 
     expect(confirm()).toBeNull();
-    await waitFor(() => expect(markAnswerHandled).toHaveBeenCalledWith({ questionId: "qid-3" }));
+    await waitFor(() =>
+      expect(markAnswerHandled).toHaveBeenCalledWith({ questionId: "qid-3", expected: "token-3" })
+    );
     await listedRows(1);
     expect(screen.getByTestId("decisions-attention-outcome").textContent).toContain(
       "Answer to q-3 marked handled"

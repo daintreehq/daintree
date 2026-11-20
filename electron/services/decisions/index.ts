@@ -1219,7 +1219,7 @@ export function reassignDecisionsAnswer(
   payload: ReassignDecisionsAnswerPayload
 ): Promise<DecisionsAnswerOutcome> {
   return whileDelivering(
-    (delivery) => delivery.reassignAnswer(payload.questionId, payload.terminalId),
+    (delivery) => delivery.reassignAnswer(payload.questionId, payload.terminalId, payload.expected),
     NOT_RUNNING
   );
 }
@@ -1227,7 +1227,10 @@ export function reassignDecisionsAnswer(
 export function markDecisionsAnswerHandled(
   payload: MarkDecisionsAnswerHandledPayload
 ): Promise<DecisionsAnswerOutcome> {
-  return whileDelivering((delivery) => delivery.markHandled(payload.questionId), NOT_RUNNING);
+  return whileDelivering(
+    (delivery) => delivery.markHandled(payload.questionId, payload.expected),
+    NOT_RUNNING
+  );
 }
 
 const NOT_RUNNING: DecisionsAnswerOutcome = { result: "refused", reason: "not-running" };

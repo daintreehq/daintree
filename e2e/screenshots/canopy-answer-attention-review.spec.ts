@@ -322,6 +322,7 @@ function webhookItem(alias: number, question: string, text: string): DecisionsAt
     followUps: [],
     canResume: false,
     canReassign: true,
+    token: "token",
   };
 }
 
@@ -367,6 +368,7 @@ function attentionItems(asker: string, projectName: string): DecisionsAttentionI
       followUps: [],
       canResume: true,
       canReassign: true,
+      token: "token",
     },
   ];
 }

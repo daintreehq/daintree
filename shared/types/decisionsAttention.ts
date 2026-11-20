@@ -137,6 +137,12 @@ export interface DecisionsAttentionItem {
    * one that may already have been typed in.
    */
   canReassign: boolean;
+  /**
+   * What the item asks of the person as read, an opaque token of ids and
+   * states (#17944): sent back with Mark handled and Choose destination, so
+   * main refuses an action confirmed before the question asked something else.
+   */
+  token: string;
 }
 
 /**
@@ -172,10 +178,14 @@ export interface ReassignDecisionsAnswerPayload {
   questionId: string;
   /** The pane the person confirmed. */
   terminalId: string;
+  /** The item's `token` as the person saw it; refused as `changed` once it no longer holds. */
+  expected?: string;
 }
 
 export interface MarkDecisionsAnswerHandledPayload {
   questionId: string;
+  /** The item's `token` as the person saw it; refused as `changed` once it no longer holds. */
+  expected?: string;
 }
 
 /**
@@ -198,6 +208,11 @@ export type DecisionsAnswerOutcome =
       terminalId: string;
       title: string | null;
       waitsFor: "composer" | "prompt" | "host";
+      /**
+       * Only the follow-ups the action sent back still wait: the timeout
+       * notice sent with them no longer does, its round replaced (#17944).
+       */
+      followUpsOnly?: true;
     }
   | {
       result: "needs-attention";
@@ -220,5 +235,7 @@ export type DecisionsAnswerOutcome =
          * The question asked for advice and is still in that round (#17941): only
          * the agent that asked it, or a resume of its session, takes its outcome.
          */
-        | "asker-only";
+        | "asker-only"
+        /** It asks something else than when it was read (#17944): nothing was done. */
+        | "changed";
     };

@@ -2503,6 +2503,28 @@ describe("AnswerDelivery, a timeout notice that couldn't reach its agent (#17944
     await stopped(h.delivery);
   });
 
+  it("refuses to handle or move a notice once it asks something else than the person confirmed", async () => {
+    const h = setup({ advisory: settledAttempt(), listTerminals: true });
+    await advisoryExpired(h.store, Q1, 1);
+    await refusedWrite(h);
+    const [item] = await h.delivery.attentionItems();
+
+    await expect(h.delivery.markHandled(Q1, "a token read before a correction")).resolves.toEqual({
+      result: "refused",
+      reason: "changed",
+    });
+    await expect(h.delivery.reassignAnswer(Q1, PANE, "stale")).resolves.toEqual({
+      result: "refused",
+      reason: "changed",
+    });
+    expect(await h.delivery.attentionItems()).toHaveLength(1);
+    expect((await h.store.listAudit(500)).some((e) => e.event === "delivery.handled")).toBe(false);
+
+    await expect(h.delivery.markHandled(Q1, item!.token)).resolves.toEqual({ result: "handled" });
+    expect(await h.delivery.attentionItems()).toEqual([]);
+    await stopped(h.delivery);
+  });
+
   it("calls a retried notice a reopen replaced before it was typed resolved, never delivered or waiting", async () => {
     const h = setup({ advisory: settledAttempt(), listTerminals: true });
     await advisoryExpired(h.store, Q1, 1);

@@ -204,19 +204,20 @@ export function sameAttention(a: DecisionsAttentionItem, b: DecisionsAttentionIt
  */
 export function attentionFingerprint(
   questions: readonly {
-    reference: { hostId: string; questionId: string };
+    reference: { hostId: string; projectId: string; terminalId: string; questionId: string };
     standing: { kind: string; deliveryStatus?: string };
     stall: { answerRevision: number | null; followUpIds: string[]; reason: string } | null;
+    closureNotice?: { delivery: string; disposition: string | null } | null;
   }[]
 ): string {
   return JSON.stringify(
     questions
       .filter((question) => question.standing.kind === "needs-attention")
       .map((question) => [
-        question.reference.hostId,
-        question.reference.questionId,
+        question.reference,
         question.standing.deliveryStatus ?? null,
         question.stall,
+        question.closureNotice ?? null,
       ])
   );
 }
@@ -315,8 +316,15 @@ export function paneName(title: string | null, agent: string): string {
 export function outcomeText(
   alias: number,
   outcome: DecisionsAnswerOutcome,
-  subject: AttentionSubject = "answer"
+  asked: AttentionSubject = "answer"
 ): string {
+  // Only the follow-ups still wait when the notice sent with them was replaced (#17944).
+  const subject: AttentionSubject =
+    outcome.result === "waiting" && outcome.followUpsOnly === true
+      ? asked.endsWith("follow-ups")
+        ? "follow-ups"
+        : "follow-up"
+      : asked;
   const q = aliasLabel(alias);
   const what = `${capitalized(subject)} ${isNotice(subject) ? "for" : "to"} ${q}`;
   const plural = isPlural(subject);
@@ -355,6 +363,8 @@ export function outcomeText(
           return `That terminal is no longer running an agent, so ${q}'s ${subject} ${plural ? "weren't" : "wasn't"} sent`;
         case "asker-only":
           return `${q} asked for advice, so only the agent that asked it can take its ${subject}`;
+        case "changed":
+          return `${q} changed after this list was read, so nothing was done`;
       }
   }
 }

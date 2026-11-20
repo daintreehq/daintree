@@ -54,6 +54,7 @@ import {
   answerNeedsAttention,
   answerPreviewOf,
   answerRevision,
+  attentionToken,
   copiedAnswerText,
   heldFollowUps,
   markAnswerHandled,
@@ -63,6 +64,7 @@ import {
   readHandledAnswers,
   resumableReason,
   threadNeedsAttention,
+  type HandledAnswers,
   type OpenFollowUp,
 } from "./attentionList.js";
 import { sanitizeAnswerText } from "./answerNotice.js";
@@ -244,11 +246,14 @@ interface Tried {
   followUps: string[];
 }
 
-function triedOf(row: QuestionRow): Tried {
+/** As `retryPatch` sends them back: the answer slot's notices only while that slot needs a person. */
+function triedOf(row: QuestionRow, handled: HandledAnswers): Tried {
   return {
-    notices: pendingEntries(row)
-      .filter((entry) => entry.kind !== "answer")
-      .map((entry) => entry.entry_id),
+    notices: answerNeedsAttention(row, handled)
+      ? pendingEntries(row)
+          .filter((entry) => entry.kind !== "answer")
+          .map((entry) => entry.entry_id)
+      : [],
     followUps: heldFollowUps(row).map((message) => message.message_id),
   };
 }
@@ -528,6 +533,7 @@ export class AnswerDelivery {
         followUps,
         canResume: (actionable || noticeHeld) && (await this.resumable(row, code)),
         canReassign: actionable && !inAdvisoryRound(row),
+        token: attentionToken(row, handled),
       });
     }
     return items;
@@ -763,7 +769,7 @@ export class AnswerDelivery {
       const row = await this.store.getQuestion(questionId);
       const early = await this.actionable(row);
       if (early !== null || row === null) return early ?? { result: "resolved" as const };
-      tried = triedOf(row);
+      tried = triedOf(row, await readHandledAnswers(this.store));
       this.resume?.allowAgain(row.origin);
       await this.store.updateQuestion(questionId, await this.retryPatch(row));
       await this.owner.ctx.audit.log({
@@ -825,7 +831,11 @@ export class AnswerDelivery {
    * advisory round (#17941): only the run that stated the plan, or a resume
    * of its session, takes what is typed for it.
    */
-  async reassignAnswer(questionId: string, terminalId: string): Promise<DecisionsAnswerOutcome> {
+  async reassignAnswer(
+    questionId: string,
+    terminalId: string,
+    expected?: string
+  ): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
     const terminal = (await this.terminals()).find((candidate) => candidate.id === terminalId);
     const run = terminal === undefined ? null : this.runOf(terminal);
@@ -836,6 +846,9 @@ export class AnswerDelivery {
       const row = await this.store.getQuestion(questionId);
       const early = await this.actionable(row);
       if (early !== null || row === null) return early ?? { result: "resolved" as const };
+      if (await this.changedSince(row, expected)) {
+        return { result: "refused" as const, reason: "changed" as const };
+      }
       if (inAdvisoryRound(row))
         return { result: "refused" as const, reason: "asker-only" as const };
       const origin: QuestionOrigin = {
@@ -886,7 +899,7 @@ export class AnswerDelivery {
    * The library holds a thread's later follow-ups behind both, so they then
    * go on.
    */
-  async markHandled(questionId: string): Promise<DecisionsAnswerOutcome> {
+  async markHandled(questionId: string, expected?: string): Promise<DecisionsAnswerOutcome> {
     if (this.stopped) return { result: "refused", reason: "not-running" };
     return this.lock.run(async () => {
       const row = await this.store.getQuestion(questionId);
@@ -894,6 +907,7 @@ export class AnswerDelivery {
       const answerHeld = answerNeedsAttention(row, await readHandledAnswers(this.store));
       const held = new Set(heldFollowUps(row).map((message) => message.message_id));
       if (!answerHeld && held.size === 0) return { result: "resolved" };
+      if (await this.changedSince(row, expected)) return { result: "refused", reason: "changed" };
       if (answerHeld) await markAnswerHandled(this.store, row);
       const patch: Partial<QuestionRow> = answerHeld ? undelivered(row) : {};
       if (held.size > 0) {
@@ -912,6 +926,15 @@ export class AnswerDelivery {
       });
       return { result: "handled" };
     });
+  }
+
+  /**
+   * Whether `row` asks something else than the token the person confirmed
+   * against (#17944). No token, from a caller that showed none, checks nothing.
+   */
+  private async changedSince(row: QuestionRow, expected: string | undefined): Promise<boolean> {
+    if (expected === undefined) return false;
+    return attentionToken(row, await readHandledAnswers(this.store)) !== expected;
   }
 
   /** Null when a person can act on `row`'s answer and follow-ups; otherwise why not. */
@@ -1003,11 +1026,13 @@ export class AnswerDelivery {
     for (const entry of parseAnswers(row.answers_json)) {
       if (entry.delivered) left.add(entry.entry_id);
     }
-    if (tried.notices.some((id) => !left.has(id))) {
-      const stillTried =
-        live.some((entry) => tried.notices.includes(entry.entry_id)) ||
-        undelivered.some((message) => tried.followUps.includes(message.message_id));
-      if (!stillTried) return { result: "resolved" };
+    // A notice sent back that is neither typed nor still to be typed was replaced or handled meanwhile.
+    const lost = tried.notices.some((id) => !left.has(id));
+    const followUpsWait = undelivered.some((message) =>
+      tried.followUps.includes(message.message_id)
+    );
+    if (lost && !followUpsWait && !live.some((entry) => tried.notices.includes(entry.entry_id))) {
+      return { result: "resolved" };
     }
     const terminalId = row.origin.pane_id;
     const title =
@@ -1022,6 +1047,7 @@ export class AnswerDelivery {
       terminalId,
       title,
       waitsFor: row.delivery_status === "pending-host" ? "host" : queues ? "composer" : "prompt",
+      ...(lost && followUpsWait ? { followUpsOnly: true as const } : {}),
     };
   }
 

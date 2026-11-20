@@ -452,6 +452,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       followUps: [],
       canResume: false,
       canReassign: true,
+      token: "token",
     },
     {
       questionId: "qid-att-38-token",
@@ -483,6 +484,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       followUps: [],
       canResume: true,
       canReassign: true,
+      token: "token",
     },
     {
       questionId: "qid-att-39-queue",
@@ -514,6 +516,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       followUps: [],
       canResume: false,
       canReassign: false,
+      token: "token",
     },
     {
       questionId: "qid-att-40-unread",
@@ -539,6 +542,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       followUps: [],
       canResume: false,
       canReassign: false,
+      token: "token",
     },
   ];
 }
