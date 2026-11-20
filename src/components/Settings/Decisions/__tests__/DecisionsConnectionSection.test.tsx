@@ -15,7 +15,9 @@ import { DecisionsDisconnectDialog } from "../DecisionsDisconnectDialog";
 import { useRelayCheck } from "../useRelayCheck";
 
 /** The section with the relay check the tab hands it. */
-function DecisionsConnectionSection(props: Omit<ComponentProps<typeof ConnectionSection>, "relay">) {
+function DecisionsConnectionSection(
+  props: Omit<ComponentProps<typeof ConnectionSection>, "relay">
+) {
   const relay = useRelayCheck();
   return <ConnectionSection {...props} relay={relay} />;
 }

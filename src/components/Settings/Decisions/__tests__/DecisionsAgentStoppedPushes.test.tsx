@@ -189,7 +189,10 @@ describe("Decisions agent-stopped pushes switch (#17319)", () => {
       cleanup();
 
       await renderSection(status, {
-        devices: devicesRead([phone(), phone({ deviceId: "tablet-1", role: "tablet", pushEnabled: true })]),
+        devices: devicesRead([
+          phone(),
+          phone({ deviceId: "tablet-1", role: "tablet", pushEnabled: true }),
+        ]),
       });
       expect(described()).not.toContain(NO_PHONE);
     });
@@ -199,7 +202,9 @@ describe("Decisions agent-stopped pushes switch (#17319)", () => {
       expect(described()).not.toContain(NO_PHONE);
       cleanup();
 
-      await renderSection(status, { devices: devicesRead([phone()], "The relay couldn't be reached") });
+      await renderSection(status, {
+        devices: devicesRead([phone()], "The relay couldn't be reached"),
+      });
       expect(described()).not.toContain(NO_PHONE);
     });
 

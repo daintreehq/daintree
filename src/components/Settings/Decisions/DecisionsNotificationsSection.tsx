@@ -87,7 +87,11 @@ export function DecisionsNotificationsSection({
   const stoppedLocked = locked || stopped.saving;
   const stoppedFailure = stopped.failure;
   const openNotificationSettings = () => {
-    void actionService.dispatch("app.settings.openTab", { tab: "notifications" }, { source: "user" });
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "notifications" },
+      { source: "user" }
+    );
   };
   return (
     <SettingsSection title="Notifications" id="decisions-notifications">

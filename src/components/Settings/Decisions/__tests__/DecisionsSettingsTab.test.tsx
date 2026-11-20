@@ -591,7 +591,9 @@ describe("DecisionsSettingsTab", () => {
     const stopped = within(notifications).getByRole("switch", {
       name: /Notify my phone when an agent stops/,
     });
-    expect(within(questions).queryByRole("switch", { name: /Hold phone notifications/ })).toBeNull();
+    expect(
+      within(questions).queryByRole("switch", { name: /Hold phone notifications/ })
+    ).toBeNull();
     expect(
       within(questions).queryByRole("switch", { name: /Notify my phone when an agent stops/ })
     ).toBeNull();
