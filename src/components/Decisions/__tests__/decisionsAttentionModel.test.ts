@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  DecisionsAnswerDestination,
   DecisionsAttentionItem,
   DecisionsFollowUpPreview,
 } from "@shared/types/decisionsAttention";
@@ -7,10 +8,13 @@ import {
   attentionFingerprint,
   canCopy,
   copyLabel,
+  destinationGroups,
+  destinationRowDetail,
   fromLines,
   handledConfirmBody,
   handledConfirmTitle,
   handledNeedsConfirm,
+  moveConfirmBody,
   noticeDeliveryText,
   noticeOutcomeText,
   noticePlanText,
@@ -21,6 +25,7 @@ import {
   sameAttention,
   statusText,
   subjectOf,
+  toLines,
 } from "../decisionsAttentionModel";
 
 function followUp(over: Partial<DecisionsFollowUpPreview> = {}): DecisionsFollowUpPreview {
@@ -397,5 +402,89 @@ describe("a timeout notice in the needs-attention list (#17944)", () => {
     expect(originParts(unknown, null).pane).toBe("Claude on another computer");
     const here = { ...base, origin: { ...origin, otherHost: null } };
     expect(originParts(here, null).pane).toBe("Claude, terminal closed");
+  });
+});
+
+describe("Choose destination's menu and confirmation (#18056)", () => {
+  function destination(
+    terminalId: string,
+    over: Partial<DecisionsAnswerDestination> = {}
+  ): DecisionsAnswerDestination {
+    return {
+      terminalId,
+      title: terminalId,
+      agentId: "claude",
+      agentName: "Claude",
+      projectId: "helios",
+      projectName: "Helios",
+      worktreeId: "w",
+      worktreeName: "main",
+      askedHere: false,
+      waitsFor: "composer",
+      ...over,
+    };
+  }
+
+  it("promises the wait the chosen agent's delivery makes, for whatever moves, typed in once", () => {
+    for (const subject of ["answer", "follow-ups", "answer and follow-ups"] as const) {
+      const composer = moveConfirmBody(subject, "composer");
+      const prompt = moveConfirmBody(subject, "prompt");
+      for (const body of [composer, prompt]) {
+        expect(body).toContain(`types the ${subject} in`);
+        expect(body).toContain("only once");
+        expect(body).toContain("audit trail records the move");
+      }
+      expect(composer).toContain("composer is empty");
+      expect(composer).toContain("while it's working");
+      expect(composer).not.toContain("prompt");
+      expect(prompt).toContain("next prompt");
+      expect(prompt).not.toContain("composer");
+    }
+  });
+
+  it("puts the asking project's agents first, then each other project's in main's order, by id", () => {
+    const groups = destinationGroups(
+      [
+        destination("atlas-1", { projectId: "atlas", projectName: "Atlas" }),
+        destination("asker", { askedHere: true }),
+        destination("twin-1", { projectId: "twin", projectName: "Atlas" }),
+        destination("atlas-2", { projectId: "atlas", projectName: "Atlas" }),
+        destination("sibling"),
+        destination("nameless", { projectId: "unnamed", projectName: null }),
+      ],
+      "helios"
+    );
+    expect(
+      groups.map((group) => [group.label, group.destinations.map((d) => d.terminalId)])
+    ).toEqual([
+      ["Asking project · Helios", ["asker", "sibling"]],
+      ["Other project · Atlas", ["atlas-1", "atlas-2"]],
+      // Another project of the same name keeps a section of its own.
+      ["Other project · Atlas", ["twin-1"]],
+      ["Other project", ["nameless"]],
+    ]);
+  });
+
+  it("names no asking project when none of its agents are running, and no section for an empty list", () => {
+    expect(
+      destinationGroups(
+        [destination("atlas-1", { projectId: "atlas", projectName: null })],
+        "helios"
+      )
+    ).toEqual([
+      {
+        projectId: "atlas",
+        label: "Other project",
+        destinations: [expect.objectContaining({ terminalId: "atlas-1" })],
+      },
+    ]);
+    expect(destinationGroups([], "helios")).toEqual([]);
+  });
+
+  it("leaves the project to the menu's section label, and keeps it in the confirmation's To", () => {
+    const chosen = destination("atlas-1", { projectId: "atlas", projectName: "Atlas" });
+    expect(destinationRowDetail(chosen, "main")).toBe("Claude · main");
+    expect(destinationRowDetail(chosen, null)).toBe("Claude");
+    expect(toLines(chosen, "main").detail).toBe("Claude · Atlas · main");
   });
 });

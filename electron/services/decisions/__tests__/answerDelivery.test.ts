@@ -3256,6 +3256,40 @@ describe("AnswerDelivery follow-ups (#16231)", () => {
     expect(typed).toContain("text: And keep it compact.");
   });
 
+  it("lists the agents an answer can move to, asking pane, its worktree, its project, then the rest, each with what its delivery waits for (#18056)", async () => {
+    const h = setup({ listTerminals: true });
+    await answered(h.store, Q1, 1, "approve", {
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+    });
+    // Main's labels list each pane with its title, which the pty host's record lacks.
+    type Listed = Partial<NotifyTerminalInfo> & { title?: string };
+    h.client.terminals.set(PANE, {
+      ...h.client.terminals.get(PANE)!,
+      title: "Zed asker",
+    } as NotifyTerminalInfo);
+    const live = (id: string, info: Listed) => {
+      h.client.terminals.set(id, { ...atPrompt(), ...info } as NotifyTerminalInfo);
+      h.client.generations.set(id, 7);
+      h.principals.set(id, `principal-${id}`);
+    };
+    // Titles that would sort ahead of the panes nearer the asker.
+    live("pane-other", { title: "Aardvark", projectId: "project-2", worktreeId: "wt-9" });
+    live("pane-project", { title: "Ant", worktreeId: "wt-2", detectedAgentId: "gemini" });
+    live("pane-worktree", { title: "Yak" });
+
+    const listed = await h.delivery.answerDestinations(Q1);
+    expect(listed.result).toBe("listed");
+    const destinations = listed.result === "listed" ? listed.destinations : [];
+    expect(destinations.map((d) => [d.terminalId, d.askedHere, d.waitsFor])).toEqual([
+      [PANE, true, "composer"],
+      ["pane-worktree", false, "composer"],
+      // An agent that takes no line mid-turn waits for its prompt.
+      ["pane-project", false, "prompt"],
+      ["pane-other", false, "composer"],
+    ]);
+  });
+
   it("lets the follow-ups after an answer marked handled go on, the answer itself never typed", async () => {
     const h = setup({ listTerminals: true });
     await answered(h.store, Q1, 1, "approve", {

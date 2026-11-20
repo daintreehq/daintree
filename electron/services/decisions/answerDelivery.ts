@@ -242,6 +242,15 @@ function inAdvisoryRound(row: QuestionRow): boolean {
   }
 }
 
+/**
+ * What delivery waits for before typing into a live pane of `agentId`: an
+ * empty composer for an agent that takes a line mid-turn, else its prompt.
+ * The confirmation that moves an answer and the outcome after it both say this.
+ */
+function waitsForAgent(agentId: string | undefined): "composer" | "prompt" {
+  return wakeGateOptionsFor(agentId).acceptWorking === true ? "composer" : "prompt";
+}
+
 /** What a retry of `row` sends back to delivery: its notices (expiry, decline, never published) and held follow-ups, by id. */
 interface Tried {
   notices: string[];
@@ -816,11 +825,16 @@ export class AnswerDelivery {
         worktreeId: terminal.worktreeId ?? NO_WORKTREE,
         worktreeName: folderName(terminal.cwd),
         askedHere: terminal.id === row.origin.pane_id,
+        waitsFor: waitsForAgent(agentId),
       });
     }
     // The pane that asked, then its worktree, then its project, then the rest.
-    const rank = (d: DecisionsAnswerDestination) =>
-      d.askedHere ? 0 : d.projectId === row.origin.project_id ? 1 : 2;
+    const askingWorktree = row.origin.worktree_id;
+    const rank = (d: DecisionsAnswerDestination) => {
+      if (d.askedHere) return 0;
+      if (d.projectId !== row.origin.project_id) return 3;
+      return askingWorktree !== NO_WORKTREE && d.worktreeId === askingWorktree ? 1 : 2;
+    };
     destinations.sort((a, b) => rank(a) - rank(b) || a.title.localeCompare(b.title));
     return { result: "listed", destinations };
   }
@@ -1050,12 +1064,14 @@ export class AnswerDelivery {
     const waiting = live.length > 0 || undelivered.length > 0;
     if (!waiting) return { result: "delivered", terminalId, title };
     // The run that asked is the only one it is typed into, so its agent says what it waits on.
-    const queues = wakeGateOptionsFor(row.origin.agent_kind || undefined).acceptWorking === true;
     return {
       result: "waiting",
       terminalId,
       title,
-      waitsFor: row.delivery_status === "pending-host" ? "host" : queues ? "composer" : "prompt",
+      waitsFor:
+        row.delivery_status === "pending-host"
+          ? "host"
+          : waitsForAgent(row.origin.agent_kind || undefined),
       ...(lost && followUpsWait ? { followUpsOnly: true as const } : {}),
     };
   }

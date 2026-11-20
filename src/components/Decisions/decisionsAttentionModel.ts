@@ -298,6 +298,67 @@ export function destinationDetail(
   return parts.join(" · ");
 }
 
+/** A destination's second line in the menu, under its project's label: its agent, then its worktree. */
+export function destinationRowDetail(
+  destination: DecisionsAnswerDestination,
+  worktreeName: string | null
+): string {
+  return [agentLabel(destination), worktreeName].filter((part) => part !== null).join(" · ");
+}
+
+/** One project's agents in the destination menu, under the label that names it. */
+export interface DestinationGroup {
+  projectId: string;
+  label: string;
+  destinations: DecisionsAnswerDestination[];
+}
+
+/**
+ * The destination menu's sections (#18056): the asking project's agents
+ * first, then each other project's, each in the order main listed them, so
+ * an agent in another project is a visible choice. Grouped by id, so two
+ * projects of one name, or of none, keep a section each.
+ */
+export function destinationGroups(
+  destinations: readonly DecisionsAnswerDestination[],
+  askingProjectId: string
+): DestinationGroup[] {
+  const ordered = [
+    ...destinations.filter((d) => d.projectId === askingProjectId),
+    ...destinations.filter((d) => d.projectId !== askingProjectId),
+  ];
+  const groups = new Map<string, DestinationGroup>();
+  for (const destination of ordered) {
+    let group = groups.get(destination.projectId);
+    if (group === undefined) {
+      const kind = destination.projectId === askingProjectId ? "Asking project" : "Other project";
+      group = {
+        projectId: destination.projectId,
+        label: destination.projectName !== null ? `${kind} · ${destination.projectName}` : kind,
+        destinations: [],
+      };
+      groups.set(destination.projectId, group);
+    }
+    group.destinations.push(destination);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * What the move's confirmation promises (#18056): when the chosen agent's
+ * delivery types it in, as main read that agent, and that it goes in once.
+ */
+export function moveConfirmBody(
+  subject: AttentionSubject,
+  waitsFor: DecisionsAnswerDestination["waitsFor"]
+): string {
+  const when =
+    waitsFor === "composer"
+      ? "as soon as that agent's composer is empty, even while it's working"
+      : "at that agent's next prompt";
+  return `Daintree types the ${subject} in ${when}, and only once. The Decisions audit trail records the move.`;
+}
+
 /** A pane as a confirmation names it: its title, or its agent when it has none. */
 export function paneName(title: string | null, agent: string): string {
   return title !== null && title.trim() !== "" ? `“${title}”` : agent;
