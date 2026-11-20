@@ -1849,7 +1849,9 @@ describe("DecisionsInboxDialog", () => {
       });
       const writeText = vi.fn(async (_text: string) => {});
       Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-      onTestFinished(() => Reflect.deleteProperty(navigator, "clipboard"));
+      onTestFinished(() => {
+        Reflect.deleteProperty(navigator, "clipboard");
+      });
       await showStall();
       await waitFor(() =>
         expect(hostAttention).toHaveBeenCalledWith({ action: "read", reference: HOST_REFERENCE })
