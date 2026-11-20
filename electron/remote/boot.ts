@@ -62,7 +62,12 @@ import {
 } from "./worktreePort/attach.js";
 import { createLogger } from "../utils/logger.js";
 import { getAgentUsageReadouts } from "../services/agentUsage/AgentUsageReadouts.js";
+import {
+  isAgentUsageTrackingEnabled,
+  onAgentUsageTrackingChanged,
+} from "../services/agentUsage/AgentUsageTracking.js";
 import { createAgentUsageHostsSource } from "./metrics/agentUsageHosts.js";
+import { installAgentUsageDemandPush } from "./metrics/agentUsageDemand.js";
 
 const logger = createLogger("main:boot");
 
@@ -314,6 +319,13 @@ function startClient(options: StartRemoteHostsOptions): void {
   );
   // This machine's alert choices, sent to every host it opens a session to (#14701).
   teardowns.push(installNotificationPolicyPush(client.manager));
+  // Whether this machine tracks agent usage, so a host reads it only for a Shell that does (#17981).
+  teardowns.push(
+    installAgentUsageDemandPush(client.manager, {
+      read: isAgentUsageTrackingEnabled,
+      onChanged: (listener) => onAgentUsageTrackingChanged(() => listener()),
+    })
+  );
   // This computer's ssh-agent for a host's terminals, where its switch is on (#17432).
   const agentForwarding = installAgentForwardingClient({
     manager: client.manager,
@@ -363,15 +375,18 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Dictation into a host's pane reads the pane's context from that host (#14782).
   teardowns.push(installVoicePaneHostsClient({ sessionFor: client.sessionFor }));
   // The sidebar's usage readout takes in what every linked host reports (#17318).
+  const usageHosts = createAgentUsageHostsSource({
+    registry: client.registry,
+    manager: client.manager,
+    sessionFor: client.sessionFor,
+    metrics: () => getRemoteService("hostMetrics"),
+  });
+  teardowns.push(getAgentUsageReadouts().setRemoteSource(usageHosts));
+  // Tracking back on shows only what hosts report from then on (#17981).
   teardowns.push(
-    getAgentUsageReadouts().setRemoteSource(
-      createAgentUsageHostsSource({
-        registry: client.registry,
-        manager: client.manager,
-        sessionFor: client.sessionFor,
-        metrics: () => getRemoteService("hostMetrics"),
-      })
-    )
+    onAgentUsageTrackingChanged((enabled) => {
+      if (enabled) usageHosts.setAside();
+    })
   );
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
   const observeHosts = () => {

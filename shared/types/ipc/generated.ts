@@ -146,9 +146,17 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string, pinned: boolean];
     result: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
   };
+  "agent-usage:get-tracking": {
+    args: [];
+    result: import("./agentUsage.js").AgentUsageTrackingSnapshot;
+  };
   "agent-usage:set-following": {
     args: [payload: { following: boolean }];
     result: import("./agentUsage.js").AgentUsageSnapshot | null;
+  };
+  "agent-usage:set-tracking": {
+    args: [payload: { enabled: boolean }];
+    result: import("./agentUsage.js").AgentUsageTrackingSnapshot;
   };
   "app:clear-quarantined-panel": {
     args: [panelId: string];

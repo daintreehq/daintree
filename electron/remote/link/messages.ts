@@ -84,6 +84,12 @@ export interface LinkClientInfo {
    * sends it none higher. Absent from older Shells, which read three.
    */
   assistantSlots?: number;
+  /**
+   * Whether this Shell tracks agent usage (#17981), as it stood when the
+   * session opened; `agentUsage.demand` carries changes. Absent from older
+   * Shells, which always want it.
+   */
+  agentUsage?: boolean;
 }
 
 export interface HelloMessage {

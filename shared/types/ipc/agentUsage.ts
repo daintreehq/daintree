@@ -61,3 +61,14 @@ export interface AgentUsageSnapshot {
   /** Increases on every change, so a view can drop a seed a newer push overtook. */
   revision: number;
 }
+
+/**
+ * Whether this machine tracks its agents' usage (#17981): the sidebar's Usage
+ * section in every window drawn here, and the background reads behind it here
+ * and on every host this machine links to. On unless turned off.
+ */
+export interface AgentUsageTrackingSnapshot {
+  enabled: boolean;
+  /** Increases on every change, so a view can drop a read a newer push overtook. */
+  revision: number;
+}

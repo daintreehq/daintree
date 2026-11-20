@@ -1514,6 +1514,9 @@ export const CHANNELS = {
   // The sidebar's agent usage readout (#17318)
   AGENT_USAGE_SET_FOLLOWING: "agent-usage:set-following",
   AGENT_USAGE_CHANGED: "agent-usage:changed",
+  AGENT_USAGE_GET_TRACKING: "agent-usage:get-tracking",
+  AGENT_USAGE_SET_TRACKING: "agent-usage:set-tracking",
+  AGENT_USAGE_TRACKING_CHANGED: "agent-usage:tracking-changed",
 
   // The person's own prompt templates, from a folder on this machine (#16398)
   USER_PROMPT_TEMPLATES_LIST: "user-prompt-templates:list",

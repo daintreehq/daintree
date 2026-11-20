@@ -79,6 +79,7 @@ import { initAgentSettingsSync } from "@/services/agentSettingsSync";
 import { initPanelGridConfigSync } from "@/services/panelGridConfigSync";
 import { initKeybindingOverridesSync } from "@/services/keybindingOverridesSync";
 import { initAgentToolbarPinsSync } from "@/services/agentToolbarPinsSync";
+import { initAgentUsageTrackingSync } from "@/store/agentUsageTrackingStore";
 import { initAgentCliChoiceSync } from "@/services/agentCliChoiceSync";
 import { initAssistantIdentitySync } from "@/services/assistantIdentitySync";
 import {
@@ -735,6 +736,8 @@ export function initStoreOrchestrator(): () => void {
 
   // 6. This machine's toolbar agent pins (#14702), kept current across views.
   disposables.add(toDisposable(initAgentToolbarPinsSync()));
+  // This machine's agent usage tracking switch (#17981), kept current across views.
+  disposables.add(toDisposable(initAgentUsageTrackingSync()));
   // The assistants' names and emoji (#16213), kept current across views.
   disposables.add(toDisposable(initAssistantIdentitySync()));
   // Which copy of each agent's CLI launches (#16399), kept current across views.

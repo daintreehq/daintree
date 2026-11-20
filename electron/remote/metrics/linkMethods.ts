@@ -68,7 +68,18 @@ export const MetricsLinkMethod = {
    * from before it existed answers UNSUPPORTED.
    */
   PROCESS_INVENTORY: "host.process-inventory",
+  /**
+   * Shell → Host: whether this Shell now tracks agent usage (#17981). The
+   * HELLO said how it stood when the session opened; this carries changes.
+   * The host reads usage only while its own switch is on and some attached
+   * Shell wants it, and sends readings only to a Shell that does. A host from
+   * before it existed answers UNSUPPORTED and keeps sending them.
+   */
+  AGENT_USAGE_DEMAND: "host.agent-usage-demand",
 } as const;
+
+export const AgentUsageDemandSchema = z.object({ enabled: z.boolean() }).strict();
+export type AgentUsageDemand = z.infer<typeof AgentUsageDemandSchema>;
 
 const id = z.string().min(1).max(256);
 const name = z.string().max(1024);
