@@ -4,7 +4,7 @@ import type {
   ClaudeAgentUsageReading,
   CodexAgentUsageReading,
 } from "@shared/types/ipc/agentUsage";
-import { describeAgentUsage, THIS_MACHINE } from "../agentUsageFormat";
+import { describeAgentUsage } from "../agentUsageFormat";
 
 const NOW = new Date(2026, 10, 18, 12, 0, 0).getTime();
 
@@ -139,15 +139,18 @@ describe("describeAgentUsage", () => {
     expect(describeAgentUsage(codex({ usedPercent: 80 }), "Codex", NOW).attention).toBe(true);
   });
 
-  it("names every account on a login, and this machine in a window on a host", () => {
+  it("names every account on a login, and the host a reading came from", () => {
     const line = describeAgentUsage(
-      codex({ accountNames: ["Work", "Team"], isDefault: false }),
+      {
+        ...codex({ accountNames: ["Work", "Team"], isDefault: false }),
+        hostId: "h1",
+        hostName: "Studio",
+      },
       "Codex",
-      NOW,
-      THIS_MACHINE
+      NOW
     );
-    expect(line.text).toBe("Codex 82% · Work, Team · This machine");
-    expect(line.detail[1]).toBe("Work, Team on this machine");
+    expect(line.text).toBe("Codex 82% · Work, Team · Studio");
+    expect(line.detail[1]).toBe("Work, Team on Studio");
   });
 
   it("turns stale just past the five-minute cadence and its slack, not before", () => {

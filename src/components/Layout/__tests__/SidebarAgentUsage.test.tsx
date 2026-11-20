@@ -50,11 +50,13 @@ function codex(
 }
 
 function claude(
-  overrides: Partial<Extract<AgentUsageReadout["reading"], { agentId: "claude" }>> = {}
+  overrides: Partial<Extract<AgentUsageReadout["reading"], { agentId: "claude" }>> = {},
+  host: Partial<Omit<AgentUsageReadout, "reading">> = {}
 ): AgentUsageReadout {
   return {
     hostId: "local",
     hostName: null,
+    ...host,
     reading: {
       agentId: "claude",
       accountNames: [],
@@ -67,6 +69,13 @@ function claude(
       ...overrides,
     },
   };
+}
+
+const STUDIO = { hostId: "studio-03", hostName: "studio-03" };
+const VPS = { hostId: "vps", hostName: "Build VPS" };
+
+function showHost(id: string) {
+  Object.defineProperty(window, "__DAINTREE_HOST_ID__", { configurable: true, value: { id } });
 }
 
 let pushed: ((snapshot: AgentUsageSnapshot) => void) | null = null;
@@ -152,20 +161,19 @@ describe("SidebarAgentUsage", () => {
     expect(followCalls()).toEqual([true, false]);
   });
 
-  it("shows the tightest reading per agent across this machine and linked hosts, whatever order they came in", async () => {
+  it("shows the tightest reading per agent of this machine alone, whatever order they came in", async () => {
     installBridge([
-      codex(91, { hostId: "vps", hostName: "Build VPS" }),
+      codex(91, VPS),
       codex(40),
-      claude(),
       claude({ statement: "used", usedPercent: 20 }),
+      claude(),
+      claude({ statement: "reached" }, VPS),
     ]);
     const { container } = await renderUsage();
-    const shown = rows(container);
-    expect(shown.map((row) => row.textContent)).toEqual([
-      "Codex 91% · Work · Build VPS",
+    expect(rows(container).map((row) => row.textContent)).toEqual([
+      "Codex 40% · Work",
       "Claude approaching weekly limit12m ago",
     ]);
-    expect(shown.every((row) => row.hasAttribute("data-attention"))).toBe(true);
   });
 
   it("opens this machine's account quota section for the agent the line is for", async () => {
@@ -181,28 +189,79 @@ describe("SidebarAgentUsage", () => {
     ]);
   });
 
-  it("says which window has a linked host's quota rather than act on another machine", async () => {
-    installBridge([codex(91, { hostId: "vps", hostName: "Build VPS" })]);
+  it("shows a host window that host's own reading, though this machine's and another host's are tighter", async () => {
+    showHost("studio-03");
+    const resetsAt = NOW + 3 * 86_400_000;
+    installBridge([
+      claude({ statement: "used", usedPercent: 85, resetsAt }),
+      claude({ statement: "used", usedPercent: 45, resetsAt }, STUDIO),
+      claude({ statement: "reached" }, VPS),
+    ]);
     const { container } = await renderUsage();
-    const [row] = rows(container);
-    expect(row!.tagName).toBe("DIV");
-    expect(row!.getAttribute("aria-label")).toMatch(
-      /Its account quota shows in a window on Build VPS$/
-    );
-    fireEvent.click(row!);
-    expect(dispatch).not.toHaveBeenCalled();
+    const shown = rows(container);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.textContent).toMatch(/^Claude 45% · studio-03 · resets /);
+    expect(shown[0]!.textContent).not.toMatch(/This machine/);
+    expect(shown[0]!.hasAttribute("data-attention")).toBe(false);
+    expect(shown[0]!.tagName).toBe("BUTTON");
+    fireEvent.click(shown[0]!);
+    expect(dispatch.mock.calls).toEqual([
+      [
+        "app.settings.openTab",
+        { tab: "agents", subtab: "claude", sectionId: "agents-account-quota" },
+        { source: "user" },
+      ],
+    ]);
   });
 
-  it("names this machine in a window on a host", async () => {
-    Object.defineProperty(window, "__DAINTREE_HOST_ID__", {
-      configurable: true,
-      value: { id: "vps" },
-    });
-    installBridge([codex(30)]);
+  it("follows its own host's readings as they change, and shows nothing once only other machines have one", async () => {
+    showHost("studio-03");
+    installBridge([codex(20, STUDIO), codex(95)]);
     const { container } = await renderUsage();
-    const [row] = rows(container);
-    expect(row!.textContent).toBe("Codex 30% · Work · This machine");
-    expect(row!.getAttribute("aria-label")).toMatch(/shows in a window on this machine$/);
+    expect(rows(container).map((row) => row.textContent)).toEqual(["Codex 20% · Work · studio-03"]);
+    act(() => pushed!({ readouts: [codex(95), codex(55, STUDIO)], revision: 2 }));
+    expect(rows(container).map((row) => row.textContent)).toEqual(["Codex 55% · Work · studio-03"]);
+    act(() => pushed!({ readouts: [codex(95), codex(99, VPS)], revision: 3 }));
+    expect(container.querySelector("[data-sidebar-agent-usage]")).toBeNull();
+  });
+
+  it("lets a newer push with none of its host's readings overtake an older seed that had one", async () => {
+    showHost("studio-03");
+    let resolveSeed!: (snapshot: AgentUsageSnapshot) => void;
+    installBridge(() => new Promise((resolve) => (resolveSeed = resolve)));
+    const { container } = await renderUsage();
+    act(() => pushed!({ readouts: [codex(95)], revision: 2 }));
+    await act(async () => resolveSeed({ readouts: [codex(40, STUDIO)], revision: 1 }));
+    expect(container.querySelector("[data-sidebar-agent-usage]")).toBeNull();
+  });
+
+  it("never picks between two machines' readings that carry the same login name", async () => {
+    const login = { isDefault: true, defaultLoginName: "Personal" };
+    const readouts = [
+      claude({ ...login, statement: "used", usedPercent: 30 }),
+      claude({ ...login, statement: "used", usedPercent: 90 }, VPS),
+    ];
+    installBridge(readouts);
+    const here = await renderUsage();
+    expect(rows(here.container).map((row) => row.textContent)).toEqual([
+      "Claude 30% · Personal12m ago",
+    ]);
+    here.unmount();
+
+    showHost("vps");
+    installBridge([...readouts].reverse());
+    const there = await renderUsage();
+    expect(rows(there.container).map((row) => row.textContent)).toEqual([
+      "Claude 90% · Personal · Build VPS12m ago",
+    ]);
+  });
+
+  it("shows nothing for an agent whose only reading is another machine's", async () => {
+    installBridge([codex(91, VPS), claude({ statement: "used", usedPercent: 10 })]);
+    const { container } = await renderUsage();
+    expect(rows(container).map((row) => row.getAttribute("data-sidebar-agent-usage-row"))).toEqual([
+      "claude",
+    ]);
   });
 
   it("drops a seed that a newer push overtook, and hides once nothing is left", async () => {

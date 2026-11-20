@@ -5,9 +5,6 @@ import { claudeWindowLabel, formatResetClock } from "./agentAccountHeadroom";
 import { windowLabel } from "./codexQuotaFormat";
 import { formatTimeAgo } from "./timeAgo";
 
-/** How a window on a host names a reading from the machine it runs on. */
-export const THIS_MACHINE = "This machine";
-
 export interface AgentUsageLine {
   /** The row: "Codex 82% · Work · resets 14:05". */
   text: string;
@@ -78,17 +75,15 @@ function accountLabel(readout: AgentUsageReadout): string {
 
 /**
  * One sidebar row for a readout (#17318): what was read or printed, the
- * login and machine it is for, and how old it is. Never a verdict about the
- * account beyond the fixed threshold's tone.
+ * login it is for and the host it came from, and how old it is. Never a
+ * verdict about the account beyond the fixed threshold's tone.
  */
 export function describeAgentUsage(
   readout: AgentUsageReadout,
   agentName: string,
-  now: number,
-  /** The machine to name: the host's name, "This machine" in a window on another, or null. */
-  machine: string | null = readout.hostName
+  now: number
 ): AgentUsageLine {
-  const { reading } = readout;
+  const { reading, hostName: machine } = readout;
   const stale =
     reading.agentId === "codex" && now - reading.observedAt > AGENT_USAGE_STALE_AFTER_MS;
   const reset =
@@ -108,7 +103,7 @@ export function describeAgentUsage(
     text: stale ? `Stale · ${text}` : text,
     detail: [
       [limitLine(readout), reset].filter(Boolean).join(" · "),
-      machine ? `${account} on ${machine === THIS_MACHINE ? "this machine" : machine}` : account,
+      machine ? `${account} on ${machine}` : account,
       reading.agentId === "codex" ? `Read from Codex ${age}` : `Printed in a terminal ${age}`,
     ],
     attention: isAgentUsagePastAttention(reading),
