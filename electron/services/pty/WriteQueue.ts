@@ -83,6 +83,11 @@ interface SubmitJob {
    * written, and false leaves it an ordinary submission in every other way.
    */
   refuse?: () => boolean;
+  /**
+   * Asked of a guarded line again right before its Enter (#17908): false
+   * holds the Enter back as a withdrawal would, leaving the body a draft.
+   */
+  holdsAtEnter?: () => boolean;
 }
 
 /**
@@ -221,7 +226,8 @@ export class WriteQueue {
     onPtyWritten?: () => void,
     admit?: () => boolean,
     imagePaths?: readonly string[],
-    refuse?: () => boolean
+    refuse?: () => boolean,
+    holdsAtEnter?: () => boolean
   ): void {
     if (this.disposed) {
       // A tracked submit into a disposed queue is answered rather than
@@ -253,6 +259,7 @@ export class WriteQueue {
       admit,
       imagePaths,
       ...(refuse !== undefined ? { refuse } : {}),
+      ...(holdsAtEnter !== undefined ? { holdsAtEnter } : {}),
     });
   }
 
@@ -568,7 +575,8 @@ export class WriteQueue {
               ? {
                   abandonEnterOnInput: true,
                   isWithdrawn: () =>
-                    this.inFlightGuardedToken === token && this.inFlightGuardedWithdrawn,
+                    (this.inFlightGuardedToken === token && this.inFlightGuardedWithdrawn) ||
+                    next.holdsAtEnter?.() === false,
                 }
               : {}),
             ...(next.imagePaths !== undefined && next.imagePaths.length > 0

@@ -14,6 +14,7 @@ import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
 } from "../../../shared/types/agentLastMessage.js";
+import { CLAUDE_UPDATE_NOT_SENT_REASONS } from "../../../shared/types/claudeUpdateApply.js";
 
 /**
  * Host-owned reductions of a tool's result for the audit record, applied
@@ -291,11 +292,32 @@ function projectHostWatch(value: unknown): Record<string, unknown> {
   };
 }
 
+const CLAUDE_UPDATE_STATUSES: ReadonlySet<string> = new Set(["sent", "not-sent", "unconfirmed"]);
+const CLAUDE_UPDATE_REASONS: ReadonlySet<string> = new Set(CLAUDE_UPDATE_NOT_SENT_REASONS);
+const CLAUDE_UPDATE_OUTPUTS: ReadonlySet<string> = new Set(["read", "lost", "unavailable"]);
+
+/**
+ * Whether `/restart` went in and whether Claude refused it (#17908), never
+ * the refusal's words: it is terminal output, and can name the project's folder.
+ */
+function projectClaudeUpdate(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  if (record === null) return { status: "unrecognized" };
+  return {
+    terminalId: auditId(record.terminalId),
+    status: fromSet(record.status, CLAUDE_UPDATE_STATUSES),
+    reason: fromSet(record.reason, CLAUDE_UPDATE_REASONS),
+    refusalSeen: typeof record.refusal === "string",
+    output: fromSet(record.output, CLAUDE_UPDATE_OUTPUTS),
+  };
+}
+
 const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown> = new Map<
   string,
   (result: unknown) => unknown
 >([
   ["terminal.readLastMessageOwned", projectLastMessage],
+  ["terminal.applyClaudeUpdateOwned", projectClaudeUpdate],
   ["terminal.getStatus", projectHandbackCarrier],
   ["terminal.waitUntilIdle", projectHandbackCarrier],
   ["terminal.waitUntilIdleBatch", projectHandbackCarrier],

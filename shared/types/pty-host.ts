@@ -1712,6 +1712,12 @@ export interface ExactPromptGuard {
   acceptWorking?: true;
   /** At a question the agent asked in prose as well as at its prompt. */
   acceptQuestion?: true;
+  /**
+   * Only while the terminal still reports the Claude Code update observation
+   * main read (#17908), by its `observedAt`, and it still names `/restart`: a
+   * footer seen anew or cleared since is not what the person approved.
+   */
+  updateObservedAt?: number;
 }
 
 /** A submission's text as a run's first-prompt record, before it was written (#15521). */

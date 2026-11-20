@@ -12,6 +12,7 @@ import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectC
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../shared/utils/launchInNewWorktree.js";
 import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../shared/types/terminalExitWait.js";
+import { CLAUDE_UPDATE_AFTER_APPROVAL_MS } from "../../../shared/types/claudeUpdateApply.js";
 import { WORKTREE_RETIRE_OWNED_TOOL } from "../../services/mcp-server/sessionToolIds.js";
 import {
   MCP_DISPATCH_TIMEOUT_MS,
@@ -684,7 +685,7 @@ const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts
 const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
 const CALL_GLOBAL_WITHHELD_DETAIL =
-  "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, closes finished ones with `terminal.closeOwned` or `terminal.closeMany`, and restarts or deletes only what it launched there. Ask the user to do it.";
+  "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, closes finished ones with `terminal.closeOwned` or `terminal.closeMany`, applies an update Claude Code offers with `terminal.applyClaudeUpdateOwned`, and restarts or deletes only what it launched there. Ask the user to do it.";
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -788,6 +789,8 @@ const RELAY_MIN_RUN_MS = MCP_REMOTE_DISPATCH_TIMEOUT_MS + RELAY_RUN_MARGIN_MS;
 const THROWAWAY_MIN_RUN_MS = 90_000;
 /** Runs a create, a setup wait and a launch in sequence on its host (#15738). */
 const LAUNCH_IN_NEW_WORKTREE_TOOL = "agent.launchInNewWorktree";
+/** Asks the person, then waits for a pane's empty prompt to type `/restart` (#17908). */
+const CLAUDE_UPDATE_TOOL = "terminal.applyClaudeUpdateOwned";
 /** How much longer than the host's own deadline the Shell waits for the answer. */
 const RELAY_ANSWER_GRACE_MS = 15_000;
 
@@ -828,6 +831,11 @@ export function relayRunMs(
     if (tool === WORKTREE_RETIRE_OWNED_TOOL) {
       wanted =
         (wanted > 0 ? wanted : DEFAULT_TERMINAL_EXIT_WAIT_MS) + MCP_REMOTE_DISPATCH_TIMEOUT_MS;
+    }
+    // An update's approval, then its wait for the empty prompt and the read
+    // of Claude's answer (#17908), one after the other.
+    if (tool === CLAUDE_UPDATE_TOOL) {
+      wanted = MCP_REMOTE_DISPATCH_TIMEOUT_MS + CLAUDE_UPDATE_AFTER_APPROVAL_MS;
     }
     wanted = Math.max(wanted, replyMs);
   }

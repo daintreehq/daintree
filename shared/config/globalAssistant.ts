@@ -70,7 +70,9 @@ export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
  * run it names and never over a person's input, and its send runs a slash
  * command only as one of the agent's fixed forms (#16101); `terminal.revealOwned`
  * reaches the same workers through the same checks, which writes nothing and so
- * waits on no one (#16096); `terminal.closeOwned` and `terminal.closeMany`
+ * waits on no one (#16096); `terminal.applyClaudeUpdateOwned` reaches them
+ * through the same checks too, and types only `/restart`, once, after the
+ * person approves (#17908); `terminal.closeOwned` and `terminal.closeMany`
  * close an agent it didn't launch only with nothing typed in it: one whose
  * stop handed the work back once the person's Daintree confirmations or the
  * person say yes, and one stopped on an error only on the person's own yes
@@ -128,6 +130,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.waitForExit",
   "terminal.restartOnPresetOwned",
   "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdateOwned",
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",

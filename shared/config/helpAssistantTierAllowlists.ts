@@ -176,6 +176,9 @@ export const CORE_TIER_TOOLS = [
   // The same move to another of its agent's accounts (#17079). Owned for every
   // origin: the unscoped `terminal.restartOnAccount` is on no tier.
   "terminal.restartOnAccountOwned",
+  // Applies a Claude Code update a pane this session launched installed, by
+  // typing `/restart` once at its empty prompt after the user approves (#17908).
+  "terminal.applyClaudeUpdateOwned",
   "terminal.moveToWorktree",
   // Brings a panel this session created into view (#12315).
   "terminal.revealOwned",

@@ -1080,7 +1080,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 199_336): the same `updateInstalled` the external half above pays for, on
   // `terminal.getStatus` and on the host status read, whose terminal rows
   // extend the same entry schema. Both are in-app; only the first is external.
-  const MAX_COHORT_PAYLOAD_BYTES = 200_000;
+  // 200_000 → 201_300 for #17908, measured at 201_212 B (+1_296 over develop's
+  // 199_916): `terminal.applyClaudeUpdateOwned`, so an assistant can apply a
+  // Claude Code update. Most of it is the closed output schema, which says
+  // whether `/restart` went in, why not, and Claude's refusal line as drawn;
+  // its descriptions were trimmed first. In-app only, so the external ceiling
+  // does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 201_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

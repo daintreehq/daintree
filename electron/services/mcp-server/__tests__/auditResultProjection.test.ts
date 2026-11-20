@@ -837,3 +837,44 @@ describe("host.status audit (#16191)", () => {
     expect(projectAuditResult("host.status", "nope")).toEqual({ status: "unrecognized" });
   });
 });
+
+describe("projectAuditResult — terminal.applyClaudeUpdateOwned (#17908)", () => {
+  const REFUSAL =
+    "Can't restart this session here. Its folder, /Users/FOLDER-SENTINEL, can't be found.";
+
+  it("keeps whether a refusal was seen, never its words", () => {
+    const projected = projectAuditResult("terminal.applyClaudeUpdateOwned", {
+      terminalId: "3f0c2a4e-1111-4222-8333-444455556666",
+      status: "sent",
+      refusal: REFUSAL,
+      output: "read",
+      message: "typed",
+    });
+
+    expect(projected).toEqual({
+      terminalId: "3f0c2a4e-1111-4222-8333-444455556666",
+      status: "sent",
+      reason: null,
+      refusalSeen: true,
+      output: "read",
+    });
+    expect(JSON.stringify(summarizeMcpResult(projected))).not.toContain("FOLDER-SENTINEL");
+  });
+
+  it("keeps why an unsent request stopped", () => {
+    expect(
+      projectAuditResult("terminal.applyClaudeUpdateOwned", {
+        terminalId: "t",
+        status: "not-sent",
+        reason: "typed",
+        message: "Someone typed.",
+      })
+    ).toEqual({
+      terminalId: null,
+      status: "not-sent",
+      reason: "typed",
+      refusalSeen: false,
+      output: null,
+    });
+  });
+});

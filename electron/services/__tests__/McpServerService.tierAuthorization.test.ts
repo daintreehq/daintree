@@ -1114,6 +1114,12 @@ describe("McpServerService", () => {
         danger: "confirm",
       }),
       createManifestEntry({
+        id: "terminal.applyClaudeUpdateOwned" as ActionId,
+        title: "Apply Claude Code update",
+        description: "Type /restart once into a Claude Code agent this MCP session created",
+        danger: "confirm",
+      }),
+      createManifestEntry({
         id: "agent.addAccount" as ActionId,
         title: "Add Agent Accounts",
         description: "Add agent accounts.",

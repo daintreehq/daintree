@@ -137,6 +137,8 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "terminal.restartOnPresetOwned",
   "terminal.restartOnAccount",
   "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdate",
+  "terminal.applyClaudeUpdateOwned",
   "terminal.revealOwned",
   "terminal.sendCommand",
   "terminal.sendCommandMany",

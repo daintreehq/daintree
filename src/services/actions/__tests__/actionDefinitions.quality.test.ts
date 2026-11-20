@@ -619,7 +619,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 26_965): the two external account tools above, plus `agent.addAccount`,
   // in-app only. The add has to say the user ticks each account with its folder
   // shown, and that the caller launches on the returned id to sign in.
-  const MAX_COHORT_TOTAL_BYTES = 27_550;
+  // 27_550 → 27_750 for #17908, measured at 27_734 B (+221 over develop's
+  // 27_513): `terminal.applyClaudeUpdateOwned`, so an assistant can apply a
+  // Claude Code update. It has to say the user approves, that `/restart` goes in
+  // once and only at an empty prompt, and that the answer never claims the
+  // conversation came back. In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 27_750;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1160,6 +1165,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
   "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdate",
+  "terminal.applyClaudeUpdateOwned",
   "terminal.restartAll",
   "terminal.startHeld",
   "terminal.arm",
@@ -1325,6 +1332,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "terminal.restartOnPresetOwned",
   // Its account twin (#17079), delegating to `terminal.restartOnAccount`.
   "terminal.restartOnAccountOwned",
+  // Same shape (#17908): main reads the pane, then delegates the approval to
+  // `terminal.applyClaudeUpdate`, and types `/restart` itself once it answers.
+  "terminal.applyClaudeUpdateOwned",
+  // That approval: dispatched only by main, never from the palette or a menu,
+  // so the dialog that gates it is `McpConfirmDialog` and nothing user-side.
+  "terminal.applyClaudeUpdate",
   // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
   // keystrokes to every armed terminal, so an external caller must pass the
   // host confirm dialog. Palette-hidden, and user-side arming goes through the

@@ -170,6 +170,7 @@ interface ReachWording {
 }
 const STEERING: ReachWording = { doing: "Steering", undone: NOTHING_SENT };
 const SHOWING: ReachWording = { doing: "Showing the person", undone: "Nothing was shown." };
+const UPDATING: ReachWording = { doing: "Applying an update to", undone: NOTHING_SENT };
 
 function refuse(code: string, message: string): never {
   throw new AssistantTargetError(code, message);
@@ -583,6 +584,17 @@ export class GlobalWorkerSteer {
     await this.requireWorker(target, SHOWING);
     target.authorize();
     return show();
+  }
+
+  /**
+   * Run `apply`, a Claude Code update's request (#17908), once the run passes
+   * the gate and the caller's `authorize`. The request makes its own checks
+   * of the pane, and asks `authorize` again right before it types.
+   */
+  async applyUpdate<T>(target: WorkerSteerTarget, apply: () => Promise<T>): Promise<T> {
+    await this.requireWorker(target, UPDATING);
+    target.authorize();
+    return apply();
   }
 
   /**

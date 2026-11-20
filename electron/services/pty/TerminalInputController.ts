@@ -514,7 +514,24 @@ export class TerminalInputController {
           : guard !== undefined && guard !== "no-choice-dialog"
             ? this.admitExact(guard)
             : undefined;
-    this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths, atChoice);
+    // A Claude Code update's `/restart` (#17908) waits a submit delay between
+    // its body and its Enter: an update observation recorded anew or a choice
+    // dialog the terminal reports by then holds back the Enter the person
+    // approved for an empty prompt. A dialog drawn in the delay itself isn't
+    // reported yet, as for every guarded line (#17984).
+    const holdsAtEnter =
+      typeof guard === "object" && guard.updateObservedAt !== undefined
+        ? () => this.stillOffersUpdate(guard.updateObservedAt!)
+        : undefined;
+    this.host.writeQueue.submit(
+      text,
+      token,
+      onPtyWritten,
+      admit,
+      imagePaths,
+      atChoice,
+      holdsAtEnter
+    );
   }
 
   /**
@@ -534,6 +551,9 @@ export class TerminalInputController {
       if (run.agentSessionId !== undefined && terminal.agentSessionId !== run.agentSessionId) {
         return false;
       }
+      if (run.updateObservedAt !== undefined && !this.stillOffersUpdate(run.updateObservedAt)) {
+        return false;
+      }
       return this.admitStrict({
         acceptWorking:
           run.acceptWorking === true &&
@@ -541,6 +561,20 @@ export class TerminalInputController {
         acceptQuestion: run.acceptQuestion === true,
       });
     };
+  }
+
+  /**
+   * The terminal still reports the update observation main read, naming
+   * `/restart`, and its published state shows no choice dialog. That state
+   * trails the screen: a waiting reason is reread only after a quiet spell.
+   */
+  private stillOffersUpdate(observedAt: number): boolean {
+    const terminal = this.host.terminalInfo;
+    return (
+      terminal.updateInstalled?.observedAt === observedAt &&
+      terminal.updateInstalled.namesRestart === true &&
+      !isAtChoiceDialog(wakeGateSnapshot(terminal))
+    );
   }
 
   /**
@@ -767,11 +801,15 @@ export class TerminalInputController {
       return;
     }
     // Its requester took it back — the user stopped the pane's notices, or
-    // turned the MCP server off — while the body waited for its Enter. The
-    // body stays in the composer unsent, which is a draft from here on, as a
-    // staged line is.
+    // turned the MCP server off — or its own hold at the Enter said no
+    // (#17908), while the body waited for its Enter. The body stays in the
+    // composer unsent, which is a draft from here on, as a staged line is.
     if (ctx?.isWithdrawn?.() === true) {
-      stampTypedInput(this.host.terminalInfo, Date.now());
+      // Another incarnation in the pty starts with an empty composer; short of
+      // that the body still counts as a draft, even while detection blinks.
+      if (this.host.terminalInfo.agentIncarnation === owner.incarnation) {
+        stampTypedInput(this.host.terminalInfo, Date.now());
+      }
       return;
     }
 
