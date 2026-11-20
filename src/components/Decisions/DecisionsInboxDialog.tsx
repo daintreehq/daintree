@@ -456,7 +456,9 @@ function InboxRow({
             </span>
             {/* History sorts by when a question closed, so it shows that time (#18025). */}
             <span className="shrink-0 text-xs leading-5 text-text-secondary tabular-nums">
-              <span className="sr-only">{shownTime.kind === "closed" ? "Closed " : "Asked "}</span>
+              <span className="sr-only">
+                {shownTime.kind === "closed" ? "Closed, " : "Asked, "}
+              </span>
               <TimeAgo timestamp={shownTime.at} />
             </span>
           </span>
