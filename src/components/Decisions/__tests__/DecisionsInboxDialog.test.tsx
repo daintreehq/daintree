@@ -4323,7 +4323,7 @@ describe("DecisionsInboxDialog", () => {
       );
       expect(selectedAlias()).toBe("q-2");
       expect(document.activeElement).toBe(field);
-      expect((field as HTMLTextAreaElement).value).toBe("Also run the migrations");
+      expect(field instanceof HTMLTextAreaElement && field.value).toBe("Also run the migrations");
     });
 
     it("stays on a cleared question whose answer the person went on to choose", async () => {

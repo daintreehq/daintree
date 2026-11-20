@@ -1883,7 +1883,8 @@ describe("moving on once the person's action takes a question out of Needs you (
     it("changes when the agent asks for a reply or something new, and not otherwise", () => {
       const asking = item("q1", OPEN, { inbox: { ask: null, seen: true, cleared: false } });
       const same = askKey(asking);
-      expect(askKey({ ...asking, standing: { kind: "to-type" } })).toBe(same);
+      const delivered = item("q1", { kind: "to-type" }, { inbox: asking.inbox });
+      expect(askKey(delivered)).toBe(same);
       expect(askKey({ ...asking, replyRequest: "msg-2" })).not.toBe(same);
       expect(askKey({ ...asking, inbox: { ask: "msg-3", seen: false, cleared: false } })).not.toBe(
         same
