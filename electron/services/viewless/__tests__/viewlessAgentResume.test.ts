@@ -519,7 +519,6 @@ describe("resumeAgentSessionAsPane", () => {
     ["exited", { isExited: true }],
     ["back at its shell", { agentState: "exited" }],
     ["an assistant", { isAssistantTerminal: true }],
-    ["in another worktree", { worktreeId: "/repo" }],
     ["taken over by a later agent", { agentIncarnation: 1 }],
     ["running another agent now", { launchAgentId: "claude", detectedAgentId: "codex" }],
     ["holding another session", { agentSessionId: "another" }],
@@ -537,6 +536,58 @@ describe("resumeAgentSessionAsPane", () => {
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
     expect(result).toMatchObject({ status: "launched" });
     expect(spawns(invoke)).toHaveLength(1);
+  });
+
+  it("returns a holder filed under another worktree, with where it is filed (#18009)", async () => {
+    // A live move refiled the pane; its agent still holds the conversation.
+    const { deps, invoke } = resumeDeps({
+      terminals: { "pane-1": { agentSessionId: SESSION, worktreeId: "/repo" } },
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [{ id: "pane-1", kind: "terminal", location: "grid" } as PanelSnapshot],
+      },
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toEqual({
+      status: "existing",
+      projectId: PROJECT.id,
+      worktreeId: "/repo",
+      terminalId: "pane-1",
+    });
+    expect(spawns(invoke)).toHaveLength(0);
+  });
+
+  it("returns that holder before refusing what would only stop a new launch", async () => {
+    // The journal still places the session where the conversation began, which
+    // would refuse a relaunch in the caller's worktree.
+    const { deps, invoke } = resumeDeps({
+      sessions: [record({ worktreeId: "/repo" })],
+      terminals: { "pane-1": { agentSessionId: SESSION, worktreeId: WORKTREE.id } },
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [{ id: "pane-1", kind: "terminal", location: "grid" } as PanelSnapshot],
+      },
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "existing", terminalId: "pane-1" });
+    expect(spawns(invoke)).toHaveLength(0);
+  });
+
+  it("files a holder the host places nowhere by its saved pane", async () => {
+    const { deps } = resumeDeps({
+      terminals: { "pane-1": { agentSessionId: SESSION } },
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [
+          { id: "pane-1", kind: "terminal", location: "grid", worktreeId: "/repo" },
+        ] as PanelSnapshot[],
+      },
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "existing", worktreeId: "/repo" });
   });
 
   it("launches beside a holder the saved layout keeps in the trash", async () => {
@@ -697,6 +748,36 @@ describe("resumeAgentSessionAsPane", () => {
     expect(result).toMatchObject({ status: "launched", savedInLayout: false });
   });
 
+  it("launches once for concurrent calls aimed at different worktrees", async () => {
+    // Two agents on one transcript, whichever worktree each was meant for.
+    const { deps, invoke } = resumeDeps();
+    const runtime = makeRuntime();
+
+    const [first, second] = await Promise.all([
+      resumeAgentSessionAsPane(REQUEST, deps, runtime),
+      resumeAgentSessionAsPane({ ...REQUEST, worktreeId: "/repo" }, deps, runtime),
+    ]);
+
+    expect(spawns(invoke)).toHaveLength(1);
+    expect(second).toEqual(first);
+  });
+
+  it("gives a joiner its own try when the launch it joined was refused for another target", async () => {
+    // The first call names a worktree the project lacks; the second names the
+    // session's own and launches it.
+    const { deps, invoke } = resumeDeps();
+    const runtime = makeRuntime();
+
+    const [first, second] = await Promise.all([
+      resumeAgentSessionAsPane({ ...REQUEST, worktreeId: "/repo-wt/gone" }, deps, runtime),
+      resumeAgentSessionAsPane(REQUEST, deps, runtime),
+    ]);
+
+    expect(first).toMatchObject({ status: "refused", reason: "worktree-gone" });
+    expect(second).toMatchObject({ status: "launched", worktreeId: WORKTREE.id });
+    expect(spawns(invoke)).toHaveLength(1);
+  });
+
   it("launches once for two concurrent calls, and both get that pane", async () => {
     const { deps, invoke } = resumeDeps();
     const runtime = makeRuntime();
@@ -732,8 +813,9 @@ describe("resumeAgentSessionAsPane", () => {
       makeRuntime()
     );
 
-    // The panel count reads the layout first; the holder scan's read is the last.
-    expect(order).toEqual(["layout read", "layout read", "asked"]);
+    // The first holder scan reads the layout, then the panel count; the last
+    // holder scan's read comes right before the question.
+    expect(order).toEqual(["layout read", "layout read", "layout read", "asked"]);
     expect(authorizeSpawn).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       status: "refused",

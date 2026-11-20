@@ -2905,12 +2905,44 @@ describe("restorePanelsPhase — moved panes and recovery holds (#12434)", () =>
     expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
   });
 
-  it("changes nothing while the worktree list isn't ready (#11234)", async () => {
-    const ctx = makeContext({ worktreesPromise: Promise.resolve([]) });
+  it("looks at the list again before placing a moved pane the first list couldn't (#18009)", async () => {
+    const rereadWorktrees = vi.fn(worktrees);
+    const ctx = makeContext({ worktreesPromise: Promise.resolve([]), rereadWorktrees });
 
     await restorePanelsPhase([movedPane("a", { agentSessionId: "sess-a" })], ctx);
 
-    expect(argsById(ctx).get("a")?.coldLaunch).toEqual({ cwd: "/repo" });
+    expect(argsById(ctx).get("a")).toMatchObject({
+      worktreeId: "/worktrees/task-a",
+      coldLaunch: { cwd: "/worktrees/task-a", conversationCwd: "/repo" },
+    });
+    expect(rereadWorktrees).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds a moved pane, still filed where it was moved, when no list comes (#18009)", async () => {
+    const ctx = makeContext({
+      worktreesPromise: Promise.resolve([]),
+      rereadWorktrees: vi.fn(async () => null),
+    });
+
+    await restorePanelsPhase([movedPane("a", { agentSessionId: "sess-a" })], ctx);
+
+    const held = argsById(ctx).get("a");
+    expect(held?.coldLaunch).toEqual({ cwd: "/repo", awaitingDestination: true });
+    expect(held?.worktreeId).toBe("/worktrees/task-a");
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("starts a pane inside its own filing without waiting on any list (#11234)", async () => {
+    const rereadWorktrees = vi.fn(async () => null);
+    const ctx = makeContext({ worktreesPromise: Promise.resolve([]), rereadWorktrees });
+
+    await restorePanelsPhase(
+      [movedPane("a", { cwd: "/worktrees/task-a/web", agentSessionId: "sess-a" })],
+      ctx
+    );
+
+    expect(argsById(ctx).get("a")?.coldLaunch).toEqual({ cwd: "/worktrees/task-a/web" });
+    expect(rereadWorktrees).not.toHaveBeenCalled();
   });
 
   it("changes nothing in a workspace that can't have worktrees", async () => {

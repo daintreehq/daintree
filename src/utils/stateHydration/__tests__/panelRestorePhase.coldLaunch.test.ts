@@ -348,6 +348,38 @@ describe("cold restore of moved Codex panes (#12434)", () => {
     expect(byId.get("a")?.worktreeId).toBe("/repo");
   });
 
+  it("resumes a moved pane in its destination once a second look finds the list (#18009)", async () => {
+    const list = [worktree("/repo"), worktree("/worktrees/task-a")];
+    const byId = await restore([movedPane("a", { agentSessionId: "sess-a" })], {
+      worktreesPromise: Promise.resolve([]),
+      rereadWorktrees: async () => list,
+    });
+
+    const args = byId.get("a");
+    expect(args?.command).toContain("resume sess-a");
+    expect(args?.cwd).toBe("/worktrees/task-a");
+    expect(args?.conversationCwd).toBe("/repo");
+    expect(args?.restoreRecovery).toBeUndefined();
+  });
+
+  it("holds a moved pane with its conversation when no list comes (#18009)", async () => {
+    const byId = await restore([movedPane("a", { agentSessionId: "sess-a" })], {
+      worktreesPromise: Promise.resolve([]),
+      rereadWorktrees: async () => null,
+    });
+
+    const args = byId.get("a");
+    expect(args?.restoreRecovery).toEqual({
+      reason: "destination-unavailable",
+      sessionId: "sess-a",
+      awaitingDestination: true,
+    });
+    expect(args?.command).not.toContain("resume");
+    // Still filed where it was moved, so it shows there once the list loads.
+    expect(args?.worktreeId).toBe("/worktrees/task-a");
+    expect(resolveResumeLatestSession).not.toHaveBeenCalled();
+  });
+
   it("leaves Claude panes exactly as restore always launched them", async () => {
     const byId = await restore([
       movedPane("a", { launchAgentId: "claude", agentSessionId: "sess-c", agentLaunchFlags: [] }),

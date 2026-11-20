@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   findLaunchRoot,
   isFilingUnavailable,
   isSameDirectory,
+  rereadWorktreeList,
   resolveColdLaunchTarget,
 } from "../coldLaunchTarget";
 
@@ -97,11 +98,25 @@ describe("resolveColdLaunchTarget (#12434)", () => {
     });
   });
 
-  it("trusts nothing while the worktree list isn't ready (#11234)", () => {
+  it("won't start a pane outside its filing while the list isn't ready (#18009)", () => {
+    // Only the list can tell a move from a directory the user chose, so this is
+    // neither relocated nor started where it was saved.
     const saved = { cwd: "/repo", worktreeId: "/worktrees/task-a" };
-    expect(resolveColdLaunchTarget(saved, [])).toEqual({ kind: "unchanged" });
-    expect(resolveColdLaunchTarget(saved, null)).toEqual({ kind: "unchanged" });
-    expect(resolveColdLaunchTarget(saved, undefined)).toEqual({ kind: "unchanged" });
+    expect(resolveColdLaunchTarget(saved, [])).toEqual({ kind: "unconfirmed" });
+    expect(resolveColdLaunchTarget(saved, null)).toEqual({ kind: "unconfirmed" });
+    expect(resolveColdLaunchTarget(saved, undefined)).toEqual({ kind: "unconfirmed" });
+  });
+
+  it("needs no list for a pane that runs inside the worktree it is filed under (#11234)", () => {
+    for (const cwd of ["/worktrees/task-a", "/worktrees/task-a/", "/worktrees/task-a/web"]) {
+      expect(resolveColdLaunchTarget({ cwd, worktreeId: "/worktrees/task-a" }, [])).toEqual({
+        kind: "unchanged",
+      });
+    }
+    // A sibling sharing the name's prefix is another directory.
+    expect(
+      resolveColdLaunchTarget({ cwd: "/worktrees/task-ab", worktreeId: "/worktrees/task-a" }, null)
+    ).toEqual({ kind: "unconfirmed" });
   });
 
   it("leaves a pane with no filing or no directory alone", () => {
@@ -159,5 +174,43 @@ describe("isSameDirectory", () => {
     expect(isSameDirectory("C:\\Repo", "c:/repo")).toBe(true);
     expect(isSameDirectory("/Repo", "/repo")).toBe(false);
     expect(isSameDirectory("/repo", "/worktrees/task-a")).toBe(false);
+  });
+});
+
+describe("rereadWorktreeList (#18009)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("answers with the first list that comes, waiting before each read", async () => {
+    vi.useFakeTimers();
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({ worktrees: [] })
+      .mockResolvedValueOnce({ worktrees: [{ id: "/repo" }] });
+    const result = rereadWorktreeList(read, [100, 200, 400]);
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(read).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(result).resolves.toEqual([{ id: "/repo" }]);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up with null once its attempts are spent, failed reads included", async () => {
+    vi.useFakeTimers();
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("host not ready"))
+      .mockResolvedValue({ worktrees: [] });
+    const result = rereadWorktreeList(read, [100, 200]);
+
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(result).resolves.toBeNull();
+    expect(read).toHaveBeenCalledTimes(2);
+    // Nothing is left scheduled once it has answered.
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
