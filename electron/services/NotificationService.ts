@@ -19,7 +19,8 @@ import {
 import { readUserPresence, type UserPresence } from "./userPresence.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { onProjectPresenceChanged } from "../window/projectPresenceChanges.js";
-import { deadlineElapsed, nextAskDeadline } from "../../shared/utils/decisionDeadline.js";
+import { nextAskDeadline } from "../../shared/utils/decisionDeadline.js";
+import { isWaitingOnPerson } from "../../shared/utils/decisionWaiting.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import type {
   DecisionQuestionList,
@@ -355,10 +356,8 @@ class NotificationService {
     this.armQuestionDeadline(list, now);
     const panes = new Map<string, string>();
     for (const question of list.questions) {
-      if (question.standing.kind !== "waiting") continue;
-      if (question.inbox?.seen === true || question.inbox?.cleared === true) continue;
-      // Past its deadline by the clock (#17943): it can't be answered, whatever the store says yet.
-      if (deadlineElapsed(question, now)) continue;
+      // The toolbar's rule (#18046), queued included; past its deadline by the clock (#17943) it can't be answered.
+      if (!isWaitingOnPerson(question, now)) continue;
       const { projectId, terminalId } = question.reference;
       panes.set(paneKey(projectId, terminalId), projectId);
     }

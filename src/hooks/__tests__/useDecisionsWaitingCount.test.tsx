@@ -25,7 +25,9 @@ vi.mock("@/clients/decisionsClient", () => ({
   },
 }));
 
-import { isWaitingOnPerson, useDecisionsWaitingCount } from "../useDecisionsWaitingCount";
+import { isWaitingOnPerson } from "@shared/utils/decisionWaiting";
+import { groupOf } from "@/components/Decisions/decisionsInboxModel";
+import { useDecisionsWaitingCount } from "../useDecisionsWaitingCount";
 
 const seen: number[] = [];
 
@@ -83,6 +85,26 @@ describe("isWaitingOnPerson", () => {
     ];
     expect(waiting.map((standing) => isWaitingOnPerson({ standing }))).toEqual([true, true, true]);
     expect(not.some((standing) => isWaitingOnPerson({ standing }))).toBe(false);
+  });
+});
+
+describe("isWaitingOnPerson against the inbox (#18046)", () => {
+  it("counts exactly the standings the inbox lists under Needs you, as main's title and Dock count does", () => {
+    const standings: DecisionQuestionStanding[] = [
+      { kind: "waiting", reason: "open" },
+      { kind: "waiting", reason: "reply" },
+      { kind: "queued" },
+      { kind: "send-failed" },
+      { kind: "to-type" },
+      { kind: "needs-attention", deliveryStatus: "needs-attention" },
+      { kind: "settled", outcome: "answered", handled: false },
+      { kind: "settled", outcome: "withdrawn" },
+    ];
+    for (const standing of standings) {
+      expect(isWaitingOnPerson({ standing }), standing.kind).toBe(
+        groupOf(standing) === "needs-you"
+      );
+    }
   });
 });
 

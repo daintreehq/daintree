@@ -1,32 +1,9 @@
 import { useSyncExternalStore } from "react";
 import { decisionsClient } from "@/clients/decisionsClient";
-import { deadlineElapsed, nextAskDeadline } from "@/components/Decisions/decisionDeadline";
-import { groupOf } from "@/components/Decisions/decisionsInboxModel";
+import { nextAskDeadline } from "@/components/Decisions/decisionDeadline";
 import { onClockJump } from "@/components/Decisions/useDecisionsClock";
-import type {
-  DecisionQuestionList,
-  DecisionQuestionListItem,
-} from "@shared/types/decisionsQuestion";
-
-/**
- * A question waits on the person while it can be answered and they haven't
- * seen or cleared what it asks now (#17895): the inbox's "Needs you" group,
- * less what they've already looked at or set aside on this computer, and,
- * given the time, less one whose deadline has passed by this computer's
- * clock (#17943), which can't be answered any more.
- */
-export function isWaitingOnPerson(
-  item: Pick<DecisionQuestionListItem, "standing" | "inbox"> & { expiresAt?: string | null },
-  nowMs: number | null = null
-): boolean {
-  return (
-    groupOf(item.standing) === "needs-you" &&
-    item.inbox?.seen !== true &&
-    item.inbox?.cleared !== true &&
-    (nowMs === null ||
-      !deadlineElapsed({ expiresAt: item.expiresAt ?? null, standing: item.standing }, nowMs))
-  );
-}
+import type { DecisionQuestionList } from "@shared/types/decisionsQuestion";
+import { isWaitingOnPerson } from "@shared/utils/decisionWaiting";
 
 /**
  * How many of this computer's questions wait on the person, shared by every
