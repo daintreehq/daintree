@@ -658,50 +658,67 @@ describe("decisionsInboxModel", () => {
       terminalId,
       questionId,
     });
+    const LOCAL_P1 = { hostId: "local", projectId: "p1" };
+    const STUDIO_P1 = { hostId: "studio", projectId: "p1" };
     const here = item("q1", { kind: "settled", outcome: "expired" });
     const hereWaiting = item("q2", OPEN, { reference: at("q2", "p1", "t2") });
     const there = item("q3", OPEN, { reference: at("q3", "p2", "t3"), projectLabel: "Other" });
-    const remote = item("q4", OPEN, {
+    // The same bare project id, reported by a Remote Host that is away.
+    const studio = item("q4", OPEN, {
       reference: at("q4", "p1", "t4"),
-      remoteHost: { hostId: "studio", name: "Studio", connected: true },
+      remoteHost: { hostId: "studio", name: "Studio", connected: false },
     });
 
-    it("counts only this computer's questions from the window's project", () => {
-      expect(inWindowProject(here, "p1")).toBe(true);
-      expect(inWindowProject(there, "p1")).toBe(false);
-      // A Remote Host's project is another computer's, whatever its id.
-      expect(inWindowProject(remote, "p1")).toBe(false);
-      // A Remote Host window has no project of its own here.
+    it("matches the window's Host as well as its project", () => {
+      expect(inWindowProject(here, LOCAL_P1)).toBe(true);
+      expect(inWindowProject(there, LOCAL_P1)).toBe(false);
+      // Studio's p1 is another computer's project in a local window, and the one a Studio window shows.
+      expect(inWindowProject(studio, LOCAL_P1)).toBe(false);
+      expect(inWindowProject(studio, STUDIO_P1)).toBe(true);
+      expect(inWindowProject(here, STUDIO_P1)).toBe(false);
       expect(inWindowProject(here, null)).toBe(false);
     });
 
     it("offers to narrow only while the list holds the window's project and another", () => {
-      expect(scopeOffered([], "p1")).toBe(false);
-      expect(scopeOffered([here, hereWaiting], "p1")).toBe(false);
-      expect(scopeOffered([there], "p1")).toBe(false);
-      expect(scopeOffered([here, there], "p1")).toBe(true);
-      expect(scopeOffered([remote, here], "p1")).toBe(true);
+      expect(scopeOffered([], LOCAL_P1)).toBe(false);
+      expect(scopeOffered([here, hereWaiting], LOCAL_P1)).toBe(false);
+      // Nothing of the window's own: narrowing could only show an empty list.
+      expect(scopeOffered([there, studio], LOCAL_P1)).toBe(false);
+      expect(scopeOffered([here, there], LOCAL_P1)).toBe(true);
+      expect(scopeOffered([studio, here], LOCAL_P1)).toBe(true);
+      expect(scopeOffered([studio, here], STUDIO_P1)).toBe(true);
       expect(scopeOffered([here, there], null)).toBe(false);
     });
 
     it("lists the window's project's questions, in the list's order, once narrowed", () => {
-      const all = [there, here, remote, hereWaiting];
-      expect(scopedQuestions(all, "all", "p1")).toBe(all);
-      expect(scopedQuestions(all, "project", "p1")).toEqual([here, hereWaiting]);
+      const all = [there, here, studio, hereWaiting];
+      expect(scopedQuestions(all, "all", LOCAL_P1)).toBe(all);
+      expect(scopedQuestions(all, "project", LOCAL_P1)).toEqual([here, hereWaiting]);
+      expect(scopedQuestions(all, "project", STUDIO_P1)).toEqual([studio]);
     });
 
     it("opens on the window's project's question that needs the person, behind the pane's own", () => {
-      const groups = inboxGroups([there, here, hereWaiting]);
+      const groups = inboxGroups([there, studio, here, hereWaiting]);
       expect(resolveSelection(groups, null, null)).toBe(there);
-      expect(resolveSelection(groups, null, null, "local", "p1")).toBe(hereWaiting);
-      expect(resolveSelection(groups, null, "t1", "local", "p1")).toBe(here);
-      // Only one that needs the person: another project's delivery still leads the rest.
+      expect(resolveSelection(groups, null, null, "local", LOCAL_P1)).toBe(hereWaiting);
+      expect(resolveSelection(groups, null, null, "studio", STUDIO_P1)).toBe(studio);
+      // The pane that opened the inbox still leads, in History too.
+      expect(resolveSelection(groups, null, "t1", "local", LOCAL_P1)).toBe(here);
+      // Only one that needs the person: a delivery keeps the list's order.
       const delivering = item("q5", { kind: "to-type" }, { reference: at("q5", "p1", "t5") });
       const thereDelivering = { ...there, standing: { kind: "to-type" as const } };
       const quiet = inboxGroups([here, thereDelivering, delivering]);
-      expect(resolveSelection(quiet, null, null, "local", "p1")).toBe(thereDelivering);
-      // A Remote Host's question is never the window's own.
-      expect(resolveSelection(inboxGroups([there, remote]), null, null, "local", "p1")).toBe(there);
+      expect(resolveSelection(quiet, null, null, "local", LOCAL_P1)).toBe(thereDelivering);
+      // Set aside on this computer, or past its deadline, it no longer needs the person.
+      const cleared = { ...hereWaiting, inbox: { ask: null, seen: true, cleared: true } };
+      expect(resolveSelection(inboxGroups([there, cleared]), null, null, "local", LOCAL_P1)).toBe(
+        there
+      );
+      const nowMs = Date.parse("2026-11-02T12:00:00.000Z");
+      const elapsed = { ...hereWaiting, expiresAt: "2026-11-02T11:00:00.000Z" };
+      expect(
+        resolveSelection(inboxGroups([there, elapsed], nowMs), null, null, "local", LOCAL_P1)
+      ).toBe(there);
     });
 
     it("names what Clear Needs you reaches when it could be more than the window's project", () => {
@@ -716,15 +733,23 @@ describe("decisionsInboxModel", () => {
 
     it("speaks for the window's project alone once narrowed", () => {
       const closed = inboxGroups([here]);
-      expect(waitingText(closed, "connected", [], "project")).toMatch(/in this project/);
-      expect(waitingText(closed, "connected", [], "project")).not.toBe(
-        waitingText(closed, "connected")
+      const quiet = waitingText(closed, "connected", [], "project");
+      expect(quiet).toMatch(/in this project/);
+      expect(quiet).not.toBe(waitingText(closed, "connected"));
+      // An empty narrowed list says there is nothing in the project, not that nothing waits.
+      const none = waitingText([], "connected", [], "project");
+      expect(none).toMatch(/in this project/);
+      expect(none).not.toBe(quiet);
+      // A Host whose rows aren't shown says nothing here; one whose rows are still names itself.
+      expect(waitingText(closed, "connected", ["Lab"], "project")).toBe(quiet);
+      expect(waitingText(closed, "unknown", ["Lab"], "project")).not.toMatch(/Lab/);
+      const studioClosed = {
+        ...studio,
+        standing: { kind: "settled" as const, outcome: "expired" as const },
+      };
+      expect(waitingText(inboxGroups([studioClosed]), "connected", ["Lab"], "project")).toMatch(
+        /Studio is away/
       );
-      // No Remote Host's questions are in this project, so one away says nothing here.
-      expect(waitingText(closed, "connected", ["Studio"], "project")).toBe(
-        waitingText(closed, "connected", [], "project")
-      );
-      expect(waitingText(closed, "unknown", ["Studio"], "project")).not.toMatch(/Studio/);
       expect(waitingText(inboxGroups([hereWaiting]), "connected", [], "project")).toBeNull();
     });
   });

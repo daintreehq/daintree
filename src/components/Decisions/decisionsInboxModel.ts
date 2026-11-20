@@ -639,36 +639,44 @@ function awayHosts(groups: readonly InboxGroup[], hostsAway: readonly string[]):
 /** Which questions the inbox lists (#18051): every project's, or only the window's own. */
 export type InboxScope = "all" | "project";
 
+/** The project a window shows: on this computer, or on the Remote Host the window belongs to. */
+export interface WindowProject {
+  hostId: string;
+  projectId: string;
+}
+
 /**
- * Whether the question was asked in the window's own project: one of this
- * computer's, from the project the window shows. `windowProjectId` is null in
- * a Remote Host window, whose projects are another computer's whatever their
- * ids, so nothing listed there is the window's own.
+ * Whether the question was asked in the window's own project: in a local
+ * window, one of this computer's from its project; in a Remote Host window,
+ * one that Host reported from the project the window shows, whether or not
+ * the Host is connected now. Null `project`, a window with no project of its
+ * own, has none.
  */
 export function inWindowProject(
   item: Pick<DecisionQuestionListItem, "reference" | "remoteHost">,
-  windowProjectId: string | null
+  project: WindowProject | null
 ): boolean {
   return (
-    windowProjectId !== null &&
-    item.remoteHost === undefined &&
-    item.reference.projectId === windowProjectId
+    project !== null &&
+    item.reference.projectId === project.projectId &&
+    (item.remoteHost?.hostId ?? LOCAL_HOST_ID) === project.hostId
   );
 }
 
 /**
  * Whether the inbox offers to narrow to the window's project (#18051): only
- * while it lists both that project's questions and another's, so the narrowed
- * list is never empty and never the whole list again.
+ * while it lists both that project's questions and another project's, so the
+ * narrowed list is never empty when offered and never the whole list again.
  */
 export function scopeOffered(
   questions: readonly DecisionQuestionListItem[],
-  windowProjectId: string | null
+  project: WindowProject | null
 ): boolean {
+  if (project === null) return false;
   let own = false;
   let other = false;
   for (const item of questions) {
-    if (inWindowProject(item, windowProjectId)) own = true;
+    if (inWindowProject(item, project)) own = true;
     else other = true;
     if (own && other) return true;
   }
@@ -679,10 +687,10 @@ export function scopeOffered(
 export function scopedQuestions(
   questions: readonly DecisionQuestionListItem[],
   scope: InboxScope,
-  windowProjectId: string | null
+  project: WindowProject | null
 ): readonly DecisionQuestionListItem[] {
   return scope === "project"
-    ? questions.filter((item) => inWindowProject(item, windowProjectId))
+    ? questions.filter((item) => inWindowProject(item, project))
     : questions;
 }
 
@@ -705,7 +713,7 @@ export function clearAllText(scope: InboxScope, reachesOthers: boolean): string 
  * vouch for. Null while Needs you has a question, seen ones included, before
  * Decisions' status is read, and while its store can't be read at all.
  * Narrowed to the window's project (#18051), it speaks for that project
- * alone, which no Remote Host's questions are part of.
+ * alone, and names only a Host whose rows it shows as away.
  */
 export function waitingText(
   groups: readonly InboxGroup[],
@@ -716,9 +724,13 @@ export function waitingText(
   if (reach === "pending" || reach === "unreadable") return null;
   if (groups.some((group) => group.id === "needs-you")) return null;
   const narrowed = scope === "project";
-  const away = narrowed ? [] : awayHosts(groups, hostsAway);
+  // Narrowed, only the Hosts of the rows shown: a Remote Host window's project is that Host's.
+  const away = awayHosts(groups, narrowed ? [] : hostsAway);
   if (reach === "connected" && away.length === 0) {
-    return narrowed ? "No questions in this project waiting on you" : "No questions waiting on you";
+    if (!narrowed) return "No questions waiting on you";
+    return groups.length === 0
+      ? "No questions in this project"
+      : "No questions in this project waiting on you";
   }
   const lead =
     groups.length === 0
@@ -787,7 +799,7 @@ export function resolveSelection(
   chosen: InboxChoice | null,
   openerTerminalId: string | null,
   viewHostId: string = LOCAL_HOST_ID,
-  windowProjectId: string | null = null
+  windowProject: WindowProject | null = null
 ): DecisionQuestionListItem | null {
   const ordered = groups.flatMap((group) => group.items);
   if (chosen !== null) {
@@ -805,7 +817,7 @@ export function resolveSelection(
   }
   const waitingHere = groups
     .find((group) => group.id === "needs-you")
-    ?.items.find((item) => inWindowProject(item, windowProjectId));
+    ?.items.find((item) => inWindowProject(item, windowProject));
   if (waitingHere !== undefined) return waitingHere;
   return groups.find((group) => AUTO_OPEN.has(group.id))?.items[0] ?? null;
 }
