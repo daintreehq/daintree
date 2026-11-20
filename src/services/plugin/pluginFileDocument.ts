@@ -99,20 +99,7 @@ function recordKey(panelId: string, filePath: string): string {
   return `${panelId}\u0000${filePath}`;
 }
 
-/**
- * Released by its view and replaced by a newer record: a late call from the
- * view that has gone (a debounced setDraft, say) changes nothing and never
- * speaks over the record a newer view holds. A record that is mounted again
- * still speaks, so a live view is never silenced.
- */
-function superseded(record: DocumentRecord): boolean {
-  const owner = records.get(record.key);
-  return record.mounts === 0 && owner !== undefined && owner !== record;
-}
-
 function publish(record: DocumentRecord): void {
-  if (superseded(record)) return;
-  const owner = records.get(record.key);
   const store = useFileDocumentStore.getState();
   if (record.mounts === 0 && record.draft === null && record.pending === 0) {
     // No draft and nobody editing: the document is released. Only this
@@ -132,12 +119,15 @@ function publish(record: DocumentRecord): void {
     dirty: record.draft !== null,
     conflict: record.hostConflict || record.viewConflict,
     save: () => saveDraft(record),
-    discard: async () => discardDraft(record),
+    discard: async () => {
+      discardDraft(record);
+      // A reaction to "discarded" that starts a new draft keeps the panel open.
+      await Promise.resolve();
+      if (record.draft !== null)
+        throw new Error("A new draft started as the old one was discarded");
+    },
   };
   record.projection = projection;
-  // A draft reported after its view released the record keeps the record, so
-  // the next view for this panel and file restores it.
-  if (owner === undefined) records.set(record.key, record);
   store.setFileDocument(record.panelId, projection);
 }
 
@@ -336,6 +326,7 @@ async function saveDraft(record: DocumentRecord): Promise<FileDocumentSaveOutcom
         reason: covered && !replaced ? "saved" : "disk",
         revision: result.revision,
       });
+      await Promise.resolve();
       return covered && record.draft === null
         ? { status: "saved" }
         : { status: "refused", reason: "Edits made during the save are still unsaved" };
@@ -358,10 +349,17 @@ function discardDraft(record: DocumentRecord): void {
   publish(record);
 }
 
+/** Whether the view a document was handed to has gone. */
+interface ViewPresence {
+  mounts: number;
+  gone: boolean;
+}
+
 function createDocument(
   record: DocumentRecord,
   mode: FileEditorMode,
-  maxBytes: number
+  maxBytes: number,
+  view: ViewPresence
 ): PluginFileDocument {
   const readOnly = mode === "view";
   return Object.freeze({
@@ -374,6 +372,7 @@ function createDocument(
     read: () => read(record, maxBytes),
     save: async (text: string, options: { expectedRevision: string }) => {
       if (readOnly) return { status: "refused", reason: "read-only" } as const;
+      if (view.gone) return { status: "refused", reason: "unavailable" } as const;
       if (typeof text !== "string" || typeof options?.expectedRevision !== "string") {
         return { status: "error", message: "save(text, { expectedRevision }) needs both" } as const;
       }
@@ -382,7 +381,7 @@ function createDocument(
     getDraft: () => record.draft,
     getDraftBaseRevision: () => (record.draft === null ? null : record.revision),
     setDraft: (text: string | null, options?: { baseRevision?: string }) => {
-      if (readOnly || superseded(record)) return;
+      if (readOnly || view.gone) return;
       const next = typeof text === "string" ? text : null;
       if (next === record.draft) return;
       if (next === null) {
@@ -401,7 +400,7 @@ function createDocument(
       publish(record);
     },
     setConflict: (conflict: boolean) => {
-      if (readOnly || superseded(record) || record.viewConflict === Boolean(conflict)) return;
+      if (readOnly || view.gone || record.viewConflict === Boolean(conflict)) return;
       record.viewConflict = Boolean(conflict);
       publish(record);
     },
@@ -464,9 +463,17 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
   if (target.mode === "edit") record.maxBytes = target.maxBytes;
   record.rootPath = target.rootPath;
   const live = record;
+  // A view's calls after its host released it (a debounced setDraft, a late
+  // save callback) change nothing: by then another view may hold the panel's
+  // document. Settled a microtask after the last release, so a remount in the
+  // same commit (StrictMode) keeps the view, and a flush from its own unmount
+  // cleanup lands whichever of the two React runs first.
+  const view: ViewPresence = { mounts: 0, gone: false };
   return {
-    document: createDocument(live, target.mode, target.maxBytes),
+    document: createDocument(live, target.mode, target.maxBytes, view),
     retain: () => {
+      view.mounts += 1;
+      view.gone = false;
       live.mounts += 1;
       if (!records.has(live.key)) records.set(live.key, live);
       publish(live);
@@ -474,6 +481,12 @@ export function openPluginFileDocument(target: PluginFileDocumentTarget): Plugin
       return () => {
         if (released) return;
         released = true;
+        view.mounts -= 1;
+        if (view.mounts === 0) {
+          queueMicrotask(() => {
+            if (view.mounts === 0) view.gone = true;
+          });
+        }
         live.mounts -= 1;
         publish(live);
       };

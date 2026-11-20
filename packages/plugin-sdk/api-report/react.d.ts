@@ -8051,9 +8051,11 @@ interface PanelViewProps {
      * opened for, owned by the host. Read it with a revision, save against the
      * revision you read, and report your unsaved text with `setDraft`, naming the
      * revision it started from, so the host's dirty indicator, Rendered preview
-     * and Save / Discard / Cancel prompt on close all apply. The draft is the host's, not the view's: it survives
-     * the user switching to Source and back, and the close prompt can save it
-     * after your view has unmounted.
+     * and Save / Discard / Cancel prompt on close all apply. The draft is the
+     * host's, not the view's: it survives the user switching to Source and back,
+     * and the close prompt can save it after your view has unmounted. Calls made
+     * after your view unmounts change nothing, so flush a pending (debounced)
+     * draft in your unmount cleanup.
      */
     readonly fileDocument?: PluginFileDocument;
     /**

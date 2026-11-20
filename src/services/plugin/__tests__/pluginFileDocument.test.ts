@@ -729,16 +729,23 @@ describe("pluginFileDocument (#13809)", () => {
     ["a draft", "newer"],
     ["no draft", null],
   ])(
-    "never lets a released record's late draft replace the projection a newer view with %s holds",
-    (_label, newer) => {
+    "ignores a released view's late calls while a newer view with %s holds the panel",
+    async (_label, newer) => {
       const old = openPluginFileDocument(target());
       old.retain()();
+      await Promise.resolve();
       const fresh = openPluginFileDocument(target());
       fresh.retain();
       if (newer !== null) fresh.document.setDraft(newer, { baseRevision: REV_B });
 
+      // A debounced report and a late save from the view that has gone.
       old.document.setDraft("late", { baseRevision: REV_A });
       old.document.setConflict(true);
+      await expect(old.document.save("late", { expectedRevision: REV_A })).resolves.toEqual({
+        status: "refused",
+        reason: "unavailable",
+      });
+      expect(bridge.save).not.toHaveBeenCalled();
       expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
         draftText: newer,
         dirty: newer !== null,
@@ -748,7 +755,43 @@ describe("pluginFileDocument (#13809)", () => {
     }
   );
 
-  it("still publishes a record that is mounted again after a newer one replaced it", () => {
+  it("never lets a departed editor clear the draft its successor holds on the same document", async () => {
+    // An editor swap: the new host opens the shared document while rendering,
+    // before the old host's cleanup releases it.
+    const departing = openPluginFileDocument(target());
+    const releaseDeparting = departing.retain();
+    const successor = openPluginFileDocument(target());
+    releaseDeparting();
+    successor.retain();
+    await Promise.resolve();
+
+    successor.document.setDraft("successor", { baseRevision: REV_B });
+    // The departed editor's delayed save callback marks itself clean.
+    departing.document.setDraft(null);
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "successor",
+    });
+  });
+
+  it("takes a view's flush from its unmount cleanup and keeps it through a remount in the same commit", async () => {
+    const handle = openPluginFileDocument(target());
+    const release = handle.retain();
+    release();
+    handle.document.setDraft("flushed", { baseRevision: REV_A });
+    // StrictMode mounts the same handle again before anything else runs.
+    handle.retain();
+    await Promise.resolve();
+
+    handle.document.setDraft("flushed more");
+    expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
+      dirty: true,
+      draftText: "flushed more",
+    });
+    expect(handle.document.getDraftBaseRevision()).toBe(REV_A);
+  });
+
+  it("still publishes a handle mounted again after a newer record took the panel's key", () => {
     const first = openPluginFileDocument(target());
     const releaseFirst = first.retain();
     const second = openPluginFileDocument(target());
@@ -763,18 +806,33 @@ describe("pluginFileDocument (#13809)", () => {
     });
   });
 
-  it("keeps a released record's late draft for the next view when no newer one exists", () => {
-    const old = openPluginFileDocument(target());
-    old.retain()();
-    old.document.setDraft("late", { baseRevision: REV_A });
+  it("refuses to close when the editor queues a new draft on hearing its draft was saved", async () => {
+    bridge.save.mockResolvedValue({ status: "saved", revision: REV_B });
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("first", { baseRevision: REV_A });
+    handle.document.onDidChange((change) => {
+      if (change.reason !== "saved") return;
+      queueMicrotask(() => handle.document.setDraft("reformatted", { baseRevision: REV_B }));
+    });
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.save()).resolves.toEqual({
+      status: "refused",
+      reason: "Edits made during the save are still unsaved",
+    });
+  });
+
+  it("fails the close prompt's Discard when the editor starts a new draft on hearing of it", async () => {
+    const handle = openPluginFileDocument(target());
+    handle.retain();
+    handle.document.setDraft("first", { baseRevision: REV_A });
+    handle.document.onDidChange((change) => {
+      if (change.reason === "discarded") handle.document.setDraft("again", { baseRevision: REV_A });
+    });
+    await expect(useFileDocumentStore.getState().byPanelId["panel-1"]!.discard()).rejects.toThrow();
     expect(useFileDocumentStore.getState().byPanelId["panel-1"]).toMatchObject({
       dirty: true,
-      draftText: "late",
+      draftText: "again",
     });
-
-    const next = openPluginFileDocument(target());
-    expect(next.document.getDraft()).toBe("late");
-    expect(next.document.getDraftBaseRevision()).toBe(REV_A);
   });
 
   it("never conflicts a roomier editor's draft over a viewer's tighter ceiling", async () => {
