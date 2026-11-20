@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, RotateCcw } from "lucide-react";
+import { ChevronDown, RotateCw } from "lucide-react";
 import { DecisionsIcon, TriangleAlert } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FactSeparator } from "@/components/ui/FactSeparator";
@@ -24,6 +24,7 @@ import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { worktreeDisplayName } from "@/utils/recipeScope";
 import { pluralize } from "@/lib/pluralize";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -39,21 +40,27 @@ import type {
   DecisionsTimeoutNotice,
 } from "@shared/types/decisionsAttention";
 import {
+  ELSEWHERE_HEADING,
   EMPTY_DESCRIPTION,
   LIST_DESCRIPTION,
+  NONE_FOR_PANE,
+  PLAN_CAPTION,
   RESUME_PENDING,
   STILL_WORKING,
   agentLabel,
   aliasLabel,
   attentionFingerprint,
   canCopy,
+  canOpenQuestion,
   copyLabel,
   destinationGroups,
   destinationRowDetail,
   fromLines,
+  groupForPane,
   handledConfirmBody,
   handledConfirmTitle,
   handledNeedsConfirm,
+  hasFullerQuestion,
   leavesList,
   missingAnswerText,
   moveConfirmBody,
@@ -131,20 +138,25 @@ function useHeldFor(active: boolean, ms: number): boolean {
   return held;
 }
 
-/** The answer as the phone sent it; a long one opens in place rather than being cut for good. */
-function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
-  const { answer } = item;
-  const alias = aliasLabel(item.alias);
+/** Whether a folded quote's text runs past its clamp, measured again as the text changes and as it folds back. */
+function useClamped(text: string | null | undefined, expanded: boolean) {
   const textRef = useRef<HTMLQuoteElement>(null);
-  const textId = useId();
-  const [expanded, setExpanded] = useState(false);
   const [clamped, setClamped] = useState(false);
-
   useLayoutEffect(() => {
     const el = textRef.current;
     if (el === null || expanded) return;
     setClamped(el.scrollHeight > el.clientHeight + 1);
-  }, [answer?.text, expanded]);
+  }, [text, expanded]);
+  return { textRef, clamped };
+}
+
+/** The answer as the phone sent it; a long one opens in place rather than being cut for good. */
+function AnswerPreview({ item }: { item: DecisionsAttentionItem }) {
+  const { answer } = item;
+  const alias = aliasLabel(item.alias);
+  const textId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const { textRef, clamped } = useClamped(answer?.text, expanded);
 
   if (answer === null) {
     // Only follow-ups need a person: the answer was typed in.
@@ -233,16 +245,9 @@ function FollowUpPreview({
   followUp: DecisionsFollowUpPreview;
   alias: string;
 }) {
-  const textRef = useRef<HTMLQuoteElement>(null);
   const textId = useId();
   const [expanded, setExpanded] = useState(false);
-  const [clamped, setClamped] = useState(false);
-
-  useLayoutEffect(() => {
-    const el = textRef.current;
-    if (el === null || expanded) return;
-    setClamped(el.scrollHeight > el.clientHeight + 1);
-  }, [followUp.text, expanded]);
+  const { textRef, clamped } = useClamped(followUp.text, expanded);
 
   return (
     <figure className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
@@ -289,8 +294,115 @@ function FollowUpPreview({
   );
 }
 
+/**
+ * The plan the agent stated for an advisory round (#18055), in its own words,
+ * beside the notice that says whether it may go ahead with it. Never that it did.
+ */
+function PlanPreview({ plan, alias }: { plan: string; alias: string }) {
+  const textId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const { textRef, clamped } = useClamped(plan, expanded);
+  return (
+    <figure
+      className="flex flex-col gap-1 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2"
+      data-testid="decisions-attention-plan"
+    >
+      <figcaption className="text-2xs text-text-secondary">{PLAN_CAPTION}</figcaption>
+      <blockquote
+        ref={textRef}
+        id={textId}
+        className={
+          expanded
+            ? "whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
+            : "line-clamp-4 whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
+        }
+      >
+        {plan}
+      </blockquote>
+      {(clamped || expanded) && (
+        <Button
+          variant="link"
+          size="xs"
+          className="self-start px-0"
+          aria-expanded={expanded}
+          aria-controls={textId}
+          aria-label={expanded ? `Show less for ${alias}` : `Show full plan for ${alias}`}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? "Show less" : "Show full plan"}
+        </Button>
+      )}
+    </figure>
+  );
+}
+
+/**
+ * The rest of the question past the row's heading, read in place (#18055),
+ * and the question view for its notes and images where it can open it.
+ */
+function QuestionDetail({ item }: { item: DecisionsAttentionItem }) {
+  const alias = aliasLabel(item.alias);
+  const textId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const fuller = hasFullerQuestion(item);
+  const { reference } = item;
+  const openable = reference !== null && canOpenQuestion(item);
+  if (!fuller && !openable) return null;
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-x-3">
+        {fuller && (
+          <Button
+            variant="link"
+            size="xs"
+            className="px-0"
+            aria-expanded={expanded}
+            aria-controls={textId}
+            aria-label={
+              expanded
+                ? `Show less of the question for ${alias}`
+                : `Show full question for ${alias}`
+            }
+            onClick={() => setExpanded((open) => !open)}
+          >
+            {expanded ? "Show less" : "Show full question"}
+          </Button>
+        )}
+        {openable && (
+          <Button
+            variant="link"
+            size="xs"
+            className="px-0"
+            aria-label={`Open question ${alias}`}
+            // Over this list, so closing it comes back to the decision.
+            onClick={() =>
+              useDecisionsQuestionViewStore.getState().openReference([reference], reference)
+            }
+          >
+            Open question
+          </Button>
+        )}
+      </div>
+      {fuller && (
+        <p
+          id={textId}
+          hidden={!expanded}
+          className="whitespace-pre-wrap text-xs text-text-primary [text-wrap:pretty]"
+          data-testid="decisions-attention-question"
+        >
+          {item.fullQuestion}
+        </p>
+      )}
+    </>
+  );
+}
+
 interface ItemProps {
   item: DecisionsAttentionItem;
+  /** Opens the rest of the list below the opening pane's items. */
+  heading?: string;
+  /** One of the opening pane's own items, where an opening for it lands. */
+  forPane: boolean;
   worktreeName: WorktreeName;
   busy: Busy | null;
   onResume: () => void;
@@ -298,7 +410,16 @@ interface ItemProps {
   onHandled: () => void;
 }
 
-function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled }: ItemProps) {
+function AttentionItem({
+  item,
+  heading,
+  forPane,
+  worktreeName,
+  busy,
+  onResume,
+  onChoose,
+  onHandled,
+}: ItemProps) {
   const headingId = useId();
   const groupIdBase = useId();
   const alias = aliasLabel(item.alias);
@@ -338,13 +459,19 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
 
   return (
     <li
-      className="flex flex-col gap-2 py-4"
+      className={
+        heading === undefined ? "flex flex-col gap-2 py-4" : "flex flex-col gap-2 pt-5 pb-4"
+      }
       aria-labelledby={headingId}
       aria-busy={locked || undefined}
       data-question-id={item.questionId}
-      data-terminal-id={item.origin.paneId}
+      data-for-pane={forPane ? "" : undefined}
       data-testid="decisions-attention-item"
     >
+      {/* Inside the row, so every child of the list stays a question. */}
+      {heading !== undefined && (
+        <h3 className="pb-1 text-xs font-medium text-text-secondary">{heading}</h3>
+      )}
       <div className="flex items-baseline gap-2">
         <span className="shrink-0 font-mono text-xs text-text-secondary tabular-nums">{alias}</span>
         <h3
@@ -363,6 +490,14 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
           className="shrink-0 text-xs text-text-secondary"
         />
       </div>
+      {/* What stopped and why leads, under the question it stopped for. */}
+      <p className="flex items-start gap-1.5 text-xs text-text-primary [text-wrap:pretty]">
+        <TriangleAlert className="mt-0.5 size-3 shrink-0 text-status-warning" aria-hidden="true" />
+        <span>
+          <span className="font-medium">{statusText(item)}.</span>
+          {reason !== null && ` ${reason}`}
+        </span>
+      </p>
       <p className="text-xs text-text-secondary [text-wrap:pretty]">
         {pane}
         {place !== null && (
@@ -372,14 +507,9 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
           </>
         )}
       </p>
-      <p className="flex items-start gap-1.5 text-xs text-text-primary [text-wrap:pretty]">
-        <TriangleAlert className="mt-0.5 size-3 shrink-0 text-status-warning" aria-hidden="true" />
-        <span>
-          <span className="font-medium">{statusText(item)}.</span>
-          {reason !== null && ` ${reason}`}
-        </span>
-      </p>
+      <QuestionDetail item={item} />
       {item.notice !== null && <NoticePreview notice={item.notice} />}
+      {item.plan !== null && <PlanPreview plan={item.plan} alias={alias} />}
       <AnswerPreview item={item} />
       {item.followUps.map((followUp) => (
         <FollowUpPreview key={followUp.messageId} followUp={followUp} alias={alias} />
@@ -397,14 +527,8 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
             // Busy keeps its focus and its width: the glyph turns while it runs.
             onClick={busy === "resume" ? undefined : onResume}
           >
-            {/* Resuming goes back to the session that asked: the go-back glyph,
-                turning the way its arrow points while it runs. */}
-            <SpinningIcon
-              icon={RotateCcw}
-              active={busy === "resume"}
-              wrapperClassName="[animation-direction:reverse]"
-              aria-hidden="true"
-            />
+            {/* Resuming restarts the session that asked: the restart glyph, turning while it runs. */}
+            <SpinningIcon icon={RotateCw} active={busy === "resume"} aria-hidden="true" />
             Try resume
           </Button>
         )}
@@ -574,8 +698,16 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   /** The place in the list of an item whose action may take it off, for focus to land after. */
   const focusAfter = useRef<{ questionId: string; index: number } | null>(null);
   const reading = useRef(0);
-  /** The opening reads are launched for now. */
-  const opening = useRef(0);
+  /** The opening reads are launched for now, and the pane it was opened for. */
+  const opening = useRef<{ seq: number; terminalId: string | null }>({ seq: 0, terminalId: null });
+  /**
+   * The opening the shown list was read for: its items are grouped for that
+   * opening's pane, and change places only when a read for a new one lands.
+   */
+  const [listedFor, setListedFor] = useState<{ seq: number; terminalId: string | null }>({
+    seq: 0,
+    terminalId: null,
+  });
   /**
    * The opening the shown list or error was read in. The host keeps the last
    * opening's list mounted, so a reopening shows it until its own read lands.
@@ -584,6 +716,22 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   const showSkeleton = useSkeletonGate(isOpen && list === null && loadError === null);
 
   const items = useMemo(() => (list?.result === "listed" ? list.items : []), [list]);
+  const groups = useMemo(
+    () => groupForPane(items, listedFor.terminalId),
+    [items, listedFor.terminalId]
+  );
+  /** The questions in the order they show, which a row that leaves hands focus on by. */
+  const shown = useMemo(
+    () => (groups === null ? items : [...groups.forPane, ...groups.elsewhere]),
+    [groups, items]
+  );
+  const elsewhereStart = groups?.elsewhere[0]?.questionId ?? null;
+  // Said only of this opening's own pane, once its own read has listed nothing for it.
+  const noneForPane =
+    groups !== null &&
+    groups.forPane.length === 0 &&
+    groups.elsewhere.length > 0 &&
+    listedFor.seq === request.seq;
 
   const refresh = useCallback(async () => {
     const ticket = ++reading.current;
@@ -592,20 +740,21 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       const next = await decisionsClient.listAttention();
       if (ticket !== reading.current) return;
       setList(next);
+      setListedFor(launchedFor);
       setLoadError(null);
     } catch (error) {
       if (ticket !== reading.current) return;
       setLoadError(formatErrorMessage(error, "Couldn't read the answers"));
     }
-    setReadFor(launchedFor);
+    setReadFor(launchedFor.seq);
   }, []);
 
   useEffect(() => {
     if (!isOpen) return;
-    opening.current = request.seq;
+    opening.current = { seq: request.seq, terminalId: request.terminalId };
     setOutcome(null);
     void refresh();
-  }, [isOpen, request.seq, refresh]);
+  }, [isOpen, request.seq, request.terminalId, refresh]);
 
   // A confirmation belongs to the opening it was asked in: closing the list
   // takes it with it, so a reopening never shows one for an item it never asked about.
@@ -701,11 +850,10 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
     const active = document.activeElement;
     const kept = active !== null && active !== document.body;
     if (focusMovedFor.current === seq && kept) return undefined;
+    // This opening's read has landed, so the rows marked for its pane are its pane's own.
     const target =
       loadError === null
-        ? listRef.current?.querySelector<HTMLElement>(
-            `[data-terminal-id="${CSS.escape(request.terminalId)}"] ${ITEM_ACTIONS}`
-          )
+        ? listRef.current?.querySelector<HTMLElement>(`[data-for-pane] ${ITEM_ACTIONS}`)
         : null;
     if (target) {
       target.focus({ preventScroll: true });
@@ -753,7 +901,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
       announce(`Resuming the agent for ${aliasLabel(item.alias)}. ${RESUME_PENDING}`);
     focusAfter.current = {
       questionId: item.questionId,
-      index: items.findIndex((candidate) => candidate.questionId === item.questionId),
+      index: shown.findIndex((candidate) => candidate.questionId === item.questionId),
     };
     let next: Outcome;
     try {
@@ -786,7 +934,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
   const askAbout = (item: DecisionsAttentionItem) => {
     confirmFrom.current = {
       questionId: item.questionId,
-      index: items.findIndex((candidate) => candidate.questionId === item.questionId),
+      index: shown.findIndex((candidate) => candidate.questionId === item.questionId),
     };
   };
 
@@ -900,16 +1048,28 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
                 Set up or reconnect the relay in Settings → Decisions.
               </p>
             )}
+            {noneForPane && (
+              <p
+                className="pt-4 text-xs text-text-secondary [text-wrap:pretty]"
+                data-testid="decisions-attention-none-for-pane"
+              >
+                {NONE_FOR_PANE}
+              </p>
+            )}
             {count > 0 && (
               <ul
                 ref={listRef}
                 aria-label={`${pluralize(count, "question")} needing attention`}
                 className="flex flex-col divide-y divide-divider"
               >
-                {items.map((item) => (
+                {/* One list, keyed by question, so a row keeps its place in the DOM, and its
+                    focus, as the opening pane's items come to lead it. */}
+                {shown.map((item) => (
                   <AttentionItem
                     key={item.questionId}
                     item={item}
+                    heading={item.questionId === elsewhereStart ? ELSEWHERE_HEADING : undefined}
+                    forPane={groups?.forPane.includes(item) ?? false}
                     worktreeName={worktreeName}
                     busy={busy.get(item.questionId) ?? null}
                     onResume={() =>

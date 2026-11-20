@@ -298,6 +298,14 @@ function webhookItem(alias: number, question: string, text: string): DecisionsAt
     status: "needs-attention",
     reason: "pane_gone",
     question,
+    fullQuestion: question,
+    plan: null,
+    reference: {
+      hostId: "host-local",
+      projectId: "helios-billing",
+      terminalId: "s-two",
+      questionId: `qid-canopy-att-${alias}-webhook`,
+    },
     askedAt: iso(3 * 3_600_000 + alias * 60_000),
     origin: {
       projectId: "helios-billing",
@@ -344,6 +352,14 @@ function attentionItems(asker: string, projectName: string): DecisionsAttentionI
       status: "needs-attention",
       reason: "relaunched",
       question: "Should token refresh retry once on a 401 before signing the user out?",
+      fullQuestion: "Should token refresh retry once on a 401 before signing the user out?",
+      plan: null,
+      reference: {
+        hostId: "host-local",
+        projectId: "helios",
+        terminalId: asker,
+        questionId: "qid-canopy-att-38-token",
+      },
       askedAt: iso(2 * 3_600_000 + 12 * 60_000),
       origin: {
         projectId: "helios",

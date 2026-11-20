@@ -125,6 +125,23 @@ export async function readQuestionContent(
   return { result: "read", question };
 }
 
+/**
+ * The whole question and the plan its round states, from content already
+ * opened (#18055), as the question view would show them: null where it would
+ * refuse the question as unreadable, its content malformed or its advisory
+ * plan refused by the protocol.
+ */
+export function questionDetail(
+  row: QuestionRow,
+  opened: DecisionContentV1 | null
+): { question: string; plan: string | null } | null {
+  const parsed = DecisionContentV1.safeParse(opened);
+  if (!parsed.success) return null;
+  const plan = verifiedPlan(row, parseAnswers(row.answers_json), parsed.data);
+  if (plan === PLAN_REFUSED) return null;
+  return { question: parsed.data.question, plan };
+}
+
 /** The question's opening line; `unreadable` when its content can't be opened here. */
 export async function readQuestionSummary(
   ctx: SealContext,

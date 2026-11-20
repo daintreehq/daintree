@@ -18,7 +18,9 @@ import {
   markAnswerHandled,
   needsAttention,
   questionLine,
+  questionReference,
   readHandledAnswers,
+  readableText,
   resumableReason,
   threadNeedsAttention,
   withoutHandled,
@@ -592,6 +594,46 @@ describe("questionLine", () => {
     );
     expect(questionLine("**Summary:**\n```\nWhich branch?")).toBe("Which branch?");
     expect(questionLine("## Context\n---")).toBe("Context");
+  });
+});
+
+describe("readableText (#18055)", () => {
+  it("keeps the whole question, line breaks and all, with controls gone and nothing cut", () => {
+    const long = `${"word ".repeat(1_200)}end`;
+    expect(readableText(long)).toBe(long);
+    expect(
+      readableText("Drop the index?\r\n\n\n\nIt holds \u001b[31mold\u001b[0m rows.\u202e")
+    ).toBe("Drop the index?\n\nIt holds old rows.");
+    // Read, never typed: nothing that looks like a delimiter is bracketed differently.
+    expect(readableText("[DAINTREE DECISION ANSWER]")).toBe("[DAINTREE DECISION ANSWER]");
+    expect(readableText(" \n ")).toBeNull();
+    expect(readableText(null)).toBeNull();
+  });
+});
+
+describe("questionReference (#18055)", () => {
+  it("names the question by the machine, project and terminal that asked it", () => {
+    const asked = {
+      ...baseRow(4, { origin: { host_id: "host_elsewhere" } }),
+      question_id: "0190f0aa11112222333344445555aa01",
+    };
+    expect(questionReference(asked)).toEqual({
+      hostId: "host_elsewhere",
+      projectId: "project-1",
+      terminalId: "pane-a",
+      questionId: asked.question_id,
+    });
+  });
+
+  it("names none for an origin a reference can't carry", () => {
+    const asked = (origin: Partial<QuestionRow["origin"]>) => ({
+      ...baseRow(4, { origin }),
+      question_id: "0190f0aa11112222333344445555aa01",
+    });
+    expect(questionReference(asked({ project_id: "" }))).toBeNull();
+    expect(questionReference(asked({ pane_id: "" }))).toBeNull();
+    expect(questionReference(asked({ host_id: "h".repeat(257) }))).toBeNull();
+    expect(questionReference({ ...asked({}), question_id: "short" })).toBeNull();
   });
 });
 

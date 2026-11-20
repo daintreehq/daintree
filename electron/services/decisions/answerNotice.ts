@@ -228,14 +228,30 @@ const MARKER_LIKE = /\[\s*decision-injection\b[^\]]*\]/gi;
 const encoder = new TextEncoder();
 const byteLength = (text: string) => encoder.encode(text).length;
 
+/** Escape sequences and controls gone, every line break a newline. */
+function withoutControls(input: string): string {
+  const text = input.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n");
+  return text.replace(OSC, "").replace(CSI, "").replace(ESC_OTHER, "").replace(CONTROLS, "");
+}
+
+/**
+ * Text only ever read on screen, never typed in (#18055): controls gone and
+ * newlines folded as in an answer, but uncut and with no delimiter rewrite,
+ * since nothing parses it.
+ */
+export function displayText(input: string): string {
+  return withoutControls(input)
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /**
  * Answer text as inert data: escape sequences and controls gone, newlines
  * folded, anything that could pass for a delimiter or a marker bracketed
  * differently, and the length capped.
  */
 export function sanitizeAnswerText(input: string, maxChars: number): string {
-  let text = input.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n");
-  text = text.replace(OSC, "").replace(CSI, "").replace(ESC_OTHER, "").replace(CONTROLS, "");
+  let text = withoutControls(input);
   text = text
     .replace(DELIMITER_LIKE, (m) => `(${m.slice(1, -1)})`)
     .replace(MARKER_LIKE, (m) => `(${m.slice(1, -1)})`);

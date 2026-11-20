@@ -10,6 +10,8 @@ import ts from "typescript";
 //   - RefreshCw — do it again / fetch it again: Retry, Refresh, Check again.
 //   - RotateCw — reload a page or view, restart a process or session.
 //   - RotateCcw — go back: restore, reset, revert, undo, replay, resume.
+//     Decisions' Try resume is the exception: it restarts the agent's session
+//     to type a stalled answer in, so it reloads (#18055).
 // Plus the smaller concepts that had split: Copy URL wears Copy (Link is for
 // linking), edit is Pencil, Project settings the Settings cog, Clone
 // repository FolderDown, Open project FolderOpen, a worktree FolderGit2.
@@ -45,6 +47,7 @@ const GLYPHS = new Set([
 type Concept = "go-back" | "reload" | "again";
 
 function rotationConcept(label: string): Concept | null {
+  if (/\btry resume\b/i.test(label)) return "reload";
   if (/\b(restore|reset|revert|undo|replay|resume|discard)\b/i.test(label)) return "go-back";
   if (/\b(restart|reload)/i.test(label)) return "reload";
   if (

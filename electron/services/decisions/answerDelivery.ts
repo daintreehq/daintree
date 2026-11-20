@@ -63,7 +63,9 @@ import {
   needsAttention,
   pendingEntries,
   questionLine,
+  questionReference,
   readHandledAnswers,
+  readableText,
   resumableReason,
   threadNeedsAttention,
   type HandledAnswers,
@@ -72,6 +74,7 @@ import {
 import { sanitizeAnswerText } from "./answerNotice.js";
 import {
   inScope,
+  questionDetail,
   readQuestionContent,
   readQuestionImage,
   readQuestionSummary,
@@ -475,8 +478,9 @@ export class AnswerDelivery {
   /**
    * The answers a person has to decide about (#16020), and the follow-ups
    * after them (#16231), oldest question first, without what was marked
-   * handled. Each is opened here, in memory: the question's first line, the
-   * answer waiting to be typed in, and each follow-up's words.
+   * handled. Each is opened here, in memory: the question, whole and as its
+   * first line, any plan its round states, the answer waiting to be typed
+   * in, and each follow-up's words.
    */
   async attentionItems(): Promise<DecisionsAttentionItem[]> {
     const handled = await readHandledAnswers(this.store);
@@ -510,12 +514,14 @@ export class AnswerDelivery {
               ? null
               : "none";
       const followUps = await this.followUpPreviews(row);
-      let question: string | null;
+      let question: string | null = null;
+      let detail: ReturnType<typeof questionDetail> = null;
       try {
         const content = await openQuestionContent(this.owner.ctx, row);
         question = content === null ? null : questionLine(content.question);
+        detail = questionDetail(row, content);
       } catch {
-        question = null;
+        // Unopened, the row says so: nothing of the question shows.
       }
       const uncertain =
         (answerHeld && row.delivery_status === "delivery-uncertain") ||
@@ -537,6 +543,9 @@ export class AnswerDelivery {
         status,
         reason: reasonOf(code),
         question,
+        fullQuestion: readableText(detail?.question),
+        plan: readableText(detail?.plan),
+        reference: questionReference(row),
         askedAt: row.origin_created_at,
         origin: await this.originOf(row.origin, terminals, projectName),
         answer,
