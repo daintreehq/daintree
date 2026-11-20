@@ -165,7 +165,10 @@ function verdict(
   origin: QuestionOrigin,
   info: PaneRecord | null
 ): "current" | "gone" | "unreadable" {
-  const mismatch = identityMismatch(sources, targetOf(origin), info ?? undefined);
+  // Another agent seen in the same live pane is another run, though nothing respawned it.
+  const mismatch = identityMismatch(sources, targetOf(origin), info ?? undefined, [
+    origin.agent_kind,
+  ]);
   // No host id, or no pty client: nothing here can say what the pane holds.
   if (mismatch === "unreadable" || mismatch === "host-offline") return "unreadable";
   if (mismatch !== null) return "gone";
@@ -173,17 +176,6 @@ function verdict(
   if (info === null) return "unreadable";
   // The agent that asked ended, though its pane lives on as a shell.
   if (info.agentState === "exited") return "gone";
-  // Another agent seen in the same live pane is another run, though nothing respawned it. A
-  // plugin agent's own id can name a process detection credits to a built-in, so only a
-  // built-in asker is compared.
-  const agent = info.detectedAgentId ?? info.launchAgentId;
-  if (
-    agent !== undefined &&
-    agent !== origin.agent_kind &&
-    Object.hasOwn(AGENT_REGISTRY, origin.agent_kind)
-  ) {
-    return "gone";
-  }
   return "current";
 }
 

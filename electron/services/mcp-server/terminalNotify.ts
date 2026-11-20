@@ -2573,16 +2573,22 @@ export class TerminalNotifyService {
     // A held prompt is never typed into a working pane, even one whose CLI
     // queues mid-turn input, and a decision answer only into one that queues
     // it (#16282), taking a question in prose only on a line of its own; both
-    // only into the run just checked. The host holds the whole line to that.
+    // only into the run just checked, and an answer only into the agent kind
+    // its wake just checked (#18116): detection can hand the PTY to another
+    // agent without a respawn. The host holds the whole line to that.
     const promptOnLine = wakes.some(({ wake }) => isHeldPrompt(wake));
+    const decisionOnLine = wakes.some(({ wake }) => wake.kind === "decision");
     const guard: TerminalSubmitGuard =
-      promptOnLine || wakes.some(({ wake }) => wake.kind === "decision")
+      promptOnLine || decisionOnLine
         ? {
             kind: "settled-prompt-exact",
             ...(info.agentIncarnation !== undefined
               ? { agentIncarnation: info.agentIncarnation }
               : {}),
             ...(info.agentSessionId !== undefined ? { agentSessionId: info.agentSessionId } : {}),
+            ...(decisionOnLine && info.detectedAgentId !== undefined
+              ? { agentId: info.detectedAgentId }
+              : {}),
             ...(promptOnLine || (!decisionsOnly && holdsPrompt(owner))
               ? {}
               : { acceptWorking: true as const }),
