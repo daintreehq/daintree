@@ -31,6 +31,15 @@ export const MetricsLinkMethod = {
    * existed refuses the call, which the host ignores.
    */
   AGENT_WAITING: "host.agent-waiting",
+  /**
+   * Host → Shell: one of the host's agents was seen reaching `completed` or
+   * `exited`, or a stop it was sent no longer stands (the agent took up work
+   * again, its terminal is being closed, or its run was put aside) (#17933).
+   * Facts only, sent as they happen and never again: nothing is held for a
+   * Shell whose link is down. Sent only to a Shell whose HELLO says it reads
+   * it, so an older one is never sent a call it would refuse.
+   */
+  AGENT_STOP_CHANGED: "host.agent-stop-changed",
   /** Shell → Host: the host's agent runs, as fleet targets. */
   LIST_FLEET_TARGETS: "fleet.list-targets",
   /** Shell → Host: submit a fleet prompt to one of the host's agents. */
@@ -121,6 +130,26 @@ export const AgentWaitingPayloadSchema = z
   })
   .strip();
 export type AgentWaitingPayload = z.infer<typeof AgentWaitingPayloadSchema>;
+
+/**
+ * What a host saw of one agent's stop: never a title, name or screen text.
+ * `state` is null when a stop it was sent no longer stands, and a stopped
+ * state a later host adds is read that way too, never refused.
+ */
+export const AgentStopChangePayloadSchema = z
+  .object({
+    terminalId: id,
+    projectId: id.nullable(),
+    state: z.enum(["completed", "exited"]).nullable().catch(null),
+    /** When the transition was seen, by the host's own clock: provenance, never compared with the Shell's. */
+    seenAt: z.number().finite(),
+    /** How long before posting the host saw it, by its own clock. */
+    ageMs: z.number().finite().min(0),
+    /** The newest ping of the Shell's the host had when it posted; null before any. */
+    afterPing: generation.nullable(),
+  })
+  .strip();
+export type AgentStopChangePayload = z.infer<typeof AgentStopChangePayloadSchema>;
 
 const FLEET_OP_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 

@@ -19,6 +19,7 @@ import {
   type DecisionsHostLink,
   type DecisionsHostsPort,
   type HostAcceptResult,
+  type HostAgentStopChange,
   type HostCallOutcome,
   type HostIdentityReport,
   type HostRequestResult,
@@ -85,6 +86,8 @@ export interface DecisionsHostsClientDeps {
    * is announced.
    */
   ownerState(): OwnerStateAnnouncement | null;
+  /** Hosts' agents' stops as the host summaries' client hears them (#17933). */
+  onAgentStopChanges?(listener: (hostId: string, change: HostAgentStopChange) => void): () => void;
   now?: () => number;
 }
 
@@ -415,6 +418,10 @@ export class DecisionsHostsClient implements DecisionsHostsPort {
     return this.deps.onSessionOpened((hostId, session) =>
       listener(hostId, this.linkOf(hostId, session))
     );
+  }
+
+  onAgentStopChanges(listener: (hostId: string, change: HostAgentStopChange) => void): () => void {
+    return this.deps.onAgentStopChanges?.(listener) ?? (() => {});
   }
 
   onHostsChanged(listener: () => void): () => void {

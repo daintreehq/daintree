@@ -59,6 +59,8 @@ const ClientInfoSchema = z.object({
   // One this side cannot read is dropped too: the host then treats the Shell
   // as one from before it, which wants usage.
   agentUsage: z.boolean().optional().catch(undefined),
+  // One this side cannot read is dropped too: the host then sends it no stops.
+  agentStopChanges: z.boolean().optional().catch(undefined),
 });
 
 export const HelloSchema = z.object({

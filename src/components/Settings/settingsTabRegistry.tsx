@@ -2410,7 +2410,7 @@ export const SETTINGS_REGISTRY = [
         section: "Questions",
         title: "Notify my phone when an agent stops",
         description:
-          "While you're away and outside quiet hours, your relay tells your phone only that an agent on this computer stopped, never which one",
+          "While you're away and outside quiet hours, your relay tells your phone only that an agent stopped, never which one. That covers this computer and the Remote Hosts it's connected to: one with a project open here, or with its notifications turned on.",
         keywords: [
           "phone",
           "push",

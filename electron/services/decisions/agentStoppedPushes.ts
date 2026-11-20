@@ -38,6 +38,17 @@ export interface AgentTransition {
   terminalClosing?: boolean;
 }
 
+/**
+ * A stop judged where its agent runs, a Remote Host (#17933): `stopped` is a
+ * turn into `completed` or `exited` there, and false takes that stop back.
+ * `key` names the agent apart from every pane on this computer and on other
+ * Hosts.
+ */
+export interface ReportedStop {
+  key: string;
+  stopped: boolean;
+}
+
 export interface AgentStoppedPushesOptions {
   /** Whether stops may be pushed now: Decisions and the switch on, in this run. Read each time. */
   allowed(): boolean;
@@ -52,6 +63,12 @@ export interface AgentStoppedPushesOptions {
   /** Hears each run being parked or snoozed until the returned function is called. */
   watchPutAside(listener: (terminalId: string) => void): () => void;
   /**
+   * Hears the stops connected Remote Hosts report until the returned function
+   * is called. They count as this computer's own do, under the same switch,
+   * presence, quiet hours, batching and limits.
+   */
+  watchReportedStops?(listener: (report: ReportedStop) => void): () => void;
+  /**
    * Asks the bridge live now for one push; null when none is, so nothing was
    * asked. `stillDue` is read once more just before the request is sent, after
    * the relay's features have been read. Supplied by the connection.
@@ -63,9 +80,10 @@ export interface AgentStoppedPushesOptions {
 }
 
 /**
- * Tells the person's phone that an agent on this computer stopped (#17319):
- * an observed turn into `completed` or `exited` while Daintree reads them as
- * away and outside quiet hours. Stops that land close together go out as one
+ * Tells the person's phone that an agent on this computer stopped (#17319),
+ * or on a Remote Host it is connected to (#17933): an observed turn into
+ * `completed` or `exited` while Daintree reads them as away and outside
+ * quiet hours. Stops that land close together go out as one
  * request, and nothing about which agent, where or how many leaves this
  * computer: the request carries none of it.
  *
@@ -118,6 +136,7 @@ export class AgentStoppedPushes {
     this.offs = [
       this.o.watchTransitions((transition) => this.observe(transition)),
       this.o.watchPutAside((terminalId) => this.forget(terminalId)),
+      this.o.watchReportedStops?.((report) => this.report(report)) ?? (() => {}),
       // Asleep, a batch would go out on waking, however late.
       watch.onSuspend(() => {
         this.asleep = true;
@@ -152,11 +171,21 @@ export class AgentStoppedPushes {
       return;
     }
     // Completed then exited is still the one stop, sent or not.
-    if (STOPPED_STATES.has(previousState) || this.pending.has(terminalId)) return;
-    if (!this.admits(terminalId)) return;
+    if (STOPPED_STATES.has(previousState)) return;
+    this.admit(terminalId);
+  }
+
+  /** A Host judged the stop as `observe` would have; only this computer's checks are left. */
+  private report({ key, stopped }: ReportedStop): void {
+    if (stopped) this.admit(key);
+    else this.forget(key);
+  }
+
+  private admit(key: string): void {
+    if (this.pending.has(key) || !this.admits(key)) return;
     const now = this.now();
     if (this.pending.size === 0) this.batchStartedAt = now;
-    this.pending.set(terminalId, now);
+    this.pending.set(key, now);
     this.schedule();
   }
 

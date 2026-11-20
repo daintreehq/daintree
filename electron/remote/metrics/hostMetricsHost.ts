@@ -22,10 +22,12 @@ import {
   AgentUsageDemandSchema,
   MetricsLinkMethod,
   SubmitFleetPayloadSchema,
+  type AgentStopChangePayload,
   type AgentWaitingPayload,
   type AttentionPayload,
 } from "./linkMethods.js";
 import { agentWaitingOf } from "./agentWaiting.js";
+import { agentStopChangeOf, type AgentStopChange } from "./agentStops.js";
 import { createLogger } from "../../utils/logger.js";
 import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 
@@ -93,6 +95,11 @@ export interface MetricsHostDeps {
    * changes while it waits (#16188).
    */
   onAgentWaiting(listener: (payload: WaitingEvent) => void): () => void;
+  /**
+   * Told when one of this host's agents stops, or a stop it reported no
+   * longer stands (#17933).
+   */
+  onAgentStopChanges(listener: (change: AgentStopChange) => void): () => void;
   /**
    * Whether this host takes work from other machines' assistants: only then
    * are its agents' waits sent for their watches, as their directory is read.
@@ -406,12 +413,30 @@ export function installHostMetricsHostWith(
     }
   });
 
+  // Only to a Shell that said it reads them, and once: a Shell whose link is
+  // down when an agent stops never hears of it, rather than hearing late.
+  const offStops = deps.onAgentStopChanges((change) => {
+    const now = deps.now();
+    for (const ctx of server.sessions) {
+      if (!ctx.session.isOpen || ctx.client.agentStopChanges !== true) continue;
+      const payload: AgentStopChangePayload = {
+        ...change,
+        ageMs: Math.max(0, now - change.seenAt),
+        afterPing: ctx.session.peerPingNonce,
+      };
+      ctx.session.call(MetricsLinkMethod.AGENT_STOP_CHANGED, payload).catch(() => {
+        // Nothing to retry: sent again later, it would be late.
+      });
+    }
+  });
+
   return () => {
     offSession();
     offTracking();
     stopLoop();
     disposed = true;
     offWaiting();
+    offStops();
     offWorktrees();
     offProjects();
     worktrees.dispose();
@@ -471,7 +496,7 @@ export async function installHostMetricsHost(
     ops,
     { events },
     { projectStore },
-    { getPtyClient },
+    { getPtyClient, getRunAttentionServiceRef },
     registry,
     { agentNotificationService },
     { getAgentUsageWatch },
@@ -517,6 +542,34 @@ export async function installHostMetricsHost(
           seen,
         });
       });
+    },
+    onAgentStopChanges(listener) {
+      const projectOf = (id: string) => getPtyClient()?.getTerminalProjectId(id) ?? null;
+      const facts = {
+        getTerminalProjectId: projectOf,
+        putAside: (id: string) => {
+          const attention = getRunAttentionServiceRef();
+          return attention !== null && (attention.getParkRecord(id) !== undefined || attention.isSnoozed(id));
+        },
+      };
+      // Put aside after its stop was sent: the stop no longer stands, and lifting it brings none back.
+      const withdraw = (terminalId: string, seenAt: number) =>
+        listener({ terminalId, projectId: projectOf(terminalId), state: null, seenAt });
+      const offs = [
+        events.on("agent:state-changed", (payload) => {
+          const change = agentStopChangeOf(payload, facts);
+          if (change !== null) listener(change);
+        }),
+        events.on("terminal:park-changed", (payload) => {
+          if (payload.parked) withdraw(payload.id, payload.timestamp);
+        }),
+        events.on("terminal:snooze-changed", (payload) => {
+          if (payload.snoozed) withdraw(payload.id, payload.timestamp);
+        }),
+      ];
+      return () => {
+        for (const off of offs) off();
+      };
     },
     notificationSettings: (projectId) => projectStore.getEffectiveNotificationSettings(projectId),
     shellDecides: (clientId) => agentNotificationService.hasShellPolicy(clientId),

@@ -50,7 +50,7 @@ export function DecisionsDisclosure({ className }: { className?: string }) {
         registers one with the relay. A push says only that a question needs you, never the
         question. If you turn on phone notifications when an agent stops, under Questions, this
         computer also asks your relay to tell your phone that an agent stopped while you were away,
-        never which agent, where or how many.
+        here or on a Remote Host it&apos;s connected to, never which agent, where or how many.
       </li>
       <li>
         <span className="font-medium text-text-primary">Whether you&apos;re at this computer.</span>{" "}

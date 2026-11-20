@@ -187,6 +187,19 @@ export interface DecisionsHostsPort {
    * its last report lists the question as waiting for the person. Null otherwise.
    */
   lastHostRead(reference: DecisionQuestionReference): DecisionQuestionLastRead | null;
+  /**
+   * Each connected Host's agents seen reaching `completed` or `exited`, and
+   * each of those stops taken back: the agent took up work again, its run was
+   * put aside, or the link it came on ended (#17933). Only links already up
+   * report, and a stop is passed on only as it happens, never late.
+   */
+  onAgentStopChanges(listener: (hostId: string, change: HostAgentStopChange) => void): () => void;
+}
+
+/** One of a Host's agents' stops: `stopped` false takes back the one before it. */
+export interface HostAgentStopChange {
+  terminalId: string;
+  stopped: boolean;
 }
 
 /** One Host's questions, as this computer last heard them (#17230). */
