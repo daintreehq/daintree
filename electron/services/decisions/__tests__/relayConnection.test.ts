@@ -8,6 +8,8 @@ import {
   INVOLVEMENT_META,
   MemoryKeyStore,
   MemoryLocalStore,
+  STORE_FORMAT,
+  STORE_FORMAT_KEY,
   loadIdentity,
   type KeyStore,
   type ProxyEngine,
@@ -1295,6 +1297,77 @@ describe("RelayConnection", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("starts on a store a 0.8.0 bridge left with a reopened question open, stamping it and running 0.9.0's repair (#17939)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-migrated-"));
+    const migrations = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../persistence/migrations"
+    );
+    try {
+      const sqlite = openDb(path.join(dir, "app.db"), migrations).sqlite;
+      const store = new DaintreeLocalStore(sqlite);
+      const deadline = "2026-12-01T00:00:00.000Z";
+      // As 0.8.0 left it: reopened into round 1, with no format marked and no repair recorded.
+      await store.commitNewQuestion(
+        {
+          question_id: "q_reopened_0001",
+          alias: 1,
+          origin: QUESTION_ORIGIN,
+          requirement: "human-required",
+          question_revision: 1,
+          remote_event_seq: 4,
+          origin_created_at: "2026-11-01T00:00:00.000Z",
+          expires_at: deadline,
+          local_status: "open",
+          delivery_status: "relay-accepted",
+          last_injection_id: null,
+          last_attempt_at: null,
+          agent_resume_strategy: null,
+          error_code: null,
+          content_sealed: '{"sealed":1}',
+          answers_json: "[]",
+          messages_json: "[]",
+          history_only: false,
+          delivered_revision: 0,
+          attachment_digests: [],
+        },
+        {
+          id: "o1",
+          kind: "create",
+          question_id: "q_reopened_0001",
+          payload: {},
+          attempts: 0,
+          next_attempt_at: 0,
+          created_at: 0,
+          last_error: null,
+        }
+      );
+      await store.deleteOutbox("o1");
+      expect(await store.getMeta(STORE_FORMAT_KEY)).toBeNull();
+      const history = vi.spyOn(store, "processedEventsOfType");
+
+      const h = await harness({ store });
+      h.connection.start();
+      const socket = await connectLive(h);
+      socket.event(1);
+      await socket.waitFor((frame) => frame.t === "ack" && frame.seq === 1);
+
+      await vi.waitFor(async () => expect(await store.getMeta("rounds-reconciled")).not.toBeNull());
+      expect(history).toHaveBeenCalledWith("decision.reopened");
+      expect(await store.getMeta(STORE_FORMAT_KEY)).toBe(String(STORE_FORMAT));
+      expect(await store.getQuestion("q_reopened_0001")).toMatchObject({
+        local_status: "open",
+        question_revision: 1,
+        expires_at: deadline,
+      });
+      h.connection.stop();
+      await store.close();
+      sqlite.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uploads, after the app starts again, what an upload cut short left spooled, from the ciphertext alone", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-attachments-"));
     const migrations = path.resolve(

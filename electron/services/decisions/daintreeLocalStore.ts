@@ -1,5 +1,7 @@
 import type Database from "better-sqlite3";
 import {
+  STORE_FORMAT_KEY,
+  checkStoreFormat,
   isPendingMessage,
   parseMessages,
   unreportedStatuses,
@@ -843,6 +845,19 @@ export class DaintreeLocalStore implements LocalStore {
         ).all(limit) as InboundEvent[]
       ).map(eventFrom)
     );
+  }
+
+  /**
+   * Throws `StoreFormatError` when a newer Decisions client wrote this store
+   * (0.9.0), so nothing here acts on records it may misread. It only reads:
+   * the bridge stamps an older or unmarked store with its own format as it
+   * starts (`admitStoreFormat`), and the app database has no other writer.
+   */
+  checkFormat(): void {
+    const row = this.st("SELECT value FROM decisions_meta WHERE key = ?").get(STORE_FORMAT_KEY) as
+      | { value: unknown }
+      | undefined;
+    checkStoreFormat(row?.value);
   }
 
   processedEventsOfType(eventType: string): Promise<InboundEvent[]> {
