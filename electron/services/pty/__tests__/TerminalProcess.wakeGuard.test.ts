@@ -1184,24 +1184,6 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
   });
 
-  it("hands the read the state the line was admitted on, not its own busy transition", async () => {
-    const terminal = createTerminal();
-    const settledAt = Date.now() - 5_000;
-    settleAtPrompt(terminal, settledAt);
-    const analysis = analysisOf(terminal);
-    const read = vi.spyOn(analysis, "serializeScreen");
-    vi.spyOn(analysis, "hasMonitor").mockReturnValue(true);
-    vi.spyOn(analysis, "notifySubmission").mockImplementation(() => {
-      info(terminal).agentState = "working";
-      info(terminal).lastStateChange = Date.now();
-    });
-    terminal.submit("wake", "tok-1", undefined, "settled-prompt");
-    await vi.advanceTimersByTimeAsync(3_000);
-
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(read).toHaveBeenCalledWith(settledAt);
-  });
-
   it("holds the Enter of a Claude Code update's /restart with its footer observation unchanged", async () => {
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);
@@ -1237,8 +1219,8 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
       (terminal) => {
         const analysis = analysisOf(terminal);
         const read = analysis.serializeScreen.bind(analysis);
-        vi.spyOn(analysis, "serializeScreen").mockImplementation(async (since) => {
-          const screen = await read(since);
+        vi.spyOn(analysis, "serializeScreen").mockImplementation(async () => {
+          const screen = await read();
           ptyOutput!("\x1b[1;1H.");
           return screen;
         });
@@ -1249,11 +1231,19 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
       (terminal) => {
         const analysis = analysisOf(terminal);
         const read = analysis.serializeScreen.bind(analysis);
-        vi.spyOn(analysis, "serializeScreen").mockImplementation(async (since) => {
-          const screen = await read(since);
+        vi.spyOn(analysis, "serializeScreen").mockImplementation(async () => {
+          const screen = await read();
           ptyOutput!("\x1b]11;?\x07");
           return screen;
         });
+      },
+    ],
+    [
+      "the mirror lost output while the body waited",
+      (terminal) => {
+        const analysis = analysisOf(terminal);
+        const since = analysis.observedSince()!;
+        vi.spyOn(analysis, "observedSince").mockReturnValue(since + 1);
       },
     ],
     [
@@ -1264,8 +1254,8 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
         const since = analysis.observedSince()!;
         let lost = false;
         vi.spyOn(analysis, "observedSince").mockImplementation(() => (lost ? since + 1 : since));
-        vi.spyOn(analysis, "serializeScreen").mockImplementation(async (at) => {
-          const screen = await read(at);
+        vi.spyOn(analysis, "serializeScreen").mockImplementation(async () => {
+          const screen = await read();
           lost = true;
           return screen;
         });
@@ -1312,7 +1302,9 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
       () => new Promise((resolve) => (answer = resolve))
     );
     // Given up on a second after the Enter delay, not whenever the read returns.
-    await vi.advanceTimersByTimeAsync(enterDelayOf(terminal) + 1_050);
+    await vi.advanceTimersByTimeAsync(enterDelayOf(terminal) + 900);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "writing" });
+    await vi.advanceTimersByTimeAsync(150);
 
     expectHeld(terminal);
     expect(terminal.hasPendingSubmission()).toBe(false);
@@ -1363,7 +1355,9 @@ describe("TerminalProcess screen read before a guarded Enter (#17984)", () => {
     terminal.submit("ls", "tok-1", undefined, guard);
     ptyOutput!(CLEAR + PERMISSION_DIALOG);
     // The Enter goes at the end of the delay, as before.
-    await vi.advanceTimersByTimeAsync(enterDelayOf(terminal) + 1);
+    await vi.advanceTimersByTimeAsync(enterDelayOf(terminal) - 1);
+    expect(written()).toEqual(["ls"]);
+    await vi.advanceTimersByTimeAsync(2);
 
     expect(read).not.toHaveBeenCalled();
     expect(written()).toEqual(["ls", "\r"]);

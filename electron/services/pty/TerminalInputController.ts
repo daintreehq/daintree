@@ -100,7 +100,7 @@ export interface TerminalInputControllerHost {
   readonly writeQueue: WriteQueue;
   logWriteError(error: unknown, context: { operation: string; traceId?: string }): void;
   /** The visible screen once all output fed so far has parsed; see `AnalysisBackend.serializeScreen`. */
-  serializeScreen(since: number): Promise<SerializedTerminalSnapshot | null>;
+  serializeScreen(): Promise<SerializedTerminalSnapshot | null>;
   /** A count that moves whenever output reaches this terminal or goes on to its views. */
   outputMark(): number;
 }
@@ -688,10 +688,10 @@ export class TerminalInputController {
     }
     terminal.lastInputTime = Date.now();
     this.laneSubmittedAt = terminal.lastInputTime;
-    // The state a guarded line was admitted on, before this submission's own
-    // busy transition moves it: a mirror that lost output since can't vouch
-    // for the screen the line was let in at (#17984).
-    const admittedOn = terminal.lastStateChange ?? Number.NEGATIVE_INFINITY;
+    // Since when the mirror has read every byte, as the line takes the lane: a
+    // loss after this is output the screen read before the Enter can't
+    // account for (#17984). A gap before it is trusted as the guard trusts it.
+    const observedAtAdmission = this.host.analysis.observedSince();
 
     if (terminal.isExited) {
       return;
@@ -719,7 +719,7 @@ export class TerminalInputController {
       if (ctx?.abandonEnterOnInput === true) {
         const owner = this.captureOwner();
         const typedBefore = terminal.lastTypedInputAt;
-        const screen = await this.readScreenAtEnter(admittedOn);
+        const screen = await this.readScreenAtEnter(observedAtAdmission);
         if (
           screen === null ||
           !this.isStillOwnedBy(generation, owner) ||
@@ -821,7 +821,7 @@ export class TerminalInputController {
       !this.isStillOwnedBy(generation, owner);
     const screen =
       ctx?.abandonEnterOnInput === true && !enterStopped()
-        ? await this.readScreenAtEnter(admittedOn)
+        ? await this.readScreenAtEnter(observedAtAdmission)
         : undefined;
 
     if (!this.host.terminalInfo.ptyProcess) {
@@ -883,19 +883,18 @@ export class TerminalInputController {
    * Enter must be held, otherwise a check, run again right before the Enter,
    * that nothing has reached the terminal since. Held when the read shows a
    * choice selector, can't show it saw every byte that came in (a mirror
-   * that lost output since the state the line was admitted on, a read that
-   * failed, timed out or was overtaken by output), or comes back empty. A
-   * pass says only what the screen showed: output still in the pty, or a
-   * frame the agent hasn't flushed, can't be seen from here.
+   * that lost output since the line took the lane, a read that failed, timed
+   * out or was overtaken by output), or comes back empty. A pass says only
+   * what the screen showed: output still in the pty, or a frame the agent
+   * hasn't flushed, can't be seen from here.
    */
   private async readScreenAtEnter(
-    admittedOn: number
+    observedAtAdmission: number | null
   ): Promise<{ unchanged: () => boolean } | null> {
+    if (observedAtAdmission === null) return null;
     const mark = this.host.outputMark();
-    const observedSince = this.host.analysis.observedSince();
-    if (observedSince === null) return null;
     const unchanged = () =>
-      this.host.outputMark() === mark && this.host.analysis.observedSince() === observedSince;
+      this.host.outputMark() === mark && this.host.analysis.observedSince() === observedAtAdmission;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), ENTER_SCREEN_READ_TIMEOUT_MS);
@@ -904,7 +903,7 @@ export class TerminalInputController {
     try {
       const snapshot = await Promise.race([
         Promise.resolve()
-          .then(() => this.host.serializeScreen(admittedOn))
+          .then(() => this.host.serializeScreen())
           .catch(() => null),
         timeout,
       ]);

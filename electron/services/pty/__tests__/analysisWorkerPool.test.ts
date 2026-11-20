@@ -528,7 +528,7 @@ describe("AnalysisWorkerPool", () => {
     backend.feedChunk("scrolled-away\r\n".repeat(10), { agentLive: false });
     backend.feedChunk("MARKER-held-bytes", { agentLive: false }); // held host-side
 
-    const screen = await backend.serializeScreen(0);
+    const screen = await backend.serializeScreen();
     expect(screen?.data).toContain("MARKER-held-bytes");
     expect(screen?.data).not.toContain(
       "scrolled-away\r\nscrolled-away\r\nscrolled-away\r\nscrolled-away"
@@ -557,12 +557,12 @@ describe("AnalysisWorkerPool", () => {
       post(msg);
     };
 
-    const reading = backend.serializeScreen(0);
+    const reading = backend.serializeScreen();
     expect(worker.messagesOfType("request")).toHaveLength(0);
     await expect(reading).resolves.toBeNull();
   });
 
-  it("answers no screen when the mirror lost output at or after the time it is asked about (#17984)", async () => {
+  it("moves its observed-since stamp for every loss, two in one millisecond included (#17984)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const backend = pool.createBackend(
@@ -572,36 +572,18 @@ describe("AnalysisWorkerPool", () => {
       },
       makeDelegate()
     )!;
-    const worker = workers[0];
-    const reply = { data: "SCREEN", cols: 80, rows: 24 };
-    const answered = (promise: Promise<unknown>) => {
-      const request = worker.messagesOfType("request").at(-1)!;
-      worker.emit("message", {
-        type: "response",
-        requestId: request.requestId,
-        terminalId: "t1",
-        result: reply,
-        generation: request.generation,
-      });
-      return promise;
+    const overflow = () => {
+      backend.feedChunk("x".repeat(20), { agentLive: false });
+      backend.feedChunk("y".repeat(30), { agentLive: false });
+      backend.feedChunk("z".repeat(30), { agentLive: false });
     };
-    // A mirror that never lost output vouches for any time.
-    await expect(answered(backend.serializeScreen(Number.NEGATIVE_INFINITY))).resolves.toEqual(
-      reply
-    );
-
     vi.setSystemTime(20_000);
-    // Past the hard cap the hold is dropped and the slot rebuilt empty.
-    backend.feedChunk("x".repeat(20), { agentLive: false });
-    backend.feedChunk("y".repeat(30), { agentLive: false });
-    backend.feedChunk("z".repeat(30), { agentLive: false });
-    expect(worker.messagesOfType("create")).toHaveLength(2);
-    const requests = worker.messagesOfType("request").length;
-
-    await expect(backend.serializeScreen(20_000)).resolves.toBeNull();
-    await expect(backend.serializeScreen(15_000)).resolves.toBeNull();
-    expect(worker.messagesOfType("request")).toHaveLength(requests);
-    await expect(answered(backend.serializeScreen(20_001))).resolves.toEqual(reply);
+    overflow();
+    const first = backend.observedSince();
+    overflow();
+    expect(workers[0].messagesOfType("create")).toHaveLength(3);
+    expect(first).toBe(20_000);
+    expect(backend.observedSince()).toBeGreaterThan(first!);
   });
 
   it("answers no screen when the slot is rebuilt while it reads (#17984)", async () => {
@@ -627,9 +609,9 @@ describe("AnalysisWorkerPool", () => {
       return promise;
     };
 
-    await expect(answer(backend.serializeScreen(0))).resolves.toEqual(reply);
+    await expect(answer(backend.serializeScreen())).resolves.toEqual(reply);
 
-    const reading = backend.serializeScreen(0);
+    const reading = backend.serializeScreen();
     // Past the hard cap the hold is dropped and the slot rebuilt empty.
     backend.feedChunk("x".repeat(20), { agentLive: false });
     backend.feedChunk("y".repeat(30), { agentLive: false });
@@ -637,8 +619,8 @@ describe("AnalysisWorkerPool", () => {
     expect(worker.messagesOfType("create")).toHaveLength(2);
     await expect(answer(reading)).resolves.toBeNull();
 
-    // A mirror that lost output before the time asked about covers everything since.
-    await expect(answer(backend.serializeScreen(Date.now() + 1))).resolves.toEqual(reply);
+    // A mirror that lost output before the read covers everything since.
+    await expect(answer(backend.serializeScreen())).resolves.toEqual(reply);
   });
 
   it("discards a worker reply stamped with a superseded generation", async () => {

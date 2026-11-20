@@ -67,7 +67,9 @@ describe("showsSelectorAtEnter (#17984)", () => {
       [" ❯ Keep auto (1m tokens)", "   Switch to Sonnet", " ↑/↓ to navigate · enter to confirm"],
     ],
   ])("sees %s drawn right under a composer still holding the line", async (_, selector) => {
-    const screen = await frame(["⏺ Done.", RULE, "❯ wake up", RULE, ...selector]);
+    // A tinted row at the foot keeps the blank rows above it in the read.
+    const foot = "\x1b[24;1H\x1b[48;5;236m\x1b[K\x1b[0m";
+    const screen = await frame(["⏺ Done.", RULE, "❯ wake up", RULE, ...selector, foot]);
     expect(readInputBoxScreen(screen, inputSuggestionRuleFor("claude")).belowBox).not.toBeNull();
     // Read as one block with the box's rule, the screen looks like a composer.
     expect(wholeScreenSelector(screen, "claude")).toBe(false);

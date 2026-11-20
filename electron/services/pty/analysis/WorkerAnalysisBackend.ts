@@ -138,10 +138,8 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // fenced against, so they go out without a continuation (#12791).
   private continuityLost = false;
   // When the mirror last lost output, or was created: what it reports covers
-  // only the stream since.
+  // only the stream since. Moved on by every loss; see `loseContinuity`.
   private continuousSince = Date.now();
-  // Bumped with every loss: two can share a millisecond, which the stamp can't tell apart.
-  private continuityBreaks = 0;
   private viewportLines: string[] = [];
   private cursorLine: string | null = null;
   private bracketedPasteMode = false;
@@ -252,9 +250,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     } else {
       // The caller may keep the hold and retry, but a chunk it drops instead
       // is a hole in the mirror no later snapshot can be fenced across.
-      this.continuityLost = true;
-      this.continuousSince = Date.now();
-      this.continuityBreaks++;
+      this.loseContinuity();
       this.settleCaptures("lost");
     }
     return sent;
@@ -570,16 +566,15 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     return screenOnly;
   }
 
-  async serializeScreen(since: number): Promise<SerializedTerminalSnapshot | null> {
+  async serializeScreen(): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
-    if (this.continuityBreaks > 0 && this.continuousSince >= since) return null;
     // A hold that can't reach the worker is output the screen would miss.
-    const breaks = this.continuityBreaks;
+    const since = this.continuousSince;
     if (!this.flushHeldFeed()) return null;
     const snapshot = asSnapshot(await this.pool.request(this.spec.terminalId, "serialize-screen"));
     // A slot rebuilt or a chunk dropped meanwhile left a mirror that never
     // saw some of what was fed before the request.
-    return snapshot !== null && !this.inactive() && this.continuityBreaks === breaks
+    return snapshot !== null && !this.inactive() && this.continuousSince === since
       ? snapshot
       : null;
   }
@@ -757,9 +752,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     const carriesBracketedPaste = this.bracketedPasteMode || this.bracketedPasteSeedPending;
     // The fresh slot starts with an empty mirror, so the capture lost its rows.
     this.settleCaptures("lost");
-    this.continuityLost = true;
-    this.continuousSince = Date.now();
-    this.continuityBreaks++;
+    this.loseContinuity();
     this.feedEpoch++;
     this.outstandingFeedBytes = 0;
     this.heldFeed = null;
@@ -836,6 +829,16 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     console.error(
       `[WorkerAnalysisBackend] No analysis worker available for ${this.spec.terminalId}; agent-state analysis disabled for this terminal`
     );
+  }
+
+  /**
+   * Mark output lost to the mirror. The stamp always moves, even for a second
+   * loss in the same millisecond or a clock stepped back, so a reader that
+   * compares `observedSince` across a span sees every loss inside it.
+   */
+  private loseContinuity(): void {
+    this.continuityLost = true;
+    this.continuousSince = Math.max(Date.now(), this.continuousSince + 1);
   }
 
   private inactive(): boolean {

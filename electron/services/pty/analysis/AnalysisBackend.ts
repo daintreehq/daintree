@@ -114,11 +114,10 @@ export interface AnalysisBackend {
   /**
    * The visible screen, read once every byte fed before the call has parsed
    * (#17984), or null when that can't be shown: no live mirror, output the
-   * mirror was never handed, a mirror that lost output at or after `since`
-   * (what it shows may have been drawn over unseen), or a read that failed.
-   * Host-internal; it never answers a view.
+   * mirror was never handed, a mirror that lost output during the read, or a
+   * read that failed. Host-internal; it never answers a view.
    */
-  serializeScreen(since: number): Promise<SerializedTerminalSnapshot | null>;
+  serializeScreen(): Promise<SerializedTerminalSnapshot | null>;
   serializeForPersistence(): Promise<SerializedTerminalSnapshot | null>;
   /** Drain pending parses, then capture both preserved + persistence forms. */
   captureFinalSnapshot(): Promise<AnalysisFinalCapture>;
@@ -127,7 +126,8 @@ export interface AnalysisBackend {
    * Since when this mirror has read every byte of the terminal's output: its
    * creation, or the last time output was lost to it (a rebuilt worker slot, a
    * dropped feed). Agent state and the visible-change stamp only cover that
-   * span. Null once nothing reads the output any more.
+   * span. Every loss moves it, even two in one millisecond. Null once nothing
+   * reads the output any more.
    */
   observedSince(): number | null;
 
