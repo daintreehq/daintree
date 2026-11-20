@@ -193,6 +193,8 @@ async function follow(key: string, claim: Claim, retry: boolean): Promise<void> 
   try {
     // Retry goes as it starts, so it can't be pressed twice.
     if (claimed(key, claim)?.phase.kind === "lost") setPhase(key, claim, { kind: "checking" });
+    // A send still out when the lookup starts can commit after it answers `not-found`.
+    const sendWasOut = sendsOut.has(claim.messageId);
     let read;
     try {
       read = await withDeadline(() => decisionsClient.getFollowUpResult(claim.messageId));
@@ -252,7 +254,7 @@ async function follow(key: string, claim: Claim, retry: boolean): Promise<void> 
     // A decline goes again only for the request it was confirmed for, never one that replaced it.
     // One whose send is still out may yet land: its id stays, and Retry reads it again.
     if (!stillDeclinable(fresh.question, submission.declines)) {
-      if (sendsOut.has(claim.messageId)) setPhase(key, claim, { kind: "lost" });
+      if (sendWasOut || sendsOut.has(claim.messageId)) setPhase(key, claim, { kind: "lost" });
       else drop(key, claim, "request-moved");
       return;
     }

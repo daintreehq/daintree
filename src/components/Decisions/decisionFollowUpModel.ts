@@ -102,7 +102,7 @@ export function declineReplyTitle(label: string): string {
 
 /** What sending the decline does, everywhere it reaches; the message itself is shown beside it. */
 export const DECLINE_REPLY_BODY =
-  "This follow-up is sent as yours. Once the relay takes it, the question stops waiting for your reply here and on your phones, and your answer stays as it is. Daintree then types it into the terminal that asked. If that terminal has closed, Daintree may reopen the agent's session to type it in, or list the follow-up under Needs attention.";
+  "This follow-up is sent as yours. Once the relay takes it, the question stops waiting for your reply here and on your phones, and your answer stays as it is. Daintree then tries to type it into the terminal that asked. If that terminal has closed, Daintree may reopen the agent's session to type it in, or list the follow-up under Needs attention.";
 
 export interface FollowUpVerdict {
   canSend: boolean;

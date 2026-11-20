@@ -110,4 +110,26 @@ describe("declineReply past main's deadline (#18030)", () => {
     expect(after.hold).toBe("request-moved");
     expect(sendFollowUp).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the id of a decline whose send commits after the lookup by its id came back empty", async () => {
+    vi.useFakeTimers();
+    let land!: (result: DecisionQuestionFollowUpResult) => void;
+    sendFollowUp.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+    const declining = declineReply(KEY, TARGET, "m_a");
+    await vi.waitFor(() => expect(sendFollowUp).toHaveBeenCalledTimes(1));
+    // Main answers the lookup before it reserved the send, which then queues while the thread is read.
+    getQuestionContent.mockImplementationOnce(async () => {
+      const [payload] = sendFollowUp.mock.calls[0]!;
+      land({ result: "submitted", messageId: payload.messageId, outcome: { status: "queued" } });
+      await Promise.resolve();
+      return { result: "read", question: answered(agentAsks("m_a"), agentAsks("m_b")) };
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await declining;
+
+    const kept = readFollowUpRecord(KEY);
+    expect(kept.submission?.phase).toEqual({ kind: "lost" });
+    expect(kept.hold).toBeNull();
+    expect(sendFollowUp).toHaveBeenCalledTimes(1);
+  });
 });
