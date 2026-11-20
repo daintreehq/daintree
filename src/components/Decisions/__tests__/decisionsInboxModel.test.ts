@@ -15,6 +15,7 @@ import {
   agentName,
   askShownIn,
   askedOnHost,
+  attentionNotice,
   attentionText,
   AWAY_NOTE,
   clearAllText,
@@ -36,6 +37,7 @@ import {
   replyLineKey,
   replyToShow,
   resolveSelection,
+  rowNote,
   scopedQuestions,
   scopeOffered,
   seeableAsk,
@@ -1010,7 +1012,7 @@ describe("closedTime (#18025)", () => {
   });
 });
 
-describe("attentionText (#18054)", () => {
+describe("what stopped, said once (#18026)", () => {
   const STOPPED: DecisionQuestionStanding = {
     kind: "needs-attention",
     deliveryStatus: "needs-attention",
@@ -1019,74 +1021,197 @@ describe("attentionText (#18054)", () => {
     kind: "needs-attention",
     deliveryStatus: "delivery-uncertain",
   };
-  const stall = (over: Partial<NonNullable<DecisionQuestionListItem["stall"]>> = {}) => ({
-    answerRevision: 1,
-    followUpIds: [] as string[],
-    reason: "pane_gone",
-    ...over,
-  });
+  const ATLAS = { hostId: "atlas", name: "Atlas", connected: true };
 
-  it("names the answer that stopped and why, in the words the attention list uses", () => {
-    expect(attentionText(STOPPED, { stall: stall() })).toBe(
-      "Typing the answer into the terminal stopped. Choose what happens to it. The terminal that asked was closed."
+  function stalled(
+    standing: DecisionQuestionStanding,
+    stall: DecisionQuestionListItem["stall"],
+    over: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    return item("q4", standing, { closedReason: null, closureNotice: null, stall, ...over });
+  }
+
+  function expired(
+    standing: DecisionQuestionStanding,
+    notice: "needs-attention" | "uncertain",
+    followUpIds: string[] = [],
+    over: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    return stalled(
+      standing,
+      { answerRevision: 0, followUpIds, reason: "resume_exited" },
+      {
+        closedReason: "expired",
+        closureNotice: { delivery: notice, disposition: "fallback-due" },
+        ...over,
+      }
     );
+  }
+
+  const followUpsOnly = (standing: DecisionQuestionStanding, followUpIds: string[]) =>
+    stalled(standing, { answerRevision: null, followUpIds, reason: "pane_gone" });
+
+  it("names what stopped in the row, and keeps the row's words when nothing was recorded", () => {
+    expect(
+      inboxRowNote(stalled(STOPPED, { answerRevision: 2, followUpIds: [], reason: "pane_gone" }))
+    ).toBe("Answer not typed in");
+    expect(inboxRowNote(followUpsOnly(STOPPED, ["m1", "m2"]))).toBe("Follow-ups not typed in");
+    expect(inboxRowNote(followUpsOnly(STOPPED, ["m1"]))).toBe("Follow-up not typed in");
+    expect(inboxRowNote(followUpsOnly(UNCERTAIN, ["m1"]))).toBe(
+      "Follow-up may not have been typed in"
+    );
+    expect(inboxRowNote(expired(STOPPED, "needs-attention", ["m1"]))).toBe(
+      "Timeout notice and follow-up not typed in"
+    );
+    // The notice stopped, a follow-up may have been typed: the row can only say "may not".
+    expect(inboxRowNote(expired(UNCERTAIN, "needs-attention", ["m1"]))).toBe(
+      "Timeout notice and follow-up may not have been typed in"
+    );
+    expect(inboxRowNote(expired(UNCERTAIN, "uncertain"))).toBe(
+      "Timeout notice may not have been typed in"
+    );
+    expect(rowNote(STOPPED)).toBe("Delivery stopped");
+    expect(rowNote(UNCERTAIN)).toBe("May not have been delivered");
   });
 
-  it("names a follow-up apart from the answer, and says why in its own words", () => {
+  it("says the same to the ear, in agreement with how many things stopped", () => {
+    expect(standingText(STOPPED, followUpsOnly(STOPPED, ["m1", "m2"]))).toBe(
+      "Follow-ups weren't typed in and need attention"
+    );
+    expect(standingText(STOPPED, followUpsOnly(STOPPED, ["m1"]))).toBe(
+      "Follow-up wasn't typed in and needs attention"
+    );
     expect(
-      attentionText(STOPPED, {
-        stall: stall({ answerRevision: null, followUpIds: ["m1"], reason: "message_unreadable" }),
+      standingText(UNCERTAIN, {
+        closedReason: null,
+        stall: { answerRevision: 1, followUpIds: [], reason: "inject_ambiguous" },
       })
+    ).toBe("Answer may or may not have been typed in");
+    expect(standingText(STOPPED)).toBe("Delivery stopped and needs attention");
+  });
+
+  it("says what stopped and why, in the notification's words, then what to do here", () => {
+    expect(
+      attentionText(stalled(STOPPED, { answerRevision: 2, followUpIds: [], reason: "pane_gone" }))
     ).toBe(
-      "Typing the follow-up into the terminal stopped. Choose what happens to it. The follow-up couldn't be decrypted on this computer."
+      "The answer wasn't typed in. The terminal that asked was closed. Choose what happens to it."
     );
     expect(
-      attentionText(UNCERTAIN, {
-        stall: stall({ answerRevision: null, followUpIds: ["m1", "m2"], reason: "x.y" }),
-      })
+      attentionText(
+        stalled(STOPPED, { answerRevision: 2, followUpIds: ["m1"], reason: "resume_exited" })
+      )
     ).toBe(
-      "The follow-ups may or may not have been typed into the terminal. Check the terminal before anything is sent again."
+      "The answer and your follow-up weren't typed in. The resumed agent exited before the answer was typed in. Choose what happens to them."
+    );
+    // The notice's own code reads as the notice's.
+    expect(attentionText(expired(STOPPED, "needs-attention"))).toBe(
+      "The timeout notice wasn't typed in. The resumed agent exited before the timeout notice was typed in. Choose what happens to it."
+    );
+    // A code with no words leaves only what stopped.
+    expect(
+      attentionText(
+        stalled(STOPPED, { answerRevision: null, followUpIds: ["m1"], reason: "unspecified" })
+      )
+    ).toBe("Your follow-up wasn't typed in. Choose what happens to it.");
+  });
+
+  it("stays as unsure as the record is, and tells the notice's own delivery from the follow-ups'", () => {
+    expect(
+      attentionText(
+        stalled(UNCERTAIN, { answerRevision: 1, followUpIds: [], reason: "inject_ambiguous" })
+      )
+    ).toBe(
+      "The answer may or may not have been typed in. Typing it in was interrupted, so it isn't typed again on its own. Check the terminal before anything is sent again."
+    );
+    // The notice stopped for certain: the uncertainty is the follow-ups'.
+    expect(attentionText(expired(UNCERTAIN, "needs-attention", ["m1", "m2"]))).toBe(
+      "The timeout notice wasn't typed in. The resumed agent exited before the timeout notice was typed in. Your follow-ups may or may not have been typed in. Check the terminal before anything is sent again."
+    );
+    // The notice is unsure, and the list can't say which follow-up is: each may or may not be in.
+    expect(attentionText(expired(UNCERTAIN, "uncertain", ["m1"]))).toBe(
+      "The timeout notice and your follow-up may or may not have been typed in. The resumed agent exited before the timeout notice was typed in. Check the terminal before anything is sent again."
     );
   });
 
-  it("agrees with several follow-ups, and with an answer beside them, definite or not", () => {
+  it("hedges only what the list can't say: which a held slot holds, or anything when nothing was recorded", () => {
+    // A Host from before #17943 reports no round.
+    const legacy = stalled(
+      STOPPED,
+      { answerRevision: 1, followUpIds: ["m1"], reason: "inject_rejected" },
+      { closedReason: undefined, closureNotice: undefined }
+    );
+    expect(inboxRowNote(legacy)).toBe("Answer or timeout notice and follow-up not typed in");
+    expect(attentionText(legacy)).toBe(
+      "The answer or timeout notice and your follow-up weren't typed in. The terminal refused the answer or timeout notice. Choose what happens to them."
+    );
+    // A round reported without its closing notice can't tell the notice from the answer either.
     expect(
-      attentionText(STOPPED, {
-        stall: stall({ answerRevision: null, followUpIds: ["m1", "m2"], reason: "unspecified" }),
-      })
-    ).toBe("Typing the follow-ups into the terminal stopped. Choose what happens to them.");
+      inboxRowNote(
+        stalled(
+          UNCERTAIN,
+          { answerRevision: 0, followUpIds: [], reason: "pane_gone" },
+          { closedReason: "expired", closureNotice: undefined }
+        )
+      )
+    ).toBe("Answer or timeout notice may not have been typed in");
+    // A code only an answer has says what the slot holds.
     expect(
-      attentionText(UNCERTAIN, {
-        stall: stall({ followUpIds: ["m1"], reason: "inject_ambiguous" }),
-      })
+      attentionText({ ...legacy, stall: { ...legacy.stall!, reason: "unknown_option" } })
     ).toBe(
-      "The answer or the follow-up may or may not have been typed into the terminal. Check the terminal before anything is sent again. Typing it in was interrupted, so it isn't typed again on its own."
+      "The answer and your follow-up weren't typed in. The answer doesn't fit what the question allows. Choose what happens to them."
+    );
+    expect(attentionText({ ...legacy, standing: UNCERTAIN, stall: null })).toBe(
+      "An answer, a notice or a follow-up may or may not have been typed in. Check the terminal before anything is sent again."
     );
   });
 
-  it("names a timeout notice by how the question closed, with a follow-up beside it", () => {
-    const round = {
-      closedReason: "expired" as const,
-      closureNotice: { delivery: "needs-attention" as const, disposition: null },
-    };
-    expect(attentionText(STOPPED, { ...round, stall: stall({ reason: "unspecified" }) })).toBe(
-      "Typing the notice that the question expired unanswered into the terminal stopped. Choose what happens to it."
-    );
+  it("names the Remote Host that keeps it instead of inviting a choice, and where its words would say this computer", () => {
     expect(
-      attentionText(STOPPED, {
-        ...round,
-        stall: stall({ followUpIds: ["m1"], reason: "unspecified" }),
-      })
+      attentionText(
+        stalled(
+          STOPPED,
+          { answerRevision: 1, followUpIds: [], reason: "answer_unreadable" },
+          { remoteHost: ATLAS }
+        )
+      )
     ).toBe(
-      "Typing the notice that the question expired unanswered and the follow-up into the terminal stopped. Choose what happens to them."
+      "The answer wasn't typed in. The answer couldn't be decrypted on Atlas. Atlas keeps it, so it can't be resolved from this computer."
     );
+    const text = attentionText(expired(UNCERTAIN, "uncertain", ["m1"], { remoteHost: ATLAS }));
+    expect(text).toMatch(
+      /Check the terminal before anything is sent again\. Atlas keeps them, so they can't be resolved from this computer\.$/
+    );
+    expect(text).not.toMatch(/Choose/);
   });
 
-  it("falls back to naming both when the list carries no stall", () => {
-    expect(attentionText(STOPPED)).toContain("An answer or follow-up was recorded");
-    expect(attentionText(UNCERTAIN, { closedReason: "declined" })).toContain(
-      "The notice that you declined it, or a follow-up,"
-    );
+  it("claims the notice only when the warning states the notice's own delivery", () => {
+    expect(attentionNotice(expired(STOPPED, "needs-attention"))).toEqual({
+      closedReason: "expired",
+      delivery: "needs-attention",
+    });
+    // Uncertain only because of a follow-up: the notice itself stopped.
+    expect(attentionNotice(expired(UNCERTAIN, "needs-attention", ["m1"]))).toEqual({
+      closedReason: "expired",
+      delivery: "needs-attention",
+    });
+    expect(
+      attentionNotice(expired(UNCERTAIN, "uncertain", ["m1"], { closedReason: "never-published" }))
+    ).toEqual({ closedReason: "never-published", delivery: "uncertain" });
+    // Follow-ups alone, an answer, or a slot the list can't name: the warning says nothing of the notice.
+    expect(
+      attentionNotice(
+        expired(UNCERTAIN, "uncertain", ["m1"], {
+          stall: { answerRevision: null, followUpIds: ["m1"], reason: "pane_gone" },
+        })
+      )
+    ).toBeNull();
+    expect(
+      attentionNotice(stalled(STOPPED, { answerRevision: 1, followUpIds: [], reason: "pane_gone" }))
+    ).toBeNull();
+    expect(
+      attentionNotice(expired(STOPPED, "needs-attention", [], { closureNotice: undefined }))
+    ).toBeNull();
+    expect(attentionNotice({ ...expired(STOPPED, "needs-attention"), standing: OPEN })).toBeNull();
   });
 });
 

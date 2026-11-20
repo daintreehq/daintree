@@ -6,6 +6,7 @@ import {
   deliverySubjectOf,
   deliverySubjectPlural,
   deliveryUncertainText,
+  isAnswerOnlyCode,
   stallSubject,
 } from "../decisionsDeliveryReasons.js";
 
@@ -136,5 +137,74 @@ describe("decisionsDeliveryReasons", () => {
     expect(deliveryReasonText("generation_mismatch")).toBe(
       "The terminal that asked was restarted after the question was asked."
     );
+  });
+
+  it("names what a listed question's stall holds, the timeout notice only when its round says it stopped", () => {
+    const stall = { answerRevision: 1, followUpIds: [], reason: "pane_gone" };
+    expect(stallSubject({ stall: null })).toBeNull();
+    // A Host from before #17943 reports no round: its stall reads as an answer's.
+    expect(stallSubject({ stall })).toBe("answer");
+    expect(
+      stallSubject({
+        stall: { ...stall, followUpIds: ["m1", "m2"] },
+        closedReason: "expired",
+        closureNotice: { delivery: "needs-attention", disposition: null },
+      })
+    ).toBe("timeout notice and follow-ups");
+    for (const delivery of ["uncertain", "needs-attention"] as const) {
+      expect(
+        stallSubject({
+          stall,
+          closedReason: "never-published",
+          closureNotice: { delivery, disposition: null },
+        })
+      ).toBe("timeout notice");
+    }
+    // A notice already typed in isn't what stopped, whatever closed the round.
+    expect(
+      stallSubject({
+        stall,
+        closedReason: "expired",
+        closureNotice: { delivery: "delivered", disposition: null },
+      })
+    ).toBe("answer");
+    expect(
+      stallSubject({
+        stall: { answerRevision: null, followUpIds: ["m1"], reason: "pane_gone" },
+        closedReason: "expired",
+        closureNotice: { delivery: "needs-attention", disposition: null },
+      })
+    ).toBe("follow-up");
+  });
+
+  it("names the Remote Host that reported it where the words would say this computer", () => {
+    expect(deliveryReasonText("answer_unreadable", "answer", "away", "Atlas")).toBe(
+      "The answer couldn't be decrypted on Atlas."
+    );
+    expect(deliveryReasonText("message_unreadable", "follow-up", "away", "Atlas")).toBe(
+      "The follow-up couldn't be decrypted on Atlas."
+    );
+    expect(deliveryReasonText("resume_unknown_project", "answer", "away", "Atlas")).toBe(
+      "The project that asked isn't open on Atlas."
+    );
+    // Taken literally, whatever the name holds, and never as words to rewrite.
+    expect(deliveryReasonText("answer_unreadable", "follow-ups", "away", "Ops $& the answer")).toBe(
+      "The answer couldn't be decrypted on Ops $& the answer."
+    );
+    expect(deliveryReasonText("answer_unreadable", "answer", "away", "Ops isn't open here")).toBe(
+      "The answer couldn't be decrypted on Ops isn't open here."
+    );
+    // Words that name no machine read the same from anywhere.
+    expect(deliveryReasonText("pane_gone", "answer", "away", "Atlas")).toBe(
+      deliveryReasonText("pane_gone")
+    );
+    expect(deliveryReasonText("answer_unreadable")).toMatch(/on this computer\.$/);
+  });
+
+  it("knows the codes only an answer has, which no closing notice does", () => {
+    expect(isAnswerOnlyCode("unknown_option")).toBe(true);
+    expect(isAnswerOnlyCode("proxy_forbidden")).toBe(true);
+    expect(isAnswerOnlyCode("pane_gone")).toBe(false);
+    expect(isAnswerOnlyCode(null)).toBe(false);
   });
 });

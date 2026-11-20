@@ -33,6 +33,7 @@ import {
   type AdvisoryHost,
   type TimeoutNotice,
 } from "./questionRound.js";
+import { isAnswerOnlyCode } from "../../../shared/utils/decisionsDeliveryReasons.js";
 
 /**
  * The answers a person has marked handled (#16020), by question, at the
@@ -156,7 +157,7 @@ export function answerNeedsAttention(row: QuestionRow, handled: HandledAnswers):
 export function closedUnanswered(row: QuestionRow): boolean {
   if (row.local_status === "cancelled") return true;
   if (row.local_status !== "expired" && row.local_status !== "publish-failed") return false;
-  if (row.error_code !== null && ANSWER_CODES.has(row.error_code)) return false;
+  if (isAnswerOnlyCode(row.error_code)) return false;
   const entries = parseAnswers(row.answers_json);
   if (!entries.some((entry) => roundNotice(entry, row) && !entry.delivered)) return false;
   // As the delivery engine's own test: a notice of a round since replaced is never typed.
@@ -186,21 +187,6 @@ function roundNotice(entry: AnswerEntry, row: QuestionRow): boolean {
 }
 
 /**
- * Codes for an answer the question can't take: never a closure notice's, so a
- * stall with one is an answer's, whatever entries the row holds.
- */
-const ANSWER_CODES: ReadonlySet<string> = new Set([
-  "answer_unreadable",
-  "answer_unknown_kind",
-  "answer_unknown_source",
-  "choice_required",
-  "text_not_allowed",
-  "too_many_choices",
-  "unknown_option",
-  "proxy_forbidden",
-]);
-
-/**
  * Typing stopped on a closure notice whose round a reopen has since replaced
  * (#17944): the library withdraws the notice but leaves the row's stopped
  * status, and nothing of the answer waits to be typed any more, so there is
@@ -211,7 +197,7 @@ const ANSWER_CODES: ReadonlySet<string> = new Set([
  */
 export function stoppedOnReplacedClosure(row: QuestionRow): boolean {
   if (row.delivery_status !== "needs-attention" || pendingEntries(row).length > 0) return false;
-  if (row.error_code !== null && ANSWER_CODES.has(row.error_code)) return false;
+  if (isAnswerOnlyCode(row.error_code)) return false;
   const entries = parseAnswers(row.answers_json);
   if (entries.length === 0) return false;
   const newest = Math.max(...entries.map((entry) => entry.revision));

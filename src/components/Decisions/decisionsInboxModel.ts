@@ -3,15 +3,17 @@ import { basename } from "@shared/utils/path";
 import { getTerminalTaskTitle } from "@shared/utils/terminalTitleDisplay";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
-import {
-  deliveryReasonText,
-  deliverySubjectPlural,
-  stallSubject,
-  type DeliverySubject,
-} from "@shared/utils/decisionsDeliveryReasons";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { pluralize } from "@shared/utils/pluralize";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
+import {
+  deliveryReasonWords,
+  isAnswerOnlyCode,
+  reasonOnHost,
+  stallSubject,
+  type DeliverySubject,
+} from "@shared/utils/decisionsDeliveryReasons";
+import type { ShownNotice } from "./decisionQuestionModel";
 import type {
   DecisionQuestionContent,
   DecisionQuestionListItem,
@@ -311,8 +313,93 @@ export function replyLine(
   return null;
 }
 
-/** What a list item says of its round, when its machine said (#17943). */
-export type ItemRound = Partial<Pick<DecisionQuestionListItem, "replyMode" | "closedReason">>;
+/**
+ * What a list item says of its round, when its machine said (#17943), and
+ * what its delivery stopped on (#17235).
+ */
+export type ItemRound = Partial<
+  Pick<DecisionQuestionListItem, "replyMode" | "closedReason" | "closureNotice" | "stall">
+>;
+
+/** How far a held part got: stopped before it was typed in, or maybe typed. */
+type HeldDelivery = "stopped" | "uncertain";
+
+interface HeldParts {
+  /** The parts as the stall's notification names them, for its reason's words. */
+  subject: DeliverySubject;
+  /** The library's code for why, as the stall records it. */
+  reason: string;
+  /** What the answer's slot holds, as far as the list can say; null when only follow-ups are held. */
+  slot: "answer" | "timeout notice" | "answer or timeout notice" | null;
+  slotDelivery: HeldDelivery;
+  followUps: number;
+  followUpDelivery: HeldDelivery;
+}
+
+/**
+ * Whether the list can't say what a held slot holds (#17944): a Host from
+ * before #17943 reports no round, and a round reported without its closing
+ * notice can't tell that notice from the answer. A code only an answer has
+ * says it all the same.
+ */
+function slotUnknown(round: ItemRound, code: string): boolean {
+  const reason = round.closedReason;
+  return (
+    !isAnswerOnlyCode(code) &&
+    (reason === undefined ||
+      ((reason === "expired" || reason === "never-published") && round.closureNotice === undefined))
+  );
+}
+
+/**
+ * What delivery stopped on, part by part, or null with no stall recorded.
+ * The standing is uncertain when any part is, so only the notice, which
+ * reports its own delivery (#17943), is told apart from the follow-ups beside it.
+ */
+function heldParts(standing: DecisionQuestionStanding, round: ItemRound): HeldParts | null {
+  if (standing.kind !== "needs-attention") return null;
+  const stall = round.stall ?? null;
+  const subject = stallSubject({
+    stall,
+    closedReason: round.closedReason,
+    closureNotice: round.closureNotice,
+  });
+  if (stall === null || subject === null) return null;
+  const any: HeldDelivery =
+    standing.deliveryStatus === "delivery-uncertain" ? "uncertain" : "stopped";
+  const notice = subject.startsWith("timeout notice");
+  return {
+    subject,
+    reason: stall.reason,
+    slot:
+      stall.answerRevision === null
+        ? null
+        : notice
+          ? "timeout notice"
+          : slotUnknown(round, stall.reason)
+            ? "answer or timeout notice"
+            : "answer",
+    slotDelivery: notice
+      ? round.closureNotice?.delivery === "uncertain"
+        ? "uncertain"
+        : "stopped"
+      : any,
+    followUps: stall.followUpIds.length,
+    followUpDelivery: any,
+  };
+}
+
+/** The held parts as a row names them, and whether that is more than one. */
+function heldName(parts: HeldParts): { name: string; plural: boolean } {
+  const followUps =
+    parts.followUps === 0 ? null : parts.followUps === 1 ? "follow-up" : "follow-ups";
+  const name = [parts.slot, followUps].filter((part) => part !== null).join(" and ");
+  return { name, plural: (parts.slot === null ? 0 : 1) + parts.followUps > 1 };
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 /**
  * The question's state, in the chip's words. One sentence, sentence case, no
@@ -333,10 +420,19 @@ export function standingText(standing: DecisionQuestionStanding, round: ItemRoun
     case "to-type":
       // An answer or a person's follow-up: the list doesn't say which.
       return "Waiting to be typed in";
-    case "needs-attention":
-      return standing.deliveryStatus === "delivery-uncertain"
-        ? "May or may not have been delivered"
-        : "Delivery stopped and needs attention";
+    case "needs-attention": {
+      const parts = heldParts(standing, round);
+      if (standing.deliveryStatus === "delivery-uncertain") {
+        return parts === null
+          ? "May or may not have been delivered"
+          : `${capitalized(heldName(parts).name)} may or may not have been typed in`;
+      }
+      if (parts === null) return "Delivery stopped and needs attention";
+      const { name, plural } = heldName(parts);
+      return plural
+        ? `${capitalized(name)} weren't typed in and need attention`
+        : `${capitalized(name)} wasn't typed in and needs attention`;
+    }
     case "settled":
       switch (standing.outcome) {
         case "answered":
@@ -373,11 +469,18 @@ export function rowNote(standing: DecisionQuestionStanding, round: ItemRound = {
     case "to-type":
       // Its group's bar says it is being delivered.
       return null;
-    case "needs-attention":
-      // Its group's bar says it needs attention; the row says what stopped.
-      return standing.deliveryStatus === "delivery-uncertain"
-        ? "May not have been delivered"
-        : "Delivery stopped";
+    case "needs-attention": {
+      // Its group's bar says it needs attention; the row says what stopped, when the list knows.
+      const parts = heldParts(standing, round);
+      if (standing.deliveryStatus === "delivery-uncertain") {
+        return parts === null
+          ? "May not have been delivered"
+          : `${capitalized(heldName(parts).name)} may not have been typed in`;
+      }
+      return parts === null
+        ? "Delivery stopped"
+        : `${capitalized(heldName(parts).name)} not typed in`;
+    }
     case "settled":
       // The finished ring says answered; only an answer that went another way earns words.
       return standing.outcome === "answered" && !standing.handled
@@ -397,7 +500,7 @@ export function rowNote(standing: DecisionQuestionStanding, round: ItemRound = {
 export function inboxRowNote(
   item: Pick<
     DecisionQuestionListItem,
-    "standing" | "inbox" | "expiresAt" | "replyMode" | "closedReason"
+    "standing" | "inbox" | "expiresAt" | "replyMode" | "closedReason" | "closureNotice" | "stall"
   >,
   nowMs: number | null = null
 ): string | null {
@@ -418,71 +521,85 @@ export function inboxRowNote(
  */
 export const AWAY_NOTE = "Away, as last reported";
 
+function heldSentence(what: string, plural: boolean, delivery: HeldDelivery): string {
+  return delivery === "uncertain"
+    ? `${capitalized(what)} may or may not have been typed in.`
+    : `${capitalized(what)} ${plural ? "weren't" : "wasn't"} typed in.`;
+}
+
 /**
- * What the shown question's warning says while delivery needs a person
- * (#18054): what stopped, as the list of answers needing attention and the
- * pane's chip name it, and why when the library recorded a code Daintree
- * knows. A Host from before its list said what stopped reads as only what was
- * recorded, since it can't say whether an answer or a follow-up did.
+ * What the shown question's warning says while delivery needs a person: what
+ * stopped and why, in the words the stall's notification uses, then what to
+ * do. Hedged only where the list can't say what stopped. A Remote Host keeps
+ * its own stopped deliveries, and nothing on this computer resolves them, so
+ * its question names that Host instead of inviting a choice.
  */
 export function attentionText(
-  standing: DecisionQuestionStanding,
-  item: Pick<ItemRound, "closedReason"> &
-    Partial<Pick<DecisionQuestionListItem, "stall" | "closureNotice">> = {}
+  item: Pick<DecisionQuestionListItem, "standing" | "remoteHost"> & ItemRound
 ): string {
+  const { standing } = item;
   const uncertain =
     standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";
-  // Closed without an answer (#17943): what stopped is the notice saying so.
-  const closing = closingNotice(item.closedReason ?? null);
-  const subject = stallSubject(item);
-  if (subject !== null && item.stall != null) {
-    const plural = deliverySubjectPlural(subject);
-    const reason = deliveryReasonText(item.stall.reason, subject);
-    const what = stoppedThing(subject, closing);
-    const sentence = uncertain
-      ? `${capitalized(what.replace(" and ", " or "))} may or may not have been typed into the terminal. Check the terminal before anything is sent again.`
-      : `Typing ${what} into the terminal stopped. Choose what happens to ${plural ? "them" : "it"}.`;
-    return reason === null ? sentence : `${sentence} ${reason}`;
+  const host = item.remoteHost?.name ?? null;
+  const parts = heldParts(standing, item);
+  const sentences: (string | null)[] = [];
+  if (parts === null) {
+    sentences.push(
+      heldSentence("an answer, a notice or a follow-up", false, uncertain ? "uncertain" : "stopped")
+    );
+  } else {
+    const words = deliveryReasonWords(parts.reason, parts.subject);
+    // Words for an answer's code would be false of a notice the slot may hold instead.
+    const hedged =
+      parts.slot === "answer or timeout notice"
+        ? words?.replace("the answer", "the answer or timeout notice")
+        : words;
+    const reason = hedged == null ? null : reasonOnHost(hedged, host);
+    const followUps =
+      parts.followUps === 0 ? null : parts.followUps === 1 ? "your follow-up" : "your follow-ups";
+    const slot = parts.slot === null ? null : `the ${parts.slot}`;
+    if (slot !== null && followUps !== null && parts.slotDelivery !== parts.followUpDelivery) {
+      // The reason is the slot's, so it follows the slot's sentence.
+      sentences.push(
+        heldSentence(slot, false, parts.slotDelivery),
+        reason,
+        heldSentence(followUps, parts.followUps > 1, parts.followUpDelivery)
+      );
+    } else {
+      const what = [slot, followUps].filter((part) => part !== null).join(" and ");
+      const delivery = slot !== null ? parts.slotDelivery : parts.followUpDelivery;
+      sentences.push(heldSentence(what, heldName(parts).plural, delivery), reason);
+    }
   }
-  // Without the stall, a follow-up's delivery can't be told apart from the notice's, so both are named.
-  if (closing !== null) {
-    return uncertain
-      ? `The notice that ${closing}, or a follow-up, may or may not have been typed into the terminal. Check it there before anything is sent again.`
-      : `The notice that ${closing}, or a follow-up, was recorded, but typing it into the terminal stopped. Choose what happens to it.`;
+  const plural = parts !== null && heldName(parts).plural;
+  if (uncertain) sentences.push("Check the terminal before anything is sent again.");
+  if (host !== null) {
+    sentences.push(
+      plural
+        ? `${host} keeps them, so they can't be resolved from this computer.`
+        : `${host} keeps it, so it can't be resolved from this computer.`
+    );
+  } else if (!uncertain) {
+    sentences.push(`Choose what happens to ${plural ? "them" : "it"}.`);
   }
-  return uncertain
-    ? "An answer or follow-up may or may not have been typed into the terminal. Check it there before anything is sent again."
-    : "An answer or follow-up was recorded, but typing it into the terminal stopped. Choose what happens to it.";
+  return sentences.filter((sentence) => sentence !== null).join(" ");
 }
 
-function capitalized(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-/** The subject in a sentence: "the answer", "the follow-ups", "the notice that you declined it". */
-function stoppedThing(subject: DeliverySubject, closing: string | null): string {
-  const named = subject.startsWith("timeout notice")
-    ? subject.replace(
-        "timeout notice",
-        closing === null ? "the timeout notice" : `the notice that ${closing}`
-      )
-    : `the ${subject}`;
-  // "the answer and follow-up": the second thing needs its article too.
-  return named.replace(" and follow-up", " and the follow-up");
-}
-
-/** What a closing notice tells the agent, as the attention callout names it. */
-function closingNotice(reason: ItemRound["closedReason"] | null): string | null {
-  switch (reason) {
-    case "expired":
-      return "the question expired unanswered";
-    case "declined":
-      return "you declined it";
-    case "never-published":
-      return "it never reached the relay";
-    default:
-      return null;
+/**
+ * The notice that closed the shown question (#17943), with its own delivery,
+ * when its warning states that: then the question's facts needn't say it again.
+ */
+export function attentionNotice(
+  item: Pick<DecisionQuestionListItem, "standing"> & ItemRound
+): ShownNotice | null {
+  const closedReason = item.closedReason;
+  if (heldParts(item.standing, item)?.slot !== "timeout notice" || closedReason == null) {
+    return null;
   }
+  return {
+    closedReason,
+    delivery: item.closureNotice?.delivery === "uncertain" ? "uncertain" : "needs-attention",
+  };
 }
 
 /** A question that is over: its row steps down a tone so the live ones lead. */
