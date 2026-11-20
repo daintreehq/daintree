@@ -796,6 +796,14 @@ export interface PanelRestoreContext {
   clipboardDirectory: string | undefined;
   projectPresetsByAgent: Record<string, AgentPreset[]>;
   worktreesPromise: Promise<WorktreeState[] | null>;
+  /**
+   * A fresh read of the worktree list, for a pane only a list can place when
+   * {@link worktreesPromise} came back unready (#18009). Asked once per pass,
+   * shared by every pane that needs it, and `null` when no list came in time.
+   * Absent, those panes are held rather than started in a folder they may
+   * have been moved out of.
+   */
+  rereadWorktrees?: () => Promise<WorktreeState[] | null>;
   restoreTerminalOrder?: RestoreTerminalOrderFn;
   safeMode: boolean;
   /**
@@ -900,6 +908,7 @@ export async function restorePanelsPhase(
     clipboardDirectory,
     projectPresetsByAgent,
     worktreesPromise,
+    rereadWorktrees,
     restoreTerminalOrder,
     safeMode,
     visiblePanelId,
@@ -1166,10 +1175,19 @@ export async function restorePanelsPhase(
         }
         return { cwd: launchCwd, conversationCwd };
       }
-      const target: ColdLaunchTarget = workspaceHasWorktrees
+      let target: ColdLaunchTarget = workspaceHasWorktrees
         ? resolveColdLaunchTarget({ ...saved, conversationCwd }, await worktreesPromise)
         : { kind: "unchanged" };
-      if (target.kind === "destination-unavailable") {
+      if (target.kind === "unconfirmed") {
+        // The list wasn't ready and this pane runs outside the worktree it is
+        // filed under: a move only the list can confirm (#18009). Ask again;
+        // a list that still doesn't come leaves it held below.
+        target = resolveColdLaunchTarget(
+          { ...saved, conversationCwd },
+          (await rereadWorktrees?.()) ?? null
+        );
+      }
+      if (target.kind === "destination-unavailable" || target.kind === "unconfirmed") {
         // Nothing runs until the user picks, and the folder the conversation
         // began in is the one choice that is always theirs to keep — not a
         // directory an earlier move landed in, which may be the one that's gone.

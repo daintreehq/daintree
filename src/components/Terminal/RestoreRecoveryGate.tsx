@@ -24,6 +24,8 @@ import {
 import { isPtyPanel, type PanelHostEnd, type RestoreRecoveryReason } from "@shared/types/panel";
 import { resolveResumeOnRestart } from "@shared/types/agentSettings";
 import { resolveConversationSearchCwd } from "@/utils/restoreRecovery";
+import { isWithinDirectory } from "@/utils/stateHydration/coldLaunchTarget";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { pluralize } from "@/lib/pluralize";
 
@@ -99,10 +101,12 @@ const RESUMES_ON_FOCUS_COPY: RecoveryCopy = {
     "Agents resume one at a time after a restart, as each panel is focused, as set in Settings > General > Startup.",
 };
 
+// Restore holds a pane here both when the worktree list lacked its filing and
+// when no list came at all (#18009), so this says what it saw, not which.
 const AWAITING_DESTINATION_COPY: RecoveryCopy = {
-  title: "Worktree no longer available",
+  title: "Choose where this panel runs",
   description:
-    "This panel's worktree isn't part of this project anymore, so it hasn't started. Move it onto a worktree, or keep the folder it began in.",
+    "Restore couldn't confirm this panel's worktree, so it hasn't started. Choose a worktree for it, or keep the folder it began in.",
 };
 
 const OUTCOME_MESSAGES: Partial<Record<RestoreRecoveryLaunchResult, RecoveryCopy>> = {
@@ -169,7 +173,7 @@ export function RestoreRecoveryGate({
   isFocused = false,
   containerRef,
 }: RestoreRecoveryGateProps) {
-  const { recovery, heldByPlugin, agentId, cwd, originCwd } = usePanelStore(
+  const { recovery, heldByPlugin, agentId, cwd, originCwd, filedWorktreeId } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[panelId];
       const pty = panel && isPtyPanel(panel) ? panel : undefined;
@@ -179,8 +183,17 @@ export function RestoreRecoveryGate({
         agentId: pty?.launchAgentId,
         cwd: pty?.cwd ?? "",
         originCwd: pty ? resolveConversationSearchCwd(pty) : "",
+        filedWorktreeId: panel?.worktreeId,
       };
     })
+  );
+  // The worktree the pane is filed under, once this view lists it. A pane held
+  // because restore couldn't read the list is still filed where it was moved
+  // (#18009), and moving it to the worktree it is already in does nothing, so
+  // running it there needs a choice of its own.
+  const filedWorktreePath = useWorktreeStoreOptional(
+    (state) => (filedWorktreeId ? state.worktrees.get(filedWorktreeId)?.path : undefined),
+    undefined
   );
   const confirmDestination = usePanelStore((state) => state.confirmRestoreRecoveryDestination);
   // Every pane in this view the same unclean end held, so they can be resumed
@@ -324,13 +337,24 @@ export function RestoreRecoveryGate({
 
         <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
           {awaitingDestination ? (
-            <Button
-              size="sm"
-              variant="contrast"
-              onClick={() => confirmDestination(panelId, originCwd)}
-            >
-              Keep original folder
-            </Button>
+            <>
+              {filedWorktreePath && !isWithinDirectory(cwd, filedWorktreePath) && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => confirmDestination(panelId, filedWorktreePath)}
+                >
+                  Run in this worktree
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="contrast"
+                onClick={() => confirmDestination(panelId, originCwd)}
+              >
+                Keep original folder
+              </Button>
+            </>
           ) : (
             <>
               {recovery.reason === "host-ended-uncleanly" &&
