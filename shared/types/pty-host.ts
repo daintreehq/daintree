@@ -1411,6 +1411,8 @@ export interface PtyHostTerminalInfo {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Its agent run hasn't been observed waiting at its prompt or a question yet (#18014). */
+  promptUnseen?: true;
   /**
    * When the visible content last changed, ignoring recognised spinner and
    * timer redraws (#12428). Absent until a change has been observed.

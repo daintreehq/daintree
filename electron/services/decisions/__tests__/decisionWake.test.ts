@@ -205,6 +205,13 @@ describe("createDecisionWake", () => {
       { detectedAgentId: "gemini", lastStateChange: Date.now() },
       "settling",
     ],
+    // A resumed Claude draws its trust prompt or another startup selector before any prompt (#18014).
+    [
+      "starting up, its prompt not seen since the run began",
+      {},
+      { agentState: "working", promptUnseen: true },
+      "working",
+    ],
   ] as const)("holds while the pane is %s", (_label, opts, patch, reason) => {
     const value = {
       ...sources().value,

@@ -42,6 +42,7 @@ import { BootDetector } from "./pty/BootDetector.js";
 import {
   classifyWaitingReason,
   endsOnChoiceSelector,
+  endsOnDrawnSelector,
   WAITING_REASON_CHECKLIST_ROWS,
   WAITING_REASON_SCAN_LINE_COUNT,
 } from "./pty/WaitingReasonClassifier.js";
@@ -66,6 +67,8 @@ const SIMPLE_COMPLETION_MIN_QUIET_MS = 1500;
 // snapshot — long enough for xterm's async parse of the last chunk (and any
 // resize/focus-triggered redraw) to land before a frame is latched.
 const SIMPLE_SNAPSHOT_SETTLE_MS = 1000;
+/** More rows than any pane has: a viewport read asks for this many and gets them all. */
+const WHOLE_VIEWPORT_ROWS = 1000;
 const SIMPLE_SNAPSHOT_MIN_INTERVAL_MS = 250;
 // Idle-agent polling backoff (#10906). Once a simple-output agent has settled
 // into idle and stayed silent this long, drop the polling cadence to
@@ -1024,22 +1027,32 @@ export class ActivityMonitor {
   }
 
   // The agent's empty input row bounds the error window when it is in view,
-  // so a footer drawn below it can't label the wait.
+  // so a footer drawn below it can't label the wait. A selector drawn short of
+  // the pane's bottom, as a freshly started agent's trust prompt is (#18014),
+  // leaves that window blank or holding only its key hint, so a reading that
+  // would admit a line is checked against everything drawn.
   private readWaitingScreen(
     lines: string[],
     isPromptDetected: boolean
-  ): { reason: WaitingReason; composerRow: number | undefined; read: string[]; rows: number } {
+  ): {
+    reason: WaitingReason;
+    composerRow: number | undefined;
+    read: string[];
+    rows: number;
+    drawnSelector: boolean;
+  } {
     const rows = Math.max(lines.length, WAITING_REASON_SCAN_LINE_COUNT);
     const wanted = rows + WAITING_REASON_CHECKLIST_ROWS;
     const read =
       this.getVisibleLines && lines.length < wanted ? this.getVisibleLines(wanted) : lines;
     const composerRow = findEmptyComposerRow(read, this.promptDetectorConfig.promptPatterns);
-    return {
-      reason: classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId),
-      composerRow,
-      read,
-      rows,
-    };
+    const reason = classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId);
+    const drawnSelector =
+      (reason === "prompt" || reason === "question") &&
+      composerRow === undefined &&
+      this.getVisibleLines !== undefined &&
+      endsOnDrawnSelector(this.getVisibleLines(WHOLE_VIEWPORT_ROWS), this.agentId);
+    return { reason: drawnSelector ? "approval" : reason, composerRow, read, rows, drawnSelector };
   }
 
   // An idle agent's reason was read once, when it settled (#16093). A screen
@@ -1081,14 +1094,14 @@ export class ActivityMonitor {
       this.getCursorLine?.() ?? null,
       { allowHistoryScan: true }
     );
-    const { reason, composerRow, read, rows } = this.readWaitingScreen(
+    const { reason, composerRow, read, rows, drawnSelector } = this.readWaitingScreen(
       lines,
       promptResult.isPrompt
     );
     if (reason === this.idleWaitingReason) return;
     if (
       composerRow === undefined &&
-      !(reason === "approval" && endsOnChoiceSelector(read, rows, this.agentId))
+      !(reason === "approval" && (drawnSelector || endsOnChoiceSelector(read, rows, this.agentId)))
     ) {
       return;
     }

@@ -161,6 +161,24 @@ describe("decisionGateOptionsFor (#16282)", () => {
     }
   });
 
+  it("never queues behind a run's startup, before it has been seen at its prompt (#18014)", () => {
+    const starting = { ...WORKING, promptUnseen: true };
+    for (const agentId of ["claude", "codex"]) {
+      const options = decisionGateOptionsFor(agentId);
+      expect(evaluateWakeGate({ ...starting, detectedAgentId: agentId }, options)).toEqual({
+        kind: "hold",
+        reason: "working",
+      });
+      // The same run in a turn after its prompt has been seen queues as before.
+      expect(evaluateWakeGate({ ...WORKING, detectedAgentId: agentId }, options)).toEqual({
+        kind: "ready",
+      });
+    }
+    expect(
+      evaluateWakeGate(starting, { ...decisionGateOptionsFor("claude"), acceptWorking: true })
+    ).toEqual({ kind: "hold", reason: "working" });
+  });
+
   it("leaves every other gate blind to the hybrid input", () => {
     const draft = { ...AT_PROMPT, hasComposerDraft: true };
     expect(evaluateWakeGate(draft)).toEqual({ kind: "ready" });

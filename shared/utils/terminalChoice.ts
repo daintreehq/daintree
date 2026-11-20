@@ -254,6 +254,45 @@ export function endsOnFooteredChoice(
   return highlighted;
 }
 
+/**
+ * Whether the last rows drawn on a screen are a selection dialog, however
+ * many blank rows lie under them (#18014). A pane whose content stops short of
+ * its bottom, as a freshly started agent's trust prompt does, leaves the
+ * bottom rows a classifier reads blank. Stricter than `endsOnChoiceDialog`, so
+ * a dialog left above later output never counts: under the option block there
+ * may be only blank rows and key hints ("Enter to confirm · Esc to cancel").
+ * The block is a numbered list, an unnumbered one with a highlighted row and a
+ * hint that names its keys, or one closed by a footer of its CLI's own.
+ */
+export function endsOnDrawnChoiceDialog(
+  rawLines: readonly string[],
+  footers: readonly RegExp[] = []
+): boolean {
+  const lines = rawLines.map(unframe);
+  let end = lines.length;
+  while (end > 0 && lines[end - 1]!.trim() === "") end--;
+  if (end === 0) return false;
+  if (endsOnFooteredChoice(lines.slice(0, end), footers)) return true;
+
+  let bottom = end - 1;
+  let named = false;
+  // An option can name a key too ("3. No, and tell Claude what to do differently (esc)").
+  const isHint = (row: string) => KEY_HINT.test(row) && optionNumber(row) === null;
+  while (bottom >= 0 && (lines[bottom]!.trim() === "" || isHint(lines[bottom]!))) {
+    if (HINT_VERB.test(lines[bottom]!)) named = true;
+    bottom--;
+  }
+  if (bottom < 1) return false;
+  let top = bottom;
+  while (top > 0 && lines[top - 1]!.trim() !== "") top--;
+  const block = lines.slice(top, bottom + 1);
+  if (block.some((row) => HORIZONTAL_RULE.test(row))) return false;
+
+  const numbered = readChoiceList(lines.slice(0, bottom + 1), false);
+  if (numbered !== null) return numbered.rows[0]! >= top;
+  return named && block.length >= 2 && block.some((row) => DIALOG_HIGHLIGHT_ROW.test(row));
+}
+
 function readChoiceList(rawLines: readonly string[], requireHint: boolean): ChoiceList | null {
   const lines = rawLines.map(unframe);
   let cursor = -1;

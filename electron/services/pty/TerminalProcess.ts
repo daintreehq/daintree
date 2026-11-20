@@ -506,6 +506,8 @@ export class TerminalProcess {
       // terminals have no agent state.
       agentState: hasLaunchHint ? "idle" : undefined,
       lastStateChange: hasLaunchHint ? spawnedAt : undefined,
+      // A resumed conversation opens on whatever its CLI shows first (#18014).
+      ...(hasLaunchHint ? { promptUnseen: true as const } : {}),
       lastInputTime: spawnedAt,
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
@@ -1148,6 +1150,7 @@ export class TerminalProcess {
       agentState: t.agentState,
       waitingReason: t.waitingReason,
       lastStateChange: t.lastStateChange,
+      promptUnseen: t.promptUnseen,
       lastOutputChangeAt: t.lastOutputChangeAt,
       traceId: t.traceId,
       analysisEnabled: t.analysisEnabled,
