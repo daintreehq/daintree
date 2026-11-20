@@ -168,14 +168,16 @@ const noop = (): void => {};
  * later (#18002). Every call made meanwhile shares the one pass after it,
  * which waits on the passes in flight alone, never on the advisory read the
  * library runs beside them. A call made once that pass has started queues
- * another.
+ * another. Each caller still settles as the pass it joined does; the pass
+ * after is extra work, so it fails to `report`, as a background pump does.
  */
 export class TrailingPump {
   private queued: { started: Promise<void>; done: Promise<void> } | null = null;
 
   constructor(
     private readonly pass: () => Promise<void>,
-    private readonly inFlight: () => Promise<unknown> | null
+    private readonly inFlight: () => Promise<unknown> | null,
+    private readonly report: (error: Error) => void
   ) {}
 
   run(): Promise<void> {
@@ -186,9 +188,9 @@ export class TrailingPump {
     return Promise.all([joined, this.queued.done]).then(noop);
   }
 
-  /** Settles once a queued pass has started, from when the library's `idle()` sees it; never rejects. */
-  started(): Promise<void> {
-    return this.queued?.started ?? Promise.resolve();
+  /** Settles once the queued pass has started, from when the library's `idle()` sees it; null with none queued. */
+  started(): Promise<void> | null {
+    return this.queued?.started ?? null;
   }
 
   /**
@@ -198,19 +200,29 @@ export class TrailingPump {
    */
   private after(running: Promise<unknown>): { started: Promise<void>; done: Promise<void> } {
     let done: Promise<void> = Promise.resolve();
-    const start = (current: Promise<unknown>): Promise<void> =>
-      current.then(noop, noop).then(() => {
-        const next = this.inFlight();
-        if (next !== null) return start(next);
-        this.queued = null;
-        try {
-          done = this.pass();
-        } catch (error) {
-          done = Promise.reject(error as Error);
-        }
-      });
+    const start = async (current: Promise<unknown>): Promise<void> => {
+      await current.then(noop, noop);
+      const next = this.inFlight();
+      if (next !== null) {
+        await start(next);
+        return;
+      }
+      this.queued = null;
+      try {
+        done = this.pass();
+      } catch (error) {
+        done = Promise.reject(error as Error);
+      }
+    };
     const started = start(running);
-    return { started, done: started.then(() => done) };
+    return {
+      started,
+      done: started
+        .then(() => done)
+        .catch((error: unknown) => {
+          this.report(error instanceof Error ? error : new Error(String(error)));
+        }),
+    };
   }
 }
 
@@ -228,14 +240,22 @@ export class AttemptBridge extends DecisionsBridge {
     if (this.state === "stopped" || this.state === "revoked") return super.pump();
     this.trailing ??= new TrailingPump(
       () => super.pump(),
-      () => (this as unknown as { pumping?: Promise<unknown> | null }).pumping ?? null
+      () => (this as unknown as { pumping?: Promise<unknown> | null }).pumping ?? null,
+      (error) => this.reportPumpError(error)
     );
     return this.trailing.run();
   }
 
-  override async idle(): Promise<void> {
-    await this.trailing?.started();
-    await super.idle();
+  override idle(): Promise<void> {
+    const queued = this.trailing?.started() ?? null;
+    return queued === null ? super.idle() : queued.then(() => super.idle());
+  }
+
+  /** On the bridge's `error`, where the library reports a background pump's failure. */
+  private reportPumpError(error: Error): void {
+    const emit = (this as unknown as { emitError?: (e: Error) => void }).emitError;
+    if (typeof emit === "function") emit.call(this, error);
+    else console.warn("[Decisions] A relay pump failed:", error.message);
   }
 }
 

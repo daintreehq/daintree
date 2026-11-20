@@ -999,7 +999,7 @@ async function publishStage(relay: FakeRelay, questionId: string): Promise<strin
         ?.question_id === questionId
   ).length;
   if (create === undefined) {
-    return `committed (${local.local_status}) with no create in the outbox, sent ${sent} time(s)`;
+    return `committed (${local.local_status}, error ${local.error_code ?? "none"}) with no create in the outbox, sent ${sent} time(s)`;
   }
   return `committed, its create still in the outbox after ${create.attempts} failed attempt(s) (${create.last_error ?? "no error"}), sent ${sent} time(s)`;
 }
@@ -1014,7 +1014,10 @@ async function publishedToRelay(relay: FakeRelay, questionIds: string[]): Promis
       const missing: string[] = [];
       for (const questionId of questionIds) {
         if (!relay.questions.has(questionId)) {
-          missing.push(`${questionId}: ${await publishStage(relay, questionId)}`);
+          const stage = await publishStage(relay, questionId).catch(
+            (error: unknown) => `unreadable (${String(error)})`
+          );
+          missing.push(`${questionId}: ${stage}`);
         }
       }
       if (missing.length > 0) throw new Error(`The relay doesn't hold ${missing.join("; ")}`);
