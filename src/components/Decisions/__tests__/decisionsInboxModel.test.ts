@@ -25,6 +25,7 @@ import {
   clearText,
   closedTime,
   connectionNotice,
+  findAsked,
   folds,
   goneAsks,
   groupOf,
@@ -466,6 +467,155 @@ describe("decisionsInboxModel", () => {
     expect(resolveSelection(groups, { key: "gone", index: 9, picked: true }, null)).toBe(
       ordered[2]
     );
+  });
+
+  describe("a question the inbox is asked to show (#18047)", () => {
+    const settled: DecisionQuestionStanding = {
+      kind: "settled",
+      outcome: "answered",
+      handled: true,
+    };
+    const waiting = item("q1", OPEN);
+    const closed = item("q2", settled, {
+      reference: { hostId: "h1", projectId: "p1", terminalId: "t2", questionId: "q2" },
+    });
+    const hostCopy = item("q2", OPEN, {
+      reference: { hostId: "build-box", projectId: "p9", terminalId: "t2", questionId: "q2" },
+      remoteHost: { hostId: "build-box", name: "Build box", connected: true },
+    });
+    const groups = inboxGroups([hostCopy, waiting, closed]);
+    const keyOf = (listed: DecisionQuestionListItem) => referenceKey(listed.reference);
+
+    it("shows it in any group, ahead of the pane's first and the first waiting", () => {
+      expect(
+        resolveSelection(groups, null, "t1", "local", null, undefined, {
+          terminalId: "t2",
+          questionId: "q2",
+        })
+      ).toBe(closed);
+      expect(
+        resolveSelection(groups, null, null, "local", null, undefined, {
+          terminalId: "t2",
+          questionId: "q2",
+          reference: hostCopy.reference,
+        })
+      ).toBe(hostCopy);
+    });
+
+    it("names a question by every part of its reference", () => {
+      const ordered = groups.flatMap((group) => group.items);
+      expect(
+        findAsked(ordered, { terminalId: "t2", questionId: "q2", reference: closed.reference })
+      ).toBe(closed);
+      for (const part of ["hostId", "projectId", "terminalId"] as const) {
+        expect(
+          findAsked(ordered, {
+            terminalId: "t2",
+            questionId: "q2",
+            reference: { ...closed.reference, [part]: "elsewhere" },
+          }),
+          part
+        ).toBeUndefined();
+      }
+    });
+
+    it("names one of a pane's by both its terminal and its id", () => {
+      const ordered = groups.flatMap((group) => group.items);
+      expect(findAsked(ordered, { terminalId: "t2", questionId: "q2" })).toBe(closed);
+      expect(findAsked(ordered, { terminalId: "t9", questionId: "q2" })).toBeUndefined();
+      expect(findAsked(ordered, { terminalId: "t2", questionId: "q9" })).toBeUndefined();
+    });
+
+    it("names one of this computer's panes' by terminal and id, never a Remote Host's alike", () => {
+      const onlyHost = inboxGroups([hostCopy, waiting]);
+      expect(
+        findAsked(
+          onlyHost.flatMap((group) => group.items),
+          {
+            terminalId: "t2",
+            questionId: "q2",
+          }
+        )
+      ).toBeUndefined();
+      expect(
+        resolveSelection(onlyHost, null, null, "local", null, undefined, {
+          terminalId: "t2",
+          questionId: "q2",
+        })
+      ).toBe(hostCopy);
+    });
+
+    it("names one of a Remote Host window's panes on that Host (#18049)", () => {
+      const ordered = groups.flatMap((group) => group.items);
+      expect(findAsked(ordered, { terminalId: "t2", questionId: "q2" }, "build-box")).toBe(
+        hostCopy
+      );
+      expect(findAsked(ordered, { terminalId: "t2", questionId: "q2" }, "studio")).toBeUndefined();
+      expect(
+        resolveSelection(groups, null, null, "build-box", null, undefined, {
+          terminalId: "t2",
+          questionId: "q2",
+        })
+      ).toBe(hostCopy);
+    });
+
+    it("takes the place of what the inbox chose by itself once it is listed, never of a pick", () => {
+      const asked = { terminalId: "t2", questionId: "q2" };
+      // Listed after the opening: the inbox's own choice gives way to it.
+      expect(
+        resolveSelection(
+          groups,
+          { key: keyOf(waiting), index: 1, picked: false },
+          null,
+          "local",
+          null,
+          undefined,
+          asked
+        )
+      ).toBe(closed);
+      // Picked by the person, or in a picked row's place: theirs stays.
+      expect(
+        resolveSelection(
+          groups,
+          { key: keyOf(waiting), index: 1, picked: true },
+          null,
+          "local",
+          null,
+          undefined,
+          asked
+        )
+      ).toBe(waiting);
+      expect(
+        resolveSelection(
+          groups,
+          { key: "gone", index: 0, picked: true },
+          null,
+          "local",
+          null,
+          undefined,
+          asked
+        )
+      ).toBe(hostCopy);
+    });
+
+    it("falls back as before while it isn't listed", () => {
+      const missing = { terminalId: "t9", questionId: "q9" };
+      expect(resolveSelection(groups, null, "t1", "local", null, undefined, missing)).toBe(waiting);
+      expect(resolveSelection(groups, null, null, "local", null, undefined, missing)).toBe(
+        hostCopy
+      );
+      expect(
+        resolveSelection(
+          groups,
+          { key: keyOf(closed), index: 2, picked: false },
+          null,
+          "local",
+          null,
+          undefined,
+          missing
+        )
+      ).toBe(closed);
+    });
   });
 
   describe("what the inbox opens on by itself (#18022)", () => {

@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { decisionsClient } from "@/clients/decisionsClient";
 import { useDecisionsAnswerStore } from "@/store/decisionsAnswerStore";
 import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
-import { useDecisionsQuestionViewStore } from "@/store/decisionsQuestionViewStore";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -37,6 +36,7 @@ import { openDecisionsInbox } from "@/components/Decisions/decisionsHostInbox";
 import { dismissingQuestionIds } from "@/components/Decisions/decisionDeclineSend";
 import type { DecisionCancelTarget } from "@/components/Decisions/decisionCancelModel";
 import { paneQuestion, questionOf } from "@/components/Decisions/decisionQuestionTarget";
+import { openPaneQuestion } from "@/components/Decisions/openPaneQuestion";
 import { useDecisionsClock } from "@/components/Decisions/useDecisionsClock";
 import { REVIEW_ATTENTION_LABEL } from "@/components/Decisions/decisionsAttentionModel";
 import type { PaneDecisionState } from "@shared/types/decisions";
@@ -360,7 +360,6 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
     );
   });
   const wait = paneWaitOf({ hasDraft, queuesInput });
-  const openQuestion = useDecisionsQuestionViewStore((s) => s.open);
   // Withdrawals main committed and the relay hasn't confirmed, held in memory
   // for as long as this view shows the pane; each shows until the pane's state drops it.
   const [cancelling, setCancelling] = useState<ReadonlySet<string>>(() => new Set());
@@ -529,7 +528,7 @@ export function TerminalDecisionsChip({ terminalId }: { terminalId: string }) {
                   sharedStatusId={sharedStatusId}
                   onOpen={() => {
                     setOpen(false);
-                    openQuestion(terminalId, questionIds, item.questionId);
+                    void openPaneQuestion(terminalId, questionIds, item.questionId);
                   }}
                   onDismiss={
                     isCancellable(item)

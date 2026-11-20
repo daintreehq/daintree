@@ -1421,7 +1421,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "navigation",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open the oldest Decisions question waiting on the user, from which the others waiting can be stepped through in order. Does nothing when none is waiting. Only opens the view",
+    "description": "Open the Decisions inbox at the oldest question waiting on the user, with the others waiting listed beside it. Does nothing when none is waiting. Only opens the view",
     "examples": undefined,
     "id": "decisions.openNextQuestion",
     "keywords": [

@@ -67,10 +67,10 @@ import type {
   DecisionQuestionContent,
   DecisionQuestionContentResult,
   DecisionQuestionDeclineResult,
-  DecisionQuestionSummariesResult,
-  DeclineDecisionQuestionPayload,
   DecisionQuestionList,
   DecisionQuestionListItem,
+  DecisionQuestionSummariesResult,
+  DeclineDecisionQuestionPayload,
 } from "@shared/types/decisionsQuestion";
 
 let statusListeners: Array<(status: DecisionsStatus) => void> = [];
@@ -224,6 +224,7 @@ beforeEach(() => {
   getDeclineResult.mockReset().mockResolvedValue({ result: "not-found" });
   useDecisionsAnswerStore.getState().clear();
   useDecisionsQuestionViewStore.setState({ isOpen: false, request: null });
+  useDecisionsInboxStore.setState({ isOpen: false, request: { terminalId: null, seq: 0 } });
   useTerminalInputStore.setState({ draftInputs: new Map() });
   onDecisionState.mockClear();
   Reflect.set(window, "electron", {
@@ -806,9 +807,10 @@ describe("TerminalDecisionsChip", () => {
       await act(async () => {});
       expect(screen.queryByTestId("terminal-decisions-row-line")).toBeNull();
       fireEvent.click(row);
-      expect(useDecisionsQuestionViewStore.getState().request?.questions).toEqual([
-        { scope: "pane", terminalId: "t1", questionId: "q42" },
-      ]);
+      expect(useDecisionsInboxStore.getState().request.question).toEqual({
+        terminalId: "t1",
+        questionId: "q42",
+      });
     });
 
     it("keeps rows openable when the read fails", async () => {
@@ -819,28 +821,144 @@ describe("TerminalDecisionsChip", () => {
       const row = await screen.findByTestId("terminal-decisions-row");
       await act(async () => {});
       fireEvent.click(row);
-      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(true);
+      expect(useDecisionsInboxStore.getState()).toMatchObject({
+        isOpen: true,
+        request: { question: { terminalId: "t1", questionId: "q42" } },
+      });
     });
 
-    it("opens the chosen question with every listed question to step through", async () => {
+    it("opens the inbox at the chosen question, the pane as its opener (#18047)", async () => {
       getStatus.mockResolvedValue({ state: "connected", revision: 1 });
       getPaneState.mockResolvedValue(twoQuestions);
       render(<TerminalDecisionsChip terminalId="t1" />);
       fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
       const rows = await screen.findAllByTestId("terminal-decisions-row");
+      const listReads = listQuestions.mock.calls.length;
       fireEvent.click(rows[1]!);
 
-      expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
+      expect(useDecisionsInboxStore.getState()).toMatchObject({
         isOpen: true,
-        request: {
+        request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q43" } },
+      });
+      expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+      // This computer's own pane: opened at once, without reading the list to find it.
+      expect(listQuestions.mock.calls.length).toBe(listReads);
+      expect(screen.queryByTestId("popover-content")).toBeNull();
+    });
+
+    describe("in a Remote Host's window", () => {
+      /** A Host's question as this computer lists it: its Decisions identity and its host-list id differ. */
+      function hostQuestion(
+        hostId: string,
+        questionId = "q43",
+        terminalId = "t1"
+      ): DecisionQuestionListItem {
+        return {
+          reference: {
+            hostId: `decisions-${hostId}`,
+            projectId: "p-host",
+            terminalId,
+            questionId,
+          },
+          alias: 43,
+          agentKind: "claude",
+          projectLabel: "Project",
+          worktreeId: "wt",
+          worktreeRoot: "/repo",
+          requirement: "human-required",
+          askedAt: "2026-11-02T10:00:00.000Z",
+          expiresAt: null,
+          settledAt: null,
+          standing: { kind: "waiting", reason: "open" },
+          replyRequest: null,
+          stall: null,
+          remoteHost: { hostId, name: "Build box", connected: true },
+        };
+      }
+
+      async function openSecondRow(): Promise<void> {
+        getStatus.mockResolvedValue({ state: "connected", revision: 1 });
+        getPaneState.mockResolvedValue(twoQuestions);
+        render(<TerminalDecisionsChip terminalId="t1" />);
+        fireEvent.click(await screen.findByTestId("terminal-decisions-chip"));
+        const rows = await screen.findAllByTestId("terminal-decisions-row");
+        await act(async () => {
+          fireEvent.click(rows[1]!);
+        });
+      }
+
+      const listHosts = vi.fn<() => Promise<DecisionsHostsResult>>();
+
+      beforeEach(() => {
+        window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+        Reflect.set(window.electron.decisions, "listHosts", listHosts);
+        listHosts.mockReset().mockResolvedValue({
+          result: "listed",
+          autoEnroll: true,
+          hosts: [],
+          inboxHostIds: ["build-box"],
+        });
+      });
+      afterEach(() => {
+        delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+      });
+
+      it("opens the inbox at the question once its enrolled Host has reported it", async () => {
+        const listedThere = hostQuestion("build-box");
+        listQuestions.mockResolvedValue({ revision: 1, questions: [listedThere] });
+        await openSecondRow();
+        await waitFor(() => expect(useDecisionsInboxStore.getState().isOpen).toBe(true));
+        expect(useDecisionsInboxStore.getState().request).toMatchObject({
+          terminalId: "t1",
+          question: { terminalId: "t1", questionId: "q43", reference: listedThere.reference },
+        });
+        expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(false);
+      });
+
+      it.each([
+        ["this computer's list doesn't hold it", async () => ({ revision: 1, questions: [] })],
+        [
+          "only another Host's question matches",
+          async () => ({ revision: 1, questions: [hostQuestion("other-box")] }),
+        ],
+        [
+          "only the Host's other questions are listed",
+          async () => ({
+            revision: 1,
+            questions: [hostQuestion("build-box", "q42"), hostQuestion("build-box", "q43", "t2")],
+          }),
+        ],
+        [
+          "the list can't be read",
+          async (): Promise<DecisionQuestionList> => {
+            throw new Error("bridge gone");
+          },
+        ],
+        [
+          "main no longer lists the Host's questions in the inbox",
+          async () => {
+            listHosts.mockResolvedValue({
+              result: "listed",
+              autoEnroll: true,
+              hosts: [],
+              inboxHostIds: ["other-box"],
+            });
+            return { revision: 1, questions: [hostQuestion("build-box")] };
+          },
+        ],
+      ])("keeps the question view, stepping through the pane's, when %s", async (_why, list) => {
+        listQuestions.mockImplementation(list);
+        await openSecondRow();
+        await waitFor(() => expect(useDecisionsQuestionViewStore.getState().isOpen).toBe(true));
+        expect(useDecisionsQuestionViewStore.getState().request).toMatchObject({
           questions: [
             { scope: "pane", terminalId: "t1", questionId: "q42" },
             { scope: "pane", terminalId: "t1", questionId: "q43" },
           ],
           index: 1,
-        },
+        });
+        expect(useDecisionsInboxStore.getState().isOpen).toBe(false);
       });
-      expect(screen.queryByTestId("popover-content")).toBeNull();
     });
   });
 
@@ -1525,9 +1643,10 @@ describe("TerminalDecisionsChip, as its questions step down (#18053)", () => {
       "Open a question to answer it here"
     );
     fireEvent.click(screen.getByTestId("terminal-decisions-row"));
-    expect(useDecisionsQuestionViewStore.getState()).toMatchObject({
+    // In the inbox (#18047), which shows a cleared question it's asked for.
+    expect(useDecisionsInboxStore.getState()).toMatchObject({
       isOpen: true,
-      request: { questions: [{ scope: "pane", terminalId: "t1", questionId: "q42" }], index: 0 },
+      request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q42" } },
     });
   });
 
@@ -1632,9 +1751,10 @@ describe("TerminalDecisionsChip, what waits on the person (#18052)", () => {
       "Follow-ups are typed in here once the draft here is sent or cleared"
     );
     fireEvent.click(row);
-    expect(useDecisionsQuestionViewStore.getState().request?.questions).toEqual([
-      { scope: "pane", terminalId: "t1", questionId: "q42" },
-    ]);
+    expect(useDecisionsInboxStore.getState()).toMatchObject({
+      isOpen: true,
+      request: { terminalId: "t1", question: { terminalId: "t1", questionId: "q42" } },
+    });
 
     act(() =>
       paneListeners[0]!(

@@ -4261,6 +4261,319 @@ describe("DecisionsInboxDialog", () => {
       expect(screen.getByTestId("decision-follow-up-open")).toBeTruthy();
     });
   });
+
+  describe("opened at a question (#18047)", () => {
+    function ask(
+      questionId: string,
+      over: Partial<DecisionQuestionReference> = {},
+      threadMessageId?: string
+    ) {
+      const ref = reference(questionId, over);
+      act(() =>
+        useDecisionsInboxStore.getState().open({
+          question: {
+            terminalId: ref.terminalId,
+            questionId,
+            reference: ref,
+            ...(threadMessageId === undefined ? {} : { threadMessageId }),
+          },
+        })
+      );
+    }
+
+    it("opens at the question asked for in any group, its row chosen and holding the keyboard", async () => {
+      ask("question-1");
+      await waitFor(() => expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-1")));
+    });
+
+    it("opens one of a pane's by its terminal and id, ahead of that pane's first", async () => {
+      act(() =>
+        useDecisionsInboxStore
+          .getState()
+          .open({ terminalId: "t1", question: { terminalId: "t1", questionId: "question-1" } })
+      );
+      await waitFor(() => expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true"));
+      expect(rowNamed("q-2").getAttribute("aria-current")).toBeNull();
+    });
+
+    it("shows a question asked for while open in the same opening, its row taking the keyboard from wherever it was", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      await waitFor(() =>
+        expect(screen.getByTestId("decisions-involvement-mode").textContent).toBe(
+          "Bring a recommendation"
+        )
+      );
+      const involvementReads = getInvolvement.mock.calls.length;
+      // The keyboard moved to another row, which the list's tab stop now rests on.
+      fireEvent.keyDown(rowNamed("q-2"), { key: "ArrowDown" });
+      expect(document.activeElement).toBe(rowNamed("q-3"));
+      const listReads = listQuestions.mock.calls.length;
+
+      ask("question-1");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true");
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-1")));
+      expect(rows().filter((row) => row.tabIndex === 0)).toEqual([rowNamed("q-1")]);
+      // The same opening: the list wasn't read again, and what agents are told wasn't reloaded.
+      expect(listQuestions.mock.calls.length).toBe(listReads);
+      expect(getInvolvement.mock.calls.length).toBe(involvementReads);
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    });
+
+    it("drops the person's pick for a question asked for while open", async () => {
+      open();
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      fireEvent.click(rowNamed("q-3"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+      ask("question-1");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      expect(rowNamed("q-1").getAttribute("aria-current")).toBe("true");
+    });
+
+    it("leaves the keyboard where it is when a question asked for while open is listed only later", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      ask("question-4");
+      await act(async () => {});
+      push({ ...LIST, revision: 2, questions: [...LIST.questions, item("question-4", 4, OPEN)] });
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+    });
+
+    it("leaves the keyboard in a layer over the inbox, bringing the row into view", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      const layer = document.createElement("div");
+      layer.setAttribute("role", "dialog");
+      const button = document.createElement("button");
+      layer.append(button);
+      document.body.append(layer);
+      onTestFinished(() => layer.remove());
+      act(() => button.focus());
+      const scrolled: Element[] = [];
+      const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (
+        this: Element
+      ) {
+        scrolled.push(this);
+      });
+      onTestFinished(() => scrollSpy.mockRestore());
+      ask("question-1");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      await act(async () => {});
+      expect(document.activeElement).toBe(button);
+      expect(scrolled).toContain(rowNamed("q-1"));
+    });
+
+    it("takes the keyboard to the row once a layer closing over the inbox hands it back", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      const opener = rowNamed("q-2");
+      const layer = document.createElement("div");
+      layer.setAttribute("role", "dialog");
+      const search = document.createElement("input");
+      layer.append(search);
+      document.body.append(layer);
+      onTestFinished(() => layer.remove());
+      act(() => search.focus());
+      ask("question-1");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      // The palette closes and returns the keyboard to the row it was opened from.
+      act(() => {
+        layer.remove();
+        opener.focus();
+      });
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-1")));
+      expect(rows().filter((row) => row.tabIndex === 0)).toEqual([rowNamed("q-1")]);
+    });
+
+    it("leaves the keyboard where a press puts it while waiting on a layer", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      const layer = document.createElement("div");
+      layer.setAttribute("role", "dialog");
+      const button = document.createElement("button");
+      layer.append(button);
+      document.body.append(layer);
+      onTestFinished(() => layer.remove());
+      act(() => button.focus());
+      ask("question-1");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      act(() => layer.remove());
+      fireEvent.pointerDown(rowNamed("q-3"));
+      act(() => rowNamed("q-3").focus());
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+      expect(document.activeElement).toBe(rowNamed("q-3"));
+    });
+
+    it("leaves the keyboard where a layer hands it back once the wait for it has passed", async () => {
+      open();
+      await waitFor(() => expect(document.activeElement).toBe(rowNamed("q-2")));
+      const layer = document.createElement("div");
+      layer.setAttribute("role", "dialog");
+      const button = document.createElement("button");
+      layer.append(button);
+      document.body.append(layer);
+      onTestFinished(() => layer.remove());
+      act(() => button.focus());
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      ask("question-1");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 1"));
+      await act(async () => vi.advanceTimersByTime(1_500));
+      act(() => {
+        layer.remove();
+        rowNamed("q-2").focus();
+      });
+      await act(async () => vi.advanceTimersByTime(50));
+      expect(document.activeElement).toBe(rowNamed("q-2"));
+    });
+
+    it("drops a way to the terminal still being looked for when a question is asked for", async () => {
+      getAllTerminals.mockResolvedValue([
+        terminal({ id: "t9", projectId: "project-b", hasPty: true }),
+      ]);
+      ask("question-3", { projectId: "project-b", terminalId: "t9" });
+      const go = await screen.findByTestId("decisions-inbox-go-to-terminal");
+      let found!: (terminals: BackendTerminalInfo[]) => void;
+      getAllTerminals.mockImplementation(
+        () => new Promise<BackendTerminalInfo[]>((resolve) => (found = resolve))
+      );
+      fireEvent.click(go);
+      await waitFor(() => expect(found).toBeTypeOf("function"));
+      // Its notification clicked while the look is out: the person is reading it again.
+      ask("question-3", { projectId: "project-b", terminalId: "t9" });
+      await act(async () => found([terminal({ id: "t9", projectId: "project-b", hasPty: true })]));
+      expect(useDecisionsInboxStore.getState().isOpen).toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it("takes the selection once a question asked for is listed, never from the person's pick", async () => {
+      ask("question-4");
+      await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+      push({ ...LIST, revision: 2, questions: [...LIST.questions, item("question-4", 4, OPEN)] });
+      await waitFor(() => expect(shownBody()).toContain("Body of question 4"));
+      expect(rowNamed("q-4").getAttribute("aria-current")).toBe("true");
+
+      fireEvent.click(rowNamed("q-3"));
+      await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+      push({ ...LIST, revision: 3, questions: [...LIST.questions, item("question-4", 4, OPEN)] });
+      await act(async () => {});
+      expect(rowNamed("q-3").getAttribute("aria-current")).toBe("true");
+    });
+
+    describe("at a reply's follow-up (#17235)", () => {
+      const asks = (messageId: string) => ({
+        type: "message" as const,
+        messageId,
+        from: "agent" as const,
+        text: `Asking ${messageId}`,
+        images: [],
+        expectsReply: true,
+        sentAt: "2026-11-02T10:07:00.000Z",
+        deliveryStatus: null,
+        unreadable: false,
+      });
+      const withThread = (...thread: ReturnType<typeof asks>[]) => ({
+        ...CONTENT["question-2"]!,
+        thread,
+      });
+      let scrolled: Element[];
+      let scrollSpy: { mockRestore: () => void };
+
+      beforeEach(() => {
+        scrolled = [];
+        // Spied on, never replaced: focusing a row scrolls too, and those calls are left out.
+        scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (
+          this: Element
+        ) {
+          if (this.closest('[data-testid="decisions-inbox-detail"]') !== null) scrolled.push(this);
+        });
+      });
+
+      afterEach(() => scrollSpy.mockRestore());
+
+      it("scrolls to that follow-up once, and a read again keeps the person's place", async () => {
+        getQuestionContentByReference.mockImplementation(async () => ({
+          result: "read",
+          question: withThread(asks("m2")),
+        }));
+        ask("question-2", {}, "m2");
+        await waitFor(() => expect(scrolled).toHaveLength(1));
+        expect(scrolled[0]!.getAttribute("data-message-id")).toBe("m2");
+
+        getQuestionContentByReference.mockImplementation(async () => ({
+          result: "read",
+          question: withThread(asks("m2"), asks("m3")),
+        }));
+        push({
+          ...LIST,
+          revision: 2,
+          questions: LIST.questions.map((entry) =>
+            entry.reference.questionId === "question-2" ? { ...entry, replyRequest: "m3" } : entry
+          ),
+        });
+        await screen.findByText("Asking m3");
+        expect(scrolled).toHaveLength(1);
+
+        // Its notification clicked again: the follow-up is shown again.
+        ask("question-2", {}, "m2");
+        await waitFor(() => expect(scrolled).toHaveLength(2));
+        expect(scrolled[1]!.getAttribute("data-message-id")).toBe("m2");
+      });
+
+      it("never lets a read begun before the ask, without the follow-up, stand for one made for it", async () => {
+        open();
+        await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+        const lands: Array<(question: DecisionQuestionContent) => void> = [];
+        getQuestionContentByReference.mockImplementation(
+          () =>
+            new Promise((resolve) =>
+              lands.push((question) => resolve({ result: "read", question }))
+            )
+        );
+        // The follow-up arrives: a read of the question shown starts, and is still out at the click.
+        push({
+          ...LIST,
+          revision: 2,
+          questions: LIST.questions.map((entry) =>
+            entry.reference.questionId === "question-2" ? { ...entry, replyRequest: "m2" } : entry
+          ),
+        });
+        await waitFor(() => expect(lands).toHaveLength(1));
+        ask("question-2", {}, "m2");
+        await waitFor(() => expect(lands).toHaveLength(2));
+
+        await act(async () => lands[0]!(withThread()));
+        expect(scrolled).toHaveLength(0);
+        await act(async () => lands[1]!(withThread(asks("m2"))));
+        await waitFor(() => expect(scrolled).toHaveLength(1));
+        expect(scrolled[0]!.getAttribute("data-message-id")).toBe("m2");
+      });
+
+      it("drops the follow-up once the person picks another question", async () => {
+        getQuestionContentByReference.mockImplementation(async ({ reference: ref }) => ({
+          result: "read",
+          question:
+            ref.questionId === "question-2" ? withThread(asks("m1")) : CONTENT[ref.questionId]!,
+        }));
+        ask("question-2", {}, "not-yet-read");
+        await waitFor(() => expect(scrolled).toHaveLength(1));
+        expect(scrolled[0]!.getAttribute("data-testid")).toBe("decision-question-thread");
+        fireEvent.click(rowNamed("q-3"));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 3"));
+        fireEvent.click(rowNamed("q-2"));
+        await waitFor(() => expect(shownBody()).toContain("Body of question 2"));
+        await act(async () => {});
+        expect(scrolled).toHaveLength(1);
+      });
+    });
+  });
 });
 
 describe("DecisionsInboxDialog: the run that asked (#18029)", () => {
