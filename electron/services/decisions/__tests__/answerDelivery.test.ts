@@ -3656,10 +3656,13 @@ describe("AnswerDelivery, choosing where a stopped answer goes (#18056)", () => 
       title: "Chosen",
     });
     expect(h.client.submitted.map((line) => line.id)).toEqual(["pane-chosen"]);
+    expect(typedChoices(h.client.submitted[0]!.text)).toEqual(["approve"]);
     expect((await h.question(Q1))?.origin).toMatchObject({
       pane_id: "pane-chosen",
       ownership_principal: "principal-pane-chosen",
     });
+    const moved = (await h.store.listAudit(500)).find((e) => e.event === "delivery.reassigned");
+    expect(moved?.detail).toMatchObject({ from_pane: PANE, to_pane: "pane-chosen" });
     await stopped(h.delivery);
   });
 
@@ -3669,6 +3672,8 @@ describe("AnswerDelivery, choosing where a stopped answer goes (#18056)", () => 
     const found =
       listed.result === "listed" ? listed.destinations.find((d) => d.terminalId === id) : undefined;
     expect(found).toBeDefined();
+    // What the IPC schema takes back: a digest, never the identity it is made of.
+    expect(found!.run).toMatch(/^[0-9a-f]{64}$/);
     return found!;
   }
 
@@ -3682,12 +3687,8 @@ describe("AnswerDelivery, choosing where a stopped answer goes (#18056)", () => 
 
   it.each([
     { how: "another agent started in the same launch", run: { agentIncarnation: 1 } },
-    {
-      how: "the pane relaunched",
-      run: { launchGeneration: 8 },
-      generation: 8,
-      principal: "principal-relaunched",
-    },
+    // Its principal kept, so the generation alone tells the runs apart.
+    { how: "its pty relaunched", run: { launchGeneration: 8 }, generation: 8 },
     { how: "its Decisions principal was reissued", run: {}, principal: "principal-reissued" },
     { how: "another kind of agent is detected", run: { detectedAgentId: "codex" } },
   ])(
@@ -3762,7 +3763,10 @@ describe("AnswerDelivery, choosing where a stopped answer goes (#18056)", () => 
     await stalled(h);
     live(h, "pane-chosen", { title: "Chosen" });
     live(h, "pane-other", { title: "Other" });
+    // Alike in every part of their runs but the pane, so the pane alone tells them apart.
+    h.principals.set("pane-other", "principal-pane-chosen");
     const other = await listedAs(h, "pane-other");
+    expect(other.run).not.toBe((await listedAs(h, "pane-chosen")).run);
 
     expect(
       await settled(h.delivery.reassignAnswer(Q1, { terminalId: "pane-chosen", run: other.run }))

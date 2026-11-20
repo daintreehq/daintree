@@ -176,6 +176,10 @@ describe("follow-ups in the needs-attention list (#16231)", () => {
     );
     expect(leavesList(changed)).toBe(false);
     expect(outcomeSeverity(changed)).toBe("warning");
+    // Against a move that went through, which leaves.
+    const moved = { result: "delivered", terminalId: "pane-8", title: "Chosen" } as const;
+    expect(leavesList(moved)).toBe(true);
+    expect(outcomeSeverity(moved)).toBe("success");
   });
 });
 

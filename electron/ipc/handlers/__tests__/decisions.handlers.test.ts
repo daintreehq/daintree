@@ -1500,7 +1500,7 @@ describe("decisions IPC", () => {
 
   it("takes a move only with the destination's run as main listed it (#18093)", () => {
     const schema = decisionsNamespace.ops.reassignAnswer.schema as SafeParse;
-    const move = { questionId: QUESTION_ID, terminalId: "pane-2", run: "b".repeat(64) };
+    const move = { questionId: QUESTION_ID, terminalId: "pane-2", run: "0a9f".repeat(16) };
     expect(schema.safeParse(move).success).toBe(true);
     expect(schema.safeParse({ ...move, expected: "c".repeat(64) }).success).toBe(true);
     const { run: _run, ...withoutRun } = move;
@@ -1508,6 +1508,7 @@ describe("decisions IPC", () => {
       withoutRun,
       { ...move, run: "" },
       { ...move, run: "B".repeat(64) },
+      { ...move, run: "0a9g".repeat(16) },
       { ...move, run: "b".repeat(63) },
       { ...move, run: "b".repeat(65) },
       { ...move, run: 7 },
