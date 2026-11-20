@@ -13,7 +13,7 @@ import type {
  * startup (`scripts/decisions-lazy-boundary.test.ts`).
  */
 let list: DecisionQuestionList = { revision: 0, questions: [] };
-let key = "[]";
+let key = keyOf([], []);
 const listeners = new Set<(list: DecisionQuestionList) => void>();
 
 /** The list now. Shared with every reader: never mutate it. */
@@ -21,17 +21,30 @@ export function getDecisionQuestionList(): DecisionQuestionList {
   return list;
 }
 
+function keyOf(
+  questions: readonly DecisionQuestionListItem[],
+  hostsAway: readonly string[]
+): string {
+  return JSON.stringify([questions, hostsAway]);
+}
+
 /**
- * Replaces the list (empty clears it), telling listeners only on a change.
- * Returns the new list, or null when nothing changed.
+ * Replaces the list (empty clears it), and the Remote Hosts away with it,
+ * telling listeners only on a change. Returns the new list, or null when
+ * nothing changed.
  */
 export function setDecisionQuestions(
-  questions: readonly DecisionQuestionListItem[]
+  questions: readonly DecisionQuestionListItem[],
+  hostsAway: readonly string[] = []
 ): DecisionQuestionList | null {
-  const next = JSON.stringify(questions);
+  const next = keyOf(questions, hostsAway);
   if (next === key) return null;
   key = next;
-  list = { revision: list.revision + 1, questions: [...questions] };
+  list = {
+    revision: list.revision + 1,
+    questions: [...questions],
+    ...(hostsAway.length > 0 ? { hostsAway: [...hostsAway] } : {}),
+  };
   const changed = list;
   for (const listener of [...listeners]) {
     try {

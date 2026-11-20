@@ -573,12 +573,33 @@ function InboxList({
       list.querySelector<HTMLElement>(`[data-inbox-key="${encodeURIComponent(last.key)}"]`) ??
       list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]');
     row?.focus({ preventScroll: true });
-  }, [shape]);
+  }, [shape, listRef]);
 
   return (
     <div
       ref={listRef}
-      onKeyDown={roving.onKeyDown}
+      onKeyDown={(event) => {
+        // On the list itself (it had no rows, or a click on its blank space), the first arrow
+        // goes to the row Tab would reach, rather than one past it.
+        if (
+          event.target === event.currentTarget &&
+          (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.shiftKey
+        ) {
+          const stop = event.currentTarget.querySelector<HTMLElement>(
+            '[data-roving-row][tabindex="0"]'
+          );
+          if (stop !== null) {
+            event.preventDefault();
+            stop.focus();
+            return;
+          }
+        }
+        roving.onKeyDown(event);
+      }}
       // The dialog's first stop while it has no rows, so the keyboard still starts on the list; with
       // rows, the rows are, and the list only holds focus a row it lost (or a control under it) hands back.
       tabIndex={keys.length === 0 ? 0 : -1}
@@ -813,10 +834,12 @@ export function DecisionsInboxDialog() {
     if (button === null) return;
     return () => {
       if (document.activeElement !== button) return;
-      // After the commit, once the rows that replaced the group are in.
+      // After the commit, once the rows that replaced the group are in, and only while the inbox
+      // is still open: one closing in the same commit hands focus back to where it was opened.
       queueMicrotask(() => {
         const list = listRef.current;
         if (button.isConnected || list === null || !list.isConnected) return;
+        if (!useDecisionsInboxStore.getState().isOpen) return;
         const focused = document.activeElement;
         if (focused !== null && focused !== document.body) return;
         (list.querySelector<HTMLElement>('[data-roving-row][tabindex="0"]') ?? list).focus();
@@ -956,13 +979,18 @@ export function DecisionsInboxDialog() {
     ? "pending"
     : status === null
       ? "unknown"
-      : notice !== null
-        ? "unavailable"
-        : "connected";
+      : status.problem === "storage"
+        ? "unreadable"
+        : notice !== null
+          ? "unavailable"
+          : "connected";
   const listed = listRead.state === "listed";
-  // Only once the relay is known to be reachable does an empty list say nothing was asked.
-  const empty = listed && listReach === "connected" ? emptyText(groups) : null;
-  const waitingLine = listed && empty === null ? waitingText(groups, listReach) : null;
+  const hostsAway = listRead.state === "listed" ? (listRead.list.hostsAway ?? []) : [];
+  // Only once the relay, and every Remote Host, is known to be reachable does an empty list say
+  // nothing was asked.
+  const empty =
+    listed && listReach === "connected" && hostsAway.length === 0 ? emptyText(groups) : null;
+  const waitingLine = listed && empty === null ? waitingText(groups, listReach, hostsAway) : null;
 
   return (
     <>

@@ -248,15 +248,20 @@ describe("decisionsInboxModel", () => {
     const groups = inboxGroups(ordered);
     const keyOf = (index: number) => referenceKey(ordered[index]!.reference);
     expect(resolveSelection([], null, null)).toBeNull();
+    expect(resolveSelection([], { key: "gone", index: 1, picked: true }, null)).toBeNull();
     expect(resolveSelection(groups, null, null)).toBe(ordered[0]);
     expect(resolveSelection(groups, null, "t2")).toBe(ordered[1]);
     expect(resolveSelection(groups, null, "gone")).toBe(ordered[0]);
     expect(resolveSelection(groups, { key: keyOf(2), index: 0, picked: false }, "t2")).toBe(
       ordered[2]
     );
-    // A picked row that went: the one now at its place, or the last when it was past the end.
+    // A picked row that went: the one now at its place, or the last when it was past the end,
+    // ahead of the opener's.
     expect(resolveSelection(groups, { key: "gone", index: 1, picked: true }, null)).toBe(
       ordered[1]
+    );
+    expect(resolveSelection(groups, { key: "gone", index: 2, picked: true }, "t2")).toBe(
+      ordered[2]
     );
     expect(resolveSelection(groups, { key: "gone", index: 9, picked: true }, null)).toBe(
       ordered[2]
@@ -290,10 +295,16 @@ describe("decisionsInboxModel", () => {
         ["awaiting", item("q3", OPEN, { expiresAt: "2026-11-02T11:00:00.000Z" })],
       ];
       for (const [group, waiting] of lead) {
-        const groups = inboxGroups([cleared, closed, waiting], nowMs);
+        const behind = { ...waiting, reference: { ...waiting.reference, questionId: "q4" } };
+        const groups = inboxGroups([cleared, closed, waiting, behind], nowMs);
         expect(groups[0]!.id).toBe(group);
+        expect(groups[0]!.items).toEqual([waiting, behind]);
         expect(resolveSelection(groups, null, null)).toBe(waiting);
       }
+      // Of two groups that need something, the first.
+      const typing = item("q5", { kind: "to-type" });
+      const asking = item("q6", OPEN);
+      expect(resolveSelection(inboxGroups([typing, asking]), null, null)).toBe(asking);
     });
 
     it("opens on the pane's own question whatever its group", () => {
@@ -303,6 +314,11 @@ describe("decisionsInboxModel", () => {
       const groups = inboxGroups([cleared, closed, waiting]);
       expect(resolveSelection(groups, null, "t2")).toBe(closed);
       expect(resolveSelection(groups, null, "t1")).toBe(cleared);
+      // Of the pane's questions, the first listed.
+      const later = item("q7", OPEN, {
+        reference: { hostId: "h1", projectId: "p1", terminalId: "t2", questionId: "q7" },
+      });
+      expect(resolveSelection(inboxGroups([closed, later]), null, "t2")).toBe(later);
     });
 
     it("never moves onto a Cleared or History neighbour from a question the person didn't pick", () => {
@@ -329,8 +345,10 @@ describe("decisionsInboxModel", () => {
       expect(waitingText(inboxGroups([closed]), "connected")).toBe("No questions waiting on you");
     });
 
-    it("waits for Decisions' status before saying anything", () => {
+    it("waits for Decisions' status before saying anything, and leaves an unreadable store to its notice", () => {
       expect(waitingText(inboxGroups([closed]), "pending")).toBeNull();
+      expect(waitingText(inboxGroups([closed]), "pending", ["Studio"])).toBeNull();
+      expect(waitingText([], "unreadable")).toBeNull();
     });
 
     it("speaks only for the questions shown when the list can't be taken at its word", () => {
@@ -369,6 +387,37 @@ describe("decisionsInboxModel", () => {
         remoteHost: { hostId: "Studio", name: "Studio", connected: true },
       });
       expect(waitingText(inboxGroups([back]), "connected")).toBe("No questions waiting on you");
+      // A row of its in Cleared names it as well as one in History.
+      const set = {
+        ...back,
+        remoteHost: { hostId: "Studio", name: "Studio", connected: false },
+      };
+      expect(waitingText(inboxGroups([set]), "connected")).toMatch(/Studio is away/);
+    });
+
+    it("names a Remote Host the list says is away even with no question of its listed", () => {
+      expect(waitingText([], "connected", ["Studio"])).toBe(
+        "No questions on this computer. Studio is away, so its questions are as last reported."
+      );
+      expect(waitingText(inboxGroups([closed]), "connected", ["Studio"])).toMatch(
+        /^None of the questions here wait on you\. Studio is away/
+      );
+      // Once per Host, from the list or a row of its.
+      const row = item(
+        "q8",
+        { kind: "settled", outcome: "expired" },
+        {
+          remoteHost: { hostId: "studio", name: "Studio", connected: false },
+        }
+      );
+      expect(waitingText(inboxGroups([row]), "connected", ["Studio"])).toMatch(/\. Studio is away/);
+      // Each reason that holds, alongside a connection notice or an unknown status.
+      expect(waitingText([], "unavailable", ["Studio"])).toBe(
+        "No questions on this computer. Studio is away, so its questions are as last reported."
+      );
+      const both = waitingText([], "unknown", ["Studio"]);
+      expect(both).toMatch(/status couldn't be read/);
+      expect(both).toMatch(/Studio is away/);
     });
   });
 

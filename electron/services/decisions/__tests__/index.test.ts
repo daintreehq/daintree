@@ -862,7 +862,24 @@ describe("Decisions entry", () => {
         name: "Studio",
         connected: false,
       });
+      expect(getDecisionQuestionList().hostsAway).toEqual(["Studio"]);
       expect(listPushes()).toHaveLength(1);
+
+      // A Host that reported nothing goes away too (#18022): no row changes, yet the list names it.
+      statusView.send.mockClear();
+      const quiet = { ...labHost, questions: [] };
+      hosts = [hosts[0]!, { ...quiet, connected: false }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().hostsAway).toEqual(["Studio", "Lab"]);
+      expect(listPushes()).toHaveLength(1);
+      // Back with the same rows: only the away Host's name goes.
+      hosts = [hosts[0]!, quiet];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().hostsAway).toEqual(["Studio"]);
+      expect(listPushes()).toHaveLength(2);
+      hosts = [hosts[0]!];
+      for (const listener of changed) listener();
+      expect(listPushes()).toHaveLength(2);
 
       // With none asked here, the Host's are still listed.
       publish([]);

@@ -431,13 +431,14 @@ export function emptyText(groups: readonly InboxGroup[]): string | null {
 /**
  * How far the list can be taken at its word (#18022): Decisions' status not
  * yet read, read as unknown (the read failed), not connected to its relay
- * (the connection notice says why), or connected.
+ * (the connection notice says why), its store unreadable (the notice says no
+ * question can be read), or connected.
  */
-export type InboxReach = "pending" | "unknown" | "unavailable" | "connected";
+export type InboxReach = "pending" | "unknown" | "unavailable" | "unreadable" | "connected";
 
-/** Each Remote Host listed as away, by name, once. */
-function awayHosts(groups: readonly InboxGroup[]): string[] {
-  const names = new Set<string>();
+/** Each Remote Host away, by name, once: those the list names, then any of its rows'. */
+function awayHosts(groups: readonly InboxGroup[], hostsAway: readonly string[]): string[] {
+  const names = new Set(hostsAway);
   for (const group of groups) {
     for (const item of group.items) {
       if (item.remoteHost !== undefined && !item.remoteHost.connected) {
@@ -451,13 +452,19 @@ function awayHosts(groups: readonly InboxGroup[]): string[] {
 /**
  * The quiet line at the top of the list while Needs you is empty (#18022):
  * that nothing waits on the person, only as far as the list can say. Not
- * connected, with status unknown, or with a Remote Host away, it speaks for
- * the questions shown and says what it can't vouch for. Null while Needs you
- * has a question, seen ones included, and before Decisions' status is read.
+ * connected, with status unknown, or with a Remote Host away (`hostsAway`,
+ * or a row's), it speaks for the questions shown and says what it can't
+ * vouch for. Null while Needs you has a question, seen ones included, before
+ * Decisions' status is read, and while its store can't be read at all.
  */
-export function waitingText(groups: readonly InboxGroup[], reach: InboxReach): string | null {
-  if (reach === "pending" || groups.some((group) => group.id === "needs-you")) return null;
-  const away = awayHosts(groups);
+export function waitingText(
+  groups: readonly InboxGroup[],
+  reach: InboxReach,
+  hostsAway: readonly string[] = []
+): string | null {
+  if (reach === "pending" || reach === "unreadable") return null;
+  if (groups.some((group) => group.id === "needs-you")) return null;
+  const away = awayHosts(groups, hostsAway);
   if (reach === "connected" && away.length === 0) return "No questions waiting on you";
   const lead =
     groups.length === 0

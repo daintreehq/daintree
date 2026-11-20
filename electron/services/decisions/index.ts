@@ -435,10 +435,11 @@ function publishQuestions(
 }
 
 function refreshQuestionList(): void {
-  const questions = listingQuestions ? listedQuestions() : [];
+  const hosts = listingQuestions ? (getDecisionsHostsPort()?.hostQuestions() ?? []) : [];
+  const questions = listingQuestions ? listedQuestions(hosts) : [];
   // Once quit begins the list only empties, for main's consumers; the windows are going.
   if (shutDown && questions.length > 0) return;
-  const changed = setDecisionQuestions(questions);
+  const changed = setDecisionQuestions(questions, shutDown ? [] : awayHostNames(hosts));
   if (changed === null || shutDown) return;
   sendToLocalViews("decisions:questions-changed", changed);
 }
@@ -476,8 +477,7 @@ function askedAtMs(question: DecisionQuestionListItem): number {
  * own read with its rows, a Host's as it reported them, else as its list
  * shows them.
  */
-function listedQuestions(): DecisionQuestionListItem[] {
-  const hosts = getDecisionsHostsPort()?.hostQuestions() ?? [];
+function listedQuestions(hosts: readonly DecisionsHostQuestions[]): DecisionQuestionListItem[] {
   const ownHostId = service?.getSettings()?.hostId ?? null;
   const asks = new Map<string, string | null>();
   if (ownHostId !== null) {
@@ -497,6 +497,20 @@ function listedQuestions(): DecisionQuestionListItem[] {
     asks,
     ownInbox?.marks ?? new Map()
   );
+}
+
+/**
+ * Each enrolled Host this computer heard from but can't reach now, by name,
+ * whether or not it listed a question (#18022): the inbox can't call itself
+ * clear while one is away. Never this computer's own.
+ */
+function awayHostNames(hosts: readonly DecisionsHostQuestions[]): string[] {
+  const ownHostId = service?.getSettings()?.hostId ?? null;
+  const names = new Set<string>();
+  for (const host of hosts) {
+    if (host.questionHostId !== ownHostId && !host.connected) names.add(host.name);
+  }
+  return [...names];
 }
 
 /**

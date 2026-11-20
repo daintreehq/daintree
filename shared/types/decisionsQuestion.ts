@@ -547,6 +547,12 @@ export interface DecisionQuestionRemoteHost {
 export interface DecisionQuestionList {
   revision: number;
   questions: DecisionQuestionListItem[];
+  /**
+   * Each enrolled Remote Host this computer heard from but can't reach now,
+   * by name, whether or not it reported a question (#18022): what it last
+   * reported may be out of date. Absent while none is away.
+   */
+  hostsAway?: string[];
 }
 
 /** Open one question in the window's question view: a click on its desktop notification (#17232). */
