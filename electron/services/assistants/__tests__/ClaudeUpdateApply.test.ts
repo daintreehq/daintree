@@ -41,6 +41,8 @@ interface Fake {
   screen: string | null;
   /** Runs inside each screen read, before it answers. */
   beforeScreen?: (fake: Fake) => void;
+  /** The screen read never answers. */
+  screenHangs?: boolean;
   screenReads: number;
   submits: Submit[];
   withdrawn: string[];
@@ -105,6 +107,7 @@ function harness(overrides: Partial<Fake> = {}) {
     serializedState: async () => {
       fake.screenReads++;
       fake.beforeScreen?.(fake);
+      if (fake.screenHangs === true) return new Promise<never>(() => {});
       return fake.screen === null ? null : { data: fake.screen };
     },
     submit: (terminalId, text, token, guard, owner) => {
@@ -258,13 +261,35 @@ describe("ClaudeUpdateApply.preflight", () => {
     expect(error.message).toMatch(/couldn't be read, so a draft in it can't be ruled out/);
   });
 
+  it("leaves a busy pane's unread box to the read made once it is ready", async () => {
+    const { pin } = await pinned({
+      record: atPrompt({ agentState: "working", waitingReason: undefined }),
+      screen: "⏺ Bash(npm test)\r\n  Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No",
+    });
+    expect(pin.observedAt).toBe(900);
+  });
+
+  it("refuses at its prompt when the screen read doesn't answer in time", async () => {
+    vi.useFakeTimers();
+    try {
+      const { service } = harness({ screenHangs: true });
+      const pending = refusal(service.preflight(TERMINAL, undefined, OWNER));
+      await vi.advanceTimersByTimeAsync(1_500);
+      const error = await pending;
+      expect(error.message).toMatch(/couldn't be read/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("takes Claude's own suggestion in the box as an empty box", async () => {
     const { pin } = await pinned({ screen: claudeScreen("❯ \x1b[2mopen the PR\x1b[22m") });
     expect(pin.observedAt).toBe(900);
   });
 
-  it("refuses a run replaced while its input box was being read", async () => {
+  it("refuses a run replaced while its input box was being read, ahead of what the box showed", async () => {
     const { service } = harness({
+      screen: claudeScreen("❯ half a thought"),
       beforeScreen: (f) => {
         f.generation = 5;
       },
@@ -637,6 +662,27 @@ describe("ClaudeUpdateApply.apply, at its edges", () => {
     };
     const result = await service.apply(pin, allow);
     expect(result).toMatchObject({ status: "not-sent", reason: "expired" });
+    expect(fake.submits).toEqual([]);
+  });
+
+  it("reports a run replaced during the box read as restarted, not as typing", async () => {
+    const { fake, service, pin } = await pinned();
+    fake.screen = claudeScreen("❯ /restart");
+    fake.beforeScreen = (f) => {
+      f.generation = 5;
+    };
+    const result = await service.apply(pin, allow);
+    expect(result).toMatchObject({ status: "not-sent", reason: "restarted" });
+    expect(fake.submits).toEqual([]);
+  });
+
+  it("stops at once when the call ends while the box read is out", async () => {
+    const { fake, service, pin } = await pinned();
+    const controller = new AbortController();
+    fake.screenHangs = true;
+    fake.beforeScreen = () => controller.abort();
+    const result = await service.apply(pin, { ...allow, signal: controller.signal });
+    expect(result).toMatchObject({ status: "not-sent", reason: "cancelled" });
     expect(fake.submits).toEqual([]);
   });
 

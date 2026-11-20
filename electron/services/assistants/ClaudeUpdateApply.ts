@@ -31,6 +31,8 @@ const POLL_MS = 200;
  * half-drawn row doesn't end it.
  */
 const REFUSAL_SETTLE_MS = 600;
+/** Ample for a viewport serialize; a read stuck past it reads as unread. */
+const SCREEN_READ_MS = 1_500;
 
 /** The pty-host record fields a request reads. */
 export interface ClaudeUpdateRecord {
@@ -252,17 +254,19 @@ export class ClaudeUpdateApply {
       );
     }
     // A settle clears the record's typing, not the box: a draft typed while
-    // the agent worked is still there at its prompt.
+    // the agent worked is still there at its prompt. Mid-turn a dialog can
+    // stand in the box's place, so an unread box there is left to the read
+    // made once the pane is ready.
     const box = await this.inputBox(terminalId);
-    if (box !== "clear") {
+    if (this.deps.getLiveGeneration(terminalId) !== live) restarted();
+    if (box === "draft")
+      refuse(WORKER_STEER_REFUSALS.typing, `${boxDraftWhy(terminalId)} ${NOTHING_SENT}`);
+    if (box === "unread" && evaluateWakeGate(record, EXACT_PROMPT_GATE).kind === "ready") {
       refuse(
         WORKER_STEER_REFUSALS.typing,
-        box === "draft"
-          ? `${boxDraftWhy(terminalId)} ${NOTHING_SENT}`
-          : `Claude Code's input box in terminal '${terminalId}' couldn't be read, so a draft in it can't be ruled out. ${NOTHING_SENT}`
+        `Claude Code's input box in terminal '${terminalId}' couldn't be read, so a draft in it can't be ruled out. ${NOTHING_SENT}`
       );
     }
-    if (this.deps.getLiveGeneration(terminalId) !== live) restarted();
     return {
       terminalId,
       generation: live,
@@ -300,14 +304,15 @@ export class ClaudeUpdateApply {
       if (check.kind === "drop") return this.notSent(pin, check.reason, check.why);
       if (check.kind === "ready") {
         // The record can't show a draft from before the pane settled; the box
-        // can. Read first, so the record read after it covers keys typed since.
-        const box = await this.inputBox(terminalId);
-        if (box === "draft") return this.notSent(pin, "typed", boxDraftWhy(terminalId));
-        check =
-          box === "clear"
-            ? this.check(pin, await this.deps.getTerminal(terminalId).catch(() => null))
-            : { kind: "wait", on: "an input box that couldn't be read" };
+        // can. The record read after it answers first: a run replaced, or
+        // keys typed while the box was read.
+        const box = await this.inputBox(terminalId, request.signal);
+        check = this.check(pin, await this.deps.getTerminal(terminalId).catch(() => null));
         if (check.kind === "drop") return this.notSent(pin, check.reason, check.why);
+        if (box === "draft") return this.notSent(pin, "typed", boxDraftWhy(terminalId));
+        if (box === "unread" && check.kind === "ready") {
+          check = { kind: "wait", on: "an input box that couldn't be read" };
+        }
         if (check.kind === "ready") break;
       }
       waitingOn = check.on;
@@ -370,12 +375,29 @@ export class ClaudeUpdateApply {
     }
   }
 
-  private async inputBox(terminalId: string): Promise<InputBox> {
-    const snapshot = await this.deps.serializedState(terminalId, { tailRows: 0 }).catch(() => null);
-    if (snapshot === null) return "unread";
-    const { state } = observeInputLine(snapshot.data, inputSuggestionRuleFor("claude")).inputLine;
-    if (state === "empty" || state === "suggestion") return "clear";
-    return state === "typed" ? "draft" : "unread";
+  /** Read off the parsed screen, given up on at {@link SCREEN_READ_MS} or when the call ends. */
+  private async inputBox(terminalId: string, signal?: AbortSignal): Promise<InputBox> {
+    if (aborted(signal)) return "unread";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stop: (() => void) | undefined;
+    const cutoff = new Promise<null>((resolve) => {
+      stop = () => resolve(null);
+      timer = setTimeout(stop, SCREEN_READ_MS);
+      signal?.addEventListener("abort", stop, { once: true });
+    });
+    try {
+      const snapshot = await Promise.race([
+        this.deps.serializedState(terminalId, { tailRows: 0 }).catch(() => null),
+        cutoff,
+      ]);
+      if (snapshot === null) return "unread";
+      const { state } = observeInputLine(snapshot.data, inputSuggestionRuleFor("claude")).inputLine;
+      if (state === "empty" || state === "suggestion") return "clear";
+      return state === "typed" ? "draft" : "unread";
+    } finally {
+      clearTimeout(timer);
+      if (stop) signal?.removeEventListener("abort", stop);
+    }
   }
 
   /** What the pane looks like to the request now. */
